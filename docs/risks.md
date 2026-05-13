@@ -2,6 +2,28 @@
 
 ## HIGH Severity
 
+### 0. Multi-user data model transition
+
+**Risk**: The current Phase 1-5 design has no user model. Adding it in Phase 6 requires:
+- Schema migration: add `user_id` to `subscription` table
+- API breaking change: all subscription endpoints change scope from global to per-user
+- Auth migration: from API key to JWT
+- Data migration: existing subscriptions must be assigned to a default admin user
+
+**Impact**: If not planned for, Phase 6 becomes a major refactor instead of an addition. Existing API consumers (admin-web) break.
+
+**Mitigation**:
+- Design Phase 1-5 with awareness that `user_id` will be added to subscription
+- Keep subscription endpoints behind admin routes until Phase 6 (avoid premature public API)
+- Use repository pattern so data access layer changes are localized
+- Reserve the `user_id` column name; don't use it for anything else
+- Write Phase 6 migration as: add nullable `user_id`, backfill with default admin, make non-nullable
+- Admin-web built against `/api/v1/admin/*` routes (unchanged by user model addition)
+
+**Decision**: Phase 1-5 stays admin-only. Phase 6 adds user model + migration path. No premature user model.
+
+---
+
 ### 1. gallery-dl version / output format stability
 
 **Risk**: gallery-dl updates frequently. Pinning a version means site-specific extractors may break when source sites change. Not pinning means output format changes can silently break metadata parsers.
@@ -129,13 +151,52 @@
 
 ---
 
-### 10. NAS HDD I/O performance
+### 10. Multi-user storage sharing
 
-**Risk**: Computing SHA-256 and pHash on large media files over NAS HDD (possibly SMR drives) will be slow.
+**Risk**: Multiple users subscribing to the same creator would download the same files repeatedly if data isn't shared. Creator/Work/Asset must be global, not per-user. But this creates a privacy consideration: one user's subscription reveals the creator to all users.
 
 **Mitigation**:
-- Compute hashes during download streaming where possible
-- Use `pyvips` over Pillow for large images (faster, less memory)
+- `creator`, `work`, `asset`, `tag` tables are global (shared, no user_id)
+- `subscription`, `album`, `download_job` tables are user-scoped (have user_id)
+- Download once, reference many times via `asset_sources`
+- Creator list is public to all authenticated users (acceptable for a personal/small-group archive)
+- If private creators are needed later: add `creator.visibility` field
+
+**Decision**: Shared creator/work/asset data model. User-scoped subscriptions and albums only.
+
+---
+
+### 11. Remote client bandwidth and image loading
+
+**Risk**: Flutter client loading full-resolution images over mobile data will be slow and consume excessive bandwidth.
+
+**Mitigation**:
+- Generate thumbnails at import time: 200px, 600px, 1200px widths
+- Client API returns thumbnail URLs alongside full-resolution URLs
+- Client fetches thumbnails for grid/list views, full image only on detail view
+- Add `?width=` query param to `/media/` for dynamic resizing (future, pyvips can do this)
+- Cache-Control headers on media: long max-age for immutable assets
+
+**Decision**: Multi-size thumbnails generated at import. No on-the-fly resizing in v1.
+
+---
+
+### 12. Client auth token lifecycle
+
+**Risk**: JWT access tokens expire every 15 minutes. Flutter client must transparently refresh. If refresh logic is buggy, user sees auth errors. If refresh token expires (30 days), user must re-login. Remote re-login when not on LAN is impossible without VPN.
+
+**Mitigation**:
+- Flutter HTTP interceptor (dio) handles 401 → refresh → retry transparently
+- Refresh token stored in platform secure storage
+- On refresh failure: clear tokens, redirect to login screen
+- Refresh token expiry: show notification 7 days before expiry
+- Admin can issue long-lived access tokens for trusted clients (future)
+
+**Decision**: Standard JWT access+refresh pattern. dio interceptor for transparent refresh.
+
+---
+
+### 13. NAS HDD I/O performance
 - Generate thumbnails at import time, not on first read request
 - Accept that initial sync of a large creator will be slow
 

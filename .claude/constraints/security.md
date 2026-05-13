@@ -26,11 +26,33 @@ subprocess.Popen(f"gallery-dl --config {config_path} {url}", shell=True)
 - Validation must use the provider's `validate_url(url)` method
 - URLs that fail validation must be rejected at the API boundary, not in the worker
 
-## Authentication
+## Authentication (Phase 1-5: Admin only)
 
-- All `/api/admin/*` routes require authentication
-- Admin-web must implement login/token flow
-- API tokens must be used for worker-to-backend communication (future)
+- `/api/v1/admin/*` routes require authentication
+- Admin-web implements simple token or API key auth
+- `ADMIN_PASSWORD` from `.env` for initial admin setup
+
+## Authentication (Phase 6+: Multi-user with JWT)
+
+When user model is added, migrate to JWT:
+
+- `POST /api/v1/auth/login` → `{access_token, refresh_token}`
+- `POST /api/v1/auth/refresh` → new `access_token`
+- Access token: short-lived (15 min), Refresh token: long-lived (30 days)
+- Refresh token rotation: each refresh invalidates previous refresh token
+- Password hashing: `bcrypt` or `argon2`
+- Token storage on client: platform secure storage (not localStorage)
+- Worker-to-backend communication: service account or internal token (future)
+- All user-scoped data queries must filter by `user_id` from JWT claims
+- Admin routes require `role=admin` claim in JWT
+
+## Authorization
+
+- `admin` role: full system access
+- `user` role: own subscriptions, own albums, accessible works
+- `creator`, `work`, `asset`, `tag` data is shared (readable by all authenticated users)
+- `subscription`, `album`, `download_job` data is user-scoped
+- Never rely on client-side role checks; enforce at API boundary
 
 ## Path exposure
 

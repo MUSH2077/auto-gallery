@@ -36,25 +36,30 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
 
 ## 领域模型
 
-所有模型使用与来源无关的命名：
+所有模型使用与来源无关的命名。共享数据 vs 用户隔离数据：
 
 ```
+（跨用户共享）
 creator ──< source_creator
 creator ──< creator_link
-creator ──< subscription ──< subscription_source
 work ──< work_source
 work ──< work_tag
 work_source ──< work_source_tag
 asset ──< asset_source
 tag
 naming_template
-download_job
-import_job
+
+（用户隔离）
+user ──< subscription ──< subscription_source
+user ──< album ──< album_work ── work
+user ──< download_job
+import_job（通过 subscription 继承隔离）
 ```
 
 ### 关键关系
 
-- **creator**：规范本地身份（如"画师 A"）
+- **user**：用户账号（管理员或普通用户）。Phase 6+ 添加。
+- **creator**：规范本地身份（如"画师 A"）——跨所有用户共享
 - **source_creator**：平台特定账号（如 Pixiv 用户 123456）
 - **creator_link**：链接创作者到外部个人资料的 URL
 - **work**：规范本地作品（可有多个 work_source）
@@ -63,6 +68,8 @@ import_job
 - **asset_source**：来源特定的文件记录
 - **subscription**：用户追踪创作者的意图
 - **subscription_source**：每个订阅的逐来源开关
+- **album**：用户创建的作品收藏集（Phase 6+）
+- **album_work**：album 与 work 的多对多关联
 
 ### 唯一性约束
 
@@ -70,8 +77,10 @@ import_job
 - `(source, source_work_id)` 在 work_sources 表
 - `(source, source_asset_id)` 在 asset_sources 表
 - `(normalized_name)` 在 tags 表
-- `(creator_id)` 在 subscriptions 表
+- `(user_id, creator_id)` 在 subscriptions 表（多用户可订阅同一创作者）
 - `(subscription_id, source)` 在 subscription_sources 表
+- `(username)` 在 users 表
+- `(album_id, work_id)` 在 album_works 表
 
 ## Provider 系统
 
@@ -147,5 +156,8 @@ NAS 主机路径仅在 `docker-compose.yml` 中映射。
 /api/v1/tags            标签管理、来源标签查看
 /api/v1/search          Meilisearch 查询
 /api/v1/admin           管理员设置、去重配置、合并候选
+/api/v1/auth            认证：登录、刷新、当前用户（Phase 6+）
+/api/v1/me/*            用户隔离数据：我的订阅、相册、动态（Phase 6+）
+/api/v1/albums          相册 CRUD（Phase 6+）
 /media                  受控媒体文件服务（无版本号）
 ```

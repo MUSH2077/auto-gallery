@@ -37,13 +37,25 @@ Non-negotiable technology choices for this project. All implementation must use 
 | Server state | TanStack Query | latest | |
 | API client | Typed fetch wrapper | | Hand-written or generated, not both |
 
+## Client (Flutter — future)
+
+| Component | Choice | Notes |
+|---|---|---|
+| Framework | Flutter | Latest stable |
+| Language | Dart | |
+| State management | Riverpod | Or provider, decided at implementation |
+| HTTP client | dio | Interceptors for JWT refresh |
+| Secure storage | flutter_secure_storage | JWT token storage |
+| Image caching | cached_network_image | Thumbnail-aware |
+
 ## Deployment
 
 | Component | Choice | Notes |
 |---|---|---|
 | Container runtime | Docker Compose v2 | |
 | Base image | python:3.12-slim | |
-| Auth mode (v1) | Simple API key | Admin routes only; JWT deferred to multi-user phase |
+| Auth mode (Phase 1-5) | Simple API key | Admin routes only |
+| Auth mode (Phase 6+) | JWT | Multi-user, access + refresh tokens |
 
 ## Explicitly Excluded
 
@@ -55,9 +67,10 @@ These may be reconsidered later but are NOT in current scope:
 | Pillow (primary) | pyvips preferred for performance |
 | SQLite | PostgreSQL only |
 | Serverless / k8s | Docker Compose on NAS only |
-| OAuth / JWT (v1) | Simple API key for initial admin auth |
+| OAuth / social login (v1) | JWT + email/password for v1 |
 | gRPC | REST only |
 | WebSockets (v1) | REST polling for job status in v1 |
+| Flutter client (Phase 1-8) | Backend + admin-web first |
 
 ## Version Pinning Policy
 

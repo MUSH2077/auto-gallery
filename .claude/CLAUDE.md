@@ -46,7 +46,9 @@ Constraint and skill files in `.claude/`:
 - [danbooru-reference.md](../.claude/constraints/danbooru-reference.md) — Danbooru as reference only
 - [deduplication.md](../.claude/constraints/deduplication.md) — dedup policy, opt-in only
 - [docker.md](../.claude/constraints/docker.md) — services, container paths, volume mapping
-- [security.md](../.claude/constraints/security.md) — subprocess, URL validation, auth, CORS, /media
+- [security.md](../.claude/constraints/security.md) — subprocess, URL validation, auth (admin + JWT), CORS, /media
+- [client-api.md](../.claude/constraints/client-api.md) — user model, client-facing APIs, albums, mobile response design
+- [remote-access.md](../.claude/constraints/remote-access.md) — LAN/VPN/reverse-proxy, HTTPS, network architecture
 
 Read constraints before implementing. The risk register documents decisions made during architecture review.
 
@@ -120,6 +122,7 @@ A separate gallery-dl downloader container can be introduced later, but is not r
 Use generic domain concepts:
 
 - source
+- user (added Phase 6+, required before any remote client)
 - creator
 - source_creator
 - creator_link
@@ -135,6 +138,8 @@ Use generic domain concepts:
 - download_job
 - import_job
 - naming_template
+- album (added Phase 6+, user-scoped work collections)
+- album_work
 - reference_provider
 - source_provider
 
@@ -364,8 +369,11 @@ Important uniqueness constraints:
 - work_sources: unique(source, source_work_id)
 - asset_sources: unique(source, source_asset_id) where available
 - tags: unique(normalized_name)
-- subscriptions: unique(creator_id)
+- subscriptions: unique(user_id, creator_id) (multiple users may subscribe to same creator)
 - subscription_sources: unique(subscription_id, source)
+- users: unique(username)
+- albums: no cross-user uniqueness needed (user-scoped)
+- album_works: unique(album_id, work_id)
 
 Store raw source metadata in JSONB.
 
@@ -394,6 +402,9 @@ Group routes:
 - /api/v1/tags
 - /api/v1/search
 - /api/v1/admin
+- /api/v1/auth (added Phase 6+: login, refresh, me)
+- /api/v1/me/* (added Phase 6+: user-scoped subscriptions, albums, feed)
+- /api/v1/albums (added Phase 6+: album CRUD)
 - /media
 
 ## Admin Web Requirements

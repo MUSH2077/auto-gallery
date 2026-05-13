@@ -36,25 +36,30 @@ auto-gallery is a layered Docker Compose application that downloads media from m
 
 ## Domain Model
 
-All models use source-agnostic naming:
+All models use source-agnostic naming. Shared data vs user-scoped data:
 
 ```
+(shared across users)
 creator ──< source_creator
 creator ──< creator_link
-creator ──< subscription ──< subscription_source
 work ──< work_source
 work ──< work_tag
 work_source ──< work_source_tag
 asset ──< asset_source
 tag
 naming_template
-download_job
-import_job
+
+(user-scoped)
+user ──< subscription ──< subscription_source
+user ──< album ──< album_work ── work
+user ──< download_job
+import_job (inherits scope via subscription)
 ```
 
 ### Key relationships
 
-- **creator**: A canonical local identity (e.g., "Artist A")
+- **user**: A user account (admin or regular user). Added Phase 6+.
+- **creator**: A canonical local identity (e.g., "Artist A") — shared across all users
 - **source_creator**: A platform-specific account (e.g., Pixiv user 123456)
 - **creator_link**: URLs linking a creator to external profiles
 - **work**: A canonical local work (may have multiple work_sources)
@@ -63,6 +68,8 @@ import_job
 - **asset_source**: A source-specific file record
 - **subscription**: A user's intent to follow a creator
 - **subscription_source**: Per-source toggle for a subscription
+- **album**: A user-created collection of works (Phase 6+)
+- **album_work**: Many-to-many join between album and work
 
 ### Uniqueness constraints
 
@@ -70,8 +77,10 @@ import_job
 - `(source, source_work_id)` on work_sources
 - `(source, source_asset_id)` on asset_sources
 - `(normalized_name)` on tags
-- `(creator_id)` on subscriptions
+- `(user_id, creator_id)` on subscriptions (multiple users may subscribe to same creator)
 - `(subscription_id, source)` on subscription_sources
+- `(username)` on users
+- `(album_id, work_id)` on album_works
 
 ## Provider System
 
