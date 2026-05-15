@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, SubscriptionSource as SS, ProviderInfo } from "@/lib/api";
-import { PageHeader, StatusBadge, SourceBadge, Modal, ConfirmDialog } from "@/components";
+import { PageHeader, StatusBadge, SourceBadge, Modal, ConfirmDialog, ErrorState, EmptyState } from "@/components";
 
 function AddSourceForm({ subId, onClose }: { subId: string; onClose: () => void }) {
   const [source, setSource] = useState("pixiv"); const [sourceUrl, setSourceUrl] = useState(""); const [sourceCreatorId, setSourceCreatorId] = useState("");
@@ -94,7 +94,7 @@ export default function SubscriptionDetailPage() {
   };
 
   if (sub.isLoading) return <main className="max-w-4xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 bg-gray-200 rounded w-1/4" /><div className="h-32 bg-gray-200 rounded" /></div></main>;
-  if (sub.error) return <main className="max-w-4xl mx-auto p-6"><div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">{(sub.error as Error).message}</div></main>;
+  if (sub.error) return <main className="max-w-4xl mx-auto p-6"><ErrorState message={(sub.error as Error).message} onRetry={() => sub.refetch()} /></main>;
   if (!sub.data) return null;
   const s = sub.data;
 
@@ -156,7 +156,7 @@ export default function SubscriptionDetailPage() {
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-gray-400">No sources configured. Add a source to enable syncing from that platform.</p>
+              <EmptyState title="No sources configured" description="Add a source to enable syncing from that platform." />
             )}
           </div>
         </div>

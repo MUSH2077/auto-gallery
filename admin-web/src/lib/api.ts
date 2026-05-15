@@ -244,8 +244,19 @@ export const api = {
 
   getWorkAssets: (id: string) => request<{id:string;file_name:string;file_path:string;width?:number;height?:number;mime_type?:string;thumb_sm_path?:string;thumb_md_path?:string}[]>(`/api/v1/works/${id}/assets`),
 
+  getWorkTags: (id: string) => request<{id:string;normalized_name:string;category?:string}[]>(`/api/v1/works/${id}/tags`),
+
   // Tags
   listTags: (offset = 0, limit = 100) => request<Tag[]>(`/api/v1/tags?offset=${offset}&limit=${limit}`),
+
+  createTag: (data: { normalized_name: string; category?: string }) =>
+    request<Tag>("/api/v1/tags", { method: "POST", body: JSON.stringify(data) }),
+
+  updateTag: (id: string, data: { normalized_name?: string; category?: string }) =>
+    request<Tag>(`/api/v1/tags/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+
+  deleteTag: (id: string) =>
+    request<{ status: string }>(`/api/v1/tags/${id}`, { method: "DELETE" }),
 
   // Media URL helper (not a fetch call)
   mediaUrl: (assetId: string, size: "thumb" | "preview" | "original" = "thumb") =>
@@ -259,6 +270,12 @@ export const api = {
     request<{ id: string; download_job_id: string; status: string; error_log?: string; created_at: string }[]>(`/api/v1/import-jobs?offset=${offset}&limit=${limit}${status ? `&status=${status}` : ""}`),
 
   scanImports: () => request<{ status: string; message: string }>("/api/v1/import-jobs/scan", { method: "POST" }),
+
+  retryImportJob: (id: string) =>
+    request<{ status: string; message: string }>(`/api/v1/import-jobs/${id}/retry`, { method: "POST" }),
+
+  deleteImportJob: (id: string) =>
+    request<{ status: string }>(`/api/v1/import-jobs/${id}`, { method: "DELETE" }),
 
   // Admin
   getAdminSettings: () => request<AdminSettings>("/api/v1/admin/settings"),

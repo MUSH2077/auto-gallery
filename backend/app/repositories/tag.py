@@ -29,3 +29,20 @@ class TagRepository:
 
     async def get(self, tag_id: UUID) -> Tag | None:
         return await self.session.get(Tag, tag_id)
+
+    async def create(self, data: dict) -> Tag:
+        tag = Tag(**data)
+        self.session.add(tag)
+        await self.session.flush()
+        return tag
+
+    async def update(self, tag: Tag, data: dict) -> Tag:
+        for key, value in data.items():
+            if value is not None:
+                setattr(tag, key, value)
+        await self.session.flush()
+        return tag
+
+    async def delete(self, tag: Tag) -> None:
+        await self.session.delete(tag)
+        await self.session.flush()

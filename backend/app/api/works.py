@@ -10,6 +10,8 @@ from app.repositories.work import WorkRepository
 from app.models.asset import Asset
 from app.models.asset_source import AssetSource
 from app.models.work_source import WorkSource
+from app.models.tag import Tag
+from app.models.work_tag import WorkTag
 
 router = APIRouter()
 
@@ -33,6 +35,16 @@ async def get_work(work_id: UUID, db: AsyncSession = Depends(get_db)):
 async def get_work_sources(work_id: UUID, db: AsyncSession = Depends(get_db)):
     repo = WorkRepository(db)
     return await repo.get_sources(work_id)
+
+
+@router.get("/{work_id}/tags")
+async def get_work_tags(work_id: UUID, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Tag).join(WorkTag, WorkTag.tag_id == Tag.id)
+        .where(WorkTag.work_id == work_id)
+    )
+    tags = result.scalars().all()
+    return [{"id": str(t.id), "normalized_name": t.normalized_name, "category": t.category} for t in tags]
 
 
 @router.get("/{work_id}/assets")

@@ -100,7 +100,7 @@ services:
 
   scheduler:
     image: auto-gallery-backend:latest
-    command: rq worker --with-scheduler --url redis://:${REDIS_PASSWORD}@redis:6379/0
+    command: sh -c "python seed_sync.py && rq worker --with-scheduler --url redis://:${REDIS_PASSWORD}@redis:6379/0 scheduled"
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -112,6 +112,9 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
+      - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
+      - ${HOST_LIBRARY:-./data/library}:/library
+      - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
     depends_on:
       redis:
         condition: service_healthy

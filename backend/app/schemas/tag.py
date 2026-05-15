@@ -4,6 +4,16 @@ from uuid import UUID
 from pydantic import BaseModel
 
 
+class TagCreate(BaseModel):
+    normalized_name: str
+    category: str | None = None
+
+
+class TagUpdate(BaseModel):
+    normalized_name: str | None = None
+    category: str | None = None
+
+
 class TagRead(BaseModel):
     id: UUID
     normalized_name: str

@@ -1,7 +1,7 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { StatusBadge, PageHeader } from "@/components";
+import { StatusBadge, PageHeader, ErrorState, CardSkeleton } from "@/components";
 import { useRouter } from "next/navigation";
 
 export default function Dashboard() {
@@ -15,18 +15,22 @@ export default function Dashboard() {
 
       <section className="mb-8">
         <h2 className="text-lg font-semibold mb-3">Services</h2>
-        <div className="grid grid-cols-3 gap-3">
-          {health.data ? (
-            Object.entries(health.data.services).map(([name, status]) => (
+        {health.isError ? (
+          <ErrorState message={health.error?.message || "Failed to load health status"} onRetry={() => health.refetch()} />
+        ) : health.isLoading ? (
+          <div className="grid grid-cols-3 gap-3">
+            {Array.from({ length: 3 }).map((_, i) => <CardSkeleton key={i} />)}
+          </div>
+        ) : health.data ? (
+          <div className="grid grid-cols-3 gap-3">
+            {Object.entries(health.data.services).map(([name, status]) => (
               <div key={name} className="bg-white rounded-lg shadow p-4 flex items-center gap-3">
                 <StatusBadge status={status as string} />
                 <span className="font-medium capitalize">{name}</span>
               </div>
-            ))
-          ) : (
-            <p className="col-span-3 text-gray-500">Loading...</p>
-          )}
-        </div>
+            ))}
+          </div>
+        ) : null}
         {health.data && <p className="text-xs text-gray-400 mt-2">Version: {health.data.version} · Status: <StatusBadge status={health.data.status} /></p>}
       </section>
 
@@ -35,20 +39,28 @@ export default function Dashboard() {
           <h2 className="text-lg font-semibold">Providers ({sources.data?.sources?.length || 0})</h2>
           <button onClick={() => router.push("/admin/sources")} className="text-sm text-blue-600 hover:underline">View all</button>
         </div>
-        <div className="grid grid-cols-3 gap-3">
-          {sources.data?.sources?.slice(0, 6).map((s) => (
-            <div key={s.source_name} className="bg-white rounded-lg shadow p-4">
-              <div className="font-medium">{s.display_name}</div>
-              <div className="text-xs text-gray-400 mt-1">{s.source_name}</div>
-              <div className="flex gap-2 mt-2 flex-wrap">
-                {s.capabilities.can_download && <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs">download</span>}
-                {s.capabilities.supports_gallerydl && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">gallery-dl</span>}
-                {s.capabilities.supports_tags && <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">tags</span>}
-                {s.capabilities.is_reference_only && <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs">reference only</span>}
+        {sources.isError ? (
+          <ErrorState message={sources.error?.message || "Failed to load sources"} onRetry={() => sources.refetch()} />
+        ) : sources.isLoading ? (
+          <div className="grid grid-cols-3 gap-3">
+            {Array.from({ length: 6 }).map((_, i) => <CardSkeleton key={i} />)}
+          </div>
+        ) : (
+          <div className="grid grid-cols-3 gap-3">
+            {sources.data?.sources?.slice(0, 6).map((s) => (
+              <div key={s.source_name} className="bg-white rounded-lg shadow p-4">
+                <div className="font-medium">{s.display_name}</div>
+                <div className="text-xs text-gray-400 mt-1">{s.source_name}</div>
+                <div className="flex gap-2 mt-2 flex-wrap">
+                  {s.capabilities.can_download && <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs">download</span>}
+                  {s.capabilities.supports_gallerydl && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">gallery-dl</span>}
+                  {s.capabilities.supports_tags && <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">tags</span>}
+                  {s.capabilities.is_reference_only && <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs">reference only</span>}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <section>

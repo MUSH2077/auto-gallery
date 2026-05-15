@@ -51,7 +51,7 @@ async def get_gallerydl_config():
         "refresh_token": pixiv.get("refresh-token"),
         "cookies_path": pixiv.get("cookies"),
         "filename": pixiv.get("filename"),
-        "directory": pixiv.get("directory"),
+        "directory": "/".join(pixiv["directory"]) if isinstance(pixiv.get("directory"), list) else pixiv.get("directory"),
         "include": str(pixiv.get("include", "artworks")),
         "tags": pixiv.get("tags", "japanese"),
         "ugoira": pixiv.get("ugoira", True),
@@ -72,7 +72,7 @@ async def update_gallerydl_config(data: GalleryDLConfig):
     if data.refresh_token is not None: pixiv["refresh-token"] = data.refresh_token
     if data.cookies_path is not None: pixiv["cookies"] = data.cookies_path
     if data.filename is not None: pixiv["filename"] = data.filename
-    if data.directory is not None: pixiv["directory"] = data.directory
+    if data.directory is not None: pixiv["directory"] = data.directory.split("/") if "/" in data.directory else data.directory
     if data.include is not None: pixiv["include"] = data.include
     if data.tags is not None: pixiv["tags"] = data.tags
     if data.ugoira is not None: pixiv["ugoira"] = data.ugoira
