@@ -1,0 +1,131 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-autogallery}
+      POSTGRES_USER: ${POSTGRES_USER:-autogallery}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ${HOST_POSTGRES:-./data/docker/postgres}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-autogallery}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - ${HOST_REDIS:-./data/docker/redis}:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.12
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      MEILI_ENV: ${MEILI_ENV:-development}
+      MEILI_HTTP_ADDR: ${MEILI_HTTP_ADDR:-meilisearch:7700}
+    volumes:
+      - ${HOST_MEILISEARCH:-./data/docker/meilisearch}:/meili_data
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: auto-gallery-backend:latest
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "${BACKEND_PORT:-8818}:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      MEILI_URL: http://meilisearch:7700
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      SECRET_KEY: ${SECRET_KEY}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      DOWNLOAD_ROOT: /downloads
+      LIBRARY_ROOT: /library
+      GALLERYDL_CONFIG_ROOT: /gallerydl-config
+      APP_CONFIG_ROOT: /app-config
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
+      - ${HOST_LIBRARY:-./data/library}:/library
+      - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
+      - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
+      - ./backend/alembic/versions:/app/alembic/versions
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      meilisearch:
+        condition: service_started
+    restart: unless-stopped
+
+  worker:
+    image: auto-gallery-backend:latest
+    command: rq worker --url redis://:${REDIS_PASSWORD}@redis:6379/0
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      MEILI_URL: http://meilisearch:7700
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      SECRET_KEY: ${SECRET_KEY}
+      DOWNLOAD_ROOT: /downloads
+      LIBRARY_ROOT: /library
+      GALLERYDL_CONFIG_ROOT: /gallerydl-config
+      APP_CONFIG_ROOT: /app-config
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
+      - ${HOST_LIBRARY:-./data/library}:/library
+      - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
+      - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
+      - ./backend/alembic/versions:/app/alembic/versions
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  scheduler:
+    image: auto-gallery-backend:latest
+    command: rq worker --with-scheduler --url redis://:${REDIS_PASSWORD}@redis:6379/0
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      SECRET_KEY: ${SECRET_KEY}
+      DOWNLOAD_ROOT: /downloads
+      LIBRARY_ROOT: /library
+      GALLERYDL_CONFIG_ROOT: /gallerydl-config
+      APP_CONFIG_ROOT: /app-config
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  admin-web:
+    build:
+      context: ./admin-web
+      dockerfile: Dockerfile
+    ports:
+      - "${ADMIN_WEB_PORT:-3000}:3000"
+    environment:
+      HOSTNAME: "0.0.0.0"
+      NEXT_PUBLIC_API_URL: http://backend:8000/api/v1
+    depends_on:
+      - backend
+    restart: unless-stopped
