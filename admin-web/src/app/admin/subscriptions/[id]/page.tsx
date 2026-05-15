@@ -8,6 +8,23 @@ import { PageHeader, StatusBadge, SourceBadge, Modal, ConfirmDialog } from "@/co
 function AddSourceForm({ subId, onClose }: { subId: string; onClose: () => void }) {
   const [source, setSource] = useState("pixiv"); const [sourceUrl, setSourceUrl] = useState(""); const [sourceCreatorId, setSourceCreatorId] = useState("");
   const qc = useQueryClient();
+
+  const urlHint = source === "pixiv" ? "https://www.pixiv.net/en/users/{id}" : source === "x" ? "https://x.com/{handle}" : source === "iwara" ? "https://www.iwara.tv/profile/{id}" : "";
+
+  const handleIdChange = (id: string) => {
+    setSourceCreatorId(id);
+    if (id && source === "pixiv") setSourceUrl(`https://www.pixiv.net/en/users/${id}`);
+    else if (id && source === "x") setSourceUrl(`https://x.com/${id}`);
+    else if (id && source === "iwara") setSourceUrl(`https://www.iwara.tv/profile/${id}`);
+  };
+
+  const handleSourceChange = (s: string) => {
+    setSource(s);
+    if (sourceCreatorId && s === "pixiv") setSourceUrl(`https://www.pixiv.net/en/users/${sourceCreatorId}`);
+    else if (sourceCreatorId && s === "x") setSourceUrl(`https://x.com/${sourceCreatorId}`);
+    else if (sourceCreatorId && s === "iwara") setSourceUrl(`https://www.iwara.tv/profile/${sourceCreatorId}`);
+  };
+
   const create = useMutation({
     mutationFn: () => api.createSubscriptionSource(subId, { source, source_url: sourceUrl || undefined, source_creator_id: sourceCreatorId || undefined, is_enabled: true }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.subscriptions.sources(subId) }); onClose(); },
@@ -18,13 +35,21 @@ function AddSourceForm({ subId, onClose }: { subId: string; onClose: () => void 
     <div className="space-y-4">
       <div>
         <label className="block text-sm font-medium mb-1">Source *</label>
-        <select value={source} onChange={(e) => setSource(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
+        <select value={source} onChange={(e) => handleSourceChange(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
           {sources.data?.sources?.filter((s: ProviderInfo) => s.capabilities.can_download || s.capabilities.can_import_local).map((s: ProviderInfo) => <option key={s.source_name} value={s.source_name}>{s.display_name} ({s.source_name})</option>)}
         </select>
-        <p className="text-xs text-gray-400 mt-1">Each subscription can sync from multiple sources. Select the source platform to enable.</p>
+        <p className="text-xs text-gray-400 mt-1">Each subscription can sync from multiple sources.</p>
       </div>
-      <div><label className="block text-sm font-medium mb-1">Source URL</label><input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="https://..." /></div>
-      <div><label className="block text-sm font-medium mb-1">Source Creator ID</label><input value={sourceCreatorId} onChange={(e) => setSourceCreatorId(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="e.g. 123456" /></div>
+      <div>
+        <label className="block text-sm font-medium mb-1">Source Creator ID</label>
+        <input value={sourceCreatorId} onChange={(e) => handleIdChange(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="e.g. 1980643" />
+        <p className="text-xs text-gray-400 mt-1">Pixiv user ID, X handle, or Iwara profile ID</p>
+      </div>
+      <div>
+        <label className="block text-sm font-medium mb-1">Source URL</label>
+        <input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} className="w-full border rounded px-3 py-2 text-sm font-mono" placeholder={urlHint} />
+        <p className="text-xs text-gray-400 mt-1">Auto-generated from Creator ID. Format: {urlHint}</p>
+      </div>
       <div className="flex justify-end gap-3 pt-2">
         <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50">Cancel</button>
         <button onClick={() => create.mutate()} disabled={create.isPending} className="px-4 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800 disabled:opacity-50">{create.isPending ? "Adding..." : "Add Source"}</button>

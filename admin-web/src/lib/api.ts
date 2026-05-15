@@ -264,7 +264,7 @@ export const api = {
     request<{ status: string; artist?: { tag: string; name: string; related_urls: string[] } }>("/api/v1/reference/danbooru/artist/preview", { method: "POST", body: JSON.stringify({ tag }) }),
 
   // gallery-dl Config
-  getGalleryDLConfig: () => request<{ refresh_token?: string; cookies_path?: string; filename?: string; directory?: string; include?: string; tags?: string; ugoira?: boolean; sleep_request?: number }>("/api/v1/admin/gallerydl-config"),
+  getGalleryDLConfig: () => request<{ refresh_token?: string; cookies_path?: string; filename?: string; directory?: string; include?: string; tags?: string; ugoira?: boolean; sleep_request?: number; max_posts?: number }>("/api/v1/admin/gallerydl-config"),
 
   updateGalleryDLConfig: (data: Record<string, unknown>) =>
     request<{ status: string; path: string }>("/api/v1/admin/gallerydl-config", { method: "PUT", body: JSON.stringify(data) }),

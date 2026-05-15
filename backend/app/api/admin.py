@@ -36,6 +36,7 @@ class GalleryDLConfig(BaseModel):
     tags: str | None = "japanese"
     ugoira: bool | None = True
     sleep_request: float | None = None
+    max_posts: int | None = None
 
 @router.get("/gallerydl-config")
 async def get_gallerydl_config():
@@ -55,6 +56,7 @@ async def get_gallerydl_config():
         "tags": pixiv.get("tags", "japanese"),
         "ugoira": pixiv.get("ugoira", True),
         "sleep_request": pixiv.get("sleep-request"),
+        "max_posts": pixiv.get("max-posts"),
     }
 
 @router.put("/gallerydl-config")
@@ -75,6 +77,7 @@ async def update_gallerydl_config(data: GalleryDLConfig):
     if data.tags is not None: pixiv["tags"] = data.tags
     if data.ugoira is not None: pixiv["ugoira"] = data.ugoira
     if data.sleep_request is not None: pixiv["sleep-request"] = data.sleep_request
+    if data.max_posts is not None: pixiv["max-posts"] = data.max_posts
     existing.setdefault("extractor", {})["pixiv"] = pixiv
     with open(config_path, "w") as f:
         json.dump(existing, f, indent=2)
