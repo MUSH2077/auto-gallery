@@ -30,7 +30,18 @@ export default function WorksPage() {
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-6">
             {works.data.filter((w: WorkListItem) => !search || (w.title && w.title.toLowerCase().includes(search.toLowerCase()))).map((w: WorkListItem) => (
               <div key={w.id} className="bg-white rounded-lg shadow overflow-hidden cursor-pointer hover:shadow-md transition-shadow" onClick={() => router.push(`/admin/works/${w.id}`)}>
-                <div className="h-32 bg-gray-100 flex items-center justify-center text-gray-400 text-xs">No thumbnail</div>
+                <div className="h-32 bg-gray-100 flex items-center justify-center text-gray-400 text-xs overflow-hidden relative">
+                  {w.thumbnail_asset_id ? (
+                    <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="w-full h-full object-cover" loading="lazy" />
+                  ) : (
+                    <span>No thumbnail</span>
+                  )}
+                  {w.asset_count > 1 && (
+                    <span className="absolute top-1 right-1 bg-black/70 text-white text-xs px-1.5 py-0.5 rounded font-medium">
+                      {w.asset_count}p
+                    </span>
+                  )}
+                </div>
                 <div className="p-3">
                   <div className="text-sm font-medium truncate">{w.title || "Untitled"}</div>
                   <div className="text-xs text-gray-400 mt-1">

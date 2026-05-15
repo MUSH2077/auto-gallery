@@ -8,6 +8,8 @@ class WorkList(BaseModel):
     id: UUID
     title: str | None = None
     posted_at: str | None = None
+    thumbnail_asset_id: str | None = None
+    asset_count: int = 1
     is_nsfw: bool
     created_at: datetime
 
@@ -19,8 +21,11 @@ class WorkRead(BaseModel):
     title: str | None = None
     description: str | None = None
     posted_at: str | None = None
+    thumbnail_asset_id: str | None = None
+    asset_count: int = 1
     is_nsfw: bool
     thumbnail_asset_id: str | None = None
+    asset_count: int = 1
     created_at: datetime
     updated_at: datetime
 

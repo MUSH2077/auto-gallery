@@ -1,8 +1,37 @@
 "use client";
+import { useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, SourceBadge } from "@/components";
+
+
+function AllPages({ workId }: { workId: string }) {
+  const assets = useQuery({ queryKey: ["works", workId, "assets"], queryFn: () => api.getWorkAssets(workId) });
+  const [activeIndex, setActiveIndex] = useState(0);
+  if (assets.isLoading) return <div className="bg-white rounded-lg shadow p-4 animate-pulse"><div className="h-24 bg-gray-100 rounded" /></div>;
+  if (!assets.data || !assets.data.length) return <div className="bg-white rounded-lg shadow p-4"><h3 className="font-medium mb-2 text-sm">Pages</h3><p className="text-xs text-gray-400">No assets available.</p></div>;
+  const current = assets.data[activeIndex];
+  return (
+    <div className="bg-white rounded-lg shadow p-4">
+      <h3 className="font-medium mb-2 text-sm">Pages ({assets.data.length})</h3>
+      {current && (
+        <div className="mb-3">
+          <img src={api.mediaUrl(current.id, "preview")} alt={current.file_name} className="w-full rounded-lg object-contain max-h-96 bg-gray-100" />
+          <p className="text-xs text-gray-400 mt-1 text-center">{activeIndex + 1} / {assets.data.length}</p>
+        </div>
+      )}
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {assets.data.map((a, i) => (
+          <button key={a.id} onClick={() => setActiveIndex(i)}
+            className={`shrink-0 w-16 h-16 rounded border-2 overflow-hidden ${i === activeIndex ? "border-blue-500" : "border-gray-200 hover:border-gray-400"}`}>
+            <img src={api.mediaUrl(a.id, "thumb")} alt={`Page ${i+1}`} className="w-full h-full object-cover" />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function WorkDetailPage() {
   const params = useParams();
@@ -59,11 +88,7 @@ export default function WorkDetailPage() {
         </div>
 
         <div className="space-y-4">
-          <div className="bg-gray-100 rounded-lg h-48 flex items-center justify-center text-gray-400 text-sm">No cover image</div>
-          <div className="bg-white rounded-lg shadow p-4">
-            <h3 className="font-medium mb-2 text-sm">Media Assets</h3>
-            <p className="text-xs text-gray-400">Asset listing requires backend /media endpoint. Assets will be available after import jobs process downloaded files.</p>
-          </div>
+          <AllPages workId={id} />
         </div>
       </div>
     </main>

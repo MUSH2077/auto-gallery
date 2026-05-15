@@ -119,6 +119,8 @@ export interface WorkListItem {
   title?: string;
   posted_at?: string;
   is_nsfw: boolean;
+  thumbnail_asset_id?: string;
+  asset_count: number;
   created_at: string;
 }
 
@@ -129,6 +131,7 @@ export interface Work {
   posted_at?: string;
   is_nsfw: boolean;
   thumbnail_asset_id?: string;
+  asset_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -239,8 +242,14 @@ export const api = {
 
   getWorkSources: (id: string) => request<unknown[]>(`/api/v1/works/${id}/sources`),
 
+  getWorkAssets: (id: string) => request<{id:string;file_name:string;file_path:string;width?:number;height?:number;mime_type?:string;thumb_sm_path?:string;thumb_md_path?:string}[]>(`/api/v1/works/${id}/assets`),
+
   // Tags
   listTags: (offset = 0, limit = 100) => request<Tag[]>(`/api/v1/tags?offset=${offset}&limit=${limit}`),
+
+  // Media URL helper (not a fetch call)
+  mediaUrl: (assetId: string, size: "thumb" | "preview" | "original" = "thumb") =>
+    `${BASE}/api/v1/media/${size}/${assetId}`,
 
   // Search
   search: (q: string, offset = 0, limit = 20) => request<{ results: unknown[]; total: number }>(`/api/v1/search?q=${encodeURIComponent(q)}&offset=${offset}&limit=${limit}`),

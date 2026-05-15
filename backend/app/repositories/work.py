@@ -11,10 +11,22 @@ class WorkRepository:
         self.session = session
 
     async def list_all(self, offset: int = 0, limit: int = 50) -> list[Work]:
+        from sqlalchemy import func
+        from app.models.asset_source import AssetSource
+        from app.models.work_source import WorkSource
         result = await self.session.execute(
-            select(Work).offset(offset).limit(limit).order_by(Work.created_at.desc())
+            select(Work, func.count(AssetSource.id).label("asset_count"))
+            .outerjoin(WorkSource, WorkSource.work_id == Work.id)
+            .outerjoin(AssetSource, AssetSource.work_source_id == WorkSource.id)
+            .group_by(Work.id)
+            .offset(offset).limit(limit).order_by(Work.created_at.desc())
         )
-        return list(result.scalars().all())
+        works = []
+        for row in result:
+            w = row[0]
+            w.asset_count = row[1]
+            works.append(w)
+        return works
 
     async def get(self, work_id: UUID) -> Work | None:
         return await self.session.get(Work, work_id)

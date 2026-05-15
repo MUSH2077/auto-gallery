@@ -1,11 +1,15 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.schemas.work import WorkRead, WorkList
 from app.repositories.work import WorkRepository
+from app.models.asset import Asset
+from app.models.asset_source import AssetSource
+from app.models.work_source import WorkSource
 
 router = APIRouter()
 
@@ -29,3 +33,20 @@ async def get_work(work_id: UUID, db: AsyncSession = Depends(get_db)):
 async def get_work_sources(work_id: UUID, db: AsyncSession = Depends(get_db)):
     repo = WorkRepository(db)
     return await repo.get_sources(work_id)
+
+
+@router.get("/{work_id}/assets")
+async def get_work_assets(work_id: UUID, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Asset).join(AssetSource, AssetSource.asset_id == Asset.id)
+        .join(WorkSource, WorkSource.id == AssetSource.work_source_id)
+        .where(WorkSource.work_id == work_id)
+        .order_by(Asset.created_at)
+    )
+    assets = result.scalars().all()
+    return [{
+        "id": str(a.id), "file_name": a.file_name, "file_path": a.file_path,
+        "width": a.width, "height": a.height, "mime_type": a.mime_type,
+        "thumb_sm_path": a.thumb_sm_path, "thumb_md_path": a.thumb_md_path,
+        "created_at": a.created_at.isoformat(),
+    } for a in assets]
