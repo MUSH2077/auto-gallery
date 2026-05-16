@@ -46,7 +46,7 @@ export default function TagsPage() {
     <main className="max-w-4xl mx-auto p-6">
       <PageHeader title="Tags" description={`Manage normalized tags across all sources`}>
         <button onClick={() => { setFormName(""); setFormCat("general"); setShowCreate(true); }}
-          className="px-4 py-2 bg-slate-900 text-white rounded text-sm hover:bg-slate-800">+ New Tag</button>
+          className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600">+ New Tag</button>
       </PageHeader>
 
       <div className="mb-4">
@@ -54,26 +54,26 @@ export default function TagsPage() {
           placeholder="Search tags..." className="w-full max-w-xs border rounded px-3 py-2 text-sm" />
       </div>
 
-      {tags.isLoading && <div className="flex flex-wrap gap-2">{Array.from({ length: 20 }).map((_, i) => <div key={i} className="h-8 w-24 bg-gray-100 rounded-full animate-pulse" />)}</div>}
+      {tags.isLoading && <div className="flex flex-wrap gap-2">{Array.from({ length: 20 }).map((_, i) => <div key={i} className="h-8 w-24 bg-gray-100 dark:bg-slate-700 rounded-full animate-pulse" />)}</div>}
       {tags.error && <ErrorState message={(tags.error as Error).message} onRetry={() => tags.refetch()} />}
       {tags.data && !tags.data.length && <EmptyState title="No tags" description="Tags are created automatically during import. Create one manually to get started." />}
 
       {tags.data && tags.data.length > 0 && (
-        <div className="bg-white rounded-lg shadow p-4">
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
           <div className="flex flex-wrap gap-2">
             {filtered.map((tag) => (
               <div key={tag.id}
-                className="group flex items-center gap-1 px-3 py-1 bg-gray-100 rounded-full text-sm hover:bg-gray-200 cursor-pointer"
+                className="group flex items-center gap-1 px-3 py-1 bg-gray-100 dark:bg-slate-700 rounded-full text-sm hover:bg-gray-200 cursor-pointer"
                 onClick={() => openEdit(tag)}>
                 <span className="font-medium">{tag.normalized_name}</span>
-                {tag.category && <span className="text-xs text-gray-400">({tag.category})</span>}
+                {tag.category && <span className="text-xs text-gray-400 dark:text-gray-500">({tag.category})</span>}
                 <button onClick={(e) => { e.stopPropagation(); setDeleteId(tag.id); }}
                   className="ml-1 opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs">&times;</button>
               </div>
             ))}
           </div>
-          {search && !filtered.length && <p className="text-sm text-gray-400 mt-3">No tags matching "{search}"</p>}
-          <p className="text-xs text-gray-400 mt-4">{filtered.length} tag{filtered.length !== 1 ? "s" : ""}{search ? " matching" : " total"}</p>
+          {search && !filtered.length && <p className="text-sm text-gray-400 dark:text-gray-500 mt-3">No tags matching "{search}"</p>}
+          <p className="text-xs text-gray-400 dark:text-gray-500 mt-4">{filtered.length} tag{filtered.length !== 1 ? "s" : ""}{search ? " matching" : " total"}</p>
         </div>
       )}
 
@@ -87,9 +87,9 @@ export default function TagsPage() {
               {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
             </select></div>
           <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => setShowCreate(false)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50">Cancel</button>
+            <button onClick={() => setShowCreate(false)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">Cancel</button>
             <button onClick={() => create.mutate()} disabled={!formName.trim() || create.isPending}
-              className="px-4 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800 disabled:opacity-50">
+              className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
               {create.isPending ? "Creating..." : "Create Tag"}
             </button>
           </div>
@@ -107,9 +107,9 @@ export default function TagsPage() {
               {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
             </select></div>
           <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => setEditId(null)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50">Cancel</button>
+            <button onClick={() => setEditId(null)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">Cancel</button>
             <button onClick={() => update.mutate()} disabled={!formName.trim() || update.isPending}
-              className="px-4 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800 disabled:opacity-50">
+              className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
               {update.isPending ? "Saving..." : "Save"}
             </button>
           </div>

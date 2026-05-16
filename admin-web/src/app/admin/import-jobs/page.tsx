@@ -36,15 +36,15 @@ function JobRow({ job }: { job: ImportJob }) {
 
   return (
     <>
-      <tr className="border-b hover:bg-gray-50">
+      <tr className="border-b dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">
         <td className="px-4 py-3">
-          <div className="font-mono text-xs text-gray-400">{job.id.slice(0, 8)}</div>
+          <div className="font-mono text-xs text-gray-400 dark:text-gray-500">{job.id.slice(0, 8)}</div>
         </td>
         <td className="px-4 py-3">
-          <div className="font-mono text-xs text-gray-400">{job.download_job_id.slice(0, 8)}</div>
+          <div className="font-mono text-xs text-gray-400 dark:text-gray-500">{job.download_job_id.slice(0, 8)}</div>
         </td>
         <td className="px-4 py-3"><StatusBadge status={job.status} /></td>
-        <td className="px-4 py-3 text-xs text-gray-400">{new Date(job.created_at).toLocaleString()}</td>
+        <td className="px-4 py-3 text-xs text-gray-400 dark:text-gray-500">{new Date(job.created_at).toLocaleString()}</td>
         <td className="px-4 py-3">
           <div className="flex gap-2">
             {job.error_log && (
@@ -58,7 +58,7 @@ function JobRow({ job }: { job: ImportJob }) {
             )}
             {canDelete && (
               <button onClick={() => setConfirmDelete(true)} disabled={deleteJob.isPending}
-                className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded hover:bg-red-200 disabled:opacity-50">
+                className="text-xs px-2 py-0.5 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded hover:bg-red-200 disabled:opacity-50">
                 {deleteJob.isPending ? "..." : "Del"}
               </button>
             )}
@@ -66,8 +66,8 @@ function JobRow({ job }: { job: ImportJob }) {
         </td>
       </tr>
       {showLog && job.error_log && (
-        <tr><td colSpan={5} className="px-4 py-3 bg-gray-50">
-          <pre className="text-xs font-mono whitespace-pre-wrap max-h-48 overflow-auto bg-gray-100 p-3 rounded">{job.error_log}</pre>
+        <tr><td colSpan={5} className="px-4 py-3 bg-gray-50 dark:bg-slate-800/50">
+          <pre className="text-xs font-mono whitespace-pre-wrap max-h-48 overflow-auto bg-gray-100 dark:bg-slate-700 p-3 rounded">{job.error_log}</pre>
         </td></tr>
       )}
       {confirmRetry && <ConfirmDialog open title="Retry Import" message={`Retry import job ${job.id.slice(0, 8)}?`} onConfirm={() => retry.mutate()} onCancel={() => setConfirmRetry(false)} isPending={retry.isPending} error={(retry.error as Error)?.message} />}
@@ -90,7 +90,7 @@ export default function ImportJobsPage() {
     <main className="max-w-7xl mx-auto p-6">
       <PageHeader title="Import Jobs" description="Metadata import pipeline status">
         <button onClick={() => scan.mutate()} disabled={scan.isPending}
-          className="px-4 py-2 bg-slate-900 text-white rounded text-sm hover:bg-slate-800 disabled:opacity-50">
+          className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
           {scan.isPending ? "Scanning..." : "Scan for Imports"}
         </button>
       </PageHeader>
@@ -102,17 +102,17 @@ export default function ImportJobsPage() {
             {s || "All"}
           </button>
         ))}
-        <button onClick={() => jobs.refetch()} className="ml-auto px-3 py-1 text-xs border rounded hover:bg-gray-50">Refresh</button>
+        <button onClick={() => jobs.refetch()} className="ml-auto px-3 py-1 text-xs border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">Refresh</button>
       </div>
 
-      {jobs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-10 bg-gray-100 rounded animate-pulse" />)}</div>}
+      {jobs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-10 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
       {jobs.error && <ErrorState message={(jobs.error as Error).message} onRetry={() => jobs.refetch()} />}
       {jobs.data && !jobs.data.length && <EmptyState title="No import jobs" description="Import jobs are created after downloads complete. Trigger a download from a subscription." />}
 
       {jobs.data && jobs.data.length > 0 && (
-        <div className="bg-white rounded-lg shadow overflow-x-auto">
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow overflow-x-auto">
           <table className="w-full text-sm">
-            <thead><tr className="border-b bg-gray-50">
+            <thead><tr className="border-b dark:border-slate-700 bg-gray-50 dark:bg-slate-800/50">
               <th className="text-left px-4 py-3">Job ID</th>
               <th className="text-left px-4 py-3">Download Job</th>
               <th className="text-left px-4 py-3">Status</th>

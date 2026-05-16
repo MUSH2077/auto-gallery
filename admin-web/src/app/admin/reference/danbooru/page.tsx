@@ -56,18 +56,18 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
 
   return (
     <div className="mt-4 space-y-4">
-      <div className="bg-white border rounded-lg p-4">
+      <div className="bg-white dark:bg-slate-800 border rounded-lg p-4">
         <h3 className="font-medium mb-2">Artist #{artist.id}: {artist.name}</h3>
         {artist.other_names.length > 0 && (
-          <p className="text-xs text-gray-500 mb-1">Also known as: {artist.other_names.join(", ")}</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Also known as: {artist.other_names.join(", ")}</p>
         )}
-        {artist.post_count != null && <p className="text-xs text-gray-500">Danbooru posts: {artist.post_count}</p>}
-        {artist.notes && <p className="text-xs text-gray-600 mt-2 bg-gray-50 p-2 rounded">{artist.notes}</p>}
+        {artist.post_count != null && <p className="text-xs text-gray-500 dark:text-gray-400">Danbooru posts: {artist.post_count}</p>}
+        {artist.notes && <p className="text-xs text-gray-600 dark:text-gray-300 mt-2 bg-gray-50 dark:bg-slate-800/50 p-2 rounded">{artist.notes}</p>}
       </div>
 
       {/* One-Click Import All & Subscribe */}
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-        <p className="text-sm text-blue-800 font-medium mb-1">One-Click Import</p>
+      <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+        <p className="text-sm text-blue-800 dark:text-blue-300 font-medium mb-1">One-Click Import</p>
         <p className="text-xs text-blue-600 mb-3">Creates Creator + Subscription + Sources + Links in one step.</p>
         <div className="flex items-end gap-2">
           <div className="flex-1">
@@ -83,11 +83,11 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
         {importAllError && <p className="text-red-600 text-xs mt-2">{importAllError}</p>}
       </div>
 
-      <div className="bg-white border rounded-lg p-4">
+      <div className="bg-white dark:bg-slate-800 border rounded-lg p-4">
         {/* Downloadable URLs with Subscribe buttons */}
         {downloadableUrls.length > 0 && (
           <div className="mt-3">
-            <h4 className="text-xs font-medium text-gray-500 mb-2">Downloadable Sources ({downloadableUrls.length})</h4>
+            <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Downloadable Sources ({downloadableUrls.length})</h4>
             <div className="space-y-2">
               {downloadableUrls.map((u, i) => (
                 <div key={i} className="flex items-center justify-between bg-green-50 border border-green-200 rounded p-2 text-xs">
@@ -127,7 +127,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
         {/* Other URLs */}
         {artist.urls.filter(u => !DOWNLOADABLE_SOURCES.includes(classifyUrl(u.normalized_url))).length > 0 && (
           <div className="mt-3">
-            <h4 className="text-xs font-medium text-gray-500 mb-1">Other Associated URLs</h4>
+            <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Other Associated URLs</h4>
             <div className="space-y-1">
               {artist.urls.filter(u => !DOWNLOADABLE_SOURCES.includes(classifyUrl(u.normalized_url))).map((u, i) => (
                 <div key={i} className="flex items-center gap-2 text-xs">
@@ -141,22 +141,22 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
         )}
 
         {artist.urls.length === 0 && (
-          <p className="text-xs text-gray-400 mt-3">No associated source URLs in Danbooru.</p>
+          <p className="text-xs text-gray-400 dark:text-gray-500 mt-3">No associated source URLs in Danbooru.</p>
         )}
       </div>
 
       {/* Import all links */}
       {links.length > 0 && (
-        <div className="bg-white border rounded-lg p-4">
+        <div className="bg-white dark:bg-slate-800 border rounded-lg p-4">
           <h3 className="font-medium mb-2">Import All Links ({links.length})</h3>
-          <p className="text-xs text-gray-500 mb-3">Creates creator_link records for all of this artist's associated URLs in Danbooru.</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Creates creator_link records for all of this artist's associated URLs in Danbooru.</p>
           <div className="space-y-2 mb-4">
             {links.map((l, i) => (
-              <div key={i} className="flex items-center gap-2 text-xs border-b pb-2">
+              <div key={i} className="flex items-center gap-2 text-xs border-b dark:border-slate-700 pb-2">
                 <SourceBadge source={l.link_type} />
                 <a href={l.url} target="_blank" rel="noopener noreferrer"
                   className="text-blue-600 hover:underline truncate max-w-md">{l.url}</a>
-                <span className="text-gray-400">confidence: {l.confidence.toFixed(1)}</span>
+                <span className="text-gray-400 dark:text-gray-500">confidence: {l.confidence.toFixed(1)}</span>
               </div>
             ))}
           </div>
@@ -170,7 +170,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
               </select>
             </div>
             <button onClick={() => onImport(selectedCreator)} disabled={!selectedCreator || importPending}
-              className="px-4 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800 disabled:opacity-50 shrink-0">
+              className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50 shrink-0">
               {importPending ? "Importing..." : `Import ${links.length} Links`}
             </button>
           </div>
@@ -259,50 +259,50 @@ export default function DanbooruReferencePage() {
     <main className="max-w-5xl mx-auto p-6">
       <PageHeader title="Danbooru Reference Mapping" description="Import Danbooru artist data and subscribe to source profiles" />
 
-      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm mb-6">
-        <p className="font-medium text-yellow-800 mb-1">Danbooru is a reference provider only.</p>
+      <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 text-sm mb-6">
+        <p className="font-medium text-yellow-800 dark:text-yellow-300 mb-1">Danbooru is a reference provider only.</p>
         <p className="text-yellow-700">Search for artists by Pixiv URL, user ID, or name. Downloadable source profiles (Pixiv, Iwara) can be subscribed to directly.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <div className="bg-white rounded-lg shadow p-4">
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
           <h3 className="font-medium mb-3 text-sm">Search by Pixiv URL</h3>
           <input value={searchUrl} onChange={(e) => setSearchUrl(e.target.value)}
             placeholder="https://www.pixiv.net/en/users/1980643"
             className="w-full border rounded px-3 py-2 text-sm mb-2" />
           <button onClick={() => handleSearch("url")} disabled={!searchUrl.trim()}
-            className="w-full px-3 py-2 bg-slate-900 text-white rounded text-sm hover:bg-slate-800 disabled:opacity-50">
+            className="w-full px-3 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
             Search
           </button>
         </div>
 
-        <div className="bg-white rounded-lg shadow p-4">
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
           <h3 className="font-medium mb-3 text-sm">Search by Pixiv User ID</h3>
           <input value={searchPixivId} onChange={(e) => setSearchPixivId(e.target.value)}
             placeholder="1980643"
             className="w-full border rounded px-3 py-2 text-sm mb-2" />
           <button onClick={() => handleSearch("pixiv_id")} disabled={!searchPixivId.trim()}
-            className="w-full px-3 py-2 bg-slate-900 text-white rounded text-sm hover:bg-slate-800 disabled:opacity-50">
+            className="w-full px-3 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
             Search
           </button>
         </div>
 
-        <div className="bg-white rounded-lg shadow p-4">
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
           <h3 className="font-medium mb-3 text-sm">Search by Artist Name</h3>
           <input value={searchName} onChange={(e) => setSearchName(e.target.value)}
             placeholder="artist_name"
             className="w-full border rounded px-3 py-2 text-sm mb-2" />
           <button onClick={() => handleSearch("name")} disabled={!searchName.trim()}
-            className="w-full px-3 py-2 bg-slate-900 text-white rounded text-sm hover:bg-slate-800 disabled:opacity-50">
+            className="w-full px-3 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
             Search
           </button>
         </div>
       </div>
 
-      {preview.isLoading && <div className="bg-white rounded-lg shadow p-4 animate-pulse"><div className="h-24 bg-gray-100 rounded" /></div>}
+      {preview.isLoading && <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 animate-pulse"><div className="h-24 bg-gray-100 dark:bg-slate-700 rounded" /></div>}
       {preview.error && <ErrorState message={(preview.error as Error).message} />}
       {preview.data && !preview.data.found && (
-        <div className="bg-white rounded-lg shadow p-4">
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
           <EmptyState title="No match found" description={preview.data.message || "No matching Danbooru artist found."} />
         </div>
       )}

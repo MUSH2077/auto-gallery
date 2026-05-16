@@ -21,7 +21,7 @@ export default function WorksPage() {
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search works..." className="flex-1 max-w-md border rounded px-3 py-2 text-sm" />
       </div>
 
-      {works.isLoading && <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">{Array.from({ length: 10 }).map((_, i) => <div key={i} className="bg-white rounded-lg shadow p-3 animate-pulse"><div className="h-32 bg-gray-200 rounded mb-2" /><div className="h-3 bg-gray-200 rounded w-3/4" /></div>)}</div>}
+      {works.isLoading && <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">{Array.from({ length: 10 }).map((_, i) => <div key={i} className="bg-white dark:bg-slate-800 rounded-lg shadow p-3 animate-pulse"><div className="h-32 bg-gray-200 rounded mb-2" /><div className="h-3 bg-gray-200 rounded w-3/4" /></div>)}</div>}
       {works.error && <ErrorState message={(works.error as Error).message} />}
       {works.data && !works.data.length && <EmptyState title="No works" description="Works will appear after download and import jobs complete." />}
 
@@ -29,8 +29,8 @@ export default function WorksPage() {
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-6">
             {works.data.filter((w: WorkListItem) => !search || (w.title && w.title.toLowerCase().includes(search.toLowerCase()))).map((w: WorkListItem) => (
-              <div key={w.id} className="bg-white rounded-lg shadow overflow-hidden cursor-pointer hover:shadow-md transition-shadow" onClick={() => router.push(`/admin/works/${w.id}`)}>
-                <div className="h-32 bg-gray-100 flex items-center justify-center text-gray-400 text-xs overflow-hidden relative">
+              <div key={w.id} className="bg-white dark:bg-slate-800 rounded-lg shadow overflow-hidden cursor-pointer hover:shadow-md transition-shadow" onClick={() => router.push(`/admin/works/${w.id}`)}>
+                <div className="h-32 bg-gray-100 dark:bg-slate-700 flex items-center justify-center text-gray-400 dark:text-gray-500 text-xs overflow-hidden relative">
                   {w.thumbnail_asset_id ? (
                     <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="w-full h-full object-cover" loading="lazy" />
                   ) : (
@@ -44,9 +44,9 @@ export default function WorksPage() {
                 </div>
                 <div className="p-3">
                   <div className="text-sm font-medium truncate">{w.title || "Untitled"}</div>
-                  <div className="text-xs text-gray-400 mt-1">
+                  <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">
                     {w.posted_at ? new Date(w.posted_at).toLocaleDateString() : "No date"}
-                    {w.is_nsfw && <span className="ml-2 px-1.5 py-0.5 bg-red-100 text-red-600 rounded text-xs">NSFW</span>}
+                    {w.is_nsfw && <span className="ml-2 px-1.5 py-0.5 bg-red-100 dark:bg-red-900/30 text-red-600 rounded text-xs">NSFW</span>}
                   </div>
                 </div>
               </div>

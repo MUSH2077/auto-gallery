@@ -64,16 +64,16 @@ export default function DedupSettingsPage() {
 
       {!current ? null : (
         <>
-          <div className="bg-white rounded-lg shadow p-6 text-sm space-y-2">
+          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6 text-sm space-y-2">
             {([
               ["source_level_enabled", "Same source + same ID = skip download. Safe to enable.", "source-level"],
               ["cross_source_enabled", "SHA-256 match across sources = reuse asset record.", "cross-source"],
               ["auto_merge", "Automatically merge visually similar works. DANGEROUS — may irreversibly modify your library.", "auto-merge"],
             ] as [keyof DedupSettings, string, string][]).map(([key, desc, label]) => (
-              <div key={key} className="flex items-center justify-between py-3 border-b last:border-0">
+              <div key={key} className="flex items-center justify-between py-3 border-b dark:border-slate-700 last:border-0">
                 <div>
                   <span className="font-medium capitalize">{key.replace(/_/g, " ")}</span>
-                  <p className="text-xs text-gray-500 mt-1">{desc}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{desc}</p>
                 </div>
                 <button
                   onClick={() => toggle(key)}
@@ -91,7 +91,7 @@ export default function DedupSettingsPage() {
             <div className="flex items-center justify-between py-3">
               <div>
                 <span className="font-medium">phash threshold</span>
-                <p className="text-xs text-gray-500 mt-1">Perceptual hash Hamming distance (0-64). Lower = stricter matching. Default 8.</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Perceptual hash Hamming distance (0-64). Lower = stricter matching. Default 8.</p>
               </div>
               <input
                 type="number" min={0} max={64}
@@ -102,7 +102,7 @@ export default function DedupSettingsPage() {
             </div>
           </div>
 
-          <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
+          <div className="mt-4 p-4 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg text-sm text-yellow-800 dark:text-yellow-300">
             <strong>Changes take effect immediately.</strong> Enable dedup settings only after reviewing the risk documentation.
             {current.auto_merge && <span className="block mt-1 text-red-600 font-medium">Auto-merge is enabled — this may irreversibly modify your library!</span>}
           </div>
@@ -111,7 +111,7 @@ export default function DedupSettingsPage() {
             <button
               onClick={() => save.mutate(current)}
               disabled={save.isPending}
-              className="px-6 py-2 bg-slate-900 text-white rounded text-sm hover:bg-slate-800 disabled:opacity-50"
+              className="px-6 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50"
             >
               {save.isPending ? "Saving..." : "Save Settings"}
             </button>

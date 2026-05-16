@@ -35,7 +35,7 @@ export default function Dashboard() {
           ) : health.data ? (
             <div className="grid grid-cols-3 gap-3">
               {Object.entries(health.data.services).map(([name, status]) => (
-                <div key={name} className="bg-white rounded-lg shadow p-4 flex items-center gap-3">
+                <div key={name} className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 flex items-center gap-3">
                   <StatusBadge status={status as string} />
                   <span className="font-medium capitalize">{name}</span>
                 </div>
@@ -53,21 +53,21 @@ export default function Dashboard() {
             <div className="grid grid-cols-2 gap-3">{Array.from({ length: 4 }).map((_, i) => <CardSkeleton key={i} />)}</div>
           ) : storage.data ? (
             <div className="grid grid-cols-2 gap-3">
-              <div className="bg-white rounded-lg shadow p-4">
+              <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
                 <div className="text-2xl font-bold">{fmtBytes(storage.data.downloads.size_bytes)}</div>
-                <div className="text-xs text-gray-500 mt-1">Downloads · {storage.data.downloads.file_count} files</div>
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Downloads · {storage.data.downloads.file_count} files</div>
               </div>
-              <div className="bg-white rounded-lg shadow p-4">
+              <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
                 <div className="text-2xl font-bold">{fmtBytes(storage.data.library.size_bytes)}</div>
-                <div className="text-xs text-gray-500 mt-1">Library · {storage.data.library.file_count} files</div>
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Library · {storage.data.library.file_count} files</div>
               </div>
-              <div className="bg-white rounded-lg shadow p-4">
+              <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
                 <div className="text-2xl font-bold">{fmtBytes(storage.data.disk.free_bytes)}</div>
-                <div className="text-xs text-gray-500 mt-1">Disk free</div>
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Disk free</div>
               </div>
-              <div className="bg-white rounded-lg shadow p-4">
+              <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
                 <div className="text-2xl font-bold">{storage.data.disk.total_bytes > 0 ? Math.round((storage.data.disk.used_bytes / storage.data.disk.total_bytes) * 100) : "?"}%</div>
-                <div className="text-xs text-gray-500 mt-1">Disk used</div>
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Disk used</div>
               </div>
             </div>
           ) : null}
@@ -77,12 +77,12 @@ export default function Dashboard() {
       {/* Recent Failures */}
       {(failedDownloads.data && failedDownloads.data.length > 0) || (failedImports.data && failedImports.data.length > 0) ? (
         <section className="mb-8">
-          <h2 className="text-lg font-semibold mb-3 text-red-700">Recent Failures</h2>
+          <h2 className="text-lg font-semibold mb-3 text-red-700 dark:text-red-400">Recent Failures</h2>
           <div className="space-y-2">
             {failedDownloads.data?.slice(0, 3).map((j) => (
               <div key={j.id} className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm flex items-center justify-between">
                 <div>
-                  <span className="font-mono text-xs text-gray-400 mr-2">DL {j.id.slice(0, 8)}</span>
+                  <span className="font-mono text-xs text-gray-400 dark:text-gray-500 mr-2">DL {j.id.slice(0, 8)}</span>
                   <StatusBadge status="failed" />
                   <span className="text-red-600 ml-2">{(j.error_log || "").slice(0, 120)}</span>
                 </div>
@@ -92,7 +92,7 @@ export default function Dashboard() {
             {failedImports.data?.slice(0, 3).map((j) => (
               <div key={j.id} className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm flex items-center justify-between">
                 <div>
-                  <span className="font-mono text-xs text-gray-400 mr-2">IM {j.id.slice(0, 8)}</span>
+                  <span className="font-mono text-xs text-gray-400 dark:text-gray-500 mr-2">IM {j.id.slice(0, 8)}</span>
                   <StatusBadge status="failed" />
                   <span className="text-red-600 ml-2">{(j.error_log || "").slice(0, 120)}</span>
                 </div>
@@ -116,11 +116,11 @@ export default function Dashboard() {
         ) : (
           <div className="grid grid-cols-3 gap-3">
             {sources.data?.sources?.slice(0, 6).map((s) => (
-              <div key={s.source_name} className="bg-white rounded-lg shadow p-4">
+              <div key={s.source_name} className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
                 <div className="font-medium">{s.display_name}</div>
-                <div className="text-xs text-gray-400 mt-1">{s.source_name}</div>
+                <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">{s.source_name}</div>
                 <div className="flex gap-2 mt-2 flex-wrap">
-                  {s.capabilities.can_download && <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs">download</span>}
+                  {s.capabilities.can_download && <span className="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded text-xs">download</span>}
                   {s.capabilities.supports_gallerydl && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">gallery-dl</span>}
                   {s.capabilities.supports_tags && <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">tags</span>}
                   {s.capabilities.is_reference_only && <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs">reference only</span>}
@@ -145,7 +145,7 @@ export default function Dashboard() {
             { label: "Settings", to: "/admin/settings" },
           ].map((item) => (
             <button key={item.to} onClick={() => router.push(item.to)}
-              className="bg-white rounded-lg shadow p-4 text-left hover:shadow-md transition-shadow">
+              className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 text-left hover:shadow-md transition-shadow">
               <span className="text-sm font-medium">{item.label}</span>
               <span className="text-xs text-blue-600 block mt-1">View &rarr;</span>
             </button>

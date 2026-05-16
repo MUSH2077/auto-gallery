@@ -25,9 +25,9 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
       </div>
       <div><label className="block text-sm font-medium mb-1">Label</label><input value={name} onChange={(e) => setName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="Optional label" /></div>
       <div className="flex justify-end gap-3 pt-2">
-        <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50">Cancel</button>
+        <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">Cancel</button>
         <button onClick={() => onSubmit({ creator_id: creatorId, name: name || undefined })} disabled={!creatorId || isPending}
-          className="px-4 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800 disabled:opacity-50">
+          className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
           {isPending ? "Creating..." : "Subscribe"}
         </button>
       </div>
@@ -68,26 +68,26 @@ export default function SubscriptionsPage() {
   return (
     <main className="max-w-6xl mx-auto p-6">
       <PageHeader title="Subscriptions" description={`${subs.data?.length || 0} subscriptions`}>
-        <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-slate-900 text-white rounded text-sm hover:bg-slate-800">+ New Subscription</button>
+        <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600">+ New Subscription</button>
       </PageHeader>
 
-      {subs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 bg-gray-100 rounded animate-pulse" />)}</div>}
+      {subs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
       {subs.error && <ErrorState message={(subs.error as Error).message} />}
-      {subs.data && !subs.data.length && <EmptyState title="No subscriptions" description="Create a subscription to start tracking a creator." action={<button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-slate-900 text-white rounded text-sm">Create Subscription</button>} />}
+      {subs.data && !subs.data.length && <EmptyState title="No subscriptions" description="Create a subscription to start tracking a creator." action={<button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm">Create Subscription</button>} />}
 
       {subs.data && subs.data.length > 0 && (
         <div className="space-y-2">
           {subs.data.map((s: Subscription) => (
-            <div key={s.id} className="bg-white rounded-lg shadow p-4 flex items-center justify-between hover:shadow-md cursor-pointer" onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>
+            <div key={s.id} className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 flex items-center justify-between hover:shadow-md cursor-pointer" onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>
               <div>
                 <div className="font-medium">{s.name || getCreatorName(s.creator_id)}</div>
-                <div className="text-xs text-gray-400">Creator: {getCreatorName(s.creator_id)}</div>
+                <div className="text-xs text-gray-400 dark:text-gray-500">Creator: {getCreatorName(s.creator_id)}</div>
               </div>
               <div className="flex items-center gap-3">
                 <StatusBadge status={s.is_active ? "up" : "down"} />
-                {s.sync_enabled ? <span className="text-xs text-green-600">Auto-sync</span> : <span className="text-xs text-gray-400">Manual</span>}
-                <span className="text-xs text-gray-400">{s.last_synced_at ? `Last: ${new Date(s.last_synced_at).toLocaleDateString()}` : "Never synced"}</span>
-                <button onClick={(e) => { e.stopPropagation(); setDeleteId(s.id); }} className="text-xs text-red-500 hover:text-red-700 px-2 py-1 border border-red-200 rounded hover:bg-red-50">Delete</button>
+                {s.sync_enabled ? <span className="text-xs text-green-600">Auto-sync</span> : <span className="text-xs text-gray-400 dark:text-gray-500">Manual</span>}
+                <span className="text-xs text-gray-400 dark:text-gray-500">{s.last_synced_at ? `Last: ${new Date(s.last_synced_at).toLocaleDateString()}` : "Never synced"}</span>
+                <button onClick={(e) => { e.stopPropagation(); setDeleteId(s.id); }} className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 px-2 py-1 border border-red-200 rounded hover:bg-red-50">Delete</button>
               </div>
             </div>
           ))}

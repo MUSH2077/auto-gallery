@@ -21,7 +21,7 @@ function ToggleField({ label, desc, value, onChange }: {
     <div className="flex items-center justify-between py-2">
       <div>
         <span className="text-sm font-medium">{label}</span>
-        {desc && <p className="text-xs text-gray-500">{desc}</p>}
+        {desc && <p className="text-xs text-gray-500 dark:text-gray-400">{desc}</p>}
       </div>
       <button
         onClick={() => onChange(!value)}
@@ -70,7 +70,7 @@ function SelectField({ label, value, onChange, options }: {
     <div>
       <label className="block text-sm font-medium mb-1">{label}</label>
       <select value={value} onChange={(e) => onChange(e.target.value)}
-        className="w-full border rounded px-3 py-2 text-sm bg-white">
+        className="w-full border rounded px-3 py-2 text-sm bg-white dark:bg-slate-800">
         {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
     </div>
@@ -152,7 +152,7 @@ export default function GalleryDLConfigPage() {
       <PageHeader title="gallery-dl Configuration" description="Per-source extractor options saved to config.json." />
 
       {/* Tabs */}
-      <div className="flex border-b mb-6">
+      <div className="flex border-b dark:border-slate-700 mb-6">
         {TABS.map((t) => (
           <button key={t.key}
             onClick={() => setActiveTab(t.key)}
@@ -165,13 +165,13 @@ export default function GalleryDLConfigPage() {
 
       {/* Unsupported banner */}
       {currentMeta && !currentMeta.supported && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6 text-sm text-yellow-800">
+        <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-6 text-sm text-yellow-800 dark:text-yellow-300">
           <strong>{currentMeta.name} is not yet supported.</strong> {currentMeta.description}
         </div>
       )}
 
       {/* Tab content */}
-      <div className="bg-white rounded-lg shadow p-6 space-y-5">
+      <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6 space-y-5">
         {activeTab === "pixiv" && <PixivTab data={pixiv} onChange={setPixiv} />}
         {activeTab === "twitter" && <TwitterTab data={twitter} onChange={setTwitter} />}
         {activeTab === "iwara" && <IwaraTab data={iwara} onChange={setIwara} />}
@@ -194,12 +194,12 @@ function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: P
   const set = (k: keyof PixivSourceConfig, v: any) => onChange({ ...data, [k]: v });
   return (
     <>
-      <h4 className="font-medium text-sm text-gray-700 border-b pb-2">Authentication</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">Authentication</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label="Refresh Token" value={str(data.refresh_token)} onChange={(v) => set("refresh_token", v || undefined)} type="password" />
         <TextField label="Cookies Path" value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/pixiv.txt" />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 border-b pb-2">Content</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">Content</h4>
       <div className="grid grid-cols-2 gap-4">
         <SelectField label="Include" value={str(data.include, "artworks")} onChange={(v) => set("include", v)}
           options={[{ value: "artworks", label: "artworks" }, { value: "favorites", label: "favorites" }, { value: "bookmarks", label: "bookmarks" }]} />
@@ -213,12 +213,12 @@ function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: P
           </label>
         </div>
       </div>
-      <h4 className="font-medium text-sm text-gray-700 border-b pb-2">File Organization</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">File Organization</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label="Directory Pattern" value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} />
         <TextField label="Filename Pattern" value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} placeholder="{id}_p{num}.{extension}" />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 border-b pb-2">Rate Limiting</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">Rate Limiting</h4>
       <div className="w-64">
         <NumberField label="Sleep (seconds)" value={numStr(data.sleep_request)} onChange={(v) => set("sleep_request", parseFloat(v) || undefined)} placeholder="0" />
       </div>
@@ -232,11 +232,11 @@ function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (
   const set = (k: keyof TwitterSourceConfig, v: any) => onChange({ ...data, [k]: v });
   return (
     <>
-      <h4 className="font-medium text-sm text-gray-700 border-b pb-2">Authentication</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">Authentication</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label="Cookies Path" value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/twitter.txt" />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 border-b pb-2">Content</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">Content</h4>
       <div className="grid grid-cols-2 gap-4">
         <SelectField label="Include" value={str(data.include, "timeline")} onChange={(v) => set("include", v)}
           options={[
@@ -245,7 +245,7 @@ function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (
           ]} />
         <NumberField label="Max Posts" value={numStr(data.max_posts)} onChange={(v) => set("max_posts", parseInt(v) || undefined)} placeholder="Unlimited" />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 border-b pb-2">Filters</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">Filters</h4>
       <div className="space-y-1">
         <ToggleField label="Retweets" desc="Include retweets." value={data.retweets ?? false} onChange={(v) => set("retweets", v)} />
         <ToggleField label="Replies" desc="Include replies to other users." value={data.replies ?? false} onChange={(v) => set("replies", v)} />
@@ -254,7 +254,7 @@ function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (
         <ToggleField label="Text Tweets" desc="Include text-only tweets (no media)." value={data.text_tweets ?? false} onChange={(v) => set("text_tweets", v)} />
         <ToggleField label="Quoted Tweets" desc="Include quoted tweet media." value={data.quoted ?? false} onChange={(v) => set("quoted", v)} />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 border-b pb-2">File Organization</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">File Organization</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label="Directory Pattern" value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} placeholder="twitter/{user[name]}" />
         <TextField label="Filename Pattern" value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} placeholder="{tweet_id}_{num}.{extension}" />
@@ -269,17 +269,17 @@ function IwaraTab({ data, onChange }: { data: IwaraSourceConfig; onChange: (d: I
   const set = (k: keyof IwaraSourceConfig, v: any) => onChange({ ...data, [k]: v });
   return (
     <>
-      <h4 className="font-medium text-sm text-gray-700 border-b pb-2">Authentication</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">Authentication</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label="Username" value={str(data.username)} onChange={(v) => set("username", v || undefined)} placeholder="iwara username" />
         <TextField label="Password" value={str(data.password)} onChange={(v) => set("password", v || undefined)} type="password" placeholder="iwara password" />
         <TextField label="Cookies Path" value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/iwara.txt" />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 border-b pb-2">Content</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">Content</h4>
       <div className="space-y-1">
         <ToggleField label="Videos" desc="Download video content." value={data.videos ?? true} onChange={(v) => set("videos", v)} />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 border-b pb-2">File Organization</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">File Organization</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label="Directory Pattern" value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} placeholder="iwara/{user[name]}" />
         <TextField label="Filename Pattern" value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} />

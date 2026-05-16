@@ -23,10 +23,10 @@ function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () =>
         <div><label className="block text-sm font-medium mb-1">Source Platform</label><input value={source} onChange={(e) => setSource(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="e.g. pixiv" /></div>
       </div>
       <div><label className="block text-sm font-medium mb-1">URL *</label><input value={url} onChange={(e) => setUrl(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="https://..." /></div>
-      <div><label className="block text-sm font-medium mb-1">Confidence ({confidence.toFixed(1)})</label><input type="range" min="0" max="1" step="0.1" value={confidence} onChange={(e) => setConfidence(parseFloat(e.target.value))} className="w-full" /><div className="flex justify-between text-xs text-gray-400"><span>0.0 (Suggested)</span><span>1.0 (Verified)</span></div></div>
+      <div><label className="block text-sm font-medium mb-1">Confidence ({confidence.toFixed(1)})</label><input type="range" min="0" max="1" step="0.1" value={confidence} onChange={(e) => setConfidence(parseFloat(e.target.value))} className="w-full" /><div className="flex justify-between text-xs text-gray-400 dark:text-gray-500"><span>0.0 (Suggested)</span><span>1.0 (Verified)</span></div></div>
       <div className="flex justify-end gap-3 pt-2">
-        <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50">Cancel</button>
-        <button onClick={() => create.mutate()} disabled={!url || create.isPending} className="px-4 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800 disabled:opacity-50">{create.isPending ? "Adding..." : "Add Link"}</button>
+        <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">Cancel</button>
+        <button onClick={() => create.mutate()} disabled={!url || create.isPending} className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">{create.isPending ? "Adding..." : "Add Link"}</button>
       </div>
       {create.error && <p className="text-red-600 text-sm">{(create.error as Error).message}</p>}
     </div>
@@ -77,12 +77,12 @@ export default function MappingPage() {
     <main className="max-w-4xl mx-auto p-6">
       <PageHeader title={`Mapping: ${creator.data?.display_name || creator.data?.name || "Creator"}`} description="Manage multi-source identity mapping">
         <div className="flex gap-2">
-          <button onClick={() => router.push(`/admin/creators/${id}`)} className="px-3 py-2 text-sm border rounded hover:bg-gray-50">Back to Creator</button>
-          <button onClick={() => setShowAdd(true)} className="px-3 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800">+ Add Link</button>
+          <button onClick={() => router.push(`/admin/creators/${id}`)} className="px-3 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">Back to Creator</button>
+          <button onClick={() => setShowAdd(true)} className="px-3 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">+ Add Link</button>
         </div>
       </PageHeader>
 
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800 mb-6">
+      <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 text-sm text-blue-800 dark:text-blue-300 mb-6">
         Links with confidence 1.0 are verified and used as the primary source of truth. Low-confidence links are suggestions from Danbooru or URL extraction that need admin review.
       </div>
 
@@ -90,7 +90,7 @@ export default function MappingPage() {
         <h2 className="font-semibold mb-3">Verified Links ({verified.length})</h2>
         <div className="space-y-2">
           {verified.map((l: CreatorLinkType) => (
-            <div key={l.id} className="bg-white rounded-lg shadow p-3 flex items-center justify-between text-sm">
+            <div key={l.id} className="bg-white dark:bg-slate-800 rounded-lg shadow p-3 flex items-center justify-between text-sm">
               <div className="flex items-center gap-3">
                 <SourceBadge source={l.link_type} />
                 <a href={l.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline truncate max-w-sm">{l.url}</a>
@@ -102,7 +102,7 @@ export default function MappingPage() {
               </div>
             </div>
           ))}
-          {!verified.length && <p className="text-sm text-gray-400">No verified links. Add and verify links to establish identity mapping.</p>}
+          {!verified.length && <p className="text-sm text-gray-400 dark:text-gray-500">No verified links. Add and verify links to establish identity mapping.</p>}
         </div>
       </section>
 
@@ -110,24 +110,24 @@ export default function MappingPage() {
         <h2 className="font-semibold mb-3">Suggested Links ({suggested.length})</h2>
         <div className="space-y-2">
           {suggested.map((l: CreatorLinkType) => (
-            <div key={l.id} className="bg-white rounded-lg shadow p-3 flex items-center justify-between text-sm">
+            <div key={l.id} className="bg-white dark:bg-slate-800 rounded-lg shadow p-3 flex items-center justify-between text-sm">
               <div className="flex items-center gap-3">
                 <span className="text-xs bg-yellow-100 px-2 py-0.5 rounded">{l.link_type}</span>
                 <a href={l.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline truncate max-w-sm">{l.url}</a>
                 {l.source && <SourceBadge source={l.source} />}
                 <span className={`text-xs ${l.confidence >= 0.7 ? "text-green-600" : l.confidence >= 0.4 ? "text-yellow-600" : "text-red-600"}`}>Confidence: {l.confidence.toFixed(1)}</span>
               </div>
-              <button onClick={() => setDialog({ action: "verify", linkId: l.id })} className="text-xs px-3 py-1 bg-green-100 text-green-700 rounded hover:bg-green-200">Approve</button>
+              <button onClick={() => setDialog({ action: "verify", linkId: l.id })} className="text-xs px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded hover:bg-green-200">Approve</button>
             </div>
           ))}
-          {!suggested.length && <p className="text-sm text-gray-400">No suggested links pending review.</p>}
+          {!suggested.length && <p className="text-sm text-gray-400 dark:text-gray-500">No suggested links pending review.</p>}
         </div>
       </section>
 
       <section>
         <h2 className="font-semibold mb-3">Danbooru Reference</h2>
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm">
-          <p className="font-medium text-yellow-800 mb-2">Danbooru is a reference provider only.</p>
+        <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 text-sm">
+          <p className="font-medium text-yellow-800 dark:text-yellow-300 mb-2">Danbooru is a reference provider only.</p>
           <p className="text-yellow-700 mb-3">Import Danbooru artist data to suggest creator links and identity mappings. Danbooru is not treated as a complete union of all works.</p>
           <button onClick={() => router.push("/admin/reference/danbooru")} className="text-xs px-3 py-1.5 bg-yellow-600 text-white rounded hover:bg-yellow-700">Open Danbooru Reference</button>
         </div>

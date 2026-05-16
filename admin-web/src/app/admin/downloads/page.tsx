@@ -18,14 +18,14 @@ function JobRow({ job }: { job: DownloadJob }) {
 
   return (
     <>
-      <tr className="border-b hover:bg-gray-50">
+      <tr className="border-b dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">
         <td className="px-4 py-3">
-          <div className="font-mono text-xs text-gray-400">{job.id.slice(0, 8)}</div>
+          <div className="font-mono text-xs text-gray-400 dark:text-gray-500">{job.id.slice(0, 8)}</div>
         </td>
         <td className="px-4 py-3"><SourceBadge source={job.source} /></td>
         <td className="px-4 py-3"><StatusBadge status={job.status} /></td>
-        <td className="px-4 py-3 text-xs text-gray-500">{job.retry_count}/3</td>
-        <td className="px-4 py-3 text-xs text-gray-400">{new Date(job.created_at).toLocaleString()}</td>
+        <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">{job.retry_count}/3</td>
+        <td className="px-4 py-3 text-xs text-gray-400 dark:text-gray-500">{new Date(job.created_at).toLocaleString()}</td>
         <td className="px-4 py-3">
           <div className="flex gap-2">
             {job.error_log && <button onClick={() => setShowLog(!showLog)} className="text-xs text-blue-600 hover:underline">Log</button>}
@@ -39,7 +39,7 @@ function JobRow({ job }: { job: DownloadJob }) {
         </td>
       </tr>
       {showLog && job.error_log && (
-        <tr><td colSpan={6} className="px-4 py-3 bg-gray-50"><pre className="text-xs font-mono whitespace-pre-wrap max-h-48 overflow-auto bg-gray-100 p-3 rounded">{job.error_log}</pre></td></tr>
+        <tr><td colSpan={6} className="px-4 py-3 bg-gray-50 dark:bg-slate-800/50"><pre className="text-xs font-mono whitespace-pre-wrap max-h-48 overflow-auto bg-gray-100 dark:bg-slate-700 p-3 rounded">{job.error_log}</pre></td></tr>
       )}
       {confirmRetry && <ConfirmDialog open title="Retry Job" message={`Retry download job ${job.id.slice(0, 8)}?`} onConfirm={() => retry.mutate()} onCancel={() => setConfirmRetry(false)} isPending={retry.isPending} error={(retry.error as Error)?.message} />}
     </>
@@ -61,17 +61,17 @@ export default function DownloadsPage() {
             {s || "All"}
           </button>
         ))}
-        <button onClick={() => jobs.refetch()} className="ml-auto px-3 py-1 text-xs border rounded hover:bg-gray-50">Refresh</button>
+        <button onClick={() => jobs.refetch()} className="ml-auto px-3 py-1 text-xs border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">Refresh</button>
       </div>
 
-      {jobs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-10 bg-gray-100 rounded animate-pulse" />)}</div>}
+      {jobs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-10 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
       {jobs.error && <ErrorState message={(jobs.error as Error).message} onRetry={() => jobs.refetch()} />}
       {jobs.data && !jobs.data.length && <EmptyState title="No download jobs" description="Create a subscription and trigger a download to see jobs here." />}
 
       {jobs.data && jobs.data.length > 0 && (
-        <div className="bg-white rounded-lg shadow overflow-x-auto">
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow overflow-x-auto">
           <table className="w-full text-sm">
-            <thead><tr className="border-b bg-gray-50"><th className="text-left px-4 py-3">Job ID</th><th className="text-left px-4 py-3">Source</th><th className="text-left px-4 py-3">Status</th><th className="text-left px-4 py-3">Retries</th><th className="text-left px-4 py-3">Created</th><th className="text-left px-4 py-3">Actions</th></tr></thead>
+            <thead><tr className="border-b dark:border-slate-700 bg-gray-50 dark:bg-slate-800/50"><th className="text-left px-4 py-3">Job ID</th><th className="text-left px-4 py-3">Source</th><th className="text-left px-4 py-3">Status</th><th className="text-left px-4 py-3">Retries</th><th className="text-left px-4 py-3">Created</th><th className="text-left px-4 py-3">Actions</th></tr></thead>
             <tbody>{jobs.data.map((job) => <JobRow key={job.id} job={job} />)}</tbody>
           </table>
         </div>

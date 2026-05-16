@@ -19,8 +19,8 @@ function TemplateForm({ template, onClose, onSave, isPending }: {
       <div><label className="block text-sm font-medium mb-1">Template *</label><textarea value={tpl} onChange={(e) => setTpl(e.target.value)} rows={3} className="w-full border rounded px-3 py-2 text-sm font-mono" placeholder="pixiv/{user[account]}/{id}" /></div>
       <div className="flex items-center gap-2"><input type="checkbox" checked={isDefault} onChange={(e) => setIsDefault(e.target.checked)} /><span className="text-sm">Set as default for this source</span></div>
       <div className="flex justify-end gap-3 pt-2">
-        <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50">Cancel</button>
-        <button onClick={() => onSave({ name, source: source || undefined, template: tpl, is_default: isDefault })} disabled={!name || !tpl || isPending} className="px-4 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800 disabled:opacity-50">{isPending ? "Saving..." : "Save"}</button>
+        <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">Cancel</button>
+        <button onClick={() => onSave({ name, source: source || undefined, template: tpl, is_default: isDefault })} disabled={!name || !tpl || isPending} className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">{isPending ? "Saving..." : "Save"}</button>
       </div>
     </div>
   );
@@ -40,14 +40,14 @@ export default function NamingTemplatesPage() {
   return (
     <main className="max-w-4xl mx-auto p-6">
       <PageHeader title="Naming Templates" description="Configure gallery-dl file organization patterns">
-        <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-slate-900 text-white rounded text-sm hover:bg-slate-800">+ New</button>
+        <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600">+ New</button>
       </PageHeader>
-      {templates.isLoading && <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-16 bg-gray-100 rounded animate-pulse" />)}</div>}
+      {templates.isLoading && <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-16 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
       {templates.error && <ErrorState message={(templates.error as Error).message} />}
       {!templates.isLoading && tpls.length === 0 && <EmptyState title="No templates" description="Create naming templates to control gallery-dl output paths." />}
       {tpls.map((t: any) => (
-        <div key={t.id} className="bg-white rounded-lg shadow p-4 flex items-center justify-between mb-2">
-          <div><div className="font-medium text-sm">{t.name}</div><div className="text-xs text-gray-500 font-mono mt-1">{t.template}</div>{t.source && <span className="text-xs bg-gray-100 px-2 py-0.5 rounded mt-1 inline-block">{t.source}</span>}{t.is_default && <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded ml-1">default</span>}</div>
+        <div key={t.id} className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 flex items-center justify-between mb-2">
+          <div><div className="font-medium text-sm">{t.name}</div><div className="text-xs text-gray-500 dark:text-gray-400 font-mono mt-1">{t.template}</div>{t.source && <span className="text-xs bg-gray-100 dark:bg-slate-700 px-2 py-0.5 rounded mt-1 inline-block">{t.source}</span>}{t.is_default && <span className="text-xs bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 px-2 py-0.5 rounded ml-1">default</span>}</div>
           <div className="flex gap-2"><button onClick={() => setEditTpl(t)} className="text-xs text-blue-600 hover:underline">Edit</button><button onClick={() => setDeleteId(t.id)} className="text-xs text-red-500 hover:underline">Delete</button></div>
         </div>
       ))}

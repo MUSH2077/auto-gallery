@@ -59,11 +59,11 @@ export default function SubscriptionDefaultsPage() {
 
       {!current ? null : (
         <>
-          <div className="bg-white rounded-lg shadow p-6 space-y-5 text-sm">
-            <div className="flex items-center justify-between py-3 border-b">
+          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6 space-y-5 text-sm">
+            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
               <div>
                 <span className="font-medium">Default Sync Interval</span>
-                <p className="text-xs text-gray-500 mt-1">How often to auto-sync each subscription (hours).</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">How often to auto-sync each subscription (hours).</p>
               </div>
               <input
                 type="number" min={1} max={168}
@@ -73,10 +73,10 @@ export default function SubscriptionDefaultsPage() {
               />
             </div>
 
-            <div className="flex items-center justify-between py-3 border-b">
+            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
               <div>
                 <span className="font-medium">Scheduler Scan Interval</span>
-                <p className="text-xs text-gray-500 mt-1">How often the scheduler wakes up to check for due subscriptions (minutes).</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">How often the scheduler wakes up to check for due subscriptions (minutes).</p>
               </div>
               <input
                 type="number" min={5} max={1440}
@@ -89,7 +89,7 @@ export default function SubscriptionDefaultsPage() {
             <div className="flex items-center justify-between py-3">
               <div>
                 <span className="font-medium">Default Sync Enabled</span>
-                <p className="text-xs text-gray-500 mt-1">New subscriptions start with auto-sync enabled.</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">New subscriptions start with auto-sync enabled.</p>
               </div>
               <button
                 onClick={() => setBool("default_sync_enabled", !current.default_sync_enabled)}
@@ -108,7 +108,7 @@ export default function SubscriptionDefaultsPage() {
             <button
               onClick={() => save.mutate(current)}
               disabled={save.isPending}
-              className="px-6 py-2 bg-slate-900 text-white rounded text-sm hover:bg-slate-800 disabled:opacity-50"
+              className="px-6 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50"
             >
               {save.isPending ? "Saving..." : "Save Settings"}
             </button>

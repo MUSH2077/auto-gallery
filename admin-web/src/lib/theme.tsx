@@ -118,46 +118,27 @@ function GlobeIcon({ className }: { className?: string }) {
 
 export function ThemeToggle() {
   const { theme, setTheme } = useTheme();
-  const [open, setOpen] = useState(false);
   const { t } = useI18n();
 
-  const options: { key: Theme; icon: typeof SunIcon; label: string }[] = [
-    { key: "light", icon: SunIcon, label: t("theme.light", "Light") },
-    { key: "dark", icon: MoonIcon, label: t("theme.dark", "Dark") },
-    { key: "system", icon: MonitorIcon, label: t("theme.system", "System") },
-  ];
+  const cycle: Theme[] = ["light", "dark", "system"];
+  const next = cycle[(cycle.indexOf(theme) + 1) % cycle.length];
 
-  const current = options.find((o) => o.key === theme) || options[0];
+  const labels: Record<Theme, string> = {
+    light: t("theme.light", "Light"),
+    dark: t("theme.dark", "Dark"),
+    system: t("theme.system", "System"),
+  };
+
+  const icon = theme === "dark" ? <MoonIcon className="w-5 h-5" /> : theme === "system" ? <MonitorIcon className="w-5 h-5" /> : <SunIcon className="w-5 h-5" />;
 
   return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen(!open)}
-        className="p-1.5 rounded hover:bg-white/10 transition-colors text-white/80 hover:text-white"
-        title={current.label}
-      >
-        <current.icon className="w-5 h-5" />
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 bg-white dark:bg-slate-800 rounded-lg shadow-lg border dark:border-slate-700 z-20 py-1 min-w-[120px]">
-            {options.map((o) => (
-              <button
-                key={o.key}
-                onClick={() => { setTheme(o.key); setOpen(false); }}
-                className={`flex items-center gap-2 px-3 py-2 text-sm w-full hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors
-                  ${theme === o.key ? "text-blue-600 dark:text-blue-400 font-medium" : "text-gray-700 dark:text-gray-300"}`}
-              >
-                <o.icon className="w-4 h-4" />
-                {o.label}
-                {theme === o.key && <span className="ml-auto text-blue-500">&#10003;</span>}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
+    <button
+      onClick={() => setTheme(next)}
+      className="p-1.5 rounded hover:bg-white/10 transition-colors text-white/80 hover:text-white"
+      title={`${labels[theme]} — click for ${labels[next]}`}
+    >
+      {icon}
+    </button>
   );
 }
 

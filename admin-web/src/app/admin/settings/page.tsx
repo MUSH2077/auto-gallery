@@ -50,7 +50,7 @@ export default function SettingsPage() {
               <p className="text-sm font-medium dark:text-white">{t("settings.language")}</p>
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("settings.language.desc")}</p>
             </div>
-            <div className="flex gap-1 bg-gray-100 dark:bg-slate-700 rounded-lg p-0.5">
+            <div className="flex gap-1 bg-gray-100 dark:bg-slate-700 dark:bg-slate-700 rounded-lg p-0.5">
               <button
                 onClick={() => setLang("zh")}
                 className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
@@ -86,7 +86,7 @@ export default function SettingsPage() {
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("settings.search_index.desc")}</p>
             </div>
             <button onClick={() => setConfirmReindex(true)} disabled={reindex.isPending}
-              className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50 shrink-0">
+              className="px-4 py-2 bg-slate-900 dark:bg-slate-700 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 dark:hover:bg-slate-600 disabled:opacity-50 shrink-0">
               {reindex.isPending ? t("settings.reindexing") : t("settings.reindex")}
             </button>
           </div>
@@ -99,12 +99,12 @@ export default function SettingsPage() {
         {settings.isError ? (
           <ErrorState message={settings.error?.message || t("common.error")} onRetry={() => settings.refetch()} />
         ) : !settings.data ? (
-          <div className="card rounded-lg shadow p-4 animate-pulse"><div className="h-20 bg-gray-100 dark:bg-slate-700 rounded" /></div>
+          <div className="card rounded-lg shadow p-4 animate-pulse"><div className="h-20 bg-gray-100 dark:bg-slate-700 dark:bg-slate-700 rounded" /></div>
         ) : (
           <div className="card rounded-lg shadow p-4">
             <div className="grid grid-cols-2 gap-3 text-sm">
               {Object.entries(settings.data.dedup || {}).map(([key, value]) => (
-                <div key={key} className="flex justify-between py-1 border-b dark:border-slate-700 last:border-0">
+                <div key={key} className="flex justify-between py-1 border-b dark:border-slate-700 dark:border-slate-700 last:border-0">
                   <span className="text-gray-500 dark:text-gray-400 capitalize">{key.replace(/_/g, " ")}</span>
                   <span className={`font-mono text-xs ${typeof value === "boolean" ? (value ? "text-green-700 dark:text-green-400" : "text-gray-400") : "text-blue-700 dark:text-blue-400"}`}>
                     {String(value)}
@@ -122,7 +122,7 @@ export default function SettingsPage() {
         <div className="card rounded-lg shadow p-4 text-sm space-y-2">
           <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Backend API</span><span className="font-mono text-xs dark:text-gray-300">/api/v1 (proxied)</span></div>
           <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Admin Web</span><span className="text-xs dark:text-gray-300">Next.js 14 · TypeScript · Tailwind · TanStack Query</span></div>
-          <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Auth mode</span><span className="text-xs text-gray-400">Admin API key</span></div>
+          <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Auth mode</span><span className="text-xs text-gray-400 dark:text-gray-500">Admin API key</span></div>
         </div>
       </section>
 

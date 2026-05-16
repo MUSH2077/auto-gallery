@@ -54,11 +54,11 @@ export default function DownloadDefaultsPage() {
 
       {!current ? null : (
         <>
-          <div className="bg-white rounded-lg shadow p-6 space-y-5 text-sm">
-            <div className="flex items-center justify-between py-3 border-b">
+          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6 space-y-5 text-sm">
+            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
               <div>
                 <span className="font-medium">Timeout</span>
-                <p className="text-xs text-gray-500 mt-1">Maximum time for a single gallery-dl download job (seconds). Default 600.</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Maximum time for a single gallery-dl download job (seconds). Default 600.</p>
               </div>
               <input
                 type="number" min={60} max={3600} step={60}
@@ -68,10 +68,10 @@ export default function DownloadDefaultsPage() {
               />
             </div>
 
-            <div className="flex items-center justify-between py-3 border-b">
+            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
               <div>
                 <span className="font-medium">Max Retries</span>
-                <p className="text-xs text-gray-500 mt-1">Number of retry attempts after a failed download before marking as failed. Default 3.</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Number of retry attempts after a failed download before marking as failed. Default 3.</p>
               </div>
               <input
                 type="number" min={0} max={10}
@@ -84,7 +84,7 @@ export default function DownloadDefaultsPage() {
             <div className="flex items-center justify-between py-3">
               <div>
                 <span className="font-medium">Retry Backoff Base</span>
-                <p className="text-xs text-gray-500 mt-1">Base delay in seconds for exponential backoff. Formula: base × 2^(retry-1). Default 60.</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Base delay in seconds for exponential backoff. Formula: base × 2^(retry-1). Default 60.</p>
               </div>
               <input
                 type="number" min={10} max={600} step={10}
@@ -95,7 +95,7 @@ export default function DownloadDefaultsPage() {
             </div>
           </div>
 
-          <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+          <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg text-sm text-blue-800 dark:text-blue-300">
             <strong>Current retry schedule:</strong> Attempt 1 → fail → wait {current.retry_backoff_base_seconds}s → Attempt 2
             → fail → wait {current.retry_backoff_base_seconds * 2}s → Attempt 3 → fail → marked as failed. Max {current.max_retries} retries.
           </div>
@@ -104,7 +104,7 @@ export default function DownloadDefaultsPage() {
             <button
               onClick={() => save.mutate(current)}
               disabled={save.isPending}
-              className="px-6 py-2 bg-slate-900 text-white rounded text-sm hover:bg-slate-800 disabled:opacity-50"
+              className="px-6 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50"
             >
               {save.isPending ? "Saving..." : "Save Settings"}
             </button>

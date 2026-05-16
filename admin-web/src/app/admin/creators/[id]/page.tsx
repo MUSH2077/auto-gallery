@@ -24,8 +24,8 @@ function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () =>
         <div><label className="block text-sm font-medium mb-1">Source</label><input value={source} onChange={(e) => setSource(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="e.g. pixiv" /></div>
       </div>
       <div className="flex justify-end gap-3 pt-2">
-        <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50">Cancel</button>
-        <button onClick={() => create.mutate()} disabled={!url || create.isPending} className="px-4 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800 disabled:opacity-50">{create.isPending ? "Adding..." : "Add Link"}</button>
+        <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">Cancel</button>
+        <button onClick={() => create.mutate()} disabled={!url || create.isPending} className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">{create.isPending ? "Adding..." : "Add Link"}</button>
       </div>
       {create.error && <p className="text-red-600 text-sm">{(create.error as Error).message}</p>}
     </div>
@@ -51,10 +51,10 @@ function SubscriptionPanel({ creatorId }: { creatorId: string }) {
   if (subs.isLoading) return <div className="animate-pulse"><div className="h-8 bg-gray-200 rounded" /></div>;
   if (!sub) {
     return (
-      <div className="text-xs text-gray-500">
+      <div className="text-xs text-gray-500 dark:text-gray-400">
         <p className="mb-2">No subscription yet.</p>
         <button onClick={() => createSub.mutate()} disabled={createSub.isPending}
-          className="px-3 py-1 bg-slate-900 text-white rounded text-xs hover:bg-slate-800">
+          className="px-3 py-1 bg-slate-900 dark:bg-slate-700 text-white rounded text-xs hover:bg-slate-800 dark:hover:bg-slate-600">
           {createSub.isPending ? "Creating..." : "Create Subscription"}
         </button>
       </div>
@@ -64,25 +64,25 @@ function SubscriptionPanel({ creatorId }: { creatorId: string }) {
   return (
     <div className="text-xs space-y-2">
       <div className="flex justify-between">
-        <span className="text-gray-500">Status:</span>
+        <span className="text-gray-500 dark:text-gray-400">Status:</span>
         <span className={sub.sync_enabled ? "text-green-600" : "text-gray-400"}>
           {sub.sync_enabled ? "Auto-sync enabled" : "Manual only"} · {sub.sync_interval_hours}h
         </span>
       </div>
       {sub.last_synced_at && (
         <div className="flex justify-between">
-          <span className="text-gray-500">Last synced:</span>
+          <span className="text-gray-500 dark:text-gray-400">Last synced:</span>
           <span>{new Date(sub.last_synced_at).toLocaleString()}</span>
         </div>
       )}
       {sources.data && sources.data.length > 0 && (
         <div className="mt-2 space-y-1">
-          <p className="text-gray-500 font-medium">Sources ({sources.data.length}):</p>
+          <p className="text-gray-500 dark:text-gray-400 font-medium">Sources ({sources.data.length}):</p>
           {sources.data.map((ss: any) => (
             <div key={ss.id} className="flex items-center justify-between border-t pt-1">
               <div className="flex items-center gap-2">
                 <SourceBadge source={ss.source} />
-                <span className="font-mono text-gray-400">{ss.source_creator_id || "—"}</span>
+                <span className="font-mono text-gray-400 dark:text-gray-500">{ss.source_creator_id || "—"}</span>
                 <span className={ss.is_enabled ? "text-green-500" : "text-gray-400"}>
                   {ss.is_enabled ? "●" : "○"}
                 </span>
@@ -94,7 +94,7 @@ function SubscriptionPanel({ creatorId }: { creatorId: string }) {
         </div>
       )}
       {(!sources.data || sources.data.length === 0) && (
-        <p className="text-gray-400">No sources configured.</p>
+        <p className="text-gray-400 dark:text-gray-500">No sources configured.</p>
       )}
     </div>
   );
@@ -120,8 +120,8 @@ function AddSourceForm({ creatorId, onClose }: { creatorId: string; onClose: () 
       <div><label className="block text-sm font-medium mb-1">Source URL</label><input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="https://..." /></div>
       <div><label className="block text-sm font-medium mb-1">Display Name</label><input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></div>
       <div className="flex justify-end gap-3 pt-2">
-        <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50">Cancel</button>
-        <button onClick={() => create.mutate()} disabled={!sourceCreatorId || create.isPending} className="px-4 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800 disabled:opacity-50">{create.isPending ? "Adding..." : "Add Source"}</button>
+        <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">Cancel</button>
+        <button onClick={() => create.mutate()} disabled={!sourceCreatorId || create.isPending} className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">{create.isPending ? "Adding..." : "Add Source"}</button>
       </div>
       {create.error && <p className="text-red-600 text-sm">{(create.error as Error).message}</p>}
     </div>
@@ -154,7 +154,7 @@ export default function CreatorDetailPage() {
   });
 
   if (creator.isLoading) return <main className="max-w-4xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 bg-gray-200 rounded w-1/4" /><div className="h-4 bg-gray-200 rounded w-1/2" /><div className="h-32 bg-gray-200 rounded" /></div></main>;
-  if (creator.error) return <main className="max-w-4xl mx-auto p-6"><div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">{(creator.error as Error).message}</div></main>;
+  if (creator.error) return <main className="max-w-4xl mx-auto p-6"><div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 dark:text-red-400">{(creator.error as Error).message}</div></main>;
   if (!creator.data) return null;
 
   const c = creator.data;
@@ -163,64 +163,64 @@ export default function CreatorDetailPage() {
     <main className="max-w-4xl mx-auto p-6">
       <PageHeader title={c.display_name || c.name}>
         <div className="flex gap-2">
-          <button onClick={() => router.push(`/admin/creators/${id}/mapping`)} className="px-3 py-2 text-sm border rounded hover:bg-gray-50">Manage Mapping</button>
-          <button onClick={openEdit} className="px-3 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800">Edit</button>
+          <button onClick={() => router.push(`/admin/creators/${id}/mapping`)} className="px-3 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">Manage Mapping</button>
+          <button onClick={openEdit} className="px-3 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">Edit</button>
         </div>
       </PageHeader>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div className="col-span-2 space-y-4">
-          <div className="bg-white rounded-lg shadow p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
             <h3 className="font-medium mb-2">Details</h3>
             <dl className="text-sm space-y-2">
-              <div className="flex gap-2"><dt className="text-gray-500 w-24">Name:</dt><dd>{c.name}</dd></div>
-              {c.display_name && <div className="flex gap-2"><dt className="text-gray-500 w-24">Display:</dt><dd>{c.display_name}</dd></div>}
-              {c.description && <div className="flex gap-2"><dt className="text-gray-500 w-24">Description:</dt><dd className="whitespace-pre-wrap">{c.description}</dd></div>}
-              <div className="flex gap-2"><dt className="text-gray-500 w-24">Status:</dt><dd><StatusBadge status={c.is_active ? "up" : "down"} /></dd></div>
-              <div className="flex gap-2"><dt className="text-gray-500 w-24">Created:</dt><dd className="text-xs">{new Date(c.created_at).toLocaleString()}</dd></div>
+              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24">Name:</dt><dd>{c.name}</dd></div>
+              {c.display_name && <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24">Display:</dt><dd>{c.display_name}</dd></div>}
+              {c.description && <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24">Description:</dt><dd className="whitespace-pre-wrap">{c.description}</dd></div>}
+              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24">Status:</dt><dd><StatusBadge status={c.is_active ? "up" : "down"} /></dd></div>
+              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24">Created:</dt><dd className="text-xs">{new Date(c.created_at).toLocaleString()}</dd></div>
             </dl>
           </div>
 
-          <div className="bg-white rounded-lg shadow p-4">
-            <div className="flex items-center justify-between mb-3"><h3 className="font-medium">Links ({links.data?.length || 0})</h3><button onClick={() => setShowAddLink(true)} className="text-xs px-3 py-1 bg-slate-900 text-white rounded hover:bg-slate-800">+ Add Link</button></div>
+          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+            <div className="flex items-center justify-between mb-3"><h3 className="font-medium">Links ({links.data?.length || 0})</h3><button onClick={() => setShowAddLink(true)} className="text-xs px-3 py-1 bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">+ Add Link</button></div>
             {links.data && links.data.length > 0 ? (
               <div className="space-y-2">
                 {links.data.map((l: CreatorLinkType) => (
-                  <div key={l.id} className="flex items-center justify-between border-b pb-2 text-sm">
+                  <div key={l.id} className="flex items-center justify-between border-b dark:border-slate-700 pb-2 text-sm">
                     <div className="flex items-center gap-2">
                       <SourceBadge source={l.link_type} />
                       <a href={l.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline truncate max-w-xs">{l.url}</a>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-gray-400">confidence: {l.confidence.toFixed(1)}</span>
+                      <span className="text-xs text-gray-400 dark:text-gray-500">confidence: {l.confidence.toFixed(1)}</span>
                       {l.is_verified ? <StatusBadge status="up" /> : <button onClick={() => verifyLink.mutate(l.id)} disabled={verifyLink.isPending} className="text-xs text-blue-600 hover:underline disabled:opacity-50">{verifyLink.isPending ? "..." : "Verify"}</button>}
                     </div>
                   </div>
                 ))}
               </div>
-            ) : <p className="text-sm text-gray-400">No links yet.</p>}
+            ) : <p className="text-sm text-gray-400 dark:text-gray-500">No links yet.</p>}
             {verifyLink.error && <p className="text-red-600 text-sm mt-2">{(verifyLink.error as Error).message}</p>}
           </div>
         </div>
 
-        <div className="bg-white rounded-lg shadow p-4 h-fit">
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 h-fit">
           <div className="flex items-center justify-between mb-3"><h3 className="font-medium">Subscription</h3></div>
           <SubscriptionPanel creatorId={id} />
         </div>
 
         {/* Danbooru Reference */}
         {c.danbooru_artist_id && (
-          <div className="bg-white rounded-lg shadow p-4 h-fit">
+          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 h-fit">
             <h3 className="font-medium mb-2">Danbooru Reference</h3>
             <div className="text-xs space-y-1">
               <div className="flex justify-between">
-                <span className="text-gray-500">Artist ID:</span>
+                <span className="text-gray-500 dark:text-gray-400">Artist ID:</span>
                 <a href={`https://danbooru.donmai.us/artists/${c.danbooru_artist_id}`} target="_blank" rel="noopener noreferrer"
                   className="text-blue-600 hover:underline font-mono">#{c.danbooru_artist_id}</a>
               </div>
             </div>
             {c.description && c.description.includes("Danbooru") && (
-              <div className="mt-2 text-xs text-gray-600 bg-blue-50 p-2 rounded">{c.description}</div>
+              <div className="mt-2 text-xs text-gray-600 dark:text-gray-300 bg-blue-50 dark:bg-blue-900/30 p-2 rounded">{c.description}</div>
             )}
             <button onClick={() => router.push(`/admin/creators/${id}/mapping`)}
               className="mt-3 text-xs text-blue-600 hover:underline w-full text-center block">
@@ -238,8 +238,8 @@ export default function CreatorDetailPage() {
           <div><label className="block text-sm font-medium mb-1">Display Name</label><input value={editDisplay} onChange={(e) => setEditDisplay(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></div>
           <div><label className="block text-sm font-medium mb-1">Description</label><textarea value={editDesc} onChange={(e) => setEditDesc(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" rows={3} /></div>
           <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => setEditing(false)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50">Cancel</button>
-            <button onClick={() => update.mutate()} disabled={update.isPending} className="px-4 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800">Save</button>
+            <button onClick={() => setEditing(false)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">Cancel</button>
+            <button onClick={() => update.mutate()} disabled={update.isPending} className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">Save</button>
           </div>
           {update.error && <p className="text-red-600 text-sm">{(update.error as Error).message}</p>}
         </div>

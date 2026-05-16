@@ -47,16 +47,16 @@ function ProviderCard({ s }: { s: ProviderInfo }) {
   };
 
   return (
-    <div className="bg-white rounded-lg shadow p-4">
+    <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
       <div className="flex items-center justify-between mb-2">
         <span className="font-medium text-lg">{s.display_name}</span>
-        <span className="text-xs text-gray-400 font-mono">{s.source_name}</span>
+        <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">{s.source_name}</span>
       </div>
-      <p className="text-xs text-gray-500 mb-3 leading-relaxed">{SOURCE_DESCRIPTIONS[s.source_name] || "No description available."}</p>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mb-3 leading-relaxed">{SOURCE_DESCRIPTIONS[s.source_name] || "No description available."}</p>
       <div className="flex gap-2 flex-wrap mb-3">
         {s.capabilities.can_download
-          ? <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs font-medium">Download: Available</span>
-          : <span className="px-2 py-0.5 bg-gray-100 text-gray-500 rounded text-xs">Download: Placeholder</span>}
+          ? <span className="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded text-xs font-medium">Download: Available</span>
+          : <span className="px-2 py-0.5 bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-gray-400 rounded text-xs">Download: Placeholder</span>}
         {s.capabilities.supports_gallerydl && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs font-medium">gallery-dl</span>}
         {s.capabilities.supports_tags && <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-medium">Tags</span>}
         {s.capabilities.is_reference_only && <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs font-medium">Reference Only</span>}
@@ -64,17 +64,17 @@ function ProviderCard({ s }: { s: ProviderInfo }) {
       </div>
 
       <div className="border-t pt-3">
-        <label className="text-xs text-gray-500 block mb-1">Test URL Validation</label>
+        <label className="text-xs text-gray-500 dark:text-gray-400 block mb-1">Test URL Validation</label>
         <div className="flex gap-2 mb-2">
           <input type="text" value={url} onChange={(e) => setUrl(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleTest()}
             placeholder={DEFAULT_URLS[s.source_name] || "https://..."}
             className="flex-1 text-sm border rounded px-3 py-1.5 font-mono" />
-          <button onClick={handleTest} className="text-xs px-3 py-1.5 bg-slate-900 text-white rounded hover:bg-slate-800 shrink-0">Test</button>
+          <button onClick={handleTest} className="text-xs px-3 py-1.5 bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 shrink-0">Test</button>
         </div>
         <button onClick={() => setUrl(DEFAULT_URLS[s.source_name] || "")}
           className="text-xs text-blue-600 hover:underline mb-2 block">
-          Try default URL: <span className="font-mono text-gray-400">{DEFAULT_URLS[s.source_name]?.slice(0, 40)}{(DEFAULT_URLS[s.source_name]?.length || 0) > 40 ? "..." : ""}</span>
+          Try default URL: <span className="font-mono text-gray-400 dark:text-gray-500">{DEFAULT_URLS[s.source_name]?.slice(0, 40)}{(DEFAULT_URLS[s.source_name]?.length || 0) > 40 ? "..." : ""}</span>
         </button>
         {validResult && (
           <div className={`p-2 rounded text-xs ${validResult.ok ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
@@ -95,9 +95,9 @@ export default function SourcesPage() {
     <main className="max-w-6xl mx-auto p-6">
       <PageHeader title="Source Providers" description={`${sources.data?.sources?.length || 0} registered · ${downloadable} downloadable · ${reference} reference-only`} />
 
-      {sources.isLoading && <div className="grid grid-cols-1 md:grid-cols-2 gap-4">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="bg-white rounded-lg shadow p-4 animate-pulse"><div className="h-4 bg-gray-200 rounded w-1/2 mb-2" /><div className="h-3 bg-gray-200 rounded w-3/4 mb-4" /><div className="h-16 bg-gray-200 rounded" /></div>)}</div>}
+      {sources.isLoading && <div className="grid grid-cols-1 md:grid-cols-2 gap-4">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 animate-pulse"><div className="h-4 bg-gray-200 rounded w-1/2 mb-2" /><div className="h-3 bg-gray-200 rounded w-3/4 mb-4" /><div className="h-16 bg-gray-200 rounded" /></div>)}</div>}
 
-      {sources.error && <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">{(sources.error as Error).message}</div>}
+      {sources.error && <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 dark:text-red-400">{(sources.error as Error).message}</div>}
 
       {sources.data && !sources.data.sources.length && <EmptyState title="No providers registered" description="Register source providers in the backend configuration." />}
 
@@ -107,21 +107,21 @@ export default function SourcesPage() {
             {sources.data.sources.map((s) => <ProviderCard key={s.source_name} s={s} />)}
           </div>
 
-          <details className="bg-white rounded-lg shadow p-4 text-sm">
+          <details className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 text-sm">
             <summary className="font-medium cursor-pointer">Provider Capability Matrix</summary>
             <div className="overflow-x-auto mt-3">
               <table className="w-full text-sm">
-                <thead><tr className="border-b bg-gray-50"><th className="text-left py-2 px-2">Provider</th><th className="text-center py-2 px-2">Download</th><th className="text-center py-2 px-2">gallery-dl</th><th className="text-center py-2 px-2">Tags</th><th className="text-center py-2 px-2">Reference</th><th className="text-center py-2 px-2">Local</th><th className="text-left py-2 px-2">Auth</th></tr></thead>
+                <thead><tr className="border-b dark:border-slate-700 bg-gray-50 dark:bg-slate-800/50"><th className="text-left py-2 px-2">Provider</th><th className="text-center py-2 px-2">Download</th><th className="text-center py-2 px-2">gallery-dl</th><th className="text-center py-2 px-2">Tags</th><th className="text-center py-2 px-2">Reference</th><th className="text-center py-2 px-2">Local</th><th className="text-left py-2 px-2">Auth</th></tr></thead>
                 <tbody>
                   {sources.data.sources.map((s) => (
-                    <tr key={s.source_name} className="border-b hover:bg-gray-50">
+                    <tr key={s.source_name} className="border-b dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">
                       <td className="py-2 px-2 font-medium">{s.display_name}</td>
                       <td className="text-center py-2 px-2">{s.capabilities.can_download ? "✓" : "—"}</td>
                       <td className="text-center py-2 px-2">{s.capabilities.supports_gallerydl ? "✓" : "—"}</td>
                       <td className="text-center py-2 px-2">{s.capabilities.supports_tags ? "✓" : "—"}</td>
                       <td className="text-center py-2 px-2">{s.capabilities.is_reference_only ? "✓" : "—"}</td>
                       <td className="text-center py-2 px-2">{s.capabilities.can_import_local ? "✓" : "—"}</td>
-                      <td className="py-2 px-2 text-xs text-gray-500">{s.source_name === "pixiv" ? "OAuth / Cookies" : s.source_name === "x" ? "OAuth (future)" : "N/A"}</td>
+                      <td className="py-2 px-2 text-xs text-gray-500 dark:text-gray-400">{s.source_name === "pixiv" ? "OAuth / Cookies" : s.source_name === "x" ? "OAuth (future)" : "N/A"}</td>
                     </tr>
                   ))}
                 </tbody>
