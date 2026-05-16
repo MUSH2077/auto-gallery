@@ -1,4 +1,5 @@
 const BASE = process.env.NEXT_PUBLIC_API_URL || "";
+const ADMIN_KEY = process.env.NEXT_PUBLIC_ADMIN_KEY || "changeme";
 
 class ApiError extends Error {
   status: number;
@@ -10,7 +11,7 @@ class ApiError extends Error {
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...options?.headers },
+    headers: { "Content-Type": "application/json", "X-Admin-Key": ADMIN_KEY, ...options?.headers },
     ...options,
   });
   if (res.status === 204) return undefined as T;
@@ -83,6 +84,7 @@ export interface Subscription {
   name?: string;
   is_active: boolean;
   sync_enabled: boolean;
+  sync_interval_hours: number;
   last_synced_at?: string;
   created_at: string;
   updated_at: string;
@@ -157,6 +159,14 @@ export interface AdminSettings {
 export const api = {
   // System
   health: () => request<HealthResponse>("/api/v1/system/health"),
+
+  storageStats: () => request<{
+    downloads: { path: string; size_bytes: number; file_count: number };
+    library: { path: string; size_bytes: number; file_count: number };
+    disk: { total_bytes: number; free_bytes: number; used_bytes: number };
+  }>("/api/v1/system/storage"),
+
+  queueStats: () => request<{ default_queue: number; scheduled_queue: number; failed_jobs: number }>("/api/v1/system/queue-stats"),
 
   // Sources
   sources: () => request<{ sources: ProviderInfo[] }>("/api/v1/sources"),

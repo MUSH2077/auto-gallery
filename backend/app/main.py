@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.api import api_router
+from app.api.media import router as media_router
 from app.config import settings
 from app.database import async_session, engine
 
@@ -24,13 +25,14 @@ app = FastAPI(title="auto-gallery", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3250", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
 
 app.include_router(api_router)
+app.include_router(media_router)
 
 
 @app.get("/api/v1/system/health")

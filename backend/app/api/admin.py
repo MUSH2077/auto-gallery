@@ -1,6 +1,8 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
-router = APIRouter()
+from app.auth import RequireAdmin
+
+router = APIRouter(dependencies=[RequireAdmin])
 
 
 @router.get("/settings")

@@ -1,4 +1,6 @@
-from sqlalchemy import Boolean, ForeignKey, UniqueConstraint
+from datetime import datetime, timezone
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from uuid import UUID
 
@@ -15,7 +17,8 @@ class Subscription(TimestampMixin, Base):
     name: Mapped[str | None] = mapped_column()
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     sync_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    last_synced_at: Mapped[str | None] = mapped_column()
+    sync_interval_hours: Mapped[int] = mapped_column(Integer, default=6)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     creator = relationship("Creator", back_populates="subscriptions")
     subscription_sources = relationship("SubscriptionSource", back_populates="subscription")

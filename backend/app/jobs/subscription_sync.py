@@ -11,15 +11,13 @@ from app.models.download_job import DownloadJob
 
 logger = logging.getLogger(__name__)
 
-# Minimum interval between auto-syncs per subscription source (hours)
-MIN_SYNC_INTERVAL_HOURS = 6
+DEFAULT_SYNC_INTERVAL_HOURS = 6
 
 
 async def sync_subscriptions():
     logger.info("Starting subscription auto-sync scan")
 
     now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(hours=MIN_SYNC_INTERVAL_HOURS)
     jobs_created = 0
 
     async with async_session() as db:
@@ -43,7 +41,14 @@ async def sync_subscriptions():
             )
             sub_sources = sources.scalars().all()
 
+            interval_hours = sub.sync_interval_hours or DEFAULT_SYNC_INTERVAL_HOURS
+            cutoff = now - timedelta(hours=interval_hours)
+
             for ss in sub_sources:
+                # Skip if auth is known to be unhealthy
+                if ss.auth_healthy is False:
+                    continue
+
                 # Check if there's a recent job for this subscription source
                 recent = await db.execute(
                     select(DownloadJob).where(
@@ -90,6 +95,7 @@ async def sync_subscriptions():
                     logger.error("Failed to enqueue download job %s: %s", job.id, e)
 
                 jobs_created += 1
+                sub.last_synced_at = now
                 logger.info("Auto-sync created download job %s for source=%s url=%s",
                             job.id, ss.source, ss.source_url)
 

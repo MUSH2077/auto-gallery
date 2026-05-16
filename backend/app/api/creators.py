@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from app.auth import RequireAdmin
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -9,7 +10,7 @@ from app.schemas.source_creator import SourceCreatorCreate, SourceCreatorRead
 from app.schemas.creator_link import CreatorLinkCreate, CreatorLinkRead, CreatorLinkUpdate
 from app.services.creator import CreatorService
 
-router = APIRouter()
+router = APIRouter(dependencies=[RequireAdmin])
 
 
 @router.get("", response_model=list[CreatorRead])

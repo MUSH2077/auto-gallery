@@ -1,14 +1,29 @@
 import logging
 import os
+import re
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
+from sqlalchemy import select
+
 from app.config import settings
 from app.database import async_session
+from app.models.subscription_source import SubscriptionSource
 from app.repositories.download_job import DownloadJobRepository
 
 logger = logging.getLogger(__name__)
+
+AUTH_ERROR_PATTERNS = [
+    (r"(?i)401\s*(unauthorized|error)", "HTTP 401 Unauthorized"),
+    (r"(?i)403\s*(forbidden|error)", "HTTP 403 Forbidden"),
+    (r"(?i)authentication\s*(required|failed|error)", "Authentication required"),
+    (r"(?i)cookie.*(expired|invalid|missing)", "Cookie expired or missing"),
+    (r"(?i)token.*(expired|invalid|revoked)", "Token expired or invalid"),
+    (r"(?i)login.*(required|failed|error)", "Login required"),
+    (r"(?i)no.*valid.*(cookie|session|token|auth)", "No valid credentials"),
+]
 
 
 async def run_download_job(job_id: str):
@@ -35,14 +50,12 @@ async def run_download_job(job_id: str):
     try:
         config_path = os.path.join(
             os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"), "config.json")
-        download_dir = Path(settings.download_root) / job_id
-        download_dir.mkdir(parents=True, exist_ok=True)
 
         cmd = ["gallery-dl"]
         if os.path.exists(config_path):
             cmd.extend(["--config", config_path])
         cmd.extend([
-            "--destination", str(download_dir),
+            "--destination", str(settings.download_root),
             "--write-metadata",
             job.source_url,
         ])
@@ -61,6 +74,27 @@ async def run_download_job(job_id: str):
                         await repo2.update_status(j, "pending", result.stderr[:5000])
                     else:
                         await repo2.update_status(j, "failed", result.stderr[:5000])
+                # Auth health monitoring
+                if j.subscription_source_id:
+                    ss = await db2.execute(
+                        select(SubscriptionSource).where(SubscriptionSource.id == j.subscription_source_id)
+                    )
+                    source = ss.scalar_one_or_none()
+                    if source:
+                        if result.returncode == 0:
+                            source.last_successful_auth = datetime.now(timezone.utc)
+                            source.auth_healthy = True
+                        else:
+                            combined = (result.stderr or "") + (result.stdout or "")
+                            auth_issue = None
+                            for pattern, label in AUTH_ERROR_PATTERNS:
+                                if re.search(pattern, combined):
+                                    auth_issue = label
+                                    break
+                            if auth_issue:
+                                source.auth_healthy = False
+                                logger.warning("Auth failure for subscription_source %s: %s", source.id, auth_issue)
+
                 await db2.commit()
 
         if result.returncode != 0 and job.retry_count < 3:

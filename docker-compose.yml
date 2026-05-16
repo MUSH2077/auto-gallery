@@ -124,8 +124,10 @@ services:
     build:
       context: ./admin-web
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_ADMIN_KEY: ${ADMIN_PASSWORD:-changeme}
     ports:
-      - "${ADMIN_WEB_PORT:-3000}:3000"
+      - "${ADMIN_WEB_PORT:-3250}:3000"
     environment:
       HOSTNAME: "0.0.0.0"
     depends_on:

@@ -1,7 +1,5 @@
 import json
 import logging
-import re
-import shutil
 from collections import defaultdict
 from pathlib import Path
 from uuid import UUID
@@ -63,15 +61,22 @@ async def run_import_job(import_job_id: str):
             return
         provider = registry.get(dj.source)
 
-        job_dir = Path(settings.download_root) / str(dj.id)
+        # Scan the permanent downloads directory (no job_id subdir)
+        # gallery-dl config "directory": ["pixiv", "{user[account]}", "{id}"]
+        # creates: /downloads/pixiv/{user[account]}/{work_id}/{work_id}_p0.jpg
+        # with JSON: /downloads/pixiv/{user[account]}/{work_id}/{work_id}_p0.jpg.json
+        source_root = Path(settings.download_root) / provider.source_name
+        if not source_root.exists():
+            async with async_session() as db:
+                ij = await db.get(ImportJob, job_uuid)
+                if ij:
+                    ij.status = "failed"
+                    ij.error_log = f"Source directory not found: {source_root}"
+                    await db.commit()
+            return
 
         # Find per-file metadata JSONs from --write-metadata
-        # These are {filename}.json alongside each image file
-        # Exclude info.json at root (from --write-info-json, not used)
-        all_json_files = sorted(
-            [p for p in job_dir.rglob("*.json")
-             if not (p.name == "info.json" and p.parent == job_dir)]
-        )
+        all_json_files = sorted(source_root.rglob("*.json"))
 
         if not all_json_files:
             async with async_session() as db:
@@ -81,10 +86,6 @@ async def run_import_job(import_job_id: str):
                     ij.error_log = "No metadata JSON files found"
                     await db.commit()
             return
-
-        # Find all image files
-        all_images = [p for p in job_dir.rglob("*")
-                      if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS]
 
         # Group JSONs by work_id
         groups = defaultdict(list)
@@ -108,7 +109,6 @@ async def run_import_job(import_job_id: str):
                     await db.commit()
             return
 
-        creator_name = None
         stats = {"works": 0, "assets": 0, "multi_page": 0}
 
         for src_work_id, items in groups.items():
@@ -123,11 +123,13 @@ async def run_import_job(import_job_id: str):
             except Exception:
                 continue
 
-            # Determine creator name from first work
-            if creator_name is None:
-                creator_name = (sc_data.get("display_name") or
-                                sc_data.get("source_creator_id", "unknown"))
-                creator_name = creator_name.replace("/", "_").replace("\\", "_").strip()
+            # Directory name: use account from raw JSON (matches gallery-dl {user[account]})
+            # Display name: for metadata.json
+            user_raw = first_raw.get("user", {})
+            dir_name = (user_raw.get("account") or
+                        sc_data.get("source_creator_id", "unknown"))
+            dir_name = dir_name.replace("/", "_").replace("\\", "_").strip()
+            display_name = (sc_data.get("display_name") or dir_name)
 
             # Idempotency: skip if this work_source already exists
             async with async_session() as check_db:
@@ -145,33 +147,16 @@ async def run_import_job(import_job_id: str):
                             pass
                     continue
 
-            # Match image files: filename stem contains the work_id
-            # gallery-dl names files {id}_p{page}.{ext}
-            work_images = [p for p in all_images if src_work_id in p.stem]
-            work_images.sort(key=lambda p: p.stem)
+            # Image files are in the SAME directory as the JSONs
+            # (gallery-dl per-work directories, no moving needed)
+            work_dir = first_file.parent
+            image_files = sorted(
+                [p for p in work_dir.iterdir()
+                 if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS],
+                key=lambda p: p.stem,
+            )
 
-            if not work_images:
-                for jf, _ in items:
-                    try:
-                        jf.unlink()
-                    except Exception:
-                        pass
-                continue
-
-            # Target dir: downloads/{source}/{creator}/{work_id}/
-            dl_work_dir = (Path(settings.download_root) / provider.source_name
-                           / creator_name / src_work_id)
-            dl_work_dir.mkdir(parents=True, exist_ok=True)
-
-            # Move files
-            moved = []
-            for fp in work_images:
-                dest = dl_work_dir / fp.name
-                if fp.parent != dl_work_dir and not dest.exists():
-                    shutil.move(str(fp), str(dest))
-                moved.append(dest)
-
-            if not moved:
+            if not image_files:
                 for jf, _ in items:
                     try:
                         jf.unlink()
@@ -180,11 +165,11 @@ async def run_import_job(import_job_id: str):
                 continue
 
             stats["works"] += 1
-            if len(moved) > 1:
+            if len(image_files) > 1:
                 stats["multi_page"] += 1
-            stats["assets"] += len(moved)
+            stats["assets"] += len(image_files)
 
-            # Create DB records
+            # Create DB records — files stay in place
             async with async_session() as db:
                 # SourceCreator (upsert)
                 existing_sc = await db.execute(select(SourceCreator).where(
@@ -218,37 +203,36 @@ async def run_import_job(import_job_id: str):
                 db.add(ws)
                 await db.flush()
 
-                # Library dir
+                # Library dir uses display name (from JSON metadata)
                 lib_dir = (Path(settings.library_root) / provider.source_name
-                           / creator_name / src_work_id)
+                           / dir_name / src_work_id)
                 lib_dir.mkdir(parents=True, exist_ok=True)
 
-                # Create assets from actual files
-                for idx, dest in enumerate(moved):
-                    dims = _get_image_dims(dest)
+                # Assets from the image files (already in final location)
+                for idx, fp in enumerate(image_files):
+                    dims = _get_image_dims(fp)
                     width, height = dims if dims else (None, None)
 
-                    dl_rel = str(dest.relative_to(settings.download_root))
+                    dl_rel = str(fp.relative_to(settings.download_root))
                     asset = Asset(
-                        file_name=dest.name,
+                        file_name=fp.name,
                         file_path=dl_rel,
-                        file_size=dest.stat().st_size,
+                        file_size=fp.stat().st_size,
                         width=width,
                         height=height,
-                        mime_type=_mime_type(dest.suffix),
+                        mime_type=_mime_type(fp.suffix),
                     )
                     db.add(asset)
                     await db.flush()
 
                     if idx == 0:
                         from app.services.thumbnail import generate_thumbnail
-                        tp = generate_thumbnail(str(dest), lib_dir)
+                        tp = generate_thumbnail(str(fp), lib_dir)
                         if tp:
                             asset.thumb_sm_path = str(
                                 Path(tp).relative_to(settings.library_root))
                         work.thumbnail_asset_id = str(asset.id)
 
-                    # AssetSource
                     db.add(AssetSource(
                         asset_id=asset.id, work_source_id=ws.id,
                         source=provider.source_name,
@@ -290,12 +274,8 @@ async def run_import_job(import_job_id: str):
                 # Write metadata.json to library
                 try:
                     assets_meta = []
-                    for dest in moved:
-                        assets_meta.append({
-                            "file_name": dest.name,
-                            "width": width,
-                            "height": height,
-                        })
+                    for fp in image_files:
+                        assets_meta.append({"file_name": fp.name})
                     with open(lib_dir / "metadata.json", "w") as mf:
                         json.dump({
                             "work_id": str(work.id),
@@ -303,7 +283,7 @@ async def run_import_job(import_job_id: str):
                             "source_work_id": src_work_id,
                             "title": ws_data.get("title"),
                             "posted_at": ws_data.get("posted_at"),
-                            "creator": creator_name,
+                            "creator": display_name,
                             "assets": assets_meta,
                         }, mf, indent=2, ensure_ascii=False, default=str)
                 except Exception:
@@ -311,20 +291,19 @@ async def run_import_job(import_job_id: str):
 
                 await db.commit()
 
-            # Delete processed JSONs
+            # Delete processed JSONs (keep image files)
             for jf, _ in items:
                 try:
                     jf.unlink()
                 except Exception:
                     pass
 
-        # Clean up empty directories
-        try:
-            for d in sorted(job_dir.rglob("*"), reverse=True):
-                if d.is_dir() and d != job_dir and not any(d.iterdir()):
-                    d.rmdir()
-        except Exception:
-            pass
+            # Remove empty directories (if no images left from other import runs)
+            try:
+                if not any(p for p in work_dir.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS):
+                    continue
+            except Exception:
+                pass
 
         async with async_session() as db:
             ij = await db.get(ImportJob, job_uuid)

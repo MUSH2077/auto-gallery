@@ -1,12 +1,13 @@
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
+from app.auth import RequireAdmin
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
 from app.models.import_job import ImportJob
 
-router = APIRouter()
+router = APIRouter(dependencies=[RequireAdmin])
 
 
 @router.post("/scan")

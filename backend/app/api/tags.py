@@ -1,13 +1,14 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from app.auth import RequireAdmin
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.schemas.tag import TagRead, TagCreate, TagUpdate
 from app.repositories.tag import TagRepository
 
-router = APIRouter()
+router = APIRouter(dependencies=[RequireAdmin])
 
 
 @router.get("", response_model=list[TagRead])

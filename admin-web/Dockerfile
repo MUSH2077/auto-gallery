@@ -6,6 +6,8 @@ RUN npm config set registry https://registry.npmmirror.com && npm install
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
+ARG NEXT_PUBLIC_ADMIN_KEY=changeme
+ENV NEXT_PUBLIC_ADMIN_KEY=${NEXT_PUBLIC_ADMIN_KEY}
 COPY . .
 RUN npm run build
 

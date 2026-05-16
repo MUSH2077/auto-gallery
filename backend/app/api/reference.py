@@ -1,13 +1,14 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from app.auth import RequireAdmin
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.services import danbooru as danbooru_svc
 from app.models.creator_link import CreatorLink
 
-router = APIRouter()
+router = APIRouter(dependencies=[RequireAdmin])
 
 
 @router.get("/providers")

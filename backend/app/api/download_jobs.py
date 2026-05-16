@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from app.auth import RequireAdmin
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -8,7 +9,7 @@ from app.schemas.download_job import DownloadJobCreate, DownloadJobRead
 from app.schemas.import_job import ImportJobRead
 from app.services.download import DownloadService
 
-router = APIRouter()
+router = APIRouter(dependencies=[RequireAdmin])
 
 
 @router.get("", response_model=list[DownloadJobRead])
