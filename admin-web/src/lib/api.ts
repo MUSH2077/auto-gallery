@@ -146,12 +146,59 @@ export interface Tag {
   created_at: string;
 }
 
+export interface DedupSettings {
+  source_level_enabled: boolean;
+  cross_source_enabled: boolean;
+  auto_merge: boolean;
+  phash_threshold: number;
+}
+
+export interface SubscriptionDefaults {
+  default_sync_interval_hours: number;
+  scheduler_scan_interval_minutes: number;
+  default_sync_enabled: boolean;
+}
+
+export interface DownloadDefaults {
+  timeout_seconds: number;
+  max_retries: number;
+  retry_backoff_base_seconds: number;
+}
+
 export interface AdminSettings {
-  dedup: {
-    source_level_enabled: boolean;
-    cross_source_enabled: boolean;
-    auto_merge: boolean;
-    phash_threshold: number;
+  dedup: DedupSettings;
+  subscription_defaults: SubscriptionDefaults;
+  download_defaults: DownloadDefaults;
+}
+
+export interface AuthStatusItem {
+  id: string;
+  source: string;
+  source_url: string;
+  source_creator_id?: string;
+  auth_healthy: boolean | null;
+  last_successful_auth: string | null;
+  is_enabled: boolean;
+  subscription: {
+    id: string;
+    name?: string;
+    is_active: boolean;
+    sync_enabled: boolean;
+  };
+  creator: {
+    id: string;
+    name: string;
+    display_name?: string;
+  };
+}
+
+export interface AuthStatusResponse {
+  sources: AuthStatusItem[];
+  summary: {
+    total: number;
+    healthy: number;
+    unhealthy: number;
+    unknown: number;
   };
 }
 
@@ -291,10 +338,16 @@ export const api = {
   // Admin
   getAdminSettings: () => request<AdminSettings>("/api/v1/admin/settings"),
 
-  updateAdminSettings: (data: { dedup?: { source_level_enabled?: boolean; cross_source_enabled?: boolean; auto_merge?: boolean; phash_threshold?: number } }) =>
+  updateAdminSettings: (data: {
+    dedup?: Partial<DedupSettings>;
+    subscription_defaults?: Partial<SubscriptionDefaults>;
+    download_defaults?: Partial<DownloadDefaults>;
+  }) =>
     request<{ status: string; message: string }>("/api/v1/admin/settings", { method: "PUT", body: JSON.stringify(data) }),
 
   reindexSearch: () => request<{ status: string; message: string }>("/api/v1/admin/search/reindex", { method: "POST" }),
+
+  getAuthStatus: () => request<AuthStatusResponse>("/api/v1/admin/auth-status"),
 
   listDuplicates: () => request<{ duplicates: { source: string; source_work_id: string; count: number; work_ids: string[] }[]; total: number }>("/api/v1/admin/dedup/duplicates"),
   scanDuplicates: () => request<{ status: string; unique_works: number; total_source_records: number; message: string }>("/api/v1/admin/dedup/scan", { method: "POST" }),

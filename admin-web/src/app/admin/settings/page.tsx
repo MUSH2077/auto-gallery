@@ -19,6 +19,7 @@ export default function SettingsPage() {
     <main className="max-w-4xl mx-auto p-6">
       <PageHeader title="Settings" description="System configuration" />
 
+      {/* Config Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
         <Link href="/admin/settings/gallerydl"
           className="bg-white rounded-lg shadow p-6 hover:shadow-md transition-shadow block">
@@ -29,10 +30,29 @@ export default function SettingsPage() {
         <Link href="/admin/settings/dedup"
           className="bg-white rounded-lg shadow p-6 hover:shadow-md transition-shadow block">
           <h2 className="text-lg font-semibold mb-2">Deduplication</h2>
-          <p className="text-sm text-gray-500">Source-level, cross-source, and perceptual hash dedup controls.</p>
+          <p className="text-sm text-gray-500">Source-level, cross-source, and perceptual hash dedup controls with toggles.</p>
+        </Link>
+
+        <Link href="/admin/settings/auth-status"
+          className="bg-white rounded-lg shadow p-6 hover:shadow-md transition-shadow block">
+          <h2 className="text-lg font-semibold mb-2">Auth & Cookie Status</h2>
+          <p className="text-sm text-gray-500">Monitor authentication health for all subscription sources. Detect expired cookies and tokens.</p>
+        </Link>
+
+        <Link href="/admin/settings/subscription-defaults"
+          className="bg-white rounded-lg shadow p-6 hover:shadow-md transition-shadow block">
+          <h2 className="text-lg font-semibold mb-2">Subscription Defaults</h2>
+          <p className="text-sm text-gray-500">Default sync interval, scheduler scan frequency, and new subscription behavior.</p>
+        </Link>
+
+        <Link href="/admin/settings/download-defaults"
+          className="bg-white rounded-lg shadow p-6 hover:shadow-md transition-shadow block">
+          <h2 className="text-lg font-semibold mb-2">Download Job Defaults</h2>
+          <p className="text-sm text-gray-500">Timeout, max retries, and exponential backoff for gallery-dl download jobs.</p>
         </Link>
       </div>
 
+      {/* Search Index */}
       <section className="mb-8">
         <h2 className="text-lg font-semibold mb-3">Search Index</h2>
         <div className="bg-white rounded-lg shadow p-4">
@@ -49,8 +69,9 @@ export default function SettingsPage() {
         </div>
       </section>
 
+      {/* Settings Summary */}
       <section className="mb-8">
-        <h2 className="text-lg font-semibold mb-3">Deduplication Status</h2>
+        <h2 className="text-lg font-semibold mb-3">Current Configuration</h2>
         {settings.isError ? (
           <ErrorState message={settings.error?.message || "Failed"} onRetry={() => settings.refetch()} />
         ) : !settings.data ? (
@@ -60,8 +81,10 @@ export default function SettingsPage() {
             <div className="grid grid-cols-2 gap-3 text-sm">
               {Object.entries(settings.data.dedup || {}).map(([key, value]) => (
                 <div key={key} className="flex justify-between py-1 border-b last:border-0">
-                  <span className="text-gray-500">{key}</span>
-                  <span className="font-mono text-xs">{String(value)}</span>
+                  <span className="text-gray-500 capitalize">{key.replace(/_/g, " ")}</span>
+                  <span className={`font-mono text-xs ${typeof value === "boolean" ? (value ? "text-green-700" : "text-gray-400") : "text-blue-700"}`}>
+                    {String(value)}
+                  </span>
                 </div>
               ))}
             </div>
@@ -69,6 +92,7 @@ export default function SettingsPage() {
         )}
       </section>
 
+      {/* System Information */}
       <section className="mb-8">
         <h2 className="text-lg font-semibold mb-3">System Information</h2>
         <div className="bg-white rounded-lg shadow p-4 text-sm space-y-2">

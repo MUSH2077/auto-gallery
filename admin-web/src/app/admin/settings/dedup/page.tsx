@@ -1,11 +1,21 @@
 "use client";
-import { useQuery } from "@tanstack/react-query";
-import { api, queryKeys } from "@/lib/api";
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { api, queryKeys, DedupSettings } from "@/lib/api";
 import { PageHeader, ErrorState } from "@/components";
 import Link from "next/link";
 
 export default function DedupSettingsPage() {
+  const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
+  const [local, setLocal] = useState<DedupSettings | null>(null);
+
+  const save = useMutation({
+    mutationFn: (data: DedupSettings) => api.updateAdminSettings({ dedup: data }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.admin.settings }),
+  });
+
+  const current = local || settings.data?.dedup;
 
   if (settings.isError) {
     return (
@@ -20,11 +30,30 @@ export default function DedupSettingsPage() {
       <main className="max-w-4xl mx-auto p-6">
         <div className="animate-pulse space-y-4">
           <div className="h-8 bg-gray-200 rounded w-1/3" />
-          <div className="h-32 bg-gray-200 rounded" />
+          <div className="h-64 bg-gray-200 rounded" />
         </div>
       </main>
     );
   }
+
+  // Init local state on first load
+  if (!local && settings.data.dedup) {
+    setLocal({ ...settings.data.dedup });
+  }
+
+  const toggle = (key: keyof DedupSettings) => {
+    if (!current) return;
+    const next = { ...current };
+    if (typeof next[key] === "boolean") {
+      (next as Record<string, unknown>)[key] = !next[key];
+    }
+    setLocal(next);
+  };
+
+  const setNumber = (key: keyof DedupSettings, val: number) => {
+    if (!current) return;
+    setLocal({ ...current, [key]: val });
+  };
 
   return (
     <main className="max-w-4xl mx-auto p-6">
@@ -33,36 +62,64 @@ export default function DedupSettingsPage() {
       </div>
       <PageHeader title="Deduplication Settings" description="Control duplicate detection and merge behavior." />
 
-      <div className="bg-white rounded-lg shadow p-6 text-sm space-y-4">
-        {Object.entries(settings.data.dedup || {}).map(([key, value]) => (
-          <div key={key} className="flex items-center justify-between py-3 border-b last:border-0">
-            <div>
-              <span className="font-medium">{key}</span>
-              <p className="text-xs text-gray-500 mt-1">{
-                key === "source_level_enabled" ? "Same source + same ID = skip download" :
-                key === "cross_source_enabled" ? "SHA-256 match across sources = reuse asset record" :
-                key === "auto_merge" ? "Automatically merge visually similar works. DANGEROUS." :
-                key === "phash_threshold" ? "Perceptual hash threshold (0-64). Lower values = stricter matching." : ""
-              }</p>
+      {!current ? null : (
+        <>
+          <div className="bg-white rounded-lg shadow p-6 text-sm space-y-2">
+            {([
+              ["source_level_enabled", "Same source + same ID = skip download. Safe to enable.", "source-level"],
+              ["cross_source_enabled", "SHA-256 match across sources = reuse asset record.", "cross-source"],
+              ["auto_merge", "Automatically merge visually similar works. DANGEROUS — may irreversibly modify your library.", "auto-merge"],
+            ] as [keyof DedupSettings, string, string][]).map(([key, desc, label]) => (
+              <div key={key} className="flex items-center justify-between py-3 border-b last:border-0">
+                <div>
+                  <span className="font-medium capitalize">{key.replace(/_/g, " ")}</span>
+                  <p className="text-xs text-gray-500 mt-1">{desc}</p>
+                </div>
+                <button
+                  onClick={() => toggle(key)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${
+                    current[key] ? "bg-green-600" : "bg-gray-300"
+                  }`}
+                >
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    current[key] ? "translate-x-6" : "translate-x-1"
+                  }`} />
+                </button>
+              </div>
+            ))}
+
+            <div className="flex items-center justify-between py-3">
+              <div>
+                <span className="font-medium">phash threshold</span>
+                <p className="text-xs text-gray-500 mt-1">Perceptual hash Hamming distance (0-64). Lower = stricter matching. Default 8.</p>
+              </div>
+              <input
+                type="number" min={0} max={64}
+                value={current.phash_threshold}
+                onChange={(e) => setNumber("phash_threshold", parseInt(e.target.value) || 0)}
+                className="w-20 border rounded px-2 py-1 text-sm font-mono text-center"
+              />
             </div>
-            <span className={`px-3 py-1 rounded text-xs font-mono ${
-              typeof value === "boolean"
-                ? (value ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500")
-                : "bg-blue-100 text-blue-700"
-            }`}>{String(value)}</span>
           </div>
-        ))}
 
-        <div className="mt-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
-          <strong>All deduplication is OFF by default.</strong> Auto-merge may irreversibly modify your library.
-          Enable dedup settings only after reviewing the risk documentation.
-        </div>
+          <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
+            <strong>Changes take effect immediately.</strong> Enable dedup settings only after reviewing the risk documentation.
+            {current.auto_merge && <span className="block mt-1 text-red-600 font-medium">Auto-merge is enabled — this may irreversibly modify your library!</span>}
+          </div>
 
-        <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
-          <strong>Phase 5 limitation:</strong> Dedup settings are editable via API (<code className="text-xs bg-blue-100 px-1 rounded">PUT /api/v1/admin/settings</code>).
-          A UI toggle will be added in a future phase.
-        </div>
-      </div>
+          <div className="mt-4 flex justify-end">
+            <button
+              onClick={() => save.mutate(current)}
+              disabled={save.isPending}
+              className="px-6 py-2 bg-slate-900 text-white rounded text-sm hover:bg-slate-800 disabled:opacity-50"
+            >
+              {save.isPending ? "Saving..." : "Save Settings"}
+            </button>
+          </div>
+          {save.isSuccess && <p className="text-green-600 text-sm mt-2">Settings saved.</p>}
+          {save.error && <p className="text-red-600 text-sm mt-2">{(save.error as Error).message}</p>}
+        </>
+      )}
     </main>
   );
 }

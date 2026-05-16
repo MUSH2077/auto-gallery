@@ -14,6 +14,7 @@ from app.models.subscription_source import SubscriptionSource
 from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
 from app.models.naming_template import NamingTemplate
+from app.models.system_setting import SystemSetting
 
 __all__ = [
     "Base",
@@ -33,4 +34,5 @@ __all__ = [
     "DownloadJob",
     "ImportJob",
     "NamingTemplate",
+    "SystemSetting",
 ]
