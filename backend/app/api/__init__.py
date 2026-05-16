@@ -12,7 +12,6 @@ from app.api.sources import router as sources_router
 from app.api.reference import router as reference_router
 from app.api.import_jobs import router as import_jobs_router
 from app.api.naming_templates import router as naming_templates_router
-from app.api.media import router as media_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(system_router, tags=["system"])
@@ -27,4 +26,3 @@ api_router.include_router(tags_router, prefix="/tags", tags=["tags"])
 api_router.include_router(search_router, prefix="/search", tags=["search"])
 api_router.include_router(admin_router, prefix="/admin", tags=["admin"])
 api_router.include_router(naming_templates_router, prefix="/admin/naming-templates", tags=["naming-templates"])
-# media routes are mounted directly on the app (not under /api/v1/)

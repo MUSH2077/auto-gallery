@@ -296,6 +296,10 @@ export const api = {
 
   reindexSearch: () => request<{ status: string; message: string }>("/api/v1/admin/search/reindex", { method: "POST" }),
 
+  listDuplicates: () => request<{ duplicates: { source: string; source_work_id: string; count: number; work_ids: string[] }[]; total: number }>("/api/v1/admin/dedup/duplicates"),
+  scanDuplicates: () => request<{ status: string; unique_works: number; total_source_records: number; message: string }>("/api/v1/admin/dedup/scan", { method: "POST" }),
+  listMergeCandidates: () => request<{ candidates: { title: string; source_count: number; sources: string[]; work_ids: string[] }[]; total: number }>("/api/v1/admin/merge-candidates"),
+
   // Danbooru Reference
   previewDanbooruArtist: (params: { url?: string; pixiv_id?: string; name?: string }) =>
     request<{
@@ -323,7 +327,13 @@ export const api = {
   listNamingTemplates: () => request<{ id: string; name: string; source?: string; template: string; is_default: boolean }[]>("/api/v1/admin/naming-templates"),
 
   createNamingTemplate: (data: { name: string; source?: string; template: string; is_default?: boolean }) =>
-    request<{ id: string }>("/api/v1/admin/naming-templates", { method: "POST", body: JSON.stringify(data) }),
+    request<Record<string, unknown>>("/api/v1/admin/naming-templates", { method: "POST", body: JSON.stringify(data) }),
+
+  updateNamingTemplate: (id: string, data: Record<string, unknown>) =>
+    request<Record<string, unknown>>(`/api/v1/admin/naming-templates/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+
+  deleteNamingTemplate: (id: string) =>
+    request<void>(`/api/v1/admin/naming-templates/${id}`, { method: "DELETE" }),
 };
 
 // ── Query Key Factory ──
