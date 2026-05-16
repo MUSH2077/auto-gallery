@@ -517,6 +517,17 @@ Admin Web:
 - Use TanStack Query for server state.
 - Design mobile-friendly admin pages but optimize for desktop first.
 
+## Commit Discipline
+
+After completing each phase task or feature milestone, create a git commit automatically. Do not wait for the user to ask.
+
+- Commit when a phase/sub-phase task is done
+- Commit when a bug fix is verified
+- Use concise Chinese or English commit messages describing the "why"
+- Follow the existing commit style: `feat:`, `fix:`, `refactor:`, `chore:` prefixes
+- Do not commit incomplete or broken work
+- Verify working tree is clean before starting new work
+
 ## Deliverables
 
 When asked to implement, produce:
