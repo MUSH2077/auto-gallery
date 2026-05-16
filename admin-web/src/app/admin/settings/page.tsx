@@ -3,9 +3,12 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, ErrorState, ConfirmDialog } from "@/components";
+import { useT, useI18n } from "@/lib/i18n";
 import Link from "next/link";
 
 export default function SettingsPage() {
+  const t = useT();
+  const { lang, setLang } = useI18n();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
   const reindex = useMutation({
@@ -15,55 +18,76 @@ export default function SettingsPage() {
   });
   const [confirmReindex, setConfirmReindex] = useState(false);
 
+  const cards = [
+    { href: "/admin/settings/gallerydl", title: t("settings.gallerydl"), desc: t("settings.gallerydl.desc") },
+    { href: "/admin/settings/dedup", title: t("settings.dedup"), desc: t("settings.dedup.desc") },
+    { href: "/admin/settings/auth-status", title: t("settings.auth"), desc: t("settings.auth.desc") },
+    { href: "/admin/settings/subscription-defaults", title: t("settings.sub_defaults"), desc: t("settings.sub_defaults.desc") },
+    { href: "/admin/settings/download-defaults", title: t("settings.dl_defaults"), desc: t("settings.dl_defaults.desc") },
+  ];
+
   return (
     <main className="max-w-4xl mx-auto p-6">
-      <PageHeader title="Settings" description="System configuration" />
+      <PageHeader title={t("settings.title")} description="System configuration" />
 
       {/* Config Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-        <Link href="/admin/settings/gallerydl"
-          className="bg-white rounded-lg shadow p-6 hover:shadow-md transition-shadow block">
-          <h2 className="text-lg font-semibold mb-2">gallery-dl Config</h2>
-          <p className="text-sm text-gray-500">Pixiv extractor settings, auth tokens, file organization, rate limiting.</p>
-        </Link>
-
-        <Link href="/admin/settings/dedup"
-          className="bg-white rounded-lg shadow p-6 hover:shadow-md transition-shadow block">
-          <h2 className="text-lg font-semibold mb-2">Deduplication</h2>
-          <p className="text-sm text-gray-500">Source-level, cross-source, and perceptual hash dedup controls with toggles.</p>
-        </Link>
-
-        <Link href="/admin/settings/auth-status"
-          className="bg-white rounded-lg shadow p-6 hover:shadow-md transition-shadow block">
-          <h2 className="text-lg font-semibold mb-2">Auth & Cookie Status</h2>
-          <p className="text-sm text-gray-500">Monitor authentication health for all subscription sources. Detect expired cookies and tokens.</p>
-        </Link>
-
-        <Link href="/admin/settings/subscription-defaults"
-          className="bg-white rounded-lg shadow p-6 hover:shadow-md transition-shadow block">
-          <h2 className="text-lg font-semibold mb-2">Subscription Defaults</h2>
-          <p className="text-sm text-gray-500">Default sync interval, scheduler scan frequency, and new subscription behavior.</p>
-        </Link>
-
-        <Link href="/admin/settings/download-defaults"
-          className="bg-white rounded-lg shadow p-6 hover:shadow-md transition-shadow block">
-          <h2 className="text-lg font-semibold mb-2">Download Job Defaults</h2>
-          <p className="text-sm text-gray-500">Timeout, max retries, and exponential backoff for gallery-dl download jobs.</p>
-        </Link>
+        {cards.map((c) => (
+          <Link key={c.href} href={c.href}
+            className="card rounded-lg shadow p-6 hover:shadow-md transition-shadow block">
+            <h2 className="text-lg font-semibold mb-2 dark:text-white">{c.title}</h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400">{c.desc}</p>
+          </Link>
+        ))}
       </div>
+
+      {/* Language */}
+      <section className="mb-8">
+        <h2 className="text-lg font-semibold mb-3 dark:text-white">{t("settings.language")}</h2>
+        <div className="card rounded-lg shadow p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium dark:text-white">{t("settings.language")}</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("settings.language.desc")}</p>
+            </div>
+            <div className="flex gap-1 bg-gray-100 dark:bg-slate-700 rounded-lg p-0.5">
+              <button
+                onClick={() => setLang("zh")}
+                className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                  lang === "zh"
+                    ? "bg-white dark:bg-slate-600 shadow-sm font-medium text-slate-900 dark:text-white"
+                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                }`}
+              >
+                中文
+              </button>
+              <button
+                onClick={() => setLang("en")}
+                className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                  lang === "en"
+                    ? "bg-white dark:bg-slate-600 shadow-sm font-medium text-slate-900 dark:text-white"
+                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                }`}
+              >
+                English
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
 
       {/* Search Index */}
       <section className="mb-8">
-        <h2 className="text-lg font-semibold mb-3">Search Index</h2>
-        <div className="bg-white rounded-lg shadow p-4">
+        <h2 className="text-lg font-semibold mb-3 dark:text-white">{t("settings.search_index")}</h2>
+        <div className="card rounded-lg shadow p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium">Meilisearch Re-indexing</p>
-              <p className="text-xs text-gray-500 mt-1">Admin-triggered full re-indexing of all works, creators, and tags.</p>
+              <p className="text-sm font-medium dark:text-white">Meilisearch Re-indexing</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("settings.search_index.desc")}</p>
             </div>
             <button onClick={() => setConfirmReindex(true)} disabled={reindex.isPending}
-              className="px-4 py-2 bg-slate-900 text-white rounded text-sm hover:bg-slate-800 disabled:opacity-50 shrink-0">
-              {reindex.isPending ? "Reindexing..." : "Reindex Now"}
+              className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50 shrink-0">
+              {reindex.isPending ? t("settings.reindexing") : t("settings.reindex")}
             </button>
           </div>
         </div>
@@ -71,18 +95,18 @@ export default function SettingsPage() {
 
       {/* Settings Summary */}
       <section className="mb-8">
-        <h2 className="text-lg font-semibold mb-3">Current Configuration</h2>
+        <h2 className="text-lg font-semibold mb-3 dark:text-white">{t("settings.current_config")}</h2>
         {settings.isError ? (
-          <ErrorState message={settings.error?.message || "Failed"} onRetry={() => settings.refetch()} />
+          <ErrorState message={settings.error?.message || t("common.error")} onRetry={() => settings.refetch()} />
         ) : !settings.data ? (
-          <div className="bg-white rounded-lg shadow p-4 animate-pulse"><div className="h-20 bg-gray-100 rounded" /></div>
+          <div className="card rounded-lg shadow p-4 animate-pulse"><div className="h-20 bg-gray-100 dark:bg-slate-700 rounded" /></div>
         ) : (
-          <div className="bg-white rounded-lg shadow p-4">
+          <div className="card rounded-lg shadow p-4">
             <div className="grid grid-cols-2 gap-3 text-sm">
               {Object.entries(settings.data.dedup || {}).map(([key, value]) => (
-                <div key={key} className="flex justify-between py-1 border-b last:border-0">
-                  <span className="text-gray-500 capitalize">{key.replace(/_/g, " ")}</span>
-                  <span className={`font-mono text-xs ${typeof value === "boolean" ? (value ? "text-green-700" : "text-gray-400") : "text-blue-700"}`}>
+                <div key={key} className="flex justify-between py-1 border-b dark:border-slate-700 last:border-0">
+                  <span className="text-gray-500 dark:text-gray-400 capitalize">{key.replace(/_/g, " ")}</span>
+                  <span className={`font-mono text-xs ${typeof value === "boolean" ? (value ? "text-green-700 dark:text-green-400" : "text-gray-400") : "text-blue-700 dark:text-blue-400"}`}>
                     {String(value)}
                   </span>
                 </div>
@@ -94,11 +118,11 @@ export default function SettingsPage() {
 
       {/* System Information */}
       <section className="mb-8">
-        <h2 className="text-lg font-semibold mb-3">System Information</h2>
-        <div className="bg-white rounded-lg shadow p-4 text-sm space-y-2">
-          <div className="flex justify-between"><span className="text-gray-500">Backend API</span><span className="font-mono text-xs">/api/v1 (proxied)</span></div>
-          <div className="flex justify-between"><span className="text-gray-500">Admin Web</span><span className="text-xs">Next.js 14 · TypeScript · Tailwind · TanStack Query</span></div>
-          <div className="flex justify-between"><span className="text-gray-500">Auth mode</span><span className="text-xs text-gray-400">Admin API key</span></div>
+        <h2 className="text-lg font-semibold mb-3 dark:text-white">{t("settings.system_info")}</h2>
+        <div className="card rounded-lg shadow p-4 text-sm space-y-2">
+          <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Backend API</span><span className="font-mono text-xs dark:text-gray-300">/api/v1 (proxied)</span></div>
+          <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Admin Web</span><span className="text-xs dark:text-gray-300">Next.js 14 · TypeScript · Tailwind · TanStack Query</span></div>
+          <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Auth mode</span><span className="text-xs text-gray-400">Admin API key</span></div>
         </div>
       </section>
 

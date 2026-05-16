@@ -1,3 +1,24 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  html {
+    @apply transition-colors duration-200;
+  }
+  html.dark body {
+    @apply bg-slate-900 text-gray-100;
+  }
+  body {
+    @apply bg-gray-50 text-gray-900 antialiased min-h-screen;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white dark:bg-slate-800 dark:border-slate-700;
+  }
+  .card-muted {
+    @apply bg-gray-50 dark:bg-slate-800/50;
+  }
+}

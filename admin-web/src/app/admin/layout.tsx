@@ -1,24 +1,46 @@
+"use client";
 import Link from "next/link";
+import { useT } from "@/lib/i18n";
+import { ThemeToggle, LangToggle } from "@/lib/theme";
 
 export const dynamic = 'force-dynamic';
+
+function AdminNav() {
+  const t = useT();
+  const links = [
+    ["/admin", t("nav.dashboard")],
+    ["/admin/sources", t("nav.sources")],
+    ["/admin/creators", t("nav.creators")],
+    ["/admin/subscriptions", t("nav.subscriptions")],
+    ["/admin/downloads", t("nav.downloads")],
+    ["/admin/works", t("nav.works")],
+    ["/admin/tags", t("nav.tags")],
+    ["/admin/scheduler", t("nav.scheduler")],
+    ["/admin/import-jobs", t("nav.import")],
+    ["/admin/reference/danbooru", t("nav.danbooru")],
+    ["/admin/settings", t("nav.settings")],
+  ];
+
+  return (
+    <nav className="bg-slate-900 text-white px-6 py-3 flex items-center gap-4 text-sm flex-wrap">
+      <Link href="/admin" className="font-bold text-base shrink-0">auto-gallery</Link>
+      <div className="flex items-center gap-3 flex-1 flex-wrap">
+        {links.map(([href, label]) => (
+          <Link key={href} href={href} className="hover:text-gray-300 transition-colors">{label}</Link>
+        ))}
+      </div>
+      <div className="flex items-center gap-1 shrink-0 ml-auto">
+        <LangToggle />
+        <ThemeToggle />
+      </div>
+    </nav>
+  );
+}
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   return (
     <div>
-      <nav className="bg-slate-900 text-white px-6 py-3 flex items-center gap-6 text-sm flex-wrap">
-        <Link href="/admin" className="font-bold text-base">auto-gallery</Link>
-        <Link href="/admin" className="hover:text-gray-300">Dashboard</Link>
-        <Link href="/admin/sources" className="hover:text-gray-300">Sources</Link>
-        <Link href="/admin/creators" className="hover:text-gray-300">Creators</Link>
-        <Link href="/admin/subscriptions" className="hover:text-gray-300">Subscriptions</Link>
-        <Link href="/admin/downloads" className="hover:text-gray-300">Downloads</Link>
-        <Link href="/admin/works" className="hover:text-gray-300">Works</Link>
-        <Link href="/admin/tags" className="hover:text-gray-300">Tags</Link>
-        <Link href="/admin/scheduler" className="hover:text-gray-300">Scheduler</Link>
-        <Link href="/admin/import-jobs" className="hover:text-gray-300">Import</Link>
-        <Link href="/admin/reference/danbooru" className="hover:text-gray-300">Danbooru</Link>
-        <Link href="/admin/settings" className="hover:text-gray-300">Settings</Link>
-      </nav>
+      <AdminNav />
       <div className="min-h-[calc(100vh-52px)]">{children}</div>
     </div>
   );
