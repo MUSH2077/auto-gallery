@@ -1,4 +1,4 @@
-const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8818";
+const BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 class ApiError extends Error {
   status: number;
@@ -260,7 +260,7 @@ export const api = {
 
   // Media URL helper (not a fetch call)
   mediaUrl: (assetId: string, size: "thumb" | "preview" | "original" = "thumb") =>
-    `${BASE}/api/v1/media/${size}/${assetId}`,
+    `/media/${size}/${assetId}`,
 
   // Search
   search: (q: string, offset = 0, limit = 20) => request<{ results: unknown[]; total: number }>(`/api/v1/search?q=${encodeURIComponent(q)}&offset=${offset}&limit=${limit}`),

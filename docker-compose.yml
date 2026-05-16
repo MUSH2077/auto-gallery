@@ -128,7 +128,6 @@ services:
       - "${ADMIN_WEB_PORT:-3000}:3000"
     environment:
       HOSTNAME: "0.0.0.0"
-      NEXT_PUBLIC_API_URL: http://backend:8000/api/v1
     depends_on:
       - backend
     restart: unless-stopped

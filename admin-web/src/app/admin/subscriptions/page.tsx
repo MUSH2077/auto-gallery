@@ -1,18 +1,19 @@
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { api, queryKeys, Subscription } from "@/lib/api";
 import { PageHeader, StatusBadge, EmptyState, ErrorState, ConfirmDialog, Modal } from "@/components";
 
-function CreateForm({ onClose }: { onClose: () => void }) {
+function CreateForm({ isPending, error, onSubmit, onClose }: {
+  isPending: boolean;
+  error: Error | null;
+  onSubmit: (data: { creator_id: string; name?: string }) => void;
+  onClose: () => void;
+}) {
   const [creatorId, setCreatorId] = useState(""); const [name, setName] = useState("");
-  const qc = useQueryClient();
   const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
-  const create = useMutation({
-    mutationFn: () => api.createSubscription({ creator_id: creatorId, name: name || undefined }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all }); onClose(); },
-  });
+
   return (
     <div className="space-y-4">
       <div>
@@ -25,23 +26,38 @@ function CreateForm({ onClose }: { onClose: () => void }) {
       <div><label className="block text-sm font-medium mb-1">Label</label><input value={name} onChange={(e) => setName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="Optional label" /></div>
       <div className="flex justify-end gap-3 pt-2">
         <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50">Cancel</button>
-        <button onClick={() => create.mutate()} disabled={!creatorId || create.isPending} className="px-4 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800 disabled:opacity-50">{create.isPending ? "Creating..." : "Subscribe"}</button>
+        <button onClick={() => onSubmit({ creator_id: creatorId, name: name || undefined })} disabled={!creatorId || isPending}
+          className="px-4 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800 disabled:opacity-50">
+          {isPending ? "Creating..." : "Subscribe"}
+        </button>
       </div>
-      {create.error && <p className="text-red-600 text-sm">{(create.error as Error).message}</p>}
+      {error && <p className="text-red-600 text-sm">{error.message}</p>}
     </div>
   );
 }
 
 export default function SubscriptionsPage() {
-  const router = useRouter(); const qc = useQueryClient();
+  const router = useRouter();
   const [showCreate, setShowCreate] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const subs = useQuery({ queryKey: queryKeys.subscriptions.all, queryFn: () => api.listSubscriptions() });
   const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
+
+  const create = useMutation({
+    mutationFn: (data: { creator_id: string; name?: string }) => api.createSubscription(data),
+    onSuccess: () => {
+      setShowCreate(false);
+      subs.refetch();
+    },
+  });
+
   const del = useMutation({
     mutationFn: (id: string) => api.deleteSubscription(id),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all }); setDeleteId(null); },
+    onSuccess: () => {
+      setDeleteId(null);
+      subs.refetch();
+    },
   });
 
   const getCreatorName = (creatorId: string) => {
@@ -78,8 +94,12 @@ export default function SubscriptionsPage() {
         </div>
       )}
 
-      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="New Subscription"><CreateForm onClose={() => setShowCreate(false)} /></Modal>
-      {deleteId && <ConfirmDialog open title="Delete Subscription" message="This will permanently delete the subscription and its source configurations." onConfirm={() => del.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={del.isPending} error={(del.error as Error)?.message} />}
+      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="New Subscription">
+        <CreateForm isPending={create.isPending} error={create.error} onSubmit={(data) => create.mutate(data)} onClose={() => setShowCreate(false)} />
+      </Modal>
+      {deleteId && <ConfirmDialog open title="Delete Subscription" message="This will permanently delete the subscription and its source configurations."
+        onConfirm={() => del.mutate(deleteId)} onCancel={() => setDeleteId(null)}
+        isPending={del.isPending} error={(del.error as Error)?.message} />}
     </main>
   );
 }
