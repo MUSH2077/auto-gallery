@@ -165,6 +165,57 @@ export interface DownloadDefaults {
   retry_backoff_base_seconds: number;
 }
 
+// Gallery-dl multi-source config types
+
+export interface PixivSourceConfig {
+  refresh_token?: string;
+  cookies_path?: string;
+  filename?: string;
+  directory?: string;
+  include?: string;
+  tags?: string;
+  ugoira?: boolean;
+  sleep_request?: number;
+  max_posts?: number;
+}
+
+export interface TwitterSourceConfig {
+  cookies_path?: string;
+  filename?: string;
+  directory?: string;
+  include?: string;
+  retweets?: boolean;
+  replies?: boolean;
+  cards?: boolean;
+  videos?: boolean;
+  text_tweets?: boolean;
+  quoted?: boolean;
+  max_posts?: number;
+}
+
+export interface IwaraSourceConfig {
+  cookies_path?: string;
+  username?: string;
+  password?: string;
+  filename?: string;
+  directory?: string;
+  videos?: boolean;
+  format?: string;
+}
+
+export interface GalleryDLSourceMeta {
+  name: string;
+  supported: boolean;
+  description: string;
+}
+
+export interface GalleryDLMultiConfig {
+  pixiv: PixivSourceConfig;
+  twitter: TwitterSourceConfig;
+  iwara: IwaraSourceConfig;
+  sources: Record<string, GalleryDLSourceMeta>;
+}
+
 export interface AdminSettings {
   dedup: DedupSettings;
   subscription_defaults: SubscriptionDefaults;
@@ -371,10 +422,10 @@ export const api = {
     request<{ status: string; found?: boolean; creator_id?: string; artist_name?: string; links_imported: number; sources_created: number; subscription_id?: string }>("/api/v1/reference/danbooru/artist/import-all", { method: "POST", body: JSON.stringify(params) }),
 
   // gallery-dl Config
-  getGalleryDLConfig: () => request<{ refresh_token?: string; cookies_path?: string; filename?: string; directory?: string; include?: string; tags?: string; ugoira?: boolean; sleep_request?: number; max_posts?: number }>("/api/v1/admin/gallerydl-config"),
+  getGalleryDLConfig: (source?: string) => request<GalleryDLMultiConfig>(`/api/v1/admin/gallerydl-config${source ? `?source=${source}` : ""}`),
 
-  updateGalleryDLConfig: (data: Record<string, unknown>) =>
-    request<{ status: string; path: string }>("/api/v1/admin/gallerydl-config", { method: "PUT", body: JSON.stringify(data) }),
+  updateGalleryDLConfig: (data: { pixiv?: Partial<PixivSourceConfig>; twitter?: Partial<TwitterSourceConfig>; iwara?: Partial<IwaraSourceConfig> }) =>
+    request<{ status: string; message: string; path: string }>("/api/v1/admin/gallerydl-config", { method: "PUT", body: JSON.stringify(data) }),
 
   // Naming Templates
   listNamingTemplates: () => request<{ id: string; name: string; source?: string; template: string; is_default: boolean }[]>("/api/v1/admin/naming-templates"),

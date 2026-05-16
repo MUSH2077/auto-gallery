@@ -86,9 +86,9 @@ async def reindex_search():
 
 # ── gallery-dl Config ──
 
-class GalleryDLConfig(BaseModel):
-    cookies_path: str | None = None
+class PixivSourceConfig(BaseModel):
     refresh_token: str | None = None
+    cookies_path: str | None = None
     filename: str | None = None
     directory: str | None = None
     include: str | None = "artworks"
@@ -97,60 +97,156 @@ class GalleryDLConfig(BaseModel):
     sleep_request: float | None = None
     max_posts: int | None = None
 
+class TwitterSourceConfig(BaseModel):
+    cookies_path: str | None = None
+    filename: str | None = None
+    directory: str | None = None
+    include: str | None = "timeline"
+    retweets: bool | None = False
+    replies: bool | None = False
+    cards: bool | None = True
+    videos: bool | None = True
+    text_tweets: bool | None = False
+    quoted: bool | None = False
+    max_posts: int | None = None
 
-@router.get("/gallerydl-config")
-async def get_gallerydl_config():
+class IwaraSourceConfig(BaseModel):
+    cookies_path: str | None = None
+    username: str | None = None
+    password: str | None = None
+    filename: str | None = None
+    directory: str | None = None
+    videos: bool | None = True
+    format: str | None = None
+
+class GalleryDLMultiConfig(BaseModel):
+    pixiv: PixivSourceConfig | None = None
+    twitter: TwitterSourceConfig | None = None
+    iwara: IwaraSourceConfig | None = None
+
+GALLERYDL_SOURCE_OPTIONS = {
+    "pixiv": {
+        "name": "Pixiv",
+        "supported": True,
+        "description": "Pixiv illustrations, manga, and ugoira.",
+    },
+    "twitter": {
+        "name": "X / Twitter",
+        "supported": True,
+        "description": "Twitter/X timeline, media, and tweets.",
+    },
+    "iwara": {
+        "name": "Iwara",
+        "supported": False,
+        "description": "Gallery-dl 1.28.3 does not include an Iwara extractor. Config is saved for future use.",
+    },
+}
+
+PIXIV_CONFIG_MAP = {
+    "refresh_token": "refresh-token", "cookies_path": "cookies",
+    "filename": "filename", "directory": "directory",
+    "include": "include", "tags": "tags", "ugoira": "ugoira",
+    "sleep_request": "sleep-request", "max_posts": "max-posts",
+}
+
+TWITTER_CONFIG_MAP = {
+    "cookies_path": "cookies", "filename": "filename",
+    "directory": "directory", "include": "include",
+    "retweets": "retweets", "replies": "replies",
+    "cards": "cards", "videos": "videos",
+    "text_tweets": "text-tweets", "quoted": "quoted",
+    "max_posts": "max-posts",
+}
+
+IWARA_CONFIG_MAP = {
+    "cookies_path": "cookies", "username": "username",
+    "password": "password", "filename": "filename",
+    "directory": "directory", "videos": "videos",
+    "format": "format",
+}
+
+def _load_config() -> tuple[dict, str]:
     import json, os
     config_path = os.path.join(os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"), "config.json")
     config = {}
     if os.path.exists(config_path):
         with open(config_path) as f:
             config = json.load(f)
-    pixiv = config.get("extractor", {}).get("pixiv", {})
-    return {
-        "refresh_token": pixiv.get("refresh-token"),
-        "cookies_path": pixiv.get("cookies"),
-        "filename": pixiv.get("filename"),
-        "directory": "/".join(pixiv["directory"]) if isinstance(pixiv.get("directory"), list) else pixiv.get("directory"),
-        "include": str(pixiv.get("include", "artworks")),
-        "tags": pixiv.get("tags", "japanese"),
-        "ugoira": pixiv.get("ugoira", True),
-        "sleep_request": pixiv.get("sleep-request"),
-        "max_posts": pixiv.get("max-posts"),
+    return config, config_path
+
+def _read_source_config(extractor_config: dict, schema_map: dict) -> dict:
+    """Read gallery-dl extractor config back into our API schema shape."""
+    result = {}
+    for api_key, dl_key in schema_map.items():
+        val = extractor_config.get(dl_key)
+        if api_key == "directory" and isinstance(val, list):
+            val = "/".join(val)
+        if val is not None:
+            result[api_key] = val
+    return result
+
+def _write_source_config(extractor_config: dict, data: BaseModel, schema_map: dict, dir_keys: set = None) -> dict:
+    """Merge API schema fields back into gallery-dl extractor config."""
+    if dir_keys is None:
+        dir_keys = {"directory"}
+    for api_key, dl_key in schema_map.items():
+        val = getattr(data, api_key, None)
+        if val is not None:
+            if dl_key in dir_keys and isinstance(val, str) and "/" in val:
+                extractor_config[dl_key] = val.split("/")
+            else:
+                extractor_config[dl_key] = val
+    return extractor_config
+
+
+@router.get("/gallerydl-config")
+async def get_gallerydl_config(source: str | None = None):
+    """Get gallery-dl config for one or all sources. Pass ?source=pixiv|twitter|iwara."""
+    config, _ = _load_config()
+    extractors = config.get("extractor", {})
+
+    def get_source(source_name, schema_map):
+        src = extractors.get(source_name, {})
+        return _read_source_config(src, schema_map)
+
+    all_config = {
+        "pixiv": get_source("pixiv", PIXIV_CONFIG_MAP),
+        "twitter": get_source("twitter", TWITTER_CONFIG_MAP),
+        "iwara": get_source("iwara", IWARA_CONFIG_MAP),
+        "sources": GALLERYDL_SOURCE_OPTIONS,
     }
+    if source:
+        return {source: all_config.get(source, {}), "sources": GALLERYDL_SOURCE_OPTIONS}
+    return all_config
 
 
 @router.put("/gallerydl-config")
-async def update_gallerydl_config(data: GalleryDLConfig):
+async def update_gallerydl_config(data: GalleryDLMultiConfig):
+    """Update gallery-dl extractor configs. Only provided source blocks are updated."""
     import json, os
-    config_path = os.path.join(os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"), "config.json")
+    config, config_path = _load_config()
+
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
-    existing = {}
-    if os.path.exists(config_path):
-        with open(config_path) as f:
-            existing = json.load(f)
-    pixiv = existing.get("extractor", {}).get("pixiv", {})
-    if data.refresh_token is not None:
-        pixiv["refresh-token"] = data.refresh_token
-    if data.cookies_path is not None:
-        pixiv["cookies"] = data.cookies_path
-    if data.filename is not None:
-        pixiv["filename"] = data.filename
-    if data.directory is not None:
-        pixiv["directory"] = data.directory.split("/") if "/" in data.directory else data.directory
-    if data.include is not None:
-        pixiv["include"] = data.include
-    if data.tags is not None:
-        pixiv["tags"] = data.tags
-    if data.ugoira is not None:
-        pixiv["ugoira"] = data.ugoira
-    if data.sleep_request is not None:
-        pixiv["sleep-request"] = data.sleep_request
-    if data.max_posts is not None:
-        pixiv["max-posts"] = data.max_posts
-    existing.setdefault("extractor", {})["pixiv"] = pixiv
+    extractors = config.setdefault("extractor", {})
+
+    if data.pixiv is not None:
+        pixiv = extractors.setdefault("pixiv", {})
+        _write_source_config(pixiv, data.pixiv, PIXIV_CONFIG_MAP)
+        extractors["pixiv"] = pixiv
+
+    if data.twitter is not None:
+        twitter = extractors.setdefault("twitter", {})
+        _write_source_config(twitter, data.twitter, TWITTER_CONFIG_MAP)
+        extractors["twitter"] = twitter
+
+    if data.iwara is not None:
+        iwara = extractors.setdefault("iwara", {})
+        _write_source_config(iwara, data.iwara, IWARA_CONFIG_MAP)
+        extractors["iwara"] = iwara
+
+    config["extractor"] = extractors
     with open(config_path, "w") as f:
-        json.dump(existing, f, indent=2)
+        json.dump(config, f, indent=2)
     return {"status": "ok", "message": "gallery-dl config updated", "path": config_path}
 
 
