@@ -117,7 +117,7 @@ export default function TagsPage() {
         </div>
       </Modal>
 
-      {deleteId && <ConfirmDialog open title="Delete Tag" message="Delete this tag? It will be removed from all associated works." onConfirm={() => deleteTag.mutate()} onCancel={() => setDeleteId(null)} />}
+      {deleteId && <ConfirmDialog open title="Delete Tag" message="Delete this tag? It will be removed from all associated works." onConfirm={() => deleteTag.mutate()} onCancel={() => setDeleteId(null)} isPending={deleteTag.isPending} error={(deleteTag.error as Error)?.message} />}
     </main>
   );
 }

@@ -28,6 +28,7 @@ function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () =>
         <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50">Cancel</button>
         <button onClick={() => create.mutate()} disabled={!url || create.isPending} className="px-4 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800 disabled:opacity-50">{create.isPending ? "Adding..." : "Add Link"}</button>
       </div>
+      {create.error && <p className="text-red-600 text-sm">{(create.error as Error).message}</p>}
     </div>
   );
 }
@@ -117,8 +118,8 @@ export default function MappingPage() {
       </section>
 
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Identity Link"><AddLinkForm creatorId={id} onClose={() => setShowAdd(false)} /></Modal>
-      {dialog?.action === "verify" && <ConfirmDialog open title="Approve Link" message="Verify this link and set confidence to 1.0?" onConfirm={() => verifyLink.mutate(dialog.linkId)} onCancel={() => setDialog(null)} />}
-      {dialog?.action === "unverify" && <ConfirmDialog open title="Unverify Link" message="Unverify this link and set confidence to 0.5?" onConfirm={() => unverifyLink.mutate(dialog.linkId)} onCancel={() => setDialog(null)} />}
+      {dialog?.action === "verify" && <ConfirmDialog open title="Approve Link" message="Verify this link and set confidence to 1.0?" onConfirm={() => verifyLink.mutate(dialog.linkId)} onCancel={() => setDialog(null)} isPending={verifyLink.isPending} error={(verifyLink.error as Error)?.message} />}
+      {dialog?.action === "unverify" && <ConfirmDialog open title="Unverify Link" message="Unverify this link and set confidence to 0.5?" onConfirm={() => unverifyLink.mutate(dialog.linkId)} onCancel={() => setDialog(null)} isPending={unverifyLink.isPending} error={(unverifyLink.error as Error)?.message} />}
     </main>
   );
 }

@@ -70,8 +70,8 @@ function JobRow({ job }: { job: ImportJob }) {
           <pre className="text-xs font-mono whitespace-pre-wrap max-h-48 overflow-auto bg-gray-100 p-3 rounded">{job.error_log}</pre>
         </td></tr>
       )}
-      {confirmRetry && <ConfirmDialog open title="Retry Import" message={`Retry import job ${job.id.slice(0, 8)}?`} onConfirm={() => retry.mutate()} onCancel={() => setConfirmRetry(false)} />}
-      {confirmDelete && <ConfirmDialog open title="Delete Import Job" message={`Delete import job ${job.id.slice(0, 8)}? This does not delete imported works.`} onConfirm={() => deleteJob.mutate()} onCancel={() => setConfirmDelete(false)} />}
+      {confirmRetry && <ConfirmDialog open title="Retry Import" message={`Retry import job ${job.id.slice(0, 8)}?`} onConfirm={() => retry.mutate()} onCancel={() => setConfirmRetry(false)} isPending={retry.isPending} error={(retry.error as Error)?.message} />}
+      {confirmDelete && <ConfirmDialog open title="Delete Import Job" message={`Delete import job ${job.id.slice(0, 8)}? This does not delete imported works.`} onConfirm={() => deleteJob.mutate()} onCancel={() => setConfirmDelete(false)} isPending={deleteJob.isPending} error={(deleteJob.error as Error)?.message} />}
     </>
   );
 }

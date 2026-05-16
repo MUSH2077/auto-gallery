@@ -77,7 +77,7 @@ export default function CreatorsPage() {
       )}
 
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title="New Creator"><CreateForm onClose={() => setShowCreate(false)} /></Modal>
-      {deleteId && <ConfirmDialog open title="Delete Creator" message="This will permanently delete the creator and all associated links. This action cannot be undone." onConfirm={() => del.mutate(deleteId)} onCancel={() => setDeleteId(null)} />}
+      {deleteId && <ConfirmDialog open title="Delete Creator" message="This will permanently delete the creator and all associated links. This action cannot be undone." onConfirm={() => del.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={del.isPending} error={(del.error as Error)?.message} />}
     </main>
   );
 }

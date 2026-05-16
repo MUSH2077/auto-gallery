@@ -79,7 +79,7 @@ export default function SubscriptionsPage() {
       )}
 
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title="New Subscription"><CreateForm onClose={() => setShowCreate(false)} /></Modal>
-      {deleteId && <ConfirmDialog open title="Delete Subscription" message="This will permanently delete the subscription and its source configurations." onConfirm={() => del.mutate(deleteId)} onCancel={() => setDeleteId(null)} />}
+      {deleteId && <ConfirmDialog open title="Delete Subscription" message="This will permanently delete the subscription and its source configurations." onConfirm={() => del.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={del.isPending} error={(del.error as Error)?.message} />}
     </main>
   );
 }

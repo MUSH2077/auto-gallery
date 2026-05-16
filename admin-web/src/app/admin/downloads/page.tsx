@@ -41,7 +41,7 @@ function JobRow({ job }: { job: DownloadJob }) {
       {showLog && job.error_log && (
         <tr><td colSpan={6} className="px-4 py-3 bg-gray-50"><pre className="text-xs font-mono whitespace-pre-wrap max-h-48 overflow-auto bg-gray-100 p-3 rounded">{job.error_log}</pre></td></tr>
       )}
-      {confirmRetry && <ConfirmDialog open title="Retry Job" message={`Retry download job ${job.id.slice(0, 8)}?`} onConfirm={() => retry.mutate()} onCancel={() => setConfirmRetry(false)} />}
+      {confirmRetry && <ConfirmDialog open title="Retry Job" message={`Retry download job ${job.id.slice(0, 8)}?`} onConfirm={() => retry.mutate()} onCancel={() => setConfirmRetry(false)} isPending={retry.isPending} error={(retry.error as Error)?.message} />}
     </>
   );
 }

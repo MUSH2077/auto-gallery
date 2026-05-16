@@ -188,7 +188,11 @@ function DedupSettings({ settings: d, onSaved }: { settings: Record<string, unkn
 export default function SettingsPage() {
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
-  const reindex = useMutation({ mutationFn: api.reindexSearch, onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.admin.settings }) });
+  const reindex = useMutation({
+    mutationFn: api.reindexSearch,
+    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.admin.settings }); setConfirmReindex(false); },
+    onError: () => { setConfirmReindex(false); },
+  });
   const [confirmReindex, setConfirmReindex] = useState(false);
 
   return (
@@ -234,7 +238,7 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {confirmReindex && <ConfirmDialog open title="Reindex Search" message="Full Meilisearch re-indexing may take a while." onConfirm={() => { reindex.mutate(); setConfirmReindex(false); }} onCancel={() => setConfirmReindex(false)} />}
+      {confirmReindex && <ConfirmDialog open title="Reindex Search" message="Full Meilisearch re-indexing may take a while." onConfirm={() => reindex.mutate()} onCancel={() => setConfirmReindex(false)} isPending={reindex.isPending} error={(reindex.error as Error)?.message} />}
     </main>
   );
 }

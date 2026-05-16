@@ -84,8 +84,15 @@ export default function SubscriptionDetailPage() {
     onSuccess: () => { sources.refetch(); setDeleteSsId(null); },
   });
   const startSync = useMutation({
-    mutationFn: (ssId: string) => api.createDownloadJob({ subscription_id: id, subscription_source_id: ssId, source: "", source_url: "" }),
-    onSuccess: (data) => alert(`Download job created: ${data.job_id}`),
+    mutationFn: (ssId: string) => {
+      const ss = sources.data?.find((s: SS) => s.id === ssId);
+      if (!ss) throw new Error("Source not found");
+      return api.createDownloadJob({ subscription_id: id, subscription_source_id: ssId, source: ss.source, source_url: ss.source_url || "" });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.sources(id) });
+    },
   });
 
   const getCreatorName = (creatorId: string) => {
@@ -158,6 +165,7 @@ export default function SubscriptionDetailPage() {
             ) : (
               <EmptyState title="No sources configured" description="Add a source to enable syncing from that platform." />
             )}
+            {startSync.error && <p className="text-red-600 text-sm mt-2">{(startSync.error as Error).message}</p>}
           </div>
         </div>
 
@@ -174,12 +182,13 @@ export default function SubscriptionDetailPage() {
             <button onClick={() => setEditing(false)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50">Cancel</button>
             <button onClick={() => update.mutate({ name: editName || undefined })} disabled={update.isPending} className="px-4 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800">Save</button>
           </div>
+          {update.error && <p className="text-red-600 text-sm">{(update.error as Error).message}</p>}
         </div>
       </Modal>
 
       <Modal open={showAddSource} onClose={() => setShowAddSource(false)} title="Add Sync Source"><AddSourceForm subId={id} onClose={() => setShowAddSource(false)} /></Modal>
-      {toggleId && <ConfirmDialog open title={sources.data?.find((ss: SS) => ss.id === toggleId)?.is_enabled ? "Disable Source" : "Enable Source"} message="Toggle this source's sync status?" onConfirm={() => { const ss = sources.data?.find((s: SS) => s.id === toggleId); if (ss) toggleSource.mutate({ ssId: toggleId, enabled: !ss.is_enabled }); }} onCancel={() => setToggleId(null)} />}
-      {deleteSsId && <ConfirmDialog open title="Remove Source" message="Remove this source configuration? This cannot be undone." onConfirm={() => deleteSource.mutate(deleteSsId)} onCancel={() => setDeleteSsId(null)} />}
+      {toggleId && <ConfirmDialog open title={sources.data?.find((ss: SS) => ss.id === toggleId)?.is_enabled ? "Disable Source" : "Enable Source"} message="Toggle this source's sync status?" onConfirm={() => { const ss = sources.data?.find((s: SS) => s.id === toggleId); if (ss) toggleSource.mutate({ ssId: toggleId, enabled: !ss.is_enabled }); }} onCancel={() => setToggleId(null)} isPending={toggleSource.isPending} error={(toggleSource.error as Error)?.message} />}
+      {deleteSsId && <ConfirmDialog open title="Remove Source" message="Remove this source configuration? This cannot be undone." onConfirm={() => deleteSource.mutate(deleteSsId)} onCancel={() => setDeleteSsId(null)} isPending={deleteSource.isPending} error={(deleteSource.error as Error)?.message} />}
     </main>
   );
 }

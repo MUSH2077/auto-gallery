@@ -1,8 +1,10 @@
 from uuid import UUID
 
+from sqlalchemy import select, delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.subscription import SubscriptionRepository
+from app.models import SubscriptionSource, DownloadJob, ImportJob
 from app.providers import registry
 
 
@@ -33,7 +35,24 @@ class SubscriptionService:
 
     async def delete_subscription(self, sub_id: UUID):
         sub = await self.get_subscription(sub_id)
-        await self.repo.delete(sub)
+
+        # 1. Delete download jobs and their import jobs first
+        djs = await self.db.execute(
+            select(DownloadJob).where(DownloadJob.subscription_id == sub_id)
+        )
+        for dj in djs.scalars().all():
+            await self.db.execute(
+                sql_delete(ImportJob).where(ImportJob.download_job_id == dj.id)
+            )
+            await self.db.delete(dj)
+
+        # 2. Delete subscription sources (no more FK references from download_jobs)
+        await self.db.execute(
+            sql_delete(SubscriptionSource).where(SubscriptionSource.subscription_id == sub_id)
+        )
+
+        # 3. Delete the subscription
+        await self.db.delete(sub)
         await self.db.commit()
 
     async def add_source(self, data: dict):

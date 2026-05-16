@@ -27,6 +27,7 @@ function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () =>
         <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50">Cancel</button>
         <button onClick={() => create.mutate()} disabled={!url || create.isPending} className="px-4 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800 disabled:opacity-50">{create.isPending ? "Adding..." : "Add Link"}</button>
       </div>
+      {create.error && <p className="text-red-600 text-sm">{(create.error as Error).message}</p>}
     </div>
   );
 }
@@ -54,6 +55,7 @@ function AddSourceForm({ creatorId, onClose }: { creatorId: string; onClose: () 
         <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50">Cancel</button>
         <button onClick={() => create.mutate()} disabled={!sourceCreatorId || create.isPending} className="px-4 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800 disabled:opacity-50">{create.isPending ? "Adding..." : "Add Source"}</button>
       </div>
+      {create.error && <p className="text-red-600 text-sm">{(create.error as Error).message}</p>}
     </div>
   );
 }
@@ -124,12 +126,13 @@ export default function CreatorDetailPage() {
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-gray-400">confidence: {l.confidence.toFixed(1)}</span>
-                      {l.is_verified ? <StatusBadge status="up" /> : <button onClick={() => verifyLink.mutate(l.id)} className="text-xs text-blue-600 hover:underline">Verify</button>}
+                      {l.is_verified ? <StatusBadge status="up" /> : <button onClick={() => verifyLink.mutate(l.id)} disabled={verifyLink.isPending} className="text-xs text-blue-600 hover:underline disabled:opacity-50">{verifyLink.isPending ? "..." : "Verify"}</button>}
                     </div>
                   </div>
                 ))}
               </div>
             ) : <p className="text-sm text-gray-400">No links yet.</p>}
+            {verifyLink.error && <p className="text-red-600 text-sm mt-2">{(verifyLink.error as Error).message}</p>}
           </div>
         </div>
 
@@ -150,6 +153,7 @@ export default function CreatorDetailPage() {
             <button onClick={() => setEditing(false)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50">Cancel</button>
             <button onClick={() => update.mutate()} disabled={update.isPending} className="px-4 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800">Save</button>
           </div>
+          {update.error && <p className="text-red-600 text-sm">{(update.error as Error).message}</p>}
         </div>
       </Modal>
     </main>
