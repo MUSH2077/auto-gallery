@@ -11,12 +11,48 @@ interface ArtistResult {
 }
 interface SuggestedLink { url: string; link_type: string; source: string; confidence: number; is_verified: boolean; notes?: string }
 
-function PreviewResult({ artist, links, onImport, importPending, selectedCreator, setSelectedCreator }: {
+function PreviewResult({ artist, links, onImport, importPending, onImportAll, importAllPending, importAllError, selectedCreator, setSelectedCreator }: {
   artist: ArtistResult; links: SuggestedLink[];
   onImport: (creatorId: string) => void; importPending: boolean;
+  onImportAll: (creatorName: string) => void; importAllPending: boolean; importAllError: string | null;
   selectedCreator: string; setSelectedCreator: (v: string) => void;
 }) {
   const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
+  const qc = useQueryClient();
+
+  const [subscribingUrl, setSubscribingUrl] = useState<string | null>(null);
+  const subs = useQuery({ queryKey: queryKeys.subscriptions.all, queryFn: () => api.listSubscriptions() });
+
+  const subscribe = useMutation({
+    mutationFn: async (params: { creatorId: string; url: string; source: string; sourceCreatorId?: string }) => {
+      // Find existing subscription for this creator, or create one
+      let sub = subs.data?.find((s) => s.creator_id === params.creatorId);
+      if (!sub) {
+        sub = await api.createSubscription({ creator_id: params.creatorId, name: undefined });
+      }
+      return api.createSubscriptionSource(sub.id, {
+        source: params.source,
+        source_url: params.url,
+        source_creator_id: params.sourceCreatorId,
+        is_enabled: true,
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+      setSubscribingUrl(null);
+      alert("Subscription source created! Trigger a sync from the Subscriptions page.");
+    },
+    onError: (err) => {
+      alert(`Failed: ${(err as Error).message}`);
+      setSubscribingUrl(null);
+    },
+  });
+
+  // Find downloadable URLs from the artist
+  const downloadableUrls = artist.urls.filter((u) => {
+    const linkType = classifyUrl(u.normalized_url);
+    return DOWNLOADABLE_SOURCES.includes(linkType) && u.is_active;
+  });
 
   return (
     <div className="mt-4 space-y-4">
@@ -27,12 +63,73 @@ function PreviewResult({ artist, links, onImport, importPending, selectedCreator
         )}
         {artist.post_count != null && <p className="text-xs text-gray-500">Danbooru posts: {artist.post_count}</p>}
         {artist.notes && <p className="text-xs text-gray-600 mt-2 bg-gray-50 p-2 rounded">{artist.notes}</p>}
+      </div>
 
-        {artist.urls.length > 0 && (
+      {/* One-Click Import All & Subscribe */}
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+        <p className="text-sm text-blue-800 font-medium mb-1">One-Click Import</p>
+        <p className="text-xs text-blue-600 mb-3">Creates Creator + Subscription + Sources + Links in one step.</p>
+        <div className="flex items-end gap-2">
+          <div className="flex-1">
+            <input type="text" value={selectedCreator} onChange={(e) => setSelectedCreator(e.target.value)}
+              placeholder="Creator name (leave empty for auto)"
+              className="w-full border rounded px-2 py-1 text-xs" />
+          </div>
+          <button onClick={() => onImportAll(selectedCreator)} disabled={importAllPending}
+            className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 shrink-0">
+            {importAllPending ? "Importing..." : "Import All & Subscribe"}
+          </button>
+        </div>
+        {importAllError && <p className="text-red-600 text-xs mt-2">{importAllError}</p>}
+      </div>
+
+      <div className="bg-white border rounded-lg p-4">
+        {/* Downloadable URLs with Subscribe buttons */}
+        {downloadableUrls.length > 0 && (
           <div className="mt-3">
-            <h4 className="text-xs font-medium text-gray-500 mb-1">Associated URLs ({artist.urls.length})</h4>
+            <h4 className="text-xs font-medium text-gray-500 mb-2">Downloadable Sources ({downloadableUrls.length})</h4>
+            <div className="space-y-2">
+              {downloadableUrls.map((u, i) => (
+                <div key={i} className="flex items-center justify-between bg-green-50 border border-green-200 rounded p-2 text-xs">
+                  <div className="flex items-center gap-2">
+                    <SourceBadge source={classifyUrl(u.normalized_url)} />
+                    <a href={u.normalized_url} target="_blank" rel="noopener noreferrer"
+                      className="text-blue-600 hover:underline truncate max-w-md">{u.normalized_url}</a>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select value={selectedCreator} onChange={(e) => setSelectedCreator(e.target.value)}
+                      className="border rounded px-2 py-1 text-xs">
+                      <option value="">Select creator...</option>
+                      {creators.data?.map((c) => <option key={c.id} value={c.id}>{c.display_name || c.name}</option>)}
+                    </select>
+                    <button
+                      onClick={() => {
+                        if (!selectedCreator) return;
+                        setSubscribingUrl(u.normalized_url);
+                        const src = classifyUrl(u.normalized_url);
+                        // Extract user ID from Pixiv URL
+                        let srcCreatorId: string | undefined;
+                        const m = u.normalized_url.match(/pixiv\.net\/(?:en\/)?users\/(\d+)/);
+                        if (m) srcCreatorId = m[1];
+                        subscribe.mutate({ creatorId: selectedCreator, url: u.normalized_url, source: src, sourceCreatorId: srcCreatorId });
+                      }}
+                      disabled={!selectedCreator || subscribe.isPending}
+                      className="px-2 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700 disabled:opacity-50 shrink-0">
+                      {subscribingUrl === u.normalized_url && subscribe.isPending ? "..." : "Subscribe"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Other URLs */}
+        {artist.urls.filter(u => !DOWNLOADABLE_SOURCES.includes(classifyUrl(u.normalized_url))).length > 0 && (
+          <div className="mt-3">
+            <h4 className="text-xs font-medium text-gray-500 mb-1">Other Associated URLs</h4>
             <div className="space-y-1">
-              {artist.urls.map((u, i) => (
+              {artist.urls.filter(u => !DOWNLOADABLE_SOURCES.includes(classifyUrl(u.normalized_url))).map((u, i) => (
                 <div key={i} className="flex items-center gap-2 text-xs">
                   {!u.is_active && <span className="text-yellow-500">[inactive]</span>}
                   <a href={u.normalized_url} target="_blank" rel="noopener noreferrer"
@@ -42,14 +139,17 @@ function PreviewResult({ artist, links, onImport, importPending, selectedCreator
             </div>
           </div>
         )}
+
         {artist.urls.length === 0 && (
-          <p className="text-xs text-gray-400 mt-3">No associated source URLs in Danbooru. A Danbooru artist reference link will still be created.</p>
+          <p className="text-xs text-gray-400 mt-3">No associated source URLs in Danbooru.</p>
         )}
       </div>
 
+      {/* Import all links */}
       {links.length > 0 && (
         <div className="bg-white border rounded-lg p-4">
-          <h3 className="font-medium mb-2">Suggested Links ({links.length})</h3>
+          <h3 className="font-medium mb-2">Import All Links ({links.length})</h3>
+          <p className="text-xs text-gray-500 mb-3">Creates creator_link records for all of this artist's associated URLs in Danbooru.</p>
           <div className="space-y-2 mb-4">
             {links.map((l, i) => (
               <div key={i} className="flex items-center gap-2 text-xs border-b pb-2">
@@ -57,14 +157,12 @@ function PreviewResult({ artist, links, onImport, importPending, selectedCreator
                 <a href={l.url} target="_blank" rel="noopener noreferrer"
                   className="text-blue-600 hover:underline truncate max-w-md">{l.url}</a>
                 <span className="text-gray-400">confidence: {l.confidence.toFixed(1)}</span>
-                {l.notes && <span className="text-gray-400 truncate max-w-[200px]">— {l.notes}</span>}
               </div>
             ))}
           </div>
-
           <div className="flex items-end gap-3">
             <div className="flex-1">
-              <label className="block text-xs font-medium mb-1">Import to Creator</label>
+              <label className="block text-xs font-medium mb-1">Target Creator</label>
               <select value={selectedCreator} onChange={(e) => setSelectedCreator(e.target.value)}
                 className="w-full border rounded px-3 py-2 text-sm">
                 <option value="">Select creator...</option>
@@ -81,6 +179,34 @@ function PreviewResult({ artist, links, onImport, importPending, selectedCreator
     </div>
   );
 }
+
+function classifyUrl(url: string): string {
+  const u = url.toLowerCase();
+  if (u.includes("sketch.pixiv.net")) return "pixiv_sketch";
+  if (u.includes("pixiv.net/stacc")) return "pixiv_stacc";
+  if (u.includes("pixiv.net")) return "pixiv";
+  if (u.includes("twitter.com") || u.includes("x.com")) return "x";
+  if (u.includes("bsky.app")) return "bluesky";
+  if (u.includes("iwara.tv")) return "iwara";
+  if (u.includes("youtube.com") || u.includes("youtu.be")) return "youtube";
+  if (u.includes("bilibili.com")) return "bilibili";
+  if (u.includes("danbooru")) return "danbooru";
+  if (u.includes("deviantart.com")) return "deviantart";
+  if (u.includes("artstation.com")) return "artstation";
+  if (u.includes("weibo.com") || u.includes("weibo.cn")) return "weibo";
+  if (u.includes("xiaohongshu.com")) return "xiaohongshu";
+  if (u.includes("fanbox")) return "fanbox";
+  if (u.includes("skeb.jp")) return "skeb";
+  if (u.includes("patreon.com")) return "patreon";
+  if (u.includes("instagram.com")) return "instagram";
+  if (u.includes("tumblr.com")) return "tumblr";
+  if (u.includes("tiktok.com")) return "tiktok";
+  if (u.includes("nicovideo.jp")) return "nicovideo";
+  if (u.includes("fantia.jp")) return "fantia";
+  return "website";
+}
+
+const DOWNLOADABLE_SOURCES = ["pixiv", "iwara"];
 
 export default function DanbooruReferencePage() {
   const [searchUrl, setSearchUrl] = useState("");
@@ -104,6 +230,19 @@ export default function DanbooruReferencePage() {
     },
   });
 
+  const importAllMutation = useMutation({
+    mutationFn: (creatorName: string) => api.importAllDanbooru({
+      creator_name: creatorName || undefined,
+      ...searchParams,
+    }),
+    onSuccess: (data) => {
+      if (!data.found) { alert("No matching Danbooru artist found."); return; }
+      qc.invalidateQueries({ queryKey: queryKeys.creators.all });
+      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+      alert(`Done! Creator: ${data.creator_id?.slice(0, 8)}... | Links: ${data.links_imported} | Sources: ${data.sources_created}`);
+    },
+  });
+
   const handleSearch = (type: "url" | "name" | "pixiv_id") => {
     const params: Record<string, string> = {};
     if (type === "url" && searchUrl.trim()) params.url = searchUrl.trim();
@@ -118,11 +257,11 @@ export default function DanbooruReferencePage() {
 
   return (
     <main className="max-w-5xl mx-auto p-6">
-      <PageHeader title="Danbooru Reference Mapping" description="Import Danbooru artist reference data for creator identity mapping" />
+      <PageHeader title="Danbooru Reference Mapping" description="Import Danbooru artist data and subscribe to source profiles" />
 
       <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm mb-6">
         <p className="font-medium text-yellow-800 mb-1">Danbooru is a reference provider only.</p>
-        <p className="text-yellow-700">Danbooru artist tag data is used to enrich creator identity mapping, suggest source account links, and extract related URLs.</p>
+        <p className="text-yellow-700">Search for artists by Pixiv URL, user ID, or name. Downloadable source profiles (Pixiv, Iwara) can be subscribed to directly.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
@@ -172,20 +311,11 @@ export default function DanbooruReferencePage() {
         <PreviewResult artist={artist} links={links}
           onImport={(creatorId) => importMutation.mutate(creatorId)}
           importPending={importMutation.isPending}
+          onImportAll={(creatorName) => importAllMutation.mutate(creatorName)}
+          importAllPending={importAllMutation.isPending}
+          importAllError={(importAllMutation.error as Error)?.message || null}
           selectedCreator={selectedCreator} setSelectedCreator={setSelectedCreator} />
       )}
-
-      <div className="bg-white rounded-lg shadow p-4 mt-6">
-        <h3 className="font-medium mb-3">How Danbooru Reference Works</h3>
-        <ol className="text-sm text-gray-600 space-y-2 list-decimal list-inside">
-          <li>Enter a Pixiv profile URL, user ID, or artist name above</li>
-          <li>Backend queries the Danbooru API for matching artist records</li>
-          <li>Related URLs are extracted and suggested as creator identity links</li>
-          <li>Import the links to a creator — they appear as low-confidence suggestions on the mapping page</li>
-          <li>Admin reviews and approves/rejects links via the creator mapping page</li>
-          <li>When creating a subscription, Danbooru enrichment runs automatically</li>
-        </ol>
-      </div>
     </main>
   );
 }

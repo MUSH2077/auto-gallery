@@ -90,6 +90,7 @@ class CreatorService:
             raise ValueError("CreatorLink not found")
         link = await self.repo.update_link(link, data)
         await self.db.commit()
+        await self.db.refresh(link)
         return link
 
     async def list_source_creators(self, creator_id: UUID):
@@ -117,6 +118,23 @@ class CreatorService:
             )
             if not links:
                 return 0
+
+            # Enrich creator record with Danbooru data
+            creator = await self.repo.get(creator_id)
+            if creator and artist:
+                if creator.danbooru_artist_id is None:
+                    creator.danbooru_artist_id = artist.get("id")
+                if not creator.description:
+                    parts = []
+                    other_names = artist.get("other_names", [])
+                    if other_names:
+                        parts.append(f"Danbooru aliases: {', '.join(other_names)}")
+                    notes = artist.get("notes")
+                    if notes:
+                        parts.append(notes)
+                    if parts:
+                        creator.description = "\n".join(parts)
+                await self.db.flush()
 
             created = 0
             for link_data in links:

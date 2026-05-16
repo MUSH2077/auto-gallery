@@ -37,13 +37,10 @@ def search_by_url(source_url: str) -> list[dict]:
 
 
 def search_by_pixiv_id(user_id: str) -> list[dict]:
-    """Search Danbooru artists by Pixiv user ID in any URL field."""
-    encoded = urllib.parse.quote(f"*pixiv*{user_id}*", safe="*")
-    path = f"/artists.json?search[any_url_matches]={encoded}&limit=10"
-    result = _get(path)
-    if isinstance(result, list):
-        return result
-    return []
+    """Search Danbooru artists by constructing the exact Pixiv user URL."""
+    # Build exact URL and use url_matches (same as search_by_url)
+    source_url = f"https://www.pixiv.net/en/users/{user_id}"
+    return search_by_url(source_url)
 
 
 def search_by_name(name: str) -> list[dict]:
@@ -58,39 +55,121 @@ def search_by_name(name: str) -> list[dict]:
 
 def get_artist(artist_id: int) -> dict | None:
     """Get full Danbooru artist detail including URLs."""
-    path = f"/artists/{artist_id}.json"
-    result = _get(path)
-    if isinstance(result, dict):
-        return result
-    return None
+    # Danbooru API doesn't include URLs in detail by default — fetch them separately
+    artist = _get(f"/artists/{artist_id}.json")
+    if not isinstance(artist, dict):
+        return None
+    urls = _get(f"/artists/{artist_id}.json?only=urls")
+    if isinstance(urls, dict) and "urls" in urls:
+        artist["urls"] = urls["urls"]
+    else:
+        artist["urls"] = []
+    return artist
+
+
+# URL patterns that are valid gallery-dl download sources
+DOWNLOADABLE_PATTERNS = {
+    "pixiv": [r"pixiv\.net/(?:en/)?users/\d+"],
+    "iwara": [r"iwara\.tv/(?:users|profile)/\w+"],
+}
 
 
 def _classify_url(url: str) -> str:
     """Classify a URL into a link_type."""
     u = url.lower()
+    # Pixiv sub-types
+    if "sketch.pixiv.net" in u:
+        return "pixiv_sketch"
+    if "pixiv.net/stacc" in u:
+        return "pixiv_stacc"
+    if "pixiv.net/fanbox" in u or "fanbox.cc" in u:
+        return "fanbox"
     if "pixiv.net" in u:
         return "pixiv"
+    # Social / X
     if "twitter.com" in u or "x.com" in u:
         return "x"
+    if "bsky.app" in u:
+        return "bluesky"
+    if "misskey" in u:
+        return "misskey"
+    if "mastodon" in u:
+        return "mastodon"
+    # Video platforms
     if "iwara.tv" in u:
         return "iwara"
+    if "youtube.com" in u or "youtu.be" in u:
+        return "youtube"
+    if "bilibili.com" in u:
+        return "bilibili"
+    if "nicovideo.jp" in u:
+        return "nicovideo"
+    if "vimeo.com" in u:
+        return "vimeo"
+    # Art platforms
     if "danbooru" in u:
         return "danbooru"
+    if "deviantart.com" in u:
+        return "deviantart"
+    if "artstation.com" in u:
+        return "artstation"
+    if "pixiv.net" in u:
+        return "pixiv"
+    # Chinese platforms
+    if "weibo.com" in u or "weibo.cn" in u:
+        return "weibo"
+    if "xiaohongshu.com" in u:
+        return "xiaohongshu"
+    if "bcy.net" in u:
+        return "bcy"
+    if "lofter.com" in u:
+        return "lofter"
+    # Funding / Shop
     if "fanbox" in u:
         return "fanbox"
     if "skeb.jp" in u:
         return "skeb"
     if "patreon.com" in u:
         return "patreon"
-    if "deviantart.com" in u:
-        return "deviantart"
-    if "youtube.com" in u or "youtu.be" in u:
-        return "youtube"
+    if "boosty.to" in u:
+        return "boosty"
+    if "gumroad.com" in u:
+        return "gumroad"
+    if "fantia.jp" in u:
+        return "fantia"
+    # Social media
     if "instagram.com" in u:
         return "instagram"
     if "tumblr.com" in u:
         return "tumblr"
+    if "facebook.com" in u:
+        return "facebook"
+    if "tiktok.com" in u:
+        return "tiktok"
+    if "threads.net" in u:
+        return "threads"
+    if "reddit.com" in u:
+        return "reddit"
+    # Other
+    if "linktr.ee" in u:
+        return "linktree"
+    if "carrd.co" in u:
+        return "carrd"
+    if "about.me" in u:
+        return "aboutme"
     return "website"
+
+
+def is_downloadable_url(url: str) -> bool:
+    """Check if a URL is a valid source for gallery-dl download."""
+    import re
+    link_type = _classify_url(url)
+    if link_type not in DOWNLOADABLE_PATTERNS:
+        return False
+    for pattern in DOWNLOADABLE_PATTERNS[link_type]:
+        if re.search(pattern, url, re.IGNORECASE):
+            return True
+    return False
 
 
 def extract_creator_links(artist: dict) -> list[dict]:

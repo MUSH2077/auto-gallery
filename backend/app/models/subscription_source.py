@@ -9,7 +9,7 @@ from app.models.base import Base, TimestampMixin
 class SubscriptionSource(TimestampMixin, Base):
     __tablename__ = "subscription_sources"
     __table_args__ = (
-        UniqueConstraint("subscription_id", "source", name="uq_subscription_sources_sub_source"),
+        UniqueConstraint("subscription_id", "source_url", name="uq_subscription_sources_sub_url"),
     )
 
     subscription_id: Mapped[UUID] = mapped_column(ForeignKey("subscriptions.id"), nullable=False)

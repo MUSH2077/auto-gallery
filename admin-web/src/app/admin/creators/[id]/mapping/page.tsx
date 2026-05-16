@@ -43,8 +43,24 @@ export default function MappingPage() {
   const [dialog, setDialog] = useState<{ action: "verify" | "unverify"; linkId: string } | null>(null);
 
   const verifyLink = useMutation({
-    mutationFn: (linkId: string) => api.updateCreatorLink(id, linkId, { is_verified: true, confidence: 1.0 }),
-    onSuccess: () => { links.refetch(); setDialog(null); },
+    mutationFn: async (linkId: string) => {
+      await api.updateCreatorLink(id, linkId, { is_verified: true, confidence: 1.0 });
+      // If it's a downloadable source, auto-create subscription source
+      const link = links.data?.find((l: CreatorLinkType) => l.id === linkId);
+      if (link && ["pixiv", "iwara"].includes(link.link_type)) {
+        const subs = await api.listSubscriptions();
+        let sub = subs.find((s) => s.creator_id === id);
+        if (!sub) {
+          sub = await api.createSubscription({ creator_id: id, name: undefined });
+        }
+        try {
+          await api.createSubscriptionSource(sub.id, { source: link.link_type, source_url: link.url, is_enabled: true });
+        } catch {
+          // Source may already exist — ignore
+        }
+      }
+    },
+    onSuccess: () => { links.refetch(); qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all }); setDialog(null); },
   });
 
   const unverifyLink = useMutation({
@@ -76,7 +92,7 @@ export default function MappingPage() {
           {verified.map((l: CreatorLinkType) => (
             <div key={l.id} className="bg-white rounded-lg shadow p-3 flex items-center justify-between text-sm">
               <div className="flex items-center gap-3">
-                <span className="text-xs bg-gray-100 px-2 py-0.5 rounded">{l.link_type}</span>
+                <SourceBadge source={l.link_type} />
                 <a href={l.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline truncate max-w-sm">{l.url}</a>
                 {l.source && <SourceBadge source={l.source} />}
               </div>

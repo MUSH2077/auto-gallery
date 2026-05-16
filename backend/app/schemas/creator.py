@@ -31,6 +31,7 @@ class CreatorRead(BaseModel):
     description: str | None = None
     thumbnail_url: str | None = None
     is_active: bool
+    danbooru_artist_id: int | None = None
     created_at: datetime
     updated_at: datetime
 

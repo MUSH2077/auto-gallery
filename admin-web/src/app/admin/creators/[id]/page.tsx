@@ -32,6 +32,74 @@ function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () =>
   );
 }
 
+function SubscriptionPanel({ creatorId }: { creatorId: string }) {
+  const router = useRouter();
+  const qc = useQueryClient();
+  const subs = useQuery({ queryKey: queryKeys.subscriptions.all, queryFn: () => api.listSubscriptions() });
+  const createSub = useMutation({
+    mutationFn: () => api.createSubscription({ creator_id: creatorId, name: undefined }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all }); },
+  });
+
+  const sub = subs.data?.find((s) => s.creator_id === creatorId);
+  const sources = useQuery({
+    queryKey: queryKeys.subscriptions.sources(sub?.id || ""),
+    queryFn: () => api.listSubscriptionSources(sub!.id),
+    enabled: !!sub,
+  });
+
+  if (subs.isLoading) return <div className="animate-pulse"><div className="h-8 bg-gray-200 rounded" /></div>;
+  if (!sub) {
+    return (
+      <div className="text-xs text-gray-500">
+        <p className="mb-2">No subscription yet.</p>
+        <button onClick={() => createSub.mutate()} disabled={createSub.isPending}
+          className="px-3 py-1 bg-slate-900 text-white rounded text-xs hover:bg-slate-800">
+          {createSub.isPending ? "Creating..." : "Create Subscription"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="text-xs space-y-2">
+      <div className="flex justify-between">
+        <span className="text-gray-500">Status:</span>
+        <span className={sub.sync_enabled ? "text-green-600" : "text-gray-400"}>
+          {sub.sync_enabled ? "Auto-sync enabled" : "Manual only"} · {sub.sync_interval_hours}h
+        </span>
+      </div>
+      {sub.last_synced_at && (
+        <div className="flex justify-between">
+          <span className="text-gray-500">Last synced:</span>
+          <span>{new Date(sub.last_synced_at).toLocaleString()}</span>
+        </div>
+      )}
+      {sources.data && sources.data.length > 0 && (
+        <div className="mt-2 space-y-1">
+          <p className="text-gray-500 font-medium">Sources ({sources.data.length}):</p>
+          {sources.data.map((ss: any) => (
+            <div key={ss.id} className="flex items-center justify-between border-t pt-1">
+              <div className="flex items-center gap-2">
+                <SourceBadge source={ss.source} />
+                <span className="font-mono text-gray-400">{ss.source_creator_id || "—"}</span>
+                <span className={ss.is_enabled ? "text-green-500" : "text-gray-400"}>
+                  {ss.is_enabled ? "●" : "○"}
+                </span>
+              </div>
+              <button onClick={() => router.push(`/admin/subscriptions/${sub.id}`)}
+                className="text-blue-600 hover:underline">Manage</button>
+            </div>
+          ))}
+        </div>
+      )}
+      {(!sources.data || sources.data.length === 0) && (
+        <p className="text-gray-400">No sources configured.</p>
+      )}
+    </div>
+  );
+}
+
 function AddSourceForm({ creatorId, onClose }: { creatorId: string; onClose: () => void }) {
   const [source, setSource] = useState("pixiv"); const [sourceCreatorId, setSourceCreatorId] = useState(""); const [sourceUrl, setSourceUrl] = useState(""); const [displayName, setDisplayName] = useState("");
   const qc = useQueryClient();
@@ -120,9 +188,8 @@ export default function CreatorDetailPage() {
                 {links.data.map((l: CreatorLinkType) => (
                   <div key={l.id} className="flex items-center justify-between border-b pb-2 text-sm">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs bg-gray-100 px-2 py-0.5 rounded">{l.link_type}</span>
+                      <SourceBadge source={l.link_type} />
                       <a href={l.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline truncate max-w-xs">{l.url}</a>
-                      {l.source && <SourceBadge source={l.source} />}
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-gray-400">confidence: {l.confidence.toFixed(1)}</span>
@@ -137,9 +204,30 @@ export default function CreatorDetailPage() {
         </div>
 
         <div className="bg-white rounded-lg shadow p-4 h-fit">
-          <div className="flex items-center justify-between mb-3"><h3 className="font-medium">Source Accounts</h3><button onClick={() => setShowAddSource(true)} className="text-xs px-3 py-1 bg-slate-900 text-white rounded hover:bg-slate-800">+ Add</button></div>
-          <EmptyState icon=" " title="Source management" description="Add source accounts to link this creator across platforms. Or use the mapping page for advanced management." action={<button onClick={() => router.push(`/admin/creators/${id}/mapping`)} className="text-xs text-blue-600 hover:underline">Open Mapping Page</button>} />
+          <div className="flex items-center justify-between mb-3"><h3 className="font-medium">Subscription</h3></div>
+          <SubscriptionPanel creatorId={id} />
         </div>
+
+        {/* Danbooru Reference */}
+        {c.danbooru_artist_id && (
+          <div className="bg-white rounded-lg shadow p-4 h-fit">
+            <h3 className="font-medium mb-2">Danbooru Reference</h3>
+            <div className="text-xs space-y-1">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Artist ID:</span>
+                <a href={`https://danbooru.donmai.us/artists/${c.danbooru_artist_id}`} target="_blank" rel="noopener noreferrer"
+                  className="text-blue-600 hover:underline font-mono">#{c.danbooru_artist_id}</a>
+              </div>
+            </div>
+            {c.description && c.description.includes("Danbooru") && (
+              <div className="mt-2 text-xs text-gray-600 bg-blue-50 p-2 rounded">{c.description}</div>
+            )}
+            <button onClick={() => router.push(`/admin/creators/${id}/mapping`)}
+              className="mt-3 text-xs text-blue-600 hover:underline w-full text-center block">
+              View all links on Mapping page &rarr;
+            </button>
+          </div>
+        )}
       </div>
 
       <Modal open={showAddLink} onClose={() => setShowAddLink(false)} title="Add Creator Link"><AddLinkForm creatorId={id} onClose={() => setShowAddLink(false)} /></Modal>

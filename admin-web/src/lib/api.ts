@@ -49,6 +49,7 @@ export interface Creator {
   description?: string;
   thumbnail_url?: string;
   is_active: boolean;
+  danbooru_artist_id?: number;
   created_at: string;
   updated_at: string;
 }
@@ -308,6 +309,9 @@ export const api = {
 
   importDanbooruArtist: (params: { creator_id: string; url?: string; pixiv_id?: string; name?: string }) =>
     request<{ status: string; imported: number; artist_name?: string }>("/api/v1/reference/danbooru/artist/import", { method: "POST", body: JSON.stringify(params) }),
+
+  importAllDanbooru: (params: { creator_id?: string; creator_name?: string; url?: string; pixiv_id?: string; name?: string }) =>
+    request<{ status: string; found?: boolean; creator_id?: string; artist_name?: string; links_imported: number; sources_created: number; subscription_id?: string }>("/api/v1/reference/danbooru/artist/import-all", { method: "POST", body: JSON.stringify(params) }),
 
   // gallery-dl Config
   getGalleryDLConfig: () => request<{ refresh_token?: string; cookies_path?: string; filename?: string; directory?: string; include?: string; tags?: string; ugoira?: boolean; sleep_request?: number; max_posts?: number }>("/api/v1/admin/gallerydl-config"),

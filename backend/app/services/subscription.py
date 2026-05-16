@@ -96,14 +96,32 @@ class SubscriptionService:
         """Query Danbooru for this source URL and create CreatorLink suggestions."""
         try:
             from app.services import danbooru as danbooru_svc
+            from app.models import Creator
 
             artist, links = danbooru_svc.search_and_extract(source_url=source_url)
             if not links:
                 return 0
 
+            # Enrich creator record with Danbooru data
+            c = await self.db.get(Creator, creator_id)
+            if c and artist:
+                if c.danbooru_artist_id is None:
+                    c.danbooru_artist_id = artist.get("id")
+                # Populate description with aliases if empty
+                if not c.description:
+                    parts = []
+                    other_names = artist.get("other_names", [])
+                    if other_names:
+                        parts.append(f"Danbooru aliases: {', '.join(other_names)}")
+                    notes = artist.get("notes")
+                    if notes:
+                        parts.append(notes)
+                    if parts:
+                        c.description = "\n".join(parts)
+                await self.db.flush()
+
             created = 0
             for link_data in links:
-                # Check for existing link to avoid duplicates
                 existing = await self.db.execute(
                     select(CreatorLink).where(
                         CreatorLink.creator_id == creator_id,
@@ -123,7 +141,7 @@ class SubscriptionService:
                 ))
                 created += 1
 
-            if created:
+            if created or (c and c.danbooru_artist_id):
                 await self.db.commit()
                 logger.info("Danbooru enrichment: %d links created for creator %s from URL %s",
                             created, creator_id, source_url)
