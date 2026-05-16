@@ -286,8 +286,18 @@ export const api = {
   reindexSearch: () => request<{ status: string; message: string }>("/api/v1/admin/search/reindex", { method: "POST" }),
 
   // Danbooru Reference
-  previewDanbooruArtist: (tag: string) =>
-    request<{ status: string; artist?: { tag: string; name: string; related_urls: string[] } }>("/api/v1/reference/danbooru/artist/preview", { method: "POST", body: JSON.stringify({ tag }) }),
+  previewDanbooruArtist: (params: { url?: string; pixiv_id?: string; name?: string }) =>
+    request<{
+      status: string; found?: boolean; message?: string;
+      artist?: { id: number; name: string; other_names: string[]; post_count?: number;
+                 notes?: string; is_active?: boolean; created_at?: string;
+                 urls: { url: string; normalized_url: string; is_active: boolean }[] };
+      suggested_links?: { url: string; link_type: string; source: string; confidence: number;
+                          is_verified: boolean; notes?: string }[];
+    }>("/api/v1/reference/danbooru/artist/preview", { method: "POST", body: JSON.stringify(params) }),
+
+  importDanbooruArtist: (params: { creator_id: string; url?: string; pixiv_id?: string; name?: string }) =>
+    request<{ status: string; imported: number; artist_name?: string }>("/api/v1/reference/danbooru/artist/import", { method: "POST", body: JSON.stringify(params) }),
 
   // gallery-dl Config
   getGalleryDLConfig: () => request<{ refresh_token?: string; cookies_path?: string; filename?: string; directory?: string; include?: string; tags?: string; ugoira?: boolean; sleep_request?: number; max_posts?: number }>("/api/v1/admin/gallerydl-config"),

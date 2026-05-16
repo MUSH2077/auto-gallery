@@ -101,3 +101,47 @@ class CreatorService:
             raise ValueError("CreatorLink not found")
         await self.repo.delete_link(link)
         await self.db.commit()
+
+    async def enrich_from_danbooru(self, creator_id: UUID, source_url: str | None = None,
+                                    pixiv_id: str | None = None,
+                                    artist_name: str | None = None) -> int:
+        """Query Danbooru and create CreatorLink suggestions for this creator."""
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            from app.services import danbooru as danbooru_svc
+
+            artist, links = danbooru_svc.search_and_extract(
+                source_url=source_url, pixiv_id=pixiv_id, artist_name=artist_name,
+            )
+            if not links:
+                return 0
+
+            created = 0
+            for link_data in links:
+                existing = await self.db.execute(
+                    select(CreatorLink).where(
+                        CreatorLink.creator_id == creator_id,
+                        CreatorLink.url == link_data["url"],
+                    )
+                )
+                if existing.scalar_one_or_none():
+                    continue
+                self.db.add(CreatorLink(
+                    creator_id=creator_id,
+                    url=link_data["url"],
+                    link_type=link_data["link_type"],
+                    source=link_data["source"],
+                    confidence=link_data["confidence"],
+                    is_verified=link_data["is_verified"],
+                    notes=link_data.get("notes"),
+                ))
+                created += 1
+
+            if created:
+                await self.db.commit()
+            return created
+        except Exception as e:
+            logger.warning("Danbooru enrichment failed: %s", e)
+            return 0

@@ -1,11 +1,14 @@
+import logging
 from uuid import UUID
 
 from sqlalchemy import select, delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.subscription import SubscriptionRepository
-from app.models import SubscriptionSource, DownloadJob, ImportJob
+from app.models import SubscriptionSource, DownloadJob, ImportJob, CreatorLink
 from app.providers import registry
+
+logger = logging.getLogger(__name__)
 
 
 class SubscriptionService:
@@ -63,6 +66,12 @@ class SubscriptionService:
             raise ValueError(f"Invalid URL for source '{source}': {url}")
         ss = await self.repo.add_source(data)
         await self.db.commit()
+
+        # Auto-enrich creator with Danbooru reference data
+        sub = await self.repo.get(ss.subscription_id)
+        if sub:
+            await self._enrich_creator_from_danbooru(sub.creator_id, url)
+
         return ss
 
     async def list_sources(self, subscription_id: UUID):
@@ -82,3 +91,43 @@ class SubscriptionService:
             raise ValueError("SubscriptionSource not found")
         await self.repo.delete_source(ss)
         await self.db.commit()
+
+    async def _enrich_creator_from_danbooru(self, creator_id: UUID, source_url: str) -> int:
+        """Query Danbooru for this source URL and create CreatorLink suggestions."""
+        try:
+            from app.services import danbooru as danbooru_svc
+
+            artist, links = danbooru_svc.search_and_extract(source_url=source_url)
+            if not links:
+                return 0
+
+            created = 0
+            for link_data in links:
+                # Check for existing link to avoid duplicates
+                existing = await self.db.execute(
+                    select(CreatorLink).where(
+                        CreatorLink.creator_id == creator_id,
+                        CreatorLink.url == link_data["url"],
+                    )
+                )
+                if existing.scalar_one_or_none():
+                    continue
+                self.db.add(CreatorLink(
+                    creator_id=creator_id,
+                    url=link_data["url"],
+                    link_type=link_data["link_type"],
+                    source=link_data["source"],
+                    confidence=link_data["confidence"],
+                    is_verified=link_data["is_verified"],
+                    notes=link_data.get("notes"),
+                ))
+                created += 1
+
+            if created:
+                await self.db.commit()
+                logger.info("Danbooru enrichment: %d links created for creator %s from URL %s",
+                            created, creator_id, source_url)
+            return created
+        except Exception as e:
+            logger.warning("Danbooru enrichment failed for creator %s: %s", creator_id, e)
+            return 0

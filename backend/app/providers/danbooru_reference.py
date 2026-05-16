@@ -34,7 +34,14 @@ class DanbooruReferenceProvider(BaseProvider):
         raise NotImplementedError("Danbooru reference does not support downloading")
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:
-        raise NotImplementedError("Danbooru reference parsing is not yet implemented")
+        artist_id = raw_metadata.get("id", "")
+        return {
+            "source": self.source_name,
+            "source_creator_id": str(artist_id),
+            "source_url": f"https://danbooru.donmai.us/artists/{artist_id}" if artist_id else None,
+            "display_name": raw_metadata.get("name"),
+            "raw_metadata": raw_metadata,
+        }
 
     def parse_work_source(self, raw_metadata: dict) -> dict:
         raise NotImplementedError("Danbooru reference does not parse works")
