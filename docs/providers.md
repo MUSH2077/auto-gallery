@@ -82,18 +82,23 @@ downloadable = registry.list_downloadable()
 - Uses gallery-dl Pixiv extractor with cookie-based auth
 
 ### Iwara (`iwara.py`)
-- **Status**: Placeholder
-- `capabilities.can_download`: False
-- `capabilities.supports_gallerydl`: False
-- URL patterns: accepted but download not implemented
-- Will raise `NotImplementedError` on `build_gallerydl_config`
+- **Status**: Downloadable (gallery-dl >= 1.32.0 required)
+
+- `source_name`: `"iwara"`
+- `capabilities.can_download`: True
+- `capabilities.supports_gallerydl`: True
+- URL patterns: `iwara.tv/video/<id>`, `iwara.tv/image/<id>`, `iwara.tv/profile/<username>`
+- Supports auth via username/password or cookie file
+- Extractors: user, user-videos, user-images, user-playlists, videos, images, playlists, favorites, followers, following, search, tag
 
 ### X / Twitter (`x.py`)
-- **Status**: Placeholder
-- `capabilities.can_download`: False
-- `capabilities.supports_gallerydl`: False
-- URL patterns: accepted but download not implemented
-- Will raise `NotImplementedError` on `build_gallerydl_config`
+- **Status**: Downloadable (gallery-dl built-in Twitter extractor)
+- `source_name`: `"x"`
+- `capabilities.can_download`: True
+- `capabilities.supports_gallerydl`: True
+- URL patterns: `x.com/<user>`, `x.com/<user>/status/<id>`, `twitter.com/<user>`
+- Uses gallery-dl Twitter extractor with cookie-based auth
+- Extractors: timeline, tweets, media, likes, search, list, bookmark, avatar, background
 
 ### Danbooru Reference (`danbooru_reference.py`)
 - **Status**: Reference only

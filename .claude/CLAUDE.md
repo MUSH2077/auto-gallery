@@ -558,6 +558,7 @@ These files must be kept current alongside every implementation change. Future C
 - `docs/setup.md` + `docs/setup.zh.md`: when installation steps, env vars, or gallery-dl config change
 - `docs/development.md` + `docs/development.zh.md`: when local dev workflow, test commands, or debugging change
 - `docs/providers.md` + `docs/providers.zh.md`: when adding, removing, or changing provider capabilities
+- `docs/gallerydl-config.md` + `docs/gallerydl-config.zh.md`: when adding, removing, or changing per-source gallery-dl extractor config options (fields, defaults, descriptions)
 - `docs/risks.md` + `docs/risks.zh.md`: when a risk materializes, is resolved, or a new risk is identified
 
 ### .claude/constraints/ and .claude/skills/

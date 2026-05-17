@@ -82,18 +82,22 @@ downloadable = registry.list_downloadable()
 - 通过 cookie 认证使用 gallery-dl 的 Pixiv 提取器
 
 ### Iwara (`iwara.py`)
-- **状态**：占位
-- `capabilities.can_download`：False
-- `capabilities.supports_gallerydl`：False
-- URL 模式：接受但不实现下载
-- `build_gallerydl_config` 将抛出 `NotImplementedError`
+- **状态**：可下载（需要 gallery-dl >= 1.32.0）
+- `source_name`：`"iwara"`
+- `capabilities.can_download`：True
+- `capabilities.supports_gallerydl`：True
+- URL 模式：`iwara.tv/video/<id>`、`iwara.tv/image/<id>`、`iwara.tv/profile/<username>`
+- 支持用户名/密码或 cookie 文件认证
+- 提取器：user、user-videos、user-images、user-playlists、videos、images、playlists、favorites、followers、following、search、tag
 
 ### X / Twitter (`x.py`)
-- **状态**：占位（暂无时间表）
-- `capabilities.can_download`：False
-- `capabilities.supports_gallerydl`：False
-- URL 模式：接受但不实现下载
-- `build_gallerydl_config` 将抛出 `NotImplementedError`
+- **状态**：可下载（gallery-dl 内置 Twitter 提取器）
+- `source_name`：`"x"`
+- `capabilities.can_download`：True
+- `capabilities.supports_gallerydl`：True
+- URL 模式：`x.com/<user>`、`x.com/<user>/status/<id>`、`twitter.com/<user>`
+- 使用 gallery-dl 的 Twitter 提取器，cookie 认证
+- 提取器：timeline、tweets、media、likes、search、list、bookmark、avatar、background
 
 ### Danbooru 参考 (`danbooru_reference.py`)
 - **状态**：仅供参考
