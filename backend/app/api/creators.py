@@ -19,6 +19,37 @@ async def list_creators(offset: int = 0, limit: int = 50, db: AsyncSession = Dep
     return await svc.list_creators(offset, limit)
 
 
+# ── Dedup & Merge ──
+
+@router.get("/duplicates")
+async def list_duplicate_creators(db: AsyncSession = Depends(get_db)):
+    """List potential duplicate creators for admin review."""
+    from app.services.creator_dedup import find_merge_candidates
+    candidates = await find_merge_candidates(db)
+    return {"duplicates": candidates, "total": len(candidates)}
+
+
+@router.post("/merge")
+async def merge_creators_endpoint(data: dict, db: AsyncSession = Depends(get_db)):
+    """Merge source creators into target. Source creators are deleted after merge.
+
+    Accepts: {target_id: UUID, source_ids: [UUID, ...]}
+    """
+    from app.services.creator_dedup import merge_creators
+
+    target_id = UUID(data["target_id"])
+    source_ids = data.get("source_ids", [])
+    results = []
+    for source_id_str in source_ids:
+        source_id = UUID(source_id_str)
+        try:
+            stats = await merge_creators(db, target_id, source_id)
+            results.append({"source_id": source_id_str, "status": "merged", **stats})
+        except ValueError as e:
+            results.append({"source_id": source_id_str, "status": "error", "error": str(e)})
+    return {"status": "ok", "results": results}
+
+
 @router.get("/{creator_id}", response_model=CreatorRead)
 async def get_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)
@@ -97,3 +128,5 @@ async def delete_creator_link(creator_id: UUID, link_id: UUID, db: AsyncSession 
         await svc.delete_link(link_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+

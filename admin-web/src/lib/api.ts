@@ -283,6 +283,13 @@ export const api = {
   deleteCreator: (id: string) =>
     request<void>(`/api/v1/creators/${id}`, { method: "DELETE" }),
 
+  listDuplicateCreators: () =>
+    request<{ duplicates: { reason: string; description: string; creator_ids: string[]; creator_names: string[] }[]; total: number }>("/api/v1/creators/duplicates"),
+
+  mergeCreators: (targetId: string, sourceIds: string[]) =>
+    request<{ status: string; results: { source_id: string; status: string; links_moved?: number; source_creators_moved?: number; subscriptions_moved?: number; error?: string }[] }>(
+      "/api/v1/creators/merge", { method: "POST", body: JSON.stringify({ target_id: targetId, source_ids: sourceIds }) }),
+
   listCreatorLinks: (creatorId: string) =>
     request<CreatorLink[]>(`/api/v1/creators/${creatorId}/links`),
 

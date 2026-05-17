@@ -129,7 +129,9 @@ async def import_all_danbooru(data: dict, db: AsyncSession = Depends(get_db)):
     if not artist:
         return {"status": "ok", "found": False, "message": "No matching Danbooru artist found"}
 
-    # Step 1: Get or create Creator
+    # Step 1: Get or create Creator (with dedup check)
+    from app.services.creator_dedup import find_existing_creator
+
     creator_id_str = data.get("creator_id")
     if creator_id_str:
         creator_id = UUID(creator_id_str)
@@ -137,12 +139,22 @@ async def import_all_danbooru(data: dict, db: AsyncSession = Depends(get_db)):
         if not creator:
             raise HTTPException(status_code=404, detail="Creator not found")
     else:
+        # Check for existing creator by Danbooru ID or source URLs
         display = creator_name or artist.get("name", "Unknown")
-        creator = Creator(name=display, display_name=display)
-        db.add(creator)
-        await db.flush()
-        creator_id = creator.id
-        creator_id_str = str(creator_id)
+        existing = await find_existing_creator(
+            db,
+            danbooru_artist_id=artist.get("id"),
+        )
+        if existing:
+            creator = existing
+            creator_id = creator.id
+            creator_id_str = str(creator_id)
+        else:
+            creator = Creator(name=display, display_name=display)
+            db.add(creator)
+            await db.flush()
+            creator_id = creator.id
+            creator_id_str = str(creator_id)
 
     # Step 2: Enrich Creator with Danbooru data
     if creator.danbooru_artist_id is None:
@@ -239,6 +251,7 @@ async def batch_import_danbooru_artists(data: dict, db: AsyncSession = Depends(g
     from app.models.creator import Creator
     from app.models.subscription import Subscription
     from app.models.subscription_source import SubscriptionSource
+    from app.services.creator_dedup import find_existing_creator
 
     pixiv_ids = data.get("pixiv_ids", [])
     if not pixiv_ids or not isinstance(pixiv_ids, list):
@@ -278,36 +291,68 @@ async def batch_import_danbooru_artists(data: dict, db: AsyncSession = Depends(g
                 })
                 continue
 
-            # Auto-import: Create Creator
-            creator = Creator(
-                name=artist_name,
-                display_name=artist_name,
+            # Dedup check: find existing creator
+            first_dl = dl_urls[0] if dl_urls else {}
+            first_url = first_dl.get("normalized_url") or first_dl.get("url", "")
+            pixiv_user_id = str(pid)
+            existing = await find_existing_creator(
+                db,
                 danbooru_artist_id=artist_id,
+                source="pixiv",
+                source_creator_id=pixiv_user_id,
+                source_url=first_url,
             )
-            db.add(creator)
-            await db.flush()
 
-            # Enrich description
-            parts = []
-            other_names = artist.get("other_names", [])
-            if other_names:
-                parts.append(f"Danbooru aliases: {', '.join(other_names)}")
-            notes = artist.get("notes")
-            if notes:
-                parts.append(notes)
-            if parts:
-                creator.description = "\n".join(parts)
+            if existing:
+                # Merge into existing: add missing links + sources
+                creator = existing
+                was_merged = True
 
-            # Import creator links
+                # Enrich if missing
+                if not creator.danbooru_artist_id:
+                    creator.danbooru_artist_id = artist_id
+                if not creator.description:
+                    parts = []
+                    other_names = artist.get("other_names", [])
+                    if other_names:
+                        parts.append(f"Danbooru aliases: {', '.join(other_names)}")
+                    notes = artist.get("notes")
+                    if notes:
+                        parts.append(notes)
+                    if parts:
+                        creator.description = "\n".join(parts)
+            else:
+                # Create new Creator
+                creator = Creator(
+                    name=artist_name,
+                    display_name=artist_name,
+                    danbooru_artist_id=artist_id,
+                )
+                db.add(creator)
+                await db.flush()
+                was_merged = False
+
+                # Enrich description
+                parts = []
+                other_names = artist.get("other_names", [])
+                if other_names:
+                    parts.append(f"Danbooru aliases: {', '.join(other_names)}")
+                notes = artist.get("notes")
+                if notes:
+                    parts.append(notes)
+                if parts:
+                    creator.description = "\n".join(parts)
+
+            # Import creator links (new only)
             links_count = 0
             for link_data in links:
-                existing = await db.execute(
+                existing_link = await db.execute(
                     select(CreatorLink).where(
                         CreatorLink.creator_id == creator.id,
                         CreatorLink.url == link_data["url"],
                     )
                 )
-                if existing.scalar_one_or_none():
+                if existing_link.scalar_one_or_none():
                     continue
                 db.add(CreatorLink(
                     creator_id=creator.id,
@@ -320,12 +365,17 @@ async def batch_import_danbooru_artists(data: dict, db: AsyncSession = Depends(g
                 ))
                 links_count += 1
 
-            # Create Subscription
-            subscription = Subscription(creator_id=creator.id)
-            db.add(subscription)
-            await db.flush()
+            # Get or create Subscription
+            sub_result = await db.execute(
+                select(Subscription).where(Subscription.creator_id == creator.id)
+            )
+            subscription = sub_result.scalar_one_or_none()
+            if not subscription:
+                subscription = Subscription(creator_id=creator.id)
+                db.add(subscription)
+                await db.flush()
 
-            # Create SubscriptionSources for downloadable URLs
+            # Create SubscriptionSources for downloadable URLs (new only)
             sources_count = 0
             for u in dl_urls:
                 raw_url = u.get("normalized_url") or u.get("url", "")
@@ -356,6 +406,7 @@ async def batch_import_danbooru_artists(data: dict, db: AsyncSession = Depends(g
                 "links_imported": links_count,
                 "sources_created": sources_count,
                 "downloadable_urls": [u.get("normalized_url") or u.get("url") for u in dl_urls],
+                "merged": was_merged,
             })
 
         except Exception as e:

@@ -64,7 +64,10 @@ export default function CreatorsPage() {
   return (
     <main className="max-w-6xl mx-auto p-6">
       <PageHeader title="Creators" description={`${creators.data?.length || 0} creators`}>
-        <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600">+ New Creator</button>
+        <div className="flex gap-2">
+          <button onClick={() => router.push("/admin/creators/duplicates")} className="px-4 py-2 border rounded text-sm hover:bg-gray-50 dark:hover:bg-slate-700 dark:text-gray-300 dark:border-slate-600">Duplicates</button>
+          <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600">+ New Creator</button>
+        </div>
       </PageHeader>
 
       <div className="mb-4"><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search creators..." className="w-full max-w-md border rounded px-3 py-2 text-sm" /></div>
