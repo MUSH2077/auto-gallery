@@ -18,6 +18,38 @@ async def list_subscriptions(offset: int = 0, limit: int = 50, db: AsyncSession 
     return await svc.list_subscriptions(offset, limit)
 
 
+# ── Batch Operations ──
+
+@router.post("/batch-delete")
+async def batch_delete_subscriptions(data: dict, db: AsyncSession = Depends(get_db)):
+    ids = data.get("ids", [])
+    svc = SubscriptionService(db)
+    results = []
+    for sid in ids:
+        try:
+            await svc.delete_subscription(UUID(sid))
+            results.append({"id": sid, "status": "deleted"})
+        except Exception as e:
+            results.append({"id": sid, "status": "error", "error": str(e)})
+    return {"status": "ok", "results": results}
+
+
+@router.post("/batch-toggle-sync")
+async def batch_toggle_sync(data: dict, db: AsyncSession = Depends(get_db)):
+    """Enable/disable sync for multiple subscriptions."""
+    ids = data.get("ids", [])
+    enabled = data.get("sync_enabled", True)
+    svc = SubscriptionService(db)
+    results = []
+    for sid in ids:
+        try:
+            await svc.update_subscription(UUID(sid), {"sync_enabled": enabled})
+            results.append({"id": sid, "status": "updated", "sync_enabled": enabled})
+        except Exception as e:
+            results.append({"id": sid, "status": "error", "error": str(e)})
+    return {"status": "ok", "results": results}
+
+
 @router.get("/{subscription_id}", response_model=SubscriptionRead)
 async def get_subscription(subscription_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = SubscriptionService(db)

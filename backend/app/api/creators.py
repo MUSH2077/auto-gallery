@@ -19,6 +19,23 @@ async def list_creators(offset: int = 0, limit: int = 50, db: AsyncSession = Dep
     return await svc.list_creators(offset, limit)
 
 
+# ── Batch Operations ──
+
+@router.post("/batch-delete")
+async def batch_delete_creators(data: dict, db: AsyncSession = Depends(get_db)):
+    """Delete multiple creators by ID list."""
+    ids = data.get("ids", [])
+    svc = CreatorService(db)
+    results = []
+    for cid in ids:
+        try:
+            await svc.delete_creator(UUID(cid))
+            results.append({"id": cid, "status": "deleted"})
+        except Exception as e:
+            results.append({"id": cid, "status": "error", "error": str(e)})
+    return {"status": "ok", "results": results}
+
+
 # ── Dedup & Merge ──
 
 @router.get("/duplicates")

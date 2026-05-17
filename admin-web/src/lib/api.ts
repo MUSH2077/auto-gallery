@@ -283,6 +283,10 @@ export const api = {
   deleteCreator: (id: string) =>
     request<void>(`/api/v1/creators/${id}`, { method: "DELETE" }),
 
+  batchDeleteCreators: (ids: string[]) =>
+    request<{ status: string; results: { id: string; status: string; error?: string }[] }>(
+      "/api/v1/creators/batch-delete", { method: "POST", body: JSON.stringify({ ids }) }),
+
   listDuplicateCreators: () =>
     request<{ duplicates: { reason: string; description: string; creator_ids: string[]; creator_names: string[] }[]; total: number }>("/api/v1/creators/duplicates"),
 
@@ -321,6 +325,14 @@ export const api = {
 
   deleteSubscription: (id: string) =>
     request<void>(`/api/v1/subscriptions/${id}`, { method: "DELETE" }),
+
+  batchDeleteSubscriptions: (ids: string[]) =>
+    request<{ status: string; results: { id: string; status: string; error?: string }[] }>(
+      "/api/v1/subscriptions/batch-delete", { method: "POST", body: JSON.stringify({ ids }) }),
+
+  batchToggleSyncSubscriptions: (ids: string[], syncEnabled: boolean) =>
+    request<{ status: string; results: { id: string; status: string; sync_enabled?: boolean; error?: string }[] }>(
+      "/api/v1/subscriptions/batch-toggle-sync", { method: "POST", body: JSON.stringify({ ids, sync_enabled: syncEnabled }) }),
 
   listSubscriptionSources: (subId: string) =>
     request<SubscriptionSource[]>(`/api/v1/subscriptions/${subId}/sources`),
