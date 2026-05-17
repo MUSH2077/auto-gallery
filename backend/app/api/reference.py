@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.services import danbooru as danbooru_svc
 from app.models.creator_link import CreatorLink
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[RequireAdmin])
 
@@ -222,4 +225,152 @@ async def import_all_danbooru(data: dict, db: AsyncSession = Depends(get_db)):
         "links_imported": links_created,
         "sources_created": sources_created,
         "subscription_id": str(subscription.id),
+    }
+
+
+@router.post("/danbooru/artist/batch-import")
+async def batch_import_danbooru_artists(data: dict, db: AsyncSession = Depends(get_db)):
+    """Batch import multiple Pixiv user IDs via Danbooru one-click flow.
+
+    Accepts: {pixiv_ids: ["1980643", "123456", ...]}
+    For each ID: search Danbooru, auto-import if high-confidence match found.
+    Returns categorized results for bulk processing.
+    """
+    from app.models.creator import Creator
+    from app.models.subscription import Subscription
+    from app.models.subscription_source import SubscriptionSource
+
+    pixiv_ids = data.get("pixiv_ids", [])
+    if not pixiv_ids or not isinstance(pixiv_ids, list):
+        raise HTTPException(status_code=400, detail="pixiv_ids list is required")
+    pixiv_ids = [str(pid).strip() for pid in pixiv_ids if str(pid).strip()]
+
+    imported = []
+    low_confidence = []
+    not_found = []
+    errors = []
+
+    for pid in pixiv_ids:
+        try:
+            # Search Danbooru for this Pixiv ID
+            artist, links = danbooru_svc.search_and_extract(pixiv_id=pid)
+            if not artist:
+                not_found.append({"pixiv_id": pid, "message": "No matching Danbooru artist found"})
+                continue
+
+            artist_name = artist.get("name", "Unknown")
+            artist_id = artist.get("id")
+
+            # Check for downloadable URLs
+            dl_urls = [
+                u for u in artist.get("urls", [])
+                if u.get("is_active", True) and danbooru_svc.is_downloadable_url(
+                    u.get("normalized_url") or u.get("url", "")
+                )
+            ]
+            if not dl_urls:
+                low_confidence.append({
+                    "pixiv_id": pid,
+                    "artist_name": artist_name,
+                    "artist_id": artist_id,
+                    "url_count": len(artist.get("urls", [])),
+                    "message": "Found but has no downloadable source URLs (Pixiv, Iwara)",
+                })
+                continue
+
+            # Auto-import: Create Creator
+            creator = Creator(
+                name=artist_name,
+                display_name=artist_name,
+                danbooru_artist_id=artist_id,
+            )
+            db.add(creator)
+            await db.flush()
+
+            # Enrich description
+            parts = []
+            other_names = artist.get("other_names", [])
+            if other_names:
+                parts.append(f"Danbooru aliases: {', '.join(other_names)}")
+            notes = artist.get("notes")
+            if notes:
+                parts.append(notes)
+            if parts:
+                creator.description = "\n".join(parts)
+
+            # Import creator links
+            links_count = 0
+            for link_data in links:
+                existing = await db.execute(
+                    select(CreatorLink).where(
+                        CreatorLink.creator_id == creator.id,
+                        CreatorLink.url == link_data["url"],
+                    )
+                )
+                if existing.scalar_one_or_none():
+                    continue
+                db.add(CreatorLink(
+                    creator_id=creator.id,
+                    url=link_data["url"],
+                    link_type=link_data["link_type"],
+                    source=link_data["source"],
+                    confidence=link_data["confidence"],
+                    is_verified=link_data["is_verified"],
+                    notes=link_data.get("notes"),
+                ))
+                links_count += 1
+
+            # Create Subscription
+            subscription = Subscription(creator_id=creator.id)
+            db.add(subscription)
+            await db.flush()
+
+            # Create SubscriptionSources for downloadable URLs
+            sources_count = 0
+            for u in dl_urls:
+                raw_url = u.get("normalized_url") or u.get("url", "")
+                src_type = danbooru_svc._classify_url(raw_url)
+                existing_ss = await db.execute(
+                    select(SubscriptionSource).where(
+                        SubscriptionSource.subscription_id == subscription.id,
+                        SubscriptionSource.source_url == raw_url,
+                    )
+                )
+                if existing_ss.scalar_one_or_none():
+                    continue
+                db.add(SubscriptionSource(
+                    subscription_id=subscription.id,
+                    source=src_type,
+                    source_url=raw_url,
+                    is_enabled=True,
+                ))
+                sources_count += 1
+
+            await db.commit()
+
+            imported.append({
+                "pixiv_id": pid,
+                "creator_id": str(creator.id),
+                "artist_name": artist_name,
+                "artist_id": artist_id,
+                "links_imported": links_count,
+                "sources_created": sources_count,
+                "downloadable_urls": [u.get("normalized_url") or u.get("url") for u in dl_urls],
+            })
+
+        except Exception as e:
+            await db.rollback()
+            errors.append({"pixiv_id": pid, "error": str(e)})
+            logger.exception("Batch import failed for pixiv_id=%s", pid)
+
+    return {
+        "total": len(pixiv_ids),
+        "imported_count": len(imported),
+        "low_confidence_count": len(low_confidence),
+        "not_found_count": len(not_found),
+        "error_count": len(errors),
+        "imported": imported,
+        "low_confidence": low_confidence,
+        "not_found": not_found,
+        "errors": errors,
     }

@@ -214,6 +214,8 @@ export default function DanbooruReferencePage() {
   const [searchPixivId, setSearchPixivId] = useState("");
   const [selectedCreator, setSelectedCreator] = useState("");
   const [searchParams, setSearchParams] = useState<{ url?: string; pixiv_id?: string; name?: string } | null>(null);
+  const [batchInput, setBatchInput] = useState("");
+  const [showBatch, setShowBatch] = useState(false);
 
   const preview = useQuery({
     queryKey: ["danbooru-preview", searchParams],
@@ -243,6 +245,23 @@ export default function DanbooruReferencePage() {
     },
   });
 
+  const batchImport = useMutation({
+    mutationFn: (ids: string[]) => api.batchImportDanbooru(ids),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.creators.all });
+      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+    },
+  });
+
+  const handleBatchSubmit = () => {
+    const ids = batchInput
+      .split(/[\n,]+/)
+      .map((s) => s.trim())
+      .filter((s) => /^\d+$/.test(s));
+    if (ids.length === 0) return;
+    batchImport.mutate(ids);
+  };
+
   const handleSearch = (type: "url" | "name" | "pixiv_id") => {
     const params: Record<string, string> = {};
     if (type === "url" && searchUrl.trim()) params.url = searchUrl.trim();
@@ -262,6 +281,134 @@ export default function DanbooruReferencePage() {
       <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 text-sm mb-6">
         <p className="font-medium text-blue-800 dark:text-blue-300 mb-1">All searches query Danbooru's artist database directly.</p>
         <p className="text-blue-700 dark:text-blue-300">Danbooru artists map source profiles (Pixiv, Twitter, Iwara, etc.) to a canonical name. Use any of the three methods below to find the matching Danbooru artist record.</p>
+      </div>
+
+      {/* Batch Import */}
+      <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-medium text-sm">Batch Import by Pixiv User ID</h3>
+          <button onClick={() => setShowBatch(!showBatch)}
+            className="text-xs text-blue-600 hover:underline">
+            {showBatch ? "Collapse" : "Expand"}
+          </button>
+        </div>
+        {!showBatch && (
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Paste multiple Pixiv user IDs to bulk import via Danbooru. High-confidence matches are auto-imported; low-confidence and not-found entries are flagged for manual review.
+          </p>
+        )}
+        {showBatch && (
+          <div className="space-y-3">
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Enter one Pixiv user ID per line, or comma-separated. Valid IDs are numeric (e.g., 1980643).
+            </p>
+            <textarea
+              value={batchInput}
+              onChange={(e) => setBatchInput(e.target.value)}
+              placeholder={"1980643\n123456\n789012"}
+              rows={5}
+              className="w-full border rounded px-3 py-2 text-sm font-mono resize-y"
+            />
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleBatchSubmit}
+                disabled={batchImport.isPending || !batchInput.trim()}
+                className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+              >
+                {batchImport.isPending ? "Processing..." : "Batch Import"}
+              </button>
+              <span className="text-xs text-gray-400">
+                {batchInput.trim() ? `${batchInput.split(/[\\n,]+/).filter(s => /^\\d+$/.test(s.trim())).length} valid IDs` : ""}
+              </span>
+            </div>
+            {batchImport.error && (
+              <p className="text-red-600 text-sm">{(batchImport.error as Error).message}</p>
+            )}
+
+            {/* Results */}
+            {batchImport.data && (
+              <div className="mt-4 space-y-4">
+                {/* Summary */}
+                <div className="grid grid-cols-4 gap-3">
+                  <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded p-3 text-center">
+                    <div className="text-xl font-bold text-green-700 dark:text-green-400">{batchImport.data.imported_count}</div>
+                    <div className="text-xs text-green-600">Imported</div>
+                  </div>
+                  <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded p-3 text-center">
+                    <div className="text-xl font-bold text-yellow-700 dark:text-yellow-400">{batchImport.data.low_confidence_count}</div>
+                    <div className="text-xs text-yellow-600">Low Confidence</div>
+                  </div>
+                  <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded p-3 text-center">
+                    <div className="text-xl font-bold text-red-700 dark:text-red-400">{batchImport.data.not_found_count}</div>
+                    <div className="text-xs text-red-600">Not Found</div>
+                  </div>
+                  <div className="bg-gray-50 dark:bg-slate-800/50 border border-gray-200 dark:border-slate-700 rounded p-3 text-center">
+                    <div className="text-xl font-bold text-gray-600 dark:text-gray-400">{batchImport.data.error_count}</div>
+                    <div className="text-xs text-gray-500">Errors</div>
+                  </div>
+                </div>
+
+                {/* Imported list */}
+                {batchImport.data.imported.length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-medium text-green-700 dark:text-green-400 mb-2">Imported ({batchImport.data.imported.length})</h4>
+                    <div className="space-y-1 max-h-48 overflow-y-auto">
+                      {batchImport.data.imported.map((r, i) => (
+                        <div key={i} className="bg-green-50 dark:bg-green-900/20 border border-green-100 dark:border-green-900 rounded p-2 text-xs flex items-center justify-between">
+                          <div>
+                            <span className="font-mono text-green-800 dark:text-green-300">Pixiv {r.pixiv_id}</span>
+                            <span className="text-green-600 mx-2">→</span>
+                            <span className="font-medium">{r.artist_name}</span>
+                            <span className="text-gray-500 dark:text-gray-400 ml-2">Danbooru #{r.artist_id}</span>
+                          </div>
+                          <div className="text-green-600 shrink-0">
+                            {r.links_imported} links · {r.sources_created} sources
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Low confidence list */}
+                {batchImport.data.low_confidence.length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-medium text-yellow-700 dark:text-yellow-400 mb-2">Low Confidence — Manual Review ({batchImport.data.low_confidence.length})</h4>
+                    <p className="text-xs text-yellow-600 mb-2">Found Danbooru artist but no downloadable source URLs. Use individual search below to review and manually subscribe.</p>
+                    <div className="space-y-1 max-h-48 overflow-y-auto">
+                      {batchImport.data.low_confidence.map((r, i) => (
+                        <div key={i} className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-100 dark:border-yellow-900 rounded p-2 text-xs flex items-center justify-between">
+                          <div>
+                            <span className="font-mono">Pixiv {r.pixiv_id}</span>
+                            <span className="mx-2">→</span>
+                            <span className="font-medium">{r.artist_name}</span>
+                            <span className="text-gray-500 dark:text-gray-400 ml-2">Danbooru #{r.artist_id}</span>
+                          </div>
+                          <div className="text-yellow-600 shrink-0">{r.url_count} URLs · {r.message}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Not found list */}
+                {batchImport.data.not_found.length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-medium text-red-700 dark:text-red-400 mb-2">Not Found ({batchImport.data.not_found.length})</h4>
+                    <p className="text-xs text-red-600 mb-2">No matching Danbooru artist. May need manual creator creation and source linking.</p>
+                    <div className="flex flex-wrap gap-2">
+                      {batchImport.data.not_found.map((r, i) => (
+                        <span key={i} className="bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900 rounded px-2 py-1 text-xs font-mono text-red-700 dark:text-red-400">
+                          Pixiv {r.pixiv_id}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
