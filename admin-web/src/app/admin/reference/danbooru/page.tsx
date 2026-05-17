@@ -259,42 +259,45 @@ export default function DanbooruReferencePage() {
     <main className="max-w-5xl mx-auto p-6">
       <PageHeader title="Danbooru Reference Mapping" description="Import Danbooru artist data and subscribe to source profiles" />
 
-      <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 text-sm mb-6">
-        <p className="font-medium text-yellow-800 dark:text-yellow-300 mb-1">Danbooru is a reference provider only.</p>
-        <p className="text-yellow-700">Search for artists by Pixiv URL, user ID, or name. Downloadable source profiles (Pixiv, Iwara) can be subscribed to directly.</p>
+      <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 text-sm mb-6">
+        <p className="font-medium text-blue-800 dark:text-blue-300 mb-1">All searches query Danbooru's artist database directly.</p>
+        <p className="text-blue-700 dark:text-blue-300">Danbooru artists map source profiles (Pixiv, Twitter, Iwara, etc.) to a canonical name. Use any of the three methods below to find the matching Danbooru artist record.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-          <h3 className="font-medium mb-3 text-sm">Search by Pixiv URL</h3>
+          <h3 className="font-medium mb-1 text-sm">Search by Source URL</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Matches Danbooru artist URLs exactly. Works with any URL type (Pixiv, Twitter, Iwara, etc.).</p>
           <input value={searchUrl} onChange={(e) => setSearchUrl(e.target.value)}
             placeholder="https://www.pixiv.net/en/users/1980643"
             className="w-full border rounded px-3 py-2 text-sm mb-2" />
           <button onClick={() => handleSearch("url")} disabled={!searchUrl.trim()}
             className="w-full px-3 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
-            Search
+            Search Danbooru
           </button>
         </div>
 
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-          <h3 className="font-medium mb-3 text-sm">Search by Pixiv User ID</h3>
+          <h3 className="font-medium mb-1 text-sm">Search by Pixiv User ID</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Constructs a Pixiv user URL and matches it against Danbooru artist records.</p>
           <input value={searchPixivId} onChange={(e) => setSearchPixivId(e.target.value)}
             placeholder="1980643"
             className="w-full border rounded px-3 py-2 text-sm mb-2" />
           <button onClick={() => handleSearch("pixiv_id")} disabled={!searchPixivId.trim()}
             className="w-full px-3 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
-            Search
+            Search Danbooru
           </button>
         </div>
 
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-          <h3 className="font-medium mb-3 text-sm">Search by Artist Name</h3>
+          <h3 className="font-medium mb-1 text-sm">Search by Artist Name</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Searches Danbooru artist names directly using wildcard matching. Supports partial names.</p>
           <input value={searchName} onChange={(e) => setSearchName(e.target.value)}
-            placeholder="artist_name"
+            placeholder="ask (askzy)"
             className="w-full border rounded px-3 py-2 text-sm mb-2" />
           <button onClick={() => handleSearch("name")} disabled={!searchName.trim()}
             className="w-full px-3 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
-            Search
+            Search Danbooru
           </button>
         </div>
       </div>
