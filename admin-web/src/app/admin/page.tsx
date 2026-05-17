@@ -18,6 +18,8 @@ export default function Dashboard() {
   const storage = useQuery({ queryKey: ["storage"], queryFn: api.storageStats, refetchInterval: 60000 });
   const failedDownloads = useQuery({ queryKey: [...queryKeys.downloadJobs.all, "failed"], queryFn: () => api.listDownloadJobs("failed", 0, 5) });
   const failedImports = useQuery({ queryKey: [...queryKeys.importJobs.all, "failed"], queryFn: () => api.listImportJobs("failed", 0, 5) });
+  const recentDownloads = useQuery({ queryKey: [...queryKeys.downloadJobs.all, "recent"], queryFn: () => api.listDownloadJobs(undefined, 0, 5) });
+  const recentImports = useQuery({ queryKey: [...queryKeys.importJobs.all, "recent"], queryFn: () => api.listImportJobs(undefined, 0, 5) });
 
   return (
     <main className="max-w-6xl mx-auto p-6">
@@ -73,6 +75,41 @@ export default function Dashboard() {
           ) : null}
         </section>
       </div>
+
+      {/* Recent Activity */}
+      <section className="mb-8">
+        <h2 className="text-lg font-semibold mb-3 dark:text-white">Recent Activity</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+            <h3 className="text-sm font-medium mb-2 dark:text-white">Download Jobs</h3>
+            {recentDownloads.isLoading ? <div className="animate-pulse h-16 bg-gray-100 dark:bg-slate-700 rounded" /> :
+             !recentDownloads.data?.length ? <p className="text-xs text-gray-400 dark:text-gray-500">No jobs yet</p> :
+             <div className="space-y-1">
+              {recentDownloads.data.slice(0, 5).map((j) => (
+                <div key={j.id} className="flex items-center justify-between text-xs">
+                  <span className="font-mono text-gray-400 dark:text-gray-500">{j.id.slice(0, 8)}</span>
+                  <span className="text-gray-600 dark:text-gray-300 truncate mx-2 flex-1">{j.source_url?.slice(0, 60)}</span>
+                  <span>{j.status === "complete" || j.status === "downloaded" ? "✅" : j.status === "failed" ? "❌" : "⏳"}</span>
+                </div>
+              ))}
+             </div>}
+          </div>
+          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+            <h3 className="text-sm font-medium mb-2 dark:text-white">Import Jobs</h3>
+            {recentImports.isLoading ? <div className="animate-pulse h-16 bg-gray-100 dark:bg-slate-700 rounded" /> :
+             !recentImports.data?.length ? <p className="text-xs text-gray-400 dark:text-gray-500">No jobs yet</p> :
+             <div className="space-y-1">
+              {recentImports.data.slice(0, 5).map((j) => (
+                <div key={j.id} className="flex items-center justify-between text-xs">
+                  <span className="font-mono text-gray-400 dark:text-gray-500">{j.id.slice(0, 8)}</span>
+                  <span className="text-gray-600 dark:text-gray-300 truncate mx-2 flex-1">{j.download_job_id ? j.download_job_id.slice(0, 8) : "—"}</span>
+                  <span>{j.status === "complete" ? "✅" : j.status === "failed" ? "❌" : "⏳"}</span>
+                </div>
+              ))}
+             </div>}
+          </div>
+        </div>
+      </section>
 
       {/* Recent Failures */}
       {(failedDownloads.data && failedDownloads.data.length > 0) || (failedImports.data && failedImports.data.length > 0) ? (

@@ -98,7 +98,7 @@ export default function ImportJobsPage() {
       <div className="flex gap-2 mb-4 flex-wrap">
         {STATUS_OPTIONS.map((s) => (
           <button key={s} onClick={() => setStatusFilter(s)}
-            className={`px-3 py-1 rounded text-xs font-medium border ${statusFilter === s ? "bg-slate-900 text-white border-slate-900" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
+            className={`px-3 py-1 rounded text-xs font-medium border ${statusFilter === s ? "bg-slate-900 dark:bg-slate-600 text-white border-slate-900 dark:border-slate-500" : "bg-white dark:bg-slate-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-600"}`}>
             {s || "All"}
           </button>
         ))}

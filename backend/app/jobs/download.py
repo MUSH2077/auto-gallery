@@ -15,6 +15,27 @@ from app.repositories.download_job import DownloadJobRepository
 
 logger = logging.getLogger(__name__)
 
+FALLBACK_TIMEOUT = 600
+FALLBACK_MAX_RETRIES = 3
+FALLBACK_BACKOFF_BASE = 60
+
+
+async def _read_download_defaults():
+    """Read download job defaults from system_settings table."""
+    try:
+        from app.models.system_setting import SystemSetting
+        async with async_session() as db:
+            result = await db.execute(
+                select(SystemSetting).where(SystemSetting.key == "download_defaults")
+            )
+            row = result.scalar_one_or_none()
+            if row and row.value:
+                return row.value
+    except Exception:
+        pass
+    return {}
+
+
 AUTH_ERROR_PATTERNS = [
     (r"(?i)401\s*(unauthorized|error)", "HTTP 401 Unauthorized"),
     (r"(?i)403\s*(forbidden|error)", "HTTP 403 Forbidden"),
@@ -60,7 +81,9 @@ async def run_download_job(job_id: str):
             job.source_url,
         ])
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        dl_defaults = await _read_download_defaults()
+        dl_timeout = int(dl_defaults.get("timeout_seconds", FALLBACK_TIMEOUT))
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=dl_timeout)
 
         async with async_session() as db2:
             repo2 = DownloadJobRepository(db2)
@@ -70,7 +93,7 @@ async def run_download_job(job_id: str):
                     await repo2.update_status(j, "downloaded")
                 else:
                     j.retry_count += 1
-                    if j.retry_count < 3:
+                    if j.retry_count < int(dl_defaults.get("max_retries", FALLBACK_MAX_RETRIES)):
                         await repo2.update_status(j, "pending", result.stderr[:5000])
                     else:
                         await repo2.update_status(j, "failed", result.stderr[:5000])
@@ -97,13 +120,16 @@ async def run_download_job(job_id: str):
 
                 await db2.commit()
 
-        if result.returncode != 0 and job.retry_count < 3:
+        max_retries = int(dl_defaults.get("max_retries", FALLBACK_MAX_RETRIES))
+        backoff_base = int(dl_defaults.get("retry_backoff_base_seconds", FALLBACK_BACKOFF_BASE))
+
+        if result.returncode != 0 and job.retry_count < max_retries:
             try:
                 import redis as redis_lib
                 from rq import Queue
                 r = redis_lib.from_url(settings.redis_url)
                 Queue(connection=r).enqueue_in(
-                    60 * (2 ** (job.retry_count - 1)),
+                    backoff_base * (2 ** (job.retry_count - 1)),
                     "app.jobs.download.run_download_job", job_id)
             except Exception:
                 pass
@@ -121,12 +147,14 @@ async def run_download_job(job_id: str):
                 logger.error("Failed to enqueue import job %s: %s", import_job_id, e)
 
     except subprocess.TimeoutExpired:
+        dl_defaults_t = await _read_download_defaults()
+        dl_timeout_t = int(dl_defaults_t.get("timeout_seconds", FALLBACK_TIMEOUT))
         async with async_session() as db2:
             repo2 = DownloadJobRepository(db2)
             j = await repo2.get(job_uuid)
             if j:
                 j.retry_count += 1
-                await repo2.update_status(j, "failed", "timeout after 600s")
+                await repo2.update_status(j, "failed", f"timeout after {dl_timeout_t}s")
                 await db2.commit()
     except Exception as e:
         async with async_session() as db2:

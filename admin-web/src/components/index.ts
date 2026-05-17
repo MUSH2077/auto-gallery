@@ -7,3 +7,4 @@ export { default as ConfirmDialog } from "./ConfirmDialog";
 export { default as DataTable } from "./DataTable";
 export { CardSkeleton, TableSkeleton } from "./LoadingSkeleton";
 export { default as Modal } from "./Modal";
+export { default as ErrorBoundary } from "./ErrorBoundary";

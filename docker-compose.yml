@@ -34,6 +34,11 @@ services:
       MEILI_HTTP_ADDR: ${MEILI_HTTP_ADDR:-meilisearch:7700}
     volumes:
       - ${HOST_MEILISEARCH:-./data/docker/meilisearch}:/meili_data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://meilisearch:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   backend:
@@ -68,7 +73,7 @@ services:
       redis:
         condition: service_healthy
       meilisearch:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
 
   worker:
@@ -91,6 +96,11 @@ services:
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
       - ./backend/alembic/versions:/app/alembic/versions
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import redis; r=redis.from_url('redis://:${REDIS_PASSWORD}@redis:6379/0'); assert r.ping()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     depends_on:
       postgres:
         condition: service_healthy
@@ -117,6 +127,11 @@ services:
       - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
       - ${HOST_LIBRARY:-./data/library}:/library
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import redis; r=redis.from_url('redis://:${REDIS_PASSWORD}@redis:6379/0'); assert r.ping()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     depends_on:
       redis:
         condition: service_healthy
