@@ -11,7 +11,75 @@ from app.models.download_job import DownloadJob
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SYNC_INTERVAL_HOURS = 6
+FALLBACK_INTERVAL_HOURS = 6
+FALLBACK_SCAN_MINUTES = 60
+
+
+async def _get_scheduler_config(db) -> dict:
+    """Read scheduler configuration from system_settings table."""
+    from app.models.system_setting import SystemSetting
+    result = await db.execute(
+        select(SystemSetting).where(SystemSetting.key == "subscription_defaults")
+    )
+    row = result.scalar_one_or_none()
+    if row and row.value:
+        return row.value
+    return {}
+
+
+def _should_sync_now(config: dict, last_synced_at, interval_hours: int) -> bool:
+    """Check whether a sync is due, respecting schedule_mode."""
+    if not last_synced_at:
+        return True  # Never synced — always sync
+
+    now = datetime.now(timezone.utc)
+    mode = config.get("schedule_mode", "interval")
+
+    if mode == "fixed_time":
+        # Check if we've passed a scheduled time since last sync
+        times_str = config.get("scheduled_times", "")
+        if not times_str:
+            # Fall back to interval if no times configured
+            cutoff = now - timedelta(hours=interval_hours)
+            return last_synced_at < cutoff
+
+        scheduled = []
+        for t in times_str.split(","):
+            t = t.strip()
+            try:
+                parts = t.split(":")
+                h, m = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+                scheduled.append((h, m))
+            except ValueError:
+                continue
+
+        if not scheduled:
+            cutoff = now - timedelta(hours=interval_hours)
+            return last_synced_at < cutoff
+
+        # Find the most recent scheduled time
+        today = now.date()
+        best_time = None
+        for h, m in scheduled:
+            st = datetime(today.year, today.month, today.day, h, m, tzinfo=timezone.utc)
+            if st <= now and (best_time is None or st > best_time):
+                best_time = st
+
+        # Also check yesterday's last scheduled time
+        if best_time is None:
+            yesterday = today - timedelta(days=1)
+            for h, m in scheduled:
+                st = datetime(yesterday.year, yesterday.month, yesterday.day, h, m, tzinfo=timezone.utc)
+                if st <= now and (best_time is None or st > best_time):
+                    best_time = st
+
+        if best_time and last_synced_at < best_time:
+            return True
+        return False
+
+    # interval mode (default)
+    cutoff = now - timedelta(hours=interval_hours)
+    return last_synced_at < cutoff
 
 
 async def sync_subscriptions():
@@ -21,6 +89,10 @@ async def sync_subscriptions():
     jobs_created = 0
 
     async with async_session() as db:
+        config = await _get_scheduler_config(db)
+        default_interval = int(config.get("default_sync_interval_hours", FALLBACK_INTERVAL_HOURS))
+        scan_minutes = int(config.get("scheduler_scan_interval_minutes", FALLBACK_SCAN_MINUTES))
+
         # Find all active, sync-enabled subscriptions
         subs = await db.execute(
             select(Subscription).where(
@@ -41,12 +113,15 @@ async def sync_subscriptions():
             )
             sub_sources = sources.scalars().all()
 
-            interval_hours = sub.sync_interval_hours or DEFAULT_SYNC_INTERVAL_HOURS
-            cutoff = now - timedelta(hours=interval_hours)
+            interval_hours = sub.sync_interval_hours or default_interval
 
             for ss in sub_sources:
                 # Skip if auth is known to be unhealthy
                 if ss.auth_healthy is False:
+                    continue
+
+                # Check if sync is due
+                if not _should_sync_now(config, sub.last_synced_at, interval_hours):
                     continue
 
                 # Check if there's a recent job for this subscription source
@@ -55,7 +130,7 @@ async def sync_subscriptions():
                         and_(
                             DownloadJob.subscription_source_id == ss.id,
                             DownloadJob.status.in_(["pending", "downloading", "downloaded"]),
-                            DownloadJob.created_at >= cutoff,
+                            DownloadJob.created_at >= now - timedelta(hours=1),
                         )
                     ).limit(1)
                 )
@@ -102,7 +177,9 @@ async def sync_subscriptions():
         if jobs_created:
             await db.commit()
 
-    logger.info("Auto-sync scan complete: %d download jobs created", jobs_created)
+    mode = config.get("schedule_mode", "interval")
+    logger.info("Auto-sync scan complete: %d jobs created (mode=%s, scan_every=%dm, default_interval=%dh)",
+                jobs_created, mode, scan_minutes, default_interval)
 
     # Re-schedule for next scan
     try:
@@ -110,7 +187,7 @@ async def sync_subscriptions():
         from rq import Queue
         r = redis_lib.from_url(settings.redis_url)
         Queue(connection=r).enqueue_in(
-            timedelta(hours=1),
+            timedelta(minutes=max(scan_minutes, 5)),
             "app.jobs.subscription_sync.sync_subscriptions",
         )
     except Exception as e:

@@ -1,8 +1,9 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys, Subscription } from "@/lib/api";
-import { PageHeader, StatusBadge, EmptyState, ErrorState } from "@/components";
+import { PageHeader, EmptyState, ErrorState } from "@/components";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 function fmtNextSync(sub: Subscription): string {
   if (!sub.last_synced_at) return "Pending first sync";
@@ -20,6 +21,7 @@ export default function SchedulerPage() {
   const subs = useQuery({ queryKey: queryKeys.subscriptions.all, queryFn: () => api.listSubscriptions() });
   const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
   const queue = useQuery({ queryKey: ["queue-stats"], queryFn: api.queueStats, refetchInterval: 15000 });
+  const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
 
   const getCreatorName = (creatorId: string) => {
     const c = creators.data?.find((c) => c.id === creatorId);
@@ -109,9 +111,52 @@ export default function SchedulerPage() {
         )}
       </section>
 
-      <div className="mt-6 p-4 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg text-sm text-blue-800 dark:text-blue-300">
-        <strong>How scheduling works:</strong> The scheduler scans active, sync-enabled subscriptions every hour.
-        For each subscription source, it checks whether the configured sync interval has elapsed since the last download.
+      {/* Scheduler Configuration */}
+      <section className="mt-8">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold dark:text-white">Scheduler Configuration</h2>
+          <Link href="/admin/settings/subscription-defaults" className="text-sm text-blue-600 hover:underline">Edit Settings</Link>
+        </div>
+        {settings.isLoading ? (
+          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 animate-pulse"><div className="h-16 bg-gray-100 dark:bg-slate-700 rounded" /></div>
+        ) : settings.data ? (
+          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 text-sm">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">Mode</div>
+                <div className="font-medium dark:text-white mt-1">
+                  {settings.data.subscription_defaults.schedule_mode === "fixed_time" ? "Fixed Time" : "Interval"}
+                </div>
+              </div>
+              {settings.data.subscription_defaults.schedule_mode === "fixed_time" ? (
+                <div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Scheduled Times (UTC)</div>
+                  <div className="font-medium dark:text-white font-mono mt-1">{settings.data.subscription_defaults.scheduled_times || "Not set"}</div>
+                </div>
+              ) : (
+                <div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Default Interval</div>
+                  <div className="font-medium dark:text-white mt-1">{settings.data.subscription_defaults.default_sync_interval_hours}h</div>
+                </div>
+              )}
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">Scan Frequency</div>
+                <div className="font-medium dark:text-white mt-1">Every {settings.data.subscription_defaults.scheduler_scan_interval_minutes}m</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">New Subs Auto-Sync</div>
+                <div className={`font-medium mt-1 ${settings.data.subscription_defaults.default_sync_enabled ? "text-green-600 dark:text-green-400" : "text-gray-400"}`}>
+                  {settings.data.subscription_defaults.default_sync_enabled ? "Enabled" : "Disabled"}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </section>
+
+      <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg text-sm text-blue-800 dark:text-blue-300">
+        <strong>How scheduling works:</strong> The scheduler scans active, sync-enabled subscriptions on each wake-up.
+        In Interval mode, subs sync when their configured hours have elapsed. In Fixed Time mode, subs sync at the next scheduled HH:MM after their last sync.
         If auth is unhealthy, the source is skipped. Failed jobs appear in the queue stats above.
       </div>
     </main>

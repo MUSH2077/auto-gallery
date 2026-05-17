@@ -21,6 +21,10 @@ class SubscriptionDefaults(BaseModel):
     default_sync_interval_hours: int = 6
     scheduler_scan_interval_minutes: int = 60
     default_sync_enabled: bool = True
+    schedule_mode: str = "interval"
+    scheduled_times: str = ""
+
+DEFAULT_SUB = {"default_sync_interval_hours": 6, "scheduler_scan_interval_minutes": 60, "default_sync_enabled": True, "schedule_mode": "interval", "scheduled_times": ""}
 
 class DownloadDefaults(BaseModel):
     timeout_seconds: int = 600

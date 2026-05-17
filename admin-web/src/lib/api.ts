@@ -157,6 +157,8 @@ export interface SubscriptionDefaults {
   default_sync_interval_hours: number;
   scheduler_scan_interval_minutes: number;
   default_sync_enabled: boolean;
+  schedule_mode: "interval" | "fixed_time";
+  scheduled_times: string;
 }
 
 export interface DownloadDefaults {
