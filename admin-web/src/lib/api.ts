@@ -199,7 +199,6 @@ export interface IwaraSourceConfig {
   password?: string;
   filename?: string;
   directory?: string;
-  videos?: boolean;
   format?: string;
 }
 

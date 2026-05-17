@@ -116,7 +116,6 @@ class IwaraSourceConfig(BaseModel):
     password: str | None = None
     filename: str | None = None
     directory: str | None = None
-    videos: bool | None = True
     format: str | None = None
 
 class GalleryDLMultiConfig(BaseModel):
@@ -137,8 +136,8 @@ GALLERYDL_SOURCE_OPTIONS = {
     },
     "iwara": {
         "name": "Iwara",
-        "supported": False,
-        "description": "Gallery-dl 1.28.3 does not include an Iwara extractor. Config is saved for future use.",
+        "supported": True,
+        "description": "Iwara.tv videos, images, playlists, and user profiles. Requires gallery-dl >= 1.32.",
     },
 }
 
@@ -161,8 +160,7 @@ TWITTER_CONFIG_MAP = {
 IWARA_CONFIG_MAP = {
     "cookies_path": "cookies", "username": "username",
     "password": "password", "filename": "filename",
-    "directory": "directory", "videos": "videos",
-    "format": "format",
+    "directory": "directory", "format": "format",
 }
 
 def _load_config() -> tuple[dict, str]:

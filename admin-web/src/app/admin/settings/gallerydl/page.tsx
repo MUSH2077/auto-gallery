@@ -126,8 +126,7 @@ export default function GalleryDLConfigPage() {
   const initIwara = (d: any) => ({
     cookies_path: str(d?.cookies_path), username: str(d?.username),
     password: str(d?.password), filename: str(d?.filename),
-    directory: str(d?.directory), videos: d?.videos ?? true,
-    format: str(d?.format),
+    directory: str(d?.directory), format: str(d?.format),
   });
 
   if (config.isError) {
@@ -271,15 +270,14 @@ function IwaraTab({ data, onChange }: { data: IwaraSourceConfig; onChange: (d: I
     <>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">Authentication</h4>
       <div className="grid grid-cols-2 gap-4">
-        <TextField label="Username" value={str(data.username)} onChange={(v) => set("username", v || undefined)} placeholder="iwara username" />
-        <TextField label="Password" value={str(data.password)} onChange={(v) => set("password", v || undefined)} type="password" placeholder="iwara password" />
+        <TextField label="Username" value={str(data.username)} onChange={(v) => set("username", v || undefined)} placeholder="Iwara account username/email" />
+        <TextField label="Password" value={str(data.password)} onChange={(v) => set("password", v || undefined)} type="password" placeholder="Iwara account password" />
         <TextField label="Cookies Path" value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/iwara.txt" />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">Content</h4>
-      <div className="space-y-1">
-        <ToggleField label="Videos" desc="Download video content." value={data.videos ?? true} onChange={(v) => set("videos", v)} />
-      </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">File Organization</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">Video Quality</h4>
+      <TextField label="Format" value={str(data.format)} onChange={(v) => set("format", v || undefined)} placeholder="Source, 540, 360" />
+      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">Comma-separated format preference, e.g. &quot;Source, 1080, 720, 540, 360&quot;. &quot;Source&quot; downloads original quality.</p>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">File Organization</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label="Directory Pattern" value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} placeholder="iwara/{user[name]}" />
         <TextField label="Filename Pattern" value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} />

@@ -15,8 +15,8 @@ class IwaraProvider(BaseProvider):
     @property
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            can_download=False,
-            supports_gallerydl=False,
+            can_download=True,
+            supports_gallerydl=True,
             supports_tags=True,
         )
 
@@ -30,7 +30,14 @@ class IwaraProvider(BaseProvider):
         return bool(re.match(r"https?://(?:www\.)?iwara\.tv/(video|profile)/[\w-]+", url))
 
     def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
-        raise NotImplementedError("Iwara download is not yet supported")
+        return {
+            "extractor": {
+                "iwara": {
+                    "cookies": "/gallerydl-config/cookies/iwara.txt",
+                    "directory": [naming_template.template if naming_template else "{user[name]}"],
+                }
+            }
+        }
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:
         raise NotImplementedError("Iwara import is not yet supported")
