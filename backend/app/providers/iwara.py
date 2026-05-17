@@ -40,13 +40,51 @@ class IwaraProvider(BaseProvider):
         }
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:
-        raise NotImplementedError("Iwara import is not yet supported")
+        user = raw_metadata.get("user", {})
+        user_id = str(user.get("id", ""))
+        return {
+            "source": self.source_name,
+            "source_creator_id": user_id,
+            "source_url": f"https://www.iwara.tv/profile/{user.get('name', user_id)}" if user_id else None,
+            "display_name": user.get("nick") or user.get("name"),
+            "raw_metadata": user,
+        }
 
     def parse_work_source(self, raw_metadata: dict) -> dict:
-        raise NotImplementedError("Iwara import is not yet supported")
+        media_type = raw_metadata.get("type", "video")
+        media_id = str(raw_metadata.get("id", ""))
+        user = raw_metadata.get("user", {})
+        return {
+            "source": self.source_name,
+            "source_work_id": media_id,
+            "source_url": f"https://www.iwara.tv/{media_type}/{media_id}" if media_id else None,
+            "source_creator_id": str(user.get("id", "")),
+            "title": raw_metadata.get("title") or "",
+            "description": raw_metadata.get("description") or "",
+            "posted_at": raw_metadata.get("date"),
+            "raw_metadata": raw_metadata,
+        }
 
     def parse_assets(self, raw_metadata: dict, files: list[str]) -> list[dict]:
-        raise NotImplementedError("Iwara import is not yet supported")
+        return [{
+            "source": self.source_name,
+            "source_asset_id": str(raw_metadata.get("file_id", raw_metadata.get("id", ""))),
+            "source_url": raw_metadata.get("url"),
+            "width": raw_metadata.get("width"),
+            "height": raw_metadata.get("height"),
+            "raw_metadata": raw_metadata,
+        }]
 
     def parse_source_tags(self, raw_metadata: dict) -> list[dict]:
-        raise NotImplementedError("Iwara import is not yet supported")
+        tags = raw_metadata.get("tags", [])
+        result = []
+        for tag in tags:
+            if isinstance(tag, str):
+                result.append({"source": self.source_name, "original_name": tag, "category": "general"})
+            elif isinstance(tag, dict):
+                result.append({"source": self.source_name, "original_name": tag.get("name") or tag.get("id", str(tag)), "category": "general"})
+        # Also emit rating tag if present
+        rating = raw_metadata.get("rating")
+        if rating:
+            result.append({"source": self.source_name, "original_name": f"rating:{rating}", "category": "meta"})
+        return result

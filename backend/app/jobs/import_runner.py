@@ -291,6 +291,27 @@ async def run_import_job(import_job_id: str):
 
                 await db.commit()
 
+                # Index in Meilisearch
+                try:
+                    from app.services.search import SearchService
+                    svc = SearchService(db)
+                    tag_names = [t.normalized_name for t in (await db.execute(
+                        select(Tag.normalized_name).join(WorkTag).where(WorkTag.work_id == work.id)
+                    )).all()]
+                    await svc.index_work(
+                        work_id=str(work.id),
+                        title=work.title,
+                        description=work.description,
+                        creator_name=display_name,
+                        is_nsfw=work.is_nsfw,
+                        source=provider.source_name,
+                        tags=[str(tn) for tn in tag_names],
+                        posted_at=work.posted_at.isoformat() if work.posted_at else None,
+                        created_at=work.created_at.isoformat(),
+                    )
+                except Exception:
+                    pass
+
             # Delete processed JSONs (keep image files)
             for jf, _ in items:
                 try:

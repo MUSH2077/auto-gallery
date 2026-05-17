@@ -80,8 +80,10 @@ async def update_settings(data: AdminSettingsUpdate, db: AsyncSession = Depends(
 # ── Search ──
 
 @router.post("/search/reindex")
-async def reindex_search():
-    return {"status": "ok", "message": "Reindex triggered"}
+async def reindex_search(db: AsyncSession = Depends(get_db)):
+    from app.services.search import SearchService
+    svc = SearchService(db)
+    return await svc.reindex()
 
 
 # ── gallery-dl Config ──

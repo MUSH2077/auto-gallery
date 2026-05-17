@@ -15,8 +15,8 @@ class XProvider(BaseProvider):
     @property
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            can_download=False,
-            supports_gallerydl=False,
+            can_download=True,
+            supports_gallerydl=True,
             supports_tags=True,
         )
 
@@ -33,16 +33,80 @@ class XProvider(BaseProvider):
         return bool(re.match(r"https?://(?:twitter\.com|x\.com)/\w+(?:/status/\d+)?/?$", url))
 
     def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
-        raise NotImplementedError("X/Twitter download is not yet supported")
+        return {
+            "extractor": {
+                "twitter": {
+                    "cookies": "/gallerydl-config/cookies/twitter.txt",
+                    "directory": [naming_template.template if naming_template else "twitter/{user[name]}"],
+                }
+            }
+        }
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:
-        raise NotImplementedError("X/Twitter import is not yet supported")
+        user = raw_metadata.get("user", {})
+        user_id = str(user.get("id", ""))
+        name = user.get("name", "")
+        return {
+            "source": self.source_name,
+            "source_creator_id": user_id,
+            "source_url": f"https://x.com/{name}" if name else None,
+            "display_name": user.get("nick") or name,
+            "raw_metadata": user,
+        }
 
     def parse_work_source(self, raw_metadata: dict) -> dict:
-        raise NotImplementedError("X/Twitter import is not yet supported")
+        tweet_id = str(raw_metadata.get("id_str") or raw_metadata.get("id", ""))
+        user = raw_metadata.get("user", {})
+        screen_name = user.get("name", "")
+        return {
+            "source": self.source_name,
+            "source_work_id": tweet_id,
+            "source_url": f"https://x.com/{screen_name}/status/{tweet_id}" if screen_name and tweet_id else None,
+            "source_creator_id": str(user.get("id", "")),
+            "title": (raw_metadata.get("full_text") or raw_metadata.get("text") or "")[:200],
+            "description": raw_metadata.get("full_text") or raw_metadata.get("text") or "",
+            "posted_at": raw_metadata.get("created_at"),
+            "raw_metadata": raw_metadata,
+        }
 
     def parse_assets(self, raw_metadata: dict, files: list[str]) -> list[dict]:
-        raise NotImplementedError("X/Twitter import is not yet supported")
+        # Twitter metadata has entities.media array for images/videos
+        entities = raw_metadata.get("entities", {})
+        media_list = entities.get("media", [])
+        if not media_list:
+            # Fallback: single asset from raw_metadata
+            return [{
+                "source": self.source_name,
+                "source_asset_id": str(raw_metadata.get("id_str") or raw_metadata.get("id", "")),
+                "source_url": raw_metadata.get("url") or raw_metadata.get("media_url"),
+                "width": raw_metadata.get("width"),
+                "height": raw_metadata.get("height"),
+                "raw_metadata": raw_metadata,
+            }]
+
+        result = []
+        for media in media_list:
+            result.append({
+                "source": self.source_name,
+                "source_asset_id": str(media.get("id_str", "")),
+                "source_url": media.get("media_url") or media.get("media_url_https"),
+                "width": (media.get("sizes", {}).get("large", {}).get("w") or media.get("sizes", {}).get("medium", {}).get("w")),
+                "height": (media.get("sizes", {}).get("large", {}).get("h") or media.get("sizes", {}).get("medium", {}).get("h")),
+                "raw_metadata": media,
+            })
+        return result
 
     def parse_source_tags(self, raw_metadata: dict) -> list[dict]:
-        raise NotImplementedError("X/Twitter import is not yet supported")
+        result = []
+        # Hashtags from entities
+        entities = raw_metadata.get("entities", {})
+        for hashtag in entities.get("hashtags", []):
+            text = hashtag.get("text", "")
+            if text:
+                result.append({"source": self.source_name, "original_name": text, "category": "hashtag"})
+        # User mentions
+        for mention in entities.get("user_mentions", []):
+            name = mention.get("name") or mention.get("screen_name", "")
+            if name:
+                result.append({"source": self.source_name, "original_name": f"@{name}", "category": "mention"})
+        return result
