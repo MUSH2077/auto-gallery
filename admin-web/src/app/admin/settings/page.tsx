@@ -25,6 +25,7 @@ export default function SettingsPage() {
     { href: "/admin/settings/auth-status", title: t("settings.auth"), desc: t("settings.auth.desc") },
     { href: "/admin/settings/subscription-defaults", title: t("settings.sub_defaults"), desc: t("settings.sub_defaults.desc") },
     { href: "/admin/settings/download-defaults", title: t("settings.dl_defaults"), desc: t("settings.dl_defaults.desc") },
+    { href: "/admin/settings/data-mgmt", title: "Data Management", desc: "Clear downloads, works, creators, subscriptions. Reset all settings to defaults." },
   ];
 
   return (

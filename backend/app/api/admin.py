@@ -183,6 +183,58 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
     }
 
 
+# ── Data Management ──
+
+ENTITIES = {
+    "works": ["work_source_tags", "work_tags", "asset_sources", "assets", "work_sources", "works"],
+    "creators": ["import_jobs", "download_jobs", "subscription_sources", "subscriptions", "source_creators", "creator_links", "creators"],
+    "downloads": ["import_jobs", "download_jobs"],
+    "settings": [],  # Special: reset to defaults
+}
+
+
+@router.post("/clear/{entity}")
+async def clear_entity(entity: str, db: AsyncSession = Depends(get_db)):
+    """Clear a specific entity or 'all' for complete cleanup."""
+    from sqlalchemy import text
+
+    if entity == "all":
+        order = [
+            "work_source_tags", "work_tags", "asset_sources", "assets", "work_sources", "works",
+            "import_jobs", "download_jobs",
+            "subscription_sources", "subscriptions",
+            "source_creators", "creator_links", "creators",
+        ]
+        results = {}
+        for table in order:
+            r = await db.execute(text(f"DELETE FROM {table}"))
+            results[table] = r.rowcount
+        await db.commit()
+        return {"status": "ok", "message": "All data cleared", "deleted": results}
+
+    tables = ENTITIES.get(entity)
+    if tables is None:
+        raise HTTPException(status_code=400, detail=f"Unknown entity: {entity}. Valid: all, works, creators, downloads")
+
+    results = {}
+    for table in tables:
+        r = await db.execute(text(f"DELETE FROM {table}"))
+        results[table] = r.rowcount
+    await db.commit()
+    return {"status": "ok", "message": f"Cleared {entity}", "deleted": results}
+
+
+@router.post("/reset-settings")
+async def reset_settings(db: AsyncSession = Depends(get_db)):
+    """Reset all system settings to defaults."""
+    from app.models.system_setting import SystemSetting
+    result = await db.execute(select(SystemSetting))
+    for row in result.scalars().all():
+        await db.delete(row)
+    await db.commit()
+    return {"status": "ok", "message": "All settings reset to defaults"}
+
+
 # ── Search ──
 
 @router.post("/search/reindex")
