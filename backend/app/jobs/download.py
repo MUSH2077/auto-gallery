@@ -83,7 +83,17 @@ async def run_download_job(job_id: str):
 
         dl_defaults = await _read_download_defaults()
         dl_timeout = int(dl_defaults.get("timeout_seconds", FALLBACK_TIMEOUT))
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=dl_timeout)
+
+        # Apply proxy env vars for gallery-dl subprocess
+        env = os.environ.copy()
+        try:
+            from app.services.proxy import _load_proxy_config, get_proxy_env
+            proxy_config = await _load_proxy_config()
+            env.update(get_proxy_env(proxy_config))
+        except Exception:
+            pass
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=dl_timeout, env=env)
 
         async with async_session() as db2:
             repo2 = DownloadJobRepository(db2)

@@ -31,10 +31,19 @@ class DownloadDefaults(BaseModel):
     max_retries: int = 3
     retry_backoff_base_seconds: int = 60
 
+class ProxySettings(BaseModel):
+    http_proxy: str = ""
+    https_proxy: str = ""
+    no_proxy: str = "localhost,127.0.0.1,::1"
+    enabled: bool = False
+
+DEFAULT_PROXY = {"http_proxy": "", "https_proxy": "", "no_proxy": "localhost,127.0.0.1,::1", "enabled": False}
+
 class AdminSettingsUpdate(BaseModel):
     dedup: DedupSettings | None = None
     subscription_defaults: SubscriptionDefaults | None = None
     download_defaults: DownloadDefaults | None = None
+    proxy: ProxySettings | None = None
 
 
 # ── Helpers ──
@@ -67,7 +76,8 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
     dedup = await _get_setting(db, "dedup", DEFAULT_DEDUP)
     sub = await _get_setting(db, "subscription_defaults", DEFAULT_SUB)
     dl = await _get_setting(db, "download_defaults", DEFAULT_DL)
-    return {"dedup": dedup, "subscription_defaults": sub, "download_defaults": dl}
+    proxy = await _get_setting(db, "proxy", DEFAULT_PROXY)
+    return {"dedup": dedup, "subscription_defaults": sub, "download_defaults": dl, "proxy": proxy}
 
 
 @router.put("/settings")
@@ -78,6 +88,8 @@ async def update_settings(data: AdminSettingsUpdate, db: AsyncSession = Depends(
         await _put_setting(db, "subscription_defaults", data.subscription_defaults.model_dump())
     if data.download_defaults is not None:
         await _put_setting(db, "download_defaults", data.download_defaults.model_dump())
+    if data.proxy is not None:
+        await _put_setting(db, "proxy", data.proxy.model_dump())
     return {"status": "ok", "message": "Settings saved to database"}
 
 

@@ -21,6 +21,7 @@ export default function SettingsPage() {
   const cards = [
     { href: "/admin/settings/gallerydl", title: t("settings.gallerydl"), desc: t("settings.gallerydl.desc") },
     { href: "/admin/settings/dedup", title: t("settings.dedup"), desc: t("settings.dedup.desc") },
+    { href: "/admin/settings/proxy", title: "Network Proxy", desc: "Configure HTTP/HTTPS proxy for external API access and gallery-dl downloads." },
     { href: "/admin/settings/auth-status", title: t("settings.auth"), desc: t("settings.auth.desc") },
     { href: "/admin/settings/subscription-defaults", title: t("settings.sub_defaults"), desc: t("settings.sub_defaults.desc") },
     { href: "/admin/settings/download-defaults", title: t("settings.dl_defaults"), desc: t("settings.dl_defaults.desc") },

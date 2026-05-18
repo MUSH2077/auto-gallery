@@ -14,12 +14,36 @@ UA = "auto-gallery/0.1 (reference provider)"
 REQUEST_TIMEOUT = 15
 
 
+def _get_opener():
+    """Get a urllib opener with proxy config if enabled."""
+    try:
+        import asyncio
+        from app.services.proxy import _load_proxy_config, apply_proxy_to_urllib
+
+        async def _load():
+            return await _load_proxy_config()
+
+        config = asyncio.get_event_loop().run_until_complete(_load())
+        opener = apply_proxy_to_urllib(config)
+        if opener:
+            return opener
+    except Exception:
+        pass
+    return urllib.request.build_opener()
+
+
+_opener = None
+
+
 def _get(path: str) -> dict | list | None:
     """GET request to Danbooru API."""
+    global _opener
     url = f"{DANBOORU_BASE}{path}"
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     try:
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        if _opener is None:
+            _opener = _get_opener()
+        with _opener.open(req, timeout=REQUEST_TIMEOUT) as resp:
             return json.loads(resp.read())  # type: ignore[no-any-return]
     except Exception as e:
         logger.warning("Danbooru API request failed: %s %s", url, e)
