@@ -435,6 +435,12 @@ export const api = {
     results: { name: string; url: string; direct_ok: boolean; direct_ms: number; proxy_ok: boolean | null; proxy_ms: number | null }[];
   }>("/api/v1/admin/proxy/test", { method: "POST" }),
 
+  clearEntity: (entity: string) =>
+    request<{ status: string; message: string; deleted?: Record<string, number> }>(`/api/v1/admin/clear/${entity}`, { method: "POST" }),
+
+  resetSettings: () =>
+    request<{ status: string; message: string }>("/api/v1/admin/reset-settings", { method: "POST" }),
+
   listDuplicates: () => request<{ duplicates: { source: string; source_work_id: string; count: number; work_ids: string[] }[]; total: number }>("/api/v1/admin/dedup/duplicates"),
   scanDuplicates: () => request<{ status: string; unique_works: number; total_source_records: number; message: string }>("/api/v1/admin/dedup/scan", { method: "POST" }),
   listMergeCandidates: () => request<{ candidates: { title: string; source_count: number; sources: string[]; work_ids: string[] }[]; total: number }>("/api/v1/admin/merge-candidates"),
