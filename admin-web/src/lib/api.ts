@@ -176,7 +176,7 @@ export interface PixivSourceConfig {
   directory?: string;
   include?: string;
   tags?: string;
-  ugoira?: boolean;
+  ugoira?: string;
   sleep_request?: number;
   max_posts?: number;
 }

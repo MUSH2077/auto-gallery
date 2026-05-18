@@ -99,7 +99,7 @@ class PixivSourceConfig(BaseModel):
     directory: str | None = None
     include: str | None = "artworks"
     tags: str | None = "japanese"
-    ugoira: bool | None = True
+    ugoira: str | None = "zip"
     sleep_request: float | None = None
     max_posts: int | None = None
 
@@ -185,6 +185,8 @@ def _read_source_config(extractor_config: dict, schema_map: dict) -> dict:
         val = extractor_config.get(dl_key)
         if api_key == "directory" and isinstance(val, list):
             val = "/".join(val)
+        if api_key == "ugoira" and isinstance(val, bool):
+            val = "zip" if val else "false"
         if val is not None:
             result[api_key] = val
     return result
@@ -196,7 +198,9 @@ def _write_source_config(extractor_config: dict, data: BaseModel, schema_map: di
     for api_key, dl_key in schema_map.items():
         val = getattr(data, api_key, None)
         if val is not None:
-            if dl_key in dir_keys and isinstance(val, str) and "/" in val:
+            if api_key == "ugoira" and val == "false":
+                extractor_config[dl_key] = False
+            elif dl_key in dir_keys and isinstance(val, str) and "/" in val:
                 extractor_config[dl_key] = val.split("/")
             else:
                 extractor_config[dl_key] = val

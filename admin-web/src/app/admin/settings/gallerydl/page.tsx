@@ -112,7 +112,7 @@ export default function GalleryDLConfigPage() {
     refresh_token: str(d?.refresh_token), cookies_path: str(d?.cookies_path),
     filename: str(d?.filename), directory: str(d?.directory),
     include: str(d?.include, "artworks"), tags: str(d?.tags, "japanese"),
-    ugoira: d?.ugoira ?? true, sleep_request: d?.sleep_request,
+    ugoira: str(d?.ugoira, "zip"), sleep_request: d?.sleep_request,
     max_posts: d?.max_posts,
   });
   const initTwitter = (d: any) => ({
@@ -205,12 +205,14 @@ function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: P
         <SelectField label="Tag Language" value={str(data.tags, "japanese")} onChange={(v) => set("tags", v)}
           options={[{ value: "japanese", label: "japanese" }, { value: "english", label: "english" }, { value: "translated", label: "translated" }]} />
         <NumberField label="Max Posts" value={numStr(data.max_posts)} onChange={(v) => set("max_posts", parseInt(v) || undefined)} placeholder="Unlimited" />
-        <div className="flex items-end pb-2">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={data.ugoira ?? true} onChange={(e) => set("ugoira", e.target.checked)} className="rounded" />
-            <span className="text-sm font-medium">Download Ugoira</span>
-          </label>
-        </div>
+        <SelectField label="Ugoira Format" value={str(data.ugoira, "zip")} onChange={(v) => set("ugoira", v)}
+          options={[
+            { value: "zip", label: "ZIP (original frames)" },
+            { value: "gif", label: "GIF (animated)" },
+            { value: "webm", label: "WebM (video)" },
+            { value: "mp4", label: "MP4 (video)" },
+            { value: "false", label: "Skip ugoira" },
+          ]} />
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">File Organization</h4>
       <div className="grid grid-cols-2 gap-4">
