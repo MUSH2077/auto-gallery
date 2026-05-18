@@ -111,6 +111,11 @@ async def run_import_job(import_job_id: str):
             return
 
         stats = {"works": 0, "assets": 0, "multi_page": 0}
+        batch_count = 0
+        BATCH_SIZE = 50
+
+        # Batch Meilisearch documents
+        meili_docs = []
 
         for src_work_id, items in groups.items():
             if not items:
@@ -303,28 +308,35 @@ async def run_import_job(import_job_id: str):
                 except Exception:
                     pass
 
-                await db.commit()
+                # Collect Meilisearch document for this work
+                tag_names = [t.normalized_name for t in (await db.execute(
+                    select(Tag.normalized_name).join(WorkTag).where(WorkTag.work_id == work.id)
+                )).all()]
+                meili_docs.append({
+                    "id": str(work.id),
+                    "title": work.title or "",
+                    "description": (work.description or "")[:500],
+                    "creator_name": display_name or "",
+                    "is_nsfw": work.is_nsfw,
+                    "source": provider.source_name,
+                    "tags": [str(tn) for tn in tag_names],
+                    "posted_at": work.posted_at.isoformat() if work.posted_at else None,
+                    "created_at": work.created_at.isoformat() if work.created_at else None,
+                })
 
-                # Index in Meilisearch
-                try:
-                    from app.services.search import SearchService
-                    svc = SearchService(db)
-                    tag_names = [t.normalized_name for t in (await db.execute(
-                        select(Tag.normalized_name).join(WorkTag).where(WorkTag.work_id == work.id)
-                    )).all()]
-                    await svc.index_work(
-                        work_id=str(work.id),
-                        title=work.title,
-                        description=work.description,
-                        creator_name=display_name,
-                        is_nsfw=work.is_nsfw,
-                        source=provider.source_name,
-                        tags=[str(tn) for tn in tag_names],
-                        posted_at=work.posted_at.isoformat() if work.posted_at else None,
-                        created_at=work.created_at.isoformat(),
-                    )
-                except Exception:
-                    pass
+                # Batch commit every BATCH_SIZE works
+                batch_count += 1
+                if batch_count >= BATCH_SIZE:
+                    await db.commit()
+                    if meili_docs:
+                        try:
+                            from app.services.search import SearchService
+                            svc = SearchService(db)
+                            await svc._batch_index_works(meili_docs)
+                        except Exception:
+                            pass
+                        meili_docs = []
+                    batch_count = 0
 
             # Delete processed JSONs (keep image files)
             for jf, _ in items:
@@ -340,13 +352,25 @@ async def run_import_job(import_job_id: str):
             except Exception:
                 pass
 
+        # Final flush: commit remaining works and index remaining Meilisearch docs
+        if batch_count > 0:
+            async with async_session() as db:
+                await db.commit()
+                if meili_docs:
+                    try:
+                        from app.services.search import SearchService
+                        svc = SearchService(db)
+                        await svc._batch_index_works(meili_docs)
+                    except Exception:
+                        pass
+
         async with async_session() as db:
             ij = await db.get(ImportJob, job_uuid)
             if ij:
                 ij.status = "complete"
                 await db.commit()
 
-        logger.info("Import complete: %d works, %d assets, %d multi-page",
+        logger.info("Import complete: %d works, %d assets, %d multi-page (batched)",
                      stats["works"], stats["assets"], stats["multi_page"])
 
     except Exception as e:

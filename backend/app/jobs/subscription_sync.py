@@ -114,6 +114,7 @@ async def sync_subscriptions():
             sub_sources = sources.scalars().all()
 
             interval_hours = sub.sync_interval_hours or default_interval
+            interval_cutoff = now - timedelta(hours=interval_hours)
 
             for ss in sub_sources:
                 # Skip if auth is known to be unhealthy
@@ -129,8 +130,8 @@ async def sync_subscriptions():
                     select(DownloadJob).where(
                         and_(
                             DownloadJob.subscription_source_id == ss.id,
-                            DownloadJob.status.in_(["pending", "downloading", "downloaded"]),
-                            DownloadJob.created_at >= now - timedelta(hours=1),
+                            DownloadJob.status.in_(["pending", "downloading", "downloaded", "complete", "importing"]),
+                            DownloadJob.created_at >= interval_cutoff,
                         )
                     ).limit(1)
                 )
