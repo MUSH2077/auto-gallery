@@ -48,6 +48,20 @@ class WorkRepository:
             .scalar_subquery()
         )
 
+        # Ugoira detection: check if any asset has .gif or .zip extension
+        ugoira_sub = (
+            select(func.count(AssetSource.id) > 0)
+            .select_from(WorkSource)
+            .join(AssetSource, AssetSource.work_source_id == WorkSource.id)
+            .join(Asset, Asset.id == AssetSource.asset_id)
+            .where(
+                WorkSource.work_id == Work.id,
+                Asset.file_name.ilike("%.gif") | Asset.file_name.ilike("%.zip"),
+            )
+            .correlate(Work)
+            .scalar_subquery()
+        )
+
         stmt = (
             select(
                 Work,
@@ -63,6 +77,7 @@ class WorkRepository:
                 src_sub.label("source"),
                 cname_sub.label("creator_name"),
                 cid_sub.label("creator_id"),
+                func.coalesce(ugoira_sub, False).label("has_ugoira"),
             )
         )
 
@@ -106,6 +121,7 @@ class WorkRepository:
             w.source = row[2]
             w.creator_name = row[3]
             w.creator_id = str(row[4]) if row[4] else None
+            w.has_ugoira = bool(row[5])
             works.append(w)
         return works
 
