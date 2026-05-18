@@ -90,7 +90,21 @@ export default function GalleryDLConfigPage() {
   const seeded = useRef(false);
 
   const save = useMutation({
-    mutationFn: () => api.updateGalleryDLConfig({ pixiv, twitter, iwara }),
+    mutationFn: () => {
+      // Strip empty strings before saving to avoid gallery-dl IsADirectoryError
+      const strip = (obj: Record<string, unknown>) => {
+        const cleaned: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(obj)) {
+          if (v !== "" && v !== null && v !== undefined) cleaned[k] = v;
+        }
+        return cleaned;
+      };
+      return api.updateGalleryDLConfig({
+        pixiv: strip(pixiv),
+        twitter: strip(twitter),
+        iwara: strip(iwara),
+      });
+    },
     onSuccess: (_, v) => {
       qc.invalidateQueries({ queryKey: ["gallerydl-config"] });
       setSaved(activeTab); setTimeout(() => setSaved(null), 3000);
