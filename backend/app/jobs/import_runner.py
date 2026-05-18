@@ -324,18 +324,17 @@ async def run_import_job(import_job_id: str):
                     "created_at": work.created_at.isoformat() if work.created_at else None,
                 })
 
-                # Batch commit every BATCH_SIZE works
+                # Commit work and batch Meilisearch periodically
+                await db.commit()
                 batch_count += 1
-                if batch_count >= BATCH_SIZE:
-                    await db.commit()
-                    if meili_docs:
-                        try:
-                            from app.services.search import SearchService
-                            svc = SearchService(db)
-                            await svc._batch_index_works(meili_docs)
-                        except Exception:
-                            pass
-                        meili_docs = []
+                if batch_count >= BATCH_SIZE and meili_docs:
+                    try:
+                        from app.services.search import SearchService
+                        svc = SearchService(db)
+                        await svc._batch_index_works(meili_docs)
+                    except Exception:
+                        pass
+                    meili_docs = []
                     batch_count = 0
 
             # Delete processed JSONs (keep image files)
@@ -352,18 +351,17 @@ async def run_import_job(import_job_id: str):
             except Exception:
                 pass
 
-        # Final flush: commit remaining works and index remaining Meilisearch docs
-        if batch_count > 0:
+        # Flush remaining Meilisearch batch
+        if meili_docs:
             async with async_session() as db:
-                await db.commit()
-                if meili_docs:
-                    try:
-                        from app.services.search import SearchService
-                        svc = SearchService(db)
-                        await svc._batch_index_works(meili_docs)
-                    except Exception:
-                        pass
+                try:
+                    from app.services.search import SearchService
+                    svc = SearchService(db)
+                    await svc._batch_index_works(meili_docs)
+                except Exception:
+                    pass
 
+        # Mark import complete
         async with async_session() as db:
             ij = await db.get(ImportJob, job_uuid)
             if ij:
