@@ -77,7 +77,6 @@ async def run_download_job(job_id: str):
             cmd.extend(["--config", config_path])
         cmd.extend([
             "--destination", str(settings.download_root),
-            "--write-metadata",
             job.source_url,
         ])
 

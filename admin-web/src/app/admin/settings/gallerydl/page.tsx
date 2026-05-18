@@ -100,9 +100,9 @@ export default function GalleryDLConfigPage() {
         return cleaned;
       };
       return api.updateGalleryDLConfig({
-        pixiv: strip(pixiv),
-        twitter: strip(twitter),
-        iwara: strip(iwara),
+        pixiv: strip(pixiv as unknown as Record<string, unknown>),
+        twitter: strip(twitter as unknown as Record<string, unknown>),
+        iwara: strip(iwara as unknown as Record<string, unknown>),
       });
     },
     onSuccess: (_, v) => {
