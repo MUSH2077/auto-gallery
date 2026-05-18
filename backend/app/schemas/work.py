@@ -15,6 +15,7 @@ class WorkList(BaseModel):
     source: str | None = None
     creator_name: str | None = None
     creator_id: str | None = None
+    has_ugoira: bool = False
 
     model_config = {"from_attributes": True}
 

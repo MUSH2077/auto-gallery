@@ -168,11 +168,15 @@ export default function WorksPage() {
                 {w.is_nsfw && (
                   <span className="absolute top-1 left-1 bg-red-600 text-white text-xs px-1.5 py-0.5 rounded">NSFW</span>
                 )}
+                {w.has_ugoira && (
+                  <span className="absolute bottom-1 right-1 bg-purple-600/90 text-white text-[10px] px-1.5 py-0.5 rounded font-medium">GIF</span>
+                )}
               </div>
               <div className="p-3">
                 <div className="text-sm font-medium truncate dark:text-white">{w.title || "Untitled"}</div>
                 <div className="flex items-center gap-1.5 mt-1">
                   {w.source && <SourceBadge source={w.source} />}
+                  {w.has_ugoira && <span className="text-[10px] bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 px-1 rounded">GIF</span>}
                   {w.creator_name && <span className="text-xs text-gray-400 dark:text-gray-500 truncate">{w.creator_name}</span>}
                 </div>
                 <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
@@ -201,6 +205,7 @@ export default function WorksPage() {
                   <span className="text-sm font-medium dark:text-white truncate">{w.title || "Untitled"}</span>
                   {w.is_nsfw && <span className="text-xs bg-red-100 dark:bg-red-900/30 text-red-600 px-1 rounded">NSFW</span>}
                   {w.asset_count > 1 && <span className="text-xs text-gray-400">{w.asset_count}p</span>}
+                  {w.has_ugoira && <span className="text-xs bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 px-1 rounded">GIF</span>}
                 </div>
                 <div className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500 mt-0.5">
                   {w.source && <SourceBadge source={w.source} />}

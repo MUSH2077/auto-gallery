@@ -128,6 +128,7 @@ export interface WorkListItem {
   source?: string;
   creator_name?: string;
   creator_id?: string;
+  has_ugoira?: boolean;
 }
 
 export interface Work {
