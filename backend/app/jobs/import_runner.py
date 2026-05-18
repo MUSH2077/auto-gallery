@@ -320,7 +320,7 @@ async def run_import_job(import_job_id: str):
                     "is_nsfw": work.is_nsfw,
                     "source": provider.source_name,
                     "tags": [str(tn) for tn in tag_names],
-                    "posted_at": work.posted_at.isoformat() if work.posted_at else None,
+                    "posted_at": work.posted_at if work.posted_at else None,
                     "created_at": work.created_at.isoformat() if work.created_at else None,
                 })
 
