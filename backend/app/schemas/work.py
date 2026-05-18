@@ -12,6 +12,9 @@ class WorkList(BaseModel):
     asset_count: int = 1
     is_nsfw: bool
     created_at: datetime
+    source: str | None = None
+    creator_name: str | None = None
+    creator_id: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -24,8 +27,6 @@ class WorkRead(BaseModel):
     thumbnail_asset_id: str | None = None
     asset_count: int = 1
     is_nsfw: bool
-    thumbnail_asset_id: str | None = None
-    asset_count: int = 1
     created_at: datetime
     updated_at: datetime
 

@@ -230,6 +230,9 @@ export default function CreatorDetailPage() {
         )}
       </div>
 
+      {/* Works by this Creator */}
+      <CreatorWorksSection creatorId={id} creatorName={creator.data?.display_name || creator.data?.name || ""} />
+
       <Modal open={showAddLink} onClose={() => setShowAddLink(false)} title="Add Creator Link"><AddLinkForm creatorId={id} onClose={() => setShowAddLink(false)} /></Modal>
       <Modal open={showAddSource} onClose={() => setShowAddSource(false)} title="Add Source Account"><AddSourceForm creatorId={id} onClose={() => setShowAddSource(false)} /></Modal>
       <Modal open={editing} onClose={() => setEditing(false)} title="Edit Creator">
@@ -245,5 +248,47 @@ export default function CreatorDetailPage() {
         </div>
       </Modal>
     </main>
+  );
+}
+
+
+function CreatorWorksSection({ creatorId, creatorName }: { creatorId: string; creatorName: string }) {
+  const router = useRouter();
+  const works = useQuery({
+    queryKey: ["creator-works", creatorId],
+    queryFn: () => api.listWorks(0, 12, { creator_id: creatorId, sort_by: "posted_at", sort_order: "desc" }),
+  });
+
+  if (works.isLoading) return null;
+  if (!works.data?.length) return null;
+
+  return (
+    <section className="mb-8">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-lg font-semibold dark:text-white">Works ({works.data.length})</h2>
+        <button onClick={() => router.push(`/admin/works?creator=${creatorId}`)}
+          className="text-sm text-blue-600 hover:underline">View all</button>
+      </div>
+      <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+        {works.data.map((w) => (
+          <div key={w.id} className="bg-white dark:bg-slate-800 rounded-lg shadow-sm overflow-hidden cursor-pointer hover:shadow-md transition-shadow" onClick={() => router.push(`/admin/works/${w.id}`)}>
+            <div className="aspect-square bg-gray-100 dark:bg-slate-700 flex items-center justify-center text-gray-400 text-xs overflow-hidden relative">
+              {w.thumbnail_asset_id ? (
+                <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="w-full h-full object-cover" loading="lazy" />
+              ) : (
+                <span>N/A</span>
+              )}
+              {w.asset_count > 1 && (
+                <span className="absolute top-0.5 right-0.5 bg-black/70 text-white text-[10px] px-1 py-0.5 rounded">{w.asset_count}p</span>
+              )}
+            </div>
+            <div className="p-2">
+              <div className="text-xs font-medium truncate dark:text-white">{w.title || "Untitled"}</div>
+              {w.source && <SourceBadge source={w.source} />}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }

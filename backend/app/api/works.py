@@ -17,9 +17,22 @@ router = APIRouter()
 
 
 @router.get("", response_model=list[WorkList])
-async def list_works(offset: int = 0, limit: int = 50, db: AsyncSession = Depends(get_db)):
+async def list_works(
+    offset: int = 0, limit: int = 50,
+    search: str | None = None,
+    source: str | None = None,
+    creator_id: str | None = None,
+    is_nsfw: bool | None = None,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+    db: AsyncSession = Depends(get_db),
+):
     repo = WorkRepository(db)
-    return await repo.list_all(offset, limit)
+    return await repo.list_all(
+        offset=offset, limit=limit,
+        search=search, source=source, creator_id=creator_id,
+        is_nsfw=is_nsfw, sort_by=sort_by, sort_order=sort_order,
+    )
 
 
 @router.get("/{work_id}", response_model=WorkRead)
