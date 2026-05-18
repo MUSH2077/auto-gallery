@@ -222,7 +222,6 @@ export interface ProxySettings {
   https_proxy: string;
   no_proxy: string;
   enabled: boolean;
-  ssl_verify: boolean;
 }
 
 export interface AdminSettings {
@@ -429,6 +428,12 @@ export const api = {
   reindexSearch: () => request<{ status: string; message: string }>("/api/v1/admin/search/reindex", { method: "POST" }),
 
   getAuthStatus: () => request<AuthStatusResponse>("/api/v1/admin/auth-status"),
+
+  testProxy: () => request<{
+    proxy_enabled: boolean;
+    proxy_config: { http: string; https: string };
+    results: { name: string; url: string; direct_ok: boolean; direct_ms: number; proxy_ok: boolean | null; proxy_ms: number | null }[];
+  }>("/api/v1/admin/proxy/test", { method: "POST" }),
 
   listDuplicates: () => request<{ duplicates: { source: string; source_work_id: string; count: number; work_ids: string[] }[]; total: number }>("/api/v1/admin/dedup/duplicates"),
   scanDuplicates: () => request<{ status: string; unique_works: number; total_source_records: number; message: string }>("/api/v1/admin/dedup/scan", { method: "POST" }),

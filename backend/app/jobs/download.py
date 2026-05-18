@@ -90,9 +90,6 @@ async def run_download_job(job_id: str):
             from app.services.proxy import _load_proxy_config, get_proxy_env
             proxy_config = await _load_proxy_config()
             env.update(get_proxy_env(proxy_config))
-            # When proxy is enabled and SSL verify is off, skip cert verification
-            if proxy_config.get("enabled") and not proxy_config.get("ssl_verify", True):
-                cmd.append("--no-ssl-verify")
         except Exception:
             pass
 
