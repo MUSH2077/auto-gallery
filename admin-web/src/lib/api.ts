@@ -217,10 +217,18 @@ export interface GalleryDLMultiConfig {
   sources: Record<string, GalleryDLSourceMeta>;
 }
 
+export interface ProxySettings {
+  http_proxy: string;
+  https_proxy: string;
+  no_proxy: string;
+  enabled: boolean;
+}
+
 export interface AdminSettings {
   dedup: DedupSettings;
   subscription_defaults: SubscriptionDefaults;
   download_defaults: DownloadDefaults;
+  proxy: ProxySettings;
 }
 
 export interface AuthStatusItem {
@@ -413,6 +421,7 @@ export const api = {
     dedup?: Partial<DedupSettings>;
     subscription_defaults?: Partial<SubscriptionDefaults>;
     download_defaults?: Partial<DownloadDefaults>;
+    proxy?: Partial<ProxySettings>;
   }) =>
     request<{ status: string; message: string }>("/api/v1/admin/settings", { method: "PUT", body: JSON.stringify(data) }),
 
