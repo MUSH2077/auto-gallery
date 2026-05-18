@@ -434,6 +434,25 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
         extractors["iwara"] = iwara
 
     config["extractor"] = extractors
+
+    # Configure ugoira postprocessor based on Pixiv ugoira format
+    if data.pixiv is not None and data.pixiv.ugoira is not None:
+        ugoira = data.pixiv.ugoira
+        if ugoira in ("gif", "webm", "mp4"):
+            config.setdefault("postprocessors", [])
+            # Replace existing ugoira pp or add new one
+            pp_list = config["postprocessors"]
+            pp_list[:] = [p for p in pp_list if p.get("name") != "ugoira"]
+            pp_list.append({
+                "name": "ugoira",
+                "extension": ugoira,
+                "keep-files": False,
+            })
+        elif ugoira == "zip":
+            # Remove postprocessor — keep original ZIP
+            config.setdefault("postprocessors", [])
+            config["postprocessors"][:] = [p for p in config["postprocessors"] if p.get("name") != "ugoira"]
+
     with open(config_path, "w") as f:
         json.dump(config, f, indent=2)
     return {"status": "ok", "message": "gallery-dl config updated", "path": config_path}
