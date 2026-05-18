@@ -125,6 +125,9 @@ export interface WorkListItem {
   thumbnail_asset_id?: string;
   asset_count: number;
   created_at: string;
+  source?: string;
+  creator_name?: string;
+  creator_id?: string;
 }
 
 export interface Work {
@@ -373,7 +376,16 @@ export const api = {
     request<{ id: string; download_job_id: string; status: string; error_log?: string }[]>(`/api/v1/download-jobs/${jobId}/imports`),
 
   // Works
-  listWorks: (offset = 0, limit = 50) => request<WorkListItem[]>(`/api/v1/works?offset=${offset}&limit=${limit}`),
+  listWorks: (offset = 0, limit = 50, filters?: { search?: string; source?: string; creator_id?: string; is_nsfw?: boolean; sort_by?: string; sort_order?: string }) => {
+    const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+    if (filters?.search) params.set("search", filters.search);
+    if (filters?.source) params.set("source", filters.source);
+    if (filters?.creator_id) params.set("creator_id", filters.creator_id);
+    if (filters?.is_nsfw !== undefined) params.set("is_nsfw", String(filters.is_nsfw));
+    if (filters?.sort_by) params.set("sort_by", filters.sort_by);
+    if (filters?.sort_order) params.set("sort_order", filters.sort_order);
+    return request<WorkListItem[]>(`/api/v1/works?${params.toString()}`);
+  },
 
   getWork: (id: string) => request<Work>(`/api/v1/works/${id}`),
 
