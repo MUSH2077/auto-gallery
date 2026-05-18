@@ -11,6 +11,7 @@ from app.database import async_session
 from app.models import (
     Work, WorkSource, Asset, AssetSource, Tag, WorkTag, WorkSourceTag, SourceCreator,
 )
+from app.models.subscription import Subscription
 from app.models.import_job import ImportJob
 from app.models.download_job import DownloadJob
 from app.providers import registry
@@ -171,18 +172,31 @@ async def run_import_job(import_job_id: str):
 
             # Create DB records — files stay in place
             async with async_session() as db:
-                # SourceCreator (upsert)
+                # SourceCreator (upsert) — link to creator via subscription
                 existing_sc = await db.execute(select(SourceCreator).where(
                     SourceCreator.source == sc_data["source"],
                     SourceCreator.source_creator_id == sc_data["source_creator_id"]))
-                if not existing_sc.scalar_one_or_none():
+                sc_obj = existing_sc.scalar_one_or_none()
+                if not sc_obj:
+                    # Find creator via download_job -> subscription
+                    creator_id = None
+                    if dj.subscription_id:
+                        sub = await db.get(Subscription, dj.subscription_id)
+                        if sub:
+                            creator_id = sub.creator_id
                     db.add(SourceCreator(
                         source=sc_data["source"],
                         source_creator_id=sc_data["source_creator_id"],
                         source_url=sc_data.get("source_url"),
                         display_name=sc_data.get("display_name"),
+                        creator_id=creator_id,
                     ))
                     await db.flush()
+                elif sc_obj.creator_id is None and dj.subscription_id:
+                    # Update existing source_creator with creator link
+                    sub = await db.get(Subscription, dj.subscription_id)
+                    if sub:
+                        sc_obj.creator_id = sub.creator_id
 
                 # Work
                 work = Work(title=ws_data.get("title"),

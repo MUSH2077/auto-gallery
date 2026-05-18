@@ -119,6 +119,8 @@ class SearchService:
                 "description": (w.description or "")[:500],
                 "creator_name": creator_name or "", "is_nsfw": w.is_nsfw,
                 "source": source, "tags": tag_names,
+                "thumbnail_asset_id": w.thumbnail_asset_id,
+                "asset_count": w.asset_count if hasattr(w, 'asset_count') else 1,
                 "posted_at": w.posted_at,
                 "created_at": w.created_at.isoformat() if w.created_at else None,
             })
