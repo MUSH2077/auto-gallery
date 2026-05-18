@@ -1,11 +1,56 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge } from "@/components";
 
 const STATUS_OPTIONS = ["", "pending", "downloading", "downloaded", "importing", "complete", "failed"];
+
+function Elapsed({ since, active }: { since: string; active: boolean }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const iv = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, [active]);
+
+  const seconds = Math.floor((now - new Date(since).getTime()) / 1000);
+  if (seconds < 60) return <span className="text-xs text-blue-500 font-mono">{seconds}s</span>;
+  if (seconds < 3600) return <span className="text-xs text-blue-500 font-mono">{Math.floor(seconds / 60)}m {seconds % 60}s</span>;
+  return <span className="text-xs text-blue-500 font-mono">{Math.floor(seconds / 3600)}h {Math.floor((seconds % 3600) / 60)}m</span>;
+}
+
+function ProgressBar({ active }: { active: boolean }) {
+  if (!active) return null;
+  return (
+    <div className="w-20 h-1.5 bg-gray-200 dark:bg-slate-600 rounded-full overflow-hidden shrink-0">
+      <div className="h-full bg-blue-500 rounded-full animate-pulse" style={{ width: "60%" }} />
+    </div>
+  );
+}
+
+function ActiveIndicator({ status }: { status: string }) {
+  const isActive = status === "downloading" || status === "running" || status === "importing";
+  if (isActive) {
+    return (
+      <span className="flex items-center gap-1.5 shrink-0 w-24">
+        <span className="relative flex h-2.5 w-2.5">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500" />
+        </span>
+        <span className="text-xs text-blue-600 dark:text-blue-400 font-medium">{status}</span>
+      </span>
+    );
+  }
+  return (
+    <span className={`shrink-0 w-24 text-xs px-1.5 py-0.5 rounded text-center ${
+      status === "complete" || status === "downloaded" ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400" :
+      status === "failed" ? "bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400" :
+      "bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-gray-400"
+    }`}>{status}</span>
+  );
+}
 
 export default function JobsPage() {
   const router = useRouter();
@@ -18,13 +63,13 @@ export default function JobsPage() {
   const downloads = useQuery({
     queryKey: [...queryKeys.downloadJobs.all, dlFilter],
     queryFn: () => api.listDownloadJobs(dlFilter || undefined, 0, 50),
-    refetchInterval: 10000,
+    refetchInterval: dlFilter === "downloading" || !dlFilter ? 3000 : 10000,
   });
 
   const imports = useQuery({
     queryKey: [...queryKeys.importJobs.all, imFilter],
     queryFn: () => api.listImportJobs(imFilter || undefined, 0, 50),
-    refetchInterval: 10000,
+    refetchInterval: imFilter === "running" || !imFilter ? 3000 : 10000,
   });
 
   const retryDL = useMutation({
@@ -66,28 +111,33 @@ export default function JobsPage() {
 
         {downloads.data && downloads.data.length > 0 && (
           <div className="space-y-1">
-            {downloads.data.map((j) => (
-              <div key={j.id} className="bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 text-sm flex items-center gap-3">
-                <span className={`w-2 h-2 rounded-full shrink-0 ${
-                  j.status === "complete" || j.status === "downloaded" ? "bg-green-500" :
-                  j.status === "failed" ? "bg-red-500" :
-                  j.status === "downloading" ? "bg-blue-500 animate-pulse" : "bg-gray-300"
-                }`} />
-                <span className="font-mono text-xs text-gray-400 dark:text-gray-500 w-20 shrink-0">{j.id.slice(0, 8)}</span>
-                <span className="bg-gray-100 dark:bg-slate-700 text-xs px-1.5 py-0.5 rounded w-24 text-center shrink-0">{j.status}</span>
-                {j.source && <SourceBadge source={j.source} />}
-                <span className="truncate text-gray-600 dark:text-gray-300 flex-1 min-w-0 text-xs">{j.source_url}</span>
-                <span className="text-xs text-gray-400 shrink-0">{j.retry_count > 0 && `↻${j.retry_count}`}</span>
-                <span className="text-xs text-gray-400 shrink-0 w-28 text-right">{new Date(j.created_at).toLocaleString()}</span>
-                <div className="flex gap-1 shrink-0">
-                  {j.status === "failed" && (
-                    <button onClick={() => { setRetryId(j.id); retryDL.mutate(j.id); }} disabled={retryDL.isPending}
-                      className="text-xs text-blue-600 hover:underline">Retry</button>
+            {downloads.data.map((j) => {
+              const active = j.status === "downloading" || j.status === "pending";
+              return (
+                <div key={j.id} className={`bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 text-sm flex items-center gap-3 ${active ? "border-l-2 border-blue-500" : ""}`}>
+                  <ActiveIndicator status={j.status} />
+                  <span className="font-mono text-xs text-gray-400 dark:text-gray-500 w-16 shrink-0">{j.id.slice(0, 8)}</span>
+                  {j.source && <SourceBadge source={j.source} />}
+                  <span className="truncate text-gray-600 dark:text-gray-300 flex-1 min-w-0 text-xs">{j.source_url}</span>
+                  <ProgressBar active={active} />
+                  {active ? (
+                    <Elapsed since={j.created_at} active={true} />
+                  ) : (
+                    <span className="text-xs text-gray-400 shrink-0 w-20 text-right">
+                      {j.retry_count > 0 && <span className="mr-1">↻{j.retry_count}</span>}
+                      {new Date(j.created_at).toLocaleTimeString()}
+                    </span>
                   )}
-                  <button onClick={() => { setDeleteId(j.id); }} className="text-xs text-red-500 hover:underline">Del</button>
+                  <div className="flex gap-1 shrink-0">
+                    {j.status === "failed" && (
+                      <button onClick={() => { setRetryId(j.id); retryDL.mutate(j.id); }} disabled={retryDL.isPending}
+                        className="text-xs text-blue-600 hover:underline">Retry</button>
+                    )}
+                    <button onClick={() => { setDeleteId(j.id); }} className="text-xs text-red-500 hover:underline">Del</button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
@@ -112,27 +162,31 @@ export default function JobsPage() {
 
         {imports.data && imports.data.length > 0 && (
           <div className="space-y-1">
-            {imports.data.map((j) => (
-              <div key={j.id} className="bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 text-sm flex items-center gap-3">
-                <span className={`w-2 h-2 rounded-full shrink-0 ${
-                  j.status === "complete" ? "bg-green-500" :
-                  j.status === "failed" ? "bg-red-500" :
-                  j.status === "running" ? "bg-blue-500 animate-pulse" : "bg-gray-300"
-                }`} />
-                <span className="font-mono text-xs text-gray-400 dark:text-gray-500 w-20 shrink-0">{j.id.slice(0, 8)}</span>
-                <span className="bg-gray-100 dark:bg-slate-700 text-xs px-1.5 py-0.5 rounded w-24 text-center shrink-0">{j.status}</span>
-                <span className="font-mono text-xs text-gray-400 truncate flex-1">DL: {j.download_job_id ? j.download_job_id.slice(0, 8) : "—"}</span>
-                {j.error_log && <span className="text-xs text-red-500 truncate max-w-xs" title={j.error_log}>{(j.error_log || "").slice(0, 80)}</span>}
-                <span className="text-xs text-gray-400 shrink-0 w-28 text-right">{new Date(j.created_at).toLocaleString()}</span>
-                <div className="flex gap-1 shrink-0">
-                  {j.status === "failed" && (
-                    <button onClick={() => { setRetryId(j.id); retryIM.mutate(j.id); }} disabled={retryIM.isPending}
-                      className="text-xs text-blue-600 hover:underline">Retry</button>
+            {imports.data.map((j) => {
+              const active = j.status === "running";
+              return (
+                <div key={j.id} className={`bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 text-sm flex items-center gap-3 ${active ? "border-l-2 border-blue-500" : ""}`}>
+                  <ActiveIndicator status={j.status} />
+                  <span className="font-mono text-xs text-gray-400 dark:text-gray-500 w-16 shrink-0">{j.id.slice(0, 8)}</span>
+                  <span className="font-mono text-xs text-gray-400 truncate flex-1">DL: {j.download_job_id ? j.download_job_id.slice(0, 8) : "—"}</span>
+                  <ProgressBar active={active} />
+                  {active ? (
+                    <Elapsed since={j.created_at} active={true} />
+                  ) : j.error_log ? (
+                    <span className="text-xs text-red-500 truncate max-w-xs" title={j.error_log}>{(j.error_log || "").slice(0, 60)}</span>
+                  ) : (
+                    <span className="text-xs text-gray-400 shrink-0 w-20 text-right">{new Date(j.created_at).toLocaleTimeString()}</span>
                   )}
-                  <button onClick={() => { setDeleteId(j.id); }} className="text-xs text-red-500 hover:underline">Del</button>
+                  <div className="flex gap-1 shrink-0">
+                    {j.status === "failed" && (
+                      <button onClick={() => { setRetryId(j.id); retryIM.mutate(j.id); }} disabled={retryIM.isPending}
+                        className="text-xs text-blue-600 hover:underline">Retry</button>
+                    )}
+                    <button onClick={() => { setDeleteId(j.id); }} className="text-xs text-red-500 hover:underline">Del</button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
