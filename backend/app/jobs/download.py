@@ -75,12 +75,22 @@ async def run_download_job(job_id: str):
         cmd = ["gallery-dl"]
         if os.path.exists(config_path):
             cmd.extend(["--config", config_path])
+
+        # Archive: skip already-downloaded works per source
+        archive_path = os.path.join(
+            str(settings.download_root), f"archive-{job.source}.sqlite3")
+        cmd.extend(["--download-archive", archive_path])
+
+        # Limit batch size to avoid timeouts on large portfolios
+        dl_defaults = await _read_download_defaults()
+        max_posts = dl_defaults.get("max_posts") or dl_defaults.get("sync_batch_size", 200)
+        cmd.extend(["--range", f"1-{max_posts}"])
+
         cmd.extend([
             "--destination", str(settings.download_root),
             job.source_url,
         ])
 
-        dl_defaults = await _read_download_defaults()
         dl_timeout = int(dl_defaults.get("timeout_seconds", FALLBACK_TIMEOUT))
 
         # Apply proxy env vars for gallery-dl subprocess

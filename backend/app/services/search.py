@@ -86,6 +86,18 @@ class SearchService:
         except Exception as e:
             logger.warning("Failed to index work %s: %s", work_id, e)
 
+    async def _batch_index_works(self, docs: list[dict]):
+        """Index multiple works in a single Meilisearch call."""
+        if not docs:
+            return
+        try:
+            client = _client()
+            _ensure_indexes(client)
+            client.index(WORKS_INDEX).add_documents(docs)
+            logger.info("Batch-indexed %d works", len(docs))
+        except Exception as e:
+            logger.warning("Batch index failed: %s", e)
+
     async def reindex(self) -> dict:
         stats = {"works": 0, "creators": 0, "tags": 0}
         try:
