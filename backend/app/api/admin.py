@@ -36,9 +36,8 @@ class ProxySettings(BaseModel):
     https_proxy: str = ""
     no_proxy: str = "localhost,127.0.0.1,::1"
     enabled: bool = False
-    ssl_verify: bool = True
 
-DEFAULT_PROXY = {"http_proxy": "", "https_proxy": "", "no_proxy": "localhost,127.0.0.1,::1", "enabled": False, "ssl_verify": True}
+DEFAULT_PROXY = {"http_proxy": "", "https_proxy": "", "no_proxy": "localhost,127.0.0.1,::1", "enabled": False}
 
 class AdminSettingsUpdate(BaseModel):
     dedup: DedupSettings | None = None
@@ -92,6 +91,96 @@ async def update_settings(data: AdminSettingsUpdate, db: AsyncSession = Depends(
     if data.proxy is not None:
         await _put_setting(db, "proxy", data.proxy.model_dump())
     return {"status": "ok", "message": "Settings saved to database"}
+
+
+# ── Proxy Test ──
+
+@router.post("/proxy/test")
+async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
+    """Test connectivity through the configured proxy to key external sites."""
+    import urllib.request
+    import urllib.error
+    import ssl
+
+    config = await _get_setting(db, "proxy", DEFAULT_PROXY)
+    enabled = config.get("enabled", False)
+
+    # Build proxy opener
+    opener = None
+    if enabled:
+        proxies = {}
+        if config.get("http_proxy"):
+            proxies["http"] = config["http_proxy"]
+        if config.get("https_proxy"):
+            proxies["https"] = config["https_proxy"]
+        if proxies:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
+
+    if opener is None:
+        opener = urllib.request.build_opener()
+
+    targets = [
+        {"name": "Pixiv", "url": "https://www.pixiv.net", "expected_code": 200},
+        {"name": "Danbooru", "url": "https://danbooru.donmai.us", "expected_code": 200},
+        {"name": "Twitter/X", "url": "https://x.com", "expected_code": 200},
+        {"name": "Iwara", "url": "https://www.iwara.tv", "expected_code": 200},
+        {"name": "Google", "url": "https://www.google.com", "expected_code": 200},
+    ]
+
+    # Test direct (no proxy) first
+    direct_opener = urllib.request.build_opener()
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+
+    results = []
+    for t in targets:
+        name = t["name"]
+        url = t["url"]
+
+        # Direct test
+        direct_ok = False
+        direct_ms = 0
+        try:
+            import time
+            req = urllib.request.Request(url, headers={"User-Agent": "auto-gallery/0.1"})
+            start = time.monotonic()
+            with direct_opener.open(req, timeout=10) as resp:
+                direct_ok = resp.status < 500
+            direct_ms = int((time.monotonic() - start) * 1000)
+        except Exception:
+            direct_ok = False
+
+        # Proxy test
+        proxy_ok = False
+        proxy_ms = 0
+        if enabled and opener is not direct_opener:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "auto-gallery/0.1"})
+                start = time.monotonic()
+                with opener.open(req, timeout=10) as resp:
+                    proxy_ok = resp.status < 500
+                proxy_ms = int((time.monotonic() - start) * 1000)
+            except Exception:
+                proxy_ok = False
+
+        results.append({
+            "name": name,
+            "url": url,
+            "direct_ok": direct_ok,
+            "direct_ms": direct_ms,
+            "proxy_ok": proxy_ok if enabled else None,
+            "proxy_ms": proxy_ms if enabled else None,
+        })
+
+    return {
+        "proxy_enabled": enabled,
+        "proxy_config": {
+            "http": config.get("http_proxy", "not set"),
+            "https": config.get("https_proxy", "not set"),
+        },
+        "results": results,
+    }
 
 
 # ── Search ──

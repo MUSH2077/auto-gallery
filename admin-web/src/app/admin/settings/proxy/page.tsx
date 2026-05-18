@@ -5,6 +5,50 @@ import { api, queryKeys, ProxySettings } from "@/lib/api";
 import { PageHeader, ErrorState } from "@/components";
 import Link from "next/link";
 
+function TestResults({ results, proxyEnabled }: { results: any[] | null; proxyEnabled: boolean }) {
+  if (!results) return null;
+  return (
+    <div className="mt-6">
+      <h4 className="font-medium text-sm mb-3 dark:text-white">Connectivity Test Results</h4>
+      <div className="bg-white dark:bg-slate-800 rounded-lg shadow overflow-hidden">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b dark:border-slate-700 bg-gray-50 dark:bg-slate-700/50">
+              <th className="text-left px-4 py-2 font-medium">Site</th>
+              <th className="text-center px-4 py-2 font-medium w-24">Direct</th>
+              {proxyEnabled && <th className="text-center px-4 py-2 font-medium w-24">Proxy</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {results.map((r: any, i: number) => (
+              <tr key={i} className="border-b dark:border-slate-700 last:border-0">
+                <td className="px-4 py-3">
+                  <div className="font-medium dark:text-white">{r.name}</div>
+                  <div className="text-xs text-gray-400 dark:text-gray-500 font-mono">{r.url}</div>
+                </td>
+                <td className="text-center px-4 py-3">
+                  {r.direct_ok
+                    ? <span className="text-green-600 dark:text-green-400 text-xs">{r.direct_ms}ms OK</span>
+                    : <span className="text-red-500 text-xs">FAIL</span>}
+                </td>
+                {proxyEnabled && (
+                  <td className="text-center px-4 py-3">
+                    {r.proxy_ok === null
+                      ? <span className="text-gray-400 text-xs">—</span>
+                      : r.proxy_ok
+                        ? <span className="text-green-600 dark:text-green-400 text-xs">{r.proxy_ms}ms OK</span>
+                        : <span className="text-red-500 text-xs">FAIL</span>}
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function ProxySettingsPage() {
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
@@ -13,6 +57,10 @@ export default function ProxySettingsPage() {
   const save = useMutation({
     mutationFn: (data: ProxySettings) => api.updateAdminSettings({ proxy: data }),
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.admin.settings }),
+  });
+
+  const testProxy = useMutation({
+    mutationFn: () => api.testProxy(),
   });
 
   const current = local || settings.data?.proxy;
@@ -111,30 +159,7 @@ export default function ProxySettingsPage() {
                 <p className="text-xs text-gray-400 mt-1">Comma-separated hosts to bypass proxy. Default: localhost,127.0.0.1,::1</p>
               </div>
             </div>
-
-            <div className="flex items-center justify-between py-3 border-t dark:border-slate-700">
-              <div>
-                <span className="font-medium">SSL Verification</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Verify SSL certificates. Disable if using a proxy that intercepts HTTPS (Clash/V2Ray).</p>
-              </div>
-              <button
-                onClick={() => setLocal(current ? { ...current, ssl_verify: !current.ssl_verify } : null)}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${
-                  current.ssl_verify ? "bg-green-600" : "bg-red-500"
-                }`}
-              >
-                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  current.ssl_verify ? "translate-x-6" : "translate-x-1"
-                }`} />
-              </button>
-            </div>
           </div>
-
-          {current.enabled && !current.ssl_verify && (
-            <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-400">
-              <strong>SSL verification is disabled.</strong> This is needed for Clash/V2Ray MITM proxies but reduces security. gallery-dl will be invoked with <code className="bg-red-100 dark:bg-red-900/50 px-1 rounded">--no-ssl-verify</code>.
-            </div>
-          )}
 
           <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg text-sm text-blue-800 dark:text-blue-300">
             <strong>Applies to:</strong>
@@ -147,6 +172,27 @@ export default function ProxySettingsPage() {
 
           <div className="mt-4 p-4 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg text-sm text-yellow-800 dark:text-yellow-300">
             <strong>Known configuration:</strong> If using Clash/V2Ray on WSL2, set both HTTP and HTTPS proxy to <code className="bg-yellow-100 dark:bg-yellow-900/50 px-1 rounded">http://192.168.10.170:7890</code> (your Windows host IP with proxy port).
+          </div>
+
+          {/* Connectivity Test */}
+          <div className="mt-4 p-4 bg-gray-50 dark:bg-slate-700/30 rounded-lg">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="font-medium text-sm dark:text-white">Connectivity Test</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Tests direct and proxy connectivity to Pixiv, Danbooru, X, Iwara, and Google.</p>
+              </div>
+              <button
+                onClick={() => testProxy.mutate()}
+                disabled={testProxy.isPending}
+                className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 shrink-0"
+              >
+                {testProxy.isPending ? "Testing..." : "Test Now"}
+              </button>
+            </div>
+            {testProxy.error && <p className="text-red-600 text-xs mt-2">{(testProxy.error as Error).message}</p>}
+            {testProxy.data && (
+              <TestResults results={testProxy.data.results} proxyEnabled={testProxy.data.proxy_enabled} />
+            )}
           </div>
 
           <div className="mt-4 flex justify-end">
