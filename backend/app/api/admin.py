@@ -304,6 +304,9 @@ def _write_source_config(extractor_config: dict, data: BaseModel, schema_map: di
                 extractor_config[dl_key] = False
             elif dl_key in dir_keys and isinstance(val, str) and "/" in val:
                 extractor_config[dl_key] = val.split("/")
+            elif isinstance(val, str) and val == "":
+                # Remove empty strings — they break gallery-dl defaults
+                extractor_config.pop(dl_key, None)
             else:
                 extractor_config[dl_key] = val
     return extractor_config
