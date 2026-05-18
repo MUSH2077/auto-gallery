@@ -79,11 +79,31 @@ async def queue_stats():
         default_q = Queue(connection=r)
         scheduled_q = Queue(name="scheduled", connection=r)
         failed_reg = FailedJobRegistry(queue=default_q)
+        sched_failed_reg = FailedJobRegistry(queue=scheduled_q)
 
         return {
             "default_queue": len(default_q),
             "scheduled_queue": len(scheduled_q),
-            "failed_jobs": failed_reg.count,
+            "failed_jobs": failed_reg.count + sched_failed_reg.count,
         }
     except Exception:
         return {"default_queue": -1, "scheduled_queue": -1, "failed_jobs": -1}
+
+
+@router.post("/system/clear-failed-jobs")
+async def clear_failed_jobs():
+    """Remove all failed jobs from Redis registries."""
+    import redis as redis_lib
+    from rq import Queue
+    from rq.registry import FailedJobRegistry
+    from app.config import settings as app_settings
+
+    r = redis_lib.from_url(app_settings.redis_url)
+    total = 0
+    for qname in ["default", "scheduled"]:
+        q = Queue(name=qname, connection=r)
+        reg = FailedJobRegistry(queue=q)
+        for job_id in reg.get_job_ids():
+            reg.remove(job_id)
+            total += 1
+    return {"status": "ok", "message": f"Removed {total} failed jobs from Redis"}

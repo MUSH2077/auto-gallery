@@ -457,6 +457,9 @@ export const api = {
   triggerSyncNow: () =>
     request<{ status: string; message: string; job_id: string }>("/api/v1/admin/scheduler/sync-now", { method: "POST" }),
 
+  clearFailedJobs: () =>
+    request<{ status: string; message: string }>("/api/v1/system/clear-failed-jobs", { method: "POST" }),
+
   listDuplicates: () => request<{ duplicates: { source: string; source_work_id: string; count: number; work_ids: string[] }[]; total: number }>("/api/v1/admin/dedup/duplicates"),
   scanDuplicates: () => request<{ status: string; unique_works: number; total_source_records: number; message: string }>("/api/v1/admin/dedup/scan", { method: "POST" }),
   listMergeCandidates: () => request<{ candidates: { title: string; source_count: number; sources: string[]; work_ids: string[] }[]; total: number }>("/api/v1/admin/merge-candidates"),

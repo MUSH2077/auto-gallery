@@ -11,7 +11,11 @@ export default function DataManagementPage() {
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   const clearAll = useMutation({
-    mutationFn: () => api.clearEntity("all"),
+    mutationFn: async () => {
+      await api.clearEntity("all");
+      await api.clearFailedJobs();
+      return { message: "All data, files, and Redis failed jobs cleared" };
+    },
     onSuccess: (d) => {
       setResult({ ok: true, msg: d.message });
       qc.invalidateQueries();
@@ -36,7 +40,11 @@ export default function DataManagementPage() {
   });
 
   const clearDownloads = useMutation({
-    mutationFn: () => api.clearEntity("downloads"),
+    mutationFn: async () => {
+      await api.clearEntity("downloads");
+      await api.clearFailedJobs();
+      return { message: "Download history and Redis failed jobs cleared" };
+    },
     onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
     onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
   });
