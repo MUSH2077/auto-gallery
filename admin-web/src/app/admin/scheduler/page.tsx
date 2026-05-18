@@ -24,6 +24,7 @@ export default function SchedulerPage() {
   const queue = useQuery({ queryKey: ["queue-stats"], queryFn: api.queueStats, refetchInterval: 15000 });
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
   const syncNow = useMutation({ mutationFn: () => api.triggerSyncNow(), onSuccess: () => { qc.invalidateQueries({ queryKey: ["queue-stats"] }); } });
+  const clearFailed = useMutation({ mutationFn: () => api.clearFailedJobs(), onSuccess: () => { qc.invalidateQueries({ queryKey: ["queue-stats"] }); } });
 
   const getCreatorName = (creatorId: string) => {
     const c = creators.data?.find((c) => c.id === creatorId);
@@ -55,9 +56,17 @@ export default function SchedulerPage() {
               <div className="text-2xl font-bold">{Math.max(0, queue.data.scheduled_queue)}</div>
               <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Scheduled Queue</div>
             </div>
-            <div className={`bg-white rounded-lg shadow p-4 ${queue.data.failed_jobs > 0 ? "border-2 border-red-300" : ""}`}>
+            <div className={`bg-white dark:bg-slate-800 rounded-lg shadow p-4 ${queue.data.failed_jobs > 0 ? "border-2 border-red-300" : ""}`}>
               <div className={`text-2xl font-bold ${queue.data.failed_jobs > 0 ? "text-red-600" : ""}`}>{Math.max(0, queue.data.failed_jobs)}</div>
-              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Failed Jobs</div>
+              <div className="flex items-center justify-between mt-1">
+                <span className="text-xs text-gray-500 dark:text-gray-400">Failed Jobs</span>
+                {queue.data.failed_jobs > 0 && (
+                  <button onClick={() => { clearFailed.mutate(); }} disabled={clearFailed.isPending}
+                    className="text-xs text-red-500 hover:text-red-700 underline">
+                    {clearFailed.isPending ? "..." : "Clear All"}
+                  </button>
+                )}
+              </div>
             </div>
           </>
         )}
