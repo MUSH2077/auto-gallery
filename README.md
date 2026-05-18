@@ -68,9 +68,9 @@ For detailed setup instructions, see [docs/setup.md](docs/setup.md).
 
 | Source | Download | Status |
 |---|---|---|
-| Pixiv | gallery-dl | First supported |
-| Iwara | TBD | Placeholder |
-| X/Twitter | TBD | Placeholder |
+| Pixiv | gallery-dl | Fully supported |
+| Iwara | gallery-dl >= 1.32 | Downloadable (videos, images, playlists) |
+| X/Twitter | gallery-dl | Downloadable (timeline, media, likes) |
 | Danbooru | Reference only | Artist identity mapping |
 | Local folder | Direct import | Planned |
 | Manual upload | Admin web | Planned |

@@ -1,5 +1,5 @@
 "use client";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, Subscription } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState } from "@/components";
 import { useRouter } from "next/navigation";
@@ -18,10 +18,12 @@ function fmtNextSync(sub: Subscription): string {
 
 export default function SchedulerPage() {
   const router = useRouter();
+  const qc = useQueryClient();
   const subs = useQuery({ queryKey: queryKeys.subscriptions.all, queryFn: () => api.listSubscriptions() });
   const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
   const queue = useQuery({ queryKey: ["queue-stats"], queryFn: api.queueStats, refetchInterval: 15000 });
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
+  const syncNow = useMutation({ mutationFn: () => api.triggerSyncNow(), onSuccess: () => { qc.invalidateQueries({ queryKey: ["queue-stats"] }); } });
 
   const getCreatorName = (creatorId: string) => {
     const c = creators.data?.find((c) => c.id === creatorId);
@@ -30,7 +32,12 @@ export default function SchedulerPage() {
 
   return (
     <main className="max-w-6xl mx-auto p-6">
-      <PageHeader title="Scheduler" description="Subscription sync schedule and queue status" />
+      <PageHeader title="Scheduler" description="Subscription sync schedule and queue status">
+        <button onClick={() => { syncNow.mutate(); }} disabled={syncNow.isPending}
+          className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
+          {syncNow.isPending ? "Syncing..." : "Sync Now"}
+        </button>
+      </PageHeader>
 
       {/* Queue Stats */}
       <div className="grid grid-cols-3 gap-4 mb-8">

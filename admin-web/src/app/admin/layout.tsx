@@ -14,11 +14,10 @@ function AdminNav() {
     ["/admin/sources", t("nav.sources")],
     ["/admin/creators", t("nav.creators")],
     ["/admin/subscriptions", t("nav.subscriptions")],
-    ["/admin/downloads", t("nav.downloads")],
+    ["/admin/jobs", "Jobs"],
     ["/admin/works", t("nav.works")],
     ["/admin/tags", t("nav.tags")],
     ["/admin/scheduler", t("nav.scheduler")],
-    ["/admin/import-jobs", t("nav.import")],
     ["/admin/reference/danbooru", t("nav.danbooru")],
     ["/admin/settings", t("nav.settings")],
   ];

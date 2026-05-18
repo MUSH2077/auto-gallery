@@ -259,6 +259,20 @@ async def reset_settings(db: AsyncSession = Depends(get_db)):
     return {"status": "ok", "message": "All settings reset to defaults"}
 
 
+# ── Scheduler ──
+
+@router.post("/scheduler/sync-now")
+async def trigger_sync_now():
+    """Manually trigger a subscription sync scan."""
+    import redis as redis_lib
+    from rq import Queue
+    from app.config import settings as app_settings
+    r = redis_lib.from_url(app_settings.redis_url)
+    q = Queue(name="scheduled", connection=r)
+    job = q.enqueue("app.jobs.subscription_sync.sync_subscriptions")
+    return {"status": "ok", "message": "Sync triggered", "job_id": job.id}
+
+
 # ── Search ──
 
 @router.post("/search/reindex")
