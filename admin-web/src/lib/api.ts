@@ -222,6 +222,7 @@ export interface ProxySettings {
   https_proxy: string;
   no_proxy: string;
   enabled: boolean;
+  ssl_verify: boolean;
 }
 
 export interface AdminSettings {

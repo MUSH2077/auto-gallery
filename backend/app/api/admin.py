@@ -36,8 +36,9 @@ class ProxySettings(BaseModel):
     https_proxy: str = ""
     no_proxy: str = "localhost,127.0.0.1,::1"
     enabled: bool = False
+    ssl_verify: bool = True
 
-DEFAULT_PROXY = {"http_proxy": "", "https_proxy": "", "no_proxy": "localhost,127.0.0.1,::1", "enabled": False}
+DEFAULT_PROXY = {"http_proxy": "", "https_proxy": "", "no_proxy": "localhost,127.0.0.1,::1", "enabled": False, "ssl_verify": True}
 
 class AdminSettingsUpdate(BaseModel):
     dedup: DedupSettings | None = None

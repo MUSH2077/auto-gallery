@@ -111,7 +111,30 @@ export default function ProxySettingsPage() {
                 <p className="text-xs text-gray-400 mt-1">Comma-separated hosts to bypass proxy. Default: localhost,127.0.0.1,::1</p>
               </div>
             </div>
+
+            <div className="flex items-center justify-between py-3 border-t dark:border-slate-700">
+              <div>
+                <span className="font-medium">SSL Verification</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Verify SSL certificates. Disable if using a proxy that intercepts HTTPS (Clash/V2Ray).</p>
+              </div>
+              <button
+                onClick={() => setLocal(current ? { ...current, ssl_verify: !current.ssl_verify } : null)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${
+                  current.ssl_verify ? "bg-green-600" : "bg-red-500"
+                }`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  current.ssl_verify ? "translate-x-6" : "translate-x-1"
+                }`} />
+              </button>
+            </div>
           </div>
+
+          {current.enabled && !current.ssl_verify && (
+            <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-400">
+              <strong>SSL verification is disabled.</strong> This is needed for Clash/V2Ray MITM proxies but reduces security. gallery-dl will be invoked with <code className="bg-red-100 dark:bg-red-900/50 px-1 rounded">--no-ssl-verify</code>.
+            </div>
+          )}
 
           <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg text-sm text-blue-800 dark:text-blue-300">
             <strong>Applies to:</strong>
