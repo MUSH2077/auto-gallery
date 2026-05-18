@@ -197,6 +197,7 @@ ENTITIES = {
 async def clear_entity(entity: str, db: AsyncSession = Depends(get_db)):
     """Clear a specific entity or 'all' for complete cleanup."""
     from sqlalchemy import text
+    import shutil, os
 
     if entity == "all":
         order = [
@@ -210,6 +211,8 @@ async def clear_entity(entity: str, db: AsyncSession = Depends(get_db)):
             r = await db.execute(text(f"DELETE FROM {table}"))
             results[table] = r.rowcount
         await db.commit()
+        _clear_files(["/downloads", "/library"])
+        results["files"] = "downloads + library cleared"
         return {"status": "ok", "message": "All data cleared", "deleted": results}
 
     tables = ENTITIES.get(entity)
@@ -221,7 +224,28 @@ async def clear_entity(entity: str, db: AsyncSession = Depends(get_db)):
         r = await db.execute(text(f"DELETE FROM {table}"))
         results[table] = r.rowcount
     await db.commit()
+
+    # Clear files for works-related entities
+    if entity == "works":
+        _clear_files(["/downloads", "/library"])
+        results["files"] = "downloads + library cleared"
+
     return {"status": "ok", "message": f"Cleared {entity}", "deleted": results}
+
+
+def _clear_files(paths: list[str]):
+    """Remove all files in given directories (preserving the root dirs)."""
+    import shutil, os
+    for p in paths:
+        try:
+            for item in os.listdir(p):
+                item_path = os.path.join(p, item)
+                if os.path.isdir(item_path):
+                    shutil.rmtree(item_path, ignore_errors=True)
+                else:
+                    os.unlink(item_path)
+        except Exception:
+            pass
 
 
 @router.post("/reset-settings")
