@@ -273,6 +273,14 @@ export const api = {
   // System
   health: () => request<HealthResponse>("/api/v1/system/health"),
 
+  systemLogs: (limit?: number, level?: string, nameFilter?: string) => {
+    const params = new URLSearchParams();
+    if (limit) params.set("limit", String(limit));
+    if (level) params.set("level", level);
+    if (nameFilter) params.set("name", nameFilter);
+    return request<{ entries: { ts: string; level: string; name: string; msg: string }[]; total: number; levels: string[] }>(`/api/v1/system/logs?${params}`);
+  },
+
   storageStats: () => request<{
     downloads: { path: string; size_bytes: number; file_count: number };
     library: { path: string; size_bytes: number; file_count: number };
