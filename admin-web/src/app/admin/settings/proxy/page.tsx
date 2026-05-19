@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, ProxySettings } from "@/lib/api";
 import { PageHeader, ErrorState } from "@/components";
+import { useT } from "@/lib/i18n";
 import Link from "next/link";
 
 function TestResults({ results, proxyEnabled }: { results: any[] | null; proxyEnabled: boolean }) {
@@ -50,6 +51,7 @@ function TestResults({ results, proxyEnabled }: { results: any[] | null; proxyEn
 }
 
 export default function ProxySettingsPage() {
+  const t = useT();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
   const [local, setLocal] = useState<ProxySettings | null>(null);
@@ -103,15 +105,15 @@ export default function ProxySettingsPage() {
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; Settings</Link>
       </div>
-      <PageHeader title="Network Proxy" description="Configure HTTP/HTTPS proxy for gallery-dl and external API access." />
+      <PageHeader title={t("proxy.title")} description={t("proxy.desc")} />
 
       {!current ? null : (
         <>
           <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6 space-y-5 text-sm">
             <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
               <div>
-                <span className="font-medium">Enable Proxy</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Route external API calls and gallery-dl traffic through a proxy server.</p>
+                <span className="font-medium">{t("proxy.enable")}</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("proxy.enable.desc")}</p>
               </div>
               <button
                 onClick={toggle}
@@ -127,42 +129,42 @@ export default function ProxySettingsPage() {
 
             <div className="grid grid-cols-1 gap-4">
               <div>
-                <label className="block text-sm font-medium mb-1">HTTP Proxy</label>
+                <label className="block text-sm font-medium mb-1">{t("proxy.http")}</label>
                 <input
                   type="text" value={current.http_proxy}
                   onChange={(e) => setStr("http_proxy", e.target.value)}
                   placeholder="http://192.0.2.10:7890"
                   className="w-full max-w-md border rounded px-3 py-2 text-sm font-mono dark:bg-slate-700 dark:text-white"
                 />
-                <p className="text-xs text-gray-400 mt-1">Used for HTTP requests (Danbooru API, etc.). Leave empty to not use HTTP proxy.</p>
+                <p className="text-xs text-gray-400 mt-1">{t("proxy.http.desc")}</p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-1">HTTPS Proxy</label>
+                <label className="block text-sm font-medium mb-1">{t("proxy.https")}</label>
                 <input
                   type="text" value={current.https_proxy}
                   onChange={(e) => setStr("https_proxy", e.target.value)}
                   placeholder="http://192.0.2.10:7890"
                   className="w-full max-w-md border rounded px-3 py-2 text-sm font-mono dark:bg-slate-700 dark:text-white"
                 />
-                <p className="text-xs text-gray-400 mt-1">Used for HTTPS connections. Usually same as HTTP proxy.</p>
+                <p className="text-xs text-gray-400 mt-1">{t("proxy.https.desc")}</p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-1">No Proxy (bypass)</label>
+                <label className="block text-sm font-medium mb-1">{t("proxy.no")}</label>
                 <input
                   type="text" value={current.no_proxy}
                   onChange={(e) => setStr("no_proxy", e.target.value)}
                   placeholder="localhost,127.0.0.1,::1"
                   className="w-full max-w-md border rounded px-3 py-2 text-sm font-mono dark:bg-slate-700 dark:text-white"
                 />
-                <p className="text-xs text-gray-400 mt-1">Comma-separated hosts to bypass proxy. Default: localhost,127.0.0.1,::1</p>
+                <p className="text-xs text-gray-400 mt-1">{t("proxy.no.desc")}</p>
               </div>
             </div>
           </div>
 
           <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg text-sm text-blue-800 dark:text-blue-300">
-            <strong>Applies to:</strong>
+            <strong>{t("proxy.scope")}</strong>
             <ul className="list-disc list-inside mt-1 space-y-1">
               <li>gallery-dl subprocess (downloads from Pixiv, Twitter, Iwara)</li>
               <li>Danbooru API reference queries (artist search, URL import)</li>
@@ -171,7 +173,7 @@ export default function ProxySettingsPage() {
           </div>
 
           <div className="mt-4 p-4 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg text-sm text-yellow-800 dark:text-yellow-300">
-            <strong>Known configuration:</strong> If using Clash/V2Ray on WSL2, set both HTTP and HTTPS proxy to <code className="bg-yellow-100 dark:bg-yellow-900/50 px-1 rounded">http://192.0.2.10:7890</code> (your Windows host IP with proxy port).
+            <strong>{t("proxy.known_config")}</strong>
           </div>
 
           {/* Connectivity Test */}
