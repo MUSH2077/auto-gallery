@@ -88,6 +88,15 @@ async def queue_stats():
         return {"default_queue": -1, "scheduled_queue": -1, "failed_jobs": -1}
 
 
+@router.get("/system/logs")
+async def get_logs(limit: int = 200, level: str | None = None, name: str | None = None):
+    """Get recent application log entries from the in-memory ring buffer."""
+    from app.services.log_buffer import get_recent, MAX_ENTRIES
+    entries = get_recent(limit=min(limit, MAX_ENTRIES), level=level, name_filter=name)
+    levels = sorted(set(e["level"] for e in entries), key=lambda x: ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"].index(x) if x in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] else 0)
+    return {"entries": entries, "total": len(entries), "levels": levels}
+
+
 @router.post("/system/clear-failed-jobs")
 async def clear_failed_jobs():
     """Remove all failed jobs from Redis registries."""

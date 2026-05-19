@@ -15,6 +15,10 @@ from app.database import async_session, engine
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO),
                     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
+# Install in-memory ring buffer for log API
+from app.services.log_buffer import install as install_log_buffer
+install_log_buffer()
+
 # Bridge structlog -> stdlib so all loggers output consistently
 structlog.configure(
     processors=[
