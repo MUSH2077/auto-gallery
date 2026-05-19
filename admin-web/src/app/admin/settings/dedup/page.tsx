@@ -3,9 +3,11 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, DedupSettings } from "@/lib/api";
 import { PageHeader, ErrorState } from "@/components";
+import { useT } from "@/lib/i18n";
 import Link from "next/link";
 
 export default function DedupSettingsPage() {
+  const t = useT();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
   const [local, setLocal] = useState<DedupSettings | null>(null);
@@ -60,19 +62,19 @@ export default function DedupSettingsPage() {
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; Settings</Link>
       </div>
-      <PageHeader title="Deduplication Settings" description="Control duplicate detection and merge behavior." />
+      <PageHeader title={t("dedup.title")} description={t("dedup.desc")} />
 
       {!current ? null : (
         <>
           <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6 text-sm space-y-2">
             {([
-              ["source_level_enabled", "Same source + same ID = skip download. Safe to enable.", "source-level"],
-              ["cross_source_enabled", "SHA-256 match across sources = reuse asset record.", "cross-source"],
-              ["auto_merge", "Automatically merge visually similar works. DANGEROUS — may irreversibly modify your library.", "auto-merge"],
-            ] as [keyof DedupSettings, string, string][]).map(([key, desc, label]) => (
+              ["source_level_enabled", t("dedup.source_level.desc")],
+              ["cross_source_enabled", t("dedup.cross_source.desc")],
+              ["auto_merge", t("dedup.auto_merge.desc")],
+            ] as [keyof DedupSettings, string][]).map(([key, desc]) => (
               <div key={key} className="flex items-center justify-between py-3 border-b dark:border-slate-700 last:border-0">
                 <div>
-                  <span className="font-medium capitalize">{key.replace(/_/g, " ")}</span>
+                  <span className="font-medium capitalize">{t(`dedup.${key}` as any)}</span>
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{desc}</p>
                 </div>
                 <button
@@ -90,8 +92,8 @@ export default function DedupSettingsPage() {
 
             <div className="flex items-center justify-between py-3">
               <div>
-                <span className="font-medium">phash threshold</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Perceptual hash Hamming distance (0-64). Lower = stricter matching. Default 8.</p>
+                <span className="font-medium">{t("dedup.phash")}</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dedup.phash.desc")}</p>
               </div>
               <input
                 type="number" min={0} max={64}
@@ -103,8 +105,8 @@ export default function DedupSettingsPage() {
           </div>
 
           <div className="mt-4 p-4 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg text-sm text-yellow-800 dark:text-yellow-300">
-            <strong>Changes take effect immediately.</strong> Enable dedup settings only after reviewing the risk documentation.
-            {current.auto_merge && <span className="block mt-1 text-red-600 font-medium">Auto-merge is enabled — this may irreversibly modify your library!</span>}
+            <strong>{t("dedup.warning")}</strong>
+            {current.auto_merge && <span className="block mt-1 text-red-600 font-medium">{t("dedup.warning_auto")}</span>}
           </div>
 
           <div className="mt-4 flex justify-end">
@@ -113,10 +115,10 @@ export default function DedupSettingsPage() {
               disabled={save.isPending}
               className="px-6 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50"
             >
-              {save.isPending ? "Saving..." : "Save Settings"}
+              {save.isPending ? t("common.saving") : t("dedup.save")}
             </button>
           </div>
-          {save.isSuccess && <p className="text-green-600 text-sm mt-2">Settings saved.</p>}
+          {save.isSuccess && <p className="text-green-600 text-sm mt-2">{t("dedup.saved")}</p>}
           {save.error && <p className="text-red-600 text-sm mt-2">{(save.error as Error).message}</p>}
         </>
       )}

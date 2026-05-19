@@ -3,16 +3,20 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { PixivSourceConfig, TwitterSourceConfig, IwaraSourceConfig, GalleryDLSourceMeta } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { PageHeader, ErrorState } from "@/components";
 import Link from "next/link";
 
 type TabKey = "pixiv" | "twitter" | "iwara";
 
-const TABS: { key: TabKey; label: string; color: string }[] = [
-  { key: "pixiv", label: "Pixiv", color: "border-blue-500" },
-  { key: "twitter", label: "X / Twitter", color: "border-gray-700" },
-  { key: "iwara", label: "Iwara", color: "border-pink-500" },
-];
+function useGalleryTabs() {
+  const t = useT();
+  return [
+    { key: "pixiv" as TabKey, label: t("gallerydl.tab.pixiv"), color: "border-blue-500" },
+    { key: "twitter" as TabKey, label: t("gallerydl.tab.twitter"), color: "border-gray-700" },
+    { key: "iwara" as TabKey, label: t("gallerydl.tab.iwara"), color: "border-pink-500" },
+  ];
+}
 
 function ToggleField({ label, desc, value, onChange }: {
   label: string; desc?: string; value: boolean; onChange: (v: boolean) => void;
@@ -78,6 +82,8 @@ function SelectField({ label, value, onChange, options }: {
 }
 
 export default function GalleryDLConfigPage() {
+  const t = useT();
+  const tabs = useGalleryTabs();
   const qc = useQueryClient();
   const config = useQuery({ queryKey: ["gallerydl-config"], queryFn: () => api.getGalleryDLConfig() });
   const [activeTab, setActiveTab] = useState<TabKey>("pixiv");
@@ -162,16 +168,16 @@ export default function GalleryDLConfigPage() {
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; Settings</Link>
       </div>
-      <PageHeader title="gallery-dl Configuration" description="Per-source extractor options saved to config.json." />
+      <PageHeader title={t("gallerydl.title")} description={t("gallerydl.desc")} />
 
       {/* Tabs */}
       <div className="flex border-b dark:border-slate-700 mb-6">
-        {TABS.map((t) => (
-          <button key={t.key}
-            onClick={() => setActiveTab(t.key)}
+        {tabs.map((tab) => (
+          <button key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
             className={`px-5 py-3 text-sm font-medium border-b-2 -mb-px transition-colors
-              ${activeTab === t.key ? `${t.color} text-slate-900` : "border-transparent text-gray-500 hover:text-gray-700"}`}>
-            {t.label}
+              ${activeTab === tab.key ? `${tab.color} text-slate-900 dark:text-white` : "border-transparent text-gray-500 hover:text-gray-700"}`}>
+            {tab.label}
           </button>
         ))}
       </div>
@@ -179,7 +185,7 @@ export default function GalleryDLConfigPage() {
       {/* Unsupported banner */}
       {currentMeta && !currentMeta.supported && (
         <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-6 text-sm text-yellow-800 dark:text-yellow-300">
-          <strong>{currentMeta.name} is not yet supported.</strong> {currentMeta.description}
+          <strong>{currentMeta.name} {t("gallerydl.unsupported")}</strong> {currentMeta.description}
         </div>
       )}
 
@@ -192,7 +198,7 @@ export default function GalleryDLConfigPage() {
         <div className="flex justify-end pt-4 border-t">
           <button onClick={() => save.mutate()} disabled={save.isPending}
             className={`px-6 py-2 rounded text-sm font-medium text-white ${saved === activeTab ? "bg-green-600" : "bg-slate-900 hover:bg-slate-800"} disabled:opacity-50`}>
-            {save.isPending ? "Saving..." : saved === activeTab ? `Saved!` : `Save ${TABS.find(t => t.key === activeTab)?.label} Config`}
+            {save.isPending ? t("common.saving") : saved === activeTab ? t("common.saved") : `${t("gallerydl.save")} (${tabs.find(tab => tab.key === activeTab)?.label})`}
           </button>
         </div>
         {save.error && <p className="text-red-600 text-sm mt-2">{(save.error as Error).message}</p>}
@@ -204,15 +210,16 @@ export default function GalleryDLConfigPage() {
 // ── Pixiv Tab ──
 
 function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: PixivSourceConfig) => void }) {
+  const t = useT();
   const set = (k: keyof PixivSourceConfig, v: any) => onChange({ ...data, [k]: v });
   return (
     <>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">Authentication</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.auth")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label="Refresh Token" value={str(data.refresh_token)} onChange={(v) => set("refresh_token", v || undefined)} type="password" />
         <TextField label="Cookies Path" value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/pixiv.txt" />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">Content</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.content")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <SelectField label="Include" value={str(data.include, "artworks")} onChange={(v) => set("include", v)}
           options={[{ value: "artworks", label: "artworks" }, { value: "favorites", label: "favorites" }, { value: "bookmarks", label: "bookmarks" }]} />
@@ -228,12 +235,12 @@ function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: P
             { value: "false", label: "Skip ugoira" },
           ]} />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">File Organization</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label="Directory Pattern" value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} />
         <TextField label="Filename Pattern" value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} placeholder="{id}_p{num}.{extension}" />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">Rate Limiting</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.rate_limit")}</h4>
       <div className="w-64">
         <NumberField label="Sleep (seconds)" value={numStr(data.sleep_request)} onChange={(v) => set("sleep_request", parseFloat(v) || undefined)} placeholder="0" />
       </div>
@@ -244,14 +251,15 @@ function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: P
 // ── Twitter Tab ──
 
 function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (d: TwitterSourceConfig) => void }) {
+  const t = useT();
   const set = (k: keyof TwitterSourceConfig, v: any) => onChange({ ...data, [k]: v });
   return (
     <>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">Authentication</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.auth")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label="Cookies Path" value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/twitter.txt" />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">Content</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.content")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <SelectField label="Include" value={str(data.include, "timeline")} onChange={(v) => set("include", v)}
           options={[
@@ -260,7 +268,7 @@ function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (
           ]} />
         <NumberField label="Max Posts" value={numStr(data.max_posts)} onChange={(v) => set("max_posts", parseInt(v) || undefined)} placeholder="Unlimited" />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">Filters</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.filters")}</h4>
       <div className="space-y-1">
         <ToggleField label="Retweets" desc="Include retweets." value={data.retweets ?? false} onChange={(v) => set("retweets", v)} />
         <ToggleField label="Replies" desc="Include replies to other users." value={data.replies ?? false} onChange={(v) => set("replies", v)} />
@@ -269,7 +277,7 @@ function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (
         <ToggleField label="Text Tweets" desc="Include text-only tweets (no media)." value={data.text_tweets ?? false} onChange={(v) => set("text_tweets", v)} />
         <ToggleField label="Quoted Tweets" desc="Include quoted tweet media." value={data.quoted ?? false} onChange={(v) => set("quoted", v)} />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">File Organization</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label="Directory Pattern" value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} placeholder="twitter/{user[name]}" />
         <TextField label="Filename Pattern" value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} placeholder="{tweet_id}_{num}.{extension}" />
@@ -281,19 +289,20 @@ function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (
 // ── Iwara Tab ──
 
 function IwaraTab({ data, onChange }: { data: IwaraSourceConfig; onChange: (d: IwaraSourceConfig) => void }) {
+  const t = useT();
   const set = (k: keyof IwaraSourceConfig, v: any) => onChange({ ...data, [k]: v });
   return (
     <>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">Authentication</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.auth")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label="Username" value={str(data.username)} onChange={(v) => set("username", v || undefined)} placeholder="Iwara account username/email" />
         <TextField label="Password" value={str(data.password)} onChange={(v) => set("password", v || undefined)} type="password" placeholder="Iwara account password" />
         <TextField label="Cookies Path" value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/iwara.txt" />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">Video Quality</h4>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.video_quality")}</h4>
       <TextField label="Format" value={str(data.format)} onChange={(v) => set("format", v || undefined)} placeholder="Source, 540, 360" />
-      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">Comma-separated format preference, e.g. &quot;Source, 1080, 720, 540, 360&quot;. &quot;Source&quot; downloads original quality.</p>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">File Organization</h4>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">{t("gallerydl.format.desc")}</p>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.file_org")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label="Directory Pattern" value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} placeholder="iwara/{user[name]}" />
         <TextField label="Filename Pattern" value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} />
