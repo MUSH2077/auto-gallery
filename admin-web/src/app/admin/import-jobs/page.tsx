@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
+import Link from "next/link";
 import { PageHeader, StatusBadge, EmptyState, ErrorState, ConfirmDialog } from "@/components";
 
 const STATUS_OPTIONS = ["", "pending", "running", "complete", "failed", "stale"];
@@ -94,6 +95,9 @@ export default function ImportJobsPage() {
           {scan.isPending ? "Scanning..." : "Scan for Imports"}
         </button>
       </PageHeader>
+      <div className="mb-4">
+        <Link href="/admin/jobs" className="text-sm text-blue-600 hover:underline">&larr; View Unified Jobs Page</Link>
+      </div>
 
       <div className="flex gap-2 mb-4 flex-wrap">
         {STATUS_OPTIONS.map((s) => (

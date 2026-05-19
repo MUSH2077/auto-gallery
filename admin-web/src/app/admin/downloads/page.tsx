@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, DownloadJob } from "@/lib/api";
+import Link from "next/link";
 import { PageHeader, StatusBadge, SourceBadge, EmptyState, ErrorState, ConfirmDialog } from "@/components";
 
 const STATUS_OPTIONS = ["", "pending", "downloading", "downloaded", "importing", "complete", "failed", "stale"];
@@ -52,7 +53,9 @@ export default function DownloadsPage() {
 
   return (
     <main className="max-w-7xl mx-auto p-6">
-      <PageHeader title="Download Jobs" description="Monitor and manage download queue" />
+      <PageHeader title="Download Jobs" description="Monitor and manage download queue">
+        <Link href="/admin/jobs" className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">View Unified Jobs Page</Link>
+      </PageHeader>
 
       <div className="flex gap-2 mb-4 flex-wrap">
         {STATUS_OPTIONS.map((s) => (
