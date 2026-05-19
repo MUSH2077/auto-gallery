@@ -132,12 +132,6 @@ async def update_creator_link(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-@router.get("/{creator_id}/sources", response_model=list[SourceCreatorRead])
-async def list_source_creators(creator_id: UUID, db: AsyncSession = Depends(get_db)):
-    svc = CreatorService(db)
-    return await svc.list_source_creators(creator_id)
-
-
 @router.delete("/{creator_id}/links/{link_id}", status_code=204)
 async def delete_creator_link(creator_id: UUID, link_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)

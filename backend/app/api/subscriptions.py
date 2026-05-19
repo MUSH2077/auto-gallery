@@ -1,14 +1,22 @@
+import logging
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import RequireAdmin
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
+from app.models.subscription import Subscription
+from app.models.subscription_source import SubscriptionSource
+from app.models.download_job import DownloadJob
 from app.schemas.subscription import SubscriptionCreate, SubscriptionRead, SubscriptionUpdate
 from app.schemas.subscription_source import SubscriptionSourceCreate, SubscriptionSourceRead, SubscriptionSourceUpdate
 from app.services.subscription import SubscriptionService
 
+logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[RequireAdmin])
 
 
@@ -48,6 +56,65 @@ async def batch_toggle_sync(data: dict, db: AsyncSession = Depends(get_db)):
         except Exception as e:
             results.append({"id": sid, "status": "error", "error": str(e)})
     return {"status": "ok", "results": results}
+
+
+@router.post("/{subscription_id}/sync-now")
+async def trigger_subscription_sync(subscription_id: UUID, db: AsyncSession = Depends(get_db)):
+    """Manually trigger sync for a single subscription — creates download jobs for all enabled sources."""
+    sub = await db.get(Subscription, subscription_id)
+    if not sub:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+
+    sources = await db.execute(
+        select(SubscriptionSource).where(
+            and_(
+                SubscriptionSource.subscription_id == subscription_id,
+                SubscriptionSource.is_enabled == True,
+            )
+        )
+    )
+    sub_sources = sources.scalars().all()
+    if not sub_sources:
+        return {"status": "ok", "message": "No enabled sources", "job_ids": []}
+
+    now = datetime.now(timezone.utc)
+    job_ids = []
+
+    for ss in sub_sources:
+        if not ss.source_url:
+            continue
+
+        from app.providers import registry
+        provider = registry.get(ss.source)
+        if not provider or not provider.capabilities.can_download:
+            continue
+        if not provider.validate_url(ss.source_url):
+            continue
+
+        job = DownloadJob(
+            subscription_id=sub.id,
+            subscription_source_id=ss.id,
+            source=ss.source,
+            source_url=ss.source_url,
+            status="pending",
+        )
+        db.add(job)
+        await db.flush()
+
+        try:
+            import redis as redis_lib
+            from rq import Queue
+            r = redis_lib.from_url(settings.redis_url)
+            Queue(name="scheduled", connection=r).enqueue(
+                "app.jobs.download.run_download_job", str(job.id))
+            job_ids.append(str(job.id))
+        except Exception as e:
+            logger.error("Failed to enqueue download job %s: %s", job.id, e)
+
+    sub.last_synced_at = now
+    await db.commit()
+
+    return {"status": "ok", "message": f"Enqueued {len(job_ids)} download jobs", "job_ids": job_ids}
 
 
 @router.get("/{subscription_id}", response_model=SubscriptionRead)

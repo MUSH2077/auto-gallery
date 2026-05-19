@@ -115,6 +115,7 @@ class WorkRepository:
 
         result = await self.session.execute(stmt)
         works = []
+        work_ids = []
         for row in result:
             w = row[0]
             w.asset_count = row[1] or 0
@@ -122,7 +123,29 @@ class WorkRepository:
             w.creator_name = row[3]
             w.creator_id = str(row[4]) if row[4] else None
             w.has_ugoira = bool(row[5])
+            w.preview_asset_ids = []
             works.append(w)
+            work_ids.append(w.id)
+
+        # Fetch preview asset IDs (first 10 per work) for multi-page preview
+        if work_ids:
+            from app.models.work_source import WorkSource as WS
+            from app.models.asset_source import AssetSource as AS
+            from app.models.asset import Asset as AM
+            asset_stmt = (
+                select(WS.work_id, AM.id)
+                .join(AS, AS.work_source_id == WS.id)
+                .join(AM, AM.id == AS.asset_id)
+                .where(WS.work_id.in_(work_ids))
+                .order_by(WS.work_id, AM.file_name)
+            )
+            asset_result = await self.session.execute(asset_stmt)
+            asset_map: dict = {}
+            for wid, aid in asset_result:
+                asset_map.setdefault(wid, []).append(str(aid))
+            for w in works:
+                w.preview_asset_ids = asset_map.get(w.id, [])[:10]
+
         return works
 
     async def get(self, work_id: UUID) -> Work | None:

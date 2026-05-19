@@ -16,6 +16,7 @@ class WorkList(BaseModel):
     creator_name: str | None = None
     creator_id: str | None = None
     has_ugoira: bool = False
+    preview_asset_ids: list[str] = []
 
     model_config = {"from_attributes": True}
 

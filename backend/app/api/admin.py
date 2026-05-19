@@ -65,7 +65,6 @@ async def _put_setting(db: AsyncSession, key: str, value: dict):
 
 
 DEFAULT_DEDUP = {"source_level_enabled": False, "cross_source_enabled": False, "auto_merge": False, "phash_threshold": 8}
-DEFAULT_SUB = {"default_sync_interval_hours": 6, "scheduler_scan_interval_minutes": 60, "default_sync_enabled": True}
 DEFAULT_DL = {"timeout_seconds": 600, "max_retries": 3, "retry_backoff_base_seconds": 60}
 
 
@@ -189,6 +188,7 @@ ENTITIES = {
     "works": ["work_source_tags", "work_tags", "asset_sources", "assets", "work_sources", "works"],
     "creators": ["import_jobs", "download_jobs", "subscription_sources", "subscriptions", "source_creators", "creator_links", "creators"],
     "downloads": ["import_jobs", "download_jobs"],
+    "tags": ["work_source_tags", "work_tags", "tags"],
     "settings": [],  # Special: reset to defaults
 }
 
@@ -205,6 +205,7 @@ async def clear_entity(entity: str, db: AsyncSession = Depends(get_db)):
             "import_jobs", "download_jobs",
             "subscription_sources", "subscriptions",
             "source_creators", "creator_links", "creators",
+            "tags",
         ]
         results = {}
         for table in order:
@@ -235,7 +236,9 @@ async def clear_entity(entity: str, db: AsyncSession = Depends(get_db)):
 
 def _clear_files(paths: list[str]):
     """Remove all files in given directories (preserving the root dirs)."""
+    import logging
     import shutil, os
+    _log = logging.getLogger(__name__)
     for p in paths:
         try:
             for item in os.listdir(p):
@@ -245,7 +248,7 @@ def _clear_files(paths: list[str]):
                 else:
                     os.unlink(item_path)
         except Exception:
-            pass
+            _log.warning("Failed to clear files in %s", p, exc_info=True)
 
 
 @router.post("/reset-settings")

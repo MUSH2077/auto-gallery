@@ -129,6 +129,7 @@ export interface WorkListItem {
   creator_name?: string;
   creator_id?: string;
   has_ugoira?: boolean;
+  preview_asset_ids?: string[];
 }
 
 export interface Work {
@@ -284,7 +285,7 @@ export const api = {
   sources: () => request<{ sources: ProviderInfo[] }>("/api/v1/sources"),
 
   // Creators
-  listCreators: (offset = 0, limit = 50) => request<Creator[]>("/api/v1/creators"),
+  listCreators: (offset = 0, limit = 50) => request<Creator[]>(`/api/v1/creators?offset=${offset}&limit=${limit}`),
 
   getCreator: (id: string) => request<Creator>(`/api/v1/creators/${id}`),
 
@@ -347,6 +348,9 @@ export const api = {
   batchToggleSyncSubscriptions: (ids: string[], syncEnabled: boolean) =>
     request<{ status: string; results: { id: string; status: string; sync_enabled?: boolean; error?: string }[] }>(
       "/api/v1/subscriptions/batch-toggle-sync", { method: "POST", body: JSON.stringify({ ids, sync_enabled: syncEnabled }) }),
+
+  syncNowSubscription: (id: string) =>
+    request<{ status: string; message: string; job_ids: string[] }>(`/api/v1/subscriptions/${id}/sync-now`, { method: "POST" }),
 
   listSubscriptionSources: (subId: string) =>
     request<SubscriptionSource[]>(`/api/v1/subscriptions/${subId}/sources`),
@@ -423,6 +427,9 @@ export const api = {
 
   retryImportJob: (id: string) =>
     request<{ status: string; message: string }>(`/api/v1/import-jobs/${id}/retry`, { method: "POST" }),
+
+  deleteDownloadJob: (id: string) =>
+    request<{ status: string }>(`/api/v1/download-jobs/${id}`, { method: "DELETE" }),
 
   deleteImportJob: (id: string) =>
     request<{ status: string }>(`/api/v1/import-jobs/${id}`, { method: "DELETE" }),

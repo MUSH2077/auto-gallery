@@ -59,6 +59,7 @@ export default function JobsPage() {
   const [imFilter, setImFilter] = useState("");
   const [retryId, setRetryId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleteType, setDeleteType] = useState<"dl" | "im">("dl");
 
   const downloads = useQuery({
     queryKey: [...queryKeys.downloadJobs.all, dlFilter],
@@ -83,6 +84,11 @@ export default function JobsPage() {
   });
 
   const delDL = useMutation({
+    mutationFn: (id: string) => api.deleteDownloadJob(id),
+    onSuccess: () => { setDeleteId(null); qc.invalidateQueries(); },
+  });
+
+  const delIM = useMutation({
     mutationFn: (id: string) => api.deleteImportJob(id),
     onSuccess: () => { setDeleteId(null); qc.invalidateQueries(); },
   });
@@ -133,7 +139,7 @@ export default function JobsPage() {
                       <button onClick={() => { setRetryId(j.id); retryDL.mutate(j.id); }} disabled={retryDL.isPending}
                         className="text-xs text-blue-600 hover:underline">Retry</button>
                     )}
-                    <button onClick={() => { setDeleteId(j.id); }} className="text-xs text-red-500 hover:underline">Del</button>
+                    <button onClick={() => { setDeleteId(j.id); setDeleteType("dl"); }} className="text-xs text-red-500 hover:underline">Del</button>
                   </div>
                 </div>
               );
@@ -182,7 +188,7 @@ export default function JobsPage() {
                       <button onClick={() => { setRetryId(j.id); retryIM.mutate(j.id); }} disabled={retryIM.isPending}
                         className="text-xs text-blue-600 hover:underline">Retry</button>
                     )}
-                    <button onClick={() => { setDeleteId(j.id); }} className="text-xs text-red-500 hover:underline">Del</button>
+                    <button onClick={() => { setDeleteId(j.id); setDeleteType("im"); }} className="text-xs text-red-500 hover:underline">Del</button>
                   </div>
                 </div>
               );
@@ -191,7 +197,7 @@ export default function JobsPage() {
         )}
       </section>
 
-      {deleteId && <ConfirmDialog open title="Delete Job" message="Delete this job?" onConfirm={() => delDL.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={delDL.isPending} />}
+      {deleteId && <ConfirmDialog open title="Delete Job" message="Delete this job?" onConfirm={() => deleteType === "dl" ? delDL.mutate(deleteId) : delIM.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={delDL.isPending || delIM.isPending} />}
     </main>
   );
 }

@@ -77,6 +77,11 @@ export default function SubscriptionsPage() {
     onSuccess: () => { setSelected(new Set()); subs.refetch(); },
   });
 
+  const syncNow = useMutation({
+    mutationFn: (id: string) => api.syncNowSubscription(id),
+    onSuccess: () => subs.refetch(),
+  });
+
   const creatorMap = useMemo(() => {
     const m = new Map<string, string>();
     creators.data?.forEach((c) => m.set(c.id, c.display_name || c.name));
@@ -176,6 +181,10 @@ export default function SubscriptionsPage() {
                 {s.sync_enabled ? <span className="text-green-600 dark:text-green-400">Auto-sync</span> : <span className="text-gray-400">Manual</span>}
                 <span className="text-gray-400 dark:text-gray-500">{s.sync_interval_hours}h</span>
                 <span className="text-gray-400 dark:text-gray-500 hidden sm:inline">{s.last_synced_at ? `Last: ${new Date(s.last_synced_at).toLocaleDateString()}` : "Never"}</span>
+                <button onClick={(e) => { e.stopPropagation(); syncNow.mutate(s.id); }} disabled={syncNow.isPending}
+                  className="text-blue-600 hover:underline disabled:opacity-50">
+                  {syncNow.isPending ? "..." : "Sync"}
+                </button>
                 <button onClick={() => router.push(`/admin/subscriptions/${s.id}`)} className="text-blue-600 hover:underline">View</button>
                 <button onClick={(e) => { e.stopPropagation(); setDeleteId(s.id); }} className="text-red-500 hover:text-red-700 dark:text-red-400">Del</button>
               </div>

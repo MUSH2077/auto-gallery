@@ -49,6 +49,12 @@ export default function DataManagementPage() {
     onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
   });
 
+  const clearTags = useMutation({
+    mutationFn: () => api.clearEntity("tags"),
+    onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+    onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
+  });
+
   const resetSettings = useMutation({
     mutationFn: () => api.resetSettings(),
     onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
@@ -59,7 +65,7 @@ export default function DataManagementPage() {
     {
       key: "all",
       title: "Clear Everything",
-      desc: "Delete ALL data + files: works, assets, downloads, imports, creators, subscriptions. Also clears /downloads and /library directories. This is irreversible.",
+      desc: "Delete ALL data + files: works, assets, downloads, imports, creators, subscriptions, tags. Also clears /downloads and /library directories. This is irreversible.",
       color: "red",
       mutation: clearAll,
     },
@@ -83,6 +89,13 @@ export default function DataManagementPage() {
       desc: "Delete download and import job history. Keeps works, assets, creators, and files intact.",
       color: "yellow",
       mutation: clearDownloads,
+    },
+    {
+      key: "tags",
+      title: "Clear Tags",
+      desc: "Delete all tags and tag associations (work_tags, work_source_tags). Works and assets remain intact.",
+      color: "yellow",
+      mutation: clearTags,
     },
     {
       key: "settings",

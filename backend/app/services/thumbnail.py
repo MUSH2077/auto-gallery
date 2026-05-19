@@ -1,15 +1,26 @@
-import os
+import logging
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
 
-def generate_thumbnail(source_path: str, library_dir: Path) -> str | None:
-    """Generate thumbnail.webp for a work in its library directory. Returns relative path."""
+
+def generate_thumbnail(source_path: str, library_dir: Path, name: str = "thumbnail") -> str | None:
+    """Generate a WebP thumbnail in the library directory.
+
+    Args:
+        source_path: Full path to the source image file.
+        library_dir: Target directory (created if needed).
+        name: Output filename stem (without extension). Defaults to 'thumbnail'.
+              Use the source file stem for per-page naming, e.g. '8232932_p0'.
+
+    Returns the full path to the generated thumbnail, or None on failure.
+    """
     try:
         import pyvips
         image = pyvips.Image.new_from_file(source_path)
         w, h = image.width, image.height
         target_w = 400
-        thumb_path = library_dir / "thumbnail.webp"
+        thumb_path = library_dir / f"{name}.webp"
         thumb_path.parent.mkdir(parents=True, exist_ok=True)
         if w > target_w:
             thumb = image.thumbnail_image(target_w, height=target_w * 1000)
@@ -18,4 +29,5 @@ def generate_thumbnail(source_path: str, library_dir: Path) -> str | None:
             image.webpsave(str(thumb_path), Q=80)
         return str(thumb_path)
     except Exception:
+        logger.warning("Failed to generate thumbnail for %s", source_path, exc_info=True)
         return None

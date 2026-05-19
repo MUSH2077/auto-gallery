@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import RequireAdmin
@@ -6,6 +7,8 @@ from sqlalchemy import select
 
 from app.database import get_db
 from app.models.import_job import ImportJob
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[RequireAdmin])
 
@@ -53,7 +56,7 @@ async def retry_import_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
         r = redis_lib.from_url(settings.redis_url)
         Queue(connection=r).enqueue("app.jobs.import_runner.run_import_job", str(job_id))
     except Exception:
-        pass
+        logger.warning("Failed to enqueue retry for import job %s", job_id, exc_info=True)
 
     return {"status": "ok", "message": f"Retry triggered for import job {job_id}"}
 

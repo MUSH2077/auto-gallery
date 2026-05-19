@@ -3,7 +3,6 @@ import logging
 import re
 import urllib.parse
 import urllib.request
-from typing import Any
 
 from app.config import settings
 
