@@ -45,6 +45,16 @@ async def retry_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.delete("/{job_id}")
+async def delete_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
+    svc = DownloadService(db)
+    try:
+        await svc.delete_job(job_id)
+        return {"status": "ok"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.get("/{job_id}/imports", response_model=list[ImportJobRead])
 async def list_imports(job_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = DownloadService(db)

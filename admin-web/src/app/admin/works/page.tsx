@@ -5,6 +5,69 @@ import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys, WorkListItem } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
 
+function Img({ assetId, alt, className }: { assetId: string | undefined; alt: string; className?: string }) {
+  const [err, setErr] = useState(false);
+  if (!assetId || err) {
+    return <div className={`${className || ""} flex items-center justify-center text-gray-400 text-xs bg-gray-100 dark:bg-slate-700`}>N/A</div>;
+  }
+  return (
+    <img src={api.mediaUrl(assetId, "thumb")} alt={alt} className={className} loading="lazy"
+      onError={() => setErr(true)} />
+  );
+}
+
+function GridCard({ w }: { w: WorkListItem }) {
+  const router = useRouter();
+  const [pageIdx, setPageIdx] = useState(0);
+  const assetIds = w.preview_asset_ids?.length ? w.preview_asset_ids : (w.thumbnail_asset_id ? [w.thumbnail_asset_id] : []);
+  const hasMultiple = assetIds.length > 1;
+  const currentId = assetIds[pageIdx] || assetIds[0];
+
+  const prevPage = (e: React.MouseEvent) => { e.stopPropagation(); setPageIdx((pageIdx - 1 + assetIds.length) % assetIds.length); };
+  const nextPage = (e: React.MouseEvent) => { e.stopPropagation(); setPageIdx((pageIdx + 1) % assetIds.length); };
+
+  return (
+    <div className="bg-white dark:bg-slate-800 rounded-lg shadow overflow-hidden cursor-pointer hover:shadow-md transition-shadow group" onClick={() => router.push(`/admin/works/${w.id}`)}>
+      <div className="h-32 bg-gray-100 dark:bg-slate-700 flex items-center justify-center text-gray-400 text-xs overflow-hidden relative">
+        <Img assetId={currentId} alt={w.title || ""} className="w-full h-full object-cover" />
+        {w.asset_count > 1 && (
+          <span className="absolute top-1 right-1 bg-black/70 text-white text-xs px-1.5 py-0.5 rounded font-medium">{w.asset_count}p</span>
+        )}
+        {w.is_nsfw && (
+          <span className="absolute top-1 left-1 bg-red-600 text-white text-xs px-1.5 py-0.5 rounded">NSFW</span>
+        )}
+        {w.has_ugoira && (
+          <span className="absolute bottom-1 right-1 bg-purple-600/90 text-white text-[10px] px-1.5 py-0.5 rounded font-medium">GIF</span>
+        )}
+        {hasMultiple && (
+          <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-between px-0.5">
+            <button onClick={prevPage} className="bg-black/60 hover:bg-black/80 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs leading-none transition-colors">&#9664;</button>
+            <button onClick={nextPage} className="bg-black/60 hover:bg-black/80 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs leading-none transition-colors">&#9654;</button>
+          </div>
+        )}
+        {hasMultiple && (
+          <div className="absolute bottom-1 left-1 flex gap-0.5">
+            {assetIds.slice(0, 10).map((_, i) => (
+              <span key={i} className={`w-1 h-1 rounded-full ${i === pageIdx ? "bg-white" : "bg-white/40"}`} />
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="p-3">
+        <div className="text-sm font-medium truncate dark:text-white">{w.title || "Untitled"}</div>
+        <div className="flex items-center gap-1.5 mt-1">
+          {w.source && <SourceBadge source={w.source} />}
+          {w.has_ugoira && <span className="text-[10px] bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 px-1 rounded">GIF</span>}
+          {w.creator_name && <span className="text-xs text-gray-400 dark:text-gray-500 truncate">{w.creator_name}</span>}
+        </div>
+        <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+          {w.posted_at ? new Date(w.posted_at).toLocaleDateString() : "No date"}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 type SortKey = "created_at" | "posted_at" | "title";
 type ViewMode = "grid" | "list";
 
@@ -154,37 +217,7 @@ export default function WorksPage() {
       {/* Grid View */}
       {works.data && works.data.length > 0 && viewMode === "grid" && (
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-6">
-          {works.data.map((w: WorkListItem) => (
-            <div key={w.id} className="bg-white dark:bg-slate-800 rounded-lg shadow overflow-hidden cursor-pointer hover:shadow-md transition-shadow" onClick={() => router.push(`/admin/works/${w.id}`)}>
-              <div className="h-32 bg-gray-100 dark:bg-slate-700 flex items-center justify-center text-gray-400 text-xs overflow-hidden relative">
-                {w.thumbnail_asset_id ? (
-                  <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="w-full h-full object-cover" loading="lazy" />
-                ) : (
-                  <span>No thumbnail</span>
-                )}
-                {w.asset_count > 1 && (
-                  <span className="absolute top-1 right-1 bg-black/70 text-white text-xs px-1.5 py-0.5 rounded font-medium">{w.asset_count}p</span>
-                )}
-                {w.is_nsfw && (
-                  <span className="absolute top-1 left-1 bg-red-600 text-white text-xs px-1.5 py-0.5 rounded">NSFW</span>
-                )}
-                {w.has_ugoira && (
-                  <span className="absolute bottom-1 right-1 bg-purple-600/90 text-white text-[10px] px-1.5 py-0.5 rounded font-medium">GIF</span>
-                )}
-              </div>
-              <div className="p-3">
-                <div className="text-sm font-medium truncate dark:text-white">{w.title || "Untitled"}</div>
-                <div className="flex items-center gap-1.5 mt-1">
-                  {w.source && <SourceBadge source={w.source} />}
-                  {w.has_ugoira && <span className="text-[10px] bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 px-1 rounded">GIF</span>}
-                  {w.creator_name && <span className="text-xs text-gray-400 dark:text-gray-500 truncate">{w.creator_name}</span>}
-                </div>
-                <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-                  {w.posted_at ? new Date(w.posted_at).toLocaleDateString() : "No date"}
-                </div>
-              </div>
-            </div>
-          ))}
+          {works.data.map((w: WorkListItem) => <GridCard key={w.id} w={w} />)}
         </div>
       )}
 
@@ -194,11 +227,7 @@ export default function WorksPage() {
           {works.data.map((w: WorkListItem) => (
             <div key={w.id} className="bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 flex items-center gap-3 cursor-pointer hover:shadow-md transition-shadow" onClick={() => router.push(`/admin/works/${w.id}`)}>
               <div className="w-12 h-12 bg-gray-100 dark:bg-slate-700 rounded overflow-hidden shrink-0">
-                {w.thumbnail_asset_id ? (
-                  <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs">N/A</div>
-                )}
+                <Img assetId={w.thumbnail_asset_id} alt={w.title || ""} className="w-full h-full object-cover" />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">

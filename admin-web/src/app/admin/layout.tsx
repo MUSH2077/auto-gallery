@@ -3,6 +3,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useT } from "@/lib/i18n";
 import { ThemeToggle, LangToggle } from "@/lib/theme";
+import ErrorBoundary from "@/components/ErrorBoundary";
 
 export const dynamic = 'force-dynamic';
 
@@ -58,9 +59,11 @@ function AdminNav() {
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div>
-      <AdminNav />
-      <div className="min-h-[calc(100vh-52px)]">{children}</div>
-    </div>
+    <ErrorBoundary>
+      <div>
+        <AdminNav />
+        <div className="min-h-[calc(100vh-52px)]">{children}</div>
+      </div>
+    </ErrorBoundary>
   );
 }

@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 import structlog
@@ -10,6 +11,28 @@ from app.api.media import router as media_router
 from app.config import settings
 from app.database import async_session, engine
 
+# Configure stdlib logging from settings
+logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO),
+                    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+# Bridge structlog -> stdlib so all loggers output consistently
+structlog.configure(
+    processors=[
+        structlog.stdlib.filter_by_level,
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.PositionalArgumentsFormatter(),
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+        structlog.processors.UnicodeDecoder(),
+        structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+    ],
+    context_class=dict,
+    logger_factory=structlog.stdlib.LoggerFactory(),
+    wrapper_class=structlog.stdlib.BoundLogger,
+    cache_logger_on_first_use=True,
+)
 logger = structlog.get_logger()
 
 
@@ -25,7 +48,7 @@ app = FastAPI(title="auto-gallery", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3250", "http://localhost:3000"],
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",")],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["*"],

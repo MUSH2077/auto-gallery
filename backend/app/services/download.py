@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,6 +7,8 @@ from app.config import settings
 from app.repositories.download_job import DownloadJobRepository
 from app.repositories.subscription import SubscriptionRepository
 from app.providers import registry
+
+logger = logging.getLogger(__name__)
 
 
 class DownloadService:
@@ -62,7 +65,7 @@ class DownloadService:
             q = Queue(connection=r)
             q.enqueue("app.jobs.download.run_download_job", str(job.id))
         except Exception:
-            pass
+            logger.warning("Failed to enqueue download job %s", job.id, exc_info=True)
 
         return {"job_id": str(job.id), "status": job.status, "source_url": normalized_url}
 
@@ -72,6 +75,13 @@ class DownloadService:
             raise ValueError(f"Cannot retry job with status '{job.status}'")
         job = await self.repo.update_status(job, "pending")
         return {"job_id": str(job.id), "status": job.status}
+
+    async def delete_job(self, job_id: UUID):
+        job = await self.get_job(job_id)
+        if job.status in ("pending", "downloading", "importing"):
+            raise ValueError(f"Cannot delete job with status '{job.status}'")
+        await self.db.delete(job)
+        await self.db.commit()
 
     async def list_imports(self, job_id: UUID):
         return await self.repo.list_imports(job_id)

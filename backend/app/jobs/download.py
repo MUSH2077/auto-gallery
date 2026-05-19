@@ -32,7 +32,7 @@ async def _read_download_defaults():
             if row and row.value:
                 return row.value
     except Exception:
-        pass
+        logger.warning("Failed to read download_defaults, using fallbacks", exc_info=True)
     return {}
 
 
@@ -100,7 +100,7 @@ async def run_download_job(job_id: str):
             proxy_config = await _load_proxy_config()
             env.update(get_proxy_env(proxy_config))
         except Exception:
-            pass
+            logger.warning("Failed to apply proxy env for download job %s", job_id, exc_info=True)
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=dl_timeout, env=env)
 
@@ -151,7 +151,7 @@ async def run_download_job(job_id: str):
                     backoff_base * (2 ** (job.retry_count - 1)),
                     "app.jobs.download.run_download_job", job_id)
             except Exception:
-                pass
+                logger.warning("Failed to enqueue retry for download job %s", job_id, exc_info=True)
 
         # Enqueue import after successful download
         if result.returncode == 0 and import_job_id:

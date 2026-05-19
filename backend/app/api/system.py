@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 
@@ -5,12 +6,8 @@ from fastapi import APIRouter
 
 from app.config import settings
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-@router.get("/system/health")
-async def health():
-    return {"status": "ok", "version": "0.1.0", "services": {"postgres": "up", "redis": "up", "meilisearch": "up"}}
 
 
 def _dir_size(path: str) -> int:
@@ -87,6 +84,7 @@ async def queue_stats():
             "failed_jobs": failed_reg.count + sched_failed_reg.count,
         }
     except Exception:
+        logger.warning("Failed to fetch queue stats", exc_info=True)
         return {"default_queue": -1, "scheduled_queue": -1, "failed_jobs": -1}
 
 

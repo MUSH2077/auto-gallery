@@ -5,10 +5,11 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import RequireAdmin
 from app.database import get_db
 from app.models.naming_template import NamingTemplate
 
-router = APIRouter()
+router = APIRouter(dependencies=[RequireAdmin])
 
 
 class NamingTemplateCreate(BaseModel):

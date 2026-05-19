@@ -99,7 +99,7 @@ async def run_import_job(import_job_id: str):
                 if src_work_id:
                     groups[src_work_id].append((jf, raw))
             except Exception:
-                pass
+                logger.warning("Failed to parse JSON %s", jf, exc_info=True)
 
         if not groups:
             async with async_session() as db:
@@ -127,6 +127,7 @@ async def run_import_job(import_job_id: str):
                 ws_data = provider.parse_work_source(first_raw)
                 sc_data = provider.parse_source_creator(first_raw)
             except Exception:
+                logger.warning("Failed to parse provider data for %s/%s", provider.source_name, src_work_id, exc_info=True)
                 continue
 
             # Directory name: use account from raw JSON (matches gallery-dl {user[account]})
@@ -150,7 +151,7 @@ async def run_import_job(import_job_id: str):
                         try:
                             jf.unlink()
                         except Exception:
-                            pass
+                            logger.warning("Failed to unlink JSON %s", jf, exc_info=True)
                     continue
 
             # Image files are in the SAME directory as the JSONs
@@ -167,7 +168,7 @@ async def run_import_job(import_job_id: str):
                     try:
                         jf.unlink()
                     except Exception:
-                        pass
+                        logger.warning("Failed to unlink JSON %s", jf, exc_info=True)
                 continue
 
             stats["works"] += 1
@@ -244,12 +245,13 @@ async def run_import_job(import_job_id: str):
                     db.add(asset)
                     await db.flush()
 
+                    # Generate per-page thumbnail: {stem}.thumbnail.webp (e.g. 8232932_p0.thumbnail.webp)
+                    from app.services.thumbnail import generate_thumbnail
+                    tp = generate_thumbnail(str(fp), lib_dir, name=f"{fp.stem}.thumbnail")
+                    if tp:
+                        asset.thumb_sm_path = str(
+                            Path(tp).relative_to(settings.library_root))
                     if idx == 0:
-                        from app.services.thumbnail import generate_thumbnail
-                        tp = generate_thumbnail(str(fp), lib_dir)
-                        if tp:
-                            asset.thumb_sm_path = str(
-                                Path(tp).relative_to(settings.library_root))
                         work.thumbnail_asset_id = str(asset.id)
 
                     db.add(AssetSource(
@@ -306,7 +308,7 @@ async def run_import_job(import_job_id: str):
                             "assets": assets_meta,
                         }, mf, indent=2, ensure_ascii=False, default=str)
                 except Exception:
-                    pass
+                    logger.warning("Failed to write metadata.json for %s/%s", provider.source_name, src_work_id, exc_info=True)
 
                 # Collect Meilisearch document for this work
                 tag_names = [t.normalized_name for t in (await db.execute(
@@ -333,7 +335,7 @@ async def run_import_job(import_job_id: str):
                         svc = SearchService(db)
                         await svc._batch_index_works(meili_docs)
                     except Exception:
-                        pass
+                        logger.warning("Batch Meilisearch index failed", exc_info=True)
                     meili_docs = []
                     batch_count = 0
 
@@ -342,14 +344,14 @@ async def run_import_job(import_job_id: str):
                 try:
                     jf.unlink()
                 except Exception:
-                    pass
+                    logger.warning("Failed to unlink processed JSON %s", jf, exc_info=True)
 
             # Remove empty directories (if no images left from other import runs)
             try:
                 if not any(p for p in work_dir.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS):
                     continue
             except Exception:
-                pass
+                logger.debug("Failed to check image files in %s", work_dir, exc_info=True)
 
         # Flush remaining Meilisearch batch
         if meili_docs:
@@ -359,7 +361,7 @@ async def run_import_job(import_job_id: str):
                     svc = SearchService(db)
                     await svc._batch_index_works(meili_docs)
                 except Exception:
-                    pass
+                    logger.warning("Failed to flush remaining Meilisearch batch", exc_info=True)
 
         # Mark import complete
         async with async_session() as db:
