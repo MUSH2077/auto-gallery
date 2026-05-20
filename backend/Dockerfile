@@ -10,7 +10,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
+ARG PIP_INDEX_URL
+RUN if [ -n "$PIP_INDEX_URL" ]; then \
+      pip install --no-cache-dir -i "$PIP_INDEX_URL" -r requirements.txt; \
+    else \
+      pip install --no-cache-dir -r requirements.txt; \
+    fi
 
 COPY . .
 

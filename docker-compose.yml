@@ -30,7 +30,7 @@ services:
     image: getmeili/meilisearch:v1.12
     environment:
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
-      MEILI_ENV: ${MEILI_ENV:-development}
+      MEILI_ENV: ${MEILI_ENV:-production}
       MEILI_HTTP_ADDR: ${MEILI_HTTP_ADDR:-meilisearch:7700}
     volumes:
       - ${HOST_MEILISEARCH:-./data/docker/meilisearch}:/meili_data
@@ -45,8 +45,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
     image: auto-gallery-backend:latest
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "${BACKEND_PORT:-8818}:8000"
     environment:
@@ -61,7 +63,7 @@ services:
       GALLERYDL_CONFIG_ROOT: /gallerydl-config
       APP_CONFIG_ROOT: /app-config
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3250,http://localhost:3000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:13000}
     volumes:
       - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
       - ${HOST_LIBRARY:-./data/library}:/library
@@ -143,11 +145,12 @@ services:
       context: ./admin-web
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_ADMIN_KEY: ${ADMIN_PASSWORD:-changeme}
+        NPM_REGISTRY: ${NPM_REGISTRY:-}
     ports:
       - "${ADMIN_WEB_PORT:-3250}:3000"
     environment:
       HOSTNAME: "0.0.0.0"
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
     depends_on:
       - backend
     restart: unless-stopped
