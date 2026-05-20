@@ -129,6 +129,25 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
     if opener is None:
         opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl_ctx))
 
+    # ── Proxy reachability check ──
+    proxy_reachable = None
+    proxy_reachable_error = ""
+    if enabled:
+        proxy_url = config.get("http_proxy") or config.get("https_proxy", "")
+        if proxy_url:
+            import socket, re
+            m = re.match(r'https?://([^:/]+):?(\d+)?', proxy_url)
+            if m:
+                host = m.group(1)
+                port = int(m.group(2)) if m.group(2) else 7890
+                try:
+                    sock = socket.create_connection((host, port), timeout=5)
+                    sock.close()
+                    proxy_reachable = True
+                except Exception as e:
+                    proxy_reachable = False
+                    proxy_reachable_error = f"Cannot connect to {host}:{port} — {e}"
+
     direct_opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl_ctx))
 
     targets = [
@@ -200,6 +219,8 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
 
     return {
         "proxy_enabled": enabled,
+        "proxy_reachable": proxy_reachable,
+        "proxy_reachable_error": proxy_reachable_error,
         "proxy_config": {
             "http": config.get("http_proxy", "not set"),
             "https": config.get("https_proxy", "not set"),

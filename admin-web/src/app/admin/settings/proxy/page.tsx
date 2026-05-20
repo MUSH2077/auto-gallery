@@ -6,10 +6,22 @@ import { PageHeader, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
 import Link from "next/link";
 
-function TestResults({ results, proxyEnabled }: { results: any[] | null; proxyEnabled: boolean }) {
-  if (!results) return null;
+function TestResults({ data, proxyEnabled }: { data: any | null; proxyEnabled: boolean }) {
+  if (!data) return null;
+  const { results, proxy_reachable, proxy_reachable_error } = data;
   return (
     <div className="mt-6">
+      {/* Proxy reachability banner */}
+      {proxy_reachable !== null && proxy_reachable !== undefined && (
+        <div className={`p-3 rounded text-sm font-medium mb-3 ${proxy_reachable ? "bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400" : "bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400"}`}>
+          {proxy_reachable ? "Proxy is reachable" : `Proxy unreachable — ${proxy_reachable_error}`}
+        </div>
+      )}
+      {proxy_reachable === false && (
+        <div className="p-3 rounded text-sm mb-3 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 text-yellow-700 dark:text-yellow-400">
+          Check: Is the proxy port open? Is the proxy container running? Is the URL correct (http://host:port)?
+        </div>
+      )}
       <h4 className="font-medium text-sm mb-3 dark:text-white">Connectivity Test Results</h4>
       <div className="bg-white dark:bg-slate-800 rounded-lg shadow overflow-x-auto">
         <table className="w-full text-sm">
@@ -207,7 +219,7 @@ export default function ProxySettingsPage() {
             </div>
             {testProxy.error && <p className="text-red-600 text-xs mt-2">{(testProxy.error as Error).message}</p>}
             {testProxy.data && (
-              <TestResults results={testProxy.data.results} proxyEnabled={testProxy.data.proxy_enabled} />
+              <TestResults data={testProxy.data} proxyEnabled={testProxy.data.proxy_enabled} />
             )}
           </div>
 
