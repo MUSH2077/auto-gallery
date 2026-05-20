@@ -16,19 +16,36 @@ REQUEST_TIMEOUT = 15
 def _get_opener():
     """Get a urllib opener with proxy config if enabled."""
     try:
-        import asyncio
         from app.services.proxy import _load_proxy_config, apply_proxy_to_urllib
+        import asyncio, threading
 
-        async def _load():
-            return await _load_proxy_config()
+        result = {}
+        err = None
 
-        config = asyncio.get_event_loop().run_until_complete(_load())
+        def _run():
+            nonlocal result, err
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                result = loop.run_until_complete(_load_proxy_config())
+                loop.close()
+            except Exception as e:
+                err = e
+
+        t = threading.Thread(target=_run)
+        t.start()
+        t.join(timeout=10)
+
+        if err:
+            raise err
+
+        config = result
         opener = apply_proxy_to_urllib(config)
         if opener:
             logger.info("Danbooru API using proxy: %s", config.get("http_proxy", "not set"))
             return opener
         else:
-            logger.info("Danbooru API direct (no proxy configured)")
+            logger.info("Danbooru API direct (proxy disabled)")
     except Exception:
         logger.warning("Failed to load proxy config for Danbooru, using direct", exc_info=True)
     return urllib.request.build_opener()
