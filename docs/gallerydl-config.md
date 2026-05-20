@@ -29,7 +29,7 @@ Auth priority: refresh-token > cookies > unauthenticated (rate-limited).
 |-------|----------|------------|--------|-------------|
 | `include` | Include | `extractor.pixiv.include` | `artworks`, `favorites`, `bookmarks` | What to download from a user URL. `artworks` downloads public illustrations and manga. `favorites`/`bookmarks` require authentication. |
 | `tags` | Tag Language | `extractor.pixiv.tags` | `japanese`, `english`, `translated` | Language version of tags to include in metadata. |
-| `ugoira` | Ugoira Format | `extractor.pixiv.ugoira` | `zip`, `gif`, `webm`, `mp4`, `false` | How to handle animated ugoira. `zip`: keep original ZIP of frames. `gif`/`webm`/`mp4`: convert to animation via ffmpeg. `false`: skip ugoira entirely. |
+| `ugoira` | Ugoira Format | `extractor.pixiv.ugoira` | `zip`, `gif` | How to handle animated ugoira. `zip`: keep original ZIP of frames. `gif`: convert to GIF animation via ffmpeg. |
 | `max_posts` | Max Posts | `extractor.pixiv.max-posts` | Integer or empty | Maximum number of artworks to download per job. Empty = unlimited. |
 
 ### File Organization

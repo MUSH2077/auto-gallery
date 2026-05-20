@@ -177,6 +177,7 @@ export interface DownloadDefaults {
 export interface PixivSourceConfig {
   refresh_token?: string;
   cookies_path?: string;
+  cookie_content?: string;
   filename?: string;
   directory?: string;
   include?: string;
@@ -188,6 +189,7 @@ export interface PixivSourceConfig {
 
 export interface TwitterSourceConfig {
   cookies_path?: string;
+  cookie_content?: string;
   filename?: string;
   directory?: string;
   include?: string;
@@ -202,6 +204,7 @@ export interface TwitterSourceConfig {
 
 export interface IwaraSourceConfig {
   cookies_path?: string;
+  cookie_content?: string;
   username?: string;
   password?: string;
   filename?: string;

@@ -290,6 +290,7 @@ async def reindex_search(db: AsyncSession = Depends(get_db)):
 class PixivSourceConfig(BaseModel):
     refresh_token: str | None = None
     cookies_path: str | None = None
+    cookie_content: str | None = None
     filename: str | None = None
     directory: str | None = None
     include: str | None = "artworks"
@@ -300,6 +301,7 @@ class PixivSourceConfig(BaseModel):
 
 class TwitterSourceConfig(BaseModel):
     cookies_path: str | None = None
+    cookie_content: str | None = None
     filename: str | None = None
     directory: str | None = None
     include: str | None = "timeline"
@@ -313,6 +315,7 @@ class TwitterSourceConfig(BaseModel):
 
 class IwaraSourceConfig(BaseModel):
     cookies_path: str | None = None
+    cookie_content: str | None = None
     username: str | None = None
     password: str | None = None
     filename: str | None = None
@@ -381,7 +384,7 @@ def _read_source_config(extractor_config: dict, schema_map: dict) -> dict:
         if api_key == "directory" and isinstance(val, list):
             val = "/".join(val)
         if api_key == "ugoira" and isinstance(val, bool):
-            val = "zip" if val else "false"
+            val = "zip"
         if val is not None:
             result[api_key] = val
     return result
@@ -393,9 +396,7 @@ def _write_source_config(extractor_config: dict, data: BaseModel, schema_map: di
     for api_key, dl_key in schema_map.items():
         val = getattr(data, api_key, None)
         if val is not None:
-            if api_key == "ugoira" and val == "false":
-                extractor_config[dl_key] = False
-            elif dl_key in dir_keys and isinstance(val, str) and "/" in val:
+            if dl_key in dir_keys and isinstance(val, str) and "/" in val:
                 extractor_config[dl_key] = val.split("/")
             elif isinstance(val, str) and val == "":
                 # Remove empty strings — they break gallery-dl defaults
@@ -434,6 +435,25 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
 
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
     extractors = config.setdefault("extractor", {})
+
+    # Write cookie content to files (auto-sets cookies_path if not provided)
+    cookies_dir = os.path.join(os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"), "cookies")
+    for source_name, source_data, source_map in [
+        ("pixiv", data.pixiv, PIXIV_CONFIG_MAP),
+        ("twitter", data.twitter, TWITTER_CONFIG_MAP),
+        ("iwara", data.iwara, IWARA_CONFIG_MAP),
+    ]:
+        if source_data is None:
+            continue
+        cc = getattr(source_data, "cookie_content", None)
+        if cc and cc.strip():
+            os.makedirs(cookies_dir, exist_ok=True)
+            cookie_path = os.path.join(cookies_dir, f"{source_name}.txt")
+            with open(cookie_path, "w") as f:
+                f.write(cc.strip() + "\n")
+            # Auto-set cookies_path if not explicitly provided
+            if not getattr(source_data, "cookies_path", None):
+                source_data.cookies_path = f"/gallerydl-config/cookies/{source_name}.txt"
 
     if data.pixiv is not None:
         pixiv = extractors.setdefault("pixiv", {})
