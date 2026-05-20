@@ -25,9 +25,12 @@ def _get_opener():
         config = asyncio.get_event_loop().run_until_complete(_load())
         opener = apply_proxy_to_urllib(config)
         if opener:
+            logger.info("Danbooru API using proxy: %s", config.get("http_proxy", "not set"))
             return opener
+        else:
+            logger.info("Danbooru API direct (no proxy configured)")
     except Exception:
-        pass
+        logger.warning("Failed to load proxy config for Danbooru, using direct", exc_info=True)
     return urllib.request.build_opener()
 
 
