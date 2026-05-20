@@ -87,7 +87,7 @@ const zh: Record<string, string> = {
   "proxy.scope.1": "gallery-dl 子进程（从 Pixiv、Twitter、Iwara 下载）",
   "proxy.scope.2": "Danbooru API 参考查询（画师搜索、URL 导入）",
   "proxy.scope.3": "后端发起的其他外部 HTTP 调用",
-  "proxy.known_config": "已知配置：如果在 WSL2 上使用 Clash/V2Ray，将 HTTP 和 HTTPS 代理都设为 Windows 宿主机 IP 加代理端口。",
+  "proxy.known_config": "已知配置：如果代理做 HTTPS 拦截 (MITM)，请关闭下方的 SSL Verification。代理地址格式：http://<代理主机IP>:<端口>，如 http://192.0.2.10:7890。",
   "proxy.save": "保存设置",
   // Auth status
   "auth.title": "认证与 Cookie 状态",
@@ -287,7 +287,7 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "proxy.scope.1": "gallery-dl subprocess (downloads from Pixiv, Twitter, Iwara)",
     "proxy.scope.2": "Danbooru API reference queries (artist search, URL import)",
     "proxy.scope.3": "Other external HTTP calls made by the backend",
-    "proxy.known_config": "Known configuration: If using Clash/V2Ray on WSL2, set both HTTP and HTTPS proxy to your Windows host IP with proxy port.",
+    "proxy.known_config": "Known configuration: If your proxy performs HTTPS interception (MITM), disable SSL Verification below. Proxy URL format: http://<proxy-host>:<port> (e.g. http://192.0.2.10:7890).",
     "proxy.save": "Save Settings",
     "auth.title": "Auth & Cookie Status",
     "auth.desc": "Monitor authentication health for all subscription sources.",

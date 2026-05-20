@@ -100,38 +100,51 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
     import urllib.request
     import urllib.error
     import ssl
+    import time
 
     config = await _get_setting(db, "proxy", DEFAULT_PROXY)
     enabled = config.get("enabled", False)
+    ssl_verify = config.get("ssl_verify", True)
+
+    # Build SSL context — skip verification if user disabled it (MITM proxy)
+    ssl_ctx = ssl.create_default_context()
+    if not ssl_verify:
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
 
     # Build proxy opener
     opener = None
     if enabled:
         proxies = {}
-        if config.get("http_proxy"):
-            proxies["http"] = config["http_proxy"]
-        if config.get("https_proxy"):
-            proxies["https"] = config["https_proxy"]
+        http_proxy = config.get("http_proxy", "")
+        https_proxy = config.get("https_proxy", "")
+        if http_proxy:
+            proxies["http"] = http_proxy
+        if https_proxy:
+            proxies["https"] = https_proxy
         if proxies:
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
+            proxy_handler = urllib.request.ProxyHandler(proxies)
+            opener = urllib.request.build_opener(proxy_handler, urllib.request.HTTPSHandler(context=ssl_ctx))
 
     if opener is None:
-        opener = urllib.request.build_opener()
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl_ctx))
+
+    direct_opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl_ctx))
 
     targets = [
-        {"name": "Pixiv", "url": "https://www.pixiv.net"},
-        {"name": "Pixiv API", "url": "https://app-api.pixiv.net"},
-        {"name": "Danbooru", "url": "https://danbooru.donmai.us"},
-        {"name": "Danbooru API", "url": "https://danbooru.donmai.us/artists.json?limit=1"},
-        {"name": "Iwara", "url": "https://www.iwara.tv"},
-        {"name": "Iwara API", "url": "https://api.iwara.tv"},
-        {"name": "Twitter/X", "url": "https://x.com"},
-        {"name": "GitHub", "url": "https://github.com"},
-        {"name": "Google", "url": "https://www.google.com"},
+        {"name": "Pixiv", "url": "https://www.pixiv.net", "tcp_only": False},
+        {"name": "Pixiv API", "url": "https://app-api.pixiv.net", "tcp_only": False},
+        {"name": "Danbooru", "url": "https://danbooru.donmai.us", "tcp_only": False},
+        {"name": "Danbooru API", "url": "https://danbooru.donmai.us/artists.json?limit=1", "tcp_only": False},
+        {"name": "Iwara", "url": "https://www.iwara.tv", "tcp_only": False},
+        {"name": "Iwara API", "url": "https://api.iwara.tv", "tcp_only": False},
+        {"name": "Twitter/X", "url": "https://x.com", "tcp_only": False},
+        {"name": "GitHub", "url": "https://github.com", "tcp_only": False},
+        {"name": "Google", "url": "https://www.google.com", "tcp_only": False},
     ]
 
-    direct_opener = urllib.request.build_opener()
-    import time
+    TEST_TIMEOUT = 5  # seconds per test — 9 targets × 5s = 45s max
+
     results = []
     for t in targets:
         name = t["name"]
@@ -144,12 +157,14 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "auto-gallery/0.1"})
             start = time.monotonic()
-            with direct_opener.open(req, timeout=10) as resp:
+            with direct_opener.open(req, timeout=TEST_TIMEOUT) as resp:
                 direct_ok = resp.status < 500
             direct_ms = int((time.monotonic() - start) * 1000)
         except urllib.error.HTTPError as e:
             direct_error = f"HTTP {e.code}"
             direct_ok = e.code < 500
+        except urllib.error.URLError as e:
+            direct_error = str(e.reason)[:120] if e.reason else str(e)[:120]
         except Exception as e:
             direct_error = str(e)[:120]
 
@@ -157,16 +172,18 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
         proxy_ok = False
         proxy_ms = 0
         proxy_error = ""
-        if enabled and opener is not direct_opener:
+        if enabled:
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "auto-gallery/0.1"})
                 start = time.monotonic()
-                with opener.open(req, timeout=10) as resp:
+                with opener.open(req, timeout=TEST_TIMEOUT) as resp:
                     proxy_ok = resp.status < 500
                 proxy_ms = int((time.monotonic() - start) * 1000)
             except urllib.error.HTTPError as e:
                 proxy_error = f"HTTP {e.code}"
                 proxy_ok = e.code < 500
+            except urllib.error.URLError as e:
+                proxy_error = str(e.reason)[:120] if e.reason else str(e)[:120]
             except Exception as e:
                 proxy_error = str(e)[:120]
 
