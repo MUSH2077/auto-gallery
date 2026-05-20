@@ -21,6 +21,8 @@ async def _load_proxy_config() -> dict:
             )
             row = result.scalar_one_or_none()
             if row and row.value:
+                logger.debug("Proxy config loaded: enabled=%s http=%s",
+                           row.value.get("enabled"), row.value.get("http_proxy", "not set"))
                 return row.value
     except Exception as e:
         logger.warning("Failed to load proxy config: %s", e)

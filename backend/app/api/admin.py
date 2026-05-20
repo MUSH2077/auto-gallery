@@ -1,7 +1,11 @@
+import logging
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 from app.auth import RequireAdmin
 from app.database import get_db
@@ -152,13 +156,18 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
 
     targets = [
         {"name": "Pixiv", "url": "https://www.pixiv.net"},
+        {"name": "Pixiv API", "url": "https://app-api.pixiv.net"},
         {"name": "Danbooru", "url": "https://danbooru.donmai.us"},
-        {"name": "Twitter/X", "url": "https://x.com"},
+        {"name": "Danbooru API", "url": "https://danbooru.donmai.us/artists.json?limit=1"},
         {"name": "Iwara", "url": "https://www.iwara.tv"},
+        {"name": "Iwara API", "url": "https://api.iwara.tv"},
+        {"name": "Twitter/X", "url": "https://x.com"},
         {"name": "GitHub", "url": "https://github.com"},
+        {"name": "Google", "url": "https://www.google.com"},
     ]
 
-    TEST_TIMEOUT = 3  # short timeout — all tests run concurrently
+    import concurrent.futures
+    TEST_TIMEOUT = 3  # per-test timeout, all 9 run concurrently with 9 workers
 
     def _test_one(t):
         name, url = t["name"], t["url"]
@@ -199,8 +208,14 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
                 "proxy_error": p_err if enabled else ""}
 
     import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+    logger.info("Proxy test starting: enabled=%s proxy=%s targets=%d", enabled,
+                config.get("http_proxy", "not set"), len(targets))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=9) as executor:
         results = list(executor.map(_test_one, targets))
+    ok = sum(1 for r in results if r["proxy_ok"])
+    fail = sum(1 for r in results if r["proxy_ok"] is False)
+    logger.info("Proxy test complete: %d OK, %d FAIL, %d total (reachable=%s)",
+                ok, fail, len(results), proxy_reachable)
 
     return {
         "proxy_enabled": enabled,
