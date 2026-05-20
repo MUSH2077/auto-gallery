@@ -81,6 +81,7 @@ services:
 
   worker:
     image: auto-gallery-backend:latest
+    pull_policy: never
     command: rq worker --url redis://:${REDIS_PASSWORD}@redis:6379/0
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
@@ -113,6 +114,7 @@ services:
 
   scheduler:
     image: auto-gallery-backend:latest
+    pull_policy: never
     command: sh -c "python seed_sync.py && rq worker --with-scheduler --url redis://:${REDIS_PASSWORD}@redis:6379/0 scheduled"
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
