@@ -462,6 +462,8 @@ export const api = {
 
   testProxy: () => request<{
     proxy_enabled: boolean;
+    proxy_reachable: boolean | null;
+    proxy_reachable_error: string;
     proxy_config: { http: string; https: string };
     results: { name: string; url: string; direct_ok: boolean; direct_ms: number; direct_error: string; proxy_ok: boolean | null; proxy_ms: number | null; proxy_error: string }[];
   }>("/api/v1/admin/proxy/test", { method: "POST" }),
