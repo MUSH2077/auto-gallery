@@ -77,4 +77,4 @@ These may be reconsidered later but are NOT in current scope:
 - All Python packages pinned with exact versions in `requirements.txt`
 - gallery-dl: pin known-good version, require smoke test before bump
 - Base Docker image: pin minor version (`python:3.12.X-slim`)
-- Meilisearch, PostgreSQL, Redis: pin major version in `docker-compose.yml`
+- Meilisearch, PostgreSQL, Redis: pin major version in `docker-compose.yaml`

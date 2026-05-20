@@ -38,7 +38,7 @@ ADMIN_PASSWORD=<generate>
 For local development, use the example dev paths already in `.env.example`. For NAS deployment, set the host paths:
 
 ```bash
-# NAS host paths (in .env, referenced by docker-compose.yml)
+# NAS host paths (in .env, referenced by docker-compose.yaml)
 HOST_DOWNLOADS=/volume1/auto-gallery/downloads
 HOST_LIBRARY=/volume1/auto-gallery/library
 HOST_CONFIG_APP=/volume1/auto-gallery/config/app

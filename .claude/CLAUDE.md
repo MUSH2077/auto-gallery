@@ -535,8 +535,13 @@ When asked to implement, produce:
 - migrations
 - tests where appropriate
 - README update
-- docker-compose update if needed
+- docker-compose update if needed (ALWAYS use `.yaml` extension, NEVER `.yml`)
 - verification steps
+
+## File Naming Conventions
+
+- Docker Compose files: ALWAYS use `.yaml` extension (`docker-compose.yaml`), never `.yml`
+- All documentation references to the compose file must use `docker-compose.yaml`
 
 ## Auto-Update Rules
 

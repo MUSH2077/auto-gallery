@@ -138,7 +138,7 @@ Worker 取走 import_job
 | `GALLERYDL_CONFIG_ROOT` | `/gallerydl-config` | gallery-dl 配置、cookie、临时任务配置 |
 | `APP_CONFIG_ROOT` | `/app-config` | 应用运行时配置 |
 
-NAS 主机路径仅在 `docker-compose.yml` 中映射。
+NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 
 ## API 路由分组
 
