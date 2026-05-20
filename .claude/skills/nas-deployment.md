@@ -12,7 +12,7 @@ Guidance for deploying and configuring auto-gallery on a NAS host. Read `.claude
 
 ```
 /volume1/auto-gallery/
-  docker-compose.yml
+  docker-compose.yaml
   .env
   downloads/           # mapped to DOWNLOAD_ROOT
   library/             # mapped to LIBRARY_ROOT
@@ -53,7 +53,7 @@ GALLERYDL_CONFIG_ROOT=/gallerydl-config
 APP_CONFIG_ROOT=/app-config
 ```
 
-## docker-compose.yml structure
+## docker-compose.yaml structure
 
 Services communicate on an internal `auto-gallery` network. Only `backend` (port 8000) and `admin-web` (port 3000) expose ports on the NAS LAN. `postgres`, `redis`, `meilisearch` are internal only.
 
@@ -79,7 +79,7 @@ Services communicate on an internal `auto-gallery` network. Only `backend` (port
 
 ## Development vs NAS
 
-For local development, the same `docker-compose.yml` works with different `.env` paths:
+For local development, the same `docker-compose.yaml` works with different `.env` paths:
 ```bash
 DOWNLOAD_ROOT=./data/downloads
 LIBRARY_ROOT=./data/library

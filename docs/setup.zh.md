@@ -38,7 +38,7 @@ ADMIN_PASSWORD=<生成>
 本地开发使用 `.env.example` 中的默认开发路径即可。NAS 部署需设置主机路径：
 
 ```bash
-# NAS 主机路径（在 .env 中，由 docker-compose.yml 引用）
+# NAS 主机路径（在 .env 中，由 docker-compose.yaml 引用）
 HOST_DOWNLOADS=/volume1/auto-gallery/downloads
 HOST_LIBRARY=/volume1/auto-gallery/library
 HOST_CONFIG_APP=/volume1/auto-gallery/config/app

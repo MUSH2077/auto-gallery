@@ -138,7 +138,7 @@ Application code uses only these env-var-driven paths:
 | `GALLERYDL_CONFIG_ROOT` | `/gallerydl-config` | gallery-dl configs, cookies, temp job configs |
 | `APP_CONFIG_ROOT` | `/app-config` | Application runtime config |
 
-NAS host paths are mapped in `docker-compose.yml` only.
+NAS host paths are mapped in `docker-compose.yaml` only.
 
 ## API Route Groups
 

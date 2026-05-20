@@ -82,7 +82,7 @@ For detailed setup instructions, see [docs/setup.md](docs/setup.md).
 - **Multi-source subscriptions** — subscribe to a creator, choose which sources to sync
 - **Deduplication defaults to OFF** — calculate hashes, create candidates, admin decides
 - **gallery-dl in worker only** — API never shells out; safe subprocess execution
-- **Container paths only in code** — NAS host paths only in docker-compose.yml
+- **Container paths only in code** — NAS host paths only in docker-compose.yaml
 
 ## Development
 

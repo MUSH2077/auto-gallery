@@ -82,7 +82,7 @@ curl http://localhost:8818/api/v1/system/health
 - **多来源订阅** — 订阅创作者后自选同步哪些来源
 - **去重默认关闭** — 计算哈希，生成候选，管理员决定
 - **gallery-dl 仅 worker 执行** — API 绝不能直接调用；安全子进程执行
-- **代码中只用容器路径** — NAS 主机路径仅在 docker-compose.yml 中
+- **代码中只用容器路径** — NAS 主机路径仅在 docker-compose.yaml 中
 
 ## 开发
 

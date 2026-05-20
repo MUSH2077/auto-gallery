@@ -4,7 +4,7 @@
 
 ```
 auto-gallery/
-  docker-compose.yml
+  docker-compose.yaml
   .env.example
   README.md
   docs/
