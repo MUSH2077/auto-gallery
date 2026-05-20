@@ -95,14 +95,20 @@ async def run_download_job(job_id: str):
 
         # Apply proxy env vars for gallery-dl subprocess
         env = os.environ.copy()
+        proxy_enabled = False
         try:
             from app.services.proxy import _load_proxy_config, get_proxy_env
             proxy_config = await _load_proxy_config()
+            proxy_enabled = proxy_config.get("enabled", False)
             env.update(get_proxy_env(proxy_config))
         except Exception:
             logger.warning("Failed to apply proxy env for download job %s", job_id, exc_info=True)
 
+        logger.info("Running gallery-dl: %s (timeout=%ds, proxy=%s)", " ".join(cmd), dl_timeout, proxy_enabled)
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=dl_timeout, env=env)
+        logger.info("gallery-dl exit=%d, stdout=%d bytes, stderr=%d bytes", result.returncode, len(result.stdout), len(result.stderr))
+        if result.returncode != 0:
+            logger.warning("gallery-dl stderr (last 500): %s", result.stderr[-500:] if result.stderr else "(none)")
 
         async with async_session() as db2:
             repo2 = DownloadJobRepository(db2)

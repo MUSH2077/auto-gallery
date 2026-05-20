@@ -463,7 +463,7 @@ export const api = {
   testProxy: () => request<{
     proxy_enabled: boolean;
     proxy_config: { http: string; https: string };
-    results: { name: string; url: string; direct_ok: boolean; direct_ms: number; proxy_ok: boolean | null; proxy_ms: number | null }[];
+    results: { name: string; url: string; direct_ok: boolean; direct_ms: number; direct_error: string; proxy_ok: boolean | null; proxy_ms: number | null; proxy_error: string }[];
   }>("/api/v1/admin/proxy/test", { method: "POST" }),
 
   clearEntity: (entity: string) =>

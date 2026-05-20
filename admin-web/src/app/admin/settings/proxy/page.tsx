@@ -11,13 +11,15 @@ function TestResults({ results, proxyEnabled }: { results: any[] | null; proxyEn
   return (
     <div className="mt-6">
       <h4 className="font-medium text-sm mb-3 dark:text-white">Connectivity Test Results</h4>
-      <div className="bg-white dark:bg-slate-800 rounded-lg shadow overflow-hidden">
+      <div className="bg-white dark:bg-slate-800 rounded-lg shadow overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b dark:border-slate-700 bg-gray-50 dark:bg-slate-700/50">
               <th className="text-left px-4 py-2 font-medium">Site</th>
-              <th className="text-center px-4 py-2 font-medium w-24">Direct</th>
-              {proxyEnabled && <th className="text-center px-4 py-2 font-medium w-24">Proxy</th>}
+              <th className="text-center px-4 py-2 font-medium w-28">Direct</th>
+              <th className="text-left px-4 py-2 font-medium w-48">Direct Error</th>
+              {proxyEnabled && <th className="text-center px-4 py-2 font-medium w-28">Proxy</th>}
+              {proxyEnabled && <th className="text-left px-4 py-2 font-medium w-48">Proxy Error</th>}
             </tr>
           </thead>
           <tbody>
@@ -29,16 +31,28 @@ function TestResults({ results, proxyEnabled }: { results: any[] | null; proxyEn
                 </td>
                 <td className="text-center px-4 py-3">
                   {r.direct_ok
-                    ? <span className="text-green-600 dark:text-green-400 text-xs">{r.direct_ms}ms OK</span>
-                    : <span className="text-red-500 text-xs">FAIL</span>}
+                    ? <span className="text-green-600 dark:text-green-400 text-xs font-medium">{r.direct_ms}ms OK</span>
+                    : <span className="text-red-500 text-xs font-medium">FAIL</span>}
+                </td>
+                <td className="px-3 py-3">
+                  {r.direct_error
+                    ? <span className="text-xs text-red-500 dark:text-red-400 font-mono" title={r.direct_error}>{r.direct_error.slice(0, 60)}</span>
+                    : r.direct_ok ? <span className="text-gray-400 text-xs">—</span> : <span className="text-gray-400 text-xs">Unknown error</span>}
                 </td>
                 {proxyEnabled && (
                   <td className="text-center px-4 py-3">
                     {r.proxy_ok === null
                       ? <span className="text-gray-400 text-xs">—</span>
                       : r.proxy_ok
-                        ? <span className="text-green-600 dark:text-green-400 text-xs">{r.proxy_ms}ms OK</span>
-                        : <span className="text-red-500 text-xs">FAIL</span>}
+                        ? <span className="text-green-600 dark:text-green-400 text-xs font-medium">{r.proxy_ms}ms OK</span>
+                        : <span className="text-red-500 text-xs font-medium">FAIL</span>}
+                  </td>
+                )}
+                {proxyEnabled && (
+                  <td className="px-3 py-3">
+                    {r.proxy_error
+                      ? <span className="text-xs text-red-500 dark:text-red-400 font-mono" title={r.proxy_error}>{r.proxy_error.slice(0, 60)}</span>
+                      : r.proxy_ok ? <span className="text-gray-400 text-xs">—</span> : <span className="text-gray-400 text-xs">Unknown error</span>}
                   </td>
                 )}
               </tr>

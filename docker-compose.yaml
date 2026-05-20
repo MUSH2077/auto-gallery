@@ -47,8 +47,6 @@ services:
       dockerfile: Dockerfile
       args:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-}
-        http_proxy: ${http_proxy:-}
-        https_proxy: ${https_proxy:-}
     image: auto-gallery-backend:latest
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     ports:
