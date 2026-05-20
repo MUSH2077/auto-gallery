@@ -130,22 +130,25 @@ export default function GalleryDLConfigPage() {
   // Seed helpers
   const initPixiv = (d: any) => ({
     refresh_token: str(d?.refresh_token), cookies_path: str(d?.cookies_path),
+    cookie_content: str(d?.cookie_content),
     filename: str(d?.filename), directory: str(d?.directory),
     include: str(d?.include, "artworks"), tags: str(d?.tags, "japanese"),
     ugoira: str(d?.ugoira, "zip"), sleep_request: d?.sleep_request,
     max_posts: d?.max_posts,
   });
   const initTwitter = (d: any) => ({
-    cookies_path: str(d?.cookies_path), filename: str(d?.filename),
-    directory: str(d?.directory), include: str(d?.include, "timeline"),
+    cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
+    filename: str(d?.filename), directory: str(d?.directory),
+    include: str(d?.include, "timeline"),
     retweets: d?.retweets ?? false, replies: d?.replies ?? false,
     cards: d?.cards ?? true, videos: d?.videos ?? true,
     text_tweets: d?.text_tweets ?? false, quoted: d?.quoted ?? false,
     max_posts: d?.max_posts,
   });
   const initIwara = (d: any) => ({
-    cookies_path: str(d?.cookies_path), username: str(d?.username),
-    password: str(d?.password), filename: str(d?.filename),
+    cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
+    username: str(d?.username), password: str(d?.password),
+    filename: str(d?.filename),
     directory: str(d?.directory), format: str(d?.format),
   });
 
@@ -219,6 +222,13 @@ function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: P
         <TextField label="Refresh Token" value={str(data.refresh_token)} onChange={(v) => set("refresh_token", v || undefined)} type="password" />
         <TextField label="Cookies Path" value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/pixiv.txt" />
       </div>
+      <div>
+        <label className="block text-sm font-medium mb-1">Cookie Content (paste Netscape-format cookies)</label>
+        <textarea value={str(data.cookie_content)} onChange={(e) => set("cookie_content", e.target.value || undefined)}
+          rows={3} className="w-full border rounded px-3 py-2 text-xs font-mono dark:bg-slate-700 dark:text-white"
+          placeholder="Paste cookie text here. Auto-saved to /gallerydl-config/cookies/pixiv.txt" />
+        <p className="text-xs text-gray-400 mt-1">Paste raw cookie content instead of specifying a file path. Overrides Cookies Path if set.</p>
+      </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.content")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <SelectField label="Include" value={str(data.include, "artworks")} onChange={(v) => set("include", v)}
@@ -229,10 +239,7 @@ function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: P
         <SelectField label="Ugoira Format" value={str(data.ugoira, "zip")} onChange={(v) => set("ugoira", v)}
           options={[
             { value: "zip", label: "ZIP (original frames)" },
-            { value: "gif", label: "GIF (animated)" },
-            { value: "webm", label: "WebM (video)" },
-            { value: "mp4", label: "MP4 (video)" },
-            { value: "false", label: "Skip ugoira" },
+            { value: "gif", label: "GIF (animated, ffmpeg)" },
           ]} />
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
@@ -258,6 +265,13 @@ function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.auth")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label="Cookies Path" value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/twitter.txt" />
+      </div>
+      <div>
+        <label className="block text-sm font-medium mb-1">Cookie Content (paste Netscape-format cookies)</label>
+        <textarea value={str(data.cookie_content)} onChange={(e) => set("cookie_content", e.target.value || undefined)}
+          rows={3} className="w-full border rounded px-3 py-2 text-xs font-mono dark:bg-slate-700 dark:text-white"
+          placeholder="Paste cookie text here. Auto-saved to /gallerydl-config/cookies/twitter.txt" />
+        <p className="text-xs text-gray-400 mt-1">Paste raw cookie content instead of specifying a file path.</p>
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.content")}</h4>
       <div className="grid grid-cols-2 gap-4">
@@ -298,6 +312,13 @@ function IwaraTab({ data, onChange }: { data: IwaraSourceConfig; onChange: (d: I
         <TextField label="Username" value={str(data.username)} onChange={(v) => set("username", v || undefined)} placeholder="Iwara account username/email" />
         <TextField label="Password" value={str(data.password)} onChange={(v) => set("password", v || undefined)} type="password" placeholder="Iwara account password" />
         <TextField label="Cookies Path" value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/iwara.txt" />
+      </div>
+      <div>
+        <label className="block text-sm font-medium mb-1">Cookie Content (paste Netscape-format cookies)</label>
+        <textarea value={str(data.cookie_content)} onChange={(e) => set("cookie_content", e.target.value || undefined)}
+          rows={3} className="w-full border rounded px-3 py-2 text-xs font-mono dark:bg-slate-700 dark:text-white"
+          placeholder="Paste cookie text here. Auto-saved to /gallerydl-config/cookies/iwara.txt" />
+        <p className="text-xs text-gray-400 mt-1">Paste raw cookie content instead of specifying a file path.</p>
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.video_quality")}</h4>
       <TextField label="Format" value={str(data.format)} onChange={(v) => set("format", v || undefined)} placeholder="Source, 540, 360" />

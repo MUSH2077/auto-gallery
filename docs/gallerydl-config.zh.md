@@ -29,7 +29,7 @@ auto-gallery 通过管理后台 **设置 → gallery-dl 配置** 管理各站点
 |------|--------|--------|--------|------|
 | `include` | Include | `extractor.pixiv.include` | `artworks`、`favorites`、`bookmarks` | 从用户 URL 下载的内容类型。`artworks` 下载公开插画和漫画。`favorites`/`bookmarks` 需要认证。 |
 | `tags` | Tag Language | `extractor.pixiv.tags` | `japanese`、`english`、`translated` | 元数据中包含的标签语言版本。 |
-| `ugoira` | Ugoira Format | `extractor.pixiv.ugoira` | `zip`、`gif`、`webm`、`mp4`、`false` | 动画 ugoira 处理方式。`zip`：保留原始帧 ZIP 包。`gif`/`webm`/`mp4`：通过 ffmpeg 转为动画。`false`：跳过 ugoira。 |
+| `ugoira` | Ugoira Format | `extractor.pixiv.ugoira` | `zip`、`gif` | 动画 ugoira 处理方式。`zip`：保留原始帧 ZIP 包。`gif`：通过 ffmpeg 转为 GIF 动图。 |
 | `max_posts` | Max Posts | `extractor.pixiv.max-posts` | 整数或留空 | 每次任务最大下载作品数。留空 = 不限制。 |
 
 ### 文件组织
