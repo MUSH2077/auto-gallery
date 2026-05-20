@@ -151,71 +151,56 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
     direct_opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl_ctx))
 
     targets = [
-        {"name": "Pixiv", "url": "https://www.pixiv.net", "tcp_only": False},
-        {"name": "Pixiv API", "url": "https://app-api.pixiv.net", "tcp_only": False},
-        {"name": "Danbooru", "url": "https://danbooru.donmai.us", "tcp_only": False},
-        {"name": "Danbooru API", "url": "https://danbooru.donmai.us/artists.json?limit=1", "tcp_only": False},
-        {"name": "Iwara", "url": "https://www.iwara.tv", "tcp_only": False},
-        {"name": "Iwara API", "url": "https://api.iwara.tv", "tcp_only": False},
-        {"name": "Twitter/X", "url": "https://x.com", "tcp_only": False},
-        {"name": "GitHub", "url": "https://github.com", "tcp_only": False},
-        {"name": "Google", "url": "https://www.google.com", "tcp_only": False},
+        {"name": "Pixiv", "url": "https://www.pixiv.net"},
+        {"name": "Danbooru", "url": "https://danbooru.donmai.us"},
+        {"name": "Twitter/X", "url": "https://x.com"},
+        {"name": "Iwara", "url": "https://www.iwara.tv"},
+        {"name": "GitHub", "url": "https://github.com"},
     ]
 
-    TEST_TIMEOUT = 5  # seconds per test — 9 targets × 5s = 45s max
+    TEST_TIMEOUT = 3  # short timeout — all tests run concurrently
 
-    results = []
-    for t in targets:
-        name = t["name"]
-        url = t["url"]
-
-        # Direct test
-        direct_ok = False
-        direct_ms = 0
-        direct_error = ""
+    def _test_one(t):
+        name, url = t["name"], t["url"]
+        # Direct
+        d_ok, d_ms, d_err = False, 0, ""
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "auto-gallery/0.1"})
             start = time.monotonic()
             with direct_opener.open(req, timeout=TEST_TIMEOUT) as resp:
-                direct_ok = resp.status < 500
-            direct_ms = int((time.monotonic() - start) * 1000)
+                d_ok = resp.status < 500
+            d_ms = int((time.monotonic() - start) * 1000)
         except urllib.error.HTTPError as e:
-            direct_error = f"HTTP {e.code}"
-            direct_ok = e.code < 500
+            d_err, d_ok = f"HTTP {e.code}", e.code < 500
         except urllib.error.URLError as e:
-            direct_error = str(e.reason)[:120] if e.reason else str(e)[:120]
+            d_err = str(e.reason)[:120] if e.reason else str(e)[:120]
         except Exception as e:
-            direct_error = str(e)[:120]
+            d_err = str(e)[:120]
 
-        # Proxy test
-        proxy_ok = False
-        proxy_ms = 0
-        proxy_error = ""
+        # Proxy
+        p_ok, p_ms, p_err = False, 0, ""
         if enabled:
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "auto-gallery/0.1"})
                 start = time.monotonic()
                 with opener.open(req, timeout=TEST_TIMEOUT) as resp:
-                    proxy_ok = resp.status < 500
-                proxy_ms = int((time.monotonic() - start) * 1000)
+                    p_ok = resp.status < 500
+                p_ms = int((time.monotonic() - start) * 1000)
             except urllib.error.HTTPError as e:
-                proxy_error = f"HTTP {e.code}"
-                proxy_ok = e.code < 500
+                p_err, p_ok = f"HTTP {e.code}", e.code < 500
             except urllib.error.URLError as e:
-                proxy_error = str(e.reason)[:120] if e.reason else str(e)[:120]
+                p_err = str(e.reason)[:120] if e.reason else str(e)[:120]
             except Exception as e:
-                proxy_error = str(e)[:120]
+                p_err = str(e)[:120]
 
-        results.append({
-            "name": name,
-            "url": url,
-            "direct_ok": direct_ok,
-            "direct_ms": direct_ms,
-            "direct_error": direct_error,
-            "proxy_ok": proxy_ok if enabled else None,
-            "proxy_ms": proxy_ms if enabled else None,
-            "proxy_error": proxy_error if enabled else "",
-        })
+        return {"name": name, "url": url,
+                "direct_ok": d_ok, "direct_ms": d_ms, "direct_error": d_err,
+                "proxy_ok": p_ok if enabled else None, "proxy_ms": p_ms if enabled else None,
+                "proxy_error": p_err if enabled else ""}
+
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        results = list(executor.map(_test_one, targets))
 
     return {
         "proxy_enabled": enabled,
