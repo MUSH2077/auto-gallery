@@ -517,17 +517,26 @@ export const api = {
     request<{ status: string; found?: boolean; creator_id?: string; artist_name?: string; links_imported: number; sources_created: number; subscription_id?: string }>("/api/v1/reference/danbooru/artist/import-all", { method: "POST", body: JSON.stringify(params) }),
 
   batchImportDanbooru: (pixivIds: string[]) =>
+    request<{ status: string; message: string; job_id: string; total: number }>(
+      "/api/v1/reference/danbooru/artist/batch-import",
+      { method: "POST", body: JSON.stringify({ pixiv_ids: pixivIds }) }),
+
+  getBatchImportStatus: (jobId?: string) =>
     request<{
-      total: number; imported_count: number; low_confidence_count: number;
-      not_found_count: number; error_count: number;
-      imported: { pixiv_id: string; creator_id: string; artist_name: string;
-                  artist_id: number; links_imported: number; sources_created: number;
-                  downloadable_urls: string[] }[];
-      low_confidence: { pixiv_id: string; artist_name: string; artist_id: number;
-                        url_count: number; message: string }[];
-      not_found: { pixiv_id: string; message: string }[];
-      errors: { pixiv_id: string; error: string }[];
-    }>("/api/v1/reference/danbooru/artist/batch-import", { method: "POST", body: JSON.stringify({ pixiv_ids: pixivIds }) }),
+      status: string; progress: { current: number; total: number; imported: number; errors: number } | null;
+      result: {
+        total: number; imported_count: number; low_confidence_count: number;
+        not_found_count: number; error_count: number;
+        imported: { pixiv_id: string; creator_id: string; artist_name: string;
+                    artist_id: number; links_imported: number; sources_created: number;
+                    downloadable_urls: string[]; merged?: boolean }[];
+        low_confidence: { pixiv_id: string; artist_name: string; artist_id: number;
+                          url_count: number; message: string }[];
+        not_found: { pixiv_id: string; message: string }[];
+        errors: { pixiv_id: string; error: string }[];
+      } | null;
+      job_status: string | null;
+    }>(`/api/v1/reference/danbooru/artist/batch-import/status${jobId ? `?job_id=${jobId}` : ""}`),
 
   // gallery-dl Config
   getGalleryDLConfig: (source?: string) => request<GalleryDLMultiConfig>(`/api/v1/admin/gallerydl-config${source ? `?source=${source}` : ""}`),
