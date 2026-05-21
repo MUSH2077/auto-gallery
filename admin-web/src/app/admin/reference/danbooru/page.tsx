@@ -82,6 +82,13 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
             {importAllPending ? t("danbooru.importing") : t("danbooru.import_all_subscribe")}
           </button>
         </div>
+        {importAllPending && (
+          <div className="mt-2">
+            <div className="w-full bg-blue-200 dark:bg-blue-800 rounded-full h-1.5 overflow-hidden">
+              <div className="bg-blue-600 h-1.5 rounded-full animate-pulse" style={{ width: "100%" }} />
+            </div>
+          </div>
+        )}
         {importAllError && <p className="text-red-600 text-xs mt-2">{importAllError}</p>}
       </div>
 
