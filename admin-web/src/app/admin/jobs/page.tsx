@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { useT } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { api, queryKeys } from "@/lib/api";
@@ -53,6 +54,7 @@ function ActiveIndicator({ status }: { status: string }) {
 }
 
 export default function JobsPage() {
+  const t = useT();
   const router = useRouter();
   const qc = useQueryClient();
   const [dlFilter, setDlFilter] = useState("");
@@ -95,17 +97,17 @@ export default function JobsPage() {
 
   return (
     <main className="max-w-7xl mx-auto p-6">
-      <PageHeader title="Jobs" description="Download and import job queues" />
+      <PageHeader title={t("jobs.title")} description={t("jobs.desc")} />
 
       {/* Download Jobs */}
       <section className="mb-8">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold dark:text-white">Download Jobs ({downloads.data?.length || 0})</h2>
+          <h2 className="text-lg font-semibold dark:text-white">{t("jobs.downloads_section").replace("{count}", String(downloads.data?.length || 0))}</h2>
           <div className="flex gap-1 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
             {STATUS_OPTIONS.map((s) => (
               <button key={s} onClick={() => setDlFilter(s)}
                 className={`px-2.5 py-1 text-xs rounded transition-colors ${dlFilter === s ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
-                {s || "All"}
+                {s || t("jobs.filter_all")}
               </button>
             ))}
           </div>
@@ -113,7 +115,7 @@ export default function JobsPage() {
 
         {downloads.isLoading && <div className="space-y-1">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-12 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
         {downloads.error && <ErrorState message={(downloads.error as Error).message} />}
-        {downloads.data && !downloads.data.length && <EmptyState title="No download jobs" description={dlFilter ? "No jobs matching the selected status." : "No downloads have been triggered yet."} />}
+        {downloads.data && !downloads.data.length && <EmptyState title={t("jobs.no_downloads")} description={dlFilter ? t("jobs.no_downloads_filter") : t("jobs.no_downloads_desc")} />}
 
         {downloads.data && downloads.data.length > 0 && (
           <div className="space-y-1">
@@ -137,9 +139,9 @@ export default function JobsPage() {
                   <div className="flex gap-1 shrink-0">
                     {j.status === "failed" && (
                       <button onClick={() => { setRetryId(j.id); retryDL.mutate(j.id); }} disabled={retryDL.isPending}
-                        className="text-xs text-blue-600 hover:underline">Retry</button>
+                        className="text-xs text-blue-600 hover:underline">{t("jobs.retry")}</button>
                     )}
-                    <button onClick={() => { setDeleteId(j.id); setDeleteType("dl"); }} className="text-xs text-red-500 hover:underline">Del</button>
+                    <button onClick={() => { setDeleteId(j.id); setDeleteType("dl"); }} className="text-xs text-red-500 hover:underline">{t("jobs.del")}</button>
                   </div>
                 </div>
               );
@@ -151,12 +153,12 @@ export default function JobsPage() {
       {/* Import Jobs */}
       <section className="mb-8">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold dark:text-white">Import Jobs ({imports.data?.length || 0})</h2>
+          <h2 className="text-lg font-semibold dark:text-white">{t("jobs.imports_section").replace("{count}", String(imports.data?.length || 0))}</h2>
           <div className="flex gap-1 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
             {["", "pending", "running", "complete", "failed"].map((s) => (
               <button key={s} onClick={() => setImFilter(s)}
                 className={`px-2.5 py-1 text-xs rounded transition-colors ${imFilter === s ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
-                {s || "All"}
+                {s || t("jobs.filter_all")}
               </button>
             ))}
           </div>
@@ -164,7 +166,7 @@ export default function JobsPage() {
 
         {imports.isLoading && <div className="space-y-1">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-12 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
         {imports.error && <ErrorState message={(imports.error as Error).message} />}
-        {imports.data && !imports.data.length && <EmptyState title="No import jobs" description={imFilter ? "No jobs matching the selected status." : "Import jobs appear after downloads complete."} />}
+        {imports.data && !imports.data.length && <EmptyState title={t("jobs.no_imports")} description={imFilter ? t("jobs.no_downloads_filter") : t("jobs.no_imports_desc")} />}
 
         {imports.data && imports.data.length > 0 && (
           <div className="space-y-1">
@@ -186,9 +188,9 @@ export default function JobsPage() {
                   <div className="flex gap-1 shrink-0">
                     {j.status === "failed" && (
                       <button onClick={() => { setRetryId(j.id); retryIM.mutate(j.id); }} disabled={retryIM.isPending}
-                        className="text-xs text-blue-600 hover:underline">Retry</button>
+                        className="text-xs text-blue-600 hover:underline">{t("jobs.retry")}</button>
                     )}
-                    <button onClick={() => { setDeleteId(j.id); setDeleteType("im"); }} className="text-xs text-red-500 hover:underline">Del</button>
+                    <button onClick={() => { setDeleteId(j.id); setDeleteType("im"); }} className="text-xs text-red-500 hover:underline">{t("jobs.del")}</button>
                   </div>
                 </div>
               );
@@ -197,7 +199,7 @@ export default function JobsPage() {
         )}
       </section>
 
-      {deleteId && <ConfirmDialog open title="Delete Job" message="Delete this job?" onConfirm={() => deleteType === "dl" ? delDL.mutate(deleteId) : delIM.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={delDL.isPending || delIM.isPending} />}
+      {deleteId && <ConfirmDialog open title={t("jobs.delete_title")} message={t("jobs.delete_msg")} onConfirm={() => deleteType === "dl" ? delDL.mutate(deleteId) : delIM.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={delDL.isPending || delIM.isPending} />}
     </main>
   );
 }

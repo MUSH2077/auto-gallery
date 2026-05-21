@@ -2,11 +2,13 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, Tag } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { PageHeader, EmptyState, ErrorState, Modal, ConfirmDialog } from "@/components";
 
 const CATEGORIES = ["general", "artist", "series", "character", "meta"];
 
 export default function TagsPage() {
+  const t = useT();
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
@@ -44,19 +46,19 @@ export default function TagsPage() {
 
   return (
     <main className="max-w-4xl mx-auto p-6">
-      <PageHeader title="Tags" description={`Manage normalized tags across all sources`}>
+      <PageHeader title={t("tags.title")} description={t("tags.desc")}>
         <button onClick={() => { setFormName(""); setFormCat("general"); setShowCreate(true); }}
-          className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600">+ New Tag</button>
+          className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600">{t("tags.new")}</button>
       </PageHeader>
 
       <div className="mb-4">
         <input value={search} onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search tags..." className="w-full max-w-xs border rounded px-3 py-2 text-sm" />
+          placeholder={t("tags.search")} className="w-full max-w-xs border rounded px-3 py-2 text-sm" />
       </div>
 
       {tags.isLoading && <div className="flex flex-wrap gap-2">{Array.from({ length: 20 }).map((_, i) => <div key={i} className="h-8 w-24 bg-gray-100 dark:bg-slate-700 rounded-full animate-pulse" />)}</div>}
       {tags.error && <ErrorState message={(tags.error as Error).message} onRetry={() => tags.refetch()} />}
-      {tags.data && !tags.data.length && <EmptyState title="No tags" description="Tags are created automatically during import. Create one manually to get started." />}
+      {tags.data && !tags.data.length && <EmptyState title={t("tags.no_tags")} description={t("tags.no_tags_desc")} />}
 
       {tags.data && tags.data.length > 0 && (
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
@@ -72,52 +74,52 @@ export default function TagsPage() {
               </div>
             ))}
           </div>
-          {search && !filtered.length && <p className="text-sm text-gray-400 dark:text-gray-500 mt-3">No tags matching "{search}"</p>}
-          <p className="text-xs text-gray-400 dark:text-gray-500 mt-4">{filtered.length} tag{filtered.length !== 1 ? "s" : ""}{search ? " matching" : " total"}</p>
+          {search && !filtered.length && <p className="text-sm text-gray-400 dark:text-gray-500 mt-3">{t("tags.no_match").replace("{query}", search)}</p>}
+          <p className="text-xs text-gray-400 dark:text-gray-500 mt-4">{search ? t("tags.matching").replace("{count}", String(filtered.length)) : t("tags.total").replace("{count}", String(filtered.length))}</p>
         </div>
       )}
 
-      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Create Tag">
+      <Modal open={showCreate} onClose={() => setShowCreate(false)} title={t("tags.create_title")}>
         <div className="space-y-4">
-          <div><label className="block text-sm font-medium mb-1">Name *</label>
+          <div><label className="block text-sm font-medium mb-1">{t("tags.name_label")}</label>
             <input value={formName} onChange={(e) => setFormName(e.target.value)}
-              className="w-full border rounded px-3 py-2 text-sm" placeholder="lowercase_tag_name" /></div>
-          <div><label className="block text-sm font-medium mb-1">Category</label>
+              className="w-full border rounded px-3 py-2 text-sm" placeholder={t("tags.name_placeholder")} /></div>
+          <div><label className="block text-sm font-medium mb-1">{t("tags.category_label")}</label>
             <select value={formCat} onChange={(e) => setFormCat(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
               {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
             </select></div>
           <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => setShowCreate(false)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">Cancel</button>
+            <button onClick={() => setShowCreate(false)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">{t("tags.cancel")}</button>
             <button onClick={() => create.mutate()} disabled={!formName.trim() || create.isPending}
               className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
-              {create.isPending ? "Creating..." : "Create Tag"}
+              {create.isPending ? t("tags.creating") : t("tags.create")}
             </button>
           </div>
           {create.error && <p className="text-red-600 text-sm">{(create.error as Error).message}</p>}
         </div>
       </Modal>
 
-      <Modal open={!!editId} onClose={() => setEditId(null)} title="Edit Tag">
+      <Modal open={!!editId} onClose={() => setEditId(null)} title={t("tags.edit_title")}>
         <div className="space-y-4">
-          <div><label className="block text-sm font-medium mb-1">Name</label>
+          <div><label className="block text-sm font-medium mb-1">{t("tags.name_label")}</label>
             <input value={formName} onChange={(e) => setFormName(e.target.value)}
               className="w-full border rounded px-3 py-2 text-sm" /></div>
-          <div><label className="block text-sm font-medium mb-1">Category</label>
+          <div><label className="block text-sm font-medium mb-1">{t("tags.category_label")}</label>
             <select value={formCat} onChange={(e) => setFormCat(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
               {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
             </select></div>
           <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => setEditId(null)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">Cancel</button>
+            <button onClick={() => setEditId(null)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">{t("tags.cancel")}</button>
             <button onClick={() => update.mutate()} disabled={!formName.trim() || update.isPending}
               className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
-              {update.isPending ? "Saving..." : "Save"}
+              {update.isPending ? t("tags.saving") : t("tags.save")}
             </button>
           </div>
           {update.error && <p className="text-red-600 text-sm">{(update.error as Error).message}</p>}
         </div>
       </Modal>
 
-      {deleteId && <ConfirmDialog open title="Delete Tag" message="Delete this tag? It will be removed from all associated works." onConfirm={() => deleteTag.mutate()} onCancel={() => setDeleteId(null)} isPending={deleteTag.isPending} error={(deleteTag.error as Error)?.message} />}
+      {deleteId && <ConfirmDialog open title={t("tags.delete_title")} message={t("tags.delete_msg")} onConfirm={() => deleteTag.mutate()} onCancel={() => setDeleteId(null)} isPending={deleteTag.isPending} error={(deleteTag.error as Error)?.message} />}
     </main>
   );
 }

@@ -4,8 +4,10 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, ConfirmDialog } from "@/components";
 import { useRouter } from "next/navigation";
+import { useT } from "@/lib/i18n";
 
 export default function CreatorDuplicatesPage() {
+  const t = useT();
   const router = useRouter();
   const qc = useQueryClient();
   const dups = useQuery({ queryKey: ["creator-duplicates"], queryFn: api.listDuplicateCreators });
@@ -43,10 +45,10 @@ export default function CreatorDuplicatesPage() {
 
   return (
     <main className="max-w-5xl mx-auto p-6">
-      <PageHeader title="Creator Duplicates" description="Detect and merge duplicate creator records across sources." />
+      <PageHeader title={t("duplicates.title")} description={t("duplicates.desc")} />
 
       <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 text-sm mb-6">
-        <strong>Manual review required.</strong> Merging transfers all links, source accounts, and subscriptions from the source creator to the target. The source creator is deleted after merging. This action is irreversible.
+        <strong>{t("duplicates.warning")}</strong> {t("duplicates.warning_detail")}
       </div>
 
       {dups.isLoading && (
@@ -54,7 +56,7 @@ export default function CreatorDuplicatesPage() {
       )}
       {dups.error && <ErrorState message={(dups.error as Error).message} onRetry={() => dups.refetch()} />}
       {dups.data && dups.data.duplicates.length === 0 && (
-        <EmptyState title="No duplicates" description="All creators have unique identities." />
+        <EmptyState title={t("duplicates.no_duplicates")} description={t("duplicates.no_duplicates_desc")} />
       )}
 
       {dups.data?.duplicates.map((group, gi) => (
@@ -66,7 +68,7 @@ export default function CreatorDuplicatesPage() {
               </span>
               <span className="text-sm text-gray-500 dark:text-gray-400 ml-2">{group.description}</span>
             </div>
-            <span className="text-xs text-gray-400">{group.creator_ids.length} creators</span>
+            <span className="text-xs text-gray-400">{group.creator_ids.length} {t("duplicates.creators_count")}</span>
           </div>
 
           <div className="space-y-2">
@@ -88,7 +90,7 @@ export default function CreatorDuplicatesPage() {
                   <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">{cid.slice(0, 8)}...</span>
                 </div>
                 <span className="text-xs text-gray-400 shrink-0">
-                  {cid === group.creator_ids[0] ? "Keep as target" : "Merge into target"}
+                  {cid === group.creator_ids[0] ? t("duplicates.keep_target") : t("duplicates.merge_into")}
                 </span>
               </div>
             ))}
@@ -101,10 +103,10 @@ export default function CreatorDuplicatesPage() {
         <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-slate-800 border-t dark:border-slate-700 shadow-lg p-4 flex items-center justify-between z-30">
           <div>
             <span className="text-sm font-medium">
-              Target: <span className="font-mono text-blue-600">{selectedTarget?.slice(0, 8)}...</span>
+              {t("duplicates.target")} <span className="font-mono text-blue-600">{selectedTarget?.slice(0, 8)}...</span>
             </span>
             <span className="text-sm text-gray-500 dark:text-gray-400 ml-4">
-              {selectedSources.size} source{selectedSources.size > 1 ? "s" : ""} selected
+              {t("duplicates.source_selected").replace("{count}", String(selectedSources.size))}
             </span>
           </div>
           <div className="flex gap-3">
@@ -112,13 +114,13 @@ export default function CreatorDuplicatesPage() {
               onClick={() => { setSelectedSources(new Set()); setSelectedTarget(null); }}
               className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:text-gray-300"
             >
-              Cancel
+              {t("duplicates.cancel")}
             </button>
             <button
               onClick={() => setConfirmMerge(true)}
               className="px-4 py-2 text-sm bg-red-600 text-white rounded hover:bg-red-700"
             >
-              Merge {selectedSources.size} → Target
+              {t("duplicates.merge_btn").replace("{count}", String(selectedSources.size))}
             </button>
           </div>
         </div>
@@ -127,8 +129,8 @@ export default function CreatorDuplicatesPage() {
       {confirmMerge && (
         <ConfirmDialog
           open
-          title="Merge Creators"
-          message={`Merge ${selectedSources.size} creator(s) into the target? Source creators will be deleted. This cannot be undone.`}
+          title={t("duplicates.merge_title")}
+          message={t("duplicates.merge_msg").replace("{count}", String(selectedSources.size))}
           onConfirm={handleMerge}
           onCancel={() => setConfirmMerge(false)}
           isPending={merge.isPending}

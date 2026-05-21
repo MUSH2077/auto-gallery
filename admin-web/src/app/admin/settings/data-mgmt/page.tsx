@@ -3,9 +3,11 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, ConfirmDialog } from "@/components";
+import { useT } from "@/lib/i18n";
 import Link from "next/link";
 
 export default function DataManagementPage() {
+  const t = useT();
   const qc = useQueryClient();
   const [confirmAction, setConfirmAction] = useState<string | null>(null);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -64,43 +66,43 @@ export default function DataManagementPage() {
   const actions = [
     {
       key: "all",
-      title: "Clear Everything",
-      desc: "Delete ALL data + files: works, assets, downloads, imports, creators, subscriptions, tags. Also clears /downloads and /library directories. This is irreversible.",
+      title: t("datamgmt.clear_all"),
+      desc: t("datamgmt.clear_all.desc"),
       color: "red",
       mutation: clearAll,
     },
     {
       key: "works",
-      title: "Clear Works & Assets",
-      desc: "Delete all works, assets, and related records. Also clears /downloads and /library directories. Keeps creators and subscriptions intact.",
+      title: t("datamgmt.clear_works"),
+      desc: t("datamgmt.clear_works.desc"),
       color: "orange",
       mutation: clearWorks,
     },
     {
       key: "creators",
-      title: "Clear Creators & Subscriptions",
-      desc: "Delete all creators, subscriptions, links, and source mappings. Keeps works and files intact.",
+      title: t("datamgmt.clear_creators"),
+      desc: t("datamgmt.clear_creators.desc"),
       color: "orange",
       mutation: clearCreators,
     },
     {
       key: "downloads",
-      title: "Clear Download History",
-      desc: "Delete download and import job history. Keeps works, assets, creators, and files intact.",
+      title: t("datamgmt.clear_downloads"),
+      desc: t("datamgmt.clear_downloads.desc"),
       color: "yellow",
       mutation: clearDownloads,
     },
     {
       key: "tags",
-      title: "Clear Tags",
-      desc: "Delete all tags and tag associations (work_tags, work_source_tags). Works and assets remain intact.",
+      title: t("datamgmt.clear_tags", "Clear Tags"),
+      desc: t("datamgmt.clear_tags.desc", "Delete all tags and tag associations (work_tags, work_source_tags). Works and assets remain intact."),
       color: "yellow",
       mutation: clearTags,
     },
     {
       key: "settings",
-      title: "Reset Settings to Defaults",
-      desc: "Reset all system settings (dedup, subscription defaults, download defaults, proxy) to factory defaults.",
+      title: t("datamgmt.reset_settings"),
+      desc: t("datamgmt.reset_settings.desc"),
       color: "blue",
       mutation: resetSettings,
     },
@@ -109,14 +111,14 @@ export default function DataManagementPage() {
   return (
     <main className="max-w-4xl mx-auto p-6">
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; Settings</Link>
+        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("datamgmt.back")}</Link>
       </div>
-      <PageHeader title="Data Management" description="Clear data and reset settings. All destructive actions require confirmation." />
+      <PageHeader title={t("datamgmt.title")} description={t("datamgmt.desc")} />
 
       {result && (
         <div className={`mb-4 p-3 rounded-lg text-sm ${result.ok ? "bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400" : "bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400"}`}>
           {result.msg}
-          <button onClick={() => setResult(null)} className="ml-3 text-xs underline">Dismiss</button>
+          <button onClick={() => setResult(null)} className="ml-3 text-xs underline">{t("datamgmt.dismiss")}</button>
         </div>
       )}
 
@@ -139,7 +141,7 @@ export default function DataManagementPage() {
                 "bg-blue-600 hover:bg-blue-700"
               }`}
             >
-              {a.mutation.isPending ? "Processing..." : a.key === "settings" ? "Reset" : "Clear"}
+              {a.mutation.isPending ? t("datamgmt.processing") : a.key === "settings" ? t("datamgmt.reset") : t("datamgmt.clear")}
             </button>
           </div>
         ))}
@@ -148,8 +150,8 @@ export default function DataManagementPage() {
       {confirmAction && (
         <ConfirmDialog
           open
-          title={`Confirm ${actions.find((a) => a.key === confirmAction)?.title}`}
-          message={`Are you sure you want to ${confirmAction === "settings" ? "reset" : "clear"} ${confirmAction}? This cannot be undone.`}
+          title={t("datamgmt.confirm_title").replace("{action}", actions.find((a) => a.key === confirmAction)?.title || "")}
+          message={t("datamgmt.confirm_msg").replace("{action}", confirmAction || "")}
           onConfirm={() => {
             const a = actions.find((a) => a.key === confirmAction);
             if (a) a.mutation.mutate();

@@ -12,8 +12,14 @@ class CreatorService:
         self.db = db
         self.repo = CreatorRepository(db)
 
-    async def list_creators(self, offset: int = 0, limit: int = 50):
-        return await self.repo.list_all(offset, limit)
+    async def list_creators(self, offset: int = 0, limit: int = 50, is_favorite: bool | None = None):
+        return await self.repo.list_all(offset, limit, is_favorite)
+
+    async def toggle_favorite(self, creator_id: UUID):
+        creator = await self.get_creator(creator_id)
+        creator.is_favorite = not creator.is_favorite
+        await self.db.commit()
+        return creator
 
     async def get_creator(self, creator_id: UUID):
         creator = await self.repo.get(creator_id)

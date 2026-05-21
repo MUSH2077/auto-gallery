@@ -1,10 +1,13 @@
+"use client";
 import { ReactNode } from "react";
 import { EmptyState } from "@/components";
+import { useT } from "@/lib/i18n";
 
 type Column<T> = { key: string; header: string; render: (row: T) => ReactNode; className?: string };
 
 export default function DataTable<T>({ columns, data, keyField }: { columns: Column<T>[]; data: T[]; keyField: keyof T }) {
-  if (!data.length) return <EmptyState title="No data" />;
+  const t = useT();
+  if (!data.length) return <EmptyState title={t("common.no_data")} />;
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">

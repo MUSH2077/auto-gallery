@@ -3,9 +3,11 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, DownloadDefaults } from "@/lib/api";
 import { PageHeader, ErrorState } from "@/components";
+import { useT } from "@/lib/i18n";
 import Link from "next/link";
 
 export default function DownloadDefaultsPage() {
+  const t = useT();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
   const [local, setLocal] = useState<DownloadDefaults | null>(null);
@@ -20,7 +22,7 @@ export default function DownloadDefaultsPage() {
   if (settings.isError) {
     return (
       <main className="max-w-4xl mx-auto p-6">
-        <ErrorState message={settings.error?.message || "Failed"} onRetry={() => settings.refetch()} />
+        <ErrorState message={settings.error?.message || t("dldefaults.failed")} onRetry={() => settings.refetch()} />
       </main>
     );
   }
@@ -48,17 +50,17 @@ export default function DownloadDefaultsPage() {
   return (
     <main className="max-w-4xl mx-auto p-6">
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; Settings</Link>
+        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("dldefaults.back")}</Link>
       </div>
-      <PageHeader title="Download Job Defaults" description="Configure timeout, retry, and backoff for gallery-dl download jobs." />
+      <PageHeader title={t("dldefaults.title")} description={t("dldefaults.desc")} />
 
       {!current ? null : (
         <>
           <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6 space-y-5 text-sm">
             <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
               <div>
-                <span className="font-medium">Timeout</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Maximum time for a single gallery-dl download job (seconds). Default 600.</p>
+                <span className="font-medium">{t("dldefaults.timeout")}</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.timeout.desc")}</p>
               </div>
               <input
                 type="number" min={60} max={3600} step={60}
@@ -70,8 +72,8 @@ export default function DownloadDefaultsPage() {
 
             <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
               <div>
-                <span className="font-medium">Max Retries</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Number of retry attempts after a failed download before marking as failed. Default 3.</p>
+                <span className="font-medium">{t("dldefaults.retries")}</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.retries.desc")}</p>
               </div>
               <input
                 type="number" min={0} max={10}
@@ -83,8 +85,8 @@ export default function DownloadDefaultsPage() {
 
             <div className="flex items-center justify-between py-3">
               <div>
-                <span className="font-medium">Retry Backoff Base</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Base delay in seconds for exponential backoff. Formula: base × 2^(retry-1). Default 60.</p>
+                <span className="font-medium">{t("dldefaults.backoff")}</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.backoff.desc")}</p>
               </div>
               <input
                 type="number" min={10} max={600} step={10}
@@ -96,8 +98,8 @@ export default function DownloadDefaultsPage() {
           </div>
 
           <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg text-sm text-blue-800 dark:text-blue-300">
-            <strong>Current retry schedule:</strong> Attempt 1 → fail → wait {current.retry_backoff_base_seconds}s → Attempt 2
-            → fail → wait {current.retry_backoff_base_seconds * 2}s → Attempt 3 → fail → marked as failed. Max {current.max_retries} retries.
+            <strong>{t("dldefaults.schedule")}:</strong>{" "}
+            {t("dldefaults.schedule.desc").replace("{base}", String(current.retry_backoff_base_seconds)).replace("{double}", String(current.retry_backoff_base_seconds * 2)).replace("{max}", String(current.max_retries))}
           </div>
 
           <div className="mt-4 flex justify-end">
@@ -106,10 +108,10 @@ export default function DownloadDefaultsPage() {
               disabled={save.isPending}
               className="px-6 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50"
             >
-              {save.isPending ? "Saving..." : "Save Settings"}
+              {save.isPending ? t("common.saving") : t("dldefaults.save")}
             </button>
           </div>
-          {save.isSuccess && <p className="text-green-600 text-sm mt-2">Settings saved.</p>}
+          {save.isSuccess && <p className="text-green-600 text-sm mt-2">{t("dldefaults.saved")}</p>}
           {save.error && <p className="text-red-600 text-sm mt-2">{(save.error as Error).message}</p>}
         </>
       )}
