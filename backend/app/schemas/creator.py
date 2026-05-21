@@ -20,6 +20,7 @@ class CreatorUpdate(BaseModel):
     description: str | None = None
     thumbnail_url: str | None = None
     is_active: bool | None = None
+    is_favorite: bool | None = None
 
     model_config = {"from_attributes": True}
 
@@ -32,6 +33,7 @@ class CreatorRead(BaseModel):
     thumbnail_url: str | None = None
     is_active: bool
     danbooru_artist_id: int | None = None
+    is_favorite: bool
     created_at: datetime
     updated_at: datetime
 

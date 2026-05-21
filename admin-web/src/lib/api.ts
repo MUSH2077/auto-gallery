@@ -50,6 +50,7 @@ export interface Creator {
   thumbnail_url?: string;
   is_active: boolean;
   danbooru_artist_id?: number;
+  is_favorite: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -130,6 +131,7 @@ export interface WorkListItem {
   creator_id?: string;
   has_ugoira?: boolean;
   preview_asset_ids?: string[];
+  is_favorite?: boolean;
 }
 
 export interface Work {
@@ -140,6 +142,7 @@ export interface Work {
   is_nsfw: boolean;
   thumbnail_asset_id?: string;
   asset_count: number;
+  is_favorite: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -296,7 +299,11 @@ export const api = {
   sources: () => request<{ sources: ProviderInfo[] }>("/api/v1/sources"),
 
   // Creators
-  listCreators: (offset = 0, limit = 50) => request<Creator[]>(`/api/v1/creators?offset=${offset}&limit=${limit}`),
+  listCreators: (offset = 0, limit = 50, is_favorite?: boolean) => {
+    const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+    if (is_favorite !== undefined) params.set("is_favorite", String(is_favorite));
+    return request<Creator[]>(`/api/v1/creators?${params.toString()}`);
+  },
 
   getCreator: (id: string) => request<Creator>(`/api/v1/creators/${id}`),
 
@@ -334,6 +341,9 @@ export const api = {
 
   createSourceCreator: (creatorId: string, data: { source: string; source_creator_id: string; source_url?: string; display_name?: string }) =>
     request<SourceCreator>(`/api/v1/creators/${creatorId}/sources`, { method: "POST", body: JSON.stringify(data) }),
+
+  toggleCreatorFavorite: (id: string) =>
+    request<Creator>(`/api/v1/creators/${id}/favorite`, { method: "POST" }),
 
   deleteCreatorLink: (creatorId: string, linkId: string) =>
     request<void>(`/api/v1/creators/${creatorId}/links/${linkId}`, { method: "DELETE" }),
@@ -392,18 +402,22 @@ export const api = {
     request<{ id: string; download_job_id: string; status: string; error_log?: string }[]>(`/api/v1/download-jobs/${jobId}/imports`),
 
   // Works
-  listWorks: (offset = 0, limit = 50, filters?: { search?: string; source?: string; creator_id?: string; is_nsfw?: boolean; sort_by?: string; sort_order?: string }) => {
+  listWorks: (offset = 0, limit = 50, filters?: { search?: string; source?: string; creator_id?: string; is_nsfw?: boolean; is_favorite?: boolean; sort_by?: string; sort_order?: string }) => {
     const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
     if (filters?.search) params.set("search", filters.search);
     if (filters?.source) params.set("source", filters.source);
     if (filters?.creator_id) params.set("creator_id", filters.creator_id);
     if (filters?.is_nsfw !== undefined) params.set("is_nsfw", String(filters.is_nsfw));
+    if (filters?.is_favorite !== undefined) params.set("is_favorite", String(filters.is_favorite));
     if (filters?.sort_by) params.set("sort_by", filters.sort_by);
     if (filters?.sort_order) params.set("sort_order", filters.sort_order);
     return request<WorkListItem[]>(`/api/v1/works?${params.toString()}`);
   },
 
   getWork: (id: string) => request<Work>(`/api/v1/works/${id}`),
+
+  toggleWorkFavorite: (id: string) =>
+    request<Work>(`/api/v1/works/${id}/favorite`, { method: "POST" }),
 
   getWorkSources: (id: string) => request<unknown[]>(`/api/v1/works/${id}/sources`),
 

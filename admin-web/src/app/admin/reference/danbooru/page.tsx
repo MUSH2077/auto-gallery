@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
 
 interface ArtistUrls { url: string; normalized_url: string; is_active: boolean }
@@ -17,6 +18,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
   onImportAll: (creatorName: string) => void; importAllPending: boolean; importAllError: string | null;
   selectedCreator: string; setSelectedCreator: (v: string) => void;
 }) {
+  const t = useT();
   const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
   const qc = useQueryClient();
 
@@ -57,17 +59,17 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
   return (
     <div className="mt-4 space-y-4">
       <div className="bg-white dark:bg-slate-800 border rounded-lg p-4">
-        <h3 className="font-medium mb-2">Artist #{artist.id}: {artist.name}</h3>
+        <h3 className="font-medium mb-2">{t("danbooru.artist_label").replace("{id}", String(artist.id)).replace("{name}", artist.name)}</h3>
         {artist.other_names.length > 0 && (
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Also known as: {artist.other_names.join(", ")}</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">{t("danbooru.also_known")} {artist.other_names.join(", ")}</p>
         )}
-        {artist.post_count != null && <p className="text-xs text-gray-500 dark:text-gray-400">Danbooru posts: {artist.post_count}</p>}
+        {artist.post_count != null && <p className="text-xs text-gray-500 dark:text-gray-400">{t("danbooru.posts_count")} {artist.post_count}</p>}
         {artist.notes && <p className="text-xs text-gray-600 dark:text-gray-300 mt-2 bg-gray-50 dark:bg-slate-800/50 p-2 rounded">{artist.notes}</p>}
       </div>
 
       {/* One-Click Import All & Subscribe */}
       <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-        <p className="text-sm text-blue-800 dark:text-blue-300 font-medium mb-1">One-Click Import</p>
+        <p className="text-sm text-blue-800 dark:text-blue-300 font-medium mb-1">{t("danbooru.one_click_import")}</p>
         <p className="text-xs text-blue-600 mb-3">Creates Creator + Subscription + Sources + Links in one step.</p>
         <div className="flex items-end gap-2">
           <div className="flex-1">
@@ -77,7 +79,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
           </div>
           <button onClick={() => onImportAll(selectedCreator)} disabled={importAllPending}
             className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 shrink-0">
-            {importAllPending ? "Importing..." : "Import All & Subscribe"}
+            {importAllPending ? t("danbooru.importing") : t("danbooru.import_all_subscribe")}
           </button>
         </div>
         {importAllError && <p className="text-red-600 text-xs mt-2">{importAllError}</p>}
@@ -87,7 +89,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
         {/* Downloadable URLs with Subscribe buttons */}
         {downloadableUrls.length > 0 && (
           <div className="mt-3">
-            <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Downloadable Sources ({downloadableUrls.length})</h4>
+            <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">{t("danbooru.downloadable_sources").replace("{count}", String(downloadableUrls.length))}</h4>
             <div className="space-y-2">
               {downloadableUrls.map((u, i) => (
                 <div key={i} className="flex items-center justify-between bg-green-50 border border-green-200 rounded p-2 text-xs">
@@ -99,7 +101,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
                   <div className="flex items-center gap-2">
                     <select value={selectedCreator} onChange={(e) => setSelectedCreator(e.target.value)}
                       className="border rounded px-2 py-1 text-xs">
-                      <option value="">Select creator...</option>
+                      <option value="">{t("danbooru.select_creator")}</option>
                       {creators.data?.map((c) => <option key={c.id} value={c.id}>{c.display_name || c.name}</option>)}
                     </select>
                     <button
@@ -115,7 +117,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
                       }}
                       disabled={!selectedCreator || subscribe.isPending}
                       className="px-2 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700 disabled:opacity-50 shrink-0">
-                      {subscribingUrl === u.normalized_url && subscribe.isPending ? "..." : "Subscribe"}
+                      {subscribingUrl === u.normalized_url && subscribe.isPending ? "..." : t("danbooru.subscribe")}
                     </button>
                   </div>
                 </div>
@@ -127,7 +129,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
         {/* Other URLs */}
         {artist.urls.filter(u => !DOWNLOADABLE_SOURCES.includes(classifyUrl(u.normalized_url))).length > 0 && (
           <div className="mt-3">
-            <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Other Associated URLs</h4>
+            <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">{t("danbooru.other_urls")}</h4>
             <div className="space-y-1">
               {artist.urls.filter(u => !DOWNLOADABLE_SOURCES.includes(classifyUrl(u.normalized_url))).map((u, i) => (
                 <div key={i} className="flex items-center gap-2 text-xs">
@@ -141,14 +143,14 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
         )}
 
         {artist.urls.length === 0 && (
-          <p className="text-xs text-gray-400 dark:text-gray-500 mt-3">No associated source URLs in Danbooru.</p>
+          <p className="text-xs text-gray-400 dark:text-gray-500 mt-3">{t("danbooru.no_urls")}</p>
         )}
       </div>
 
       {/* Import all links */}
       {links.length > 0 && (
         <div className="bg-white dark:bg-slate-800 border rounded-lg p-4">
-          <h3 className="font-medium mb-2">Import All Links ({links.length})</h3>
+          <h3 className="font-medium mb-2">{t("danbooru.import_links_count").replace("{count}", String(links.length))}</h3>
           <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Creates creator_link records for all of this artist's associated URLs in Danbooru.</p>
           <div className="space-y-2 mb-4">
             {links.map((l, i) => (
@@ -162,16 +164,16 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
           </div>
           <div className="flex items-end gap-3">
             <div className="flex-1">
-              <label className="block text-xs font-medium mb-1">Target Creator</label>
+              <label className="block text-xs font-medium mb-1">{t("danbooru.target_creator")}</label>
               <select value={selectedCreator} onChange={(e) => setSelectedCreator(e.target.value)}
                 className="w-full border rounded px-3 py-2 text-sm">
-                <option value="">Select creator...</option>
+                <option value="">{t("danbooru.select_creator")}</option>
                 {creators.data?.map((c) => <option key={c.id} value={c.id}>{c.display_name || c.name}</option>)}
               </select>
             </div>
             <button onClick={() => onImport(selectedCreator)} disabled={!selectedCreator || importPending}
               className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50 shrink-0">
-              {importPending ? "Importing..." : `Import ${links.length} Links`}
+              {importPending ? t("danbooru.importing") : t("danbooru.import_links_btn").replace("{count}", String(links.length))}
             </button>
           </div>
         </div>
@@ -209,6 +211,7 @@ function classifyUrl(url: string): string {
 const DOWNLOADABLE_SOURCES = ["pixiv", "iwara"];
 
 export default function DanbooruReferencePage() {
+  const t = useT();
   const [searchUrl, setSearchUrl] = useState("");
   const [searchName, setSearchName] = useState("");
   const [searchPixivId, setSearchPixivId] = useState("");
@@ -276,20 +279,20 @@ export default function DanbooruReferencePage() {
 
   return (
     <main className="max-w-5xl mx-auto p-6">
-      <PageHeader title="Danbooru Reference Mapping" description="Import Danbooru artist data and subscribe to source profiles" />
+      <PageHeader title={t("danbooru.title")} description={t("danbooru.desc")} />
 
       <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 text-sm mb-6">
-        <p className="font-medium text-blue-800 dark:text-blue-300 mb-1">All searches query Danbooru's artist database directly.</p>
+        <p className="font-medium text-blue-800 dark:text-blue-300 mb-1">{t("danbooru.search_info")}</p>
         <p className="text-blue-700 dark:text-blue-300">Danbooru artists map source profiles (Pixiv, Twitter, Iwara, etc.) to a canonical name. Use any of the three methods below to find the matching Danbooru artist record.</p>
       </div>
 
       {/* Batch Import */}
       <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 mb-6">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="font-medium text-sm">Batch Import by Pixiv User ID</h3>
+          <h3 className="font-medium text-sm">{t("danbooru.batch_title")}</h3>
           <button onClick={() => setShowBatch(!showBatch)}
             className="text-xs text-blue-600 hover:underline">
-            {showBatch ? "Collapse" : "Expand"}
+            {showBatch ? t("danbooru.batch_collapse") : t("danbooru.batch_expand")}
           </button>
         </div>
         {!showBatch && (
@@ -305,7 +308,7 @@ export default function DanbooruReferencePage() {
             <textarea
               value={batchInput}
               onChange={(e) => setBatchInput(e.target.value)}
-              placeholder={"1980643\n123456\n789012"}
+              placeholder={t("danbooru.batch_placeholder")}
               rows={5}
               className="w-full border rounded px-3 py-2 text-sm font-mono resize-y"
             />
@@ -315,10 +318,10 @@ export default function DanbooruReferencePage() {
                 disabled={batchImport.isPending || !batchInput.trim()}
                 className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
               >
-                {batchImport.isPending ? "Processing..." : "Batch Import"}
+                {batchImport.isPending ? t("danbooru.processing") : t("danbooru.batch_import")}
               </button>
               <span className="text-xs text-gray-400">
-                {batchInput.trim() ? `${batchInput.split(/[\\n,]+/).filter(s => /^\\d+$/.test(s.trim())).length} valid IDs` : ""}
+                {batchInput.trim() ? `${batchInput.split(/[\n,]+/).filter((s: string) => /^\d+$/.test(s.trim())).length} ${t("danbooru.valid_ids")}` : ""}
               </span>
             </div>
             {batchImport.error && (
@@ -332,28 +335,28 @@ export default function DanbooruReferencePage() {
                 <div className="grid grid-cols-4 gap-3">
                   <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded p-3 text-center">
                     <div className="text-xl font-bold text-green-700 dark:text-green-400">{batchImport.data.imported_count}</div>
-                    <div className="text-xs text-green-600">Imported</div>
+                    <div className="text-xs text-green-600">{t("danbooru.batch_result_imported")}</div>
                   </div>
                   <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded p-3 text-center">
                     <div className="text-xl font-bold text-yellow-700 dark:text-yellow-400">{batchImport.data.low_confidence_count}</div>
-                    <div className="text-xs text-yellow-600">Low Confidence</div>
+                    <div className="text-xs text-yellow-600">{t("danbooru.batch_result_low_confidence")}</div>
                   </div>
                   <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded p-3 text-center">
                     <div className="text-xl font-bold text-red-700 dark:text-red-400">{batchImport.data.not_found_count}</div>
-                    <div className="text-xs text-red-600">Not Found</div>
+                    <div className="text-xs text-red-600">{t("danbooru.batch_result_not_found")}</div>
                   </div>
                   <div className="bg-gray-50 dark:bg-slate-800/50 border border-gray-200 dark:border-slate-700 rounded p-3 text-center">
                     <div className="text-xl font-bold text-gray-600 dark:text-gray-400">{batchImport.data.error_count}</div>
-                    <div className="text-xs text-gray-500">Errors</div>
+                    <div className="text-xs text-gray-500">{t("danbooru.batch_result_errors")}</div>
                   </div>
                 </div>
 
                 {/* Imported list */}
                 {batchImport.data.imported.length > 0 && (
                   <div>
-                    <h4 className="text-sm font-medium text-green-700 dark:text-green-400 mb-2">Imported ({batchImport.data.imported.length})</h4>
+                    <h4 className="text-sm font-medium text-green-700 dark:text-green-400 mb-2">{t("danbooru.batch_result_imported")} ({batchImport.data.imported.length})</h4>
                     <div className="space-y-1 max-h-48 overflow-y-auto">
-                      {batchImport.data.imported.map((r, i) => (
+                      {batchImport.data.imported.map((r: any, i: number) => (
                         <div key={i} className="bg-green-50 dark:bg-green-900/20 border border-green-100 dark:border-green-900 rounded p-2 text-xs flex items-center justify-between">
                           <div>
                             <span className="font-mono text-green-800 dark:text-green-300">Pixiv {r.pixiv_id}</span>
@@ -373,10 +376,10 @@ export default function DanbooruReferencePage() {
                 {/* Low confidence list */}
                 {batchImport.data.low_confidence.length > 0 && (
                   <div>
-                    <h4 className="text-sm font-medium text-yellow-700 dark:text-yellow-400 mb-2">Low Confidence — Manual Review ({batchImport.data.low_confidence.length})</h4>
+                    <h4 className="text-sm font-medium text-yellow-700 dark:text-yellow-400 mb-2">{t("danbooru.batch_result_low_confidence")} — Manual Review ({batchImport.data.low_confidence.length})</h4>
                     <p className="text-xs text-yellow-600 mb-2">Found Danbooru artist but no downloadable source URLs. Use individual search below to review and manually subscribe.</p>
                     <div className="space-y-1 max-h-48 overflow-y-auto">
-                      {batchImport.data.low_confidence.map((r, i) => (
+                      {batchImport.data.low_confidence.map((r: any, i: number) => (
                         <div key={i} className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-100 dark:border-yellow-900 rounded p-2 text-xs flex items-center justify-between">
                           <div>
                             <span className="font-mono">Pixiv {r.pixiv_id}</span>
@@ -394,10 +397,10 @@ export default function DanbooruReferencePage() {
                 {/* Not found list */}
                 {batchImport.data.not_found.length > 0 && (
                   <div>
-                    <h4 className="text-sm font-medium text-red-700 dark:text-red-400 mb-2">Not Found ({batchImport.data.not_found.length})</h4>
+                    <h4 className="text-sm font-medium text-red-700 dark:text-red-400 mb-2">{t("danbooru.batch_result_not_found")} ({batchImport.data.not_found.length})</h4>
                     <p className="text-xs text-red-600 mb-2">No matching Danbooru artist. May need manual creator creation and source linking.</p>
                     <div className="flex flex-wrap gap-2">
-                      {batchImport.data.not_found.map((r, i) => (
+                      {batchImport.data.not_found.map((r: any, i: number) => (
                         <span key={i} className="bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900 rounded px-2 py-1 text-xs font-mono text-red-700 dark:text-red-400">
                           Pixiv {r.pixiv_id}
                         </span>
@@ -413,38 +416,38 @@ export default function DanbooruReferencePage() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-          <h3 className="font-medium mb-1 text-sm">Search by Source URL</h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Matches Danbooru artist URLs exactly. Works with any URL type (Pixiv, Twitter, Iwara, etc.).</p>
+          <h3 className="font-medium mb-1 text-sm">{t("danbooru.search_url_title")}</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">{t("danbooru.search_url_desc")}</p>
           <input value={searchUrl} onChange={(e) => setSearchUrl(e.target.value)}
-            placeholder="https://www.pixiv.net/en/users/1980643"
+            placeholder={t("danbooru.url_placeholder")}
             className="w-full border rounded px-3 py-2 text-sm mb-2" />
           <button onClick={() => handleSearch("url")} disabled={!searchUrl.trim()}
             className="w-full px-3 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
-            Search Danbooru
+            {t("danbooru.search_btn")}
           </button>
         </div>
 
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-          <h3 className="font-medium mb-1 text-sm">Search by Pixiv User ID</h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Constructs a Pixiv user URL and matches it against Danbooru artist records.</p>
+          <h3 className="font-medium mb-1 text-sm">{t("danbooru.search_pixiv_title")}</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">{t("danbooru.search_pixiv_desc")}</p>
           <input value={searchPixivId} onChange={(e) => setSearchPixivId(e.target.value)}
-            placeholder="1980643"
+            placeholder={t("danbooru.pixiv_id_placeholder")}
             className="w-full border rounded px-3 py-2 text-sm mb-2" />
           <button onClick={() => handleSearch("pixiv_id")} disabled={!searchPixivId.trim()}
             className="w-full px-3 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
-            Search Danbooru
+            {t("danbooru.search_btn")}
           </button>
         </div>
 
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-          <h3 className="font-medium mb-1 text-sm">Search by Artist Name</h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Searches Danbooru artist names directly using wildcard matching. Supports partial names.</p>
+          <h3 className="font-medium mb-1 text-sm">{t("danbooru.search_name_title")}</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">{t("danbooru.search_name_desc")}</p>
           <input value={searchName} onChange={(e) => setSearchName(e.target.value)}
-            placeholder="ask (askzy)"
+            placeholder={t("danbooru.name_placeholder")}
             className="w-full border rounded px-3 py-2 text-sm mb-2" />
           <button onClick={() => handleSearch("name")} disabled={!searchName.trim()}
             className="w-full px-3 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
-            Search Danbooru
+            {t("danbooru.search_btn")}
           </button>
         </div>
       </div>
@@ -453,7 +456,7 @@ export default function DanbooruReferencePage() {
       {preview.error && <ErrorState message={(preview.error as Error).message} />}
       {preview.data && !preview.data.found && (
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-          <EmptyState title="No match found" description={preview.data.message || "No matching Danbooru artist found."} />
+          <EmptyState title={t("danbooru.no_match")} description={preview.data.message || "No matching Danbooru artist found."} />
         </div>
       )}
 

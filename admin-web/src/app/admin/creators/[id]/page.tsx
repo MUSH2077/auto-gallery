@@ -4,8 +4,10 @@ import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, CreatorLink as CreatorLinkType, SourceCreator as SourceCreatorType } from "@/lib/api";
 import { PageHeader, StatusBadge, SourceBadge, EmptyState, Modal, ConfirmDialog } from "@/components";
+import { useT } from "@/lib/i18n";
 
 function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () => void }) {
+  const t = useT();
   const [url, setUrl] = useState(""); const [linkType, setLinkType] = useState("website"); const [source, setSource] = useState("");
   const qc = useQueryClient();
   const create = useMutation({
@@ -14,18 +16,18 @@ function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () =>
   });
   return (
     <div className="space-y-4">
-      <div><label className="block text-sm font-medium mb-1">URL *</label><input value={url} onChange={(e) => setUrl(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="https://..." /></div>
+      <div><label className="block text-sm font-medium mb-1">{t("creator_detail.url_label")}</label><input value={url} onChange={(e) => setUrl(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder={t("creator_detail.url_placeholder")} /></div>
       <div className="grid grid-cols-2 gap-4">
-        <div><label className="block text-sm font-medium mb-1">Type</label>
+        <div><label className="block text-sm font-medium mb-1">{t("creator_detail.type_label")}</label>
           <select value={linkType} onChange={(e) => setLinkType(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
-            <option value="website">Website</option><option value="pixiv">Pixiv</option><option value="x">X / Twitter</option><option value="iwara">Iwara</option><option value="danbooru">Danbooru</option><option value="other">Other</option>
+            <option value="website">{t("creator_detail.type_website")}</option><option value="pixiv">{t("creator_detail.type_pixiv")}</option><option value="x">{t("creator_detail.type_x")}</option><option value="iwara">{t("creator_detail.type_iwara")}</option><option value="danbooru">{t("creator_detail.type_danbooru")}</option><option value="other">{t("creator_detail.type_other")}</option>
           </select>
         </div>
-        <div><label className="block text-sm font-medium mb-1">Source</label><input value={source} onChange={(e) => setSource(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="e.g. pixiv" /></div>
+        <div><label className="block text-sm font-medium mb-1">{t("creator_detail.source_label")}</label><input value={source} onChange={(e) => setSource(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder={t("creator_detail.source_placeholder")} /></div>
       </div>
       <div className="flex justify-end gap-3 pt-2">
-        <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">Cancel</button>
-        <button onClick={() => create.mutate()} disabled={!url || create.isPending} className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">{create.isPending ? "Adding..." : "Add Link"}</button>
+        <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">{t("creator_detail.cancel")}</button>
+        <button onClick={() => create.mutate()} disabled={!url || create.isPending} className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">{create.isPending ? t("creator_detail.adding") : t("creator_detail.add_link_btn")}</button>
       </div>
       {create.error && <p className="text-red-600 text-sm">{(create.error as Error).message}</p>}
     </div>
@@ -33,6 +35,7 @@ function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () =>
 }
 
 function SubscriptionPanel({ creatorId }: { creatorId: string }) {
+  const t = useT();
   const router = useRouter();
   const qc = useQueryClient();
   const subs = useQuery({ queryKey: queryKeys.subscriptions.all, queryFn: () => api.listSubscriptions() });
@@ -52,10 +55,10 @@ function SubscriptionPanel({ creatorId }: { creatorId: string }) {
   if (!sub) {
     return (
       <div className="text-xs text-gray-500 dark:text-gray-400">
-        <p className="mb-2">No subscription yet.</p>
+        <p className="mb-2">{t("creator_detail.no_subscription")}</p>
         <button onClick={() => createSub.mutate()} disabled={createSub.isPending}
           className="px-3 py-1 bg-slate-900 dark:bg-slate-700 text-white rounded text-xs hover:bg-slate-800 dark:hover:bg-slate-600">
-          {createSub.isPending ? "Creating..." : "Create Subscription"}
+          {createSub.isPending ? t("creator_detail.creating_sub") : t("creator_detail.create_subscription")}
         </button>
       </div>
     );
@@ -64,20 +67,20 @@ function SubscriptionPanel({ creatorId }: { creatorId: string }) {
   return (
     <div className="text-xs space-y-2">
       <div className="flex justify-between">
-        <span className="text-gray-500 dark:text-gray-400">Status:</span>
+        <span className="text-gray-500 dark:text-gray-400">{t("creator_detail.sub_status")}</span>
         <span className={sub.sync_enabled ? "text-green-600" : "text-gray-400"}>
-          {sub.sync_enabled ? "Auto-sync enabled" : "Manual only"} · {sub.sync_interval_hours}h
+          {sub.sync_enabled ? t("creator_detail.auto_sync_on") : t("creator_detail.manual_only")} · {sub.sync_interval_hours}h
         </span>
       </div>
       {sub.last_synced_at && (
         <div className="flex justify-between">
-          <span className="text-gray-500 dark:text-gray-400">Last synced:</span>
+          <span className="text-gray-500 dark:text-gray-400">{t("creator_detail.last_synced")}</span>
           <span>{new Date(sub.last_synced_at).toLocaleString()}</span>
         </div>
       )}
       {sources.data && sources.data.length > 0 && (
         <div className="mt-2 space-y-1">
-          <p className="text-gray-500 dark:text-gray-400 font-medium">Sources ({sources.data.length}):</p>
+          <p className="text-gray-500 dark:text-gray-400 font-medium">{t("creator_detail.sources_count").replace("{count}", String(sources.data.length))}</p>
           {sources.data.map((ss: any) => (
             <div key={ss.id} className="flex items-center justify-between border-t pt-1">
               <div className="flex items-center gap-2">
@@ -88,19 +91,20 @@ function SubscriptionPanel({ creatorId }: { creatorId: string }) {
                 </span>
               </div>
               <button onClick={() => router.push(`/admin/subscriptions/${sub.id}`)}
-                className="text-blue-600 hover:underline">Manage</button>
+                className="text-blue-600 hover:underline">{t("creator_detail.manage")}</button>
             </div>
           ))}
         </div>
       )}
       {(!sources.data || sources.data.length === 0) && (
-        <p className="text-gray-400 dark:text-gray-500">No sources configured.</p>
+        <p className="text-gray-400 dark:text-gray-500">{t("creator_detail.no_sources")}</p>
       )}
     </div>
   );
 }
 
 function AddSourceForm({ creatorId, onClose }: { creatorId: string; onClose: () => void }) {
+  const t = useT();
   const [source, setSource] = useState("pixiv"); const [sourceCreatorId, setSourceCreatorId] = useState(""); const [sourceUrl, setSourceUrl] = useState(""); const [displayName, setDisplayName] = useState("");
   const qc = useQueryClient();
   const create = useMutation({
@@ -110,18 +114,18 @@ function AddSourceForm({ creatorId, onClose }: { creatorId: string; onClose: () 
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-4">
-        <div><label className="block text-sm font-medium mb-1">Source *</label>
+        <div><label className="block text-sm font-medium mb-1">{t("creator_detail.source_field")}</label>
           <select value={source} onChange={(e) => setSource(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
-            <option value="pixiv">Pixiv</option><option value="x">X / Twitter</option><option value="iwara">Iwara</option><option value="local">Local</option><option value="manual">Manual</option>
+            <option value="pixiv">{t("creator_detail.source_pixiv")}</option><option value="x">{t("creator_detail.source_x")}</option><option value="iwara">{t("creator_detail.source_iwara")}</option><option value="local">{t("creator_detail.source_local")}</option><option value="manual">{t("creator_detail.source_manual")}</option>
           </select>
         </div>
-        <div><label className="block text-sm font-medium mb-1">Source Creator ID *</label><input value={sourceCreatorId} onChange={(e) => setSourceCreatorId(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="e.g. 123456" /></div>
+        <div><label className="block text-sm font-medium mb-1">{t("creator_detail.source_creator_id")}</label><input value={sourceCreatorId} onChange={(e) => setSourceCreatorId(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder={t("creator_detail.source_id_placeholder")} /></div>
       </div>
-      <div><label className="block text-sm font-medium mb-1">Source URL</label><input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="https://..." /></div>
-      <div><label className="block text-sm font-medium mb-1">Display Name</label><input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></div>
+      <div><label className="block text-sm font-medium mb-1">{t("creator_detail.source_url")}</label><input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder={t("creator_detail.url_placeholder")} /></div>
+      <div><label className="block text-sm font-medium mb-1">{t("creator_detail.source_display_name")}</label><input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></div>
       <div className="flex justify-end gap-3 pt-2">
-        <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">Cancel</button>
-        <button onClick={() => create.mutate()} disabled={!sourceCreatorId || create.isPending} className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">{create.isPending ? "Adding..." : "Add Source"}</button>
+        <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">{t("creator_detail.cancel")}</button>
+        <button onClick={() => create.mutate()} disabled={!sourceCreatorId || create.isPending} className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">{create.isPending ? t("creator_detail.adding") : t("creator_detail.add_source_btn")}</button>
       </div>
       {create.error && <p className="text-red-600 text-sm">{(create.error as Error).message}</p>}
     </div>
@@ -129,6 +133,7 @@ function AddSourceForm({ creatorId, onClose }: { creatorId: string; onClose: () 
 }
 
 export default function CreatorDetailPage() {
+  const t = useT();
   const params = useParams(); const router = useRouter(); const qc = useQueryClient();
   const id = params.id as string;
 
@@ -148,6 +153,11 @@ export default function CreatorDetailPage() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.creators.detail(id) }); setEditing(false); },
   });
 
+  const toggleFavorite = useMutation({
+    mutationFn: (creatorId: string) => api.toggleCreatorFavorite(creatorId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.creators.detail(id as string) }),
+  });
+
   const verifyLink = useMutation({
     mutationFn: (linkId: string) => api.updateCreatorLink(id, linkId, { is_verified: true, confidence: 1.0 }),
     onSuccess: () => links.refetch(),
@@ -163,26 +173,31 @@ export default function CreatorDetailPage() {
     <main className="max-w-4xl mx-auto p-6">
       <PageHeader title={c.display_name || c.name}>
         <div className="flex gap-2">
-          <button onClick={() => router.push(`/admin/creators/${id}/mapping`)} className="px-3 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">Manage Mapping</button>
-          <button onClick={openEdit} className="px-3 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">Edit</button>
+          <button onClick={() => toggleFavorite.mutate(id as string)}
+            className={`text-xl px-2 ${creator.data?.is_favorite ? "text-yellow-500" : "text-gray-300 hover:text-yellow-400"}`}
+            title={creator.data?.is_favorite ? "Unfavorite" : "Favorite"}>
+            {creator.data?.is_favorite ? "★" : "☆"}
+          </button>
+          <button onClick={() => router.push(`/admin/creators/${id}/mapping`)} className="px-3 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">{t("creator_detail.manage_mapping")}</button>
+          <button onClick={openEdit} className="px-3 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">{t("creator_detail.edit")}</button>
         </div>
       </PageHeader>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div className="col-span-2 space-y-4">
           <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-            <h3 className="font-medium mb-2">Details</h3>
+            <h3 className="font-medium mb-2">{t("creator_detail.details")}</h3>
             <dl className="text-sm space-y-2">
-              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24">Name:</dt><dd>{c.name}</dd></div>
-              {c.display_name && <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24">Display:</dt><dd>{c.display_name}</dd></div>}
-              {c.description && <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24">Description:</dt><dd className="whitespace-pre-wrap">{c.description}</dd></div>}
-              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24">Status:</dt><dd><StatusBadge status={c.is_active ? "up" : "down"} /></dd></div>
-              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24">Created:</dt><dd className="text-xs">{new Date(c.created_at).toLocaleString()}</dd></div>
+              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24">{t("creator_detail.name")}</dt><dd>{c.name}</dd></div>
+              {c.display_name && <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24">{t("creator_detail.display")}</dt><dd>{c.display_name}</dd></div>}
+              {c.description && <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24">{t("creator_detail.description")}</dt><dd className="whitespace-pre-wrap">{c.description}</dd></div>}
+              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24">{t("creator_detail.status")}</dt><dd><StatusBadge status={c.is_active ? "up" : "down"} /></dd></div>
+              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24">{t("creator_detail.created")}</dt><dd className="text-xs">{new Date(c.created_at).toLocaleString()}</dd></div>
             </dl>
           </div>
 
           <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-            <div className="flex items-center justify-between mb-3"><h3 className="font-medium">Links ({links.data?.length || 0})</h3><button onClick={() => setShowAddLink(true)} className="text-xs px-3 py-1 bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">+ Add Link</button></div>
+            <div className="flex items-center justify-between mb-3"><h3 className="font-medium">{t("creator_detail.links").replace("{count}", String(links.data?.length || 0))}</h3><button onClick={() => setShowAddLink(true)} className="text-xs px-3 py-1 bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">{t("creator_detail.add_link")}</button></div>
             {links.data && links.data.length > 0 ? (
               <div className="space-y-2">
                 {links.data.map((l: CreatorLinkType) => (
@@ -192,29 +207,29 @@ export default function CreatorDetailPage() {
                       <a href={l.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline truncate max-w-xs">{l.url}</a>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-gray-400 dark:text-gray-500">confidence: {l.confidence.toFixed(1)}</span>
-                      {l.is_verified ? <StatusBadge status="up" /> : <button onClick={() => verifyLink.mutate(l.id)} disabled={verifyLink.isPending} className="text-xs text-blue-600 hover:underline disabled:opacity-50">{verifyLink.isPending ? "..." : "Verify"}</button>}
+                      <span className="text-xs text-gray-400 dark:text-gray-500">{t("creator_detail.confidence")} {l.confidence.toFixed(1)}</span>
+                      {l.is_verified ? <StatusBadge status="up" /> : <button onClick={() => verifyLink.mutate(l.id)} disabled={verifyLink.isPending} className="text-xs text-blue-600 hover:underline disabled:opacity-50">{verifyLink.isPending ? "..." : t("creator_detail.verify")}</button>}
                     </div>
                   </div>
                 ))}
               </div>
-            ) : <p className="text-sm text-gray-400 dark:text-gray-500">No links yet.</p>}
+            ) : <p className="text-sm text-gray-400 dark:text-gray-500">{t("creator_detail.no_links")}</p>}
             {verifyLink.error && <p className="text-red-600 text-sm mt-2">{(verifyLink.error as Error).message}</p>}
           </div>
         </div>
 
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 h-fit">
-          <div className="flex items-center justify-between mb-3"><h3 className="font-medium">Subscription</h3></div>
+          <div className="flex items-center justify-between mb-3"><h3 className="font-medium">{t("creator_detail.subscription")}</h3></div>
           <SubscriptionPanel creatorId={id} />
         </div>
 
         {/* Danbooru Reference */}
         {c.danbooru_artist_id && (
           <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 h-fit">
-            <h3 className="font-medium mb-2">Danbooru Reference</h3>
+            <h3 className="font-medium mb-2">{t("creator_detail.danbooru_ref")}</h3>
             <div className="text-xs space-y-1">
               <div className="flex justify-between">
-                <span className="text-gray-500 dark:text-gray-400">Artist ID:</span>
+                <span className="text-gray-500 dark:text-gray-400">{t("creator_detail.artist_id")}</span>
                 <a href={`https://danbooru.donmai.us/artists/${c.danbooru_artist_id}`} target="_blank" rel="noopener noreferrer"
                   className="text-blue-600 hover:underline font-mono">#{c.danbooru_artist_id}</a>
               </div>
@@ -224,7 +239,7 @@ export default function CreatorDetailPage() {
             )}
             <button onClick={() => router.push(`/admin/creators/${id}/mapping`)}
               className="mt-3 text-xs text-blue-600 hover:underline w-full text-center block">
-              View all links on Mapping page &rarr;
+              {t("creator_detail.view_mapping")}
             </button>
           </div>
         )}
@@ -233,16 +248,16 @@ export default function CreatorDetailPage() {
       {/* Works by this Creator */}
       <CreatorWorksSection creatorId={id} creatorName={creator.data?.display_name || creator.data?.name || ""} />
 
-      <Modal open={showAddLink} onClose={() => setShowAddLink(false)} title="Add Creator Link"><AddLinkForm creatorId={id} onClose={() => setShowAddLink(false)} /></Modal>
-      <Modal open={showAddSource} onClose={() => setShowAddSource(false)} title="Add Source Account"><AddSourceForm creatorId={id} onClose={() => setShowAddSource(false)} /></Modal>
-      <Modal open={editing} onClose={() => setEditing(false)} title="Edit Creator">
+      <Modal open={showAddLink} onClose={() => setShowAddLink(false)} title={t("creator_detail.add_link_title")}><AddLinkForm creatorId={id} onClose={() => setShowAddLink(false)} /></Modal>
+      <Modal open={showAddSource} onClose={() => setShowAddSource(false)} title={t("creator_detail.add_source_title")}><AddSourceForm creatorId={id} onClose={() => setShowAddSource(false)} /></Modal>
+      <Modal open={editing} onClose={() => setEditing(false)} title={t("creator_detail.edit_title")}>
         <div className="space-y-4">
-          <div><label className="block text-sm font-medium mb-1">Name</label><input value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></div>
-          <div><label className="block text-sm font-medium mb-1">Display Name</label><input value={editDisplay} onChange={(e) => setEditDisplay(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></div>
-          <div><label className="block text-sm font-medium mb-1">Description</label><textarea value={editDesc} onChange={(e) => setEditDesc(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" rows={3} /></div>
+          <div><label className="block text-sm font-medium mb-1">{t("creator_detail.name_field")}</label><input value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></div>
+          <div><label className="block text-sm font-medium mb-1">{t("creator_detail.display_name_field")}</label><input value={editDisplay} onChange={(e) => setEditDisplay(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></div>
+          <div><label className="block text-sm font-medium mb-1">{t("creator_detail.description_field")}</label><textarea value={editDesc} onChange={(e) => setEditDesc(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" rows={3} /></div>
           <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => setEditing(false)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">Cancel</button>
-            <button onClick={() => update.mutate()} disabled={update.isPending} className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">Save</button>
+            <button onClick={() => setEditing(false)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">{t("creator_detail.cancel")}</button>
+            <button onClick={() => update.mutate()} disabled={update.isPending} className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">{t("creator_detail.save")}</button>
           </div>
           {update.error && <p className="text-red-600 text-sm">{(update.error as Error).message}</p>}
         </div>
@@ -253,6 +268,7 @@ export default function CreatorDetailPage() {
 
 
 function CreatorWorksSection({ creatorId, creatorName }: { creatorId: string; creatorName: string }) {
+  const t = useT();
   const router = useRouter();
   const works = useQuery({
     queryKey: ["creator-works", creatorId],
@@ -265,9 +281,9 @@ function CreatorWorksSection({ creatorId, creatorName }: { creatorId: string; cr
   return (
     <section className="mb-8">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-lg font-semibold dark:text-white">Works ({works.data.length})</h2>
+        <h2 className="text-lg font-semibold dark:text-white">{t("creator_detail.works_section").replace("{count}", String(works.data.length))}</h2>
         <button onClick={() => router.push(`/admin/works?creator=${creatorId}`)}
-          className="text-sm text-blue-600 hover:underline">View all</button>
+          className="text-sm text-blue-600 hover:underline">{t("creator_detail.view_all_works")}</button>
       </div>
       <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
         {works.data.map((w) => (
@@ -276,14 +292,14 @@ function CreatorWorksSection({ creatorId, creatorName }: { creatorId: string; cr
               {w.thumbnail_asset_id ? (
                 <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="w-full h-full object-cover" loading="lazy" />
               ) : (
-                <span>N/A</span>
+                <span>{t("creator_detail.na")}</span>
               )}
               {w.asset_count > 1 && (
                 <span className="absolute top-0.5 right-0.5 bg-black/70 text-white text-[10px] px-1 py-0.5 rounded">{w.asset_count}p</span>
               )}
             </div>
             <div className="p-2">
-              <div className="text-xs font-medium truncate dark:text-white">{w.title || "Untitled"}</div>
+              <div className="text-xs font-medium truncate dark:text-white">{w.title || t("creator_detail.untitled")}</div>
               {w.source && <SourceBadge source={w.source} />}
             </div>
           </div>

@@ -23,6 +23,7 @@ async def list_works(
     source: str | None = None,
     creator_id: str | None = None,
     is_nsfw: bool | None = None,
+    is_favorite: bool | None = None,
     sort_by: str = "created_at",
     sort_order: str = "desc",
     db: AsyncSession = Depends(get_db),
@@ -31,7 +32,8 @@ async def list_works(
     return await repo.list_all(
         offset=offset, limit=limit,
         search=search, source=source, creator_id=creator_id,
-        is_nsfw=is_nsfw, sort_by=sort_by, sort_order=sort_order,
+        is_nsfw=is_nsfw, is_favorite=is_favorite,
+        sort_by=sort_by, sort_order=sort_order,
     )
 
 
@@ -42,6 +44,15 @@ async def get_work(work_id: UUID, db: AsyncSession = Depends(get_db)):
     if not work:
         raise HTTPException(status_code=404, detail="Work not found")
     return work
+
+
+@router.post("/{work_id}/favorite", response_model=WorkRead)
+async def toggle_work_favorite(work_id: UUID, db: AsyncSession = Depends(get_db)):
+    repo = WorkRepository(db)
+    work = await repo.get(work_id)
+    if not work:
+        raise HTTPException(status_code=404, detail="Work not found")
+    return await repo.toggle_favorite(work)
 
 
 @router.get("/{work_id}/sources")

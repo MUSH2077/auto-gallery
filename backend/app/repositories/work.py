@@ -15,6 +15,7 @@ class WorkRepository:
                        source: str | None = None,
                        creator_id: str | None = None,
                        is_nsfw: bool | None = None,
+                       is_favorite: bool | None = None,
                        sort_by: str = "created_at",
                        sort_order: str = "desc") -> list[Work]:
         # Scalar subquery for source (first alphabetically)
@@ -87,6 +88,8 @@ class WorkRepository:
             conditions.append(Work.title.ilike(f"%{search}%"))
         if is_nsfw is not None:
             conditions.append(Work.is_nsfw == is_nsfw)
+        if is_favorite is not None:
+            conditions.append(Work.is_favorite == is_favorite)
 
         # For source and creator filters, need EXISTS subquery
         if source:
@@ -147,6 +150,11 @@ class WorkRepository:
                 w.preview_asset_ids = asset_map.get(w.id, [])[:10]
 
         return works
+
+    async def toggle_favorite(self, work: Work) -> Work:
+        work.is_favorite = not work.is_favorite
+        await self.session.flush()
+        return work
 
     async def get(self, work_id: UUID) -> Work | None:
         return await self.session.get(Work, work_id)

@@ -154,7 +154,7 @@ export default function GalleryDLConfigPage() {
 
   if (config.isError) {
     return <main className="max-w-4xl mx-auto p-6">
-      <ErrorState message={config.error?.message || "Failed"} onRetry={() => config.refetch()} />
+      <ErrorState message={config.error?.message || t("gallerydl.failed")} onRetry={() => config.refetch()} />
     </main>;
   }
   if (!config.data) {
@@ -169,7 +169,7 @@ export default function GalleryDLConfigPage() {
   return (
     <main className="max-w-4xl mx-auto p-6">
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; Settings</Link>
+        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("gallerydl.back")}</Link>
       </div>
       <PageHeader title={t("gallerydl.title")} description={t("gallerydl.desc")} />
 
@@ -219,37 +219,37 @@ function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: P
     <>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.auth")}</h4>
       <div className="grid grid-cols-2 gap-4">
-        <TextField label="Refresh Token" value={str(data.refresh_token)} onChange={(v) => set("refresh_token", v || undefined)} type="password" />
-        <TextField label="Cookies Path" value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/pixiv.txt" />
+        <TextField label={t("gallerydl.refresh_token")} value={str(data.refresh_token)} onChange={(v) => set("refresh_token", v || undefined)} type="password" />
+        <TextField label={t("gallerydl.cookies_path")} value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/pixiv.txt" />
       </div>
       <div>
-        <label className="block text-sm font-medium mb-1">Cookie Content (paste Netscape-format cookies)</label>
+        <label className="block text-sm font-medium mb-1">{t("gallerydl.cookie_content")}</label>
         <textarea value={str(data.cookie_content)} onChange={(e) => set("cookie_content", e.target.value || undefined)}
           rows={3} className="w-full border rounded px-3 py-2 text-xs font-mono dark:bg-slate-700 dark:text-white"
           placeholder="Paste cookie text here. Auto-saved to /gallerydl-config/cookies/pixiv.txt" />
-        <p className="text-xs text-gray-400 mt-1">Paste raw cookie content instead of specifying a file path. Overrides Cookies Path if set.</p>
+        <p className="text-xs text-gray-400 mt-1">{t("gallerydl.cookies_help")}</p>
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.content")}</h4>
       <div className="grid grid-cols-2 gap-4">
-        <SelectField label="Include" value={str(data.include, "artworks")} onChange={(v) => set("include", v)}
-          options={[{ value: "artworks", label: "artworks" }, { value: "favorites", label: "favorites" }, { value: "bookmarks", label: "bookmarks" }]} />
-        <SelectField label="Tag Language" value={str(data.tags, "japanese")} onChange={(v) => set("tags", v)}
-          options={[{ value: "japanese", label: "japanese" }, { value: "english", label: "english" }, { value: "translated", label: "translated" }]} />
-        <NumberField label="Max Posts" value={numStr(data.max_posts)} onChange={(v) => set("max_posts", parseInt(v) || undefined)} placeholder="Unlimited" />
-        <SelectField label="Ugoira Format" value={str(data.ugoira, "zip")} onChange={(v) => set("ugoira", v)}
+        <SelectField label={t("gallerydl.include")} value={str(data.include, "artworks")} onChange={(v) => set("include", v)}
+          options={[{ value: "artworks", label: t("gallerydl.artworks") }, { value: "favorites", label: t("gallerydl.favorites") }, { value: "bookmarks", label: t("gallerydl.bookmarks") }]} />
+        <SelectField label={t("gallerydl.tag_language")} value={str(data.tags, "japanese")} onChange={(v) => set("tags", v)}
+          options={[{ value: "japanese", label: t("gallerydl.japanese") }, { value: "english", label: t("gallerydl.english") }, { value: "translated", label: t("gallerydl.translated") }]} />
+        <NumberField label={t("gallerydl.max_posts")} value={numStr(data.max_posts)} onChange={(v) => set("max_posts", parseInt(v) || undefined)} placeholder="Unlimited" />
+        <SelectField label={t("gallerydl.ugoira_format")} value={str(data.ugoira, "zip")} onChange={(v) => set("ugoira", v)}
           options={[
-            { value: "zip", label: "ZIP (original frames)" },
-            { value: "gif", label: "GIF (animated, ffmpeg)" },
+            { value: "zip", label: t("gallerydl.zip_format") },
+            { value: "gif", label: t("gallerydl.gif_format") },
           ]} />
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
       <div className="grid grid-cols-2 gap-4">
-        <TextField label="Directory Pattern" value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} />
-        <TextField label="Filename Pattern" value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} placeholder="{id}_p{num}.{extension}" />
+        <TextField label={t("gallerydl.dir_pattern")} value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} />
+        <TextField label={t("gallerydl.filename_pattern")} value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} placeholder="{id}_p{num}.{extension}" />
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.rate_limit")}</h4>
       <div className="w-64">
-        <NumberField label="Sleep (seconds)" value={numStr(data.sleep_request)} onChange={(v) => set("sleep_request", parseFloat(v) || undefined)} placeholder="0" />
+        <NumberField label={t("gallerydl.sleep_seconds")} value={numStr(data.sleep_request)} onChange={(v) => set("sleep_request", parseFloat(v) || undefined)} placeholder="0" />
       </div>
     </>
   );
@@ -264,37 +264,37 @@ function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (
     <>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.auth")}</h4>
       <div className="grid grid-cols-2 gap-4">
-        <TextField label="Cookies Path" value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/twitter.txt" />
+        <TextField label={t("gallerydl.cookies_path")} value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/twitter.txt" />
       </div>
       <div>
-        <label className="block text-sm font-medium mb-1">Cookie Content (paste Netscape-format cookies)</label>
+        <label className="block text-sm font-medium mb-1">{t("gallerydl.cookie_content")}</label>
         <textarea value={str(data.cookie_content)} onChange={(e) => set("cookie_content", e.target.value || undefined)}
           rows={3} className="w-full border rounded px-3 py-2 text-xs font-mono dark:bg-slate-700 dark:text-white"
           placeholder="Paste cookie text here. Auto-saved to /gallerydl-config/cookies/twitter.txt" />
-        <p className="text-xs text-gray-400 mt-1">Paste raw cookie content instead of specifying a file path.</p>
+        <p className="text-xs text-gray-400 mt-1">{t("gallerydl.cookies_help")}</p>
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.content")}</h4>
       <div className="grid grid-cols-2 gap-4">
-        <SelectField label="Include" value={str(data.include, "timeline")} onChange={(v) => set("include", v)}
+        <SelectField label={t("gallerydl.include")} value={str(data.include, "timeline")} onChange={(v) => set("include", v)}
           options={[
-            { value: "timeline", label: "timeline" }, { value: "media", label: "media only" },
-            { value: "tweets", label: "tweets" }, { value: "likes", label: "likes" },
+            { value: "timeline", label: t("gallerydl.timeline") }, { value: "media", label: t("gallerydl.media_only") },
+            { value: "tweets", label: t("gallerydl.tweets") }, { value: "likes", label: t("gallerydl.likes") },
           ]} />
-        <NumberField label="Max Posts" value={numStr(data.max_posts)} onChange={(v) => set("max_posts", parseInt(v) || undefined)} placeholder="Unlimited" />
+        <NumberField label={t("gallerydl.max_posts")} value={numStr(data.max_posts)} onChange={(v) => set("max_posts", parseInt(v) || undefined)} placeholder="Unlimited" />
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.filters")}</h4>
       <div className="space-y-1">
-        <ToggleField label="Retweets" desc="Include retweets." value={data.retweets ?? false} onChange={(v) => set("retweets", v)} />
-        <ToggleField label="Replies" desc="Include replies to other users." value={data.replies ?? false} onChange={(v) => set("replies", v)} />
-        <ToggleField label="Cards" desc="Download Twitter Cards (e.g. links, summary cards)." value={data.cards ?? true} onChange={(v) => set("cards", v)} />
-        <ToggleField label="Videos" desc="Download embedded videos." value={data.videos ?? true} onChange={(v) => set("videos", v)} />
-        <ToggleField label="Text Tweets" desc="Include text-only tweets (no media)." value={data.text_tweets ?? false} onChange={(v) => set("text_tweets", v)} />
-        <ToggleField label="Quoted Tweets" desc="Include quoted tweet media." value={data.quoted ?? false} onChange={(v) => set("quoted", v)} />
+        <ToggleField label={t("gallerydl.retweets")} desc={t("gallerydl.include_retweets")} value={data.retweets ?? false} onChange={(v) => set("retweets", v)} />
+        <ToggleField label={t("gallerydl.replies")} desc={t("gallerydl.include_replies")} value={data.replies ?? false} onChange={(v) => set("replies", v)} />
+        <ToggleField label={t("gallerydl.cards")} desc={t("gallerydl.cards.desc")} value={data.cards ?? true} onChange={(v) => set("cards", v)} />
+        <ToggleField label={t("gallerydl.videos")} desc={t("gallerydl.videos.desc")} value={data.videos ?? true} onChange={(v) => set("videos", v)} />
+        <ToggleField label={t("gallerydl.text_tweets")} desc={t("gallerydl.text_tweets.desc")} value={data.text_tweets ?? false} onChange={(v) => set("text_tweets", v)} />
+        <ToggleField label={t("gallerydl.quoted")} desc={t("gallerydl.quoted.desc")} value={data.quoted ?? false} onChange={(v) => set("quoted", v)} />
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
       <div className="grid grid-cols-2 gap-4">
-        <TextField label="Directory Pattern" value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} placeholder="twitter/{user[name]}" />
-        <TextField label="Filename Pattern" value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} placeholder="{tweet_id}_{num}.{extension}" />
+        <TextField label={t("gallerydl.dir_pattern")} value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} placeholder="twitter/{user[name]}" />
+        <TextField label={t("gallerydl.filename_pattern")} value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} placeholder="{tweet_id}_{num}.{extension}" />
       </div>
     </>
   );
@@ -309,24 +309,24 @@ function IwaraTab({ data, onChange }: { data: IwaraSourceConfig; onChange: (d: I
     <>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.auth")}</h4>
       <div className="grid grid-cols-2 gap-4">
-        <TextField label="Username" value={str(data.username)} onChange={(v) => set("username", v || undefined)} placeholder="Iwara account username/email" />
-        <TextField label="Password" value={str(data.password)} onChange={(v) => set("password", v || undefined)} type="password" placeholder="Iwara account password" />
-        <TextField label="Cookies Path" value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/iwara.txt" />
+        <TextField label={t("gallerydl.username")} value={str(data.username)} onChange={(v) => set("username", v || undefined)} placeholder="Iwara account username/email" />
+        <TextField label={t("gallerydl.password")} value={str(data.password)} onChange={(v) => set("password", v || undefined)} type="password" placeholder="Iwara account password" />
+        <TextField label={t("gallerydl.cookies_path")} value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/iwara.txt" />
       </div>
       <div>
-        <label className="block text-sm font-medium mb-1">Cookie Content (paste Netscape-format cookies)</label>
+        <label className="block text-sm font-medium mb-1">{t("gallerydl.cookie_content")}</label>
         <textarea value={str(data.cookie_content)} onChange={(e) => set("cookie_content", e.target.value || undefined)}
           rows={3} className="w-full border rounded px-3 py-2 text-xs font-mono dark:bg-slate-700 dark:text-white"
           placeholder="Paste cookie text here. Auto-saved to /gallerydl-config/cookies/iwara.txt" />
-        <p className="text-xs text-gray-400 mt-1">Paste raw cookie content instead of specifying a file path.</p>
+        <p className="text-xs text-gray-400 mt-1">{t("gallerydl.cookies_help")}</p>
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.video_quality")}</h4>
-      <TextField label="Format" value={str(data.format)} onChange={(v) => set("format", v || undefined)} placeholder="Source, 540, 360" />
+      <TextField label={t("gallerydl.format")} value={str(data.format)} onChange={(v) => set("format", v || undefined)} placeholder="Source, 540, 360" />
       <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">{t("gallerydl.format.desc")}</p>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.file_org")}</h4>
       <div className="grid grid-cols-2 gap-4">
-        <TextField label="Directory Pattern" value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} placeholder="iwara/{user[name]}" />
-        <TextField label="Filename Pattern" value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} />
+        <TextField label={t("gallerydl.dir_pattern")} value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} placeholder="iwara/{user[name]}" />
+        <TextField label={t("gallerydl.filename_pattern")} value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} />
       </div>
     </>
   );

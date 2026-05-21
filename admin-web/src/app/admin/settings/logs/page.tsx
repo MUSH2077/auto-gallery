@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageHeader, ErrorState } from "@/components";
+import { useT } from "@/lib/i18n";
 import Link from "next/link";
 
 const LEVEL_COLORS: Record<string, string> = {
@@ -14,6 +15,7 @@ const LEVEL_COLORS: Record<string, string> = {
 };
 
 export default function SystemLogsPage() {
+  const t = useT();
   const [levelFilter, setLevelFilter] = useState("");
   const [nameFilter, setNameFilter] = useState("");
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -30,26 +32,26 @@ export default function SystemLogsPage() {
   return (
     <main className="max-w-6xl mx-auto p-6">
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; Settings</Link>
+        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("logs.back")}</Link>
       </div>
-      <PageHeader title="System Logs" description="Real-time application log viewer from the in-memory ring buffer (last 2000 entries)." />
+      <PageHeader title={t("logs.title")} description={t("logs.desc")} />
 
       {/* Toolbar */}
       <div className="flex items-center gap-3 mb-4 flex-wrap">
         <select value={levelFilter} onChange={(e) => setLevelFilter(e.target.value)}
           className="border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white dark:border-slate-600">
-          <option value="">All Levels</option>
+          <option value="">{t("logs.all_levels")}</option>
           {["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"].map((l) => <option key={l} value={l}>{l}</option>)}
         </select>
         <input value={nameFilter} onChange={(e) => setNameFilter(e.target.value)}
-          placeholder="Filter by logger name..."
+          placeholder={t("logs.filter_name")}
           className="border rounded px-3 py-2 text-sm w-48 dark:bg-slate-700 dark:text-white dark:border-slate-600" />
         <label className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400 cursor-pointer">
           <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} className="rounded" />
-          Auto-refresh (5s)
+          {t("logs.auto_refresh")}
         </label>
         <div className="flex-1" />
-        {logs.data && <span className="text-xs text-gray-400">{logs.data.total} entries</span>}
+        {logs.data && <span className="text-xs text-gray-400">{logs.data.total} {t("logs.entries")}</span>}
       </div>
 
       {/* Log entries */}
@@ -58,7 +60,7 @@ export default function SystemLogsPage() {
 
       {logs.data && (
         <div className="bg-slate-950 text-green-400 rounded-lg shadow p-4 font-mono text-xs leading-relaxed overflow-auto max-h-[70vh]">
-          {logs.data.entries.length === 0 && <span className="text-gray-500">No log entries matching filters.</span>}
+          {logs.data.entries.length === 0 && <span className="text-gray-500">{t("logs.no_entries")}</span>}
           {logs.data.entries.map((e, i) => (
             <div key={i} className="flex gap-3 hover:bg-slate-800 px-1 -mx-1 rounded">
               <span className="text-slate-500 shrink-0">{e.ts.slice(11, 19)}</span>

@@ -10,10 +10,11 @@ class CreatorRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def list_all(self, offset: int = 0, limit: int = 50) -> list[Creator]:
-        result = await self.session.execute(
-            select(Creator).offset(offset).limit(limit).order_by(Creator.name)
-        )
+    async def list_all(self, offset: int = 0, limit: int = 50, is_favorite: bool | None = None) -> list[Creator]:
+        stmt = select(Creator).offset(offset).limit(limit).order_by(Creator.name)
+        if is_favorite is not None:
+            stmt = stmt.where(Creator.is_favorite == is_favorite)
+        result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
     async def get(self, creator_id: UUID) -> Creator | None:

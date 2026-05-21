@@ -3,9 +3,11 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, SubscriptionDefaults } from "@/lib/api";
 import { PageHeader, ErrorState } from "@/components";
+import { useT } from "@/lib/i18n";
 import Link from "next/link";
 
 export default function SubscriptionDefaultsPage() {
+  const t = useT();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
   const [local, setLocal] = useState<SubscriptionDefaults | null>(null);
@@ -20,7 +22,7 @@ export default function SubscriptionDefaultsPage() {
   if (settings.isError) {
     return (
       <main className="max-w-4xl mx-auto p-6">
-        <ErrorState message={settings.error?.message || "Failed"} onRetry={() => settings.refetch()} />
+        <ErrorState message={settings.error?.message || t("subdefaults.failed")} onRetry={() => settings.refetch()} />
       </main>
     );
   }
@@ -53,35 +55,35 @@ export default function SubscriptionDefaultsPage() {
   return (
     <main className="max-w-4xl mx-auto p-6">
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; Settings</Link>
+        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("subdefaults.back")}</Link>
       </div>
-      <PageHeader title="Subscription Defaults" description="Default sync settings and scheduler behavior." />
+      <PageHeader title={t("subdefaults.title")} description={t("subdefaults.desc")} />
 
       {!current ? null : (
         <>
           <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6 space-y-5 text-sm">
-            <h4 className="font-medium text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">Sync Timing</h4>
+            <h4 className="font-medium text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("subdefaults.sync_timing")}</h4>
 
             <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
               <div>
-                <span className="font-medium">Schedule Mode</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Interval: sync every N hours. Fixed Time: sync at specific times of day.</p>
+                <span className="font-medium">{t("subdefaults.schedule_mode")}</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("subdefaults.schedule_mode.desc")}</p>
               </div>
               <select
                 value={current.schedule_mode || "interval"}
                 onChange={(e) => setLocal({ ...current, schedule_mode: e.target.value as "interval" | "fixed_time" })}
                 className="border rounded px-2 py-1 text-sm dark:bg-slate-700 dark:text-white"
               >
-                <option value="interval">Interval (N hours)</option>
-                <option value="fixed_time">Fixed Time (HH:MM)</option>
+                <option value="interval">{t("subdefaults.interval")}</option>
+                <option value="fixed_time">{t("subdefaults.fixed_time")}</option>
               </select>
             </div>
 
             {current.schedule_mode === "interval" ? (
               <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
                 <div>
-                  <span className="font-medium">Default Sync Interval</span>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Sync each subscription when this many hours have passed since last sync.</p>
+                  <span className="font-medium">{t("subdefaults.sync_interval")}</span>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("subdefaults.sync_interval.desc")}</p>
                 </div>
                 <input
                   type="number" min={1} max={168}
@@ -93,8 +95,8 @@ export default function SubscriptionDefaultsPage() {
             ) : (
               <div className="py-3 border-b dark:border-slate-700">
                 <div className="mb-2">
-                  <span className="font-medium">Scheduled Times</span>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Comma-separated HH:MM times (UTC). Sync runs at these moments each day.</p>
+                  <span className="font-medium">{t("subdefaults.scheduled_times")}</span>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("subdefaults.scheduled_times.desc")}</p>
                 </div>
                 <input
                   type="text"
@@ -103,16 +105,16 @@ export default function SubscriptionDefaultsPage() {
                   placeholder="03:00, 15:00"
                   className="w-48 border rounded px-2 py-1 text-sm font-mono dark:bg-slate-700 dark:text-white"
                 />
-                <p className="text-xs text-gray-400 mt-1">Example: "00:00, 06:00, 12:00, 18:00" for every 6 hours at fixed moments.</p>
+                <p className="text-xs text-gray-400 mt-1">{t("subdefaults.scheduled_times.example")}</p>
               </div>
             )}
 
-            <h4 className="font-medium text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-2">Scheduler Settings</h4>
+            <h4 className="font-medium text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-2">{t("subdefaults.scheduler")}</h4>
 
             <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
               <div>
-                <span className="font-medium">Scheduler Scan Interval</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">How often the scheduler wakes up to check for due subscriptions (minutes). Min 5.</p>
+                <span className="font-medium">{t("subdefaults.scan_interval")}</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("subdefaults.scan_interval.desc")}</p>
               </div>
               <input
                 type="number" min={5} max={1440}
@@ -122,12 +124,12 @@ export default function SubscriptionDefaultsPage() {
               />
             </div>
 
-            <h4 className="font-medium text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-2">New Subscription Defaults</h4>
+            <h4 className="font-medium text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-2">{t("subdefaults.new_sub")}</h4>
 
             <div className="flex items-center justify-between py-3">
               <div>
-                <span className="font-medium">Default Sync Enabled</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">New subscriptions start with auto-sync enabled.</p>
+                <span className="font-medium">{t("subdefaults.sync_enabled")}</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("subdefaults.sync_enabled.desc")}</p>
               </div>
               <button
                 onClick={() => setBool("default_sync_enabled", !current.default_sync_enabled)}
@@ -148,10 +150,10 @@ export default function SubscriptionDefaultsPage() {
               disabled={save.isPending}
               className="px-6 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50"
             >
-              {save.isPending ? "Saving..." : "Save Settings"}
+              {save.isPending ? t("common.saving") : t("subdefaults.save")}
             </button>
           </div>
-          {save.isSuccess && <p className="text-green-600 text-sm mt-2">Settings saved.</p>}
+          {save.isSuccess && <p className="text-green-600 text-sm mt-2">{t("subdefaults.saved")}</p>}
           {save.error && <p className="text-red-600 text-sm mt-2">{(save.error as Error).message}</p>}
         </>
       )}

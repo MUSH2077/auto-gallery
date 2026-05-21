@@ -14,9 +14,9 @@ router = APIRouter(dependencies=[RequireAdmin])
 
 
 @router.get("", response_model=list[CreatorRead])
-async def list_creators(offset: int = 0, limit: int = 50, db: AsyncSession = Depends(get_db)):
+async def list_creators(offset: int = 0, limit: int = 50, is_favorite: bool | None = None, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)
-    return await svc.list_creators(offset, limit)
+    return await svc.list_creators(offset, limit, is_favorite)
 
 
 # ── Batch Operations ──
@@ -96,6 +96,15 @@ async def delete_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)
     try:
         await svc.delete_creator(creator_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/{creator_id}/favorite", response_model=CreatorRead)
+async def toggle_creator_favorite(creator_id: UUID, db: AsyncSession = Depends(get_db)):
+    svc = CreatorService(db)
+    try:
+        return await svc.toggle_favorite(creator_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

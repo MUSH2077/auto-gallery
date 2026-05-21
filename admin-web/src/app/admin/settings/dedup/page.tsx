@@ -22,7 +22,7 @@ export default function DedupSettingsPage() {
   if (settings.isError) {
     return (
       <main className="max-w-4xl mx-auto p-6">
-        <ErrorState message={settings.error?.message || "Failed"} onRetry={() => settings.refetch()} />
+        <ErrorState message={settings.error?.message || t("dedup.failed")} onRetry={() => settings.refetch()} />
       </main>
     );
   }
@@ -60,7 +60,7 @@ export default function DedupSettingsPage() {
   return (
     <main className="max-w-4xl mx-auto p-6">
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; Settings</Link>
+        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("dedup.back")}</Link>
       </div>
       <PageHeader title={t("dedup.title")} description={t("dedup.desc")} />
 

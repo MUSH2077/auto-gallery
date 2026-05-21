@@ -1,7 +1,8 @@
 "use client";
 import { useState } from "react";
+import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, SourceBadge, ErrorState, EmptyState } from "@/components";
 
@@ -29,11 +30,12 @@ interface AssetData {
 }
 
 function AllPages({ workId, sources }: { workId: string; sources: WorkSourceData[] }) {
+  const t = useT();
   const assets = useQuery({ queryKey: ["works", workId, "assets"], queryFn: () => api.getWorkAssets(workId) });
   const [activeIndex, setActiveIndex] = useState(0);
 
   if (assets.isLoading) return <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 animate-pulse"><div className="h-24 bg-gray-100 dark:bg-slate-700 rounded" /></div>;
-  if (!assets.data || !assets.data.length) return <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4"><EmptyState title="No assets" description="No image files found for this work." /></div>;
+  if (!assets.data || !assets.data.length) return <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4"><EmptyState title={t("work_detail.no_assets_title", "No assets")} description={t("work_detail.no_assets")} /></div>;
 
   const current = assets.data[activeIndex] as AssetData;
   const totalPages = assets.data.length;
@@ -41,7 +43,7 @@ function AllPages({ workId, sources }: { workId: string; sources: WorkSourceData
 
   return (
     <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-      <h3 className="font-medium mb-2 text-sm">Pages ({totalPages})</h3>
+      <h3 className="font-medium mb-2 text-sm">{t("work_detail.pages_section").replace("{count}", String(totalPages))}</h3>
       {current && (
         <div className="mb-3">
           <img src={api.mediaUrl(current.id, "preview")} alt={current.file_name}
@@ -61,13 +63,13 @@ function AllPages({ workId, sources }: { workId: string; sources: WorkSourceData
       {/* Asset metadata for current page */}
       {current && (
         <div className="mt-4 pt-3 border-t text-xs text-gray-500 dark:text-gray-400 space-y-1">
-          <p className="font-medium text-gray-700 dark:text-gray-300 mb-1">Current Page</p>
-          <div className="flex justify-between"><span>File:</span><span className="font-mono">{current.file_name}</span></div>
+          <p className="font-medium text-gray-700 dark:text-gray-300 mb-1">{t("work_detail.current_page")}</p>
+          <div className="flex justify-between"><span>{t("work_detail.file")}</span><span className="font-mono">{current.file_name}</span></div>
           {current.width && current.height && (
-            <div className="flex justify-between"><span>Dimensions:</span><span>{current.width} &times; {current.height}</span></div>
+            <div className="flex justify-between"><span>{t("work_detail.dimensions")}</span><span>{current.width} &times; {current.height}</span></div>
           )}
           {current.mime_type && (
-            <div className="flex justify-between"><span>Format:</span><span>{current.mime_type}</span></div>
+            <div className="flex justify-between"><span>{t("work_detail.format")}</span><span>{current.mime_type}</span></div>
           )}
         </div>
       )}
@@ -76,11 +78,17 @@ function AllPages({ workId, sources }: { workId: string; sources: WorkSourceData
 }
 
 export default function WorkDetailPage() {
+  const t = useT();
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
+  const qc = useQueryClient();
 
   const work = useQuery({ queryKey: queryKeys.works.detail(id), queryFn: () => api.getWork(id) });
+  const toggleFavorite = useMutation({
+    mutationFn: (workId: string) => api.toggleWorkFavorite(workId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.works.detail(id) }),
+  });
   const sources = useQuery({ queryKey: queryKeys.works.sources(id), queryFn: () => api.getWorkSources(id) });
   const workTags = useQuery({ queryKey: ["works", id, "tags"], queryFn: () => api.getWorkTags(id) });
 
@@ -112,21 +120,28 @@ export default function WorkDetailPage() {
   return (
     <main className="max-w-6xl mx-auto p-6">
       {/* Header */}
-      <div className="mb-6">
-        <PageHeader title={w.title || "Untitled"}
-          description={
-            <span className="flex items-center gap-3 flex-wrap">
-              {primaryWs && <SourceBadge source={primaryWs.source} />}
-              {primaryWs?.source_creator_id && (
-                <span className="text-sm">Creator ID: <span className="font-mono">{primaryWs.source_creator_id}</span></span>
-              )}
-              {rating && <span className="text-xs px-2 py-0.5 rounded bg-gray-100 dark:bg-slate-700">{rating}</span>}
-              {illustType && <span className="text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700">{illustType}</span>}
-              {w.is_nsfw && <span className="text-xs px-2 py-0.5 rounded bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400">NSFW</span>}
-              {isAiGenerated && <span className="text-xs px-2 py-0.5 rounded bg-yellow-100 text-yellow-700">AI Generated</span>}
-            </span>
-          }
-        />
+      <div className="mb-6 flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <PageHeader title={w.title || t("work_detail.untitled")}
+            description={
+              <span className="flex items-center gap-3 flex-wrap">
+                {primaryWs && <SourceBadge source={primaryWs.source} />}
+                {primaryWs?.source_creator_id && (
+                  <span className="text-sm">{t("work_detail.creator_id")} <span className="font-mono">{primaryWs.source_creator_id}</span></span>
+                )}
+                {rating && <span className="text-xs px-2 py-0.5 rounded bg-gray-100 dark:bg-slate-700">{rating}</span>}
+                {illustType && <span className="text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700">{illustType}</span>}
+                {w.is_nsfw && <span className="text-xs px-2 py-0.5 rounded bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400">{t("work_detail.nsfw")}</span>}
+                {isAiGenerated && <span className="text-xs px-2 py-0.5 rounded bg-yellow-100 text-yellow-700">{t("work_detail.ai_generated")}</span>}
+              </span>
+            }
+          />
+        </div>
+        <button onClick={() => toggleFavorite.mutate(id)}
+          className={`text-2xl shrink-0 mt-1 ${work.data?.is_favorite ? "text-yellow-500" : "text-gray-300 hover:text-yellow-400"}`}
+          title={work.data?.is_favorite ? t("common.unfavorite") : t("common.favorite")}>
+          {work.data?.is_favorite ? "★" : "☆"}
+        </button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -134,39 +149,39 @@ export default function WorkDetailPage() {
         <div className="md:col-span-2 space-y-4">
           {/* Summary Card */}
           <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-            <h3 className="font-medium mb-3 text-sm uppercase tracking-wide text-gray-400 dark:text-gray-500">Summary</h3>
+            <h3 className="font-medium mb-3 text-sm uppercase tracking-wide text-gray-400 dark:text-gray-500">{t("work_detail.summary")}</h3>
             <dl className="text-sm space-y-2">
-              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">Title:</dt><dd className="font-medium">{w.title || "Untitled"}</dd></div>
+              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t("work_detail.title")}</dt><dd className="font-medium">{w.title || t("work_detail.untitled")}</dd></div>
               {primaryWs?.source_work_id && (
-                <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">Work ID:</dt><dd className="font-mono text-xs">{primaryWs.source_work_id}</dd></div>
+                <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t("work_detail.work_id")}</dt><dd className="font-mono text-xs">{primaryWs.source_work_id}</dd></div>
               )}
-              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">Posted:</dt><dd>{createDate ? new Date(createDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : "Unknown"}</dd></div>
+              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t("work_detail.posted")}</dt><dd>{createDate ? new Date(createDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : t("work_detail.unknown")}</dd></div>
               {rawWidth && rawHeight && (
-                <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">Dimensions:</dt><dd>{rawWidth} &times; {rawHeight}</dd></div>
+                <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t("work_detail.dimensions")}</dt><dd>{rawWidth} &times; {rawHeight}</dd></div>
               )}
-              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">Pages:</dt><dd>{pageCount}</dd></div>
+              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t("work_detail.pages")}</dt><dd>{pageCount}</dd></div>
               {illustType && (
-                <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">Type:</dt><dd className="capitalize">{illustType}</dd></div>
+                <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t("work_detail.type")}</dt><dd className="capitalize">{illustType}</dd></div>
               )}
-              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">Imported:</dt><dd className="text-xs">{new Date(w.created_at).toLocaleString()}</dd></div>
+              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t("work_detail.imported")}</dt><dd className="text-xs">{new Date(w.created_at).toLocaleString()}</dd></div>
             </dl>
           </div>
 
           {/* Stats Card */}
           {hasStats && (
             <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-              <h3 className="font-medium mb-3 text-sm uppercase tracking-wide text-gray-400 dark:text-gray-500">Stats</h3>
+              <h3 className="font-medium mb-3 text-sm uppercase tracking-wide text-gray-400 dark:text-gray-500">{t("work_detail.stats")}</h3>
               <div className="grid grid-cols-2 gap-4">
                 {totalView !== undefined && (
                   <div className="text-center p-3 bg-blue-50 dark:bg-blue-900/30 rounded-lg">
                     <div className="text-2xl font-bold text-blue-700">{totalView.toLocaleString()}</div>
-                    <div className="text-xs text-blue-500 mt-1">Views</div>
+                    <div className="text-xs text-blue-500 mt-1">{t("work_detail.views")}</div>
                   </div>
                 )}
                 {totalBookmarks !== undefined && (
                   <div className="text-center p-3 bg-pink-50 rounded-lg">
                     <div className="text-2xl font-bold text-pink-700">{totalBookmarks.toLocaleString()}</div>
-                    <div className="text-xs text-pink-500 mt-1">Bookmarks</div>
+                    <div className="text-xs text-pink-500 mt-1">{t("work_detail.bookmarks")}</div>
                   </div>
                 )}
               </div>
@@ -177,7 +192,7 @@ export default function WorkDetailPage() {
           {(rawTags.length > 0 || (workTags.data && workTags.data.length > 0)) && (
             <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
               <h3 className="font-medium mb-3 text-sm uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                Tags ({rawTags.length} source{workTags.data?.length ? ` · ${workTags.data.length} normalized` : ""})
+                {t("work_detail.tags")} ({rawTags.length} {t("work_detail.source_tags")}{workTags.data?.length ? ` · ${workTags.data.length} ${t("work_detail.normalized_tags")}` : ""})
               </h3>
               {/* Normalized (work-level) tags */}
               {workTags.data && workTags.data.length > 0 && (
@@ -208,7 +223,7 @@ export default function WorkDetailPage() {
           {/* Tools */}
           {rawTools.length > 0 && (
             <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-              <h3 className="font-medium mb-3 text-sm uppercase tracking-wide text-gray-400 dark:text-gray-500">Tools</h3>
+              <h3 className="font-medium mb-3 text-sm uppercase tracking-wide text-gray-400 dark:text-gray-500">{t("work_detail.tools")}</h3>
               <div className="flex flex-wrap gap-2">
                 {rawTools.map((tool, i) => (
                   <span key={i} className="px-3 py-1 bg-indigo-50 text-indigo-700 rounded-full text-sm">{tool}</span>
@@ -220,7 +235,7 @@ export default function WorkDetailPage() {
           {/* Description */}
           {w.description && (
             <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-              <h3 className="font-medium mb-2 text-sm uppercase tracking-wide text-gray-400 dark:text-gray-500">Description</h3>
+              <h3 className="font-medium mb-2 text-sm uppercase tracking-wide text-gray-400 dark:text-gray-500">{t("work_detail.description")}</h3>
               <p className="text-sm whitespace-pre-wrap leading-relaxed">{w.description}</p>
             </div>
           )}
@@ -228,7 +243,7 @@ export default function WorkDetailPage() {
           {/* Source Records */}
           <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
             <h3 className="font-medium mb-3 text-sm uppercase tracking-wide text-gray-400 dark:text-gray-500">
-              Source Records ({wsList.length})
+              {t("work_detail.source_records").replace("{count}", String(wsList.length))}
             </h3>
             {wsList.length > 0 ? (
               <div className="space-y-3">
@@ -236,7 +251,7 @@ export default function WorkDetailPage() {
                   <SourceRecord key={s.id} source={s} />
                 ))}
               </div>
-            ) : <EmptyState title="No source records" description="Source metadata is created during import." />}
+            ) : <EmptyState title={t("work_detail.no_source_records")} description={t("work_detail.no_source_records_desc", "Source metadata is created during import.")} />}
           </div>
         </div>
 
@@ -247,7 +262,7 @@ export default function WorkDetailPage() {
           {/* Series info */}
           {series && (
             <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-              <h3 className="font-medium mb-2 text-sm text-gray-500 dark:text-gray-400">Series</h3>
+              <h3 className="font-medium mb-2 text-sm text-gray-500 dark:text-gray-400">{t("work_detail.series")}</h3>
               <p className="text-sm">{series}</p>
             </div>
           )}
@@ -255,10 +270,10 @@ export default function WorkDetailPage() {
           {/* Quick links */}
           {primaryWs?.source_url && (
             <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-              <h3 className="font-medium mb-2 text-sm text-gray-500 dark:text-gray-400">Links</h3>
+              <h3 className="font-medium mb-2 text-sm text-gray-500 dark:text-gray-400">{t("work_detail.links")}</h3>
               <a href={primaryWs.source_url} target="_blank" rel="noopener noreferrer"
                 className="text-sm text-blue-600 hover:underline break-all">
-                View on {primaryWs.source} &rarr;
+                {t("work_detail.view_on").replace("{source}", primaryWs.source)}
               </a>
             </div>
           )}
@@ -269,6 +284,7 @@ export default function WorkDetailPage() {
 }
 
 function SourceRecord({ source: s }: { source: WorkSourceData }) {
+  const t = useT();
   const [showRaw, setShowRaw] = useState(false);
   return (
     <div className="border rounded-lg p-3 text-sm">
@@ -276,7 +292,7 @@ function SourceRecord({ source: s }: { source: WorkSourceData }) {
         <SourceBadge source={s.source} />
         <span className="font-mono text-xs text-gray-500 dark:text-gray-400">{s.source_work_id}</span>
         {s.source_creator_id && (
-          <span className="text-xs text-gray-400 dark:text-gray-500">by {s.source_creator_id}</span>
+          <span className="text-xs text-gray-400 dark:text-gray-500">{t("work_detail.by")} {s.source_creator_id}</span>
         )}
       </div>
       {s.source_url && (
@@ -286,13 +302,13 @@ function SourceRecord({ source: s }: { source: WorkSourceData }) {
           </a>
         </div>
       )}
-      {s.title && <p className="text-xs text-gray-600 dark:text-gray-300 mt-1">Source title: {s.title}</p>}
-      {s.posted_at && <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Posted: {s.posted_at}</p>}
+      {s.title && <p className="text-xs text-gray-600 dark:text-gray-300 mt-1">{t("work_detail.source_title")} {s.title}</p>}
+      {s.posted_at && <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{t("work_detail.source_posted")} {s.posted_at}</p>}
       {s.raw_metadata && (
         <div className="mt-2">
           <button onClick={() => setShowRaw(!showRaw)}
             className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:text-gray-300 underline">
-            {showRaw ? "Hide raw metadata" : "Show raw metadata"}
+            {showRaw ? t("work_detail.hide_metadata") : t("work_detail.show_metadata")}
           </button>
           {showRaw && (
             <pre className="mt-2 text-xs font-mono bg-gray-50 dark:bg-slate-800/50 p-3 rounded max-h-64 overflow-auto">

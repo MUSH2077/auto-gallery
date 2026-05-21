@@ -21,18 +21,18 @@ export default function SettingsPage() {
   const cards = [
     { href: "/admin/settings/gallerydl", title: t("settings.gallerydl"), desc: t("settings.gallerydl.desc") },
     { href: "/admin/settings/dedup", title: t("settings.dedup"), desc: t("settings.dedup.desc") },
-    { href: "/admin/settings/proxy", title: "Network Proxy", desc: "Configure HTTP/HTTPS proxy for external API access and gallery-dl downloads." },
+    { href: "/admin/settings/proxy", title: t("settings.proxy"), desc: t("settings.proxy.desc") },
     { href: "/admin/settings/auth-status", title: t("settings.auth"), desc: t("settings.auth.desc") },
     { href: "/admin/settings/subscription-defaults", title: t("settings.sub_defaults"), desc: t("settings.sub_defaults.desc") },
     { href: "/admin/settings/download-defaults", title: t("settings.dl_defaults"), desc: t("settings.dl_defaults.desc") },
-    { href: "/admin/naming-templates", title: "Naming Templates", desc: "Configure gallery-dl file organization patterns per source." },
-    { href: "/admin/settings/logs", title: "System Logs", desc: "Real-time application log viewer with filtering and auto-refresh." },
-    { href: "/admin/settings/data-mgmt", title: "Data Management", desc: "Clear downloads, works, creators, subscriptions. Reset all settings to defaults." },
+    { href: "/admin/naming-templates", title: t("settings.naming"), desc: t("settings.naming.desc") },
+    { href: "/admin/settings/logs", title: t("settings.logs"), desc: t("settings.logs.desc") },
+    { href: "/admin/settings/data-mgmt", title: t("settings.data_mgmt"), desc: t("settings.data_mgmt.desc") },
   ];
 
   return (
     <main className="max-w-4xl mx-auto p-6">
-      <PageHeader title={t("settings.title")} description="System configuration" />
+      <PageHeader title={t("settings.title")} description={t("settings.desc_default")} />
 
       {/* Config Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
@@ -86,7 +86,7 @@ export default function SettingsPage() {
         <div className="card rounded-lg shadow p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium dark:text-white">Meilisearch Re-indexing</p>
+              <p className="text-sm font-medium dark:text-white">{t("settings.reindex_label")}</p>
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("settings.search_index.desc")}</p>
             </div>
             <button onClick={() => setConfirmReindex(true)} disabled={reindex.isPending}
@@ -124,13 +124,13 @@ export default function SettingsPage() {
       <section className="mb-8">
         <h2 className="text-lg font-semibold mb-3 dark:text-white">{t("settings.system_info")}</h2>
         <div className="card rounded-lg shadow p-4 text-sm space-y-2">
-          <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Backend API</span><span className="font-mono text-xs dark:text-gray-300">/api/v1 (proxied)</span></div>
-          <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Admin Web</span><span className="text-xs dark:text-gray-300">Next.js 14 · TypeScript · Tailwind · TanStack Query</span></div>
-          <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Auth mode</span><span className="text-xs text-gray-400 dark:text-gray-500">Admin API key</span></div>
+          <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">{t("settings.backend_api")}</span><span className="font-mono text-xs dark:text-gray-300">{t("settings.backend_api_val")}</span></div>
+          <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">{t("settings.admin_web")}</span><span className="text-xs dark:text-gray-300">{t("settings.admin_web_val")}</span></div>
+          <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">{t("settings.auth_mode")}</span><span className="text-xs text-gray-400 dark:text-gray-500">{t("settings.auth_mode_val")}</span></div>
         </div>
       </section>
 
-      {confirmReindex && <ConfirmDialog open title="Reindex Search" message="Full Meilisearch re-indexing may take a while."
+      {confirmReindex && <ConfirmDialog open title={t("settings.reindex_confirm_title")} message={t("settings.reindex_confirm_msg")}
         onConfirm={() => reindex.mutate()} onCancel={() => setConfirmReindex(false)}
         isPending={reindex.isPending} error={(reindex.error as Error)?.message} />}
     </main>

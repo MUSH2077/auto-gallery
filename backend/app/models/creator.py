@@ -13,6 +13,7 @@ class Creator(TimestampMixin, Base):
     thumbnail_url: Mapped[str | None] = mapped_column(String(2000))
     is_active: Mapped[bool] = mapped_column(default=True)
     danbooru_artist_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_favorite: Mapped[bool] = mapped_column(default=False)
 
     source_creators = relationship("SourceCreator", back_populates="creator")
     creator_links = relationship("CreatorLink", back_populates="creator")

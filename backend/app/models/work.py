@@ -12,6 +12,7 @@ class Work(TimestampMixin, Base):
     posted_at: Mapped[str | None] = mapped_column(String(100))
     is_nsfw: Mapped[bool] = mapped_column(Boolean, default=False)
     thumbnail_asset_id: Mapped[str | None] = mapped_column(String(36))
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
 
     work_sources = relationship("WorkSource", back_populates="work")
     work_tags = relationship("WorkTag", back_populates="work")
