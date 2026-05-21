@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     gallerydl_config_root: str = "/gallerydl-config"
     app_config_root: str = "/app-config"
 
-    cors_origins: str = "http://localhost:3250,http://localhost:3000"
+    cors_origins: str = "http://localhost:13000"
     log_level: str = "INFO"
 
     model_config = {"env_prefix": "", "case_sensitive": False}

@@ -14,8 +14,41 @@ router = APIRouter(dependencies=[RequireAdmin])
 
 
 @router.post("/scan")
-async def scan_imports():
-    return {"status": "ok", "message": "Import job scan triggered", "jobs_found": 0}
+async def scan_imports(db: AsyncSession = Depends(get_db)):
+    """Scan for pending import work: check downloads dir for unprocessed JSON metadata files."""
+    import os
+    from pathlib import Path
+    from app.config import settings
+
+    job_count = 0
+    # Find all download dirs that have metadata JSONs from --write-metadata
+    dl_root = Path(settings.download_root)
+    if dl_root.exists():
+        for source_dir in dl_root.iterdir():
+            if not source_dir.is_dir():
+                continue
+            for user_dir in source_dir.iterdir():
+                if not user_dir.is_dir():
+                    continue
+                for work_dir in user_dir.iterdir():
+                    if not work_dir.is_dir():
+                        continue
+                    json_files = list(work_dir.glob("*.json"))
+                    if json_files:
+                        job_count += 1
+
+    # Also count existing failed import jobs that can be retried
+    failed = await db.execute(
+        select(ImportJob).where(ImportJob.status.in_(["failed", "stale"]))
+    )
+    failed_count = len(failed.scalars().all())
+
+    return {
+        "status": "ok",
+        "message": f"Found {job_count} directories with pending metadata, {failed_count} retryable jobs",
+        "pending_dirs": job_count,
+        "retryable_jobs": failed_count,
+    }
 
 
 @router.get("")

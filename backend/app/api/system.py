@@ -1,6 +1,5 @@
 import logging
 import os
-from pathlib import Path
 
 from fastapi import APIRouter
 
@@ -18,8 +17,8 @@ def _dir_size(path: str) -> int:
                 total += entry.stat().st_size
             elif entry.is_dir(follow_symlinks=False):
                 total += _dir_size(entry.path)
-    except (OSError, PermissionError):
-        pass
+    except (OSError, PermissionError) as e:
+        logger.debug("Cannot scan %s: %s", path, e)
     return total
 
 
@@ -31,8 +30,8 @@ def _count_files(path: str) -> int:
                 count += 1
             elif entry.is_dir(follow_symlinks=False):
                 count += _count_files(entry.path)
-    except (OSError, PermissionError):
-        pass
+    except (OSError, PermissionError) as e:
+        logger.debug("Cannot count files in %s: %s", path, e)
     return count
 
 
