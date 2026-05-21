@@ -1,9 +1,9 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Tag
+from app.models import Tag, WorkTag
 
 
 class TagRepository:
@@ -11,10 +11,23 @@ class TagRepository:
         self.session = session
 
     async def list_all(self, offset: int = 0, limit: int = 100) -> list[Tag]:
-        result = await self.session.execute(
-            select(Tag).offset(offset).limit(limit).order_by(Tag.normalized_name)
+        count_sub = (
+            select(func.count(WorkTag.work_id))
+            .where(WorkTag.tag_id == Tag.id)
+            .correlate(Tag)
+            .scalar_subquery()
         )
-        return list(result.scalars().all())
+        result = await self.session.execute(
+            select(Tag, count_sub.label("usage_count"))
+            .offset(offset).limit(limit)
+            .order_by(Tag.normalized_name)
+        )
+        tags = []
+        for row in result:
+            tag = row[0]
+            tag.usage_count = row[1] or 0
+            tags.append(tag)
+        return tags
 
     async def get_or_create(self, normalized_name: str) -> Tag:
         result = await self.session.execute(

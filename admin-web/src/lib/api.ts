@@ -151,6 +151,7 @@ export interface Tag {
   id: string;
   normalized_name: string;
   category?: string;
+  usage_count: number;
   created_at: string;
 }
 
