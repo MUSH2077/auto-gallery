@@ -300,9 +300,16 @@ export const api = {
   sources: () => request<{ sources: ProviderInfo[] }>("/api/v1/sources"),
 
   // Creators
-  listCreators: (offset = 0, limit = 50, is_favorite?: boolean) => {
+  listCreators: (offset = 0, limit = 50, filters?: {
+    search?: string; is_active?: boolean; has_danbooru?: boolean;
+    has_subscription?: boolean; is_favorite?: boolean;
+  }) => {
     const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
-    if (is_favorite !== undefined) params.set("is_favorite", String(is_favorite));
+    if (filters?.search) params.set("search", filters.search);
+    if (filters?.is_active !== undefined) params.set("is_active", String(filters.is_active));
+    if (filters?.has_danbooru !== undefined) params.set("has_danbooru", String(filters.has_danbooru));
+    if (filters?.has_subscription !== undefined) params.set("has_subscription", String(filters.has_subscription));
+    if (filters?.is_favorite !== undefined) params.set("is_favorite", String(filters.is_favorite));
     return request<Creator[]>(`/api/v1/creators?${params.toString()}`);
   },
 
@@ -350,7 +357,16 @@ export const api = {
     request<void>(`/api/v1/creators/${creatorId}/links/${linkId}`, { method: "DELETE" }),
 
   // Subscriptions
-  listSubscriptions: (offset = 0, limit = 50) => request<Subscription[]>(`/api/v1/subscriptions`),
+  listSubscriptions: (offset = 0, limit = 50, filters?: {
+    search?: string; is_active?: boolean; sync_enabled?: boolean; never_synced?: boolean;
+  }) => {
+    const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+    if (filters?.search) params.set("search", filters.search);
+    if (filters?.is_active !== undefined) params.set("is_active", String(filters.is_active));
+    if (filters?.sync_enabled !== undefined) params.set("sync_enabled", String(filters.sync_enabled));
+    if (filters?.never_synced !== undefined) params.set("never_synced", String(filters.never_synced));
+    return request<Subscription[]>(`/api/v1/subscriptions?${params.toString()}`);
+  },
 
   getSubscription: (id: string) => request<Subscription>(`/api/v1/subscriptions/${id}`),
 

@@ -21,9 +21,19 @@ router = APIRouter(dependencies=[RequireAdmin])
 
 
 @router.get("", response_model=list[SubscriptionRead])
-async def list_subscriptions(offset: int = 0, limit: int = 50, db: AsyncSession = Depends(get_db)):
+async def list_subscriptions(
+    offset: int = 0, limit: int = 50,
+    search: str | None = None,
+    is_active: bool | None = None,
+    sync_enabled: bool | None = None,
+    never_synced: bool | None = None,
+    db: AsyncSession = Depends(get_db),
+):
     svc = SubscriptionService(db)
-    return await svc.list_subscriptions(offset, limit)
+    return await svc.list_subscriptions(offset, limit,
+                                        search=search, is_active=is_active,
+                                        sync_enabled=sync_enabled,
+                                        never_synced=never_synced)
 
 
 # ── Batch Operations ──
