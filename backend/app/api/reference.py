@@ -1,12 +1,15 @@
 import asyncio
+import json
 import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import RequireAdmin
+from rq import Queue
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.services import danbooru as danbooru_svc
 from app.models.creator_link import CreatorLink
@@ -245,187 +248,80 @@ async def import_all_danbooru(data: dict, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/danbooru/artist/batch-import")
-async def batch_import_danbooru_artists(data: dict, db: AsyncSession = Depends(get_db)):
-    """Batch import multiple Pixiv user IDs via Danbooru one-click flow.
+async def batch_import_danbooru_artists(data: dict):
+    """Enqueue a batch import job for Pixiv user IDs via Danbooru.
 
     Accepts: {pixiv_ids: ["1980643", "123456", ...]}
-    For each ID: search Danbooru, auto-import if high-confidence match found.
-    Returns categorized results for bulk processing.
+    Returns immediately with a job_id. Poll GET /danbooru/artist/batch-import/status
+    for progress and results.
     """
-    from app.models.creator import Creator
-    from app.models.subscription import Subscription
-    from app.models.subscription_source import SubscriptionSource
-    from app.services.creator_dedup import find_existing_creator
+    import redis as redis_lib
 
     pixiv_ids = data.get("pixiv_ids", [])
     if not pixiv_ids or not isinstance(pixiv_ids, list):
         raise HTTPException(status_code=400, detail="pixiv_ids list is required")
     pixiv_ids = [str(pid).strip() for pid in pixiv_ids if str(pid).strip()]
+    if not pixiv_ids:
+        raise HTTPException(status_code=400, detail="No valid pixiv_ids provided")
 
-    imported = []
-    low_confidence = []
-    not_found = []
-    errors = []
+    r = redis_lib.from_url(settings.redis_url)
+    q = Queue(connection=r)
+    job = q.enqueue("app.jobs.batch_import.run_batch_import", pixiv_ids,
+                    job_timeout=3600,  # 1 hour max
+                    result_ttl=3600)
 
-    for pid in pixiv_ids:
+    logger.info("Enqueued batch import job %s with %d pixiv_ids", job.id, len(pixiv_ids))
+    return {
+        "status": "ok",
+        "message": f"Batch import enqueued ({len(pixiv_ids)} IDs)",
+        "job_id": job.id,
+        "total": len(pixiv_ids),
+    }
+
+
+@router.get("/danbooru/artist/batch-import/status")
+async def get_batch_import_status(job_id: str | None = None):
+    """Get progress or results of a batch import job.
+
+    Without job_id: returns the most recent batch result from Redis.
+    With job_id: fetches RQ job status + Redis progress/result.
+    """
+    import redis as redis_lib
+
+    r = redis_lib.from_url(settings.redis_url)
+    q = Queue(connection=r)
+
+    # Check for in-progress data
+    progress_raw = r.get("batch_import:progress")
+    result_raw = r.get("batch_import:result")
+
+    progress = None
+    if progress_raw:
         try:
-            # Search Danbooru for this Pixiv ID (in thread to avoid blocking async event loop)
-            artist, links = await asyncio.to_thread(danbooru_svc.search_and_extract, pixiv_id=pid)
-            if not artist:
-                not_found.append({"pixiv_id": pid, "message": "No matching Danbooru artist found"})
-                continue
+            progress = json.loads(progress_raw)
+        except Exception:
+            pass
 
-            artist_name = artist.get("name", "Unknown")
-            artist_id = artist.get("id")
+    result = None
+    if result_raw:
+        try:
+            result = json.loads(result_raw)
+        except Exception:
+            pass
 
-            # Check for downloadable URLs
-            dl_urls = [
-                u for u in artist.get("urls", [])
-                if u.get("is_active", True) and danbooru_svc.is_downloadable_url(
-                    u.get("normalized_url") or u.get("url", "")
-                )
-            ]
-            if not dl_urls:
-                low_confidence.append({
-                    "pixiv_id": pid,
-                    "artist_name": artist_name,
-                    "artist_id": artist_id,
-                    "url_count": len(artist.get("urls", [])),
-                    "message": "Found but has no downloadable source URLs (Pixiv, Iwara)",
-                })
-                continue
-
-            # Dedup check: find existing creator
-            first_dl = dl_urls[0] if dl_urls else {}
-            first_url = first_dl.get("normalized_url") or first_dl.get("url", "")
-            pixiv_user_id = str(pid)
-            existing = await find_existing_creator(
-                db,
-                danbooru_artist_id=artist_id,
-                source="pixiv",
-                source_creator_id=pixiv_user_id,
-                source_url=first_url,
-            )
-
-            if existing:
-                # Merge into existing: add missing links + sources
-                creator = existing
-                was_merged = True
-
-                # Enrich if missing
-                if not creator.danbooru_artist_id:
-                    creator.danbooru_artist_id = artist_id
-                if not creator.description:
-                    parts = []
-                    other_names = artist.get("other_names", [])
-                    if other_names:
-                        parts.append(f"Danbooru aliases: {', '.join(other_names)}")
-                    notes = artist.get("notes")
-                    if notes:
-                        parts.append(notes)
-                    if parts:
-                        creator.description = "\n".join(parts)
-            else:
-                # Create new Creator
-                creator = Creator(
-                    name=artist_name,
-                    display_name=artist_name,
-                    danbooru_artist_id=artist_id,
-                )
-                db.add(creator)
-                await db.flush()
-                was_merged = False
-
-                # Enrich description
-                parts = []
-                other_names = artist.get("other_names", [])
-                if other_names:
-                    parts.append(f"Danbooru aliases: {', '.join(other_names)}")
-                notes = artist.get("notes")
-                if notes:
-                    parts.append(notes)
-                if parts:
-                    creator.description = "\n".join(parts)
-
-            # Import creator links (new only)
-            links_count = 0
-            for link_data in links:
-                existing_link = await db.execute(
-                    select(CreatorLink).where(
-                        CreatorLink.creator_id == creator.id,
-                        CreatorLink.url == link_data["url"],
-                    )
-                )
-                if existing_link.scalar_one_or_none():
-                    continue
-                db.add(CreatorLink(
-                    creator_id=creator.id,
-                    url=link_data["url"],
-                    link_type=link_data["link_type"],
-                    source=link_data["source"],
-                    confidence=link_data["confidence"],
-                    is_verified=link_data["is_verified"],
-                    notes=link_data.get("notes"),
-                ))
-                links_count += 1
-
-            # Get or create Subscription
-            sub_result = await db.execute(
-                select(Subscription).where(Subscription.creator_id == creator.id)
-            )
-            subscription = sub_result.scalar_one_or_none()
-            if not subscription:
-                subscription = Subscription(creator_id=creator.id)
-                db.add(subscription)
-                await db.flush()
-
-            # Create SubscriptionSources for downloadable URLs (new only)
-            sources_count = 0
-            for u in dl_urls:
-                raw_url = u.get("normalized_url") or u.get("url", "")
-                src_type = danbooru_svc._classify_url(raw_url)
-                existing_ss = await db.execute(
-                    select(SubscriptionSource).where(
-                        SubscriptionSource.subscription_id == subscription.id,
-                        SubscriptionSource.source_url == raw_url,
-                    )
-                )
-                if existing_ss.scalar_one_or_none():
-                    continue
-                db.add(SubscriptionSource(
-                    subscription_id=subscription.id,
-                    source=src_type,
-                    source_url=raw_url,
-                    is_enabled=True,
-                ))
-                sources_count += 1
-
-            await db.commit()
-
-            imported.append({
-                "pixiv_id": pid,
-                "creator_id": str(creator.id),
-                "artist_name": artist_name,
-                "artist_id": artist_id,
-                "links_imported": links_count,
-                "sources_created": sources_count,
-                "downloadable_urls": [u.get("normalized_url") or u.get("url") for u in dl_urls],
-                "merged": was_merged,
-            })
-
-        except Exception as e:
-            await db.rollback()
-            errors.append({"pixiv_id": pid, "error": str(e)})
-            logger.exception("Batch import failed for pixiv_id=%s", pid)
+    # Check RQ job status if job_id provided
+    job_status = None
+    if job_id:
+        try:
+            job = q.fetch_job(job_id)
+            if job:
+                job_status = job.get_status()
+        except Exception:
+            pass
 
     return {
-        "total": len(pixiv_ids),
-        "imported_count": len(imported),
-        "low_confidence_count": len(low_confidence),
-        "not_found_count": len(not_found),
-        "error_count": len(errors),
-        "imported": imported,
-        "low_confidence": low_confidence,
-        "not_found": not_found,
-        "errors": errors,
+        "status": "completed" if result else ("running" if progress else "unknown"),
+        "progress": progress,
+        "result": result,
+        "job_status": job_status,
     }

@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
@@ -248,13 +248,33 @@ export default function DanbooruReferencePage() {
     },
   });
 
-  const batchImport = useMutation({
+  const [batchJobId, setBatchJobId] = useState<string | null>(null);
+
+  const enqueueBatch = useMutation({
     mutationFn: (ids: string[]) => api.batchImportDanbooru(ids),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.creators.all });
-      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+    onSuccess: (data) => {
+      setBatchJobId(data.job_id);
     },
   });
+
+  // Poll for batch results while a job is running
+  const batchStatus = useQuery({
+    queryKey: ["batch-import-status", batchJobId],
+    queryFn: () => api.getBatchImportStatus(batchJobId || undefined),
+    enabled: !!batchJobId,
+    refetchInterval: (query) => query.state.data?.status === "completed" ? false : 2000,
+  });
+
+  const batchResult = batchStatus.data?.result;
+  const batchProgress = batchStatus.data?.progress;
+
+  // Clear job when results arrive
+  useEffect(() => {
+    if (batchResult) {
+      qc.invalidateQueries({ queryKey: queryKeys.creators.all });
+      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+    }
+  }, [batchResult, qc]);
 
   const handleBatchSubmit = () => {
     const ids = batchInput
@@ -262,7 +282,8 @@ export default function DanbooruReferencePage() {
       .map((s) => s.trim())
       .filter((s) => /^\d+$/.test(s));
     if (ids.length === 0) return;
-    batchImport.mutate(ids);
+    setBatchJobId(null);
+    enqueueBatch.mutate(ids);
   };
 
   const handleSearch = (type: "url" | "name" | "pixiv_id") => {
@@ -315,48 +336,64 @@ export default function DanbooruReferencePage() {
             <div className="flex items-center gap-3">
               <button
                 onClick={handleBatchSubmit}
-                disabled={batchImport.isPending || !batchInput.trim()}
+                disabled={enqueueBatch.isPending || (!!batchJobId && !batchResult) || !batchInput.trim()}
                 className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
               >
-                {batchImport.isPending ? t("danbooru.processing") : t("danbooru.batch_import")}
+                {enqueueBatch.isPending ? "..." : (!!batchJobId && !batchResult) ? t("danbooru.processing") : t("danbooru.batch_import")}
               </button>
               <span className="text-xs text-gray-400">
                 {batchInput.trim() ? `${batchInput.split(/[\n,]+/).filter((s: string) => /^\d+$/.test(s.trim())).length} ${t("danbooru.valid_ids")}` : ""}
               </span>
+              {batchResult && (
+                <button onClick={() => { setBatchJobId(null); }} className="text-xs text-blue-600 hover:underline">{t("common.close")}</button>
+              )}
             </div>
-            {batchImport.error && (
-              <p className="text-red-600 text-sm">{(batchImport.error as Error).message}</p>
+            {enqueueBatch.error && (
+              <p className="text-red-600 text-sm">{(enqueueBatch.error as Error).message}</p>
+            )}
+
+            {/* Progress bar */}
+            {batchProgress && !batchResult && (
+              <div className="mt-3">
+                <div className="flex justify-between text-xs text-gray-500 mb-1">
+                  <span>Processing {batchProgress.current}/{batchProgress.total}</span>
+                  <span>{batchProgress.imported} imported, {batchProgress.errors} errors</span>
+                </div>
+                <div className="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-2">
+                  <div className="bg-blue-600 h-2 rounded-full transition-all" style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }} />
+                </div>
+              </div>
             )}
 
             {/* Results */}
-            {batchImport.data && (
+            {batchResult && (
               <div className="mt-4 space-y-4">
                 {/* Summary */}
                 <div className="grid grid-cols-4 gap-3">
                   <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded p-3 text-center">
-                    <div className="text-xl font-bold text-green-700 dark:text-green-400">{batchImport.data.imported_count}</div>
+                    <div className="text-xl font-bold text-green-700 dark:text-green-400">{batchResult.imported_count}</div>
                     <div className="text-xs text-green-600">{t("danbooru.batch_result_imported")}</div>
                   </div>
                   <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded p-3 text-center">
-                    <div className="text-xl font-bold text-yellow-700 dark:text-yellow-400">{batchImport.data.low_confidence_count}</div>
+                    <div className="text-xl font-bold text-yellow-700 dark:text-yellow-400">{batchResult.low_confidence_count}</div>
                     <div className="text-xs text-yellow-600">{t("danbooru.batch_result_low_confidence")}</div>
                   </div>
                   <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded p-3 text-center">
-                    <div className="text-xl font-bold text-red-700 dark:text-red-400">{batchImport.data.not_found_count}</div>
+                    <div className="text-xl font-bold text-red-700 dark:text-red-400">{batchResult.not_found_count}</div>
                     <div className="text-xs text-red-600">{t("danbooru.batch_result_not_found")}</div>
                   </div>
                   <div className="bg-gray-50 dark:bg-slate-800/50 border border-gray-200 dark:border-slate-700 rounded p-3 text-center">
-                    <div className="text-xl font-bold text-gray-600 dark:text-gray-400">{batchImport.data.error_count}</div>
+                    <div className="text-xl font-bold text-gray-600 dark:text-gray-400">{batchResult.error_count}</div>
                     <div className="text-xs text-gray-500">{t("danbooru.batch_result_errors")}</div>
                   </div>
                 </div>
 
                 {/* Imported list */}
-                {batchImport.data.imported.length > 0 && (
+                {batchResult.imported.length > 0 && (
                   <div>
-                    <h4 className="text-sm font-medium text-green-700 dark:text-green-400 mb-2">{t("danbooru.batch_result_imported")} ({batchImport.data.imported.length})</h4>
+                    <h4 className="text-sm font-medium text-green-700 dark:text-green-400 mb-2">{t("danbooru.batch_result_imported")} ({batchResult.imported.length})</h4>
                     <div className="space-y-1 max-h-48 overflow-y-auto">
-                      {batchImport.data.imported.map((r: any, i: number) => (
+                      {batchResult.imported.map((r: any, i: number) => (
                         <div key={i} className="bg-green-50 dark:bg-green-900/20 border border-green-100 dark:border-green-900 rounded p-2 text-xs flex items-center justify-between">
                           <div>
                             <span className="font-mono text-green-800 dark:text-green-300">Pixiv {r.pixiv_id}</span>
@@ -374,12 +411,12 @@ export default function DanbooruReferencePage() {
                 )}
 
                 {/* Low confidence list */}
-                {batchImport.data.low_confidence.length > 0 && (
+                {batchResult.low_confidence.length > 0 && (
                   <div>
-                    <h4 className="text-sm font-medium text-yellow-700 dark:text-yellow-400 mb-2">{t("danbooru.batch_result_low_confidence")} — Manual Review ({batchImport.data.low_confidence.length})</h4>
+                    <h4 className="text-sm font-medium text-yellow-700 dark:text-yellow-400 mb-2">{t("danbooru.batch_result_low_confidence")} — Manual Review ({batchResult.low_confidence.length})</h4>
                     <p className="text-xs text-yellow-600 mb-2">Found Danbooru artist but no downloadable source URLs. Use individual search below to review and manually subscribe.</p>
                     <div className="space-y-1 max-h-48 overflow-y-auto">
-                      {batchImport.data.low_confidence.map((r: any, i: number) => (
+                      {batchResult.low_confidence.map((r: any, i: number) => (
                         <div key={i} className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-100 dark:border-yellow-900 rounded p-2 text-xs flex items-center justify-between">
                           <div>
                             <span className="font-mono">Pixiv {r.pixiv_id}</span>
@@ -395,12 +432,12 @@ export default function DanbooruReferencePage() {
                 )}
 
                 {/* Not found list */}
-                {batchImport.data.not_found.length > 0 && (
+                {batchResult.not_found.length > 0 && (
                   <div>
-                    <h4 className="text-sm font-medium text-red-700 dark:text-red-400 mb-2">{t("danbooru.batch_result_not_found")} ({batchImport.data.not_found.length})</h4>
+                    <h4 className="text-sm font-medium text-red-700 dark:text-red-400 mb-2">{t("danbooru.batch_result_not_found")} ({batchResult.not_found.length})</h4>
                     <p className="text-xs text-red-600 mb-2">No matching Danbooru artist. May need manual creator creation and source linking.</p>
                     <div className="flex flex-wrap gap-2">
-                      {batchImport.data.not_found.map((r: any, i: number) => (
+                      {batchResult.not_found.map((r: any, i: number) => (
                         <span key={i} className="bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900 rounded px-2 py-1 text-xs font-mono text-red-700 dark:text-red-400">
                           Pixiv {r.pixiv_id}
                         </span>
