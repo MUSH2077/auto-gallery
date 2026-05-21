@@ -16,8 +16,15 @@ class SubscriptionService:
         self.db = db
         self.repo = SubscriptionRepository(db)
 
-    async def list_subscriptions(self, offset: int = 0, limit: int = 50):
-        return await self.repo.list_all(offset, limit)
+    async def list_subscriptions(self, offset: int = 0, limit: int = 50,
+                                  search: str | None = None,
+                                  is_active: bool | None = None,
+                                  sync_enabled: bool | None = None,
+                                  never_synced: bool | None = None):
+        return await self.repo.list_all(offset, limit,
+                                        search=search, is_active=is_active,
+                                        sync_enabled=sync_enabled,
+                                        never_synced=never_synced)
 
     async def get_subscription(self, sub_id: UUID):
         sub = await self.repo.get(sub_id)

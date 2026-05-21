@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { useT } from "@/lib/i18n";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -38,15 +38,28 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
   );
 }
 
+function buildFilters(filter: FilterMode, search: string) {
+  const f: { search?: string; is_active?: boolean; sync_enabled?: boolean; never_synced?: boolean } = {};
+  if (search) f.search = search;
+  switch (filter) {
+    case "active": f.is_active = true; break;
+    case "inactive": f.is_active = false; break;
+    case "sync_on": f.sync_enabled = true; break;
+    case "sync_off": f.sync_enabled = false; break;
+    case "never_synced": f.never_synced = true; break;
+  }
+  return f;
+}
+
 export default function SubscriptionsPage() {
   const router = useRouter();
   const t = useT();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterMode>("all");
+  const [page, setPage] = useState(0);
+  const limit = 25;
   const [showCreate, setShowCreate] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [confirmBatchDel, setConfirmBatchDel] = useState(false);
 
   const FILTERS: { key: FilterMode; label: string }[] = [
     { key: "all", label: t("subscriptions.filter_all") },
@@ -57,8 +70,12 @@ export default function SubscriptionsPage() {
     { key: "never_synced", label: t("subscriptions.filter_never") },
   ];
 
-  const subs = useQuery({ queryKey: queryKeys.subscriptions.all, queryFn: () => api.listSubscriptions() });
-  const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
+  const filters = buildFilters(filter, search);
+
+  const subs = useQuery({
+    queryKey: [...queryKeys.subscriptions.all, page, filters],
+    queryFn: () => api.listSubscriptions(page * limit, limit, filters),
+  });
 
   const create = useMutation({
     mutationFn: (data: { creator_id: string; name?: string }) => api.createSubscription(data),
@@ -70,115 +87,45 @@ export default function SubscriptionsPage() {
     onSuccess: () => { setDeleteId(null); subs.refetch(); },
   });
 
-  const batchDel = useMutation({
-    mutationFn: (ids: string[]) => api.batchDeleteSubscriptions(ids),
-    onSuccess: () => { setSelected(new Set()); setConfirmBatchDel(false); subs.refetch(); },
-  });
-
-  const batchSync = useMutation({
-    mutationFn: (params: { ids: string[]; enable: boolean }) => api.batchToggleSyncSubscriptions(params.ids, params.enable),
-    onSuccess: () => { setSelected(new Set()); subs.refetch(); },
-  });
-
   const syncNow = useMutation({
     mutationFn: (id: string) => api.syncNowSubscription(id),
     onSuccess: () => subs.refetch(),
   });
 
-  const creatorMap = useMemo(() => {
-    const m = new Map<string, string>();
-    creators.data?.forEach((c) => m.set(c.id, c.display_name || c.name));
-    return m;
-  }, [creators.data]);
-
-  const filtered = useMemo(() => {
-    let list = subs.data || [];
-    if (search) {
-      const q = search.toLowerCase();
-      list = list.filter((s) => {
-        const cn = creatorMap.get(s.creator_id) || "";
-        return cn.toLowerCase().includes(q) || (s.name || "").toLowerCase().includes(q);
-      });
-    }
-    switch (filter) {
-      case "active": list = list.filter((s) => s.is_active); break;
-      case "inactive": list = list.filter((s) => !s.is_active); break;
-      case "sync_on": list = list.filter((s) => s.sync_enabled); break;
-      case "sync_off": list = list.filter((s) => !s.sync_enabled); break;
-      case "never_synced": list = list.filter((s) => !s.last_synced_at); break;
-    }
-    return list;
-  }, [subs.data, search, filter, creatorMap]);
-
-  const toggleSelect = (id: string) => {
-    const next = new Set(selected);
-    next.has(id) ? next.delete(id) : next.add(id);
-    setSelected(next);
-  };
-  const selectAll = () => {
-    if (selected.size === filtered.length) setSelected(new Set());
-    else setSelected(new Set(filtered.map((s) => s.id)));
-  };
-
   return (
     <main className="max-w-6xl mx-auto p-6">
-      <PageHeader title={t("subscriptions.title")} description={t("subscriptions.subs_count").replace("{filtered}", String(filtered.length)).replace("{total}", String(subs.data?.length || 0))}>
+      <PageHeader title={t("subscriptions.title")} description={t("subscriptions.count").replace("{filtered}", String(subs.data?.length || 0)).replace("{total}", String(subs.data?.length || 0)).replace("{page}", String(page + 1))}>
         <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600">{t("subscriptions.new")}</button>
       </PageHeader>
 
       {/* Toolbar */}
       <div className="flex items-center gap-3 mb-4 flex-wrap">
-        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("subscriptions.search")} className="border rounded px-3 py-2 text-sm w-48 dark:bg-slate-700 dark:text-white dark:border-slate-600" />
+        <input value={search} onChange={(e) => { setSearch(e.target.value); setPage(0); }} placeholder={t("subscriptions.search")} className="border rounded px-3 py-2 text-sm w-48 dark:bg-slate-700 dark:text-white dark:border-slate-600" />
         <div className="flex gap-1 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
           {FILTERS.map((f) => (
-            <button key={f.key} onClick={() => setFilter(f.key)}
+            <button key={f.key} onClick={() => { setFilter(f.key); setPage(0); }}
               className={`px-3 py-1 text-xs rounded transition-colors ${filter === f.key ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
               {f.label}
             </button>
           ))}
         </div>
-        <div className="flex-1" />
-        {selected.size > 0 && (
-          <div className="flex gap-2">
-            <button onClick={() => batchSync.mutate({ ids: [...selected], enable: true })} disabled={batchSync.isPending}
-              className="px-3 py-1.5 text-xs bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50">
-              {t("subscriptions.enable_sync")}
-            </button>
-            <button onClick={() => batchSync.mutate({ ids: [...selected], enable: false })} disabled={batchSync.isPending}
-              className="px-3 py-1.5 text-xs bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50">
-              {t("subscriptions.disable_sync")}
-            </button>
-            <button onClick={() => setConfirmBatchDel(true)} className="px-3 py-1.5 text-xs bg-red-600 text-white rounded hover:bg-red-700">
-              {t("subscriptions.delete_selected").replace("{count}", String(selected.size))}
-            </button>
-          </div>
-        )}
       </div>
-
-      {/* Select all */}
-      {filtered.length > 0 && (
-        <label className="flex items-center gap-2 mb-2 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
-          <input type="checkbox" checked={selected.size === filtered.length && filtered.length > 0} onChange={selectAll} className="rounded" />
-          {t("subscriptions.select_all")}
-        </label>
-      )}
 
       {/* Content */}
       {subs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
       {subs.error && <ErrorState message={(subs.error as Error).message} />}
       {subs.data && !subs.data.length && <EmptyState title={t("subscriptions.no_subs")} description={t("subscriptions.no_subs_desc")} action={<button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm">{t("subscriptions.create_sub")}</button>} />}
 
-      {filtered.length > 0 && (
+      {subs.data && subs.data.length > 0 && (
         <div className="space-y-1">
-          {filtered.map((s: Subscription) => (
-            <div key={s.id} className={`bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 flex items-center gap-3 transition-colors ${selected.has(s.id) ? "ring-2 ring-blue-500" : ""}`}>
-              <input type="checkbox" checked={selected.has(s.id)} onChange={() => toggleSelect(s.id)} className="rounded shrink-0" onClick={(e) => e.stopPropagation()} />
+          {subs.data.map((s: Subscription) => (
+            <div key={s.id} className="bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 flex items-center gap-3">
               <div className="flex-1 min-w-0 cursor-pointer" onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>
                 <div className="flex items-center gap-2">
-                  <span className="font-medium text-sm truncate">{s.name || creatorMap.get(s.creator_id) || s.creator_id.slice(0, 8)}</span>
+                  <span className="font-medium text-sm truncate">{s.name || s.creator_id.slice(0, 8)}</span>
                   {s.is_active ? <span className="w-1.5 h-1.5 bg-green-500 rounded-full shrink-0" /> : <span className="w-1.5 h-1.5 bg-gray-300 rounded-full shrink-0" />}
                 </div>
-                <div className="text-xs text-gray-400 dark:text-gray-500">{t("subscriptions.creator_prefix")} {creatorMap.get(s.creator_id) || s.creator_id.slice(0, 8)}</div>
+                <div className="text-xs text-gray-400 dark:text-gray-500">{t("subscriptions.creator_prefix")} {s.creator_id.slice(0, 8)}</div>
               </div>
               <div className="flex items-center gap-3 shrink-0 text-xs">
                 {s.sync_enabled ? <span className="text-green-600 dark:text-green-400">{t("subscriptions.auto_sync")}</span> : <span className="text-gray-400">{t("subscriptions.manual")}</span>}
@@ -196,11 +143,19 @@ export default function SubscriptionsPage() {
         </div>
       )}
 
+      {/* Pagination */}
+      {subs.data && subs.data.length > 0 && (
+        <div className="flex gap-2 justify-center mt-4">
+          <button disabled={page === 0} onClick={() => setPage(page - 1)} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("works.prev")}</button>
+          <span className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400">{t("works.page").replace("{page}", String(page + 1))}</span>
+          <button onClick={() => setPage(page + 1)} disabled={!subs.data || subs.data.length < limit} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("works.next")}</button>
+        </div>
+      )}
+
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title={t("subscriptions.new_sub_title")}>
         <CreateForm isPending={create.isPending} error={create.error} onSubmit={(data) => create.mutate(data)} onClose={() => setShowCreate(false)} />
       </Modal>
       {deleteId && <ConfirmDialog open title={t("subscriptions.delete_title")} message={t("subscriptions.delete_msg")} onConfirm={() => del.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={del.isPending} error={(del.error as Error)?.message} />}
-      {confirmBatchDel && <ConfirmDialog open title={t("subscriptions.batch_delete_title")} message={t("subscriptions.batch_delete_msg").replace("{count}", String(selected.size))} onConfirm={() => batchDel.mutate([...selected])} onCancel={() => setConfirmBatchDel(false)} isPending={batchDel.isPending} error={(batchDel.error as Error)?.message} />}
     </main>
   );
 }

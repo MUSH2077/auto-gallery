@@ -1,19 +1,47 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Creator, SourceCreator, CreatorLink
+from app.models import Creator, SourceCreator, CreatorLink, Subscription
 
 
 class CreatorRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def list_all(self, offset: int = 0, limit: int = 50, is_favorite: bool | None = None) -> list[Creator]:
-        stmt = select(Creator).offset(offset).limit(limit).order_by(Creator.name)
+    async def list_all(self, offset: int = 0, limit: int = 50,
+                       search: str | None = None,
+                       is_active: bool | None = None,
+                       has_danbooru: bool | None = None,
+                       has_subscription: bool | None = None,
+                       is_favorite: bool | None = None) -> list[Creator]:
+        conditions = []
+
+        if search:
+            conditions.append(or_(
+                Creator.name.ilike(f"%{search}%"),
+                Creator.display_name.ilike(f"%{search}%"),
+            ))
+        if is_active is not None:
+            conditions.append(Creator.is_active == is_active)
+        if has_danbooru is not None:
+            if has_danbooru:
+                conditions.append(Creator.danbooru_artist_id.isnot(None))
+            else:
+                conditions.append(Creator.danbooru_artist_id.is_(None))
+        if has_subscription is not None:
+            subq = select(Subscription.id).where(Subscription.creator_id == Creator.id)
+            if has_subscription:
+                conditions.append(subq.exists())
+            else:
+                conditions.append(~subq.exists())
         if is_favorite is not None:
-            stmt = stmt.where(Creator.is_favorite == is_favorite)
+            conditions.append(Creator.is_favorite == is_favorite)
+
+        stmt = select(Creator).offset(offset).limit(limit).order_by(Creator.name)
+        if conditions:
+            stmt = stmt.where(and_(*conditions))
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 

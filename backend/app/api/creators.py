@@ -14,9 +14,21 @@ router = APIRouter(dependencies=[RequireAdmin])
 
 
 @router.get("", response_model=list[CreatorRead])
-async def list_creators(offset: int = 0, limit: int = 50, is_favorite: bool | None = None, db: AsyncSession = Depends(get_db)):
+async def list_creators(
+    offset: int = 0, limit: int = 50,
+    search: str | None = None,
+    is_active: bool | None = None,
+    has_danbooru: bool | None = None,
+    has_subscription: bool | None = None,
+    is_favorite: bool | None = None,
+    db: AsyncSession = Depends(get_db),
+):
     svc = CreatorService(db)
-    return await svc.list_creators(offset, limit, is_favorite)
+    return await svc.list_creators(offset, limit,
+                                   search=search, is_active=is_active,
+                                   has_danbooru=has_danbooru,
+                                   has_subscription=has_subscription,
+                                   is_favorite=is_favorite)
 
 
 # ── Batch Operations ──
