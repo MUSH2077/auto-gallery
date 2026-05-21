@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from uuid import UUID
 
@@ -33,7 +34,8 @@ async def preview_danbooru_artist(data: dict):
     if not source_url and not pixiv_id and not artist_name:
         return {"status": "error", "message": "At least one of url, pixiv_id, or name is required"}
 
-    artist, links = danbooru_svc.search_and_extract(
+    artist, links = await asyncio.to_thread(
+        danbooru_svc.search_and_extract,
         source_url=source_url,
         pixiv_id=pixiv_id,
         artist_name=artist_name,
@@ -78,7 +80,8 @@ async def import_danbooru_artist(data: dict, db: AsyncSession = Depends(get_db))
     if not source_url and not pixiv_id and not artist_name:
         raise HTTPException(status_code=400, detail="At least one of url, pixiv_id, or name is required")
 
-    artist, links = danbooru_svc.search_and_extract(
+    artist, links = await asyncio.to_thread(
+        danbooru_svc.search_and_extract,
         source_url=source_url,
         pixiv_id=pixiv_id,
         artist_name=artist_name,
@@ -123,7 +126,8 @@ async def import_all_danbooru(data: dict, db: AsyncSession = Depends(get_db)):
     if not source_url and not pixiv_id and not artist_name:
         raise HTTPException(status_code=400, detail="At least one of url, pixiv_id, or name is required")
 
-    artist, links = danbooru_svc.search_and_extract(
+    artist, links = await asyncio.to_thread(
+        danbooru_svc.search_and_extract,
         source_url=source_url, pixiv_id=pixiv_id, artist_name=artist_name,
     )
     if not artist:
@@ -265,8 +269,8 @@ async def batch_import_danbooru_artists(data: dict, db: AsyncSession = Depends(g
 
     for pid in pixiv_ids:
         try:
-            # Search Danbooru for this Pixiv ID
-            artist, links = danbooru_svc.search_and_extract(pixiv_id=pid)
+            # Search Danbooru for this Pixiv ID (in thread to avoid blocking async event loop)
+            artist, links = await asyncio.to_thread(danbooru_svc.search_and_extract, pixiv_id=pid)
             if not artist:
                 not_found.append({"pixiv_id": pid, "message": "No matching Danbooru artist found"})
                 continue
