@@ -1,1 +1,6 @@
 .next
+node_modules/
+.git/
+*.md
+.DS_Store
+*.swp

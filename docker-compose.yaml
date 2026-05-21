@@ -77,6 +77,11 @@ services:
         condition: service_healthy
       meilisearch:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/api/v1/system/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped
 
   worker:
@@ -149,10 +154,15 @@ services:
       args:
         NPM_REGISTRY: ${NPM_REGISTRY:-}
     ports:
-      - "${ADMIN_WEB_PORT:-3250}:3000"
+      - "${ADMIN_WEB_PORT:-13000}:3000"
     environment:
       HOSTNAME: "0.0.0.0"
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/admin"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     depends_on:
       - backend
     restart: unless-stopped
