@@ -270,12 +270,14 @@ export default function DanbooruReferencePage() {
     queryFn: () => api.getBatchImportStatus(batchJobId || undefined),
     enabled: !!batchJobId,
     refetchInterval: (query) => query.state.data?.status === "completed" ? false : 2000,
+    // Keep previous data hidden when switching to a new job
+    placeholderData: undefined,
   });
 
-  const batchResult = batchStatus.data?.result;
-  const batchProgress = batchStatus.data?.progress;
+  // Only use results from the current job (guard against stale Redis data)
+  const batchResult = batchJobId ? batchStatus.data?.result : null;
+  const batchProgress = batchJobId ? batchStatus.data?.progress : null;
 
-  // Clear job when results arrive
   useEffect(() => {
     if (batchResult) {
       qc.invalidateQueries({ queryKey: queryKeys.creators.all });
@@ -289,7 +291,9 @@ export default function DanbooruReferencePage() {
       .map((s) => s.trim())
       .filter((s) => /^\d+$/.test(s));
     if (ids.length === 0) return;
+    // Clear old state and query cache before starting new batch
     setBatchJobId(null);
+    qc.removeQueries({ queryKey: ["batch-import-status"] });
     enqueueBatch.mutate(ids);
   };
 

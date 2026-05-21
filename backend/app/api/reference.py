@@ -266,6 +266,10 @@ async def batch_import_danbooru_artists(data: dict):
 
     r = redis_lib.from_url(settings.redis_url)
     q = Queue(connection=r)
+
+    # Clear any previous batch results so old data doesn't leak into new poll
+    r.delete("batch_import:progress", "batch_import:result")
+
     job = q.enqueue("app.jobs.batch_import.run_batch_import", pixiv_ids,
                     job_timeout=3600,  # 1 hour max
                     result_ttl=3600)
