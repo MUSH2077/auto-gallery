@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import time
 import urllib.parse
 import urllib.request
 
@@ -11,6 +12,8 @@ logger = logging.getLogger(__name__)
 DANBOORU_BASE = "https://danbooru.donmai.us"
 UA = "auto-gallery/0.1 (reference provider)"
 REQUEST_TIMEOUT = 15
+MAX_RETRIES = 3
+RETRY_BACKOFF = 2  # seconds, doubles each retry
 
 
 def _get_opener():
@@ -55,18 +58,32 @@ _opener = None
 
 
 def _get(path: str) -> dict | list | None:
-    """GET request to Danbooru API."""
+    """GET request to Danbooru API with retry on transient errors."""
     global _opener
     url = f"{DANBOORU_BASE}{path}"
     req = urllib.request.Request(url, headers={"User-Agent": UA})
-    try:
-        if _opener is None:
-            _opener = _get_opener()
-        with _opener.open(req, timeout=REQUEST_TIMEOUT) as resp:
-            return json.loads(resp.read())  # type: ignore[no-any-return]
-    except Exception as e:
-        logger.warning("Danbooru API request failed: %s %s", url, e)
-        return None
+
+    last_error = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            if _opener is None:
+                _opener = _get_opener()
+            with _opener.open(req, timeout=REQUEST_TIMEOUT) as resp:
+                return json.loads(resp.read())  # type: ignore[no-any-return]
+        except Exception as e:
+            last_error = e
+            if attempt < MAX_RETRIES - 1:
+                wait = RETRY_BACKOFF * (2 ** attempt)
+                logger.debug("Danbooru API attempt %d/%d failed, retrying in %ds: %s",
+                             attempt + 1, MAX_RETRIES, wait, e)
+                time.sleep(wait)
+                # Reset opener on SSL errors so it reconnects fresh
+                if "SSL" in str(e) or "ssl" in str(e).lower():
+                    _opener = None
+
+    logger.warning("Danbooru API request failed after %d attempts: %s %s",
+                   MAX_RETRIES, url, last_error)
+    return None
 
 
 def search_by_url(source_url: str) -> list[dict]:
