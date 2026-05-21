@@ -3,13 +3,68 @@
 import logging
 import urllib.request
 
+from app.config import settings as app_settings
+
 logger = logging.getLogger(__name__)
 
 _cached_proxy: dict | None = None
 
 
+def get_cached_proxy_config() -> dict:
+    """Return cached proxy config, loading from DB if needed.
+
+    Uses a dedicated asyncio event loop + asyncpg connection so it can be
+    called from any thread (including asyncio.to_thread workers) without
+    conflicting with the main event loop or SQLAlchemy session.
+    """
+    global _cached_proxy
+    if _cached_proxy is not None:
+        return _cached_proxy
+
+    try:
+        import asyncio
+        import asyncpg
+        import json
+        from urllib.parse import urlparse
+
+        db_url = app_settings.database_url
+        parsed = urlparse(db_url)
+        dsn = (
+            f"postgresql://{parsed.username}:{parsed.password}"
+            f"@{parsed.hostname}:{parsed.port or 5432}/{parsed.path.lstrip('/')}"
+        )
+
+        async def _query():
+            conn = await asyncpg.connect(dsn)
+            try:
+                row = await conn.fetchrow(
+                    "SELECT value FROM system_settings WHERE key = 'proxy'"
+                )
+                if row:
+                    val = row["value"]
+                    if isinstance(val, str):
+                        val = json.loads(val)
+                    return val
+            finally:
+                await conn.close()
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(_query())
+            if result:
+                logger.debug("Proxy config loaded: enabled=%s http=%s",
+                           result.get("enabled"), result.get("http_proxy", "not set"))
+                _cached_proxy = result
+        finally:
+            loop.close()
+    except Exception as e:
+        logger.warning("Failed to load proxy config: %s", e)
+        _cached_proxy = {}
+    return _cached_proxy or {}
+
+
 async def _load_proxy_config() -> dict:
-    """Read proxy settings from the database."""
+    """Read proxy settings from the database (async version for API use)."""
     try:
         from app.database import async_session
         from app.models.system_setting import SystemSetting
@@ -23,6 +78,8 @@ async def _load_proxy_config() -> dict:
             if row and row.value:
                 logger.debug("Proxy config loaded: enabled=%s http=%s",
                            row.value.get("enabled"), row.value.get("http_proxy", "not set"))
+                global _cached_proxy
+                _cached_proxy = row.value
                 return row.value
     except Exception as e:
         logger.warning("Failed to load proxy config: %s", e)

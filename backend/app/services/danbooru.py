@@ -17,32 +17,15 @@ RETRY_BACKOFF = 2  # seconds, doubles each retry
 
 
 def _get_opener():
-    """Get a urllib opener with proxy config if enabled."""
+    """Get a urllib opener with proxy config if enabled.
+
+    Uses a sync DB query via the cached proxy config to avoid async event-loop
+    conflicts when called from asyncio.to_thread().
+    """
     try:
-        from app.services.proxy import _load_proxy_config, apply_proxy_to_urllib
-        import asyncio, threading
+        from app.services.proxy import get_cached_proxy_config, apply_proxy_to_urllib
 
-        result = {}
-        err = None
-
-        def _run():
-            nonlocal result, err
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                result = loop.run_until_complete(_load_proxy_config())
-                loop.close()
-            except Exception as e:
-                err = e
-
-        t = threading.Thread(target=_run)
-        t.start()
-        t.join(timeout=10)
-
-        if err:
-            raise err
-
-        config = result
+        config = get_cached_proxy_config()
         opener = apply_proxy_to_urllib(config)
         if opener:
             logger.info("Danbooru API using proxy: %s", config.get("http_proxy", "not set"))
