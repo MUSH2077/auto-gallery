@@ -517,6 +517,7 @@ const zh: Record<string, string> = {
   "scheduler.not_set": "未设置",
   "scheduler.enabled_val": "启用",
   "scheduler.disabled_val": "禁用",
+  "scheduler.every": "每 {minutes} 分钟",
   "scheduler.how_title": "调度工作原理：",
   "scheduler.how_text": "调度器定期扫描所有已启用自动同步的订阅。对于每个订阅，检查距离上次同步是否已超过设定的同步间隔。如果是，则在默认队列中创建一个下载任务。失败的任务会进入失败注册表，可在下方查看和清理。",
 
@@ -885,6 +886,9 @@ const zh: Record<string, string> = {
   "common.reload_page": "重新加载",
   "common.favorite": "收藏",
   "common.unfavorite": "取消收藏",
+  "common.prev": "上一页",
+  "common.next": "下一页",
+  "common.page": "第 {page} 页",
   "common.optional_label": "可选标签",
 
   // Theme
@@ -1396,6 +1400,7 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "scheduler.not_set": "Not set",
     "scheduler.enabled_val": "Enabled",
     "scheduler.disabled_val": "Disabled",
+    "scheduler.every": "Every {minutes}m",
     "scheduler.how_title": "How scheduling works:",
     "scheduler.how_text": "The scheduler periodically scans all subscriptions that have auto-sync enabled. For each subscription, it checks if the configured sync interval has elapsed since the last sync. If so, a download job is created in the default queue. Failed jobs are recorded in the failed registry, which you can view and clear below.",
 
@@ -1749,6 +1754,9 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "common.reload_page": "Reload Page",
     "common.favorite": "Favorite",
     "common.unfavorite": "Unfavorite",
+    "common.prev": "Prev",
+    "common.next": "Next",
+    "common.page": "Page {page}",
     "common.optional_label": "Optional label",
 
     "theme.light": "Light",
