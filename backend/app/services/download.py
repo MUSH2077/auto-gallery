@@ -74,6 +74,13 @@ class DownloadService:
         if job.status not in ("failed", "stale"):
             raise ValueError(f"Cannot retry job with status '{job.status}'")
         job = await self.repo.update_status(job, "pending")
+        try:
+            import redis as redis_lib
+            from rq import Queue
+            r = redis_lib.from_url(settings.redis_url)
+            Queue(connection=r).enqueue("app.jobs.download.run_download_job", str(job.id))
+        except Exception:
+            logger.warning("Failed to enqueue retry for download job %s", job.id, exc_info=True)
         return {"job_id": str(job.id), "status": job.status}
 
     async def delete_job(self, job_id: UUID):

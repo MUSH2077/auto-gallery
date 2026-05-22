@@ -176,6 +176,7 @@ export interface DownloadDefaults {
   timeout_seconds: number;
   max_retries: number;
   retry_backoff_base_seconds: number;
+  max_posts: number;
 }
 
 // Gallery-dl multi-source config types

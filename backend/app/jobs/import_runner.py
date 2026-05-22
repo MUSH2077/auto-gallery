@@ -363,11 +363,15 @@ async def run_import_job(import_job_id: str):
                 except Exception:
                     logger.warning("Failed to flush remaining Meilisearch batch", exc_info=True)
 
-        # Mark import complete
+        # Mark import complete and update parent download_job
         async with async_session() as db:
             ij = await db.get(ImportJob, job_uuid)
             if ij:
                 ij.status = "complete"
+                # Also mark the parent download job as complete
+                dj = await db.get(DownloadJob, ij.download_job_id)
+                if dj:
+                    dj.status = "complete"
                 await db.commit()
 
         logger.info("Import complete: %d works, %d assets, %d multi-page (batched)",
