@@ -12,9 +12,12 @@ router = APIRouter(dependencies=[RequireAdmin])
 
 
 @router.get("", response_model=list[TagRead])
-async def list_tags(offset: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
+async def list_tags(offset: int = 0, limit: int = 100,
+                    sort_by: str = "usage_count",
+                    sort_order: str = "desc",
+                    db: AsyncSession = Depends(get_db)):
     repo = TagRepository(db)
-    return await repo.list_all(offset, limit)
+    return await repo.list_all(offset, limit, sort_by=sort_by, sort_order=sort_order)
 
 
 @router.get("/{tag_id}", response_model=TagRead)

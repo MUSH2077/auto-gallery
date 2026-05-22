@@ -62,13 +62,18 @@ export default function TagsPage() {
   const t = useT();
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
   const [showCreate, setShowCreate] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [formName, setFormName] = useState("");
   const [formCat, setFormCat] = useState("general");
+  const limit = 50;
 
-  const tags = useQuery({ queryKey: queryKeys.tags.all, queryFn: () => api.listTags() });
+  const tags = useQuery({
+    queryKey: [...queryKeys.tags.all, page],
+    queryFn: () => api.listTags(page * limit, limit),
+  });
 
   const create = useMutation({
     mutationFn: () => api.createTag({ normalized_name: formName.trim().toLowerCase(), category: formCat || undefined }),
@@ -103,7 +108,7 @@ export default function TagsPage() {
 
   return (
     <main className="max-w-5xl mx-auto p-6">
-      <PageHeader title={t("tags.title")} description={t("tags.desc")}>
+      <PageHeader title={t("tags.title")} description={tags.data?.length ? t("common.page").replace("{page}", String(page + 1)) : t("tags.desc")}>
         <button onClick={() => { setFormName(""); setFormCat("general"); setShowCreate(true); }}
           className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600">{t("tags.new")}</button>
       </PageHeader>
@@ -208,6 +213,17 @@ export default function TagsPage() {
       </Modal>
 
       {deleteId && <ConfirmDialog open title={t("tags.delete_title")} message={t("tags.delete_msg")} onConfirm={() => deleteTag.mutate()} onCancel={() => setDeleteId(null)} isPending={deleteTag.isPending} error={(deleteTag.error as Error)?.message} />}
+
+      {/* Pagination */}
+      {tags.data && tags.data.length > 0 && (
+        <div className="flex gap-2 justify-center mt-4">
+          <button disabled={page === 0} onClick={() => setPage(page - 1)}
+            className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.prev")}</button>
+          <span className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400">{t("common.page").replace("{page}", String(page + 1))}</span>
+          <button onClick={() => setPage(page + 1)} disabled={!tags.data || tags.data.length < limit}
+            className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.next")}</button>
+        </div>
+      )}
     </main>
   );
 }
