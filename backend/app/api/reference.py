@@ -264,6 +264,16 @@ async def batch_import_danbooru_artists(data: dict):
     if not pixiv_ids:
         raise HTTPException(status_code=400, detail="No valid pixiv_ids provided")
 
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique: list[str] = []
+    for pid in pixiv_ids:
+        if pid not in seen:
+            seen.add(pid)
+            unique.append(pid)
+    deduped = len(pixiv_ids) - len(unique)
+    pixiv_ids = unique
+
     r = redis_lib.from_url(settings.redis_url)
     q = Queue(connection=r)
 
@@ -274,12 +284,14 @@ async def batch_import_danbooru_artists(data: dict):
                     job_timeout=3600,  # 1 hour max
                     result_ttl=3600)
 
-    logger.info("Enqueued batch import job %s with %d pixiv_ids", job.id, len(pixiv_ids))
+    logger.info("Enqueued batch import job %s with %d pixiv_ids (%d duplicates removed)",
+                job.id, len(pixiv_ids), deduped)
     return {
         "status": "ok",
-        "message": f"Batch import enqueued ({len(pixiv_ids)} IDs)",
+        "message": f"Batch import enqueued ({len(pixiv_ids)} IDs" + (f", {deduped} duplicates removed)" if deduped > 0 else ")"),
         "job_id": job.id,
         "total": len(pixiv_ids),
+        "duplicates_removed": deduped,
     }
 
 
