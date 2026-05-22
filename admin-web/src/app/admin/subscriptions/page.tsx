@@ -87,10 +87,33 @@ export default function SubscriptionsPage() {
     onSuccess: () => { setDeleteId(null); subs.refetch(); },
   });
 
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmBatchDel, setConfirmBatchDel] = useState(false);
+
   const syncNow = useMutation({
     mutationFn: (id: string) => api.syncNowSubscription(id),
     onSuccess: () => subs.refetch(),
   });
+
+  const batchDel = useMutation({
+    mutationFn: (ids: string[]) => api.batchDeleteSubscriptions(ids),
+    onSuccess: () => { setSelected(new Set()); setConfirmBatchDel(false); subs.refetch(); },
+  });
+
+  const batchSync = useMutation({
+    mutationFn: (params: { ids: string[]; enable: boolean }) => api.batchToggleSyncSubscriptions(params.ids, params.enable),
+    onSuccess: () => { setSelected(new Set()); subs.refetch(); },
+  });
+
+  const toggleSelect = (id: string) => {
+    const next = new Set(selected);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setSelected(next);
+  };
+  const selectAll = () => {
+    if (selected.size === (subs.data?.length || 0)) setSelected(new Set());
+    else setSelected(new Set((subs.data || []).map((s) => s.id)));
+  };
 
   return (
     <main className="max-w-6xl mx-auto p-6">
@@ -109,7 +132,27 @@ export default function SubscriptionsPage() {
             </button>
           ))}
         </div>
+        <div className="flex-1" />
+        {selected.size > 0 && (
+          <div className="flex gap-2">
+            <button onClick={() => batchSync.mutate({ ids: [...selected], enable: true })} disabled={batchSync.isPending}
+              className="px-3 py-1.5 text-xs bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50">{t("subscriptions.enable_sync")}</button>
+            <button onClick={() => batchSync.mutate({ ids: [...selected], enable: false })} disabled={batchSync.isPending}
+              className="px-3 py-1.5 text-xs bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50">{t("subscriptions.disable_sync")}</button>
+            <button onClick={() => setConfirmBatchDel(true)} className="px-3 py-1.5 text-xs bg-red-600 text-white rounded hover:bg-red-700">
+              {t("subscriptions.delete_selected").replace("{count}", String(selected.size))}
+            </button>
+          </div>
+        )}
       </div>
+
+      {/* Select all */}
+      {subs.data && subs.data.length > 0 && (
+        <label className="flex items-center gap-2 mb-2 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+          <input type="checkbox" checked={selected.size === subs.data.length && subs.data.length > 0} onChange={selectAll} className="rounded" />
+          {t("subscriptions.select_all")}
+        </label>
+      )}
 
       {/* Content */}
       {subs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
@@ -119,20 +162,21 @@ export default function SubscriptionsPage() {
       {subs.data && subs.data.length > 0 && (
         <div className="space-y-1">
           {subs.data.map((s: Subscription) => (
-            <div key={s.id} className="bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 flex items-center gap-3">
+            <div key={s.id} className={`bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 flex items-center gap-3 cursor-pointer hover:shadow-md transition-shadow ${selected.has(s.id) ? "ring-2 ring-blue-500" : ""}`} onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>
+              <input type="checkbox" checked={selected.has(s.id)} onChange={() => toggleSelect(s.id)} className="rounded shrink-0" onClick={(e) => e.stopPropagation()} />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="font-medium text-sm truncate cursor-pointer hover:text-blue-600" onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>{s.name || s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8)}</span>
+                  <span className="font-medium text-sm truncate">{s.name || s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8)}</span>
                   {s.is_active ? <span className="w-1.5 h-1.5 bg-green-500 rounded-full shrink-0" /> : <span className="w-1.5 h-1.5 bg-gray-300 rounded-full shrink-0" />}
                 </div>
                 <div className="text-xs text-gray-400 dark:text-gray-500">
                   {t("subscriptions.creator_prefix")}{" "}
-                  <span className="text-blue-600 hover:underline cursor-pointer" onClick={(e) => { e.stopPropagation(); router.push(`/admin/creators/${s.creator_id}`); }}>
+                  <span className="text-blue-600 hover:underline" onClick={(e) => { e.stopPropagation(); router.push(`/admin/creators/${s.creator_id}`); }}>
                     {s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8)}
                   </span>
                 </div>
               </div>
-              <div className="flex items-center gap-3 shrink-0 text-xs">
+              <div className="flex items-center gap-3 shrink-0 text-xs" onClick={(e) => e.stopPropagation()}>
                 {s.sync_enabled ? <span className="text-green-600 dark:text-green-400">{t("subscriptions.auto_sync")}</span> : <span className="text-gray-400">{t("subscriptions.manual")}</span>}
                 <span className="text-gray-400 dark:text-gray-500">{s.sync_interval_hours}h</span>
                 <span className="text-gray-400 dark:text-gray-500 hidden sm:inline">{s.last_synced_at ? `${t("subscriptions.last_sync")} ${new Date(s.last_synced_at).toLocaleDateString()}` : t("subscriptions.never")}</span>
@@ -140,7 +184,6 @@ export default function SubscriptionsPage() {
                   className="text-blue-600 hover:underline disabled:opacity-50">
                   {syncNow.isPending ? t("subscriptions.syncing") : t("subscriptions.sync")}
                 </button>
-                <button onClick={() => router.push(`/admin/subscriptions/${s.id}`)} className="text-blue-600 hover:underline">{t("subscriptions.view")}</button>
                 <button onClick={(e) => { e.stopPropagation(); setDeleteId(s.id); }} className="text-red-500 hover:text-red-700 dark:text-red-400">{t("subscriptions.del")}</button>
               </div>
             </div>
@@ -161,6 +204,7 @@ export default function SubscriptionsPage() {
         <CreateForm isPending={create.isPending} error={create.error} onSubmit={(data) => create.mutate(data)} onClose={() => setShowCreate(false)} />
       </Modal>
       {deleteId && <ConfirmDialog open title={t("subscriptions.delete_title")} message={t("subscriptions.delete_msg")} onConfirm={() => del.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={del.isPending} error={(del.error as Error)?.message} />}
+      {confirmBatchDel && <ConfirmDialog open title={t("subscriptions.batch_delete_title")} message={t("subscriptions.batch_delete_msg").replace("{count}", String(selected.size))} onConfirm={() => batchDel.mutate([...selected])} onCancel={() => setConfirmBatchDel(false)} isPending={batchDel.isPending} error={(batchDel.error as Error)?.message} />}
     </main>
   );
 }
