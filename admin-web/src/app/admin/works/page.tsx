@@ -1,7 +1,7 @@
 "use client";
 import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
 import { api, queryKeys, WorkListItem } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
@@ -82,6 +82,7 @@ type ViewMode = "grid" | "list";
 export default function WorksPage() {
   const t = useT();
   const router = useRouter();
+  const qc = useQueryClient();
 
   const SORT_OPTIONS: { key: SortKey; label: string }[] = [
     { key: "created_at", label: t("works.sort_imported") },
@@ -129,7 +130,7 @@ export default function WorksPage() {
 
   const toggleFavorite = useMutation({
     mutationFn: (id: string) => api.toggleWorkFavorite(id),
-    onSuccess: () => works.refetch(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.works.all }),
   });
 
   const creators = useQuery({
