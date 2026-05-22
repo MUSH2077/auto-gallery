@@ -56,6 +56,8 @@ export default function CreatorsPage() {
   const [page, setPage] = useState(0);
   const [showCreate, setShowCreate] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmBatchDel, setConfirmBatchDel] = useState(false);
   const limit = 25;
 
   const FILTERS: { key: FilterMode; label: string }[] = useMemo(() => [
@@ -84,6 +86,21 @@ export default function CreatorsPage() {
     mutationFn: (id: string) => api.deleteCreator(id),
     onSuccess: () => { setDeleteId(null); creators.refetch(); },
   });
+
+  const batchDel = useMutation({
+    mutationFn: (ids: string[]) => api.batchDeleteCreators(ids),
+    onSuccess: () => { setSelected(new Set()); setConfirmBatchDel(false); creators.refetch(); },
+  });
+
+  const toggleSelect = (id: string) => {
+    const next = new Set(selected);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setSelected(next);
+  };
+  const selectAll = () => {
+    if (selected.size === (creators.data?.length || 0)) setSelected(new Set());
+    else setSelected(new Set((creators.data || []).map((c) => c.id)));
+  };
 
   const toggleFavorite = useMutation({
     mutationFn: (id: string) => api.toggleCreatorFavorite(id),
@@ -120,7 +137,21 @@ export default function CreatorsPage() {
             </button>
           ))}
         </div>
+        <div className="flex-1" />
+        {selected.size > 0 && (
+          <button onClick={() => setConfirmBatchDel(true)} className="px-3 py-1.5 text-xs bg-red-600 text-white rounded hover:bg-red-700">
+            {t("creators.delete_selected").replace("{count}", String(selected.size))}
+          </button>
+        )}
       </div>
+
+      {/* Select all */}
+      {creators.data && creators.data.length > 0 && (
+        <label className="flex items-center gap-2 mb-2 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+          <input type="checkbox" checked={selected.size === creators.data.length && creators.data.length > 0} onChange={selectAll} className="rounded" />
+          {t("creators.select_all")}
+        </label>
+      )}
 
       {/* Content */}
       {creators.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
@@ -136,8 +167,9 @@ export default function CreatorsPage() {
       {creators.data && creators.data.length > 0 && (
         <div className="space-y-1">
           {creators.data.map((c) => (
-            <div key={c.id} className="bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 flex items-center gap-3 transition-colors">
-              <div className="flex-1 min-w-0 cursor-pointer" onClick={() => router.push(`/admin/creators/${c.id}`)}>
+            <div key={c.id} className={`bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 flex items-center gap-3 cursor-pointer hover:shadow-md transition-colors ${selected.has(c.id) ? "ring-2 ring-blue-500" : ""}`} onClick={() => router.push(`/admin/creators/${c.id}`)}>
+              <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggleSelect(c.id)} className="rounded shrink-0" onClick={(e) => e.stopPropagation()} />
+              <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-sm truncate">{c.display_name || c.name}</span>
                   {c.display_name && <span className="text-xs text-gray-400 dark:text-gray-500 truncate">{c.name}</span>}
@@ -145,7 +177,7 @@ export default function CreatorsPage() {
                 </div>
                 {c.description && <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-1">{c.description}</p>}
               </div>
-              <div className="flex items-center gap-2 shrink-0 text-xs">
+              <div className="flex items-center gap-2 shrink-0 text-xs" onClick={(e) => e.stopPropagation()}>
                 {(c as any).danbooru_artist_id && <span className="px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 rounded font-mono text-[10px]">D#{String((c as any).danbooru_artist_id)}</span>}
                 {(c as any).has_subscription && <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded text-[10px]">{t("creators.sub_badge")}</span>}
                 <button onClick={(e) => { e.stopPropagation(); toggleFavorite.mutate(c.id); }}
@@ -153,7 +185,6 @@ export default function CreatorsPage() {
                   title={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}>
                   {c.is_favorite ? "★" : "☆"}
                 </button>
-                <button onClick={() => router.push(`/admin/creators/${c.id}`)} className="text-blue-600 hover:underline">{t("creators.view")}</button>
                 <button onClick={(e) => { e.stopPropagation(); setDeleteId(c.id); }} className="text-red-500 hover:text-red-700 dark:text-red-400">{t("creators.del")}</button>
               </div>
             </div>
@@ -174,6 +205,7 @@ export default function CreatorsPage() {
         <CreateForm isPending={create.isPending} error={create.error} onSubmit={(data) => create.mutate(data)} onClose={() => setShowCreate(false)} />
       </Modal>
       {deleteId && <ConfirmDialog open title={t("creators.delete_title")} message={t("creators.delete_msg")} onConfirm={() => del.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={del.isPending} error={(del.error as Error)?.message} />}
+      {confirmBatchDel && <ConfirmDialog open title={t("creators.batch_delete_title")} message={t("creators.batch_delete_msg").replace("{count}", String(selected.size))} onConfirm={() => batchDel.mutate([...selected])} onCancel={() => setConfirmBatchDel(false)} isPending={batchDel.isPending} error={(batchDel.error as Error)?.message} />}
     </main>
   );
 }

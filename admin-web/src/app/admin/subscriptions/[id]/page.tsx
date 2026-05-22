@@ -110,7 +110,7 @@ export default function SubscriptionDetailPage() {
 
   return (
     <main className="max-w-4xl mx-auto p-6">
-      <PageHeader title={s.name || `${t("subscription_detail.subscription_prefix")} ${getCreatorName(s.creator_id)}`} description={`${t("subscription_detail.creator")} ${getCreatorName(s.creator_id)}`}>
+      <PageHeader title={s.name || (s.creator_display_name || s.creator_name || getCreatorName(s.creator_id))} description={s.creator_display_name || s.creator_name ? `${t("subscription_detail.creator")} ${s.creator_display_name || s.creator_name}` : undefined}>
         <div className="flex gap-2">
           <button onClick={() => { setEditName(s.name || ""); setEditing(true); }} className="px-3 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">{t("subscription_detail.edit")}</button>
         </div>
@@ -121,7 +121,7 @@ export default function SubscriptionDetailPage() {
           <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 mb-4">
             <h3 className="font-medium mb-3">{t("subscription_detail.details")}</h3>
             <dl className="text-sm space-y-2">
-              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-28">{t("subscription_detail.creator")}</dt><dd className="cursor-pointer text-blue-600 hover:underline" onClick={() => router.push(`/admin/creators/${s.creator_id}`)}>{getCreatorName(s.creator_id)}</dd></div>
+              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-28">{t("subscription_detail.creator")}</dt><dd className="cursor-pointer text-blue-600 hover:underline" onClick={() => router.push(`/admin/creators/${s.creator_id}`)}>{s.creator_display_name || s.creator_name || getCreatorName(s.creator_id)}</dd></div>
               <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-28">{t("subscription_detail.status")}</dt><dd><StatusBadge status={s.is_active ? "up" : "down"} /></dd></div>
               <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-28">{t("subscription_detail.auto_sync")}</dt><dd>{s.sync_enabled ? <span className="text-green-600">{t("subscription_detail.sync_enabled")}</span> : <span className="text-gray-400 dark:text-gray-500">{t("subscription_detail.sync_disabled")}</span>}</dd></div>
               <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-28">{t("subscription_detail.last_synced")}</dt><dd className="text-xs">{s.last_synced_at ? new Date(s.last_synced_at).toLocaleString() : t("subscription_detail.never_synced")}</dd></div>
@@ -141,7 +141,7 @@ export default function SubscriptionDetailPage() {
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
                         <SourceBadge source={ss.source} />
-                        <span className="font-medium">{ss.source_creator_id || "—"}</span>
+                        <span className="font-medium">{ss.source_creator_id || ss.source_url?.split("/").pop() || "—"}</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <button onClick={() => setToggleId(ss.id)}
