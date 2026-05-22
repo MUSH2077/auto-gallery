@@ -153,7 +153,8 @@ class WorkRepository:
 
     async def toggle_favorite(self, work: Work) -> Work:
         work.is_favorite = not work.is_favorite
-        await self.session.flush()
+        await self.session.commit()
+        await self.session.refresh(work)
         return work
 
     async def get(self, work_id: UUID) -> Work | None:
