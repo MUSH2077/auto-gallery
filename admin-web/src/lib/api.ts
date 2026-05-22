@@ -445,7 +445,8 @@ export const api = {
   getWorkTags: (id: string) => request<{id:string;normalized_name:string;category?:string}[]>(`/api/v1/works/${id}/tags`),
 
   // Tags
-  listTags: (offset = 0, limit = 100) => request<Tag[]>(`/api/v1/tags?offset=${offset}&limit=${limit}`),
+  listTags: (offset = 0, limit = 100, sortBy = "usage_count", sortOrder = "desc") =>
+    request<Tag[]>(`/api/v1/tags?offset=${offset}&limit=${limit}&sort_by=${sortBy}&sort_order=${sortOrder}`),
 
   createTag: (data: { normalized_name: string; category?: string }) =>
     request<Tag>("/api/v1/tags", { method: "POST", body: JSON.stringify(data) }),
