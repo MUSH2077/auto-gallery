@@ -27,6 +27,8 @@ class SubscriptionRead(BaseModel):
     id: UUID
     creator_id: UUID
     name: str | None = None
+    creator_name: str | None = None
+    creator_display_name: str | None = None
     is_active: bool
     sync_enabled: bool
     sync_interval_hours: int = 6
