@@ -68,6 +68,14 @@ async def _put_setting(db: AsyncSession, key: str, value: dict):
         db.add(SystemSetting(key=key, value=value))
     await db.commit()
 
+    # Invalidate caches when relevant settings change
+    if key == "proxy":
+        try:
+            from app.services.proxy import clear_proxy_cache
+            clear_proxy_cache()
+        except Exception:
+            pass
+
 
 DEFAULT_DEDUP = {"source_level_enabled": False, "cross_source_enabled": False, "auto_merge": False, "phash_threshold": 8}
 DEFAULT_DL = {"timeout_seconds": 600, "max_retries": 3, "retry_backoff_base_seconds": 60, "max_posts": 200}
