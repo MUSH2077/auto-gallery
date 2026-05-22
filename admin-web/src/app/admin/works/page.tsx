@@ -130,7 +130,13 @@ export default function WorksPage() {
 
   const toggleFavorite = useMutation({
     mutationFn: (id: string) => api.toggleWorkFavorite(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.works.all }),
+    onSuccess: (updated) => {
+      // Directly patch the cache so the star updates immediately
+      qc.setQueryData([...queryKeys.works.all, page, filters], (old: WorkListItem[] | undefined) => {
+        if (!old) return old;
+        return old.map((w) => w.id === updated.id ? { ...w, is_favorite: updated.is_favorite } : w);
+      });
+    },
   });
 
   const creators = useQuery({

@@ -87,7 +87,9 @@ export default function WorkDetailPage() {
   const work = useQuery({ queryKey: queryKeys.works.detail(id), queryFn: () => api.getWork(id) });
   const toggleFavorite = useMutation({
     mutationFn: (workId: string) => api.toggleWorkFavorite(workId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.works.detail(id) }),
+    onSuccess: (updated) => {
+      qc.setQueryData(queryKeys.works.detail(id), updated);
+    },
   });
   const sources = useQuery({ queryKey: queryKeys.works.sources(id), queryFn: () => api.getWorkSources(id) });
   const workTags = useQuery({ queryKey: ["works", id, "tags"], queryFn: () => api.getWorkTags(id) });
