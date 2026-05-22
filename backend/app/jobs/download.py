@@ -2,7 +2,7 @@ import logging
 import os
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from uuid import UUID
 
@@ -148,13 +148,13 @@ async def run_download_job(job_id: str):
         max_retries = int(dl_defaults.get("max_retries", FALLBACK_MAX_RETRIES))
         backoff_base = int(dl_defaults.get("retry_backoff_base_seconds", FALLBACK_BACKOFF_BASE))
 
-        if result.returncode != 0 and job.retry_count < max_retries:
+        if result.returncode != 0 and j and j.retry_count < max_retries:
             try:
                 import redis as redis_lib
                 from rq import Queue
                 r = redis_lib.from_url(settings.redis_url)
                 Queue(connection=r).enqueue_in(
-                    backoff_base * (2 ** (job.retry_count - 1)),
+                    timedelta(seconds=backoff_base * (2 ** (j.retry_count - 1))),
                     "app.jobs.download.run_download_job", job_id)
             except Exception:
                 logger.warning("Failed to enqueue retry for download job %s", job_id, exc_info=True)

@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -101,6 +101,20 @@ async def trigger_subscription_sync(subscription_id: UUID, db: AsyncSession = De
         if not provider.validate_url(ss.source_url):
             continue
 
+        # Guard against duplicate: skip if recent job exists for this source
+        interval_cutoff = now - timedelta(hours=sub.sync_interval_hours)
+        recent = await db.execute(
+            select(DownloadJob).where(
+                and_(
+                    DownloadJob.subscription_source_id == ss.id,
+                    DownloadJob.status.in_(["pending", "downloading", "downloaded", "importing"]),
+                    DownloadJob.created_at >= interval_cutoff,
+                )
+            ).limit(1)
+        )
+        if recent.scalar_one_or_none():
+            continue
+
         job = DownloadJob(
             subscription_id=sub.id,
             subscription_source_id=ss.id,
@@ -121,7 +135,8 @@ async def trigger_subscription_sync(subscription_id: UUID, db: AsyncSession = De
         except Exception as e:
             logger.error("Failed to enqueue download job %s: %s", job.id, e)
 
-    sub.last_synced_at = now
+    if job_ids:
+        sub.last_synced_at = now
     await db.commit()
 
     return {"status": "ok", "message": f"Enqueued {len(job_ids)} download jobs", "job_ids": job_ids}

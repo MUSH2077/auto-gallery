@@ -34,6 +34,7 @@ class DownloadDefaults(BaseModel):
     timeout_seconds: int = 600
     max_retries: int = 3
     retry_backoff_base_seconds: int = 60
+    max_posts: int = 200
 
 class ProxySettings(BaseModel):
     http_proxy: str = ""
@@ -69,7 +70,7 @@ async def _put_setting(db: AsyncSession, key: str, value: dict):
 
 
 DEFAULT_DEDUP = {"source_level_enabled": False, "cross_source_enabled": False, "auto_merge": False, "phash_threshold": 8}
-DEFAULT_DL = {"timeout_seconds": 600, "max_retries": 3, "retry_backoff_base_seconds": 60}
+DEFAULT_DL = {"timeout_seconds": 600, "max_retries": 3, "retry_backoff_base_seconds": 60, "max_posts": 200}
 
 
 # ── Settings ──

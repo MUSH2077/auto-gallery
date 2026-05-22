@@ -95,6 +95,19 @@ export default function DownloadDefaultsPage() {
                 className="w-20 border rounded px-2 py-1 text-sm font-mono text-center"
               />
             </div>
+
+            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+              <div>
+                <span className="font-medium">{t("dldefaults.max_posts")}</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.max_posts.desc")}</p>
+              </div>
+              <input
+                type="number" min={10} max={10000} step={10}
+                value={current.max_posts}
+                onChange={(e) => setNum("max_posts", parseInt(e.target.value) || 200)}
+                className="w-20 border rounded px-2 py-1 text-sm font-mono text-center"
+              />
+            </div>
           </div>
 
           <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg text-sm text-blue-800 dark:text-blue-300">

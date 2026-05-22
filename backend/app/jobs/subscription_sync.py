@@ -57,24 +57,25 @@ def _should_sync_now(config: dict, last_synced_at, interval_hours: int) -> bool:
             cutoff = now - timedelta(hours=interval_hours)
             return last_synced_at < cutoff
 
-        # Find the most recent scheduled time
-        today = now.date()
-        best_time = None
-        for h, m in scheduled:
-            st = datetime(today.year, today.month, today.day, h, m, tzinfo=timezone.utc)
-            if st <= now and (best_time is None or st > best_time):
-                best_time = st
-
-        # Also check yesterday's last scheduled time
-        if best_time is None:
-            yesterday = today - timedelta(days=1)
+        # Walk back day by day from today until we find the most recent
+        # scheduled time that falls after last_synced_at.
+        # This handles multi-day downtime correctly.
+        max_lookback = 30  # days
+        for days_back in range(max_lookback):
+            day = now.date() - timedelta(days=days_back)
+            best_time = None
             for h, m in scheduled:
-                st = datetime(yesterday.year, yesterday.month, yesterday.day, h, m, tzinfo=timezone.utc)
+                st = datetime(day.year, day.month, day.day, h, m, tzinfo=timezone.utc)
                 if st <= now and (best_time is None or st > best_time):
                     best_time = st
+            if best_time:
+                if last_synced_at < best_time:
+                    return True
+                return False  # found the most recent time but it's before last sync
 
-        if best_time and last_synced_at < best_time:
-            return True
+        # If we walked back 30 days and found nothing, fall back to interval
+        cutoff = now - timedelta(hours=interval_hours)
+        return last_synced_at < cutoff
         return False
 
     # interval mode (default)
