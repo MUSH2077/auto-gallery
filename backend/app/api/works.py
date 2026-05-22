@@ -52,7 +52,9 @@ async def toggle_work_favorite(work_id: UUID, db: AsyncSession = Depends(get_db)
     work = await repo.get(work_id)
     if not work:
         raise HTTPException(status_code=404, detail="Work not found")
-    return await repo.toggle_favorite(work)
+    work = await repo.toggle_favorite(work)
+    await db.refresh(work)
+    return work
 
 
 @router.get("/{work_id}/sources")
