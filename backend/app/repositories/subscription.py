@@ -36,11 +36,22 @@ class SubscriptionRepository:
             else:
                 conditions.append(Subscription.last_synced_at.isnot(None))
 
-        stmt = select(Subscription).offset(offset).limit(limit).order_by(Subscription.created_at.desc())
+        stmt = (
+            select(Subscription, Creator.name, Creator.display_name)
+            .join(Creator, Creator.id == Subscription.creator_id)
+            .offset(offset).limit(limit)
+            .order_by(Subscription.created_at.desc())
+        )
         if conditions:
             stmt = stmt.where(and_(*conditions))
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        subs = []
+        for row in result:
+            sub = row[0]
+            sub.creator_name = row[1] or sub.creator_id
+            sub.creator_display_name = row[2]
+            subs.append(sub)
+        return subs
 
     async def get(self, sub_id: UUID) -> Subscription | None:
         return await self.session.get(Subscription, sub_id)

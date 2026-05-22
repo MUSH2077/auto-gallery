@@ -120,12 +120,17 @@ export default function SubscriptionsPage() {
         <div className="space-y-1">
           {subs.data.map((s: Subscription) => (
             <div key={s.id} className="bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 flex items-center gap-3">
-              <div className="flex-1 min-w-0 cursor-pointer" onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>
+              <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="font-medium text-sm truncate">{s.name || s.creator_id.slice(0, 8)}</span>
+                  <span className="font-medium text-sm truncate cursor-pointer hover:text-blue-600" onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>{s.name || s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8)}</span>
                   {s.is_active ? <span className="w-1.5 h-1.5 bg-green-500 rounded-full shrink-0" /> : <span className="w-1.5 h-1.5 bg-gray-300 rounded-full shrink-0" />}
                 </div>
-                <div className="text-xs text-gray-400 dark:text-gray-500">{t("subscriptions.creator_prefix")} {s.creator_id.slice(0, 8)}</div>
+                <div className="text-xs text-gray-400 dark:text-gray-500">
+                  {t("subscriptions.creator_prefix")}{" "}
+                  <span className="text-blue-600 hover:underline cursor-pointer" onClick={(e) => { e.stopPropagation(); router.push(`/admin/creators/${s.creator_id}`); }}>
+                    {s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8)}
+                  </span>
+                </div>
               </div>
               <div className="flex items-center gap-3 shrink-0 text-xs">
                 {s.sync_enabled ? <span className="text-green-600 dark:text-green-400">{t("subscriptions.auto_sync")}</span> : <span className="text-gray-400">{t("subscriptions.manual")}</span>}

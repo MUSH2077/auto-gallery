@@ -84,6 +84,8 @@ export interface Subscription {
   id: string;
   creator_id: string;
   name?: string;
+  creator_name?: string;
+  creator_display_name?: string;
   is_active: boolean;
   sync_enabled: boolean;
   sync_interval_hours: number;
