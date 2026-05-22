@@ -27,6 +27,7 @@ export default function SettingsPage() {
     { href: "/admin/settings/download-defaults", title: t("settings.dl_defaults"), desc: t("settings.dl_defaults.desc") },
     { href: "/admin/naming-templates", title: t("settings.naming"), desc: t("settings.naming.desc") },
     { href: "/admin/settings/logs", title: t("settings.logs"), desc: t("settings.logs.desc") },
+    { href: "/admin/settings/backup", title: t("settings.backup"), desc: t("settings.backup.desc") },
     { href: "/admin/settings/data-mgmt", title: t("settings.data_mgmt"), desc: t("settings.data_mgmt.desc") },
   ];
 

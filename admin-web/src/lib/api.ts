@@ -579,6 +579,20 @@ export const api = {
 
   deleteNamingTemplate: (id: string) =>
     request<void>(`/api/v1/admin/naming-templates/${id}`, { method: "DELETE" }),
+
+  // Backup & Restore
+  createBackup: () =>
+    request<{ status: string; filename: string; size_bytes: number; size_mb: number }>(
+      "/api/v1/admin/backup", { method: "POST" }),
+
+  listBackups: () =>
+    request<{ backups: { filename: string; size_mb: number; created_at: string }[] }>(
+      "/api/v1/admin/backup/list"),
+
+  downloadBackup: (filename?: string) => {
+    const params = filename ? `?filename=${encodeURIComponent(filename)}` : "";
+    return `${BASE}/api/v1/admin/backup/download${params}`;
+  },
 };
 
 // ── Query Key Factory ──
