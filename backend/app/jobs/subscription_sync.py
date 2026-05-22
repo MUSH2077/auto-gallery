@@ -1,5 +1,7 @@
 import logging
+import sqlite3
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 from sqlalchemy import select, and_
 
@@ -20,6 +22,18 @@ async def _get_scheduler_config(db) -> dict:
     from app.models.system_setting import SystemSetting
     result = await db.execute(
         select(SystemSetting).where(SystemSetting.key == "subscription_defaults")
+    )
+    row = result.scalar_one_or_none()
+    if row and row.value:
+        return row.value
+    return {}
+
+
+async def _read_download_defaults(db) -> dict:
+    """Read download defaults from system_settings for stale detection timeout."""
+    from app.models.system_setting import SystemSetting
+    result = await db.execute(
+        select(SystemSetting).where(SystemSetting.key == "download_defaults")
     )
     row = result.scalar_one_or_none()
     if row and row.value:
@@ -178,6 +192,45 @@ async def sync_subscriptions():
 
         if jobs_created:
             await db.commit()
+
+    # Stale job detection: mark download jobs stuck "downloading" for too long
+    try:
+        dl_config = await _get_scheduler_config(db)
+        dl_defaults = await _read_download_defaults(db)
+        dl_timeout = int(dl_defaults.get("timeout_seconds", 600))
+        stale_cutoff = now - timedelta(seconds=dl_timeout * 2)
+        stale_result = await db.execute(
+            select(DownloadJob).where(
+                DownloadJob.status == "downloading",
+                DownloadJob.created_at < stale_cutoff,
+            )
+        )
+        stale_jobs = stale_result.scalars().all()
+        for sj in stale_jobs:
+            sj.status = "stale"
+            if sj.error_log:
+                sj.error_log += "\n[auto] Marked stale: stuck downloading for > 2x timeout"
+            else:
+                sj.error_log = "[auto] Marked stale: stuck downloading for > 2x timeout"
+            logger.warning("Marked download job %s as stale (stuck downloading)", sj.id)
+        if stale_jobs:
+            await db.commit()
+    except Exception:
+        logger.debug("Stale job detection skipped", exc_info=True)
+
+    # Periodic archive maintenance: VACUUM download archive SQLite files
+    try:
+        dl_root = Path(str(settings.download_root))
+        for archive_file in dl_root.glob("archive-*.sqlite3"):
+            try:
+                conn = sqlite3.connect(str(archive_file))
+                conn.execute("VACUUM")
+                conn.close()
+                logger.debug("VACUUMed download archive: %s", archive_file.name)
+            except Exception:
+                logger.debug("Failed to VACUUM archive %s", archive_file.name, exc_info=True)
+    except Exception:
+        logger.debug("Archive maintenance skipped", exc_info=True)
 
     mode = config.get("schedule_mode", "interval")
     logger.info("Auto-sync scan complete: %d jobs created (mode=%s, scan_every=%dm, default_interval=%dh)",

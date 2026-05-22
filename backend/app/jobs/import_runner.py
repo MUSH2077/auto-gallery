@@ -379,9 +379,29 @@ async def run_import_job(import_job_id: str):
 
     except Exception as e:
         import traceback
+        error_text = f"{str(e)[:1000]}\n{traceback.format_exc()[-500:]}"
         async with async_session() as db:
             ij = await db.get(ImportJob, job_uuid)
             if ij:
-                ij.status = "failed"
-                ij.error_log = f"{str(e)[:1000]}\n{traceback.format_exc()[-500:]}"
-                await db.commit()
+                # Check if this is a first failure — if so, retry once
+                already_retried = ij.error_log and "RETRY_ATTEMPT" in (ij.error_log or "")
+                if not already_retried:
+                    ij.status = "pending"
+                    ij.error_log = f"RETRY_ATTEMPT\n{error_text}"
+                    await db.commit()
+                    # Re-enqueue with backoff
+                    try:
+                        import redis as redis_lib
+                        from rq import Queue
+                        from datetime import timedelta
+                        r = redis_lib.from_url(settings.redis_url)
+                        Queue(connection=r).enqueue_in(
+                            timedelta(seconds=60),
+                            "app.jobs.import_runner.run_import_job", job_id)
+                        logger.info("Re-enqueued import job %s for retry", job_id)
+                    except Exception:
+                        logger.warning("Failed to enqueue import retry for %s", job_id, exc_info=True)
+                else:
+                    ij.status = "failed"
+                    ij.error_log = error_text
+                    await db.commit()

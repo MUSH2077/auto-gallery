@@ -10,6 +10,13 @@ logger = logging.getLogger(__name__)
 _cached_proxy: dict | None = None
 
 
+def clear_proxy_cache():
+    """Invalidate the cached proxy config so the next read reloads from DB."""
+    global _cached_proxy
+    _cached_proxy = None
+    logger.info("Proxy cache invalidated")
+
+
 def get_cached_proxy_config() -> dict:
     """Return cached proxy config, loading from DB if needed.
 
