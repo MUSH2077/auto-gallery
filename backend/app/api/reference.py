@@ -274,6 +274,24 @@ async def batch_import_danbooru_artists(data: dict):
     deduped = len(pixiv_ids) - len(unique)
     pixiv_ids = unique
 
+    # Pre-check: which IDs already have creators in the database?
+    existing_ids: list[str] = []
+    from app.database import async_session
+    from app.models.source_creator import SourceCreator
+    from app.models.creator import Creator
+    from sqlalchemy import select as sa_select
+    async with async_session() as precheck_db:
+        result = await precheck_db.execute(
+            sa_select(SourceCreator.source_creator_id, Creator.name, Creator.id)
+            .join(Creator, Creator.id == SourceCreator.creator_id)
+            .where(
+                SourceCreator.source == "pixiv",
+                SourceCreator.source_creator_id.in_(pixiv_ids),
+            )
+        )
+        existing_map = {row[0]: {"name": row[1], "creator_id": str(row[2])} for row in result}
+        existing_ids = [pid for pid in pixiv_ids if pid in existing_map]
+
     r = redis_lib.from_url(settings.redis_url)
     q = Queue(connection=r)
 
@@ -284,14 +302,15 @@ async def batch_import_danbooru_artists(data: dict):
                     job_timeout=3600,  # 1 hour max
                     result_ttl=3600)
 
-    logger.info("Enqueued batch import job %s with %d pixiv_ids (%d duplicates removed)",
-                job.id, len(pixiv_ids), deduped)
+    logger.info("Enqueued batch import job %s with %d pixiv_ids (%d duplicates removed, %d already exist)",
+                job.id, len(pixiv_ids), deduped, len(existing_ids))
     return {
         "status": "ok",
         "message": f"Batch import enqueued ({len(pixiv_ids)} IDs" + (f", {deduped} duplicates removed)" if deduped > 0 else ")"),
         "job_id": job.id,
         "total": len(pixiv_ids),
         "duplicates_removed": deduped,
+        "already_exists": [{"pixiv_id": pid, "creator_name": existing_map[pid]["name"], "creator_id": existing_map[pid]["creator_id"]} for pid in existing_ids],
     }
 
 

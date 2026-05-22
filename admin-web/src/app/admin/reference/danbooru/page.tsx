@@ -358,6 +358,17 @@ export default function DanbooruReferencePage() {
               {enqueueBatch.data?.duplicates_removed ? (
                 <span className="text-xs text-yellow-600">({enqueueBatch.data.duplicates_removed} duplicates removed)</span>
               ) : null}
+              {enqueueBatch.data?.already_exists && enqueueBatch.data.already_exists.length > 0 && (
+                <div className="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded text-xs">
+                  <span className="text-yellow-700 dark:text-yellow-400 font-medium">{enqueueBatch.data.already_exists.length} ID(s) already have creators: </span>
+                  {enqueueBatch.data.already_exists.map((e, i) => (
+                    <span key={e.pixiv_id} className="text-yellow-600">
+                      {i > 0 && ", "}
+                      <span className="font-mono">Pixiv {e.pixiv_id}</span> → {e.creator_name}
+                    </span>
+                  ))}
+                </div>
+              )}
               {batchResult && (
                 <button onClick={() => { setBatchJobId(null); }} className="text-xs text-blue-600 hover:underline">{t("common.close")}</button>
               )}
