@@ -536,7 +536,7 @@ export const api = {
     request<{ status: string; found?: boolean; creator_id?: string; artist_name?: string; links_imported: number; sources_created: number; subscription_id?: string }>("/api/v1/reference/danbooru/artist/import-all", { method: "POST", body: JSON.stringify(params) }),
 
   batchImportDanbooru: (pixivIds: string[]) =>
-    request<{ status: string; message: string; job_id: string; total: number }>(
+    request<{ status: string; message: string; job_id: string; total: number; duplicates_removed?: number }>(
       "/api/v1/reference/danbooru/artist/batch-import",
       { method: "POST", body: JSON.stringify({ pixiv_ids: pixivIds }) }),
 

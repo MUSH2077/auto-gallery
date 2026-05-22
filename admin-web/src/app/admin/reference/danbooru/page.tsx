@@ -355,6 +355,9 @@ export default function DanbooruReferencePage() {
               <span className="text-xs text-gray-400">
                 {batchInput.trim() ? `${batchInput.split(/[\n,]+/).filter((s: string) => /^\d+$/.test(s.trim())).length} ${t("danbooru.valid_ids")}` : ""}
               </span>
+              {enqueueBatch.data?.duplicates_removed ? (
+                <span className="text-xs text-yellow-600">({enqueueBatch.data.duplicates_removed} duplicates removed)</span>
+              ) : null}
               {batchResult && (
                 <button onClick={() => { setBatchJobId(null); }} className="text-xs text-blue-600 hover:underline">{t("common.close")}</button>
               )}
