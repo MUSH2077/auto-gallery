@@ -102,7 +102,7 @@ export default function CreatorsPage() {
 
   return (
     <main className="max-w-6xl mx-auto p-6">
-      <PageHeader title={t("creators.title")} description={t("works.page").replace("{page}", String(page + 1))}>
+      <PageHeader title={t("creators.title")} description={t("common.page").replace("{page}", String(page + 1))}>
         <div className="flex gap-2">
           <button onClick={() => router.push("/admin/creators/duplicates")} className="px-4 py-2 border rounded text-sm hover:bg-gray-50 dark:hover:bg-slate-700 dark:text-gray-300 dark:border-slate-600">{t("creators.duplicates")}</button>
           <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600">{t("creators.new")}</button>
@@ -164,9 +164,9 @@ export default function CreatorsPage() {
       {/* Pagination */}
       {(creators.data?.length || 0) > 0 && (
         <div className="flex gap-2 justify-center mt-4">
-          <button disabled={page === 0} onClick={() => setPage(page - 1)} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("works.prev")}</button>
-          <span className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400">{t("works.page").replace("{page}", String(page + 1))}</span>
-          <button onClick={() => setPage(page + 1)} disabled={!creators.data || creators.data.length < limit} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("works.next")}</button>
+          <button disabled={page === 0} onClick={() => setPage(page - 1)} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.prev")}</button>
+          <span className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400">{t("common.page").replace("{page}", String(page + 1))}</span>
+          <button onClick={() => setPage(page + 1)} disabled={!creators.data || creators.data.length < limit} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.next")}</button>
         </div>
       )}
 

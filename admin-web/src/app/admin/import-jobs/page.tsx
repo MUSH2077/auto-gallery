@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useT } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
@@ -83,16 +83,18 @@ export default function ImportJobsPage() {
   const t = useT();
   const qc = useQueryClient();
   const [statusFilter, setStatusFilter] = useState("");
+  const [page, setPage] = useState(0);
+  const limit = 25;
   const jobs = useQuery({
-    queryKey: [...queryKeys.importJobs.all, statusFilter],
-    queryFn: () => api.listImportJobs(statusFilter || undefined),
+    queryKey: [...queryKeys.importJobs.all, statusFilter, page],
+    queryFn: () => api.listImportJobs(statusFilter || undefined, page * limit, limit),
     refetchInterval: statusFilter === "" || statusFilter === "pending" || statusFilter === "running" ? 10000 : false,
   });
   const scan = useMutation({ mutationFn: api.scanImports, onSuccess: () => jobs.refetch() });
 
   return (
     <main className="max-w-7xl mx-auto p-6">
-      <PageHeader title={t("imports.title")} description={t("imports.desc")}>
+      <PageHeader title={t("imports.title")} description={jobs.data?.length ? t("common.page").replace("{page}", String(page + 1)) : t("imports.desc")}>
         <button onClick={() => scan.mutate()} disabled={scan.isPending}
           className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
           {scan.isPending ? t("imports.scanning") : t("imports.scan")}
@@ -104,7 +106,7 @@ export default function ImportJobsPage() {
 
       <div className="flex gap-2 mb-4 flex-wrap">
         {STATUS_OPTIONS.map((s) => (
-          <button key={s} onClick={() => setStatusFilter(s)}
+          <button key={s} onClick={() => { setStatusFilter(s); setPage(0); }}
             className={`px-3 py-1 rounded text-xs font-medium border ${statusFilter === s ? "bg-slate-900 dark:bg-slate-600 text-white border-slate-900 dark:border-slate-500" : "bg-white dark:bg-slate-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-600"}`}>
             {s || t("imports.filter_all", "All")}
           </button>
@@ -128,6 +130,16 @@ export default function ImportJobsPage() {
             </tr></thead>
             <tbody>{jobs.data.map((job) => <JobRow key={job.id} job={job} />)}</tbody>
           </table>
+        </div>
+      )}
+
+      {jobs.data && jobs.data.length > 0 && (
+        <div className="flex gap-2 justify-center mt-4">
+          <button disabled={page === 0} onClick={() => setPage(page - 1)}
+            className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.prev")}</button>
+          <span className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400">{t("common.page").replace("{page}", String(page + 1))}</span>
+          <button onClick={() => setPage(page + 1)} disabled={!jobs.data || jobs.data.length < limit}
+            className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.next")}</button>
         </div>
       )}
     </main>

@@ -72,8 +72,51 @@ export default function SchedulerPage() {
         )}
       </div>
 
-      {/* Subscription Sync Status */}
+      {/* Scheduler Configuration */}
       <section>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold dark:text-white">{t("scheduler.config")}</h2>
+          <Link href="/admin/settings/subscription-defaults" className="text-sm text-blue-600 hover:underline">{t("scheduler.edit_settings")}</Link>
+        </div>
+        {settings.isLoading ? (
+          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 animate-pulse"><div className="h-16 bg-gray-100 dark:bg-slate-700 rounded" /></div>
+        ) : settings.data ? (
+          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 text-sm">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">{t("scheduler.mode")}</div>
+                <div className="font-medium dark:text-white mt-1">
+                  {settings.data.subscription_defaults.schedule_mode === "fixed_time" ? t("scheduler.fixed_time") : t("scheduler.interval")}
+                </div>
+              </div>
+              {settings.data.subscription_defaults.schedule_mode === "fixed_time" ? (
+                <div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">{t("scheduler.scheduled_times")}</div>
+                  <div className="font-medium dark:text-white font-mono mt-1">{settings.data.subscription_defaults.scheduled_times || t("scheduler.not_set")}</div>
+                </div>
+              ) : (
+                <div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">{t("scheduler.default_interval")}</div>
+                  <div className="font-medium dark:text-white mt-1">{settings.data.subscription_defaults.default_sync_interval_hours}h</div>
+                </div>
+              )}
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">{t("scheduler.scan_frequency")}</div>
+                <div className="font-medium dark:text-white mt-1">{t("scheduler.every").replace("{minutes}", String(settings.data.subscription_defaults.scheduler_scan_interval_minutes))}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">{t("scheduler.auto_sync_new")}</div>
+                <div className={`font-medium mt-1 ${settings.data.subscription_defaults.default_sync_enabled ? "text-green-600 dark:text-green-400" : "text-gray-400"}`}>
+                  {settings.data.subscription_defaults.default_sync_enabled ? t("scheduler.enabled_val") : t("scheduler.disabled_val")}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </section>
+
+      {/* Subscription Sync Schedule */}
+      <section className="mt-8">
         <h2 className="text-lg font-semibold mb-3">{t("scheduler.sync_schedule")}</h2>
 
         {subs.isLoading && (
@@ -127,49 +170,6 @@ export default function SchedulerPage() {
             </table>
           </div>
         )}
-      </section>
-
-      {/* Scheduler Configuration */}
-      <section className="mt-8">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold dark:text-white">{t("scheduler.config")}</h2>
-          <Link href="/admin/settings/subscription-defaults" className="text-sm text-blue-600 hover:underline">{t("scheduler.edit_settings")}</Link>
-        </div>
-        {settings.isLoading ? (
-          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 animate-pulse"><div className="h-16 bg-gray-100 dark:bg-slate-700 rounded" /></div>
-        ) : settings.data ? (
-          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 text-sm">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">{t("scheduler.mode")}</div>
-                <div className="font-medium dark:text-white mt-1">
-                  {settings.data.subscription_defaults.schedule_mode === "fixed_time" ? t("scheduler.fixed_time") : t("scheduler.interval")}
-                </div>
-              </div>
-              {settings.data.subscription_defaults.schedule_mode === "fixed_time" ? (
-                <div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">{t("scheduler.scheduled_times")}</div>
-                  <div className="font-medium dark:text-white font-mono mt-1">{settings.data.subscription_defaults.scheduled_times || t("scheduler.not_set")}</div>
-                </div>
-              ) : (
-                <div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">{t("scheduler.default_interval")}</div>
-                  <div className="font-medium dark:text-white mt-1">{settings.data.subscription_defaults.default_sync_interval_hours}h</div>
-                </div>
-              )}
-              <div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">{t("scheduler.scan_frequency")}</div>
-                <div className="font-medium dark:text-white mt-1">Every {settings.data.subscription_defaults.scheduler_scan_interval_minutes}m</div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">{t("scheduler.auto_sync_new")}</div>
-                <div className={`font-medium mt-1 ${settings.data.subscription_defaults.default_sync_enabled ? "text-green-600 dark:text-green-400" : "text-gray-400"}`}>
-                  {settings.data.subscription_defaults.default_sync_enabled ? t("scheduler.enabled_val") : t("scheduler.disabled_val")}
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : null}
       </section>
 
       <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg text-sm text-blue-800 dark:text-blue-300">
