@@ -28,6 +28,7 @@ class CreatorService:
         creator = await self.get_creator(creator_id)
         creator.is_favorite = not creator.is_favorite
         await self.db.commit()
+        await self.db.refresh(creator)
         return creator
 
     async def get_creator(self, creator_id: UUID):
