@@ -281,6 +281,14 @@ async def clear_entity(entity: str, db: AsyncSession = Depends(get_db)):
         await db.commit()
         _clear_files(["/downloads", "/library"])
         results["files"] = "downloads + library cleared"
+        # Also clear Meilisearch indexes
+        try:
+            from app.services.search import SearchService
+            svc = SearchService(db)
+            await svc.delete_all_works()
+            logger.info("Cleared Meilisearch indexes after 'all' clear")
+        except Exception:
+            logger.warning("Failed to clear Meilisearch", exc_info=True)
         return {"status": "ok", "message": "All data cleared", "deleted": results}
 
     tables = ENTITIES.get(entity)
@@ -293,10 +301,17 @@ async def clear_entity(entity: str, db: AsyncSession = Depends(get_db)):
         results[table] = r.rowcount
     await db.commit()
 
-    # Clear files for works-related entities
+    # Clear files + Meilisearch for works-related entities
     if entity == "works":
         _clear_files(["/downloads", "/library"])
         results["files"] = "downloads + library cleared"
+        try:
+            from app.services.search import SearchService
+            svc = SearchService(db)
+            await svc.delete_all_works()
+            logger.info("Cleared Meilisearch index after 'works' clear")
+        except Exception:
+            logger.warning("Failed to clear Meilisearch", exc_info=True)
 
     return {"status": "ok", "message": f"Cleared {entity}", "deleted": results}
 

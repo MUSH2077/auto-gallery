@@ -1,6 +1,6 @@
 "use client";
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect, useRef } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
@@ -9,34 +9,58 @@ import { PageHeader, EmptyState, SourceBadge } from "@/components";
 export default function SearchPage() {
   const t = useT();
   const router = useRouter();
+  const qc = useQueryClient();
   const [query, setQuery] = useState("");
-  const [submitted, setSubmitted] = useState("");
+  const [debounced, setDebounced] = useState("");
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounce: search 300ms after user stops typing
+  useEffect(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setDebounced(query), 300);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [query]);
+
   const results = useQuery({
-    queryKey: ["search", submitted],
-    queryFn: () => api.search(submitted),
-    enabled: !!submitted,
+    queryKey: ["search", debounced],
+    queryFn: () => api.search(debounced),
+    enabled: debounced.length > 0,
   });
 
   return (
     <main className="max-w-6xl mx-auto p-6">
-      <PageHeader title={t("search.title")} description={t("search.desc")} />
-      <form onSubmit={(e) => { e.preventDefault(); setSubmitted(query); }} className="flex gap-2 mb-6">
-        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("search.placeholder")} className="flex-1 border rounded px-4 py-2 text-sm dark:bg-slate-700 dark:text-white dark:border-slate-600" />
-        <button type="submit" className="px-6 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600">{t("search.button")}</button>
-      </form>
+      <PageHeader title={t("search.title")} description={t("search.desc")}>
+        <button
+          className="px-3 py-1.5 text-xs bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600"
+          onClick={() => {
+            if (confirm(t("settings.reindex_confirm_msg"))) {
+              fetch(`${process.env.NEXT_PUBLIC_API_URL || ""}/api/v1/admin/search/reindex`, {
+                method: "POST",
+                headers: { "X-Admin-Key": process.env.NEXT_PUBLIC_ADMIN_KEY || "changeme" },
+              }).then(r => r.json()).then(d => alert(d.message || d.status));
+            }
+          }}>
+          {t("settings.reindex")}
+        </button>
+      </PageHeader>
+      <div className="flex gap-2 mb-6">
+        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("search.placeholder")}
+          className="flex-1 border rounded px-4 py-2 text-sm dark:bg-slate-700 dark:text-white dark:border-slate-600"
+          autoFocus />
+      </div>
 
-      {!submitted && <EmptyState title={t("search.empty")} description={t("search.empty_desc")} />}
+      {!debounced && <EmptyState title={t("search.empty")} description={t("search.empty_desc")} />}
 
-      {results.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-20 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
-      {results.data && !results.data.total && <EmptyState title={t("search.no_results")} description={t("search.no_results_for").replace("{query}", submitted)} />}
+      {results.isLoading && debounced && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-20 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
+      {results.data && !results.data.total && debounced && <EmptyState title={t("search.no_results")} description={t("search.no_results_for").replace("{query}", debounced)} />}
       {results.data && results.data.total > 0 && (
         <div>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">{t("search.results_for").replace("{count}", String(results.data.total)).replace("{query}", submitted)}</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">{t("search.results_for").replace("{count}", String(results.data.total)).replace("{query}", debounced)}</p>
           <div className="space-y-2">
             {results.data.results.map((r: any, i: number) => (
               <div key={r.id || i} className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 flex gap-4 cursor-pointer hover:shadow-md transition-shadow" onClick={() => router.push(`/admin/works/${r.id}`)}>
                 {r.thumbnail_asset_id ? (
-                  <img src={api.mediaUrl(r.thumbnail_asset_id, "thumb")} alt={r.title || ""} className="w-16 h-16 object-cover rounded shrink-0" />
+                  <img src={api.mediaUrl(r.thumbnail_asset_id, "thumb")} alt={r.title || ""} className="w-16 h-16 object-cover rounded shrink-0" loading="lazy" />
                 ) : (
                   <div className="w-16 h-16 bg-gray-100 dark:bg-slate-700 rounded shrink-0 flex items-center justify-center text-gray-400 text-xs">{t("search.na")}</div>
                 )}
