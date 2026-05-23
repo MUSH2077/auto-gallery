@@ -18,7 +18,6 @@ function AdminNav() {
     ["/admin/jobs", t("nav.jobs")],
     ["/admin/works", t("nav.works")],
     ["/admin/tags", t("nav.tags")],
-    ["/admin/search", t("nav.search")],
     ["/admin/scheduler", t("nav.scheduler")],
     ["/admin/reference/danbooru", t("nav.danbooru")],
     ["/admin/settings", t("nav.settings")],
@@ -35,6 +34,12 @@ function AdminNav() {
           ))}
         </div>
         <div className="flex items-center gap-1 shrink-0 ml-auto">
+          <Link href="/admin/search" className="p-1.5 rounded hover:bg-white/10 transition-colors" title={t("nav.search")}>
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8" />
+              <path d="M21 21l-4.3-4.3" />
+            </svg>
+          </Link>
           <LangToggle />
           <ThemeToggle />
           {/* Hamburger — mobile only */}
@@ -52,6 +57,8 @@ function AdminNav() {
             <Link key={href} href={href} onClick={() => setOpen(false)}
               className="hover:text-gray-300 transition-colors px-1 py-1 text-sm">{label}</Link>
           ))}
+          <Link href="/admin/search" onClick={() => setOpen(false)}
+            className="hover:text-gray-300 transition-colors px-1 py-1 text-sm">{t("nav.search")}</Link>
         </div>
       )}
     </nav>
