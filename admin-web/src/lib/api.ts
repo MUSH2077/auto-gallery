@@ -558,6 +558,14 @@ export const api = {
       "/api/v1/reference/danbooru/artist/batch-import",
       { method: "POST", body: JSON.stringify({ pixiv_ids: pixivIds }) }),
 
+  syncDanbooruFavorites: () =>
+    request<{
+      status: string; message?: string;
+      total_favorites?: number; created: number; matched: number; errors: number;
+      details?: { artist_name: string; danbooru_id?: number; action: string;
+                  creator_id?: string; post_count?: number; error?: string }[];
+    }>("/api/v1/reference/danbooru/favorites/sync", { method: "POST" }),
+
   getBatchImportStatus: (jobId?: string) =>
     request<{
       status: string; progress: { current: number; total: number; imported: number; errors: number } | null;
