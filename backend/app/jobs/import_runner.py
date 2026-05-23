@@ -314,6 +314,7 @@ async def run_import_job(import_job_id: str):
                 tag_names = [t.normalized_name for t in (await db.execute(
                     select(Tag.normalized_name).join(WorkTag).where(WorkTag.work_id == work.id)
                 )).all()]
+                asset_count = len(items)
                 meili_docs.append({
                     "id": str(work.id),
                     "title": work.title or "",
@@ -322,6 +323,8 @@ async def run_import_job(import_job_id: str):
                     "is_nsfw": work.is_nsfw,
                     "source": provider.source_name,
                     "tags": [str(tn) for tn in tag_names],
+                    "thumbnail_asset_id": str(work.thumbnail_asset_id) if work.thumbnail_asset_id else None,
+                    "asset_count": asset_count,
                     "posted_at": work.posted_at if work.posted_at else None,
                     "created_at": work.created_at.isoformat() if work.created_at else None,
                 })

@@ -72,7 +72,8 @@ class SearchService:
 
     async def index_work(self, work_id: str, title: str | None, description: str | None,
                           creator_name: str | None, is_nsfw: bool, source: str,
-                          tags: list[str], posted_at: str | None, created_at: str):
+                          tags: list[str], posted_at: str | None, created_at: str,
+                          thumbnail_asset_id: str | None = None, asset_count: int = 1):
         try:
             client = _client()
             _ensure_indexes(client)
@@ -81,10 +82,29 @@ class SearchService:
                 "description": (description or "")[:500],
                 "creator_name": creator_name or "", "is_nsfw": is_nsfw,
                 "source": source, "tags": tags,
+                "thumbnail_asset_id": thumbnail_asset_id,
+                "asset_count": asset_count,
                 "posted_at": posted_at, "created_at": created_at,
             }])
         except Exception as e:
             logger.warning("Failed to index work %s: %s", work_id, e)
+
+    async def delete_work(self, work_id: str):
+        """Remove a work from the Meilisearch index (e.g., when deleted from DB)."""
+        try:
+            client = _client()
+            client.index(WORKS_INDEX).delete_document(work_id)
+        except Exception as e:
+            logger.debug("Failed to delete work %s from index: %s", work_id, e)
+
+    async def delete_all_works(self):
+        """Clear all works from the Meilisearch index."""
+        try:
+            client = _client()
+            client.index(WORKS_INDEX).delete_all_documents()
+            logger.info("Cleared all works from Meilisearch index")
+        except Exception as e:
+            logger.warning("Failed to clear works index: %s", e)
 
     async def _batch_index_works(self, docs: list[dict]):
         """Index multiple works in a single Meilisearch call."""
