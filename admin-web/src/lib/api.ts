@@ -225,10 +225,23 @@ export interface GalleryDLSourceMeta {
   description: string;
 }
 
+export interface DanbooruSourceConfig {
+  username?: string;
+  password?: string;
+  api_key?: string;
+  cookies_path?: string;
+  cookie_content?: string;
+  favorite_artists?: string;
+  favorite_tags?: string;
+  filename?: string;
+  directory?: string;
+}
+
 export interface GalleryDLMultiConfig {
   pixiv: PixivSourceConfig;
   twitter: TwitterSourceConfig;
   iwara: IwaraSourceConfig;
+  danbooru: DanbooruSourceConfig;
   sources: Record<string, GalleryDLSourceMeta>;
 }
 
@@ -565,7 +578,7 @@ export const api = {
   // gallery-dl Config
   getGalleryDLConfig: (source?: string) => request<GalleryDLMultiConfig>(`/api/v1/admin/gallerydl-config${source ? `?source=${source}` : ""}`),
 
-  updateGalleryDLConfig: (data: { pixiv?: Partial<PixivSourceConfig>; twitter?: Partial<TwitterSourceConfig>; iwara?: Partial<IwaraSourceConfig> }) =>
+  updateGalleryDLConfig: (data: { pixiv?: Partial<PixivSourceConfig>; twitter?: Partial<TwitterSourceConfig>; iwara?: Partial<IwaraSourceConfig>; danbooru?: Partial<DanbooruSourceConfig> }) =>
     request<{ status: string; message: string; path: string }>("/api/v1/admin/gallerydl-config", { method: "PUT", body: JSON.stringify(data) }),
 
   // Naming Templates

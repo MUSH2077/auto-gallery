@@ -2,12 +2,12 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { PixivSourceConfig, TwitterSourceConfig, IwaraSourceConfig, GalleryDLSourceMeta } from "@/lib/api";
+import type { PixivSourceConfig, TwitterSourceConfig, IwaraSourceConfig, DanbooruSourceConfig, GalleryDLSourceMeta } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { PageHeader, ErrorState } from "@/components";
 import Link from "next/link";
 
-type TabKey = "pixiv" | "twitter" | "iwara";
+type TabKey = "pixiv" | "twitter" | "iwara" | "danbooru";
 
 function useGalleryTabs() {
   const t = useT();
@@ -15,6 +15,7 @@ function useGalleryTabs() {
     { key: "pixiv" as TabKey, label: t("gallerydl.tab.pixiv"), color: "border-blue-500" },
     { key: "twitter" as TabKey, label: t("gallerydl.tab.twitter"), color: "border-gray-700" },
     { key: "iwara" as TabKey, label: t("gallerydl.tab.iwara"), color: "border-pink-500" },
+    { key: "danbooru" as TabKey, label: t("gallerydl.tab.danbooru"), color: "border-yellow-700" },
   ];
 }
 
@@ -93,6 +94,7 @@ export default function GalleryDLConfigPage() {
   const [pixiv, setPixiv] = useState<PixivSourceConfig>({});
   const [twitter, setTwitter] = useState<TwitterSourceConfig>({});
   const [iwara, setIwara] = useState<IwaraSourceConfig>({});
+  const [danbooru, setDanbooru] = useState<DanbooruSourceConfig>({});
   const seeded = useRef(false);
 
   const save = useMutation({
@@ -109,6 +111,7 @@ export default function GalleryDLConfigPage() {
         pixiv: strip(pixiv as unknown as Record<string, unknown>),
         twitter: strip(twitter as unknown as Record<string, unknown>),
         iwara: strip(iwara as unknown as Record<string, unknown>),
+        danbooru: strip(danbooru as unknown as Record<string, unknown>),
       });
     },
     onSuccess: (_, v) => {
@@ -123,6 +126,7 @@ export default function GalleryDLConfigPage() {
       setPixiv(initPixiv(d.pixiv));
       setTwitter(initTwitter(d.twitter));
       setIwara(initIwara(d.iwara));
+      setDanbooru(initDanbooru(d.danbooru));
       seeded.current = true;
     }
   }, [config.data]);
@@ -150,6 +154,13 @@ export default function GalleryDLConfigPage() {
     username: str(d?.username), password: str(d?.password),
     filename: str(d?.filename),
     directory: str(d?.directory), format: str(d?.format),
+  });
+  const initDanbooru = (d: any) => ({
+    username: str(d?.username), password: str(d?.password),
+    api_key: str(d?.api_key),
+    cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
+    favorite_artists: str(d?.favorite_artists), favorite_tags: str(d?.favorite_tags),
+    filename: str(d?.filename), directory: str(d?.directory),
   });
 
   if (config.isError) {
@@ -197,6 +208,7 @@ export default function GalleryDLConfigPage() {
         {activeTab === "pixiv" && <PixivTab data={pixiv} onChange={setPixiv} />}
         {activeTab === "twitter" && <TwitterTab data={twitter} onChange={setTwitter} />}
         {activeTab === "iwara" && <IwaraTab data={iwara} onChange={setIwara} />}
+        {activeTab === "danbooru" && <DanbooruTab data={danbooru} onChange={setDanbooru} />}
 
         <div className="flex justify-end pt-4 border-t">
           <button onClick={() => save.mutate()} disabled={save.isPending}
@@ -326,6 +338,55 @@ function IwaraTab({ data, onChange }: { data: IwaraSourceConfig; onChange: (d: I
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.file_org")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label={t("gallerydl.dir_pattern")} value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} placeholder="iwara/{user[name]}" />
+        <TextField label={t("gallerydl.filename_pattern")} value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} />
+      </div>
+    </>
+  );
+}
+
+// ── Danbooru Tab ──
+
+function DanbooruTab({ data, onChange }: { data: DanbooruSourceConfig; onChange: (d: DanbooruSourceConfig) => void }) {
+  const t = useT();
+  const set = (k: keyof DanbooruSourceConfig, v: any) => onChange({ ...data, [k]: v });
+  return (
+    <>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.auth")}</h4>
+      <div className="grid grid-cols-3 gap-4">
+        <TextField label={t("gallerydl.danbooru.username")} value={str(data.username)} onChange={(v) => set("username", v || undefined)} placeholder="Danbooru username" />
+        <TextField label={t("gallerydl.danbooru.password")} value={str(data.password)} onChange={(v) => set("password", v || undefined)} type="password" placeholder="Danbooru password" />
+        <TextField label={t("gallerydl.danbooru.api_key")} value={str(data.api_key)} onChange={(v) => set("api_key", v || undefined)} placeholder="Danbooru API key" />
+      </div>
+      <div className="grid grid-cols-2 gap-4 mt-4">
+        <TextField label={t("gallerydl.cookies_path")} value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/danbooru.txt" />
+      </div>
+      <div>
+        <label className="block text-sm font-medium mb-1">{t("gallerydl.cookie_content")}</label>
+        <textarea value={str(data.cookie_content)} onChange={(e) => set("cookie_content", e.target.value || undefined)}
+          rows={3} className="w-full border rounded px-3 py-2 text-xs font-mono dark:bg-slate-700 dark:text-white"
+          placeholder="Paste cookie text here. Auto-saved to /gallerydl-config/cookies/danbooru.txt" />
+        <p className="text-xs text-gray-400 mt-1">{t("gallerydl.danbooru.cookies_help")}</p>
+      </div>
+
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.content")}</h4>
+      <div className="space-y-3">
+        <div>
+          <TextField label={t("gallerydl.danbooru.favorite_artists")} value={str(data.favorite_artists)}
+            onChange={(v) => set("favorite_artists", v || undefined)}
+            placeholder="ask, wlop, fuetaro" />
+          <p className="text-xs text-gray-400 mt-1">{t("gallerydl.danbooru.favorite_artists.desc")}</p>
+        </div>
+        <div>
+          <TextField label={t("gallerydl.danbooru.favorite_tags")} value={str(data.favorite_tags)}
+            onChange={(v) => set("favorite_tags", v || undefined)}
+            placeholder="kantai_collection, touhou" />
+          <p className="text-xs text-gray-400 mt-1">{t("gallerydl.danbooru.favorite_tags.desc")}</p>
+        </div>
+      </div>
+
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.file_org")}</h4>
+      <div className="grid grid-cols-2 gap-4">
+        <TextField label={t("gallerydl.dir_pattern")} value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} placeholder="danbooru/{artist[name]}" />
         <TextField label={t("gallerydl.filename_pattern")} value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} />
       </div>
     </>
