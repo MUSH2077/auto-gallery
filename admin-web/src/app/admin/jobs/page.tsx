@@ -62,6 +62,7 @@ export default function JobsPage() {
   const [retryId, setRetryId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteType, setDeleteType] = useState<"dl" | "im">("dl");
+  const [expandedLog, setExpandedLog] = useState<string | null>(null);
 
   const downloads = useQuery({
     queryKey: [...queryKeys.downloadJobs.all, dlFilter],
@@ -122,27 +123,35 @@ export default function JobsPage() {
             {downloads.data.map((j) => {
               const active = j.status === "downloading" || j.status === "pending";
               return (
-                <div key={j.id} className={`bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 text-sm flex items-center gap-3 ${active ? "border-l-2 border-blue-500" : ""}`}>
-                  <ActiveIndicator status={j.status} />
-                  <span className="font-mono text-xs text-gray-400 dark:text-gray-500 w-16 shrink-0">{j.id.slice(0, 8)}</span>
-                  {j.source && <SourceBadge source={j.source} />}
-                  <span className="truncate text-gray-600 dark:text-gray-300 flex-1 min-w-0 text-xs">{j.source_url}</span>
-                  <ProgressBar active={active} />
-                  {active ? (
-                    <Elapsed since={j.created_at} active={true} />
-                  ) : (
-                    <span className="text-xs text-gray-400 shrink-0 w-20 text-right">
-                      {j.retry_count > 0 && <span className="mr-1">↻{j.retry_count}</span>}
-                      {new Date(j.created_at).toLocaleTimeString()}
-                    </span>
-                  )}
-                  <div className="flex gap-1 shrink-0">
-                    {j.status === "failed" && (
-                      <button onClick={() => { setRetryId(j.id); retryDL.mutate(j.id); }} disabled={retryDL.isPending}
-                        className="text-xs text-blue-600 hover:underline">{t("jobs.retry")}</button>
+                <div key={j.id}>
+                  <div className={`bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 text-sm flex items-center gap-3 ${active ? "border-l-2 border-blue-500" : j.status === "failed" ? "border-l-2 border-red-400" : ""}`}>
+                    <ActiveIndicator status={j.status} />
+                    <span className="font-mono text-xs text-gray-400 dark:text-gray-500 w-16 shrink-0">{j.id.slice(0, 8)}</span>
+                    {j.source && <SourceBadge source={j.source} />}
+                    <span className="truncate text-gray-600 dark:text-gray-300 flex-1 min-w-0 text-xs">{j.source_url}</span>
+                    <ProgressBar active={active} />
+                    {active ? (
+                      <Elapsed since={j.created_at} active={true} />
+                    ) : (
+                      <span className="text-xs text-gray-400 shrink-0 w-20 text-right">
+                        {j.retry_count > 0 && <span className="mr-1">↻{j.retry_count}</span>}
+                        {new Date(j.created_at).toLocaleTimeString()}
+                      </span>
                     )}
-                    <button onClick={() => { setDeleteId(j.id); setDeleteType("dl"); }} className="text-xs text-red-500 hover:underline">{t("jobs.del")}</button>
+                    <div className="flex gap-1 shrink-0">
+                      {j.error_log && (
+                        <button onClick={() => setExpandedLog(expandedLog === j.id ? null : j.id)} className="text-xs text-orange-500 hover:underline">{expandedLog === j.id ? "▲" : t("downloads.log")}</button>
+                      )}
+                      {j.status === "failed" && (
+                        <button onClick={() => { setRetryId(j.id); retryDL.mutate(j.id); }} disabled={retryDL.isPending}
+                          className="text-xs text-blue-600 hover:underline">{t("jobs.retry")}</button>
+                      )}
+                      <button onClick={() => { setDeleteId(j.id); setDeleteType("dl"); }} className="text-xs text-red-500 hover:underline">{t("jobs.del")}</button>
+                    </div>
                   </div>
+                  {expandedLog === j.id && j.error_log && (
+                    <pre className="text-xs font-mono whitespace-pre-wrap bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900 rounded p-3 mt-1 max-h-48 overflow-auto">{j.error_log}</pre>
+                  )}
                 </div>
               );
             })}
@@ -173,25 +182,31 @@ export default function JobsPage() {
             {imports.data.map((j) => {
               const active = j.status === "running";
               return (
-                <div key={j.id} className={`bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 text-sm flex items-center gap-3 ${active ? "border-l-2 border-blue-500" : ""}`}>
-                  <ActiveIndicator status={j.status} />
-                  <span className="font-mono text-xs text-gray-400 dark:text-gray-500 w-16 shrink-0">{j.id.slice(0, 8)}</span>
-                  <span className="font-mono text-xs text-gray-400 truncate flex-1">DL: {j.download_job_id ? j.download_job_id.slice(0, 8) : "—"}</span>
-                  <ProgressBar active={active} />
-                  {active ? (
-                    <Elapsed since={j.created_at} active={true} />
-                  ) : j.error_log ? (
-                    <span className="text-xs text-red-500 truncate max-w-xs" title={j.error_log}>{(j.error_log || "").slice(0, 60)}</span>
-                  ) : (
-                    <span className="text-xs text-gray-400 shrink-0 w-20 text-right">{new Date(j.created_at).toLocaleTimeString()}</span>
-                  )}
-                  <div className="flex gap-1 shrink-0">
-                    {j.status === "failed" && (
-                      <button onClick={() => { setRetryId(j.id); retryIM.mutate(j.id); }} disabled={retryIM.isPending}
-                        className="text-xs text-blue-600 hover:underline">{t("jobs.retry")}</button>
+                <div key={j.id}>
+                  <div className={`bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 text-sm flex items-center gap-3 ${active ? "border-l-2 border-blue-500" : j.status === "failed" ? "border-l-2 border-red-400" : ""}`}>
+                    <ActiveIndicator status={j.status} />
+                    <span className="font-mono text-xs text-gray-400 dark:text-gray-500 w-16 shrink-0">{j.id.slice(0, 8)}</span>
+                    <span className="font-mono text-xs text-gray-400 truncate flex-1">DL: {j.download_job_id ? j.download_job_id.slice(0, 8) : "—"}</span>
+                    <ProgressBar active={active} />
+                    {active ? (
+                      <Elapsed since={j.created_at} active={true} />
+                    ) : (
+                      <span className="text-xs text-gray-400 shrink-0 w-20 text-right">{new Date(j.created_at).toLocaleTimeString()}</span>
                     )}
-                    <button onClick={() => { setDeleteId(j.id); setDeleteType("im"); }} className="text-xs text-red-500 hover:underline">{t("jobs.del")}</button>
+                    <div className="flex gap-1 shrink-0">
+                      {j.error_log && (
+                        <button onClick={() => setExpandedLog(expandedLog === j.id ? null : j.id)} className="text-xs text-orange-500 hover:underline">{expandedLog === j.id ? "▲" : t("downloads.log")}</button>
+                      )}
+                      {j.status === "failed" && (
+                        <button onClick={() => { setRetryId(j.id); retryIM.mutate(j.id); }} disabled={retryIM.isPending}
+                          className="text-xs text-blue-600 hover:underline">{t("jobs.retry")}</button>
+                      )}
+                      <button onClick={() => { setDeleteId(j.id); setDeleteType("im"); }} className="text-xs text-red-500 hover:underline">{t("jobs.del")}</button>
+                    </div>
                   </div>
+                  {expandedLog === j.id && j.error_log && (
+                    <pre className="text-xs font-mono whitespace-pre-wrap bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900 rounded p-3 mt-1 max-h-48 overflow-auto">{j.error_log}</pre>
+                  )}
                 </div>
               );
             })}
