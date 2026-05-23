@@ -404,10 +404,23 @@ class IwaraSourceConfig(BaseModel):
     directory: str | None = None
     format: str | None = None
 
+class DanbooruSourceConfig(BaseModel):
+    username: str | None = None
+    password: str | None = None
+    api_key: str | None = None
+    cookies_path: str | None = None
+    cookie_content: str | None = None
+    favorite_artists: str | None = None
+    favorite_tags: str | None = None
+    filename: str | None = None
+    directory: str | None = None
+
+
 class GalleryDLMultiConfig(BaseModel):
     pixiv: PixivSourceConfig | None = None
     twitter: TwitterSourceConfig | None = None
     iwara: IwaraSourceConfig | None = None
+    danbooru: DanbooruSourceConfig | None = None
 
 GALLERYDL_SOURCE_OPTIONS = {
     "pixiv": {
@@ -424,6 +437,11 @@ GALLERYDL_SOURCE_OPTIONS = {
         "name": "Iwara",
         "supported": True,
         "description": "Iwara.tv videos, images, playlists, and user profiles. Requires gallery-dl >= 1.32.",
+    },
+    "danbooru": {
+        "name": "Danbooru",
+        "supported": True,
+        "description": "Danbooru reference provider — artist tracking, tag monitoring, metadata enrichment. Not used as a primary download source.",
     },
 }
 
@@ -447,6 +465,12 @@ IWARA_CONFIG_MAP = {
     "cookies_path": "cookies", "username": "username",
     "password": "password", "filename": "filename",
     "directory": "directory", "format": "format",
+}
+
+DANBOORU_CONFIG_MAP = {
+    "username": "username", "password": "password",
+    "api_key": "api-key", "cookies_path": "cookies",
+    "filename": "filename", "directory": "directory",
 }
 
 def _load_config() -> tuple[dict, str]:
@@ -502,6 +526,7 @@ async def get_gallerydl_config(source: str | None = None):
         "pixiv": get_source("pixiv", PIXIV_CONFIG_MAP),
         "twitter": get_source("twitter", TWITTER_CONFIG_MAP),
         "iwara": get_source("iwara", IWARA_CONFIG_MAP),
+        "danbooru": get_source("danbooru", DANBOORU_CONFIG_MAP),
         "sources": GALLERYDL_SOURCE_OPTIONS,
     }
     if source:
@@ -524,6 +549,7 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
         ("pixiv", data.pixiv, PIXIV_CONFIG_MAP),
         ("twitter", data.twitter, TWITTER_CONFIG_MAP),
         ("iwara", data.iwara, IWARA_CONFIG_MAP),
+        ("danbooru", data.danbooru, DANBOORU_CONFIG_MAP),
     ]:
         if source_data is None:
             continue
@@ -551,6 +577,11 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
         iwara = extractors.setdefault("iwara", {})
         _write_source_config(iwara, data.iwara, IWARA_CONFIG_MAP)
         extractors["iwara"] = iwara
+
+    if data.danbooru is not None:
+        danbooru = extractors.setdefault("danbooru", {})
+        _write_source_config(danbooru, data.danbooru, DANBOORU_CONFIG_MAP)
+        extractors["danbooru"] = danbooru
 
     config["extractor"] = extractors
 
