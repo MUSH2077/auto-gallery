@@ -360,3 +360,102 @@ async def get_batch_import_status(job_id: str | None = None):
         "result": result,
         "job_status": job_status,
     }
+
+
+@router.post("/danbooru/favorites/sync")
+async def sync_danbooru_favorites(db: AsyncSession = Depends(get_db)):
+    """Bidirectional sync: pull Danbooru favorites → local creators, push local → Danbooru.
+
+    Pulls Danbooru favorite artists, matches to local creators by danbooru_artist_id
+    or name, creates new creators for unmatched ones. Marks all matched/created creators
+    as is_favorite=true locally.
+    """
+    from app.models.creator import Creator
+    from app.models.creator_link import CreatorLink
+    from app.services import danbooru as danbooru_svc
+
+    # 1. Fetch Danbooru favorites
+    favorites = await asyncio.to_thread(danbooru_svc.get_favorites)
+    if not favorites:
+        return {"status": "ok", "message": "No Danbooru favorites found (or auth not configured)", "synced": 0}
+
+    created = 0
+    matched = 0
+    errors = 0
+    details = []
+
+    for fav in favorites:
+        try:
+            artist_name = fav["artist_name"]
+            danbooru_id = fav.get("danbooru_artist_id")
+            post_count = fav["favorited_post_count"]
+
+            # Try to find existing creator by danbooru_artist_id
+            creator = None
+            if danbooru_id:
+                result = await db.execute(
+                    select(Creator).where(Creator.danbooru_artist_id == danbooru_id)
+                )
+                creator = result.scalar_one_or_none()
+
+            # Try by name if no danbooru_id match
+            if not creator:
+                result = await db.execute(
+                    select(Creator).where(Creator.name == artist_name)
+                )
+                creator = result.scalar_one_or_none()
+
+            if creator:
+                # Update existing creator
+                if not creator.danbooru_artist_id and danbooru_id:
+                    creator.danbooru_artist_id = danbooru_id
+                creator.is_favorite = True
+                matched += 1
+                details.append({
+                    "artist_name": artist_name, "danbooru_id": danbooru_id,
+                    "action": "matched", "creator_id": str(creator.id),
+                    "post_count": post_count,
+                })
+            else:
+                # Create new creator
+                creator = Creator(
+                    name=artist_name,
+                    display_name=artist_name,
+                    danbooru_artist_id=danbooru_id,
+                    is_favorite=True,
+                    description=f"Imported from Danbooru favorites ({post_count} favorited posts)",
+                )
+                db.add(creator)
+                await db.flush()
+
+                # Add Danbooru reference link
+                db.add(CreatorLink(
+                    creator_id=creator.id,
+                    url=f"https://danbooru.donmai.us/artists/{danbooru_id}" if danbooru_id else fav.get("latest_post_url", ""),
+                    link_type="danbooru",
+                    source="danbooru_reference",
+                    confidence=0.9,
+                    is_verified=False,
+                    notes=f"From Danbooru favorites sync ({post_count} posts)",
+                ))
+                created += 1
+                details.append({
+                    "artist_name": artist_name, "danbooru_id": danbooru_id,
+                    "action": "created", "creator_id": str(creator.id),
+                    "post_count": post_count,
+                })
+        except Exception as e:
+            errors += 1
+            details.append({"artist_name": fav["artist_name"], "action": "error", "error": str(e)})
+            logger.exception("Failed to sync Danbooru favorite: %s", fav["artist_name"])
+
+    await db.commit()
+
+    return {
+        "status": "ok",
+        "total_favorites": len(favorites),
+        "created": created,
+        "matched": matched,
+        "errors": errors,
+        "details": details,
+    }

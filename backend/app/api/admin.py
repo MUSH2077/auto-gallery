@@ -470,6 +470,7 @@ IWARA_CONFIG_MAP = {
 DANBOORU_CONFIG_MAP = {
     "username": "username", "password": "password",
     "api_key": "api-key", "cookies_path": "cookies",
+    "favorite_artists": "favorite-artists", "favorite_tags": "favorite-tags",
     "filename": "filename", "directory": "directory",
 }
 

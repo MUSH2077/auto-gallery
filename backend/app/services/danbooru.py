@@ -285,3 +285,129 @@ def search_and_extract(source_url: str | None = None,
 
     links = extract_creator_links(artist)
     return artist, links
+
+
+# ── Auth + Favorites ──
+
+_auth_cache: dict | None = None
+
+
+def _get_auth() -> dict:
+    """Read Danbooru auth credentials from gallery-dl config.json."""
+    global _auth_cache
+    if _auth_cache is not None:
+        return _auth_cache
+
+    try:
+        import json, os
+        config_path = os.path.join(
+            os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"), "config.json")
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                cfg = json.load(f)
+            extractor = cfg.get("extractor", {}).get("danbooru", {})
+            _auth_cache = {
+                "username": extractor.get("username", ""),
+                "password": extractor.get("password", ""),
+                "api_key": extractor.get("api-key", ""),
+            }
+            return _auth_cache
+    except Exception:
+        logger.debug("Failed to read Danbooru auth from config", exc_info=True)
+    _auth_cache = {}
+    return _auth_cache
+
+
+def _add_auth(req: urllib.request.Request) -> urllib.request.Request:
+    """Add Danbooru auth to a request if credentials are configured."""
+    auth = _get_auth()
+    api_key = auth.get("api_key", "")
+    username = auth.get("username", "")
+    if api_key:
+        if username:
+            # HTTP Basic Auth (Danbooru: username + api_key as password)
+            import base64
+            creds = base64.b64encode(f"{username}:{api_key}".encode()).decode()
+            req.add_header("Authorization", f"Basic {creds}")
+        else:
+            # API key as query param
+            req.add_header("X-Api-Key", api_key)
+    return req
+
+
+def get_favorites(page: int = 1, limit: int = 200) -> list[dict]:
+    """Fetch a user's Danbooru favorites (artist-level aggregation).
+
+    Returns a list of dicts with keys: danbooru_artist_id, artist_name,
+    favorited_post_count, latest_post_url.
+    """
+    global _opener
+    if _opener is None:
+        _opener = _get_opener()
+
+    # Fetch favorited posts with artist tags
+    path = f"/favorites.json?limit={limit}&page={page}"
+    url = f"{DANBOORU_BASE}{path}"
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    _add_auth(req)
+
+    posts = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            with _opener.open(req, timeout=REQUEST_TIMEOUT) as resp:
+                posts = json.loads(resp.read())
+                break
+        except Exception as e:
+            if attempt < MAX_RETRIES - 1:
+                wait = RETRY_BACKOFF * (2 ** attempt)
+                logger.debug("Danbooru favorites attempt %d/%d failed, retrying in %ds",
+                             attempt + 1, MAX_RETRIES, wait)
+                time.sleep(wait)
+            else:
+                logger.warning("Failed to fetch Danbooru favorites: %s", e)
+                return []
+
+    if not isinstance(posts, list) or not posts:
+        return []
+
+    # Aggregate by artist: group posts by tag_string_artist
+    artist_map: dict[str, dict] = {}
+    for post in posts:
+        tag_artist = post.get("tag_string_artist", "")
+        if not tag_artist:
+            continue
+        # tag_string_artist is space-separated artist names
+        artists = tag_artist.split()
+        for artist_name in artists:
+            if artist_name not in artist_map:
+                artist_map[artist_name] = {
+                    "artist_name": artist_name,
+                    "favorited_post_count": 0,
+                    "latest_post_url": "",
+                    "sample_post_id": 0,
+                    "latest_created_at": "",
+                }
+            entry = artist_map[artist_name]
+            entry["favorited_post_count"] += 1
+            post_created = post.get("created_at", "")
+            if post_created > entry["latest_created_at"]:
+                entry["latest_created_at"] = post_created
+                entry["latest_post_url"] = f"https://danbooru.donmai.us/posts/{post['id']}"
+                entry["sample_post_id"] = post["id"]
+
+    # Try to resolve Danbooru artist IDs for each artist name
+    result = []
+    for artist_name, entry in artist_map.items():
+        artists = search_by_name(artist_name)
+        danbooru_id = artists[0]["id"] if artists else None
+        result.append({
+            "artist_name": artist_name,
+            "danbooru_artist_id": danbooru_id,
+            "favorited_post_count": entry["favorited_post_count"],
+            "latest_post_url": entry["latest_post_url"],
+            "sample_post_id": entry["sample_post_id"],
+        })
+
+    # Sort by favorited post count (most favorited first)
+    result.sort(key=lambda x: x["favorited_post_count"], reverse=True)
+    return result
