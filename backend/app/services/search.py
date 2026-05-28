@@ -18,7 +18,7 @@ TAGS_INDEX = "tags"
 INDEX_SETTINGS = {
     WORKS_INDEX: {
         "searchableAttributes": ["title", "description", "creator_name"],
-        "filterableAttributes": ["is_nsfw", "source", "tags"],
+        "filterableAttributes": ["is_nsfw", "is_ai_generated", "source", "tags"],
         "sortableAttributes": ["posted_at", "created_at"],
     },
     CREATORS_INDEX: {
@@ -73,7 +73,8 @@ class SearchService:
     async def index_work(self, work_id: str, title: str | None, description: str | None,
                           creator_name: str | None, is_nsfw: bool, source: str,
                           tags: list[str], posted_at: str | None, created_at: str,
-                          thumbnail_asset_id: str | None = None, asset_count: int = 1):
+                          thumbnail_asset_id: str | None = None, asset_count: int = 1,
+                          is_ai_generated: bool = False):
         try:
             client = _client()
             _ensure_indexes(client)
@@ -81,6 +82,7 @@ class SearchService:
                 "id": work_id, "title": title or "",
                 "description": (description or "")[:500],
                 "creator_name": creator_name or "", "is_nsfw": is_nsfw,
+                "is_ai_generated": is_ai_generated,
                 "source": source, "tags": tags,
                 "thumbnail_asset_id": thumbnail_asset_id,
                 "asset_count": asset_count,
@@ -126,33 +128,51 @@ class SearchService:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-        # Index works
+        # ── Bulk pre-fetch: avoid N+1 ──────────────────────────────────────────
+
+        # work_id → [tag_names]  (single JOIN query)
+        tags_rows = await self.db.execute(
+            select(WorkTag.work_id, Tag.normalized_name).join(Tag, Tag.id == WorkTag.tag_id)
+        )
+        work_tags: dict[str, list[str]] = {}
+        for wid, tname in tags_rows.all():
+            work_tags.setdefault(str(wid), []).append(tname)
+
+        # work_id → (source, creator_display_name)  (single outer-join query)
+        sc_rows = await self.db.execute(
+            select(WorkSource.work_id, WorkSource.source, SourceCreator.display_name).outerjoin(
+                SourceCreator,
+                (SourceCreator.source_creator_id == WorkSource.source_creator_id)
+                & (SourceCreator.source == WorkSource.source),
+            )
+        )
+        work_source: dict[str, str] = {}
+        work_creator: dict[str, str] = {}
+        for wid, src, cname in sc_rows.all():
+            key = str(wid)
+            if key not in work_source:
+                work_source[key] = src
+                if cname:
+                    work_creator[key] = cname
+
+        # ── Index works ────────────────────────────────────────────────────────
         works = await self.db.execute(
             select(Work).order_by(Work.created_at.desc()).limit(10000)
         )
         work_docs = []
         for w in works.scalars().all():
-            tags_result = await self.db.execute(
-                select(Tag.normalized_name).join(WorkTag).where(WorkTag.work_id == w.id)
-            )
-            tag_names = [t[0] for t in tags_result.all()]
-            src_result = await self.db.execute(
-                select(WorkSource.source).where(WorkSource.work_id == w.id).limit(1)
-            )
-            source = src_result.scalar_one_or_none() or "unknown"
-            creator_result = await self.db.execute(
-                select(SourceCreator.display_name).join(
-                    WorkSource, WorkSource.source_creator_id == SourceCreator.source_creator_id
-                ).where(WorkSource.work_id == w.id).limit(1)
-            )
-            creator_name = creator_result.scalar_one_or_none()
+            wid = str(w.id)
             work_docs.append({
-                "id": str(w.id), "title": w.title or "",
+                "id": wid,
+                "title": w.title or "",
                 "description": (w.description or "")[:500],
-                "creator_name": creator_name or "", "is_nsfw": w.is_nsfw,
-                "source": source, "tags": tag_names,
+                "creator_name": work_creator.get(wid) or "",
+                "is_nsfw": w.is_nsfw,
+                "is_ai_generated": w.is_ai_generated,
+                "source": work_source.get(wid) or "unknown",
+                "tags": work_tags.get(wid) or [],
                 "thumbnail_asset_id": w.thumbnail_asset_id,
-                "asset_count": w.asset_count if hasattr(w, 'asset_count') else 1,
+                "asset_count": getattr(w, "asset_count", 1),
                 "posted_at": w.posted_at,
                 "created_at": w.created_at.isoformat() if w.created_at else None,
             })

@@ -34,13 +34,14 @@ def install():
 
 
 def get_recent(limit: int = 200, level: str | None = None, name_filter: str | None = None) -> list[dict]:
-    """Get recent log entries, optionally filtered."""
+    """Get recent log entries, optionally filtered. Returns newest-first."""
     entries = list(_buffer)
     if level:
         entries = [e for e in entries if e["level"].upper() == level.upper()]
     if name_filter:
         entries = [e for e in entries if name_filter.lower() in e["name"].lower()]
-    return list(reversed(entries))[-limit:]
+    # reversed(entries) puts newest first; [:limit] keeps the most recent N
+    return list(reversed(entries))[:limit]
 
 
 def clear():
