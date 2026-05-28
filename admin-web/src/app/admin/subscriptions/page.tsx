@@ -1,7 +1,7 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useT } from "@/lib/i18n";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { api, queryKeys, Subscription } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, ConfirmDialog, Modal, SourceBadge } from "@/components";
@@ -51,15 +51,42 @@ function buildFilters(filter: FilterMode, search: string) {
   return f;
 }
 
-export default function SubscriptionsPage() {
+function SubscriptionsContent() {
   const router = useRouter();
   const t = useT();
-  const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<FilterMode>("all");
-  const [page, setPage] = useState(0);
+  const sp = useSearchParams();
+  const pathname = usePathname();
+
+  // Filter state derived from URL
+  const search = sp.get("q") ?? "";
+  const filter = (sp.get("filter") as FilterMode) ?? "all";
+  const page = Number(sp.get("p") ?? "0");
   const limit = 25;
   const [showCreate, setShowCreate] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+
+  // Local input for search field — debounced 300ms before writing to URL
+  const [inputVal, setInputVal] = useState(search);
+  useEffect(() => { setInputVal(search); }, [search]);
+  useEffect(() => {
+    if (inputVal === search) return;
+    const timer = setTimeout(() => {
+      const p = new URLSearchParams(sp.toString());
+      if (inputVal) p.set("q", inputVal); else p.delete("q");
+      p.delete("p");
+      router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [inputVal]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function updateParams(updates: Record<string, string | null>, resetPage = true) {
+    const p = new URLSearchParams(sp.toString());
+    for (const [k, v] of Object.entries(updates)) {
+      if (v === null || v === "") p.delete(k); else p.set(k, v);
+    }
+    if (resetPage) p.delete("p");
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+  }
 
   const FILTERS: { key: FilterMode; label: string }[] = [
     { key: "all", label: t("subscriptions.filter_all") },
@@ -123,10 +150,10 @@ export default function SubscriptionsPage() {
 
       {/* Toolbar */}
       <div className="flex items-center gap-3 mb-4 flex-wrap">
-        <input value={search} onChange={(e) => { setSearch(e.target.value); setPage(0); }} placeholder={t("subscriptions.search")} className="border rounded px-3 py-2 text-sm w-48 dark:bg-slate-700 dark:text-white dark:border-slate-600" />
+        <input value={inputVal} onChange={(e) => { setInputVal(e.target.value); }} placeholder={t("subscriptions.search")} className="border rounded px-3 py-2 text-sm w-48 dark:bg-slate-700 dark:text-white dark:border-slate-600" />
         <div className="flex gap-1 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
           {FILTERS.map((f) => (
-            <button key={f.key} onClick={() => { setFilter(f.key); setPage(0); }}
+            <button key={f.key} onClick={() => updateParams({ filter: f.key === "all" ? null : f.key })}
               className={`px-3 py-1 text-xs rounded transition-colors ${filter === f.key ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
               {f.label}
             </button>
@@ -194,9 +221,9 @@ export default function SubscriptionsPage() {
       {/* Pagination */}
       {subs.data && subs.data.length > 0 && (
         <div className="flex gap-2 justify-center mt-4">
-          <button disabled={page === 0} onClick={() => setPage(page - 1)} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.prev")}</button>
+          <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.prev")}</button>
           <span className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400">{t("common.page").replace("{page}", String(page + 1))}</span>
-          <button onClick={() => setPage(page + 1)} disabled={!subs.data || subs.data.length < limit} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.next")}</button>
+          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!subs.data || subs.data.length < limit} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.next")}</button>
         </div>
       )}
 
@@ -206,5 +233,13 @@ export default function SubscriptionsPage() {
       {deleteId && <ConfirmDialog open title={t("subscriptions.delete_title")} message={t("subscriptions.delete_msg")} onConfirm={() => del.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={del.isPending} error={(del.error as Error)?.message} />}
       {confirmBatchDel && <ConfirmDialog open title={t("subscriptions.batch_delete_title")} message={t("subscriptions.batch_delete_msg").replace("{count}", String(selected.size))} onConfirm={() => batchDel.mutate([...selected])} onCancel={() => setConfirmBatchDel(false)} isPending={batchDel.isPending} error={(batchDel.error as Error)?.message} />}
     </main>
+  );
+}
+
+export default function SubscriptionsPage() {
+  return (
+    <Suspense>
+      <SubscriptionsContent />
+    </Suspense>
   );
 }

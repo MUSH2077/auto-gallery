@@ -1,6 +1,6 @@
 "use client";
-import { useState, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useMemo, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
 import { api, queryKeys, WorkListItem } from "@/lib/api";
@@ -41,8 +41,8 @@ function GridCard({ w, onToggleFavorite }: { w: WorkListItem; onToggleFavorite: 
         {w.asset_count > 1 && (
           <span className="absolute bottom-1 left-1 bg-black/70 text-white text-xs px-1.5 py-0.5 rounded font-medium">{w.asset_count}p</span>
         )}
-        {w.is_nsfw && (
-          <span className="absolute top-1 left-1 bg-red-600 text-white text-xs px-1.5 py-0.5 rounded">{t("works.nsfw_badge")}</span>
+        {w.is_ai_generated && (
+          <span className="absolute top-1 left-1 bg-yellow-500 text-white text-xs px-1.5 py-0.5 rounded">{t("works.ai_badge")}</span>
         )}
         {w.has_ugoira && (
           <span className="absolute bottom-1 right-1 bg-purple-600/90 text-white text-[10px] px-1.5 py-0.5 rounded font-medium">{t("works.gif_badge")}</span>
@@ -79,10 +79,12 @@ function GridCard({ w, onToggleFavorite }: { w: WorkListItem; onToggleFavorite: 
 type SortKey = "created_at" | "posted_at" | "title";
 type ViewMode = "grid" | "list";
 
-export default function WorksPage() {
+function WorksContent() {
   const t = useT();
   const router = useRouter();
   const qc = useQueryClient();
+  const sp = useSearchParams();
+  const pathname = usePathname();
 
   const SORT_OPTIONS: { key: SortKey; label: string }[] = [
     { key: "created_at", label: t("works.sort_imported") },
@@ -102,26 +104,52 @@ export default function WorksPage() {
     { key: "x", label: "X" },
     { key: "iwara", label: "Iwara" },
   ];
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useState(0);
-  const [sortBy, setSortBy] = useState<SortKey>("created_at");
-  const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
-  const [nsfwFilter, setNsfwFilter] = useState("all");
-  const [sourceFilter, setSourceFilter] = useState("");
-  const [creatorFilter, setCreatorFilter] = useState("");
-  const [isFavoriteFilter, setIsFavoriteFilter] = useState(false);
-  const [viewMode, setViewMode] = useState<ViewMode>("grid");
+  // All filter state derived from URL — preserves filters on back/forward and supports sharing links
+  const search = sp.get("q") ?? "";
+  const page = Number(sp.get("p") ?? "0");
+  const sortBy = (sp.get("sort") as SortKey) ?? "created_at";
+  const sortOrder = (sp.get("order") as "desc" | "asc") ?? "desc";
+  const sourceFilter = sp.get("source") ?? "";
+  const creatorFilter = sp.get("creator") ?? "";
+  const nsfwFilter = sp.get("nsfw") ?? "all";
+  const isFavoriteFilter = sp.get("fav") === "1";
+  const aiFilter = (sp.get("ai") as "all" | "human" | "ai") ?? "all";
+  const viewMode = (sp.get("view") as ViewMode) ?? "grid";
   const limit = 25;
+
+  // Local input for search field — debounced 300ms before writing to URL
+  const [inputVal, setInputVal] = useState(search);
+  useEffect(() => { setInputVal(search); }, [search]);
+  useEffect(() => {
+    if (inputVal === search) return;
+    const timer = setTimeout(() => {
+      const p = new URLSearchParams(sp.toString());
+      if (inputVal) p.set("q", inputVal); else p.delete("q");
+      p.delete("p");
+      router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [inputVal]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function updateParams(updates: Record<string, string | null>, resetPage = true) {
+    const p = new URLSearchParams(sp.toString());
+    for (const [k, v] of Object.entries(updates)) {
+      if (v === null || v === "") p.delete(k); else p.set(k, v);
+    }
+    if (resetPage) p.delete("p");
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+  }
 
   const filters = useMemo(() => ({
     search: search || undefined,
     source: sourceFilter || undefined,
     creator_id: creatorFilter || undefined,
-    is_nsfw: nsfwFilter === "all" ? undefined : nsfwFilter === "nsfw",
+        is_nsfw: nsfwFilter === "all" ? undefined : nsfwFilter === "nsfw",
     is_favorite: isFavoriteFilter || undefined,
+    is_ai_generated: aiFilter === "all" ? undefined : aiFilter === "ai",
     sort_by: sortBy,
     sort_order: sortOrder,
-  }), [search, sourceFilter, creatorFilter, nsfwFilter, isFavoriteFilter, sortBy, sortOrder]);
+  }), [search, sourceFilter, creatorFilter, nsfwFilter, isFavoriteFilter, aiFilter, sortBy, sortOrder]);
 
   const works = useQuery({
     queryKey: [...queryKeys.works.all, page, filters],
@@ -150,13 +178,13 @@ export default function WorksPage() {
 
       {/* Search & Filters */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
-        <input value={search} onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+        <input value={inputVal} onChange={(e) => setInputVal(e.target.value)}
           placeholder={t("works.search_title")} className="border rounded px-3 py-1.5 text-sm w-48 dark:bg-slate-700 dark:text-white dark:border-slate-600" />
 
         {/* Source filter */}
         <div className="flex gap-0.5 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
           {SOURCE_FILTERS.map((f) => (
-            <button key={f.key} onClick={() => { setSourceFilter(f.key); setPage(0); }}
+            <button key={f.key} onClick={() => updateParams({ source: f.key || null })}
               className={`px-2.5 py-1 text-xs rounded transition-colors ${sourceFilter === f.key ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
               {f.label}
             </button>
@@ -165,7 +193,7 @@ export default function WorksPage() {
 
         {/* Creator filter */}
         {(creators.data?.length || 0) > 0 && (
-          <select value={creatorFilter} onChange={(e) => { setCreatorFilter(e.target.value); setPage(0); }}
+          <select value={creatorFilter} onChange={(e) => updateParams({ creator: e.target.value || null })}
             className="border rounded px-2 py-1.5 text-xs dark:bg-slate-700 dark:text-white dark:border-slate-600">
             <option value="">{t("works.filter_all_creators")}</option>
             {creators.data?.map((c) => (
@@ -177,7 +205,7 @@ export default function WorksPage() {
         {/* NSFW filter */}
         <div className="flex gap-0.5 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
           {NSFW_FILTERS.map((f) => (
-            <button key={f.key} onClick={() => { setNsfwFilter(f.key); setPage(0); }}
+            <button key={f.key} onClick={() => updateParams({ nsfw: f.key === "all" ? null : f.key })}
               className={`px-2.5 py-1 text-xs rounded transition-colors ${nsfwFilter === f.key ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
               {f.label}
             </button>
@@ -185,17 +213,29 @@ export default function WorksPage() {
         </div>
 
         {/* Favorites filter */}
-        <button onClick={() => { setIsFavoriteFilter(!isFavoriteFilter); setPage(0); }}
+        <button onClick={() => updateParams({ fav: isFavoriteFilter ? null : "1" })}
           className={`px-2.5 py-1 text-xs rounded transition-colors ${isFavoriteFilter ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
           {"★"} {t("works.filter_favorites")}
         </button>
 
+        {/* AI filter */}
+        <div className="flex gap-0.5 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
+          {[
+            { key: "all", label: t("works.ai_filter_all") },
+            { key: "human", label: t("works.ai_filter_human") },
+            { key: "ai", label: t("works.ai_filter_ai") },
+          ].map((f) => (
+            <button key={f.key} onClick={() => updateParams({ ai: f.key === "all" ? null : f.key })}
+              className={`px-2.5 py-1 text-xs rounded transition-colors ${aiFilter === f.key ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+
         {/* Sort */}
         <select value={`${sortBy}-${sortOrder}`} onChange={(e) => {
           const [k, o] = e.target.value.split("-");
-          setSortBy(k as SortKey);
-          setSortOrder(o as "desc" | "asc");
-          setPage(0);
+          updateParams({ sort: k === "created_at" ? null : k, order: o === "desc" ? null : o });
         }} className="border rounded px-2 py-1.5 text-xs dark:bg-slate-700 dark:text-white dark:border-slate-600">
           {SORT_OPTIONS.map((s) => (
             <option key={`${s.key}-desc`} value={`${s.key}-desc`}>{s.label} ↓</option>
@@ -209,11 +249,11 @@ export default function WorksPage() {
 
         {/* View toggle */}
         <div className="flex gap-0.5 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
-          <button onClick={() => setViewMode("grid")}
+          <button onClick={() => updateParams({ view: null }, false)}
             className={`px-2.5 py-1 rounded text-xs ${viewMode === "grid" ? "bg-white dark:bg-slate-600 shadow-sm" : "text-gray-500"}`}>
             {t("works.view_grid")}
           </button>
-          <button onClick={() => setViewMode("list")}
+          <button onClick={() => updateParams({ view: "list" }, false)}
             className={`px-2.5 py-1 rounded text-xs ${viewMode === "list" ? "bg-white dark:bg-slate-600 shadow-sm" : "text-gray-500"}`}>
             {t("works.view_list")}
           </button>
@@ -284,11 +324,19 @@ export default function WorksPage() {
       {/* Pagination */}
       {(works.data?.length || 0) > 0 && (
         <div className="flex gap-2 justify-center">
-          <button disabled={page === 0} onClick={() => setPage(page - 1)} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("works.prev")}</button>
+          <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("works.prev")}</button>
           <span className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400">{t("works.page").replace("{page}", String(page + 1))}</span>
-          <button onClick={() => setPage(page + 1)} disabled={!works.data || works.data.length < limit} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("works.next")}</button>
+          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!works.data || works.data.length < limit} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("works.next")}</button>
         </div>
       )}
     </main>
+  );
+}
+
+export default function WorksPage() {
+  return (
+    <Suspense>
+      <WorksContent />
+    </Suspense>
   );
 }
