@@ -3,8 +3,8 @@ const sourceColors: Record<string, string> = {
   pixiv: "bg-blue-100 text-blue-700",
   iwara: "bg-pink-100 text-pink-700",
   // Pixiv sub-types
-  pixiv_sketch: "bg-sky-100 text-sky-700",
-  pixiv_stacc: "bg-indigo-100 text-indigo-700",
+  pixiv_sketch: "bg-blue-100 text-blue-700",
+  pixiv_stacc: "bg-blue-100 text-blue-700",
   // Social
   x: "bg-gray-900 text-white",
   bluesky: "bg-sky-500 text-white",
@@ -15,6 +15,7 @@ const sourceColors: Record<string, string> = {
   danbooru_reference: "bg-yellow-100 text-yellow-700",
   deviantart: "bg-green-200 text-green-800",
   artstation: "bg-blue-200 text-blue-800",
+  pinterest: "bg-red-200 text-red-800",
   // Video
   youtube: "bg-red-100 text-red-700",
   bilibili: "bg-pink-100 text-pink-700",

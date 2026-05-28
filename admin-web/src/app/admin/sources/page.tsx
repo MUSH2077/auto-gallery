@@ -6,9 +6,12 @@ import { PageHeader, EmptyState } from "@/components";
 import { useT } from "@/lib/i18n";
 
 const DEFAULT_URLS: Record<string, string> = {
-  pixiv: "https://www.pixiv.net/en/artworks/12345678",
+  pixiv: "https://www.pixiv.net/artworks/12345678",
   iwara: "https://www.iwara.tv/video/abc123",
   x: "https://x.com/artist_handle/status/1234567890123456789",
+  danbooru: "https://danbooru.donmai.us/posts?tags=ask",
+  pinterest: "https://www.pinterest.com/username/pins/",
+  lofter: "https://blogname.lofter.com/",
   danbooru_reference: "https://danbooru.donmai.us/artists/12345",
   local: "/path/to/local/folder",
   manual: "(manual upload — no URL required)",
@@ -18,8 +21,11 @@ const SOURCE_DESCRIPTIONS: Record<string, string> = {
   pixiv: "Pixiv artworks, user profiles, favorites, rankings, and search results. First fully-supported downloadable source. Requires cookies or OAuth refresh-token for authentication.",
   iwara: "Iwara video and profile pages. Currently a placeholder — download support planned for a future phase.",
   x: "X / Twitter media posts and user timelines. Currently a placeholder with no timeline. Re-evaluate after Pixiv pipeline stabilizes.",
-  danbooru_reference: "Danbooru artist tag reference data for creator identity mapping. Reference only — not a default media download source. Does not contain the complete union of all works.",
+  danbooru: "Danbooru post download via tag search (e.g. posts?tags=artist_name). Supports full download pipeline with rich tag metadata (artist, character, copyright, general, meta categories). Defaults to disabled when a creator is imported — must be manually enabled.",
+  danbooru_reference: "Danbooru artist reference data for creator identity mapping. Used to discover external URLs (Pixiv, Twitter, etc.) from Danbooru artist records and suggest creator links. Not a download source — see 'danbooru' provider above for post downloads.",
   local: "Import media from a local folder on the NAS. Does not use gallery-dl. Supports manual organization of existing media libraries.",
+  pinterest: "Pinterest pins, boards, and user all-pins. Downloads images from pin pages, user profiles, and board collections. No tag system.",
+  lofter: "LOFTER blog posts and images. Chinese blogging platform popular with artists. Downloads post images. No tag metadata from gallery-dl.",
   manual: "Manual upload of individual files through the admin interface. Does not use gallery-dl. For one-off additions.",
 };
 
@@ -27,7 +33,10 @@ const URL_PATTERNS: Record<string, RegExp> = {
   pixiv: /pixiv\.net\/(?:en\/)?(artworks|users)\/\d+/,
   iwara: /iwara\.tv\/(video|profile)\/[\w-]+/,
   x: /(?:twitter\.com|x\.com)\/\w+(?:\/status\/\d+)?\/?$/,
+  danbooru: /danbooru\.donmai\.us\/posts\?tags=.+/,
   danbooru_reference: /danbooru\.donmai\.us\/(artists\/\d+|posts\?tags=.+)/,
+  pinterest: /pinterest\.\w+\/(pin\/\d+|[\w.-]+\/(pins|[\w.-]+))/,
+  lofter: /[\w-]+\.lofter\.com(\/post\/[\w_]+)?/,
   local: /.+/,
   manual: /.+/,
 };
@@ -125,7 +134,7 @@ export default function SourcesPage() {
                       <td className="text-center py-2 px-2">{s.capabilities.supports_tags ? "✓" : "—"}</td>
                       <td className="text-center py-2 px-2">{s.capabilities.is_reference_only ? "✓" : "—"}</td>
                       <td className="text-center py-2 px-2">{s.capabilities.can_import_local ? "✓" : "—"}</td>
-                      <td className="py-2 px-2 text-xs text-gray-500 dark:text-gray-400">{s.source_name === "pixiv" ? t("sources.auth_oauth") : s.source_name === "x" ? t("sources.auth_oauth_future") : t("sources.auth_na")}</td>
+                      <td className="py-2 px-2 text-xs text-gray-500 dark:text-gray-400">{s.source_name === "pixiv" ? t("sources.auth_oauth") : s.source_name === "x" ? t("sources.auth_oauth_future") : s.source_name === "danbooru" ? t("sources.auth_basic") : t("sources.auth_na")}</td>
                     </tr>
                   ))}
                 </tbody>

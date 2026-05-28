@@ -55,6 +55,41 @@ async def delete_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.post("/{job_id}/pause")
+async def pause_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
+    svc = DownloadService(db)
+    try:
+        return await svc.pause_job(job_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{job_id}/resume")
+async def resume_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
+    svc = DownloadService(db)
+    try:
+        return await svc.resume_job(job_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/batch")
+async def batch_jobs(data: dict, db: AsyncSession = Depends(get_db)):
+    """Batch action on multiple download jobs.
+
+    Accepts: {ids: [UUID, ...], action: "retry"|"delete"|"pause"|"resume"}
+    """
+    ids_raw = data.get("ids", [])
+    action = data.get("action", "")
+    if not ids_raw or not isinstance(ids_raw, list):
+        raise HTTPException(status_code=400, detail="ids list is required")
+    if action not in ("retry", "delete", "pause", "resume"):
+        raise HTTPException(status_code=400, detail="action must be retry/delete/pause/resume")
+    ids = [UUID(i) for i in ids_raw]
+    svc = DownloadService(db)
+    return await svc.batch_action(ids, action)
+
+
 @router.get("/{job_id}/imports", response_model=list[ImportJobRead])
 async def list_imports(job_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = DownloadService(db)

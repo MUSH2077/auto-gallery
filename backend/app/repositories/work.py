@@ -16,6 +16,7 @@ class WorkRepository:
                        creator_id: str | None = None,
                        is_nsfw: bool | None = None,
                        is_favorite: bool | None = None,
+                       is_ai_generated: bool | None = None,
                        sort_by: str = "created_at",
                        sort_order: str = "desc") -> list[Work]:
         # Scalar subquery for source (first alphabetically)
@@ -90,6 +91,8 @@ class WorkRepository:
             conditions.append(Work.is_nsfw == is_nsfw)
         if is_favorite is not None:
             conditions.append(Work.is_favorite == is_favorite)
+        if is_ai_generated is not None:
+            conditions.append(Work.is_ai_generated == is_ai_generated)
 
         # For source and creator filters, need EXISTS subquery
         if source:

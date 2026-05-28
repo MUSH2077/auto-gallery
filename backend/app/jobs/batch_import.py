@@ -7,6 +7,7 @@ HTTP request timeouts.
 import asyncio
 import json
 import logging
+import urllib.parse
 import redis as redis_lib
 from uuid import UUID
 
@@ -154,7 +155,26 @@ async def _batch_import(pixiv_ids: list[str]) -> dict:
                     db.add(SubscriptionSource(
                         subscription_id=subscription.id,
                         source=src_type, source_url=raw_url,
-                        is_enabled=True,
+                        is_enabled=(src_type == "pixiv"),
+                    ))
+                    sources_count += 1
+
+                # Also create Danbooru subscription source (default disabled)
+                danbooru_posts_url = (
+                    f"https://danbooru.donmai.us/posts?tags={urllib.parse.quote(artist_name)}"
+                )
+                existing_ds = await db.execute(
+                    select(SubscriptionSource).where(
+                        SubscriptionSource.subscription_id == subscription.id,
+                        SubscriptionSource.source == "danbooru",
+                    )
+                )
+                if not existing_ds.scalar_one_or_none():
+                    db.add(SubscriptionSource(
+                        subscription_id=subscription.id,
+                        source="danbooru",
+                        source_url=danbooru_posts_url,
+                        is_enabled=False,
                     ))
                     sources_count += 1
 

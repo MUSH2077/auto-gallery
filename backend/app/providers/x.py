@@ -30,14 +30,14 @@ class XProvider(BaseProvider):
         return None
 
     def validate_url(self, url: str) -> bool:
-        return bool(re.match(r"https?://(?:twitter\.com|x\.com)/\w+(?:/status/\d+)?/?$", url))
+        return bool(re.match(r"https?://(?:twitter\.com|x\.com)/\w+(?:/status/\d+)?/?(?:\?.*)?$", url))
 
     def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
         return {
             "extractor": {
                 "twitter": {
                     "cookies": "/gallerydl-config/cookies/twitter.txt",
-                    "directory": [naming_template.template if naming_template else "twitter/{user[name]}"],
+                    "directory": [naming_template.template if naming_template else "x/{user[name]}"],
                 }
             }
         }
@@ -110,3 +110,7 @@ class XProvider(BaseProvider):
             if name:
                 result.append({"source": self.source_name, "original_name": f"@{name}", "category": "mention"})
         return result
+
+    def get_creator_directory_name(self, raw_metadata: dict) -> str:
+        user = raw_metadata.get("user", {})
+        return str(user.get("name") or user.get("id", "unknown"))

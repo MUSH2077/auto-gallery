@@ -10,6 +10,8 @@ from app.providers import registry
 
 logger = logging.getLogger(__name__)
 
+RQ_JOB_TIMEOUT = 7200  # 2 hours — must exceed gallery-dl subprocess timeout
+
 
 class DownloadService:
     def __init__(self, db: AsyncSession):
@@ -63,7 +65,7 @@ class DownloadService:
             from rq import Queue
             r = redis_lib.from_url(settings.redis_url)
             q = Queue(connection=r)
-            q.enqueue("app.jobs.download.run_download_job", str(job.id))
+            q.enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
         except Exception:
             logger.warning("Failed to enqueue download job %s", job.id, exc_info=True)
 
@@ -71,24 +73,65 @@ class DownloadService:
 
     async def retry_job(self, job_id: UUID):
         job = await self.get_job(job_id)
-        if job.status not in ("failed", "stale"):
+        if job.status not in ("failed", "stale", "downloading"):
             raise ValueError(f"Cannot retry job with status '{job.status}'")
         job = await self.repo.update_status(job, "pending")
         try:
             import redis as redis_lib
             from rq import Queue
             r = redis_lib.from_url(settings.redis_url)
-            Queue(connection=r).enqueue("app.jobs.download.run_download_job", str(job.id))
+            Queue(connection=r).enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
         except Exception:
             logger.warning("Failed to enqueue retry for download job %s", job.id, exc_info=True)
         return {"job_id": str(job.id), "status": job.status}
 
     async def delete_job(self, job_id: UUID):
         job = await self.get_job(job_id)
-        if job.status in ("pending", "downloading", "importing"):
+        if job.status in ("pending", "importing"):
             raise ValueError(f"Cannot delete job with status '{job.status}'")
         await self.db.delete(job)
         await self.db.commit()
+
+    async def pause_job(self, job_id: UUID):
+        job = await self.get_job(job_id)
+        if job.status not in ("pending", "downloading"):
+            raise ValueError(f"Cannot pause job with status '{job.status}'")
+        job = await self.repo.update_status(job, "paused")
+        return {"job_id": str(job.id), "status": job.status}
+
+    async def resume_job(self, job_id: UUID):
+        job = await self.get_job(job_id)
+        if job.status not in ("paused",):
+            raise ValueError(f"Cannot resume job with status '{job.status}'")
+        job = await self.repo.update_status(job, "pending")
+        try:
+            import redis as redis_lib
+            from rq import Queue
+            r = redis_lib.from_url(settings.redis_url)
+            Queue(connection=r).enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
+        except Exception:
+            logger.warning("Failed to enqueue resume for download job %s", job.id, exc_info=True)
+        return {"job_id": str(job.id), "status": job.status}
+
+    async def batch_action(self, ids: list[UUID], action: str) -> dict:
+        results = {"succeeded": 0, "failed": 0, "errors": []}
+        for jid in ids:
+            try:
+                if action == "retry":
+                    await self.retry_job(jid)
+                elif action == "delete":
+                    await self.delete_job(jid)
+                elif action == "pause":
+                    await self.pause_job(jid)
+                elif action == "resume":
+                    await self.resume_job(jid)
+                else:
+                    raise ValueError(f"Unknown action: {action}")
+                results["succeeded"] += 1
+            except Exception as e:
+                results["failed"] += 1
+                results["errors"].append({"id": str(jid), "error": str(e)})
+        return results
 
     async def list_imports(self, job_id: UUID):
         return await self.repo.list_imports(job_id)

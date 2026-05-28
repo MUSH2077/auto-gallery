@@ -18,7 +18,54 @@ from app.providers import registry
 
 logger = logging.getLogger(__name__)
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+
+
+def _detect_ai_generated(raw: dict, source: str) -> bool:
+    """Detect if a work is AI-generated from its raw metadata."""
+    # Pixiv: illust_ai_type field (1=AI, 2=AI)
+    if source == "pixiv":
+        ai_type = raw.get("illust_ai_type")
+        if ai_type is not None and ai_type == 2:
+            return True
+    # Danbooru: check meta tags for ai_generated
+    if source == "danbooru":
+        meta_tags = raw.get("tag_string_meta", "")
+        if "ai_generated" in meta_tags.lower():
+            return True
+    # Generic tag-based detection for other sources
+    tags_str = " ".join(str(v) for v in raw.values() if isinstance(v, str)).lower()
+    ai_indicators = ["ai_generated", "ai-generated", "ai generated", "created by ai", "ai art"]
+    for indicator in ai_indicators:
+        if indicator in tags_str:
+            return True
+    return False
+
+
+def _detect_nsfw(raw: dict, source: str) -> bool:
+    """Detect if a work is NSFW/R-18 from its raw metadata."""
+    if source == "pixiv":
+        # x_restrict: 0=all-ages, 1=R-18, 2=R-18G
+        restrict = raw.get("restrict")
+        if restrict is not None and restrict >= 1:
+            return True
+        # sanity_level: 0-11, 7+ = explicit
+        sanity = raw.get("sanity_level")
+        if sanity is not None and sanity >= 7:
+            return True
+    elif source == "danbooru":
+        # rating: s=safe, q=questionable, e=explicit
+        rating = raw.get("rating", "").lower()
+        if rating in ("q", "e"):
+            return True
+    elif source == "iwara":
+        rating = raw.get("rating", "").lower()
+        if rating and rating not in ("general", "allages", "all-ages", "safe"):
+            return True
+    elif source == "x":
+        if raw.get("possibly_sensitive"):
+            return True
+    return False
 
 
 def _get_image_dims(filepath: Path) -> tuple[int, int] | None:
@@ -130,11 +177,9 @@ async def run_import_job(import_job_id: str):
                 logger.warning("Failed to parse provider data for %s/%s", provider.source_name, src_work_id, exc_info=True)
                 continue
 
-            # Directory name: use account from raw JSON (matches gallery-dl {user[account]})
+            # Directory name: provider knows which field matches its gallery-dl template
             # Display name: for metadata.json
-            user_raw = first_raw.get("user", {})
-            dir_name = (user_raw.get("account") or
-                        sc_data.get("source_creator_id", "unknown"))
+            dir_name = provider.get_creator_directory_name(first_raw)
             dir_name = dir_name.replace("/", "_").replace("\\", "_").strip()
             display_name = (sc_data.get("display_name") or dir_name)
 
@@ -205,9 +250,13 @@ async def run_import_job(import_job_id: str):
                         sc_obj.creator_id = sub.creator_id
 
                 # Work
+                is_ai = _detect_ai_generated(first_raw, provider.source_name)
+                is_nsfw = _detect_nsfw(first_raw, provider.source_name)
                 work = Work(title=ws_data.get("title"),
                             description=ws_data.get("description"),
-                            posted_at=ws_data.get("posted_at"))
+                            posted_at=ws_data.get("posted_at"),
+                            is_ai_generated=is_ai,
+                            is_nsfw=is_nsfw)
                 db.add(work)
                 await db.flush()
 
@@ -257,7 +306,7 @@ async def run_import_job(import_job_id: str):
                     db.add(AssetSource(
                         asset_id=asset.id, work_source_id=ws.id,
                         source=provider.source_name,
-                        source_asset_id=f"{src_work_id}_p{idx}",
+                        source_asset_id=fp.stem,
                         source_url=None,
                         raw_metadata=None,
                     ))
@@ -314,13 +363,14 @@ async def run_import_job(import_job_id: str):
                 tag_names = [t.normalized_name for t in (await db.execute(
                     select(Tag.normalized_name).join(WorkTag).where(WorkTag.work_id == work.id)
                 )).all()]
-                asset_count = len(items)
+                asset_count = len(image_files)
                 meili_docs.append({
                     "id": str(work.id),
                     "title": work.title or "",
                     "description": (work.description or "")[:500],
                     "creator_name": display_name or "",
                     "is_nsfw": work.is_nsfw,
+                    "is_ai_generated": work.is_ai_generated,
                     "source": provider.source_name,
                     "tags": [str(tn) for tn in tag_names],
                     "thumbnail_asset_id": str(work.thumbnail_asset_id) if work.thumbnail_asset_id else None,
@@ -349,10 +399,20 @@ async def run_import_job(import_job_id: str):
                 except Exception:
                     logger.warning("Failed to unlink processed JSON %s", jf, exc_info=True)
 
-            # Remove empty directories (if no images left from other import runs)
+            # Remove empty directories (no images left)
             try:
-                if not any(p for p in work_dir.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS):
-                    continue
+                remaining_images = [p for p in work_dir.iterdir()
+                                    if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS]
+                if not remaining_images:
+                    for leftover in work_dir.iterdir():
+                        try:
+                            leftover.unlink()
+                        except Exception:
+                            pass
+                    try:
+                        work_dir.rmdir()
+                    except Exception:
+                        pass
             except Exception:
                 logger.debug("Failed to check image files in %s", work_dir, exc_info=True)
 
@@ -400,10 +460,10 @@ async def run_import_job(import_job_id: str):
                         r = redis_lib.from_url(settings.redis_url)
                         Queue(connection=r).enqueue_in(
                             timedelta(seconds=60),
-                            "app.jobs.import_runner.run_import_job", job_id)
-                        logger.info("Re-enqueued import job %s for retry", job_id)
+                            "app.jobs.import_runner.run_import_job", import_job_id)
+                        logger.info("Re-enqueued import job %s for retry", import_job_id)
                     except Exception:
-                        logger.warning("Failed to enqueue import retry for %s", job_id, exc_info=True)
+                        logger.warning("Failed to enqueue import retry for %s", import_job_id, exc_info=True)
                 else:
                     ij.status = "failed"
                     ij.error_log = error_text

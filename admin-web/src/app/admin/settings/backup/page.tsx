@@ -50,9 +50,8 @@ export default function BackupPage() {
     try {
       const formData = new FormData();
       formData.append("file", restoreFile);
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ""}/api/v1/admin/backup/restore`, {
+      const res = await fetch("/api/v1/admin/backup/restore", {
         method: "POST",
-        headers: { "X-Admin-Key": process.env.NEXT_PUBLIC_ADMIN_KEY || "changeme" },
         body: formData,
       });
       const data = await res.json();

@@ -126,22 +126,6 @@ export default function SubscriptionDefaultsPage() {
 
             <h4 className="font-medium text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-2">{t("subdefaults.new_sub")}</h4>
 
-            <div className="flex items-center justify-between py-3">
-              <div>
-                <span className="font-medium">{t("subdefaults.sync_enabled")}</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("subdefaults.sync_enabled.desc")}</p>
-              </div>
-              <button
-                onClick={() => setBool("default_sync_enabled", !current.default_sync_enabled)}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${
-                  current.default_sync_enabled ? "bg-green-600" : "bg-gray-300"
-                }`}
-              >
-                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  current.default_sync_enabled ? "translate-x-6" : "translate-x-1"
-                }`} />
-              </button>
-            </div>
           </div>
 
           <div className="mt-4 flex justify-end">

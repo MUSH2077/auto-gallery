@@ -156,7 +156,7 @@ docker compose exec redis redis-cli -a $REDIS_PASSWORD
 
 ```bash
 docker compose exec worker gallery-dl --version
-docker compose exec worker gallery-dl --config /gallerydl-config/config.json "https://www.pixiv.net/en/artworks/123456"
+docker compose exec worker gallery-dl --config /gallerydl-config/config.json "https://www.pixiv.net/artworks/123456"
 ```
 
 ### 依赖变更后重建

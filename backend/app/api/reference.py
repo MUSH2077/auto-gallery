@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import urllib.parse
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,6 +16,35 @@ from app.services import danbooru as danbooru_svc
 from app.models.creator_link import CreatorLink
 
 logger = logging.getLogger(__name__)
+
+def _get_auto_enable_sources() -> set[str]:
+    """Read auto-enable-on-import from gallery-dl config.json per extractor."""
+    import json, os
+    try:
+        config_path = os.path.join(
+            os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"), "config.json")
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                cfg = json.load(f)
+            extractors = cfg.get("extractor", {})
+            result = set()
+            for src_name, src_cfg in extractors.items():
+                if src_cfg.get("auto-enable-on-import") is True:
+                    # Map gallery-dl extractor names to provider source names
+                    if src_name == "twitter":
+                        result.add("x")
+                    else:
+                        result.add(src_name)
+            if result:
+                return result
+    except Exception:
+        pass
+    return {"pixiv"}
+
+
+def _is_source_auto_enabled(source: str) -> bool:
+    return source in _get_auto_enable_sources()
+
 
 router = APIRouter(dependencies=[RequireAdmin])
 
@@ -230,7 +260,26 @@ async def import_all_danbooru(data: dict, db: AsyncSession = Depends(get_db)):
             subscription_id=subscription.id,
             source=danbooru_svc._classify_url(raw_url),
             source_url=raw_url,
-            is_enabled=True,
+            is_enabled=_is_source_auto_enabled(danbooru_svc._classify_url(raw_url)),
+        ))
+        sources_created += 1
+
+    # Step 6: Create Danbooru subscription source (default disabled)
+    danbooru_posts_url = (
+        f"https://danbooru.donmai.us/posts?tags={urllib.parse.quote(artist['name'])}"
+    )
+    existing_ds = await db.execute(
+        select(SubscriptionSource).where(
+            SubscriptionSource.subscription_id == subscription.id,
+            SubscriptionSource.source == "danbooru",
+        )
+    )
+    if not existing_ds.scalar_one_or_none():
+        db.add(SubscriptionSource(
+            subscription_id=subscription.id,
+            source="danbooru",
+            source_url=danbooru_posts_url,
+            is_enabled=False,
         ))
         sources_created += 1
 

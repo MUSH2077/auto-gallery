@@ -12,7 +12,7 @@ This document describes every available configuration option for each supported 
 
 **Status**: Fully supported (gallery-dl built-in)  
 **Extractor key**: `extractor.pixiv`  
-**URL patterns**: `pixiv.net/en/artworks/<id>`, `pixiv.net/users/<id>`
+**URL patterns**: `pixiv.net/artworks/<id>`, `pixiv.net/users/<id>` (optionally with `/en/` locale prefix)
 
 ### Authentication
 

@@ -78,7 +78,7 @@ downloadable = registry.list_downloadable()
 - `source_name`: `"pixiv"`
 - `capabilities.can_download`: True
 - `capabilities.supports_gallerydl`: True
-- URL patterns: `pixiv.net/en/artworks/<id>`, `pixiv.net/artworks/<id>`, `pixiv.net/users/<id>`
+- URL patterns: `pixiv.net/artworks/<id>`, `pixiv.net/users/<id>` (optionally with `/en/` locale prefix)
 - Uses gallery-dl Pixiv extractor with cookie-based auth
 
 ### Iwara (`iwara.py`)
@@ -100,12 +100,41 @@ downloadable = registry.list_downloadable()
 - Uses gallery-dl Twitter extractor with cookie-based auth
 - Extractors: timeline, tweets, media, likes, search, list, bookmark, avatar, background
 
+### Danbooru (`danbooru.py`)
+- **Status**: Downloadable
+- `source_name`: `"danbooru"`
+- `capabilities.can_download`: True
+- `capabilities.supports_gallerydl`: True
+- `capabilities.supports_tags`: True (5 categories: artist, character, copyright, general, meta)
+- URL patterns: `danbooru.donmai.us/posts?tags=...`, `danbooru.donmai.us/artists/<id>`, `danbooru.donmai.us/pools/<id>`
+- Auth via username/password or API key
+
 ### Danbooru Reference (`danbooru_reference.py`)
 - **Status**: Reference only
+- `source_name`: `"danbooru_reference"`
 - `capabilities.is_reference_only`: True
 - `capabilities.can_download`: False
 - Handles: Danbooru artist tag normalization, URL extraction, creator_link suggestion
 - Does NOT implement `build_gallerydl_config` or `parse_assets`
+
+### Pinterest (`pinterest.py`)
+- **Status**: Downloadable
+- `source_name`: `"pinterest"`
+- `capabilities.can_download`: True
+- `capabilities.supports_gallerydl`: True
+- `capabilities.supports_tags`: False
+- URL patterns: `pinterest.com/pin/<id>`, `pinterest.com/<user>/pins/`, `pinterest.com/<user>/<board>/`
+- Public API only — no authentication required
+
+### Lofter (`lofter.py`)
+- **Status**: Downloadable
+- `source_name`: `"lofter"`
+- `capabilities.can_download`: True
+- `capabilities.supports_gallerydl`: True
+- `capabilities.supports_tags`: False
+- URL patterns: `<blog>.lofter.com/post/<id>`, `<blog>.lofter.com/`
+- Excludes www.lofter.com (not a blog host)
+- No authentication required
 
 ### Local Folder (`local.py`)
 - **Status**: Planned

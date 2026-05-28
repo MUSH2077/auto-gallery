@@ -44,3 +44,11 @@ class BaseProvider(ABC):
 
     @abstractmethod
     def parse_source_tags(self, raw_metadata: dict) -> list[dict]: ...
+
+    def get_creator_directory_name(self, raw_metadata: dict) -> str:
+        """Return the directory name for a creator from raw metadata.
+
+        Must match the gallery-dl directory template used in build_gallerydl_config().
+        Default: uses parse_source_creator()['source_creator_id'].
+        """
+        return str(self.parse_source_creator(raw_metadata).get("source_creator_id", "unknown"))

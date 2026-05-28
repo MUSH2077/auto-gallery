@@ -1,5 +1,4 @@
-const BASE = process.env.NEXT_PUBLIC_API_URL || "";
-const ADMIN_KEY = process.env.NEXT_PUBLIC_ADMIN_KEY || "changeme";
+const BASE = "";
 
 class ApiError extends Error {
   status: number;
@@ -10,8 +9,13 @@ class ApiError extends Error {
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const headers = new Headers(options?.headers);
+  if (!headers.has("Content-Type") && !(options?.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
+
   const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json", "X-Admin-Key": ADMIN_KEY, ...options?.headers },
+    headers,
     ...options,
   });
   if (res.status === 204) return undefined as T;
@@ -125,6 +129,7 @@ export interface WorkListItem {
   title?: string;
   posted_at?: string;
   is_nsfw: boolean;
+  is_ai_generated: boolean;
   thumbnail_asset_id?: string;
   asset_count: number;
   created_at: string;
@@ -142,6 +147,7 @@ export interface Work {
   description?: string;
   posted_at?: string;
   is_nsfw: boolean;
+  is_ai_generated: boolean;
   thumbnail_asset_id?: string;
   asset_count: number;
   is_favorite: boolean;
@@ -167,7 +173,6 @@ export interface DedupSettings {
 export interface SubscriptionDefaults {
   default_sync_interval_hours: number;
   scheduler_scan_interval_minutes: number;
-  default_sync_enabled: boolean;
   schedule_mode: "interval" | "fixed_time";
   scheduled_times: string;
 }
@@ -177,11 +182,13 @@ export interface DownloadDefaults {
   max_retries: number;
   retry_backoff_base_seconds: number;
   max_posts: number;
+  skip_ai_generated: boolean;
 }
 
 // Gallery-dl multi-source config types
 
 export interface PixivSourceConfig {
+  auto_enable_on_import?: boolean;
   refresh_token?: string;
   cookies_path?: string;
   cookie_content?: string;
@@ -195,6 +202,7 @@ export interface PixivSourceConfig {
 }
 
 export interface TwitterSourceConfig {
+  auto_enable_on_import?: boolean;
   cookies_path?: string;
   cookie_content?: string;
   filename?: string;
@@ -210,6 +218,7 @@ export interface TwitterSourceConfig {
 }
 
 export interface IwaraSourceConfig {
+  auto_enable_on_import?: boolean;
   cookies_path?: string;
   cookie_content?: string;
   username?: string;
@@ -226,6 +235,7 @@ export interface GalleryDLSourceMeta {
 }
 
 export interface DanbooruSourceConfig {
+  auto_enable_on_import?: boolean;
   username?: string;
   password?: string;
   api_key?: string;
@@ -237,11 +247,33 @@ export interface DanbooruSourceConfig {
   directory?: string;
 }
 
+export interface PinterestSourceConfig {
+  auto_enable_on_import?: boolean;
+  domain?: string;
+  stories?: boolean;
+  videos?: boolean;
+  sections?: boolean;
+  cookies_path?: string;
+  cookie_content?: string;
+  filename?: string;
+  directory?: string;
+}
+
+export interface LofterSourceConfig {
+  auto_enable_on_import?: boolean;
+  cookies_path?: string;
+  cookie_content?: string;
+  filename?: string;
+  directory?: string;
+}
+
 export interface GalleryDLMultiConfig {
   pixiv: PixivSourceConfig;
   twitter: TwitterSourceConfig;
   iwara: IwaraSourceConfig;
   danbooru: DanbooruSourceConfig;
+  pinterest: PinterestSourceConfig;
+  lofter: LofterSourceConfig;
   sources: Record<string, GalleryDLSourceMeta>;
 }
 
@@ -431,17 +463,27 @@ export const api = {
   retryDownloadJob: (id: string) =>
     request<{ job_id: string; status: string }>(`/api/v1/download-jobs/${id}/retry`, { method: "POST" }),
 
+  pauseDownloadJob: (id: string) =>
+    request<{ job_id: string; status: string }>(`/api/v1/download-jobs/${id}/pause`, { method: "POST" }),
+
+  resumeDownloadJob: (id: string) =>
+    request<{ job_id: string; status: string }>(`/api/v1/download-jobs/${id}/resume`, { method: "POST" }),
+
+  batchDownloadJobs: (ids: string[], action: string) =>
+    request<{ succeeded: number; failed: number; errors?: { id: string; error: string }[] }>("/api/v1/download-jobs/batch", { method: "POST", body: JSON.stringify({ ids, action }) }),
+
   listDownloadJobImports: (jobId: string) =>
     request<{ id: string; download_job_id: string; status: string; error_log?: string }[]>(`/api/v1/download-jobs/${jobId}/imports`),
 
   // Works
-  listWorks: (offset = 0, limit = 50, filters?: { search?: string; source?: string; creator_id?: string; is_nsfw?: boolean; is_favorite?: boolean; sort_by?: string; sort_order?: string }) => {
+  listWorks: (offset = 0, limit = 50, filters?: { search?: string; source?: string; creator_id?: string; is_nsfw?: boolean; is_favorite?: boolean; is_ai_generated?: boolean; sort_by?: string; sort_order?: string }) => {
     const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
     if (filters?.search) params.set("search", filters.search);
     if (filters?.source) params.set("source", filters.source);
     if (filters?.creator_id) params.set("creator_id", filters.creator_id);
     if (filters?.is_nsfw !== undefined) params.set("is_nsfw", String(filters.is_nsfw));
     if (filters?.is_favorite !== undefined) params.set("is_favorite", String(filters.is_favorite));
+    if (filters?.is_ai_generated !== undefined) params.set("is_ai_generated", String(filters.is_ai_generated));
     if (filters?.sort_by) params.set("sort_by", filters.sort_by);
     if (filters?.sort_order) params.set("sort_order", filters.sort_order);
     return request<WorkListItem[]>(`/api/v1/works?${params.toString()}`);
@@ -586,7 +628,7 @@ export const api = {
   // gallery-dl Config
   getGalleryDLConfig: (source?: string) => request<GalleryDLMultiConfig>(`/api/v1/admin/gallerydl-config${source ? `?source=${source}` : ""}`),
 
-  updateGalleryDLConfig: (data: { pixiv?: Partial<PixivSourceConfig>; twitter?: Partial<TwitterSourceConfig>; iwara?: Partial<IwaraSourceConfig>; danbooru?: Partial<DanbooruSourceConfig> }) =>
+  updateGalleryDLConfig: (data: { pixiv?: Partial<PixivSourceConfig>; twitter?: Partial<TwitterSourceConfig>; iwara?: Partial<IwaraSourceConfig>; danbooru?: Partial<DanbooruSourceConfig>; pinterest?: Partial<PinterestSourceConfig>; lofter?: Partial<LofterSourceConfig> }) =>
     request<{ status: string; message: string; path: string }>("/api/v1/admin/gallerydl-config", { method: "PUT", body: JSON.stringify(data) }),
 
   // Naming Templates

@@ -9,8 +9,6 @@ RUN if [ -n "$NPM_REGISTRY" ]; then \
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
-# Use a unique placeholder that gets replaced at container startup
-ENV NEXT_PUBLIC_ADMIN_KEY=__ADMIN_KEY_PLACEHOLDER__
 COPY . .
 RUN npm run build
 

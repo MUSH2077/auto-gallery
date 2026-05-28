@@ -11,6 +11,7 @@ class WorkList(BaseModel):
     thumbnail_asset_id: str | None = None
     asset_count: int = 1
     is_nsfw: bool
+    is_ai_generated: bool = False
     created_at: datetime
     source: str | None = None
     creator_name: str | None = None
@@ -30,6 +31,7 @@ class WorkRead(BaseModel):
     thumbnail_asset_id: str | None = None
     asset_count: int = 1
     is_nsfw: bool
+    is_ai_generated: bool = False
     is_favorite: bool
     created_at: datetime
     updated_at: datetime

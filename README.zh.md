@@ -83,6 +83,7 @@ curl http://localhost:8818/api/v1/system/health
 - **去重默认关闭** — 计算哈希，生成候选，管理员决定
 - **gallery-dl 仅 worker 执行** — API 绝不能直接调用；安全子进程执行
 - **代码中只用容器路径** — NAS 主机路径仅在 docker-compose.yaml 中
+- **管理员密钥仅服务端持有** — Admin Web 通过 Next.js 服务端路由转发 `/api/v1/*`，并用 `ADMIN_PASSWORD` 注入 `X-Admin-Key`，浏览器不再暴露管理员密钥
 
 ## 开发
 

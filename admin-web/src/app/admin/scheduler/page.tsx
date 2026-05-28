@@ -105,10 +105,6 @@ export default function SchedulerPage() {
                 <div className="font-medium dark:text-white mt-1">{t("scheduler.every").replace("{minutes}", String(settings.data.subscription_defaults.scheduler_scan_interval_minutes))}</div>
               </div>
               <div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">{t("scheduler.auto_sync_new")}</div>
-                <div className={`font-medium mt-1 ${settings.data.subscription_defaults.default_sync_enabled ? "text-green-600 dark:text-green-400" : "text-gray-400"}`}>
-                  {settings.data.subscription_defaults.default_sync_enabled ? t("scheduler.enabled_val") : t("scheduler.disabled_val")}
-                </div>
               </div>
             </div>
           </div>

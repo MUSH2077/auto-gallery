@@ -83,6 +83,7 @@ For detailed setup instructions, see [docs/setup.md](docs/setup.md).
 - **Deduplication defaults to OFF** — calculate hashes, create candidates, admin decides
 - **gallery-dl in worker only** — API never shells out; safe subprocess execution
 - **Container paths only in code** — NAS host paths only in docker-compose.yaml
+- **Admin key is server-side only** — Admin Web forwards `/api/v1/*` through a Next.js server route and injects `X-Admin-Key` from `ADMIN_PASSWORD`; no browser-exposed admin key
 
 ## Development
 

@@ -1,5 +1,29 @@
 # auto-gallery Project Guide
 
+## Quick Start
+
+```bash
+# Build all services
+docker compose build
+
+# Build specific services
+docker compose build backend admin-web
+
+# Run database migrations
+docker compose exec backend alembic upgrade head
+
+# Deploy (recreate changed containers)
+docker compose up -d --force-recreate backend worker admin-web
+
+# View logs
+docker compose logs --tail 50 -f backend
+
+# Run tests
+docker compose exec backend python -m pytest
+
+# Backend API runs on port 8818, Admin Web on port 13000
+```
+
 ## Project Identity
 
 Project name: auto-gallery
@@ -58,7 +82,7 @@ The following were decided during risk analysis (see [docs/risks.md](../docs/ris
 
 - **RQ for job queue** (not Celery). Simpler, uses Redis already in stack. `download_job`/`import_job` tables are source of truth; queue backend is replaceable.
 - **`creator_link.confidence` field** (0.0–1.0 float). Suggested links from Danbooru or URL extraction are scored. Admin reviews low-confidence suggestions.
-- **Job state machine**: `pending → downloading → downloaded → importing → complete | failed | stale`. Worker startup reconciles orphaned DOWNLOAD_ROOT directories.
+- **Job state machine**: `pending → downloading → downloaded → importing → complete | failed | stale | paused`. Paused jobs skip execution. Stale detection marks stuck downloading jobs after 2x timeout. Partial import recovery on timeout/failure.
 - **`subscription_source.last_successful_auth`** timestamp for cookie expiration visibility.
 - **Meilisearch sync**: admin-triggered full re-indexing for v1. Application-level dual-writes deferred.
 - **pyvips preferred over Pillow** for image processing (faster, lower memory).
@@ -149,20 +173,14 @@ Pixiv-specific logic must live only inside provider modules.
 
 ## Danbooru Role
 
-Danbooru is a reference provider in the current phase.
+Danbooru serves two roles:
+1. **Reference provider** (`danbooru_reference`) — artist identity mapping, URL extraction, creator link suggestions
+2. **Download provider** (`danbooru`) — post download via tag search (`posts?tags=artist_name`)
 
-Danbooru artist tag data may be used to:
-- fetch or store artist reference records
-- extract related URLs
-- suggest creator links
-- suggest source account mappings
-- enrich creator identity data
+Danbooru has rich tag metadata (artist/character/copyright/general/meta categories).
 
-Danbooru must not be assumed to contain the complete union of all works from all source platforms.
-
-Do not make Danbooru the default media download source.
-
-Do not assume that downloading from Danbooru is enough to archive a creator.
+Danbooru must not be assumed to contain the complete union of all works.
+Danbooru subscription sources default to `is_enabled=False` on import — must be manually enabled.
 
 ## Creator Identity Mapping
 
@@ -227,10 +245,9 @@ For each enabled subscription source:
 - write logs
 - import downloaded metadata and media
 
-First implementation:
-- actual download support may be Pixiv only
-- X and Iwara should be placeholders
-- Danbooru artist reference import should be implemented separately from media download
+All registered providers (Pixiv, Danbooru, Iwara, X, Pinterest, LOFTER) support gallery-dl download.
+Import defaults: only Pixiv auto-enables subscription sources. Other sources default to disabled.
+Per-source `auto_enable_on_import` configurable in gallery-dl settings page.
 
 ## Deduplication Policy
 
@@ -310,7 +327,10 @@ Provider modules:
 - backend/app/providers/pixiv.py
 - backend/app/providers/iwara.py
 - backend/app/providers/x.py
-- backend/app/providers/danbooru_reference.py
+- backend/app/providers/danbooru.py (download provider — tag search)
+- backend/app/providers/danbooru_reference.py (reference provider — artist identity)
+- backend/app/providers/pinterest.py
+- backend/app/providers/lofter.py
 - backend/app/providers/local.py
 - backend/app/providers/manual.py
 
@@ -397,8 +417,7 @@ Danbooru reference provider responsibilities:
 - Client must never receive real NAS filesystem paths.
 - Media must be served through backend /media endpoints.
 - Do not expose the system directly to the public internet in the first version.
-- First downloadable provider can be Pixiv only.
-- Iwara and X are placeholders until explicitly implemented.
+- Multiple downloadable providers supported (Pixiv, Danbooru, Iwara, X, Pinterest, LOFTER).
 
 ## Database Requirements
 
@@ -498,6 +517,17 @@ Phase order:
 Every major change must keep docker compose runnable.
 
 Update README when deployment behavior changes.
+
+## Gotchas
+
+- **Pixiv AI detection**: `illust_ai_type=2` means AI-generated, `illust_ai_type=1` means human. Only `== 2` should flag as AI.
+- **LOFTER directory**: Must use `["lofter", "{blog_name}", "{id}"]` in build_gallerydl_config. Flat directories cause all posts to merge into one work.
+- **`auto_enable_on_import`**: Stored in `config.json` under each extractor, NOT in DB system_settings. Read by `reference.py` from `GALLERYDL_CONFIG_ROOT/config.json`.
+- **`--write-metadata`**: Download job passes this flag. Without it, import runner has no JSON metadata to parse.
+- **RQ timeout**: `job_timeout=7200` (2 hours) on all enqueue calls. RQ defaults to 180s otherwise, killing long downloads.
+- **Gallery-dl exit code 0**: Does NOT guarantee files were downloaded. Always check metadata JSON count before enqueuing import.
+- **`subscription_source`**: Only Pixiv defaults to `is_enabled=True` on import. Other sources default to disabled.
+- **`_classify_url` in danbooru.py**: Used to determine source type for new subscription sources. Tighten regexes to avoid false matches (e.g., `www.lofter.com` must not match LOFTER pattern).
 
 ## Coding Rules
 
