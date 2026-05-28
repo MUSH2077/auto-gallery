@@ -106,6 +106,17 @@ downloadable = registry.list_downloadable()
 - 处理：Danbooru 画师标签规范化、URL 提取、creator_link 建议
 - 不实现 `build_gallerydl_config` 或 `parse_assets`
 
+### 微博 Weibo (`weibo.py`)
+- **状态**：可下载
+- `source_name`：`"weibo"`
+- `capabilities.can_download`：True
+- `capabilities.supports_gallerydl`：True
+- `capabilities.supports_tags`：True
+- URL 模式：`weibo.com/u/<uid>`、`weibo.com/<username>`、`weibo.com/<uid>/<status_id>`
+- 从帖子文本中的 `#话题#` 模式提取标签
+- Cookie 可选 — 如需认证访问，设置 `data/config/gallery-dl/cookies/weibo.txt`
+- gallery-dl 请求频率限制：1.0–2.0 秒/请求
+
 ### 本地文件夹 (`local.py`)
 - **状态**：计划中
 - `capabilities.can_download`：False

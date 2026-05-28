@@ -136,6 +136,17 @@ downloadable = registry.list_downloadable()
 - Excludes www.lofter.com (not a blog host)
 - No authentication required
 
+### 微博 / Weibo (`weibo.py`)
+- **Status**: Downloadable
+- `source_name`: `"weibo"`
+- `capabilities.can_download`: True
+- `capabilities.supports_gallerydl`: True
+- `capabilities.supports_tags`: True
+- URL patterns: `weibo.com/u/<uid>`, `weibo.com/<username>`, `weibo.com/<uid>/<status_id>`
+- Tags extracted from `#hashtag#` patterns in post text
+- Cookies optional — set `data/config/gallery-dl/cookies/weibo.txt` for authenticated access
+- gallery-dl rate-limit: 1.0–2.0 s between requests
+
 ### Local Folder (`local.py`)
 - **Status**: Planned
 - `capabilities.can_download`: False
