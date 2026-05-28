@@ -1,12 +1,20 @@
+import asyncio
 import logging
 import os
+import time
 
 from fastapi import APIRouter
+from app.auth import RequireAdmin
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[RequireAdmin])
+
+# ── Storage stats TTL cache ────────────────────────────────────────────────────
+_storage_cache: dict | None = None
+_storage_cache_ts: float = 0.0
+_STORAGE_CACHE_TTL = 60.0  # seconds
 
 
 def _dir_size(path: str) -> int:
@@ -37,13 +45,20 @@ def _count_files(path: str) -> int:
 
 @router.get("/system/storage")
 async def storage_stats():
+    global _storage_cache, _storage_cache_ts
+    now = time.monotonic()
+    if _storage_cache is not None and (now - _storage_cache_ts) < _STORAGE_CACHE_TTL:
+        return _storage_cache
+
     dl_root = settings.download_root
     lib_root = settings.library_root
 
-    dl_size = _dir_size(dl_root)
-    lib_size = _dir_size(lib_root)
-    dl_files = _count_files(dl_root)
-    lib_files = _count_files(lib_root)
+    dl_size, lib_size, dl_files, lib_files = await asyncio.gather(
+        asyncio.to_thread(_dir_size, dl_root),
+        asyncio.to_thread(_dir_size, lib_root),
+        asyncio.to_thread(_count_files, dl_root),
+        asyncio.to_thread(_count_files, lib_root),
+    )
 
     # Disk usage for the mount point
     try:
@@ -56,11 +71,14 @@ async def storage_stats():
         free_bytes = 0
         used_bytes = 0
 
-    return {
+    result = {
         "downloads": {"path": dl_root, "size_bytes": dl_size, "file_count": dl_files},
         "library": {"path": lib_root, "size_bytes": lib_size, "file_count": lib_files},
         "disk": {"total_bytes": total_bytes, "free_bytes": free_bytes, "used_bytes": used_bytes},
     }
+    _storage_cache = result
+    _storage_cache_ts = now
+    return result
 
 
 @router.get("/system/queue-stats")
