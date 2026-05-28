@@ -12,7 +12,7 @@ auto-gallery 通过管理后台 **设置 → gallery-dl 配置** 管理各站点
 
 **状态**：完全支持（gallery-dl 内置）  
 **提取器键**：`extractor.pixiv`  
-**URL 模式**：`pixiv.net/en/artworks/<id>`、`pixiv.net/users/<id>`
+**URL 模式**：`pixiv.net/artworks/<id>`、`pixiv.net/users/<id>`（可选 `/en/` 语言前缀）
 
 ### 认证
 

@@ -30,14 +30,14 @@ class TestPixivProvider:
 
     def test_normalize_url(self):
         result = self.p.normalize_url("https://www.pixiv.net/en/artworks/38362603")
-        assert result == "https://www.pixiv.net/en/artworks/38362603"
+        assert result == "https://www.pixiv.net/artworks/38362603"
 
     def test_parse_source_creator(self, sample_pixiv_metadata):
         result = self.p.parse_source_creator(sample_pixiv_metadata)
         assert result["source"] == "pixiv"
         assert result["source_creator_id"] == "1980643"
         assert result["display_name"] == "ASK"
-        assert "pixiv.net/en/users/1980643" in result["source_url"]
+        assert "pixiv.net/users/1980643" in result["source_url"]
 
     def test_parse_work_source(self, sample_pixiv_metadata):
         result = self.p.parse_work_source(sample_pixiv_metadata)

@@ -106,7 +106,7 @@ services:
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
       - ./backend/alembic/versions:/app/alembic/versions
     healthcheck:
-      test: ["CMD", "python3", "-c", "import redis; r=redis.from_url('redis://:${REDIS_PASSWORD}@redis:6379/0'); assert r.ping()"]
+      test: ["CMD", "python3", "-c", "import redis, subprocess; r=redis.from_url('redis://:${REDIS_PASSWORD}@redis:6379/0'); assert r.ping(); subprocess.run(['gallery-dl', '--version'], capture_output=True, timeout=5).check_returncode()"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -158,6 +158,7 @@ services:
     environment:
       HOSTNAME: "0.0.0.0"
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8000}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/admin"]
       interval: 15s

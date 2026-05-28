@@ -66,8 +66,8 @@ class BaseProvider(ABC):
 - `source_name = "pixiv"`
 - `capabilities.can_download = True`
 - `capabilities.supports_gallerydl = True`
-- `validate_url`: accept `pixiv.net/en/artworks/...`, `pixiv.net/artworks/...`, `pixiv.net/users/...`
-- `normalize_url`: strip tracking params, normalize to `https://www.pixiv.net/en/artworks/<id>`
+- `validate_url`: accept `pixiv.net/artworks/...`, `pixiv.net/users/...` (with or without `/en/` locale prefix)
+- `normalize_url`: strip tracking params and `/en/` locale, normalize to `https://www.pixiv.net/artworks/<id>`
 - `build_gallerydl_config`: generate per-job config with cookie/auth from GALLERYDL_CONFIG_ROOT
 
 ## Iwara and X providers (placeholders initially)

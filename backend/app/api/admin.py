@@ -35,17 +35,18 @@ class DedupSettings(BaseModel):
 class SubscriptionDefaults(BaseModel):
     default_sync_interval_hours: int = 6
     scheduler_scan_interval_minutes: int = 60
-    default_sync_enabled: bool = True
     schedule_mode: str = "interval"
     scheduled_times: str = ""
+    auto_enable_sources: str = "pixiv"
 
-DEFAULT_SUB = {"default_sync_interval_hours": 6, "scheduler_scan_interval_minutes": 60, "default_sync_enabled": True, "schedule_mode": "interval", "scheduled_times": ""}
+DEFAULT_SUB = {"default_sync_interval_hours": 6, "scheduler_scan_interval_minutes": 60, "schedule_mode": "interval", "scheduled_times": "", "auto_enable_sources": "pixiv"}
 
 class DownloadDefaults(BaseModel):
     timeout_seconds: int = 600
     max_retries: int = 3
     retry_backoff_base_seconds: int = 60
     max_posts: int = 200
+    skip_ai_generated: bool = False
 
 class ProxySettings(BaseModel):
     http_proxy: str = ""
@@ -89,7 +90,7 @@ async def _put_setting(db: AsyncSession, key: str, value: dict):
 
 
 DEFAULT_DEDUP = {"source_level_enabled": False, "cross_source_enabled": False, "auto_merge": False, "phash_threshold": 8}
-DEFAULT_DL = {"timeout_seconds": 600, "max_retries": 3, "retry_backoff_base_seconds": 60, "max_posts": 200}
+DEFAULT_DL = {"timeout_seconds": 600, "max_retries": 3, "retry_backoff_base_seconds": 60, "max_posts": 200, "skip_ai_generated": False}
 
 
 # ── Settings ──
@@ -255,6 +256,7 @@ ENTITIES = {
     "works": ["work_source_tags", "work_tags", "asset_sources", "assets", "work_sources", "works"],
     "creators": ["import_jobs", "download_jobs", "subscription_sources", "subscriptions", "source_creators", "creator_links", "creators"],
     "downloads": ["import_jobs", "download_jobs"],
+    "jobs": ["import_jobs", "download_jobs"],
     "tags": ["work_source_tags", "work_tags", "tags"],
     "settings": [],  # Special: reset to defaults
 }
@@ -279,7 +281,7 @@ async def clear_entity(entity: str, db: AsyncSession = Depends(get_db)):
             r = await db.execute(text(f"DELETE FROM {table}"))
             results[table] = r.rowcount
         await db.commit()
-        _clear_files(["/downloads", "/library"])
+        _clear_files([str(settings.download_root), str(settings.library_root)])
         results["files"] = "downloads + library cleared"
         # Also clear Meilisearch indexes
         try:
@@ -303,7 +305,7 @@ async def clear_entity(entity: str, db: AsyncSession = Depends(get_db)):
 
     # Clear files + Meilisearch for works-related entities
     if entity == "works":
-        _clear_files(["/downloads", "/library"])
+        _clear_files([str(settings.download_root), str(settings.library_root)])
         results["files"] = "downloads + library cleared"
         try:
             from app.services.search import SearchService
@@ -416,11 +418,31 @@ class DanbooruSourceConfig(BaseModel):
     directory: str | None = None
 
 
+class PinterestSourceConfig(BaseModel):
+    domain: str | None = None
+    stories: bool | None = True
+    videos: bool | None = True
+    sections: bool | None = True
+    cookies_path: str | None = None
+    cookie_content: str | None = None
+    filename: str | None = None
+    directory: str | None = None
+
+
+class LofterSourceConfig(BaseModel):
+    cookies_path: str | None = None
+    cookie_content: str | None = None
+    filename: str | None = None
+    directory: str | None = None
+
+
 class GalleryDLMultiConfig(BaseModel):
     pixiv: PixivSourceConfig | None = None
     twitter: TwitterSourceConfig | None = None
     iwara: IwaraSourceConfig | None = None
     danbooru: DanbooruSourceConfig | None = None
+    pinterest: PinterestSourceConfig | None = None
+    lofter: LofterSourceConfig | None = None
 
 GALLERYDL_SOURCE_OPTIONS = {
     "pixiv": {
@@ -441,11 +463,22 @@ GALLERYDL_SOURCE_OPTIONS = {
     "danbooru": {
         "name": "Danbooru",
         "supported": True,
-        "description": "Danbooru reference provider — artist tracking, tag monitoring, metadata enrichment. Not used as a primary download source.",
+        "description": "Danbooru post download and reference — artist tracking, tag monitoring, metadata enrichment.",
+    },
+    "pinterest": {
+        "name": "Pinterest",
+        "supported": True,
+        "description": "Pinterest pins, boards, and user profiles. No authentication required — public API only.",
+    },
+    "lofter": {
+        "name": "LOFTER",
+        "supported": True,
+        "description": "LOFTER blog posts and images. Chinese platform. No authentication required.",
     },
 }
 
 PIXIV_CONFIG_MAP = {
+    "auto_enable_on_import": "auto-enable-on-import",
     "refresh_token": "refresh-token", "cookies_path": "cookies",
     "filename": "filename", "directory": "directory",
     "include": "include", "tags": "tags", "ugoira": "ugoira",
@@ -453,6 +486,7 @@ PIXIV_CONFIG_MAP = {
 }
 
 TWITTER_CONFIG_MAP = {
+    "auto_enable_on_import": "auto-enable-on-import",
     "cookies_path": "cookies", "filename": "filename",
     "directory": "directory", "include": "include",
     "retweets": "retweets", "replies": "replies",
@@ -462,16 +496,33 @@ TWITTER_CONFIG_MAP = {
 }
 
 IWARA_CONFIG_MAP = {
+    "auto_enable_on_import": "auto-enable-on-import",
     "cookies_path": "cookies", "username": "username",
     "password": "password", "filename": "filename",
     "directory": "directory", "format": "format",
 }
 
 DANBOORU_CONFIG_MAP = {
+    "auto_enable_on_import": "auto-enable-on-import",
     "username": "username", "password": "password",
     "api_key": "api-key", "cookies_path": "cookies",
     "favorite_artists": "favorite-artists", "favorite_tags": "favorite-tags",
     "filename": "filename", "directory": "directory",
+}
+
+
+PINTEREST_CONFIG_MAP = {
+    "auto_enable_on_import": "auto-enable-on-import",
+    "domain": "domain", "stories": "stories",
+    "videos": "videos", "sections": "sections",
+    "cookies_path": "cookies", "filename": "filename",
+    "directory": "directory",
+}
+
+LOFTER_CONFIG_MAP = {
+    "auto_enable_on_import": "auto-enable-on-import",
+    "cookies_path": "cookies", "filename": "filename",
+    "directory": "directory",
 }
 
 def _load_config() -> tuple[dict, str]:
@@ -528,6 +579,8 @@ async def get_gallerydl_config(source: str | None = None):
         "twitter": get_source("twitter", TWITTER_CONFIG_MAP),
         "iwara": get_source("iwara", IWARA_CONFIG_MAP),
         "danbooru": get_source("danbooru", DANBOORU_CONFIG_MAP),
+        "pinterest": get_source("pinterest", PINTEREST_CONFIG_MAP),
+        "lofter": get_source("lofter", LOFTER_CONFIG_MAP),
         "sources": GALLERYDL_SOURCE_OPTIONS,
     }
     if source:
@@ -551,6 +604,8 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
         ("twitter", data.twitter, TWITTER_CONFIG_MAP),
         ("iwara", data.iwara, IWARA_CONFIG_MAP),
         ("danbooru", data.danbooru, DANBOORU_CONFIG_MAP),
+        ("pinterest", data.pinterest, PINTEREST_CONFIG_MAP),
+        ("lofter", data.lofter, LOFTER_CONFIG_MAP),
     ]:
         if source_data is None:
             continue
@@ -595,7 +650,7 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
     pp_list.append({
         "name": "metadata",
         "event": "after",
-        "filename": "{id}_p{num}.{extension}.json",
+        "filename": "{filename}.json",
     })
 
     # Configure ugoira postprocessor based on Pixiv ugoira format

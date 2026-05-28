@@ -59,17 +59,20 @@ def run_gallerydl_download(job_config: dict, url: str) -> subprocess.CompletedPr
 2. Worker picks up `pending` jobs from the queue
 3. Worker calls `provider.build_gallerydl_config(subscription_source, naming_template)` to generate the job-specific gallery-dl config
 4. Worker writes the temp config to `GALLERYDL_CONFIG_ROOT/jobs/<job_id>.json`
-5. Worker runs `gallery-dl` with the temp config and destination under `DOWNLOAD_ROOT`
+5. Worker runs `gallery-dl` with the temp config, writing directly to `DOWNLOAD_ROOT/{source}/{creator}/{work_id}/` (directory structure set by the provider's gallery-dl config template)
 6. On success: update job status to `downloaded`, enqueue import job
 7. On failure: update job status to `failed`, persist stderr to `download_job.error_log`
 
 ## Output
 
-gallery-dl writes files to `DOWNLOAD_ROOT/<job_id>/`. The worker then:
-- Reads the `.info.json` metadata files
-- Passes raw metadata to provider parse methods
-- Creates import records pointing to the downloaded files
-- Import job moves/links files from `DOWNLOAD_ROOT` to `LIBRARY_ROOT`
+gallery-dl writes files to `DOWNLOAD_ROOT/{source}/{creator}/{work_id}/` using per-work directories. The import job then:
+- Scans `DOWNLOAD_ROOT/{source}/` recursively for `.json` metadata files written by `--write-metadata`
+- Groups JSONs by `source_work_id` (extracted via `provider.parse_work_source()`)
+- Creates DB records (Work, WorkSource, Asset, AssetSource, Tags)
+- Generates thumbnails (pyvips WebP) in `LIBRARY_ROOT/{source}/{creator}/{work_id}/`
+- Writes `metadata.json` to `LIBRARY_ROOT/{source}/{creator}/{work_id}/`
+- Deletes processed JSON files (image files stay in DOWNLOAD_ROOT)
+- Original images remain in DOWNLOAD_ROOT for serving; LIBRARY_ROOT contains only metadata + thumbnails
 
 ## Timeout and retry
 

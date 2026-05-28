@@ -116,7 +116,7 @@ export default function WorkDetailPage() {
   const aiType = raw.illust_ai_type as number | undefined;
   const series = raw.series as string | undefined;
 
-  const isAiGenerated = aiType !== undefined && aiType > 0;
+  const isAiGenerated = aiType !== undefined && aiType == 2;
   const hasStats = totalView !== undefined || totalBookmarks !== undefined;
 
   return (
@@ -200,8 +200,9 @@ export default function WorkDetailPage() {
               {workTags.data && workTags.data.length > 0 && (
                 <div className="flex flex-wrap gap-2 mb-3">
                   {workTags.data.map((t) => (
-                    <span key={t.id} className="px-3 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-700 rounded-full text-sm border border-blue-200 dark:border-blue-800"
-                      title={`Normalized: ${t.normalized_name}${t.category ? ` (${t.category})` : ""}`}>
+                    <span key={t.id} onClick={() => router.push(`/admin/search?q=${encodeURIComponent(t.normalized_name)}`)}
+                      className="px-3 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-700 rounded-full text-sm border border-blue-200 dark:border-blue-800 cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-800/50 transition-colors"
+                      title={`Search: ${t.normalized_name}${t.category ? ` (${t.category})` : ""}`}>
                       {t.normalized_name}
                       {t.category && <span className="text-xs text-blue-400 ml-1">({t.category})</span>}
                     </span>
@@ -212,8 +213,9 @@ export default function WorkDetailPage() {
               {rawTags.length > 0 && (
                 <div className="flex flex-wrap gap-2">
                   {rawTags.map((tag, i) => (
-                    <span key={i} className="px-3 py-1 bg-gray-100 dark:bg-slate-700 rounded-full text-sm hover:bg-gray-200 cursor-default"
-                      title={`Source tag: ${tag}`}>
+                    <span key={i} onClick={() => router.push(`/admin/search?q=${encodeURIComponent(tag)}`)}
+                      className="px-3 py-1 bg-gray-100 dark:bg-slate-700 rounded-full text-sm hover:bg-blue-100 hover:text-blue-700 dark:hover:bg-blue-900/30 dark:hover:text-blue-300 cursor-pointer transition-colors"
+                      title={`Search source tag: ${tag}`}>
                       {tag}
                     </span>
                   ))}

@@ -130,7 +130,7 @@ async def trigger_subscription_sync(subscription_id: UUID, db: AsyncSession = De
             from rq import Queue
             r = redis_lib.from_url(settings.redis_url)
             Queue(name="scheduled", connection=r).enqueue(
-                "app.jobs.download.run_download_job", str(job.id))
+                "app.jobs.download.run_download_job", str(job.id), job_timeout=7200)
             job_ids.append(str(job.id))
         except Exception as e:
             logger.error("Failed to enqueue download job %s: %s", job.id, e)

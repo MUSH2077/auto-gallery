@@ -108,6 +108,22 @@ export default function DownloadDefaultsPage() {
                 className="w-20 border rounded px-2 py-1 text-sm font-mono text-center"
               />
             </div>
+
+            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+              <div>
+                <span className="font-medium">{t("dldefaults.skip_ai")}</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.skip_ai.desc")}</p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={current.skip_ai_generated}
+                  onChange={(e) => { if (current) setLocal({ ...current, skip_ai_generated: e.target.checked }); }}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-slate-700 dark:peer-checked:bg-slate-500"></div>
+              </label>
+            </div>
           </div>
 
           <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg text-sm text-blue-800 dark:text-blue-300">

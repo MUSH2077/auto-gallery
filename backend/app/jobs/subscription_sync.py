@@ -181,7 +181,7 @@ async def sync_subscriptions():
                     from rq import Queue
                     r = redis_lib.from_url(settings.redis_url)
                     Queue(name="scheduled", connection=r).enqueue(
-                        "app.jobs.download.run_download_job", str(job.id))
+                        "app.jobs.download.run_download_job", str(job.id), job_timeout=7200)
                 except Exception as e:
                     logger.error("Failed to enqueue download job %s: %s", job.id, e)
 
@@ -195,26 +195,26 @@ async def sync_subscriptions():
 
     # Stale job detection: mark download jobs stuck "downloading" for too long
     try:
-        dl_config = await _get_scheduler_config(db)
-        dl_defaults = await _read_download_defaults(db)
-        dl_timeout = int(dl_defaults.get("timeout_seconds", 600))
-        stale_cutoff = now - timedelta(seconds=dl_timeout * 2)
-        stale_result = await db.execute(
-            select(DownloadJob).where(
-                DownloadJob.status == "downloading",
-                DownloadJob.created_at < stale_cutoff,
+        async with async_session() as stale_db:
+            dl_defaults = await _read_download_defaults(stale_db)
+            dl_timeout = int(dl_defaults.get("timeout_seconds", 600))
+            stale_cutoff = now - timedelta(seconds=dl_timeout * 2)
+            stale_result = await stale_db.execute(
+                select(DownloadJob).where(
+                    DownloadJob.status == "downloading",
+                    DownloadJob.created_at < stale_cutoff,
+                )
             )
-        )
-        stale_jobs = stale_result.scalars().all()
-        for sj in stale_jobs:
-            sj.status = "stale"
-            if sj.error_log:
-                sj.error_log += "\n[auto] Marked stale: stuck downloading for > 2x timeout"
-            else:
-                sj.error_log = "[auto] Marked stale: stuck downloading for > 2x timeout"
-            logger.warning("Marked download job %s as stale (stuck downloading)", sj.id)
-        if stale_jobs:
-            await db.commit()
+            stale_jobs = stale_result.scalars().all()
+            for sj in stale_jobs:
+                sj.status = "stale"
+                if sj.error_log:
+                    sj.error_log += "\n[auto] Marked stale: stuck downloading for > 2x timeout"
+                else:
+                    sj.error_log = "[auto] Marked stale: stuck downloading for > 2x timeout"
+                logger.warning("Marked download job %s as stale (stuck downloading)", sj.id)
+            if stale_jobs:
+                await stale_db.commit()
     except Exception:
         logger.debug("Stale job detection skipped", exc_info=True)
 

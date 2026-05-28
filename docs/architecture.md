@@ -101,7 +101,7 @@ Scheduler → create download_job (pending)
   → Worker picks up job (downloading)
     → Provider.build_gallerydl_config()
     → subprocess.run(["gallery-dl", ...], shell=False)
-    → Files land in DOWNLOAD_ROOT/<job_id>/
+    → Files land in DOWNLOAD_ROOT/{source}/{creator}/{work_id}/
     → Job status = downloaded
     → Enqueue import_job
 ```
@@ -109,12 +109,15 @@ Scheduler → create download_job (pending)
 ### Import Flow
 ```
 Worker picks up import_job
-  → Read gallery-dl .info.json
+  → Scan DOWNLOAD_ROOT/{source}/ for *.json metadata files (--write-metadata output)
+  → Provider.parse_work_source() → group JSONs by source_work_id
   → Provider.parse_source_creator() → upsert source_creator
   → Provider.parse_work_source() → upsert work_source
-  → Provider.parse_assets() → upsert asset + asset_source
+  → Create Asset + AssetSource from image files in work directory
   → Provider.parse_source_tags() → upsert tags + work_source_tags
-  → Move files from DOWNLOAD_ROOT → LIBRARY_ROOT
+  → Generate thumbnails (pyvips WebP) in LIBRARY_ROOT/{source}/{creator}/{work_id}/
+  → Write metadata.json to LIBRARY_ROOT/{source}/{creator}/{work_id}/
+  → Delete processed JSON files (image files remain in DOWNLOAD_ROOT)
   → Job status = complete
 ```
 

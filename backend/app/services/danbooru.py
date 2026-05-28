@@ -82,7 +82,7 @@ def search_by_url(source_url: str) -> list[dict]:
 def search_by_pixiv_id(user_id: str) -> list[dict]:
     """Search Danbooru artists by constructing the exact Pixiv user URL."""
     # Build exact URL and use url_matches (same as search_by_url)
-    source_url = f"https://www.pixiv.net/en/users/{user_id}"
+    source_url = f"https://www.pixiv.net/users/{user_id}"
     return search_by_url(source_url)
 
 
@@ -114,6 +114,9 @@ def get_artist(artist_id: int) -> dict | None:
 DOWNLOADABLE_PATTERNS = {
     "pixiv": [r"pixiv\.net/(?:en/)?users/\d+"],
     "iwara": [r"iwara\.tv/(?:users|profile)/\w+"],
+    "danbooru": [r"danbooru\.donmai\.us/(?:posts\?tags=|artists/\d+|pools/\d+)"],
+    "pinterest": [r"pinterest\.\w+(?:\.\w+)?/(?:pin/\d+|(?:[\w.-]+/pins|[\w.-]+/[\w.-]+/?))"],
+    "lofter": [r"^https?://(?!www\.)[\w-]+\.lofter\.com"],
 }
 
 
@@ -165,6 +168,8 @@ def _classify_url(url: str) -> str:
         return "xiaohongshu"
     if "bcy.net" in u:
         return "bcy"
+    if "pinterest.com" in u or "pin.it" in u:
+        return "pinterest"
     if "lofter.com" in u:
         return "lofter"
     # Funding / Shop

@@ -78,7 +78,7 @@ downloadable = registry.list_downloadable()
 - `source_name`：`"pixiv"`
 - `capabilities.can_download`：True
 - `capabilities.supports_gallerydl`：True
-- URL 模式：`pixiv.net/en/artworks/<id>`、`pixiv.net/artworks/<id>`、`pixiv.net/users/<id>`
+- URL 模式：`pixiv.net/artworks/<id>`、`pixiv.net/users/<id>`（可选 `/en/` 语言前缀）
 - 通过 cookie 认证使用 gallery-dl 的 Pixiv 提取器
 
 ### Iwara (`iwara.py`)

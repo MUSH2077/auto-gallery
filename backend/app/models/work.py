@@ -11,6 +11,7 @@ class Work(TimestampMixin, Base):
     description: Mapped[str | None] = mapped_column(Text)
     posted_at: Mapped[str | None] = mapped_column(String(100))
     is_nsfw: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_ai_generated: Mapped[bool] = mapped_column(Boolean, default=False)
     thumbnail_asset_id: Mapped[str | None] = mapped_column(String(36))
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
 

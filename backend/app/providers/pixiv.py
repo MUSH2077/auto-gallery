@@ -23,12 +23,12 @@ class PixivProvider(BaseProvider):
     def normalize_url(self, input_text: str) -> str | None:
         patterns = [
             r"pixiv\.net/(?:en/)?artworks/(\d+)",
-            r"pixiv\.net/users/(\d+)",
+            r"pixiv\.net/(?:en/)?users/(\d+)",
         ]
         for pattern in patterns:
             match = re.search(pattern, input_text)
             if match:
-                return f"https://www.pixiv.net/en/artworks/{match.group(1)}" if "artworks" in pattern else f"https://www.pixiv.net/en/users/{match.group(1)}"
+                return f"https://www.pixiv.net/artworks/{match.group(1)}" if "artworks" in pattern else f"https://www.pixiv.net/users/{match.group(1)}"
         return None
 
     def validate_url(self, url: str) -> bool:
@@ -41,7 +41,7 @@ class PixivProvider(BaseProvider):
             "extractor": {
                 "pixiv": {
                     "cookies": "/gallerydl-config/cookies/pixiv.txt",
-                    "directory": [naming_template.template if naming_template else "{user[id]}"],
+                    "directory": [naming_template.template if naming_template else "pixiv/{user[id]}"],
                 }
             }
         }
@@ -51,7 +51,7 @@ class PixivProvider(BaseProvider):
         return {
             "source": self.source_name,
             "source_creator_id": str(user.get("id", "")),
-            "source_url": f"https://www.pixiv.net/en/users/{user.get('id', '')}",
+            "source_url": f"https://www.pixiv.net/users/{user.get('id', '')}",
             "display_name": user.get("name") or user.get("account"),
             "raw_metadata": raw_metadata.get("user", {}),
         }
@@ -60,7 +60,7 @@ class PixivProvider(BaseProvider):
         return {
             "source": self.source_name,
             "source_work_id": str(raw_metadata.get("id", "")),
-            "source_url": f"https://www.pixiv.net/en/artworks/{raw_metadata.get('id', '')}",
+            "source_url": f"https://www.pixiv.net/artworks/{raw_metadata.get('id', '')}",
             "source_creator_id": str(raw_metadata.get("user", {}).get("id", "")),
             "title": raw_metadata.get("title"),
             "description": raw_metadata.get("description"),

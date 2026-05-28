@@ -51,6 +51,16 @@ export default function DataManagementPage() {
     onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
   });
 
+  const clearJobs = useMutation({
+    mutationFn: async () => {
+      await api.clearEntity("jobs");
+      await api.clearFailedJobs();
+      return { message: "All download and import jobs cleared" };
+    },
+    onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+    onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
+  });
+
   const clearTags = useMutation({
     mutationFn: () => api.clearEntity("tags"),
     onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
@@ -91,6 +101,13 @@ export default function DataManagementPage() {
       desc: t("datamgmt.clear_downloads.desc"),
       color: "yellow",
       mutation: clearDownloads,
+    },
+    {
+      key: "jobs",
+      title: t("datamgmt.clear_jobs"),
+      desc: t("datamgmt.clear_jobs.desc"),
+      color: "yellow",
+      mutation: clearJobs,
     },
     {
       key: "tags",

@@ -1,6 +1,7 @@
 "use client";
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { api, queryKeys, Tag } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { PageHeader, EmptyState, ErrorState, Modal, ConfirmDialog } from "@/components";
@@ -60,6 +61,7 @@ function bubbleStyleDark(tag: Tag, minCount: number, maxCount: number) {
 
 export default function TagsPage() {
   const t = useT();
+  const router = useRouter();
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
@@ -147,7 +149,7 @@ export default function TagsPage() {
                     color: light.color,
                     borderColor: light.borderColor,
                   }}
-                  onClick={() => openEdit(tag)}>
+                  onClick={() => router.push(`/admin/search?q=${encodeURIComponent(tag.normalized_name)}`)}>
                   <span className="font-semibold truncate max-w-[16rem]">{tag.normalized_name}</span>
                   {tag.category && (
                     <span className="opacity-60" style={{ fontSize: `calc(${light.fontSize} * 0.7)` }}>
@@ -157,8 +159,10 @@ export default function TagsPage() {
                   <span className="opacity-40 ml-0.5" style={{ fontSize: `calc(${light.fontSize} * 0.65)` }}>
                     {tag.usage_count}
                   </span>
+                  <button onClick={(e) => { e.stopPropagation(); openEdit(tag); }}
+                    className="ml-1 opacity-0 group-hover:opacity-100 hover:text-blue-500 transition-opacity text-sm leading-none" title="Edit">&#9998;</button>
                   <button onClick={(e) => { e.stopPropagation(); setDeleteId(tag.id); }}
-                    className="ml-1 opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity text-lg leading-none">&times;</button>
+                    className="opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity text-lg leading-none">&times;</button>
                 </div>
               );
             })}

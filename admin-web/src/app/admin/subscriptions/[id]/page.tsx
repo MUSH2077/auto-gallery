@@ -11,20 +11,22 @@ function AddSourceForm({ subId, onClose }: { subId: string; onClose: () => void 
   const t = useT();
   const qc = useQueryClient();
 
-  const urlHint = source === "pixiv" ? "https://www.pixiv.net/en/users/{id}" : source === "x" ? "https://x.com/{handle}" : source === "iwara" ? "https://www.iwara.tv/profile/{id}" : "";
+  const urlHint = source === "pixiv" ? "https://www.pixiv.net/users/{id}" : source === "x" ? "https://x.com/{handle}" : source === "iwara" ? "https://www.iwara.tv/profile/{id}" : source === "danbooru" ? "https://danbooru.donmai.us/posts?tags={tag}" : "";
 
   const handleIdChange = (id: string) => {
     setSourceCreatorId(id);
-    if (id && source === "pixiv") setSourceUrl(`https://www.pixiv.net/en/users/${id}`);
+    if (id && source === "pixiv") setSourceUrl(`https://www.pixiv.net/users/${id}`);
     else if (id && source === "x") setSourceUrl(`https://x.com/${id}`);
     else if (id && source === "iwara") setSourceUrl(`https://www.iwara.tv/profile/${id}`);
+    else if (id && source === "danbooru") setSourceUrl(`https://danbooru.donmai.us/posts?tags=${encodeURIComponent(id)}`);
   };
 
   const handleSourceChange = (s: string) => {
     setSource(s);
-    if (sourceCreatorId && s === "pixiv") setSourceUrl(`https://www.pixiv.net/en/users/${sourceCreatorId}`);
+    if (sourceCreatorId && s === "pixiv") setSourceUrl(`https://www.pixiv.net/users/${sourceCreatorId}`);
     else if (sourceCreatorId && s === "x") setSourceUrl(`https://x.com/${sourceCreatorId}`);
     else if (sourceCreatorId && s === "iwara") setSourceUrl(`https://www.iwara.tv/profile/${sourceCreatorId}`);
+    else if (sourceCreatorId && s === "danbooru") setSourceUrl(`https://danbooru.donmai.us/posts?tags=${encodeURIComponent(sourceCreatorId)}`);
   };
 
   const create = useMutation({

@@ -21,20 +21,21 @@ class IwaraProvider(BaseProvider):
         )
 
     def normalize_url(self, input_text: str) -> str | None:
-        match = re.search(r"iwara\.tv/(video|profile)/[\w-]+", input_text)
+        match = re.search(r"iwara\.tv/(video|profile|users)/[\w-]+", input_text)
         if match:
-            return f"https://www.iwara.tv/{match.group(1)}/{match.group(0).split('/')[-1]}"
+            id_part = match.group(0).split('/')[-1]
+            return f"https://www.iwara.tv/{match.group(1)}/{id_part}"
         return None
 
     def validate_url(self, url: str) -> bool:
-        return bool(re.match(r"https?://(?:www\.)?iwara\.tv/(video|profile)/[\w-]+", url))
+        return bool(re.match(r"https?://(?:www\.)?iwara\.tv/(video|profile|users)/[\w-]+", url))
 
     def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
         return {
             "extractor": {
                 "iwara": {
                     "cookies": "/gallerydl-config/cookies/iwara.txt",
-                    "directory": [naming_template.template if naming_template else "{user[name]}"],
+                    "directory": [naming_template.template if naming_template else "iwara/{user[name]}"],
                 }
             }
         }
@@ -88,3 +89,7 @@ class IwaraProvider(BaseProvider):
         if rating:
             result.append({"source": self.source_name, "original_name": f"rating:{rating}", "category": "meta"})
         return result
+
+    def get_creator_directory_name(self, raw_metadata: dict) -> str:
+        user = raw_metadata.get("user", {})
+        return str(user.get("name") or user.get("id", "unknown"))

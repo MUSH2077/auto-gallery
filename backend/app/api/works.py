@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from app.auth import RequireAdmin
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,7 +14,7 @@ from app.models.work_source import WorkSource
 from app.models.tag import Tag
 from app.models.work_tag import WorkTag
 
-router = APIRouter()
+router = APIRouter(dependencies=[RequireAdmin])
 
 
 @router.get("", response_model=list[WorkList])
@@ -24,6 +25,7 @@ async def list_works(
     creator_id: str | None = None,
     is_nsfw: bool | None = None,
     is_favorite: bool | None = None,
+    is_ai_generated: bool | None = None,
     sort_by: str = "created_at",
     sort_order: str = "desc",
     db: AsyncSession = Depends(get_db),
@@ -33,6 +35,7 @@ async def list_works(
         offset=offset, limit=limit,
         search=search, source=source, creator_id=creator_id,
         is_nsfw=is_nsfw, is_favorite=is_favorite,
+        is_ai_generated=is_ai_generated,
         sort_by=sort_by, sort_order=sort_order,
     )
 

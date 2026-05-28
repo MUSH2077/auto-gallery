@@ -1,18 +1,28 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { PageHeader, EmptyState, SourceBadge } from "@/components";
 
-export default function SearchPage() {
+function SearchContent() {
   const t = useT();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const qc = useQueryClient();
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Sync URL ?q= param into search — handles initial load AND tag-click navigation
+  useEffect(() => {
+    const q = searchParams.get("q");
+    if (q) {
+      setQuery(q);
+      setDebounced(q);
+    }
+  }, [searchParams]);
 
   // Debounce: search 300ms after user stops typing
   useEffect(() => {
@@ -34,10 +44,9 @@ export default function SearchPage() {
           className="px-3 py-1.5 text-xs bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600"
           onClick={() => {
             if (confirm(t("settings.reindex_confirm_msg"))) {
-              fetch(`${process.env.NEXT_PUBLIC_API_URL || ""}/api/v1/admin/search/reindex`, {
-                method: "POST",
-                headers: { "X-Admin-Key": process.env.NEXT_PUBLIC_ADMIN_KEY || "changeme" },
-              }).then(r => r.json()).then(d => alert(d.message || d.status));
+              api.reindexSearch()
+                .then((d) => alert(d.message || d.status))
+                .catch((e: Error) => alert(e.message));
             }
           }}>
           {t("settings.reindex")}
@@ -79,7 +88,8 @@ export default function SearchPage() {
                   {r.tags && r.tags.length > 0 && (
                     <div className="flex gap-1 mt-1.5 flex-wrap">
                       {r.tags.slice(0, 8).map((tag: string) => (
-                        <span key={tag} className="text-[10px] bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-gray-400 px-1.5 py-0.5 rounded">{tag}</span>
+                        <span key={tag} onClick={(e) => { e.stopPropagation(); router.push(`/admin/search?q=${encodeURIComponent(tag)}`); }}
+                          className="text-[10px] bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-gray-400 px-1.5 py-0.5 rounded cursor-pointer hover:bg-blue-100 hover:text-blue-700 dark:hover:bg-blue-900/30 dark:hover:text-blue-300 transition-colors">{tag}</span>
                       ))}
                       {r.tags.length > 8 && <span className="text-[10px] text-gray-400">+{r.tags.length - 8}</span>}
                     </div>
@@ -91,5 +101,13 @@ export default function SearchPage() {
         </div>
       )}
     </main>
+  );
+}
+
+export default function SearchPage() {
+  return (
+    <Suspense>
+      <SearchContent />
+    </Suspense>
   );
 }
