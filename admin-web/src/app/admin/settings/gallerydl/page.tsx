@@ -2,12 +2,12 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { PixivSourceConfig, TwitterSourceConfig, IwaraSourceConfig, DanbooruSourceConfig, PinterestSourceConfig, LofterSourceConfig, GalleryDLSourceMeta } from "@/lib/api";
+import type { PixivSourceConfig, TwitterSourceConfig, IwaraSourceConfig, DanbooruSourceConfig, PinterestSourceConfig, LofterSourceConfig, WeiboSourceConfig, GalleryDLSourceMeta } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { PageHeader, ErrorState } from "@/components";
 import Link from "next/link";
 
-type TabKey = "pixiv" | "twitter" | "iwara" | "danbooru" | "pinterest" | "lofter";
+type TabKey = "pixiv" | "twitter" | "iwara" | "danbooru" | "pinterest" | "lofter" | "weibo";
 
 function useGalleryTabs() {
   const t = useT();
@@ -18,6 +18,7 @@ function useGalleryTabs() {
     { key: "danbooru" as TabKey, label: t("gallerydl.tab.danbooru"), color: "border-yellow-700" },
     { key: "pinterest" as TabKey, label: t("gallerydl.tab.pinterest"), color: "border-red-500" },
     { key: "lofter" as TabKey, label: t("gallerydl.tab.lofter"), color: "border-teal-500" },
+    { key: "weibo" as TabKey, label: t("gallerydl.tab.weibo"), color: "border-orange-500" },
   ];
 }
 
@@ -102,6 +103,7 @@ export default function GalleryDLConfigPage() {
   const [danbooru, setDanbooru] = useState<DanbooruSourceConfig>({});
   const [pinterest, setPinterest] = useState<PinterestSourceConfig>({});
   const [lofter, setLofter] = useState<LofterSourceConfig>({});
+  const [weibo, setWeibo] = useState<WeiboSourceConfig>({});
   const seeded = useRef(false);
 
   const save = useMutation({
@@ -121,6 +123,7 @@ export default function GalleryDLConfigPage() {
         danbooru: strip(danbooru as unknown as Record<string, unknown>),
         pinterest: strip(pinterest as unknown as Record<string, unknown>),
         lofter: strip(lofter as unknown as Record<string, unknown>),
+        weibo: strip(weibo as unknown as Record<string, unknown>),
       });
     },
     onSuccess: (_, v) => {
@@ -138,6 +141,7 @@ export default function GalleryDLConfigPage() {
       setDanbooru(initDanbooru(d.danbooru));
       setPinterest(initPinterest(d.pinterest));
       setLofter(initLofter(d.lofter));
+      setWeibo(initWeibo(d.weibo));
       seeded.current = true;
     }
   }, [config.data]);
@@ -189,6 +193,14 @@ export default function GalleryDLConfigPage() {
     cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
     filename: str(d?.filename), directory: str(d?.directory),
   });
+  const initWeibo = (d: any) => ({
+    auto_enable_on_import: d?.auto_enable_on_import ?? false,
+    cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
+    videos: d?.videos ?? true,
+    retweets: d?.retweets ?? false,
+    include: str(d?.include),
+    filename: str(d?.filename), directory: str(d?.directory),
+  });
 
   if (config.isError) {
     return <main className="max-w-4xl mx-auto p-6">
@@ -238,6 +250,7 @@ export default function GalleryDLConfigPage() {
         {activeTab === "danbooru" && <DanbooruTab data={danbooru} onChange={setDanbooru} />}
         {activeTab === "pinterest" && <PinterestTab data={pinterest} onChange={setPinterest} />}
         {activeTab === "lofter" && <LofterTab data={lofter} onChange={setLofter} />}
+        {activeTab === "weibo" && <WeiboTab data={weibo} onChange={setWeibo} />}
 
         <div className="flex justify-end pt-4 border-t">
           <button onClick={() => save.mutate()} disabled={save.isPending}
@@ -534,6 +547,40 @@ function LofterTab({ data, onChange }: { data: LofterSourceConfig; onChange: (d:
         <TextField label={t("gallerydl.filename")} value={data.filename || ""}
           onChange={(v) => set("filename", v || undefined)}
           placeholder="{id}_{num}.{extension}" />
+      </div>
+    </div>
+  );
+}
+
+function WeiboTab({ data, onChange }: { data: WeiboSourceConfig; onChange: (d: WeiboSourceConfig) => void }) {
+  const t = useT();
+  const set = (k: string, v: any) => onChange({ ...data, [k]: v });
+  return (
+    <div className="space-y-5 text-sm">
+      <div className="border-b dark:border-slate-700 pb-3 mb-3">
+        <ToggleField label={t("gallerydl.auto_enable_on_import")} desc={t("gallerydl.auto_enable_on_import.desc")}
+          value={data.auto_enable_on_import ?? false} onChange={(v) => set("auto_enable_on_import", v)} />
+      </div>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.auth")}</h4>
+      <div className="grid grid-cols-2 gap-4">
+        <TextField label={t("gallerydl.cookies_path")} value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/weibo.txt" />
+      </div>
+      <div>
+        <label className="block text-sm font-medium mb-1">{t("gallerydl.cookie_content")}</label>
+        <textarea value={str(data.cookie_content)} onChange={(e) => set("cookie_content", e.target.value || undefined)}
+          rows={3} className="w-full border rounded px-3 py-2 text-xs font-mono dark:bg-slate-700 dark:text-white"
+          placeholder="Paste cookie text here. Auto-saved to /gallerydl-config/cookies/weibo.txt" />
+        <p className="text-xs text-gray-400 mt-1">{t("gallerydl.cookies_help")}</p>
+      </div>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.filters")}</h4>
+      <div className="space-y-1">
+        <ToggleField label={t("gallerydl.videos")} desc={t("gallerydl.videos.desc")} value={data.videos ?? true} onChange={(v) => set("videos", v)} />
+        <ToggleField label={t("gallerydl.retweets")} desc={t("gallerydl.include_retweets")} value={data.retweets ?? false} onChange={(v) => set("retweets", v)} />
+      </div>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
+      <div className="grid grid-cols-2 gap-4">
+        <TextField label={t("gallerydl.dir_pattern")} value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} placeholder="weibo/{user[screen_name]}" />
+        <TextField label={t("gallerydl.filename_pattern")} value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} placeholder="{id}_{num}.{extension}" />
       </div>
     </div>
   );

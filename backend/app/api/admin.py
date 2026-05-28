@@ -419,6 +419,7 @@ class DanbooruSourceConfig(BaseModel):
 
 
 class PinterestSourceConfig(BaseModel):
+    auto_enable_on_import: bool | None = None
     domain: str | None = None
     stories: bool | None = True
     videos: bool | None = True
@@ -430,8 +431,20 @@ class PinterestSourceConfig(BaseModel):
 
 
 class LofterSourceConfig(BaseModel):
+    auto_enable_on_import: bool | None = None
     cookies_path: str | None = None
     cookie_content: str | None = None
+    filename: str | None = None
+    directory: str | None = None
+
+
+class WeiboSourceConfig(BaseModel):
+    auto_enable_on_import: bool | None = None
+    cookies_path: str | None = None
+    cookie_content: str | None = None
+    videos: bool | None = None
+    retweets: bool | None = None
+    include: str | None = None
     filename: str | None = None
     directory: str | None = None
 
@@ -443,6 +456,7 @@ class GalleryDLMultiConfig(BaseModel):
     danbooru: DanbooruSourceConfig | None = None
     pinterest: PinterestSourceConfig | None = None
     lofter: LofterSourceConfig | None = None
+    weibo: WeiboSourceConfig | None = None
 
 GALLERYDL_SOURCE_OPTIONS = {
     "pixiv": {
@@ -474,6 +488,11 @@ GALLERYDL_SOURCE_OPTIONS = {
         "name": "LOFTER",
         "supported": True,
         "description": "LOFTER blog posts and images. Chinese platform. No authentication required.",
+    },
+    "weibo": {
+        "name": "微博 (Weibo)",
+        "supported": True,
+        "description": "Weibo user feeds, albums, and statuses. Chinese platform. Cookies optional.",
     },
 }
 
@@ -522,6 +541,16 @@ PINTEREST_CONFIG_MAP = {
 LOFTER_CONFIG_MAP = {
     "auto_enable_on_import": "auto-enable-on-import",
     "cookies_path": "cookies", "filename": "filename",
+    "directory": "directory",
+}
+
+WEIBO_CONFIG_MAP = {
+    "auto_enable_on_import": "auto-enable-on-import",
+    "cookies_path": "cookies",
+    "videos": "videos",
+    "retweets": "retweets",
+    "include": "include",
+    "filename": "filename",
     "directory": "directory",
 }
 
@@ -581,6 +610,7 @@ async def get_gallerydl_config(source: str | None = None):
         "danbooru": get_source("danbooru", DANBOORU_CONFIG_MAP),
         "pinterest": get_source("pinterest", PINTEREST_CONFIG_MAP),
         "lofter": get_source("lofter", LOFTER_CONFIG_MAP),
+        "weibo": get_source("weibo", WEIBO_CONFIG_MAP),
         "sources": GALLERYDL_SOURCE_OPTIONS,
     }
     if source:
@@ -606,6 +636,7 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
         ("danbooru", data.danbooru, DANBOORU_CONFIG_MAP),
         ("pinterest", data.pinterest, PINTEREST_CONFIG_MAP),
         ("lofter", data.lofter, LOFTER_CONFIG_MAP),
+        ("weibo", data.weibo, WEIBO_CONFIG_MAP),
     ]:
         if source_data is None:
             continue
@@ -638,6 +669,21 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
         danbooru = extractors.setdefault("danbooru", {})
         _write_source_config(danbooru, data.danbooru, DANBOORU_CONFIG_MAP)
         extractors["danbooru"] = danbooru
+
+    if data.pinterest is not None:
+        pinterest = extractors.setdefault("pinterest", {})
+        _write_source_config(pinterest, data.pinterest, PINTEREST_CONFIG_MAP)
+        extractors["pinterest"] = pinterest
+
+    if data.lofter is not None:
+        lofter = extractors.setdefault("lofter", {})
+        _write_source_config(lofter, data.lofter, LOFTER_CONFIG_MAP)
+        extractors["lofter"] = lofter
+
+    if data.weibo is not None:
+        weibo = extractors.setdefault("weibo", {})
+        _write_source_config(weibo, data.weibo, WEIBO_CONFIG_MAP)
+        extractors["weibo"] = weibo
 
     config["extractor"] = extractors
 
