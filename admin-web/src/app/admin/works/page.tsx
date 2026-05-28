@@ -103,6 +103,10 @@ function WorksContent() {
     { key: "pixiv", label: "Pixiv" },
     { key: "x", label: "X" },
     { key: "iwara", label: "Iwara" },
+    { key: "danbooru", label: "Danbooru" },
+    { key: "pinterest", label: "Pinterest" },
+    { key: "lofter", label: "Lofter" },
+    { key: "weibo", label: "微博 (Weibo)" },
   ];
   // All filter state derived from URL — preserves filters on back/forward and supports sharing links
   const search = sp.get("q") ?? "";

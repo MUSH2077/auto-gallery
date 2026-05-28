@@ -267,6 +267,17 @@ export interface LofterSourceConfig {
   directory?: string;
 }
 
+export interface WeiboSourceConfig {
+  auto_enable_on_import?: boolean;
+  cookies_path?: string;
+  cookie_content?: string;
+  videos?: boolean;
+  retweets?: boolean;
+  include?: string;
+  filename?: string;
+  directory?: string;
+}
+
 export interface GalleryDLMultiConfig {
   pixiv: PixivSourceConfig;
   twitter: TwitterSourceConfig;
@@ -274,6 +285,7 @@ export interface GalleryDLMultiConfig {
   danbooru: DanbooruSourceConfig;
   pinterest: PinterestSourceConfig;
   lofter: LofterSourceConfig;
+  weibo: WeiboSourceConfig;
   sources: Record<string, GalleryDLSourceMeta>;
 }
 
@@ -628,7 +640,7 @@ export const api = {
   // gallery-dl Config
   getGalleryDLConfig: (source?: string) => request<GalleryDLMultiConfig>(`/api/v1/admin/gallerydl-config${source ? `?source=${source}` : ""}`),
 
-  updateGalleryDLConfig: (data: { pixiv?: Partial<PixivSourceConfig>; twitter?: Partial<TwitterSourceConfig>; iwara?: Partial<IwaraSourceConfig>; danbooru?: Partial<DanbooruSourceConfig>; pinterest?: Partial<PinterestSourceConfig>; lofter?: Partial<LofterSourceConfig> }) =>
+  updateGalleryDLConfig: (data: { pixiv?: Partial<PixivSourceConfig>; twitter?: Partial<TwitterSourceConfig>; iwara?: Partial<IwaraSourceConfig>; danbooru?: Partial<DanbooruSourceConfig>; pinterest?: Partial<PinterestSourceConfig>; lofter?: Partial<LofterSourceConfig>; weibo?: Partial<WeiboSourceConfig> }) =>
     request<{ status: string; message: string; path: string }>("/api/v1/admin/gallerydl-config", { method: "PUT", body: JSON.stringify(data) }),
 
   // Naming Templates
