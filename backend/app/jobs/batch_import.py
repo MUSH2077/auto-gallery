@@ -98,8 +98,20 @@ async def _batch_import(pixiv_ids: list[str]) -> dict:
                     if not creator.danbooru_artist_id:
                         creator.danbooru_artist_id = artist_id
                 else:
+                    # name = Danbooru canonical tag (slug, used for dedup)
+                    # display_name = Pixiv username if available, else Danbooru tag
+                    from app.models.source_creator import SourceCreator
+                    sc_result = await db.execute(
+                        select(SourceCreator).where(
+                            SourceCreator.source == "pixiv",
+                            SourceCreator.source_creator_id == str(pid),
+                        )
+                    )
+                    sc = sc_result.scalar_one_or_none()
+                    pixiv_display = sc.display_name if sc else None
                     creator = Creator(
-                        name=artist_name, display_name=artist_name,
+                        name=artist_name,
+                        display_name=pixiv_display or artist_name,
                         danbooru_artist_id=artist_id,
                     )
                     db.add(creator)
