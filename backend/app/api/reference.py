@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import urllib.parse
 from uuid import UUID
 
@@ -14,6 +15,7 @@ from app.config import settings
 from app.database import get_db
 from app.services import danbooru as danbooru_svc
 from app.models.creator_link import CreatorLink
+from app.models.source_creator import SourceCreator
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +57,11 @@ async def list_reference_providers():
 
 
 @router.post("/danbooru/artist/preview")
-async def preview_danbooru_artist(data: dict):
+async def preview_danbooru_artist(data: dict, db: AsyncSession = Depends(get_db)):
     """Search Danbooru for artists matching a Pixiv URL, artist name, or tag.
 
     Accepts: {url?: str, pixiv_id?: str, name?: str}
+    Returns pixiv_display_name when a matching SourceCreator is found in the local DB.
     """
     source_url = data.get("url") or data.get("source_url")
     pixiv_id = data.get("pixiv_id")
@@ -77,6 +80,36 @@ async def preview_danbooru_artist(data: dict):
     if not artist:
         return {"status": "ok", "found": False, "message": "No matching Danbooru artist found"}
 
+    # Resolve Pixiv user ID from search params or artist URLs
+    pixiv_user_id: str | None = None
+    if pixiv_id:
+        pixiv_user_id = str(pixiv_id).strip()
+    elif source_url:
+        m = re.search(r'pixiv\.net/(?:en/)?users/(\d+)', source_url)
+        if m:
+            pixiv_user_id = m.group(1)
+    # Also check the artist's associated URLs as a fallback
+    if not pixiv_user_id:
+        for u in artist.get("urls", []):
+            raw = u.get("normalized_url") or u.get("url", "")
+            m = re.search(r'pixiv\.net/(?:en/)?users/(\d+)', raw)
+            if m:
+                pixiv_user_id = m.group(1)
+                break
+
+    # Look up Pixiv display name from existing SourceCreator records
+    pixiv_display_name: str | None = None
+    if pixiv_user_id:
+        result = await db.execute(
+            select(SourceCreator).where(
+                SourceCreator.source == "pixiv",
+                SourceCreator.source_creator_id == pixiv_user_id,
+            ).limit(1)
+        )
+        sc = result.scalar_one_or_none()
+        if sc and sc.display_name:
+            pixiv_display_name = sc.display_name
+
     return {
         "status": "ok",
         "found": True,
@@ -90,6 +123,7 @@ async def preview_danbooru_artist(data: dict):
             "created_at": artist.get("created_at"),
             "urls": [{"url": u["url"], "normalized_url": u.get("normalized_url", u["url"]),
                       "is_active": u.get("is_active", True)} for u in artist.get("urls", [])],
+            "pixiv_display_name": pixiv_display_name,
         },
         "suggested_links": links,
     }
