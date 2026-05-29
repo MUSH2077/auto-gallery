@@ -211,7 +211,10 @@ async def import_all_danbooru(data: dict, db: AsyncSession = Depends(get_db)):
             raise HTTPException(status_code=404, detail="Creator not found")
     else:
         # Check for existing creator by Danbooru ID or source URLs
-        display = creator_name or artist.get("name", "Unknown")
+        # canonical_name: Danbooru tag name (slug-like, lowercase) — used for dedup/identity
+        # chosen_display: user-provided pretty name or fallback
+        canonical_name = artist.get("name", "Unknown")
+        chosen_display = creator_name or canonical_name
         existing = await find_existing_creator(
             db,
             danbooru_artist_id=artist.get("id"),
@@ -220,8 +223,11 @@ async def import_all_danbooru(data: dict, db: AsyncSession = Depends(get_db)):
             creator = existing
             creator_id = creator.id
             creator_id_str = str(creator_id)
+            # Only update display_name if user explicitly chose one
+            if creator_name:
+                creator.display_name = creator_name
         else:
-            creator = Creator(name=display, display_name=display)
+            creator = Creator(name=canonical_name, display_name=chosen_display)
             db.add(creator)
             await db.flush()
             creator_id = creator.id

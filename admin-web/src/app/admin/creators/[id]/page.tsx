@@ -132,6 +132,75 @@ function AddSourceForm({ creatorId, onClose }: { creatorId: string; onClose: () 
   );
 }
 
+function parseDanbooruAliases(description: string | undefined | null): string[] {
+  if (!description) return [];
+  const match = description.match(/^Danbooru aliases:\s*(.+)$/m);
+  if (!match) return [];
+  return match[1].split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+function DanbooruAliasesPanel({
+  creatorId, danbooru_artist_id, description, currentDisplayName, onDisplayNameUpdated,
+}: {
+  creatorId: string;
+  danbooru_artist_id: number;
+  description?: string | null;
+  currentDisplayName: string;
+  onDisplayNameUpdated: () => void;
+}) {
+  const t = useT();
+  const router = useRouter();
+  const qc = useQueryClient();
+  const aliases = parseDanbooruAliases(description);
+
+  const updateDisplayName = useMutation({
+    mutationFn: (name: string) => api.updateCreator(creatorId, { display_name: name }),
+    onSuccess: () => onDisplayNameUpdated(),
+  });
+
+  return (
+    <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 h-fit">
+      <h3 className="font-medium mb-2">{t("creator_detail.danbooru_ref")}</h3>
+      <div className="text-xs space-y-1">
+        <div className="flex justify-between">
+          <span className="text-gray-500 dark:text-gray-400">{t("creator_detail.artist_id")}</span>
+          <a href={`https://danbooru.donmai.us/artists/${danbooru_artist_id}`} target="_blank" rel="noopener noreferrer"
+            className="text-blue-600 hover:underline font-mono">#{danbooru_artist_id}</a>
+        </div>
+      </div>
+      {aliases.length > 0 && (
+        <div className="mt-3">
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">{t("creator_detail.danbooru_aliases_hint")}</p>
+          <div className="flex flex-wrap gap-1.5">
+            {aliases.map((alias) => (
+              <button
+                key={alias}
+                onClick={() => updateDisplayName.mutate(alias)}
+                disabled={updateDisplayName.isPending}
+                title={t("creator_detail.set_display_name_as").replace("{name}", alias)}
+                className={`px-2 py-0.5 rounded text-xs border transition-colors ${
+                  alias === currentDisplayName
+                    ? "bg-blue-600 text-white border-blue-600"
+                    : "bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-gray-200 border-gray-200 dark:border-slate-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 hover:border-blue-400 hover:text-blue-700"
+                } disabled:opacity-50`}
+              >
+                {alias}
+              </button>
+            ))}
+          </div>
+          {updateDisplayName.error && (
+            <p className="text-red-600 text-xs mt-1">{(updateDisplayName.error as Error).message}</p>
+          )}
+        </div>
+      )}
+      <button onClick={() => router.push(`/admin/creators/${creatorId}/mapping`)}
+        className="mt-3 text-xs text-blue-600 hover:underline w-full text-center block">
+        {t("creator_detail.view_mapping")}
+      </button>
+    </div>
+  );
+}
+
 export default function CreatorDetailPage() {
   const t = useT();
   const params = useParams(); const router = useRouter(); const qc = useQueryClient();
@@ -225,23 +294,13 @@ export default function CreatorDetailPage() {
 
         {/* Danbooru Reference */}
         {c.danbooru_artist_id && (
-          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 h-fit">
-            <h3 className="font-medium mb-2">{t("creator_detail.danbooru_ref")}</h3>
-            <div className="text-xs space-y-1">
-              <div className="flex justify-between">
-                <span className="text-gray-500 dark:text-gray-400">{t("creator_detail.artist_id")}</span>
-                <a href={`https://danbooru.donmai.us/artists/${c.danbooru_artist_id}`} target="_blank" rel="noopener noreferrer"
-                  className="text-blue-600 hover:underline font-mono">#{c.danbooru_artist_id}</a>
-              </div>
-            </div>
-            {c.description && c.description.includes("Danbooru") && (
-              <div className="mt-2 text-xs text-gray-600 dark:text-gray-300 bg-blue-50 dark:bg-blue-900/30 p-2 rounded">{c.description}</div>
-            )}
-            <button onClick={() => router.push(`/admin/creators/${id}/mapping`)}
-              className="mt-3 text-xs text-blue-600 hover:underline w-full text-center block">
-              {t("creator_detail.view_mapping")}
-            </button>
-          </div>
+          <DanbooruAliasesPanel
+            creatorId={id}
+            danbooru_artist_id={c.danbooru_artist_id}
+            description={c.description}
+            currentDisplayName={c.display_name || c.name}
+            onDisplayNameUpdated={() => qc.invalidateQueries({ queryKey: queryKeys.creators.detail(id) })}
+          />
         )}
       </div>
 
