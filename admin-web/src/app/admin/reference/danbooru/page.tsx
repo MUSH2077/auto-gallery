@@ -9,14 +9,16 @@ interface ArtistUrls { url: string; normalized_url: string; is_active: boolean }
 interface ArtistResult {
   id: number; name: string; other_names: string[]; post_count?: number;
   notes?: string; is_active?: boolean; created_at?: string; urls: ArtistUrls[];
+  pixiv_display_name?: string | null;
 }
 interface SuggestedLink { url: string; link_type: string; source: string; confidence: number; is_verified: boolean; notes?: string }
 
-function PreviewResult({ artist, links, onImport, importPending, onImportAll, importAllPending, importAllError, selectedCreator, setSelectedCreator }: {
+function PreviewResult({ artist, links, onImport, importPending, onImportAll, importAllPending, importAllError, selectedCreator, setSelectedCreator, importName, setImportName }: {
   artist: ArtistResult; links: SuggestedLink[];
   onImport: (creatorId: string) => void; importPending: boolean;
   onImportAll: (creatorName: string) => void; importAllPending: boolean; importAllError: string | null;
   selectedCreator: string; setSelectedCreator: (v: string) => void;
+  importName: string; setImportName: (v: string) => void;
 }) {
   const t = useT();
   const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
@@ -61,7 +63,18 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
       <div className="bg-white dark:bg-slate-800 border rounded-lg p-4">
         <h3 className="font-medium mb-2">{t("danbooru.artist_label").replace("{id}", String(artist.id)).replace("{name}", artist.name)}</h3>
         {artist.other_names.length > 0 && (
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">{t("danbooru.also_known")} {artist.other_names.join(", ")}</p>
+          <div className="flex flex-wrap items-center gap-1 mb-1">
+            <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">{t("danbooru.also_known")}</span>
+            {artist.other_names.map((n) => (
+              <button key={n} type="button" onClick={() => setImportName(n)}
+                className={`text-xs px-2 py-0.5 rounded-full border transition-colors cursor-pointer
+                  ${importName === n
+                    ? "bg-blue-600 text-white border-blue-600"
+                    : "bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-300 border-gray-300 hover:bg-blue-50 hover:border-blue-400 dark:hover:bg-blue-900/30"}`}>
+                {n}
+              </button>
+            ))}
+          </div>
         )}
         {artist.post_count != null && <p className="text-xs text-gray-500 dark:text-gray-400">{t("danbooru.posts_count")} {artist.post_count}</p>}
         {artist.notes && <p className="text-xs text-gray-600 dark:text-gray-300 mt-2 bg-gray-50 dark:bg-slate-800/50 p-2 rounded">{artist.notes}</p>}
@@ -71,14 +84,43 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
       <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
         <p className="text-sm text-blue-800 dark:text-blue-300 font-medium mb-1">{t("danbooru.one_click_import")}</p>
         <p className="text-xs text-blue-600 mb-3">Creates Creator + Subscription + Sources + Links in one step.</p>
-        <div className="flex items-end gap-2">
-          <div className="flex-1">
-            <input type="text" value={selectedCreator} onChange={(e) => setSelectedCreator(e.target.value)}
-              placeholder="Creator name (leave empty for auto)"
-              className="w-full border rounded px-2 py-1 text-xs" />
-          </div>
-          <button onClick={() => onImportAll(selectedCreator)} disabled={importAllPending}
-            className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 shrink-0">
+        <div className="mb-3">
+          <label className="block text-xs font-medium text-blue-800 dark:text-blue-300 mb-1">
+            创建者名称
+            <span className="font-normal text-blue-600 dark:text-blue-400 ml-1">（留空则自动使用 Danbooru 标签名）</span>
+          </label>
+          {/* Clickable name chips: Pixiv display name + Danbooru aliases */}
+          {(artist.pixiv_display_name || artist.other_names.length > 0) && (
+            <div className="flex flex-wrap gap-1 mb-2">
+              {artist.pixiv_display_name && (
+                <button key="__pixiv__" type="button" onClick={() => setImportName(artist.pixiv_display_name!)}
+                  title="Pixiv 用户名"
+                  className={`text-xs px-2 py-0.5 rounded-full border transition-colors cursor-pointer flex items-center gap-1
+                    ${importName === artist.pixiv_display_name
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : "bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 border-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800/50"}`}>
+                  <span className="opacity-70">P</span>{artist.pixiv_display_name}
+                </button>
+              )}
+              {artist.other_names.map((n) => (
+                <button key={n} type="button" onClick={() => setImportName(n)}
+                  title="Danbooru 别名"
+                  className={`text-xs px-2 py-0.5 rounded-full border transition-colors cursor-pointer
+                    ${importName === n
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : "bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-300 border-gray-300 hover:bg-blue-50 hover:border-blue-400 dark:hover:bg-blue-900/30"}`}>
+                  {n}
+                </button>
+              ))}
+            </div>
+          )}
+          <input type="text" value={importName} onChange={(e) => setImportName(e.target.value)}
+            placeholder="留空则自动使用 Danbooru 标签名"
+            className="w-full border rounded px-2 py-1 text-xs" />
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => onImportAll(importName)} disabled={importAllPending}
+            className="flex-1 px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50">
             {importAllPending ? t("danbooru.importing") : t("danbooru.import_all_subscribe")}
           </button>
         </div>
@@ -223,6 +265,7 @@ export default function DanbooruReferencePage() {
   const [searchName, setSearchName] = useState("");
   const [searchPixivId, setSearchPixivId] = useState("");
   const [selectedCreator, setSelectedCreator] = useState("");
+  const [importName, setImportName] = useState("");
   const [searchParams, setSearchParams] = useState<{ url?: string; pixiv_id?: string; name?: string } | null>(null);
   const [batchInput, setBatchInput] = useState("");
   const [showBatch, setShowBatch] = useState(false);
@@ -308,6 +351,13 @@ export default function DanbooruReferencePage() {
 
   const artist = preview.data?.artist;
   const links = preview.data?.suggested_links || [];
+
+  // Auto-fill importName from Pixiv display name when preview data arrives
+  useEffect(() => {
+    if (artist) {
+      setImportName(artist.pixiv_display_name || "");
+    }
+  }, [artist]);
 
   return (
     <main className="max-w-5xl mx-auto p-6">
@@ -566,7 +616,8 @@ export default function DanbooruReferencePage() {
           onImportAll={(creatorName) => importAllMutation.mutate(creatorName)}
           importAllPending={importAllMutation.isPending}
           importAllError={(importAllMutation.error as Error)?.message || null}
-          selectedCreator={selectedCreator} setSelectedCreator={setSelectedCreator} />
+          selectedCreator={selectedCreator} setSelectedCreator={setSelectedCreator}
+          importName={importName} setImportName={setImportName} />
       )}
     </main>
   );

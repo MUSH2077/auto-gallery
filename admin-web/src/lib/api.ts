@@ -592,6 +592,7 @@ export const api = {
       status: string; found?: boolean; message?: string;
       artist?: { id: number; name: string; other_names: string[]; post_count?: number;
                  notes?: string; is_active?: boolean; created_at?: string;
+                 pixiv_display_name?: string | null;
                  urls: { url: string; normalized_url: string; is_active: boolean }[] };
       suggested_links?: { url: string; link_type: string; source: string; confidence: number;
                           is_verified: boolean; notes?: string }[];
