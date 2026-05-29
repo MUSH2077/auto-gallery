@@ -113,7 +113,9 @@ def get_artist(artist_id: int) -> dict | None:
 # URL patterns that are valid gallery-dl download sources
 DOWNLOADABLE_PATTERNS = {
     "pixiv": [r"pixiv\.net/(?:en/)?users/\d+"],
-    "iwara": [r"iwara\.tv/(?:users|profile)/\w+"],
+    "x": [r"(?:twitter\.com|x\.com)/(?!i/)(?!intent)\w+"],
+    "weibo": [r"weibo\.(?:com|cn)/(?:u/\d+|[\w\u4e00-\u9fff]+)"],
+    "iwara": [r"iwara\.tv/(?:users|profile)/[\w-]+"],
     "danbooru": [r"danbooru\.donmai\.us/(?:posts\?tags=|artists/\d+|pools/\d+)"],
     "pinterest": [r"pinterest\.\w+(?:\.\w+)?/(?:pin/\d+|(?:[\w.-]+/pins|[\w.-]+/[\w.-]+/?))"],
     "lofter": [r"^https?://(?!www\.)[\w-]+\.lofter\.com"],
@@ -132,8 +134,8 @@ def _classify_url(url: str) -> str:
         return "fanbox"
     if "pixiv.net" in u:
         return "pixiv"
-    # Social / X
-    if "twitter.com" in u or "x.com" in u:
+    # Social / X  (use regex to avoid matching substrings like ax.com)
+    if "twitter.com" in u or re.search(r"(?:^|[./@])x\.com(?:[/?#:]|$)", u):
         return "x"
     if "bsky.app" in u:
         return "bluesky"
@@ -159,8 +161,6 @@ def _classify_url(url: str) -> str:
         return "deviantart"
     if "artstation.com" in u:
         return "artstation"
-    if "pixiv.net" in u:
-        return "pixiv"
     # Chinese platforms
     if "weibo.com" in u or "weibo.cn" in u:
         return "weibo"
@@ -170,7 +170,8 @@ def _classify_url(url: str) -> str:
         return "bcy"
     if "pinterest.com" in u or "pin.it" in u:
         return "pinterest"
-    if "lofter.com" in u:
+    # Lofter: only subdomain blogs (user.lofter.com), not www.lofter.com
+    if ".lofter.com" in u and "www.lofter.com" not in u:
         return "lofter"
     # Funding / Shop
     if "fanbox" in u:

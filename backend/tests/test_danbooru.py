@@ -47,6 +47,17 @@ class TestURLClassification:
     def test_chinese_platforms(self):
         assert _classify_url("https://www.weibo.com/u/123") == "weibo"
         assert _classify_url("https://www.xiaohongshu.com/user/123") == "xiaohongshu"
+        assert _classify_url("https://username.lofter.com") == "lofter"
+        assert _classify_url("https://username.lofter.com/post/abc123") == "lofter"
+        # www.lofter.com is the portal, not a user blog
+        assert _classify_url("https://www.lofter.com") == "website"
+
+    def test_x_no_false_positive(self):
+        # ax.com should NOT be classified as x
+        assert _classify_url("https://ax.com/user") != "x"
+        # but real x/twitter URLs should
+        assert _classify_url("https://x.com/artist") == "x"
+        assert _classify_url("https://twitter.com/artist") == "x"
 
     def test_website_fallback(self):
         assert _classify_url("https://example.com/profile") == "website"
@@ -62,10 +73,23 @@ class TestDownloadableURL:
         assert is_downloadable_url("https://www.pixiv.net/en/users/1980643") is True
         assert is_downloadable_url("https://www.pixiv.net/artworks/123") is False  # artwork URL, not user
 
+    def test_x_downloadable(self):
+        assert is_downloadable_url("https://twitter.com/artist") is True
+        assert is_downloadable_url("https://x.com/artist") is True
+
+    def test_weibo_downloadable(self):
+        assert is_downloadable_url("https://weibo.com/u/1234567890") is True
+        assert is_downloadable_url("https://weibo.com/username") is True
+
     def test_iwara_downloadable(self):
         assert is_downloadable_url("https://www.iwara.tv/profile/username") is True
+        assert is_downloadable_url("https://www.iwara.tv/users/username") is True
         assert is_downloadable_url("https://www.iwara.tv/video/abc") is False
 
+    def test_lofter_downloadable(self):
+        assert is_downloadable_url("https://username.lofter.com") is True
+        assert is_downloadable_url("https://www.lofter.com") is False
+
     def test_non_downloadable(self):
-        assert is_downloadable_url("https://twitter.com/artist") is False
         assert is_downloadable_url("https://youtube.com/@channel") is False
+        assert is_downloadable_url("https://danbooru.donmai.us/posts/123") is False  # individual post, not tag search
