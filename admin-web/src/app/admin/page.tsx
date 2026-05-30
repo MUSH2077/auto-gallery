@@ -99,9 +99,9 @@ export default function Dashboard() {
           <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
             <h3 className="text-sm font-medium mb-2 dark:text-white">{t("dashboard.import_jobs")}</h3>
             {recentImports.isLoading ? <div className="animate-pulse h-16 bg-gray-100 dark:bg-slate-700 rounded" /> :
-             !recentImports.data?.length ? <p className="text-xs text-gray-400 dark:text-gray-500">{t("dashboard.no_jobs")}</p> :
+             !recentImports.data?.items?.length ? <p className="text-xs text-gray-400 dark:text-gray-500">{t("dashboard.no_jobs")}</p> :
              <div className="space-y-1">
-              {recentImports.data.slice(0, 5).map((j) => (
+              {recentImports.data.items.slice(0, 5).map((j) => (
                 <div key={j.id} className="flex items-center justify-between text-xs">
                   <span className="font-mono text-gray-400 dark:text-gray-500">{j.id.slice(0, 8)}</span>
                   <span className="text-gray-600 dark:text-gray-300 truncate mx-2 flex-1">{j.download_job_id ? j.download_job_id.slice(0, 8) : "—"}</span>
@@ -114,7 +114,7 @@ export default function Dashboard() {
       </section>
 
       {/* Recent Failures */}
-      {(failedDownloads.data && failedDownloads.data.length > 0) || (failedImports.data && failedImports.data.length > 0) ? (
+      {(failedDownloads.data && failedDownloads.data.length > 0) || (failedImports.data && (failedImports.data.items?.length ?? 0) > 0) ? (
         <section className="mb-8">
           <h2 className="text-lg font-semibold mb-3 text-red-700 dark:text-red-400">{t("dashboard.recent_failures")}</h2>
           <div className="space-y-2">
@@ -128,7 +128,7 @@ export default function Dashboard() {
                 <button onClick={() => router.push("/admin/downloads")} className="text-xs text-blue-600 hover:underline shrink-0 ml-4">View</button>
               </div>
             ))}
-            {failedImports.data?.slice(0, 3).map((j) => (
+            {failedImports.data?.items?.slice(0, 3).map((j) => (
               <div key={j.id} className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm flex items-center justify-between">
                 <div>
                   <span className="font-mono text-xs text-gray-400 dark:text-gray-500 mr-2">IM {j.id.slice(0, 8)}</span>

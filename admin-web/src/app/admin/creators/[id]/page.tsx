@@ -335,17 +335,17 @@ function CreatorWorksSection({ creatorId, creatorName }: { creatorId: string; cr
   });
 
   if (works.isLoading) return null;
-  if (!works.data?.length) return null;
+  if (!works.data?.items?.length) return null;
 
   return (
     <section className="mb-8">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-lg font-semibold dark:text-white">{t("creator_detail.works_section").replace("{count}", String(works.data.length))}</h2>
+        <h2 className="text-lg font-semibold dark:text-white">{t("creator_detail.works_section").replace("{count}", String(works.data.total))}</h2>
         <button onClick={() => router.push(`/admin/works?creator=${creatorId}`)}
           className="text-sm text-blue-600 hover:underline">{t("creator_detail.view_all_works")}</button>
       </div>
       <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-        {works.data.map((w) => (
+        {works.data.items.map((w) => (
           <div key={w.id} className="bg-white dark:bg-slate-800 rounded-lg shadow-sm overflow-hidden cursor-pointer hover:shadow-md transition-shadow" onClick={() => router.push(`/admin/works/${w.id}`)}>
             <div className="aspect-square bg-gray-100 dark:bg-slate-700 flex items-center justify-center text-gray-400 text-xs overflow-hidden relative">
               {w.thumbnail_asset_id ? (

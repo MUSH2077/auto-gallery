@@ -15,8 +15,8 @@ class XProvider(BaseProvider):
     @property
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            can_download=True,
-            supports_gallerydl=True,
+            can_download=False,
+            supports_gallerydl=False,
             supports_tags=True,
         )
 
@@ -33,6 +33,7 @@ class XProvider(BaseProvider):
         return bool(re.match(r"https?://(?:twitter\.com|x\.com)/\w+(?:/status/\d+)?/?(?:\?.*)?$", url))
 
     def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
+        raise NotImplementedError("X/Twitter download is not supported in this version")
         return {
             "extractor": {
                 "twitter": {

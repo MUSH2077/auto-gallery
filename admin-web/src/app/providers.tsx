@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 import { ThemeProvider } from "@/lib/theme";
 import { I18nProvider } from "@/lib/i18n";
+import { AuthProvider } from "@/lib/auth";
 import ErrorBoundary from "@/components/ErrorBoundary";
 
 export default function Providers({ children }: { children: React.ReactNode }) {
@@ -13,7 +14,9 @@ export default function Providers({ children }: { children: React.ReactNode }) {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <I18nProvider>
-          <ThemeProvider>{children}</ThemeProvider>
+          <ThemeProvider>
+            <AuthProvider>{children}</AuthProvider>
+          </ThemeProvider>
         </I18nProvider>
       </QueryClientProvider>
     </ErrorBoundary>

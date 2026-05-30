@@ -23,6 +23,11 @@ class WorkList(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class WorkListResponse(BaseModel):
+    total: int
+    items: list[WorkList]
+
+
 class WorkRead(BaseModel):
     id: UUID
     title: str | None = None

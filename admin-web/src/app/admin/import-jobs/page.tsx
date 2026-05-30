@@ -109,7 +109,7 @@ function ImportJobsContent() {
 
   return (
     <main className="max-w-7xl mx-auto p-6">
-      <PageHeader title={t("imports.title")} description={jobs.data?.length ? t("common.page").replace("{page}", String(page + 1)) : t("imports.desc")}>
+      <PageHeader title={t("imports.title")} description={(jobs.data?.total ?? 0) > 0 ? t("common.page").replace("{page}", String(page + 1)) : t("imports.desc")}>
         <button onClick={() => scan.mutate()} disabled={scan.isPending}
           className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
           {scan.isPending ? t("imports.scanning") : t("imports.scan")}
@@ -131,9 +131,9 @@ function ImportJobsContent() {
 
       {jobs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-10 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
       {jobs.error && <ErrorState message={(jobs.error as Error).message} onRetry={() => jobs.refetch()} />}
-      {jobs.data && !jobs.data.length && <EmptyState title={t("imports.no_jobs")} description={t("imports.no_jobs_desc")} />}
+      {jobs.data && !jobs.data.items?.length && <EmptyState title={t("imports.no_jobs")} description={t("imports.no_jobs_desc")} />}
 
-      {jobs.data && jobs.data.length > 0 && (
+      {jobs.data && jobs.data.items?.length > 0 && (
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow overflow-x-auto">
           <table className="w-full text-sm">
             <thead><tr className="border-b dark:border-slate-700 bg-gray-50 dark:bg-slate-800/50">
@@ -143,17 +143,17 @@ function ImportJobsContent() {
               <th className="text-left px-4 py-3">{t("imports.col_created")}</th>
               <th className="text-left px-4 py-3">{t("imports.col_actions")}</th>
             </tr></thead>
-            <tbody>{jobs.data.map((job) => <JobRow key={job.id} job={job} />)}</tbody>
+            <tbody>{jobs.data.items.map((job) => <JobRow key={job.id} job={job} />)}</tbody>
           </table>
         </div>
       )}
 
-      {jobs.data && jobs.data.length > 0 && (
+      {(jobs.data?.total ?? 0) > 0 && (
         <div className="flex gap-2 justify-center mt-4">
           <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)}
             className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.prev")}</button>
           <span className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400">{t("common.page").replace("{page}", String(page + 1))}</span>
-          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!jobs.data || jobs.data.length < limit}
+          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!jobs.data || (page + 1) * limit >= jobs.data.total}
             className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.next")}</button>
         </div>
       )}
