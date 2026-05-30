@@ -648,6 +648,15 @@ export const api = {
       "/api/v1/reference/danbooru/artist/batch-import",
       { method: "POST", body: JSON.stringify({ pixiv_ids: pixivIds }) }),
 
+  urlBatchImportDanbooru: (urls: string[]) =>
+    request<{
+      status: string; total: number; imported: number; not_found: number; errors: number;
+      results: { url: string; status: string; message?: string; artist_name?: string;
+                 creator_id?: string; created_new?: boolean; links_imported?: number; sources_created?: number }[];
+    }>(
+      "/api/v1/reference/danbooru/url-batch-import",
+      { method: "POST", body: JSON.stringify({ urls }) }),
+
   syncDanbooruFavorites: () =>
     request<{
       status: string; message?: string;

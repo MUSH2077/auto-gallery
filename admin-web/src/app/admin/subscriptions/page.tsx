@@ -119,7 +119,15 @@ function SubscriptionsContent() {
 
   const syncNow = useMutation({
     mutationFn: (id: string) => api.syncNowSubscription(id),
-    onSuccess: () => subs.refetch(),
+    onSuccess: (data) => {
+      subs.refetch();
+      if (data.status === "error" || data.status === "partial_error") {
+        alert((data as any).message || "Sync partially failed");
+      } else if (data.job_ids.length === 0) {
+        alert(t("subscriptions.sync_no_jobs"));
+      }
+    },
+    onError: (e: Error) => alert(e.message),
   });
 
   const batchDel = useMutation({
