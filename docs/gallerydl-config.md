@@ -154,6 +154,49 @@ Common format values: `Source`, `1080`, `720`, `540`, `360`. If left empty, gall
 
 ---
 
+## Bilibili
+
+**Status**: Supported (gallery-dl built-in)  
+**Extractor key**: `extractor.bilibili`  
+**URL patterns**: `space.bilibili.com/<uid>/article`, `bilibili.com/read/cv<id>`, `space.bilibili.com/<uid>/favlist?ftype=article`
+
+### Authentication
+
+No authentication required for public articles and user article pages.
+
+### Content Options
+
+| Field | UI Label | Config Key | Default | Description |
+|-------|----------|------------|---------|-------------|
+| `livephoto` | Live Photo | `extractor.bilibili.livephoto` | `true` | Download live photo files (short video clips attached to some articles). Set to `false` to skip. |
+
+### File Organization
+
+| Field | UI Label | Config Key | Description |
+|-------|----------|------------|-------------|
+| `directory` | Directory Pattern | `extractor.bilibili.directory` (array) | Default: `["bilibili", "{user[name]}", "{id}"]` |
+| `filename` | Filename Pattern | `extractor.bilibili.filename` | Default: `{id}_{num}.{extension}` |
+
+#### Useful Tokens
+
+| Token | Example Value |
+|-------|--------------|
+| `{user[id]}` | Numeric UID |
+| `{user[name]}` | Display name |
+| `{id}` | Article ID (e.g. `12345678`) |
+| `{title}` | Article title |
+| `{date}` | Publication date |
+| `{num}` | Image number within article |
+| `{extension}` | `jpg`, `png`, `gif` |
+
+### Rate Limiting
+
+| Field | UI Label | Config Key | Default | Description |
+|-------|----------|------------|---------|-------------|
+| `sleep_request` | Sleep (seconds) | `extractor.bilibili.sleep-request` | `"3.0-6.0"` | Seconds to wait between HTTP requests. Range string supported (e.g. `"3.0-6.0"` picks a random delay in that interval). |
+
+---
+
 ## Config File Structure
 
 All per-source settings map to gallery-dl's `config.json`:
@@ -241,6 +284,15 @@ The admin API uses camelCase field names. The table below maps API field names t
 | `filename` | `filename` |
 | `directory` | `directory` (string → split to array) |
 | `format` | `format` |
+
+### Bilibili Mapping
+
+| API Field | Config Key |
+|-----------|-----------|
+| `livephoto` | `livephoto` |
+| `filename` | `filename` |
+| `directory` | `directory` (string → split to array) |
+| `sleep_request` | `sleep-request` |
 
 ## Naming Template Integration
 

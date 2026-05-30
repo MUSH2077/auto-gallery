@@ -154,6 +154,49 @@ auto-gallery 通过管理后台 **设置 → gallery-dl 配置** 管理各站点
 
 ---
 
+## 哔哩哔哩 Bilibili
+
+**状态**：支持（gallery-dl 内置）  
+**提取器键**：`extractor.bilibili`  
+**URL 模式**：`space.bilibili.com/<uid>/article`、`bilibili.com/read/cv<id>`、`space.bilibili.com/<uid>/favlist?ftype=article`
+
+### 认证
+
+公开文章和用户文章页面无需认证。
+
+### 内容选项
+
+| 字段 | UI 标签 | 配置键 | 默认值 | 描述 |
+|------|--------|--------|--------|------|
+| `livephoto` | Live Photo | `extractor.bilibili.livephoto` | `true` | 下载动态图文件（部分文章附带的短视频片段）。设为 `false` 可跳过。 |
+
+### 文件组织
+
+| 字段 | UI 标签 | 配置键 | 描述 |
+|------|--------|--------|------|
+| `directory` | Directory Pattern | `extractor.bilibili.directory`（数组） | 默认：`["bilibili", "{user[name]}", "{id}"]` |
+| `filename` | Filename Pattern | `extractor.bilibili.filename` | 默认：`{id}_{num}.{extension}` |
+
+#### 常用令牌
+
+| 令牌 | 示例值 |
+|------|--------|
+| `{user[id]}` | 数字 UID |
+| `{user[name]}` | 显示名称 |
+| `{id}` | 文章 ID（如 `12345678`） |
+| `{title}` | 文章标题 |
+| `{date}` | 发布日期 |
+| `{num}` | 文章内图片序号 |
+| `{extension}` | `jpg`、`png`、`gif` |
+
+### 速率限制
+
+| 字段 | UI 标签 | 配置键 | 默认值 | 描述 |
+|------|--------|--------|--------|------|
+| `sleep_request` | Sleep（秒） | `extractor.bilibili.sleep-request` | `"3.0-6.0"` | HTTP 请求间隔时间（秒）。支持区间字符串（如 `"3.0-6.0"` 表示在该区间内随机取值）。 |
+
+---
+
 ## 配置文件结构
 
 各站点设置映射到 gallery-dl 的 `config.json`：
@@ -241,6 +284,15 @@ auto-gallery 通过管理后台 **设置 → gallery-dl 配置** 管理各站点
 | `filename` | `filename` |
 | `directory` | `directory`（字符串 → 分割为数组） |
 | `format` | `format` |
+
+### Bilibili 映射
+
+| API 字段 | 配置键 |
+|----------|--------|
+| `livephoto` | `livephoto` |
+| `filename` | `filename` |
+| `directory` | `directory`（字符串 → 分割为数组） |
+| `sleep_request` | `sleep-request` |
 
 ## 命名模板集成
 

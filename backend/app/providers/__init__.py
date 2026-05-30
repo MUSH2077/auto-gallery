@@ -7,6 +7,7 @@ from app.providers.danbooru import DanbooruProvider
 from app.providers.pinterest import PinterestProvider
 from app.providers.lofter import LofterProvider
 from app.providers.weibo import WeiboProvider
+from app.providers.bilibili import BilibiliProvider
 from app.providers.local import LocalProvider
 from app.providers.manual import ManualProvider
 
@@ -18,6 +19,7 @@ registry.register(DanbooruReferenceProvider())
 registry.register(PinterestProvider())
 registry.register(LofterProvider())
 registry.register(WeiboProvider())
+registry.register(BilibiliProvider())
 registry.register(LocalProvider())
 registry.register(ManualProvider())
 

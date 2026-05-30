@@ -117,6 +117,21 @@ downloadable = registry.list_downloadable()
 - Cookie 可选 — 如需认证访问，设置 `data/config/gallery-dl/cookies/weibo.txt`
 - gallery-dl 请求频率限制：1.0–2.0 秒/请求
 
+### 哔哩哔哩 Bilibili (`bilibili.py`)
+- **状态**：可下载
+- `source_name`：`"bilibili"`
+- `capabilities.can_download`：True
+- `capabilities.supports_gallerydl`：True
+- `capabilities.supports_tags`：True
+- URL 模式：
+  - 用户文章：`space.bilibili.com/<uid>/article`
+  - 单篇文章：`bilibili.com/read/cv<id>`
+  - 用户文章收藏夹：`space.bilibili.com/<uid>/favlist?ftype=article`
+- 公开内容无需认证
+- 从文章标签列表提取标签
+- gallery-dl 请求频率限制：3.0–6.0 秒/请求
+- 默认下载 `livephoto` 文件（可通过配置关闭）
+
 ### 本地文件夹 (`local.py`)
 - **状态**：计划中
 - `capabilities.can_download`：False
