@@ -164,9 +164,9 @@ function WorksContent() {
     mutationFn: (id: string) => api.toggleWorkFavorite(id),
     onSuccess: (updated) => {
       // Directly patch the cache so the star updates immediately
-      qc.setQueryData([...queryKeys.works.all, page, filters], (old: WorkListItem[] | undefined) => {
+      qc.setQueryData([...queryKeys.works.all, page, filters], (old: { total: number; items: WorkListItem[] } | undefined) => {
         if (!old) return old;
-        return old.map((w) => w.id === updated.id ? { ...w, is_favorite: updated.is_favorite } : w);
+        return { ...old, items: old.items.map((w) => w.id === updated.id ? { ...w, is_favorite: updated.is_favorite } : w) };
       });
     },
   });
@@ -178,7 +178,7 @@ function WorksContent() {
 
   return (
     <main className="max-w-7xl mx-auto p-6">
-      <PageHeader title={t("works.title")} description={t("works.count", "0 works").replace("{count}", String(works.data?.length || 0)).replace("{page}", String(page + 1))} />
+      <PageHeader title={t("works.title")} description={t("works.count", "0 works").replace("{count}", String(works.data?.total ?? 0)).replace("{page}", String(page + 1))} />
 
       {/* Search & Filters */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -283,21 +283,21 @@ function WorksContent() {
       {works.error && <ErrorState message={(works.error as Error).message} onRetry={() => works.refetch()} />}
 
       {/* Empty */}
-      {works.data && !works.data.length && (
+      {works.data && !works.data.items?.length && (
         <EmptyState title={t("works.no_works")} description={search || sourceFilter || creatorFilter ? t("works.no_works_filter") : t("works.no_works_desc")} />
       )}
 
       {/* Grid View */}
-      {works.data && works.data.length > 0 && viewMode === "grid" && (
+      {works.data && works.data.items?.length > 0 && viewMode === "grid" && (
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-6">
-          {works.data.map((w: WorkListItem) => <GridCard key={w.id} w={w} onToggleFavorite={(id) => toggleFavorite.mutate(id)} />)}
+          {works.data.items.map((w: WorkListItem) => <GridCard key={w.id} w={w} onToggleFavorite={(id) => toggleFavorite.mutate(id)} />)}
         </div>
       )}
 
       {/* List View */}
-      {works.data && works.data.length > 0 && viewMode === "list" && (
+      {works.data && works.data.items?.length > 0 && viewMode === "list" && (
         <div className="space-y-1 mb-6">
-          {works.data.map((w: WorkListItem) => (
+          {works.data.items.map((w: WorkListItem) => (
             <div key={w.id} className="bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 flex items-center gap-3 cursor-pointer hover:shadow-md transition-shadow" onClick={() => router.push(`/admin/works/${w.id}`)}>
               <div className="w-12 h-12 bg-gray-100 dark:bg-slate-700 rounded overflow-hidden shrink-0">
                 <Img assetId={w.thumbnail_asset_id} alt={w.title || ""} className="w-full h-full object-cover" />
@@ -326,11 +326,11 @@ function WorksContent() {
       )}
 
       {/* Pagination */}
-      {(works.data?.length || 0) > 0 && (
+      {(works.data?.total ?? 0) > 0 && (
         <div className="flex gap-2 justify-center">
           <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("works.prev")}</button>
           <span className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400">{t("works.page").replace("{page}", String(page + 1))}</span>
-          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!works.data || works.data.length < limit} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("works.next")}</button>
+          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!works.data || (page + 1) * limit >= works.data.total} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("works.next")}</button>
         </div>
       )}
     </main>

@@ -16,6 +16,7 @@ async function proxy(request: NextRequest, path: string[]) {
 
   request.headers.forEach((value, key) => {
     const lower = key.toLowerCase();
+    // Strip hop-by-hop headers; keep authorization for JWT passthrough
     if (lower === "host" || lower === "content-length" || lower === "x-admin-key") {
       return;
     }
@@ -23,7 +24,8 @@ async function proxy(request: NextRequest, path: string[]) {
   });
 
   const adminPassword = process.env.ADMIN_PASSWORD;
-  if (adminPassword) {
+  // Inject X-Admin-Key only when browser didn't supply a JWT token
+  if (adminPassword && !outboundHeaders.has("authorization")) {
     outboundHeaders.set("X-Admin-Key", adminPassword);
   }
 

@@ -530,8 +530,11 @@ export const api = {
     if (filters?.is_ai_generated !== undefined) params.set("is_ai_generated", String(filters.is_ai_generated));
     if (filters?.sort_by) params.set("sort_by", filters.sort_by);
     if (filters?.sort_order) params.set("sort_order", filters.sort_order);
-    return request<WorkListItem[]>(`/api/v1/works?${params.toString()}`);
+    return request<{ total: number; items: WorkListItem[] }>(`/api/v1/works?${params.toString()}`);
   },
+
+  deleteWork: (id: string) =>
+    request<void>(`/api/v1/works/${id}`, { method: "DELETE" }),
 
   getWork: (id: string) => request<Work>(`/api/v1/works/${id}`),
 
@@ -566,7 +569,7 @@ export const api = {
 
   // Import Jobs
   listImportJobs: (status?: string, offset = 0, limit = 50) =>
-    request<{ id: string; download_job_id: string; status: string; error_log?: string; created_at: string }[]>(`/api/v1/import-jobs?offset=${offset}&limit=${limit}${status ? `&status=${status}` : ""}`),
+    request<{ total: number; items: { id: string; download_job_id: string; status: string; error_log?: string; created_at: string }[] }>(`/api/v1/import-jobs?offset=${offset}&limit=${limit}${status ? `&status=${status}` : ""}`),
 
   scanImports: () => request<{ status: string; message: string }>("/api/v1/import-jobs/scan", { method: "POST" }),
 

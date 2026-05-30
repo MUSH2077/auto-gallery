@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import RequireAdmin
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.database import get_db
 from app.models.import_job import ImportJob
@@ -53,12 +53,18 @@ async def scan_imports(db: AsyncSession = Depends(get_db)):
 
 @router.get("")
 async def list_import_jobs(status: str | None = None, offset: int = 0, limit: int = 50, db: AsyncSession = Depends(get_db)):
-    stmt = select(ImportJob).offset(offset).limit(limit).order_by(ImportJob.created_at.desc())
+    stmt = select(ImportJob)
     if status:
         stmt = stmt.where(ImportJob.status == status)
+    count_stmt = select(func.count(ImportJob.id))
+    if status:
+        count_stmt = count_stmt.where(ImportJob.status == status)
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar_one()
+    stmt = stmt.order_by(ImportJob.created_at.desc()).offset(offset).limit(limit)
     result = await db.execute(stmt)
     jobs = list(result.scalars().all())
-    return [{"id": str(j.id), "download_job_id": str(j.download_job_id), "status": j.status, "error_log": j.error_log, "created_at": j.created_at.isoformat(), "updated_at": j.updated_at.isoformat()} for j in jobs]
+    return {"total": total, "items": [{"id": str(j.id), "download_job_id": str(j.download_job_id), "status": j.status, "error_log": j.error_log, "created_at": j.created_at.isoformat(), "updated_at": j.updated_at.isoformat()} for j in jobs]}
 
 
 @router.get("/{job_id}")

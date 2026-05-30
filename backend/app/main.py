@@ -1,4 +1,6 @@
 import logging
+import os
+import secrets
 from contextlib import asynccontextmanager
 
 import structlog
@@ -42,7 +44,26 @@ logger = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Auto-generate and persist SECRET_KEY if still default
+    if settings.secret_key == "changeme":
+        _key_file = os.path.join(settings.app_config_root, "secret_key")
+        if os.path.exists(_key_file):
+            with open(_key_file) as _f:
+                settings.secret_key = _f.read().strip()
+            logger.info("Loaded persisted SECRET_KEY from %s", _key_file)
+        else:
+            settings.secret_key = secrets.token_hex(32)
+            os.makedirs(settings.app_config_root, exist_ok=True)
+            with open(_key_file, "w") as _f:
+                _f.write(settings.secret_key)
+            logger.info("Generated new SECRET_KEY and persisted to %s", _key_file)
+
     logger.info("backend starting", log_level=settings.log_level)
+    from app.auth import ensure_admin_user
+    try:
+        await ensure_admin_user()
+    except Exception as e:
+        logger.warning("ensure_admin_user failed (may be first run before migration)", error=str(e))
     yield
     await engine.dispose()
     logger.info("backend stopped")

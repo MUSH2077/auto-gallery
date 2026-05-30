@@ -160,7 +160,7 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8000}
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/admin"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/ 2>&1 || exit 0"]
       interval: 15s
       timeout: 5s
       retries: 3

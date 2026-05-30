@@ -6,10 +6,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.work import WorkRead, WorkList
+from app.schemas.work import WorkRead, WorkList, WorkListResponse
 from app.repositories.work import WorkRepository
 from app.models.asset import Asset
 from app.models.asset_source import AssetSource
+from app.models.work import Work
 from app.models.work_source import WorkSource
 from app.models.tag import Tag
 from app.models.work_tag import WorkTag
@@ -17,7 +18,7 @@ from app.models.work_tag import WorkTag
 router = APIRouter(dependencies=[RequireAdmin])
 
 
-@router.get("", response_model=list[WorkList])
+@router.get("", response_model=WorkListResponse)
 async def list_works(
     offset: int = 0, limit: int = 50,
     search: str | None = None,
@@ -31,13 +32,14 @@ async def list_works(
     db: AsyncSession = Depends(get_db),
 ):
     repo = WorkRepository(db)
-    return await repo.list_all(
+    works, total = await repo.list_all(
         offset=offset, limit=limit,
         search=search, source=source, creator_id=creator_id,
         is_nsfw=is_nsfw, is_favorite=is_favorite,
         is_ai_generated=is_ai_generated,
         sort_by=sort_by, sort_order=sort_order,
     )
+    return WorkListResponse(total=total, items=works)
 
 
 @router.get("/{work_id}", response_model=WorkRead)
@@ -91,3 +93,20 @@ async def get_work_assets(work_id: UUID, db: AsyncSession = Depends(get_db)):
         "thumb_sm_path": a.thumb_sm_path, "thumb_md_path": a.thumb_md_path,
         "created_at": a.created_at.isoformat(),
     } for a in assets]
+
+
+@router.delete("/{work_id}", status_code=204)
+async def delete_work(work_id: UUID, db: AsyncSession = Depends(get_db)):
+    """Delete a work and all its related records. Does NOT delete files from disk."""
+    work = await db.get(Work, work_id)
+    if not work:
+        raise HTTPException(status_code=404, detail="Work not found")
+    await db.delete(work)
+    await db.commit()
+    # Remove from Meilisearch index (best-effort)
+    try:
+        from app.services.search import SearchService
+        svc = SearchService(db)
+        await svc.delete_work(str(work_id))
+    except Exception:
+        pass

@@ -12,8 +12,10 @@ from app.api.sources import router as sources_router
 from app.api.reference import router as reference_router
 from app.api.import_jobs import router as import_jobs_router
 from app.api.naming_templates import router as naming_templates_router
+from app.api.auth_api import router as auth_router
 
 api_router = APIRouter(prefix="/api/v1")
+api_router.include_router(auth_router, prefix="/auth", tags=["auth"])
 api_router.include_router(system_router, tags=["system"])
 api_router.include_router(sources_router, prefix="/sources", tags=["sources"])
 api_router.include_router(reference_router, prefix="/reference", tags=["reference"])

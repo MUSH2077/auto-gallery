@@ -18,7 +18,7 @@ class WorkRepository:
                        is_favorite: bool | None = None,
                        is_ai_generated: bool | None = None,
                        sort_by: str = "created_at",
-                       sort_order: str = "desc") -> list[Work]:
+                       sort_order: str = "desc") -> tuple[list[Work], int]:
         # Scalar subquery for source (first alphabetically)
         src_sub = (
             select(WorkSource.source)
@@ -113,6 +113,13 @@ class WorkRepository:
         if conditions:
             stmt = stmt.where(and_(*conditions))
 
+        # Count query (same filters, no limit/offset)
+        count_stmt = select(func.count(Work.id))
+        if conditions:
+            count_stmt = count_stmt.where(and_(*conditions))
+        count_result = await self.session.execute(count_stmt)
+        total = count_result.scalar_one()
+
         # Sort
         sort_col = getattr(Work, sort_by, Work.created_at)
         stmt = stmt.order_by(sort_col.desc() if sort_order == "desc" else sort_col.asc())
@@ -152,7 +159,7 @@ class WorkRepository:
             for w in works:
                 w.preview_asset_ids = asset_map.get(w.id, [])[:10]
 
-        return works
+        return works, total
 
     async def toggle_favorite(self, work: Work) -> Work:
         work.is_favorite = not work.is_favorite

@@ -278,7 +278,7 @@ export default function JobsPage() {
       {/* Import Jobs */}
       <section className="mb-8">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold dark:text-white">{t("jobs.imports_section").replace("{count}", String(imports.data?.length || 0))}</h2>
+          <h2 className="text-lg font-semibold dark:text-white">{t("jobs.imports_section").replace("{count}", String(imports.data?.total ?? 0))}</h2>
           <div className="flex gap-1 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
             {["", "pending", "running", "complete", "failed"].map((s) => (
               <button key={s} onClick={() => setImFilter(s)}
@@ -291,11 +291,11 @@ export default function JobsPage() {
 
         {imports.isLoading && <div className="space-y-1">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-12 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
         {imports.error && <ErrorState message={(imports.error as Error).message} />}
-        {imports.data && !imports.data.length && <EmptyState title={t("jobs.no_imports")} description={imFilter ? t("jobs.no_downloads_filter") : t("jobs.no_imports_desc")} />}
+        {imports.data && !imports.data.items?.length && <EmptyState title={t("jobs.no_imports")} description={imFilter ? t("jobs.no_downloads_filter") : t("jobs.no_imports_desc")} />}
 
-        {imports.data && imports.data.length > 0 && (
+        {imports.data && (imports.data.items?.length ?? 0) > 0 && (
           <div className="space-y-1">
-            {imports.data.map((j) => {
+            {imports.data.items.map((j) => {
               const active = j.status === "running";
               return (
                 <div key={j.id}>

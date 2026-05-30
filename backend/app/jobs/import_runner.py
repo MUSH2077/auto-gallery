@@ -312,6 +312,17 @@ async def run_import_job(import_job_id: str):
                     if tp:
                         asset.thumb_sm_path = str(
                             Path(tp).relative_to(settings.library_root))
+
+                    # Compute pHash for image files (skip animated/video types)
+                    if fp.suffix.lower() in IMAGE_EXTENSIONS and fp.suffix.lower() not in {".gif"}:
+                        try:
+                            import imagehash
+                            from PIL import Image as _PILImage
+                            with _PILImage.open(str(fp)) as _pil_img:
+                                asset.phash = str(imagehash.phash(_pil_img))
+                        except Exception as _phash_err:
+                            logger.warning("pHash failed for %s: %s", fp, _phash_err)
+
                     if idx == 0:
                         work.thumbnail_asset_id = str(asset.id)
 
