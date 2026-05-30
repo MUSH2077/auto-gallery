@@ -52,3 +52,13 @@ class BaseProvider(ABC):
         Default: uses parse_source_creator()['source_creator_id'].
         """
         return str(self.parse_source_creator(raw_metadata).get("source_creator_id", "unknown"))
+
+    def get_creator_dir_from_url(self, source_url: str) -> str | None:
+        """Extract the creator directory component from a subscription source URL.
+
+        Returns the directory name segment that gallery-dl will use as the creator
+        sub-directory under the source root, or None if it cannot be determined
+        from the URL alone. Returning None causes import_runner to fall back to
+        scanning the entire source root.
+        """
+        return None

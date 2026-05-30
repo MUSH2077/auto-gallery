@@ -137,7 +137,7 @@ async def sync_subscriptions():
                     continue
 
                 # Check if sync is due
-                if not _should_sync_now(config, sub.last_synced_at, interval_hours):
+                if not _should_sync_now(config, ss.last_synced_at, interval_hours):
                     continue
 
                 # Check if there's a recent job for this subscription source
@@ -186,6 +186,7 @@ async def sync_subscriptions():
                     logger.error("Failed to enqueue download job %s: %s", job.id, e)
 
                 jobs_created += 1
+                ss.last_synced_at = now
                 sub.last_synced_at = now
                 logger.info("Auto-sync created download job %s for source=%s url=%s",
                             job.id, ss.source, ss.source_url)

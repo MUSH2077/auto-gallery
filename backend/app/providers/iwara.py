@@ -35,7 +35,7 @@ class IwaraProvider(BaseProvider):
             "extractor": {
                 "iwara": {
                     "cookies": "/gallerydl-config/cookies/iwara.txt",
-                    "directory": [naming_template.template if naming_template else "iwara/{user[name]}"],
+                    "directory": [naming_template.template if naming_template else "iwara/{user[id]}"],
                 }
             }
         }
@@ -92,4 +92,9 @@ class IwaraProvider(BaseProvider):
 
     def get_creator_directory_name(self, raw_metadata: dict) -> str:
         user = raw_metadata.get("user", {})
-        return str(user.get("name") or user.get("id", "unknown"))
+        return str(user.get("id") or user.get("name", "unknown"))
+
+    def get_creator_dir_from_url(self, source_url: str) -> str | None:
+        # Iwara profile URL uses username but template uses user.id (numeric)
+        # Cannot reliably map without an API call; return None to use full source scan.
+        return None

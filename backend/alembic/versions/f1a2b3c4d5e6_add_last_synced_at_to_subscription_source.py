@@ -1,0 +1,28 @@
+"""add last_synced_at to subscription_source
+
+Revision ID: f1a2b3c4d5e6
+Revises: ea15eaa99d22
+Create Date: 2025-07-14 00:00:00.000000
+
+"""
+from typing import Union
+
+import sqlalchemy as sa
+from alembic import op
+
+# revision identifiers, used by Alembic.
+revision: str = 'f1a2b3c4d5e6'
+down_revision: Union[str, None] = 'ea15eaa99d22'
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.add_column(
+        'subscription_sources',
+        sa.Column('last_synced_at', sa.DateTime(timezone=True), nullable=True),
+    )
+
+
+def downgrade() -> None:
+    op.drop_column('subscription_sources', 'last_synced_at')

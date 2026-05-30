@@ -47,7 +47,7 @@ class WeiboProvider(BaseProvider):
         config: dict = {
             "extractor": {
                 "weibo": {
-                    "directory": [naming_template.template if naming_template else "weibo/{user[name]}/{id}"],
+                    "directory": [naming_template.template if naming_template else "weibo/{user[id]}/{id}"],
                     "videos": True,
                     "retweets": False,
                 }
@@ -125,4 +125,8 @@ class WeiboProvider(BaseProvider):
 
     def get_creator_directory_name(self, raw_metadata: dict) -> str:
         user = raw_metadata.get("user", {})
-        return str(user.get("name") or user.get("id", "unknown"))
+        return str(user.get("id") or user.get("name", "unknown"))
+
+    def get_creator_dir_from_url(self, source_url: str) -> str | None:
+        m = re.search(r'weibo\.com/u/(\d+)', source_url)
+        return m.group(1) if m else None

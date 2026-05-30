@@ -84,3 +84,9 @@ class LofterProvider(BaseProvider):
     def parse_source_tags(self, raw_metadata: dict) -> list[dict]:
         return []
 
+    def get_creator_dir_from_url(self, source_url: str) -> str | None:
+        m = re.search(r'https?://([\w-]+)\.lofter\.com', source_url)
+        if m and m.group(1) not in ("www",):
+            return m.group(1)
+        return None
+

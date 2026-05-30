@@ -210,14 +210,29 @@ async def import_all_danbooru(data: dict, db: AsyncSession = Depends(get_db)):
         if not creator:
             raise HTTPException(status_code=404, detail="Creator not found")
     else:
-        # Check for existing creator by Danbooru ID or source URLs
         # canonical_name: Danbooru tag name (slug-like, lowercase) — used for dedup/identity
         # chosen_display: user-provided pretty name or fallback
         canonical_name = artist.get("name", "Unknown")
         chosen_display = creator_name or canonical_name
+
+        # Extract Pixiv user ID from artist URLs for secondary dedup check
+        _pixiv_user_id: str | None = None
+        _pixiv_profile_url: str | None = None
+        for _u in artist.get("urls", []):
+            _raw_url = _u.get("normalized_url") or _u.get("url", "")
+            _m = re.search(r'pixiv\.net/(?:en/)?users/(\d+)', _raw_url)
+            if _m:
+                _pixiv_user_id = _m.group(1)
+                _pixiv_profile_url = f"https://www.pixiv.net/users/{_pixiv_user_id}"
+                break
+
+        # Three-level dedup: danbooru_artist_id → Pixiv source_creator_id → Pixiv profile URL
         existing = await find_existing_creator(
             db,
             danbooru_artist_id=artist.get("id"),
+            source="pixiv" if _pixiv_user_id else None,
+            source_creator_id=_pixiv_user_id,
+            source_url=_pixiv_profile_url,
         )
         if existing:
             creator = existing
