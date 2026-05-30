@@ -147,6 +147,21 @@ downloadable = registry.list_downloadable()
 - Cookies optional — set `data/config/gallery-dl/cookies/weibo.txt` for authenticated access
 - gallery-dl rate-limit: 1.0–2.0 s between requests
 
+### 哔哩哔哩 / Bilibili (`bilibili.py`)
+- **Status**: Downloadable
+- `source_name`: `"bilibili"`
+- `capabilities.can_download`: True
+- `capabilities.supports_gallerydl`: True
+- `capabilities.supports_tags`: True
+- URL patterns:
+  - User articles: `space.bilibili.com/<uid>/article`
+  - Single article: `bilibili.com/read/cv<id>`
+  - User article favorites: `space.bilibili.com/<uid>/favlist?ftype=article`
+- No authentication required for public content
+- Tags extracted from article tag list
+- gallery-dl rate-limit: 3.0–6.0 s between requests
+- `livephoto` files downloaded by default (toggleable via config)
+
 ### Local Folder (`local.py`)
 - **Status**: Planned
 - `capabilities.can_download`: False
