@@ -52,7 +52,7 @@ class BilibiliProvider(BaseProvider):
 
     def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
         template = naming_template.template if naming_template else None
-        directory = [template] if template else ["bilibili", "{user[name]}", "{id}"]
+        directory = [template] if template else ["bilibili", "{user[id]}", "{id}"]
         config: dict = {
             "extractor": {
                 "bilibili": {
@@ -139,4 +139,8 @@ class BilibiliProvider(BaseProvider):
 
     def get_creator_directory_name(self, raw_metadata: dict) -> str:
         user = raw_metadata.get("user", {})
-        return user.get("name") or str(user.get("id", "unknown"))
+        return str(user.get("id") or user.get("name", "unknown"))
+
+    def get_creator_dir_from_url(self, source_url: str) -> str | None:
+        m = re.search(r'space\.bilibili\.com/(\d+)', source_url)
+        return m.group(1) if m else None

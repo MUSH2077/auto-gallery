@@ -148,8 +148,22 @@ async def run_download_job(job_id: str):
     # Write per-job gallery-dl config with provider directory/filename settings
     try:
         from app.providers import registry as _reg
+        from app.models.naming_template import NamingTemplate as _NamingTemplate
         _prov = _reg.get(job.source)
-        _cfg = _prov.build_gallerydl_config(None, None)
+        # Load the active naming template for this source (if any)
+        _naming_tpl = None
+        try:
+            async with async_session() as _nt_db:
+                _nt_result = await _nt_db.execute(
+                    select(_NamingTemplate).where(
+                        _NamingTemplate.source == job.source,
+                        _NamingTemplate.is_default == True,
+                    ).limit(1)
+                )
+                _naming_tpl = _nt_result.scalar_one_or_none()
+        except Exception:
+            logger.debug("Failed to load naming template for source %s", job.source, exc_info=True)
+        _cfg = _prov.build_gallerydl_config(None, _naming_tpl)
         if _cfg:
             job_config_path = os.path.join(
                 os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"),
@@ -157,6 +171,18 @@ async def run_download_job(job_id: str):
             os.makedirs(os.path.dirname(job_config_path), exist_ok=True)
             with open(job_config_path, "w") as f:
                 json.dump(_cfg, f)
+        # Record creator dir so import_runner can scope its scan
+        try:
+            _creator_dir = _prov.get_creator_dir_from_url(job.source_url)
+            if _creator_dir and not job.download_dir:
+                async with async_session() as _dir_db:
+                    from app.repositories.download_job import DownloadJobRepository as _DJRepo
+                    _dir_j = await _DJRepo(_dir_db).get(job_uuid)
+                    if _dir_j and not _dir_j.download_dir:
+                        _dir_j.download_dir = _creator_dir
+                        await _dir_db.commit()
+        except Exception:
+            logger.debug("Failed to record download_dir for job %s", job_id, exc_info=True)
     except Exception:
         logger.debug("Failed to write per-job config for %s", job_id, exc_info=True)
 

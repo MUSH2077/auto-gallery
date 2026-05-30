@@ -123,8 +123,16 @@ async def run_import_job(import_job_id: str):
                     await db.commit()
             return
 
+        # Narrow scan to the specific creator sub-directory when available
+        # (avoids scanning the entire source library on every import)
+        if dj.download_dir:
+            candidate_root = source_root / dj.download_dir
+            scan_root = candidate_root if candidate_root.exists() else source_root
+        else:
+            scan_root = source_root
+
         # Find per-file metadata JSONs from --write-metadata
-        all_json_files = sorted(source_root.rglob("*.json"))
+        all_json_files = sorted(scan_root.rglob("*.json"))
 
         if not all_json_files:
             async with async_session() as db:

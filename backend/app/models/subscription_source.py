@@ -19,5 +19,6 @@ class SubscriptionSource(TimestampMixin, Base):
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     last_successful_auth: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     auth_healthy: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     subscription = relationship("Subscription", back_populates="subscription_sources")

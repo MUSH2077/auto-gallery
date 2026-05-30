@@ -101,3 +101,7 @@ class PixivProvider(BaseProvider):
                     "category": "general",
                 })
         return result
+
+    def get_creator_dir_from_url(self, source_url: str) -> str | None:
+        m = re.search(r'pixiv\.net/(?:en/)?users/(\d+)', source_url)
+        return m.group(1) if m else None
