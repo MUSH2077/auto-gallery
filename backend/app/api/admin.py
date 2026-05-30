@@ -382,6 +382,11 @@ class PixivSourceConfig(BaseModel):
     ugoira: str | None = "zip"
     sleep_request: float | None = None
     max_posts: int | None = None
+    metadata: bool | None = None
+    metadata_bookmark: bool | None = None
+    captions: bool | None = None
+    comments: bool | None = None
+    sanity: bool | None = None
 
 class TwitterSourceConfig(BaseModel):
     cookies_path: str | None = None
@@ -395,6 +400,9 @@ class TwitterSourceConfig(BaseModel):
     videos: bool | None = True
     text_tweets: bool | None = False
     quoted: bool | None = False
+    pinned: bool | None = None
+    previews: bool | None = None
+    articles: bool | None = None
     max_posts: int | None = None
 
 class IwaraSourceConfig(BaseModel):
@@ -405,6 +413,7 @@ class IwaraSourceConfig(BaseModel):
     filename: str | None = None
     directory: str | None = None
     format: str | None = None
+    include: str | None = None
 
 class DanbooruSourceConfig(BaseModel):
     username: str | None = None
@@ -414,6 +423,9 @@ class DanbooruSourceConfig(BaseModel):
     cookie_content: str | None = None
     favorite_artists: str | None = None
     favorite_tags: str | None = None
+    external: bool | None = None
+    ugoira: bool | None = None
+    metadata: bool | None = None
     filename: str | None = None
     directory: str | None = None
 
@@ -444,7 +456,19 @@ class WeiboSourceConfig(BaseModel):
     cookie_content: str | None = None
     videos: bool | None = None
     retweets: bool | None = None
+    gifs: bool | None = None
+    livephoto: bool | None = None
+    movies: bool | None = None
+    text: bool | None = None
     include: str | None = None
+    filename: str | None = None
+    directory: str | None = None
+
+
+class BilibiliSourceConfig(BaseModel):
+    auto_enable_on_import: bool | None = None
+    livephoto: bool | None = None
+    sleep_request: str | None = None
     filename: str | None = None
     directory: str | None = None
 
@@ -457,6 +481,7 @@ class GalleryDLMultiConfig(BaseModel):
     pinterest: PinterestSourceConfig | None = None
     lofter: LofterSourceConfig | None = None
     weibo: WeiboSourceConfig | None = None
+    bilibili: BilibiliSourceConfig | None = None
 
 GALLERYDL_SOURCE_OPTIONS = {
     "pixiv": {
@@ -494,6 +519,11 @@ GALLERYDL_SOURCE_OPTIONS = {
         "supported": True,
         "description": "Weibo user feeds, albums, and statuses. Chinese platform. Cookies optional.",
     },
+    "bilibili": {
+        "name": "哔哩哔哩 (Bilibili)",
+        "supported": True,
+        "description": "Bilibili articles and user galleries. No authentication required for public content.",
+    },
 }
 
 PIXIV_CONFIG_MAP = {
@@ -502,6 +532,8 @@ PIXIV_CONFIG_MAP = {
     "filename": "filename", "directory": "directory",
     "include": "include", "tags": "tags", "ugoira": "ugoira",
     "sleep_request": "sleep-request", "max_posts": "max-posts",
+    "metadata": "metadata", "metadata_bookmark": "metadata-bookmark",
+    "captions": "captions", "comments": "comments", "sanity": "sanity",
 }
 
 TWITTER_CONFIG_MAP = {
@@ -511,6 +543,7 @@ TWITTER_CONFIG_MAP = {
     "retweets": "retweets", "replies": "replies",
     "cards": "cards", "videos": "videos",
     "text_tweets": "text-tweets", "quoted": "quoted",
+    "pinned": "pinned", "previews": "previews", "articles": "articles",
     "max_posts": "max-posts",
 }
 
@@ -519,6 +552,7 @@ IWARA_CONFIG_MAP = {
     "cookies_path": "cookies", "username": "username",
     "password": "password", "filename": "filename",
     "directory": "directory", "format": "format",
+    "include": "include",
 }
 
 DANBOORU_CONFIG_MAP = {
@@ -526,6 +560,7 @@ DANBOORU_CONFIG_MAP = {
     "username": "username", "password": "password",
     "api_key": "api-key", "cookies_path": "cookies",
     "favorite_artists": "favorite-artists", "favorite_tags": "favorite-tags",
+    "external": "external", "ugoira": "ugoira", "metadata": "metadata",
     "filename": "filename", "directory": "directory",
 }
 
@@ -549,7 +584,19 @@ WEIBO_CONFIG_MAP = {
     "cookies_path": "cookies",
     "videos": "videos",
     "retweets": "retweets",
+    "gifs": "gifs",
+    "livephoto": "livephoto",
+    "movies": "movies",
+    "text": "text",
     "include": "include",
+    "filename": "filename",
+    "directory": "directory",
+}
+
+BILIBILI_CONFIG_MAP = {
+    "auto_enable_on_import": "auto-enable-on-import",
+    "livephoto": "livephoto",
+    "sleep_request": "sleep-request",
     "filename": "filename",
     "directory": "directory",
 }
@@ -611,6 +658,7 @@ async def get_gallerydl_config(source: str | None = None):
         "pinterest": get_source("pinterest", PINTEREST_CONFIG_MAP),
         "lofter": get_source("lofter", LOFTER_CONFIG_MAP),
         "weibo": get_source("weibo", WEIBO_CONFIG_MAP),
+        "bilibili": get_source("bilibili", BILIBILI_CONFIG_MAP),
         "sources": GALLERYDL_SOURCE_OPTIONS,
     }
     if source:
@@ -637,6 +685,7 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
         ("pinterest", data.pinterest, PINTEREST_CONFIG_MAP),
         ("lofter", data.lofter, LOFTER_CONFIG_MAP),
         ("weibo", data.weibo, WEIBO_CONFIG_MAP),
+        ("bilibili", data.bilibili, BILIBILI_CONFIG_MAP),
     ]:
         if source_data is None:
             continue
@@ -684,6 +733,11 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
         weibo = extractors.setdefault("weibo", {})
         _write_source_config(weibo, data.weibo, WEIBO_CONFIG_MAP)
         extractors["weibo"] = weibo
+
+    if data.bilibili is not None:
+        bilibili = extractors.setdefault("bilibili", {})
+        _write_source_config(bilibili, data.bilibili, BILIBILI_CONFIG_MAP)
+        extractors["bilibili"] = bilibili
 
     config["extractor"] = extractors
 

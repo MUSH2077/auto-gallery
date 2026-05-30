@@ -13,6 +13,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   if (!headers.has("Content-Type") && !(options?.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
+  // Attach JWT token if present in localStorage
+  if (typeof window !== "undefined") {
+    const token = localStorage.getItem("ag_token");
+    if (token && !headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+  }
 
   const res = await fetch(`${BASE}${path}`, {
     headers,
@@ -199,6 +206,11 @@ export interface PixivSourceConfig {
   ugoira?: string;
   sleep_request?: number;
   max_posts?: number;
+  metadata?: boolean;
+  metadata_bookmark?: boolean;
+  captions?: boolean;
+  comments?: boolean;
+  sanity?: boolean;
 }
 
 export interface TwitterSourceConfig {
@@ -214,6 +226,9 @@ export interface TwitterSourceConfig {
   videos?: boolean;
   text_tweets?: boolean;
   quoted?: boolean;
+  pinned?: boolean;
+  previews?: boolean;
+  articles?: boolean;
   max_posts?: number;
 }
 
@@ -226,6 +241,7 @@ export interface IwaraSourceConfig {
   filename?: string;
   directory?: string;
   format?: string;
+  include?: string;
 }
 
 export interface GalleryDLSourceMeta {
@@ -243,6 +259,9 @@ export interface DanbooruSourceConfig {
   cookie_content?: string;
   favorite_artists?: string;
   favorite_tags?: string;
+  external?: boolean;
+  ugoira?: boolean;
+  metadata?: boolean;
   filename?: string;
   directory?: string;
 }
@@ -273,7 +292,19 @@ export interface WeiboSourceConfig {
   cookie_content?: string;
   videos?: boolean;
   retweets?: boolean;
+  gifs?: boolean;
+  livephoto?: boolean;
+  movies?: boolean;
+  text?: boolean;
   include?: string;
+  filename?: string;
+  directory?: string;
+}
+
+export interface BilibiliSourceConfig {
+  auto_enable_on_import?: boolean;
+  livephoto?: boolean;
+  sleep_request?: string;
   filename?: string;
   directory?: string;
 }
@@ -286,6 +317,7 @@ export interface GalleryDLMultiConfig {
   pinterest: PinterestSourceConfig;
   lofter: LofterSourceConfig;
   weibo: WeiboSourceConfig;
+  bilibili: BilibiliSourceConfig;
   sources: Record<string, GalleryDLSourceMeta>;
 }
 
@@ -641,7 +673,7 @@ export const api = {
   // gallery-dl Config
   getGalleryDLConfig: (source?: string) => request<GalleryDLMultiConfig>(`/api/v1/admin/gallerydl-config${source ? `?source=${source}` : ""}`),
 
-  updateGalleryDLConfig: (data: { pixiv?: Partial<PixivSourceConfig>; twitter?: Partial<TwitterSourceConfig>; iwara?: Partial<IwaraSourceConfig>; danbooru?: Partial<DanbooruSourceConfig>; pinterest?: Partial<PinterestSourceConfig>; lofter?: Partial<LofterSourceConfig>; weibo?: Partial<WeiboSourceConfig> }) =>
+  updateGalleryDLConfig: (data: { pixiv?: Partial<PixivSourceConfig>; twitter?: Partial<TwitterSourceConfig>; iwara?: Partial<IwaraSourceConfig>; danbooru?: Partial<DanbooruSourceConfig>; pinterest?: Partial<PinterestSourceConfig>; lofter?: Partial<LofterSourceConfig>; weibo?: Partial<WeiboSourceConfig>; bilibili?: Partial<BilibiliSourceConfig> }) =>
     request<{ status: string; message: string; path: string }>("/api/v1/admin/gallerydl-config", { method: "PUT", body: JSON.stringify(data) }),
 
   // Naming Templates
@@ -710,3 +742,35 @@ export const queryKeys = {
     danbooru: ["reference", "danbooru"] as const,
   },
 } as const;
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+export interface AuthTokenResponse {
+  access_token: string;
+  token_type: string;
+}
+
+export interface AuthUser {
+  id: number;
+  username: string;
+  display_name: string | null;
+  is_active: boolean;
+}
+
+export async function authLogin(username: string, password: string): Promise<AuthTokenResponse> {
+  return request<AuthTokenResponse>("/api/v1/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export async function authMe(): Promise<AuthUser> {
+  return request<AuthUser>("/api/v1/auth/me");
+}
+
+export async function authChangePassword(currentPassword: string, newPassword: string): Promise<void> {
+  return request<void>("/api/v1/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+}

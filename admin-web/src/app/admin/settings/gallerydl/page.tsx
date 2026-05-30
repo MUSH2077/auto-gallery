@@ -2,12 +2,12 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { PixivSourceConfig, TwitterSourceConfig, IwaraSourceConfig, DanbooruSourceConfig, PinterestSourceConfig, LofterSourceConfig, WeiboSourceConfig, GalleryDLSourceMeta } from "@/lib/api";
+import type { PixivSourceConfig, TwitterSourceConfig, IwaraSourceConfig, DanbooruSourceConfig, PinterestSourceConfig, LofterSourceConfig, WeiboSourceConfig, BilibiliSourceConfig, GalleryDLSourceMeta } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { PageHeader, ErrorState } from "@/components";
 import Link from "next/link";
 
-type TabKey = "pixiv" | "twitter" | "iwara" | "danbooru" | "pinterest" | "lofter" | "weibo";
+type TabKey = "pixiv" | "twitter" | "iwara" | "danbooru" | "pinterest" | "lofter" | "weibo" | "bilibili";
 
 function useGalleryTabs() {
   const t = useT();
@@ -19,6 +19,7 @@ function useGalleryTabs() {
     { key: "pinterest" as TabKey, label: t("gallerydl.tab.pinterest"), color: "border-red-500" },
     { key: "lofter" as TabKey, label: t("gallerydl.tab.lofter"), color: "border-teal-500" },
     { key: "weibo" as TabKey, label: t("gallerydl.tab.weibo"), color: "border-orange-500" },
+    { key: "bilibili" as TabKey, label: t("gallerydl.tab.bilibili"), color: "border-cyan-500" },
   ];
 }
 
@@ -104,6 +105,7 @@ export default function GalleryDLConfigPage() {
   const [pinterest, setPinterest] = useState<PinterestSourceConfig>({});
   const [lofter, setLofter] = useState<LofterSourceConfig>({});
   const [weibo, setWeibo] = useState<WeiboSourceConfig>({});
+  const [bilibili, setBilibili] = useState<BilibiliSourceConfig>({});
   const seeded = useRef(false);
 
   const save = useMutation({
@@ -124,6 +126,7 @@ export default function GalleryDLConfigPage() {
         pinterest: strip(pinterest as unknown as Record<string, unknown>),
         lofter: strip(lofter as unknown as Record<string, unknown>),
         weibo: strip(weibo as unknown as Record<string, unknown>),
+        bilibili: strip(bilibili as unknown as Record<string, unknown>),
       });
     },
     onSuccess: (_, v) => {
@@ -142,6 +145,7 @@ export default function GalleryDLConfigPage() {
       setPinterest(initPinterest(d.pinterest));
       setLofter(initLofter(d.lofter));
       setWeibo(initWeibo(d.weibo));
+      setBilibili(initBilibili(d.bilibili));
       seeded.current = true;
     }
   }, [config.data]);
@@ -155,6 +159,11 @@ export default function GalleryDLConfigPage() {
     include: str(d?.include, "artworks"), tags: str(d?.tags, "japanese"),
     ugoira: str(d?.ugoira, "zip"), sleep_request: d?.sleep_request,
     max_posts: d?.max_posts,
+    metadata: d?.metadata ?? false,
+    metadata_bookmark: d?.metadata_bookmark ?? false,
+    captions: d?.captions ?? false,
+    comments: d?.comments ?? false,
+    sanity: d?.sanity ?? false,
   });
   const initTwitter = (d: any) => ({
     auto_enable_on_import: d?.auto_enable_on_import ?? false,
@@ -164,6 +173,7 @@ export default function GalleryDLConfigPage() {
     retweets: d?.retweets ?? false, replies: d?.replies ?? false,
     cards: d?.cards ?? true, videos: d?.videos ?? true,
     text_tweets: d?.text_tweets ?? false, quoted: d?.quoted ?? false,
+    pinned: d?.pinned ?? false, previews: d?.previews ?? false, articles: d?.articles ?? false,
     max_posts: d?.max_posts,
   });
   const initIwara = (d: any) => ({
@@ -172,6 +182,7 @@ export default function GalleryDLConfigPage() {
     username: str(d?.username), password: str(d?.password),
     filename: str(d?.filename),
     directory: str(d?.directory), format: str(d?.format),
+    include: str(d?.include),
   });
   const initDanbooru = (d: any) => ({
     auto_enable_on_import: d?.auto_enable_on_import ?? false,
@@ -179,6 +190,9 @@ export default function GalleryDLConfigPage() {
     api_key: str(d?.api_key),
     cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
     favorite_artists: str(d?.favorite_artists), favorite_tags: str(d?.favorite_tags),
+    external: d?.external ?? false,
+    ugoira: d?.ugoira ?? false,
+    metadata: d?.metadata ?? false,
     filename: str(d?.filename), directory: str(d?.directory),
   });
   const initPinterest = (d: any) => ({
@@ -198,8 +212,19 @@ export default function GalleryDLConfigPage() {
     cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
     videos: d?.videos ?? true,
     retweets: d?.retweets ?? false,
+    gifs: d?.gifs ?? true,
+    livephoto: d?.livephoto ?? false,
+    movies: d?.movies ?? false,
+    text: d?.text ?? false,
     include: str(d?.include),
     filename: str(d?.filename), directory: str(d?.directory),
+  });
+  const initBilibili = (d: any) => ({
+    auto_enable_on_import: d?.auto_enable_on_import ?? false,
+    livephoto: d?.livephoto ?? true,
+    sleep_request: str(d?.sleep_request, "3.0-6.0"),
+    filename: str(d?.filename),
+    directory: str(d?.directory),
   });
 
   if (config.isError) {
@@ -251,6 +276,7 @@ export default function GalleryDLConfigPage() {
         {activeTab === "pinterest" && <PinterestTab data={pinterest} onChange={setPinterest} />}
         {activeTab === "lofter" && <LofterTab data={lofter} onChange={setLofter} />}
         {activeTab === "weibo" && <WeiboTab data={weibo} onChange={setWeibo} />}
+        {activeTab === "bilibili" && <BilibiliTab data={bilibili} onChange={setBilibili} />}
 
         <div className="flex justify-end pt-4 border-t">
           <button onClick={() => save.mutate()} disabled={save.isPending}
@@ -309,6 +335,14 @@ function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: P
       <div className="w-64">
         <NumberField label={t("gallerydl.sleep_seconds")} desc={t("gallerydl.sleep_seconds.desc")} value={numStr(data.sleep_request)} onChange={(v) => set("sleep_request", parseFloat(v) || undefined)} placeholder="0" />
       </div>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.metadata_section")}</h4>
+      <div className="space-y-1">
+        <ToggleField label={t("gallerydl.metadata")} desc={t("gallerydl.metadata.desc")} value={data.metadata ?? false} onChange={(v) => set("metadata", v)} />
+        <ToggleField label={t("gallerydl.metadata_bookmark")} desc={t("gallerydl.metadata_bookmark.desc")} value={data.metadata_bookmark ?? false} onChange={(v) => set("metadata_bookmark", v)} />
+        <ToggleField label={t("gallerydl.captions")} desc={t("gallerydl.captions.desc")} value={data.captions ?? false} onChange={(v) => set("captions", v)} />
+        <ToggleField label={t("gallerydl.comments")} desc={t("gallerydl.comments.desc")} value={data.comments ?? false} onChange={(v) => set("comments", v)} />
+        <ToggleField label={t("gallerydl.sanity")} desc={t("gallerydl.sanity.desc")} value={data.sanity ?? false} onChange={(v) => set("sanity", v)} />
+      </div>
     </>
   );
 }
@@ -352,6 +386,9 @@ function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (
         <ToggleField label={t("gallerydl.videos")} desc={t("gallerydl.twitter_videos.desc")} value={data.videos ?? true} onChange={(v) => set("videos", v)} />
         <ToggleField label={t("gallerydl.text_tweets")} desc={t("gallerydl.text_tweets.desc")} value={data.text_tweets ?? false} onChange={(v) => set("text_tweets", v)} />
         <ToggleField label={t("gallerydl.quoted")} desc={t("gallerydl.quoted.desc")} value={data.quoted ?? false} onChange={(v) => set("quoted", v)} />
+        <ToggleField label={t("gallerydl.pinned")} desc={t("gallerydl.pinned.desc")} value={data.pinned ?? false} onChange={(v) => set("pinned", v)} />
+        <ToggleField label={t("gallerydl.previews")} desc={t("gallerydl.previews.desc")} value={data.previews ?? false} onChange={(v) => set("previews", v)} />
+        <ToggleField label={t("gallerydl.articles")} desc={t("gallerydl.articles.desc")} value={data.articles ?? false} onChange={(v) => set("articles", v)} />
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
       <div className="grid grid-cols-2 gap-4">
@@ -389,6 +426,15 @@ function IwaraTab({ data, onChange }: { data: IwaraSourceConfig; onChange: (d: I
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.video_quality")}</h4>
       <TextField label={t("gallerydl.format")} value={str(data.format)} onChange={(v) => set("format", v || undefined)} placeholder="Source, 540, 360" />
       <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">{t("gallerydl.format.desc")}</p>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.content")}</h4>
+      <div className="w-64">
+        <SelectField label={t("gallerydl.include")} desc={t("gallerydl.iwara_include.desc")} value={str(data.include, "user-videos")} onChange={(v) => set("include", v || undefined)}
+          options={[
+            { value: "user-images", label: t("gallerydl.user_images") },
+            { value: "user-videos", label: t("gallerydl.user_videos") },
+            { value: "user-playlists", label: t("gallerydl.user_playlists") },
+          ]} />
+      </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.file_org")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label={t("gallerydl.dir_pattern")} value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} placeholder="iwara/{user[name]}" />
@@ -441,6 +487,12 @@ function DanbooruTab({ data, onChange }: { data: DanbooruSourceConfig; onChange:
           <p className="text-xs text-gray-400 mt-1">{t("gallerydl.danbooru.favorite_tags.desc")}</p>
         </div>
       </div>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.metadata_section")}</h4>
+      <div className="space-y-1">
+        <ToggleField label={t("gallerydl.danbooru.external")} desc={t("gallerydl.danbooru.external.desc")} value={data.external ?? false} onChange={(v) => set("external", v)} />
+        <ToggleField label={t("gallerydl.ugoira_download")} desc={t("gallerydl.ugoira_download.desc")} value={data.ugoira ?? false} onChange={(v) => set("ugoira", v)} />
+        <ToggleField label={t("gallerydl.metadata")} desc={t("gallerydl.metadata.desc")} value={data.metadata ?? false} onChange={(v) => set("metadata", v)} />
+      </div>
 
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.file_org")}</h4>
       <div className="grid grid-cols-2 gap-4">
@@ -470,23 +522,14 @@ function PinterestTab({ data, onChange }: { data: PinterestSourceConfig; onChang
   const numStr = (v: any) => v === undefined || v === null ? "" : String(v);
 
   return (
-    <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6 space-y-5 text-sm">
-      <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">{t("gallerydl.public_api_no_auth")}</p>
-<div className="border-b dark:border-slate-700 pb-4 mb-4">
+    <div className="space-y-5 text-sm">
+      <p className="text-xs text-gray-400 dark:text-gray-500">{t("gallerydl.public_api_no_auth")}</p>
+      <div className="border-b dark:border-slate-700 pb-3 mb-3">
         <ToggleField label={t("gallerydl.auto_enable_on_import")} desc={t("gallerydl.auto_enable_on_import.desc")}
-          value={data.auto_enable_on_import ?? true} onChange={(v) => set("auto_enable_on_import", v)} />
+          value={data.auto_enable_on_import ?? false} onChange={(v) => set("auto_enable_on_import", v)} />
       </div>
-
-      
-<div className="border-b dark:border-slate-700 pb-4 mb-4">
-        <ToggleField label={t("gallerydl.auto_enable_on_import")} desc={t("gallerydl.auto_enable_on_import.desc")}
-          value={data.auto_enable_on_import ?? true} onChange={(v) => set("auto_enable_on_import", v)} />
-      </div>
-
-      
-
-      <div className="border-b dark:border-slate-700 pb-4">
-        <h3 className="font-medium mb-3">{t("gallerydl.section_content")}</h3>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.content")}</h4>
+      <div className="space-y-1">
         <ToggleField label={t("gallerydl.stories")} desc={t("gallerydl.stories.desc")}
           value={data.stories ?? true} onChange={(v) => bool("stories", v)} />
         <ToggleField label={t("gallerydl.videos")} desc={t("gallerydl.videos.desc")}
@@ -494,25 +537,16 @@ function PinterestTab({ data, onChange }: { data: PinterestSourceConfig; onChang
         <ToggleField label={t("gallerydl.sections")} desc={t("gallerydl.sections.desc")}
           value={data.sections ?? true} onChange={(v) => bool("sections", v)} />
       </div>
-
-      <div className="border-b dark:border-slate-700 pb-4">
-        <h3 className="font-medium mb-3">{t("gallerydl.section_network")}</h3>
-        <TextField label={t("gallerydl.domain")} value={data.domain || ""}
-          onChange={(v) => set("domain", v || undefined)} placeholder="auto" />
-        <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{t("gallerydl.domain.desc")}</p>
-      </div>
-
-      <div className="border-b dark:border-slate-700 pb-4">
-        <div className="border-b dark:border-slate-700 pb-4 mb-4">
-        <ToggleField label={t("gallerydl.auto_enable_on_import")} desc={t("gallerydl.auto_enable_on_import.desc")}
-          value={data.auto_enable_on_import ?? true} onChange={(v) => set("auto_enable_on_import", v)} />
-      </div>
-
-      <h3 className="font-medium mb-3">{t("gallerydl.section_file")}</h3>
-        <TextField label={t("gallerydl.directory")} value={data.directory || ""}
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.section_network")}</h4>
+      <TextField label={t("gallerydl.domain")} value={data.domain || ""}
+        onChange={(v) => set("domain", v || undefined)} placeholder="auto" />
+      <p className="text-xs text-gray-400 dark:text-gray-500">{t("gallerydl.domain.desc")}</p>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
+      <div className="grid grid-cols-2 gap-4">
+        <TextField label={t("gallerydl.dir_pattern")} value={data.directory || ""}
           onChange={(v) => set("directory", v || undefined)}
           placeholder="{category}/{user}/{board[name]}" />
-        <TextField label={t("gallerydl.filename")} value={data.filename || ""}
+        <TextField label={t("gallerydl.filename_pattern")} value={data.filename || ""}
           onChange={(v) => set("filename", v || undefined)}
           placeholder="{id}_{num}.{extension}" />
       </div>
@@ -525,26 +559,18 @@ function LofterTab({ data, onChange }: { data: LofterSourceConfig; onChange: (d:
   const set = (k: string, v: any) => onChange({ ...data, [k]: v });
 
   return (
-    <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6 space-y-5 text-sm">
-      <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">{t("gallerydl.public_api_no_auth")}</p>
-<div className="border-b dark:border-slate-700 pb-4 mb-4">
+    <div className="space-y-5 text-sm">
+      <p className="text-xs text-gray-400 dark:text-gray-500">{t("gallerydl.public_api_no_auth")}</p>
+      <div className="border-b dark:border-slate-700 pb-3 mb-3">
         <ToggleField label={t("gallerydl.auto_enable_on_import")} desc={t("gallerydl.auto_enable_on_import.desc")}
-          value={data.auto_enable_on_import ?? true} onChange={(v) => set("auto_enable_on_import", v)} />
+          value={data.auto_enable_on_import ?? false} onChange={(v) => set("auto_enable_on_import", v)} />
       </div>
-
-      
-
-      <div className="border-b dark:border-slate-700 pb-4">
-        <div className="border-b dark:border-slate-700 pb-4 mb-4">
-        <ToggleField label={t("gallerydl.auto_enable_on_import")} desc={t("gallerydl.auto_enable_on_import.desc")}
-          value={data.auto_enable_on_import ?? true} onChange={(v) => set("auto_enable_on_import", v)} />
-      </div>
-
-      <h3 className="font-medium mb-3">{t("gallerydl.section_file")}</h3>
-        <TextField label={t("gallerydl.directory")} value={data.directory || ""}
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
+      <div className="grid grid-cols-2 gap-4">
+        <TextField label={t("gallerydl.dir_pattern")} value={data.directory || ""}
           onChange={(v) => set("directory", v || undefined)}
           placeholder="{category}/{blog_name}" />
-        <TextField label={t("gallerydl.filename")} value={data.filename || ""}
+        <TextField label={t("gallerydl.filename_pattern")} value={data.filename || ""}
           onChange={(v) => set("filename", v || undefined)}
           placeholder="{id}_{num}.{extension}" />
       </div>
@@ -576,11 +602,47 @@ function WeiboTab({ data, onChange }: { data: WeiboSourceConfig; onChange: (d: W
       <div className="space-y-1">
         <ToggleField label={t("gallerydl.videos")} desc={t("gallerydl.videos.desc")} value={data.videos ?? true} onChange={(v) => set("videos", v)} />
         <ToggleField label={t("gallerydl.retweets")} desc={t("gallerydl.include_retweets")} value={data.retweets ?? false} onChange={(v) => set("retweets", v)} />
+        <ToggleField label={t("gallerydl.gifs")} desc={t("gallerydl.gifs.desc")} value={data.gifs ?? true} onChange={(v) => set("gifs", v)} />
+        <ToggleField label={t("gallerydl.livephoto")} desc={t("gallerydl.livephoto.desc")} value={data.livephoto ?? false} onChange={(v) => set("livephoto", v)} />
+        <ToggleField label={t("gallerydl.movies")} desc={t("gallerydl.movies.desc")} value={data.movies ?? false} onChange={(v) => set("movies", v)} />
+        <ToggleField label={t("gallerydl.text_posts")} desc={t("gallerydl.text_posts.desc")} value={data.text ?? false} onChange={(v) => set("text", v)} />
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label={t("gallerydl.dir_pattern")} value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} placeholder="weibo/{user[screen_name]}" />
         <TextField label={t("gallerydl.filename_pattern")} value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} placeholder="{id}_{num}.{extension}" />
+      </div>
+    </div>
+  );
+}
+
+function BilibiliTab({ data, onChange }: { data: BilibiliSourceConfig; onChange: (d: BilibiliSourceConfig) => void }) {
+  const t = useT();
+  const set = (k: string, v: any) => onChange({ ...data, [k]: v });
+  return (
+    <div className="space-y-5 text-sm">
+      <p className="text-xs text-gray-400 dark:text-gray-500">公开内容无需登录认证。No authentication required for public content.</p>
+      <div className="border-b dark:border-slate-700 pb-3 mb-3">
+        <ToggleField label={t("gallerydl.auto_enable_on_import")} desc={t("gallerydl.auto_enable_on_import.desc")}
+          value={data.auto_enable_on_import ?? false} onChange={(v) => set("auto_enable_on_import", v)} />
+      </div>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.content")}</h4>
+      <div className="space-y-1">
+        <ToggleField label={t("gallerydl.bilibili.livephoto")} desc={t("gallerydl.bilibili.livephoto.desc")}
+          value={data.livephoto ?? true} onChange={(v) => set("livephoto", v)} />
+      </div>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.rate_limit")}</h4>
+      <div className="w-64">
+        <TextField label={t("gallerydl.bilibili.sleep_request")} value={str(data.sleep_request, "3.0-6.0")}
+          onChange={(v) => set("sleep_request", v || undefined)} placeholder="3.0-6.0" />
+        <p className="text-xs text-gray-400 mt-1">{t("gallerydl.bilibili.sleep_request.desc")}</p>
+      </div>
+      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
+      <div className="grid grid-cols-2 gap-4">
+        <TextField label={t("gallerydl.dir_pattern")} value={str(data.directory)}
+          onChange={(v) => set("directory", v || undefined)} placeholder="bilibili/{user[name]}/{id}" />
+        <TextField label={t("gallerydl.filename_pattern")} value={str(data.filename)}
+          onChange={(v) => set("filename", v || undefined)} placeholder="{id}_{num}.{extension}" />
       </div>
     </div>
   );
