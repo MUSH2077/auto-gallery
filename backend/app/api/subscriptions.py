@@ -89,6 +89,7 @@ async def trigger_subscription_sync(subscription_id: UUID, db: AsyncSession = De
 
     now = datetime.now(timezone.utc)
     job_ids = []
+    enqueue_errors = []
 
     for ss in sub_sources:
         if not ss.source_url:
@@ -134,11 +135,18 @@ async def trigger_subscription_sync(subscription_id: UUID, db: AsyncSession = De
             job_ids.append(str(job.id))
         except Exception as e:
             logger.error("Failed to enqueue download job %s: %s", job.id, e)
+            job.status = "failed"
+            job.error_log = f"Enqueue failed: {e}"
+            enqueue_errors.append(str(e))
 
     if job_ids:
         sub.last_synced_at = now
     await db.commit()
 
+    if enqueue_errors and not job_ids:
+        return {"status": "error", "message": "All enqueue attempts failed", "job_ids": [], "errors": enqueue_errors}
+    if enqueue_errors:
+        return {"status": "partial_error", "message": f"Enqueued {len(job_ids)} jobs, {len(enqueue_errors)} failed", "job_ids": job_ids, "errors": enqueue_errors}
     return {"status": "ok", "message": f"Enqueued {len(job_ids)} download jobs", "job_ids": job_ids}
 
 

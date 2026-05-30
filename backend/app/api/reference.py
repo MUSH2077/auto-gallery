@@ -451,6 +451,137 @@ async def get_batch_import_status(job_id: str | None = None):
     }
 
 
+@router.post("/danbooru/url-batch-import")
+async def url_batch_import_danbooru(data: dict, db: AsyncSession = Depends(get_db)):
+    """Import multiple creator URLs via Danbooru lookup.
+
+    Accepts: {urls: ["https://pixiv.net/users/123", "https://twitter.com/...", ...]}
+    For each URL, looks up the matching Danbooru artist and runs import-all logic.
+    Returns per-URL results immediately (synchronous, not queued).
+    """
+    from app.models.creator import Creator
+    from app.models.subscription import Subscription
+    from app.models.subscription_source import SubscriptionSource
+    from app.services.creator_dedup import find_existing_creator
+
+    urls = data.get("urls", [])
+    if not urls or not isinstance(urls, list):
+        raise HTTPException(status_code=400, detail="urls list is required")
+    urls = [str(u).strip() for u in urls if str(u).strip()]
+    if not urls:
+        raise HTTPException(status_code=400, detail="No valid URLs provided")
+    if len(urls) > 100:
+        raise HTTPException(status_code=400, detail="Too many URLs (max 100 per request)")
+
+    results = []
+    for url in urls:
+        try:
+            artist, links = await asyncio.to_thread(
+                danbooru_svc.search_and_extract,
+                source_url=url,
+                pixiv_id=None,
+                artist_name=None,
+            )
+            if not artist:
+                results.append({"url": url, "status": "not_found", "message": "No matching Danbooru artist found"})
+                continue
+
+            canonical_name = artist.get("name", "Unknown")
+            existing = await find_existing_creator(db, danbooru_artist_id=artist.get("id"))
+            if existing:
+                creator = existing
+                creator_id = creator.id
+                created_new = False
+            else:
+                creator = Creator(name=canonical_name, display_name=canonical_name)
+                db.add(creator)
+                await db.flush()
+                creator_id = creator.id
+                created_new = True
+
+            if creator.danbooru_artist_id is None:
+                creator.danbooru_artist_id = artist.get("id")
+
+            links_created = 0
+            for link_data in links:
+                existing_link = await db.execute(
+                    select(CreatorLink).where(
+                        CreatorLink.creator_id == creator_id,
+                        CreatorLink.url == link_data["url"],
+                    )
+                )
+                if existing_link.scalar_one_or_none():
+                    continue
+                db.add(CreatorLink(
+                    creator_id=creator_id,
+                    url=link_data["url"],
+                    link_type=link_data["link_type"],
+                    source=link_data["source"],
+                    confidence=link_data["confidence"],
+                    is_verified=link_data["is_verified"],
+                    notes=link_data.get("notes"),
+                ))
+                links_created += 1
+
+            sub_result = await db.execute(select(Subscription).where(Subscription.creator_id == creator_id))
+            subscription = sub_result.scalar_one_or_none()
+            if not subscription:
+                subscription = Subscription(creator_id=creator_id)
+                db.add(subscription)
+                await db.flush()
+
+            sources_created = 0
+            for u in artist.get("urls", []):
+                raw_url = u.get("normalized_url") or u.get("url", "")
+                if not raw_url or not u.get("is_active", True):
+                    continue
+                if not danbooru_svc.is_downloadable_url(raw_url):
+                    continue
+                existing_ss = await db.execute(
+                    select(SubscriptionSource).where(
+                        SubscriptionSource.subscription_id == subscription.id,
+                        SubscriptionSource.source_url == raw_url,
+                    )
+                )
+                if existing_ss.scalar_one_or_none():
+                    continue
+                db.add(SubscriptionSource(
+                    subscription_id=subscription.id,
+                    source=danbooru_svc._classify_url(raw_url),
+                    source_url=raw_url,
+                    is_enabled=_is_source_auto_enabled(danbooru_svc._classify_url(raw_url)),
+                ))
+                sources_created += 1
+
+            await db.flush()
+            results.append({
+                "url": url,
+                "status": "imported",
+                "artist_name": artist["name"],
+                "creator_id": str(creator_id),
+                "created_new": created_new,
+                "links_imported": links_created,
+                "sources_created": sources_created,
+            })
+        except Exception as e:
+            logger.error("URL batch import error for %s: %s", url, e)
+            results.append({"url": url, "status": "error", "message": str(e)})
+
+    await db.commit()
+
+    imported = sum(1 for r in results if r["status"] == "imported")
+    not_found = sum(1 for r in results if r["status"] == "not_found")
+    errors = sum(1 for r in results if r["status"] == "error")
+    return {
+        "status": "ok",
+        "total": len(urls),
+        "imported": imported,
+        "not_found": not_found,
+        "errors": errors,
+        "results": results,
+    }
+
+
 @router.post("/danbooru/favorites/sync")
 async def sync_danbooru_favorites(db: AsyncSession = Depends(get_db)):
     """Bidirectional sync: pull Danbooru favorites → local creators, push local → Danbooru.

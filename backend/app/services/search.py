@@ -57,18 +57,32 @@ class SearchService:
     async def search(self, query: str, offset: int = 0, limit: int = 20) -> dict:
         try:
             client = _client()
-            result = client.index(WORKS_INDEX).search(query, offset=offset, limit=limit)
-            # meilisearch_python_sdk returns a typed SearchResults object
-            hits = getattr(result, 'hits', [])
-            total = getattr(result, 'estimated_total_hits', 0) or getattr(result, 'estimatedTotalHits', 0)
+            works_result = client.index(WORKS_INDEX).search(query, offset=offset, limit=limit)
+            works_hits = getattr(works_result, 'hits', []) or []
+            works_total = getattr(works_result, 'estimated_total_hits', 0) or getattr(works_result, 'estimatedTotalHits', 0) or 0
+
+            try:
+                creators_result = client.index(CREATORS_INDEX).search(query, limit=10)
+                creators_hits = getattr(creators_result, 'hits', []) or []
+            except Exception:
+                creators_hits = []
+
+            try:
+                tags_result = client.index(TAGS_INDEX).search(query, limit=10)
+                tags_hits = getattr(tags_result, 'hits', []) or []
+            except Exception:
+                tags_hits = []
+
             return {
-                "results": list(hits) if hits else [],
-                "total": total,
+                "results": list(works_hits),
+                "total": works_total,
                 "query": query,
+                "creators": list(creators_hits),
+                "tags": list(tags_hits),
             }
         except Exception as e:
             logger.warning("Meilisearch search failed: %s", e)
-            return {"results": [], "total": 0, "query": query}
+            return {"results": [], "total": 0, "query": query, "creators": [], "tags": []}
 
     async def index_work(self, work_id: str, title: str | None, description: str | None,
                           creator_name: str | None, is_nsfw: bool, source: str,

@@ -307,6 +307,26 @@ export default function DanbooruReferencePage() {
     },
   });
 
+  // URL batch import (synchronous, returns per-URL results directly)
+  const [urlBatchInput, setUrlBatchInput] = useState("");
+  const [showUrlBatch, setShowUrlBatch] = useState(false);
+  const urlBatchImport = useMutation({
+    mutationFn: (urls: string[]) => api.urlBatchImportDanbooru(urls),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.creators.all });
+      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+    },
+  });
+
+  const handleUrlBatchSubmit = () => {
+    const urls = urlBatchInput
+      .split(/\n/)
+      .map((s) => s.trim())
+      .filter((s) => s.startsWith("http"));
+    if (urls.length === 0) return;
+    urlBatchImport.mutate(urls);
+  };
+
   // Poll for batch results while a job is running
   const batchStatus = useQuery({
     queryKey: ["batch-import-status", batchJobId],
@@ -403,6 +423,101 @@ export default function DanbooruReferencePage() {
           </button>
         </div>
         <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-2">{t("danbooru.favorites_sync.auth_warn")}</p>
+      </div>
+
+      {/* URL Batch Import */}
+      <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-medium text-sm">{t("danbooru.url_batch_title")}</h3>
+          <button onClick={() => setShowUrlBatch(!showUrlBatch)} className="text-xs text-blue-600 hover:underline">
+            {showUrlBatch ? t("danbooru.batch_collapse") : t("danbooru.batch_expand")}
+          </button>
+        </div>
+        {!showUrlBatch && (
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Paste multiple creator profile URLs (Pixiv, Twitter/X, Iwara, etc.) to bulk import via Danbooru. Results are shown immediately per URL.
+          </p>
+        )}
+        {showUrlBatch && (
+          <div className="space-y-3">
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Enter one URL per line. Supported: Pixiv, Twitter/X, Iwara, and other Danbooru-indexed profile URLs.
+            </p>
+            <textarea
+              value={urlBatchInput}
+              onChange={(e) => setUrlBatchInput(e.target.value)}
+              placeholder={"https://www.pixiv.net/users/123456\nhttps://twitter.com/artist_name\nhttps://www.iwara.tv/profile/..."}
+              rows={5}
+              className="w-full border rounded px-3 py-2 text-sm font-mono resize-y"
+            />
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleUrlBatchSubmit}
+                disabled={urlBatchImport.isPending || !urlBatchInput.trim()}
+                className="px-4 py-2 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {urlBatchImport.isPending ? t("danbooru.processing") : t("danbooru.url_batch_import")}
+              </button>
+              <span className="text-xs text-gray-400">
+                {urlBatchInput.trim() ? `${urlBatchInput.split("\n").filter((s) => s.trim().startsWith("http")).length} URLs` : ""}
+              </span>
+              {urlBatchImport.data && (
+                <button onClick={() => { urlBatchImport.reset(); setUrlBatchInput(""); }} className="text-xs text-blue-600 hover:underline">{t("common.close")}</button>
+              )}
+            </div>
+            {urlBatchImport.error && (
+              <p className="text-red-600 text-sm">{(urlBatchImport.error as Error).message}</p>
+            )}
+            {urlBatchImport.data && (
+              <div className="mt-4 space-y-3">
+                {/* Summary */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded p-3 text-center">
+                    <div className="text-xl font-bold text-green-700 dark:text-green-400">{urlBatchImport.data.imported}</div>
+                    <div className="text-xs text-green-600">{t("danbooru.batch_result_imported")}</div>
+                  </div>
+                  <div className="bg-gray-50 dark:bg-slate-800/50 border border-gray-200 dark:border-slate-700 rounded p-3 text-center">
+                    <div className="text-xl font-bold text-gray-600 dark:text-gray-400">{urlBatchImport.data.not_found}</div>
+                    <div className="text-xs text-gray-500">{t("danbooru.batch_result_not_found")}</div>
+                  </div>
+                  <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded p-3 text-center">
+                    <div className="text-xl font-bold text-red-700 dark:text-red-400">{urlBatchImport.data.errors}</div>
+                    <div className="text-xs text-red-600">{t("danbooru.batch_result_errors")}</div>
+                  </div>
+                </div>
+                {/* Per-URL results */}
+                <div className="space-y-1 max-h-72 overflow-y-auto">
+                  {urlBatchImport.data.results.map((r, i) => (
+                    <div key={i} className={`rounded p-2 text-xs flex items-start justify-between gap-2 border ${
+                      r.status === "imported" ? "bg-green-50 dark:bg-green-900/20 border-green-100 dark:border-green-900" :
+                      r.status === "not_found" ? "bg-gray-50 dark:bg-slate-800/50 border-gray-200 dark:border-slate-700" :
+                      "bg-red-50 dark:bg-red-900/20 border-red-100 dark:border-red-900"
+                    }`}>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-mono text-gray-600 dark:text-gray-400 truncate">{r.url}</div>
+                        {r.artist_name && (
+                          <div className="mt-1 font-medium text-gray-800 dark:text-gray-200">{r.artist_name}</div>
+                        )}
+                        {r.message && (
+                          <div className="mt-1 text-gray-500">{r.message}</div>
+                        )}
+                      </div>
+                      <div className="shrink-0 text-right">
+                        {r.status === "imported" && (
+                          <span className="text-green-600">
+                            {r.created_new ? "New" : "Exists"} · {r.links_imported} links · {r.sources_created} src
+                          </span>
+                        )}
+                        {r.status === "not_found" && <span className="text-gray-400">Not found</span>}
+                        {r.status === "error" && <span className="text-red-500">Error</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Batch Import */}
