@@ -141,4 +141,6 @@ async def health():
         "status": "ok" if all_up else "degraded",
         "version": "0.1.0",
         "services": services,
+    "services": services,
+    "disk": disk_status,
     }

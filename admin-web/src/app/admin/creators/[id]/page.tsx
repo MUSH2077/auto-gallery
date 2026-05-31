@@ -4,10 +4,12 @@ import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, CreatorLink as CreatorLinkType, SourceCreator as SourceCreatorType } from "@/lib/api";
 import { PageHeader, StatusBadge, SourceBadge, EmptyState, Modal, ConfirmDialog, WorkGrid } from "@/components";
+import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 
 function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () => void }) {
   const t = useT();
+  const toast = useToast();
   const [url, setUrl] = useState(""); const [linkType, setLinkType] = useState("website"); const [source, setSource] = useState("");
   const qc = useQueryClient();
   const create = useMutation({
@@ -36,6 +38,7 @@ function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () =>
 
 function SubscriptionPanel({ creatorId }: { creatorId: string }) {
   const t = useT();
+  const toast = useToast();
   const router = useRouter();
   const qc = useQueryClient();
   const subs = useQuery({ queryKey: queryKeys.subscriptions.all, queryFn: () => api.listSubscriptions() });
@@ -105,6 +108,7 @@ function SubscriptionPanel({ creatorId }: { creatorId: string }) {
 
 function AddSourceForm({ creatorId, onClose }: { creatorId: string; onClose: () => void }) {
   const t = useT();
+  const toast = useToast();
   const [source, setSource] = useState("pixiv"); const [sourceCreatorId, setSourceCreatorId] = useState(""); const [sourceUrl, setSourceUrl] = useState(""); const [displayName, setDisplayName] = useState("");
   const qc = useQueryClient();
   const create = useMutation({
@@ -149,6 +153,7 @@ function DanbooruAliasesPanel({
   onDisplayNameUpdated: () => void;
 }) {
   const t = useT();
+  const toast = useToast();
   const router = useRouter();
   const qc = useQueryClient();
   const aliases = parseDanbooruAliases(description);
@@ -203,6 +208,7 @@ function DanbooruAliasesPanel({
 
 export default function CreatorDetailPage() {
   const t = useT();
+  const toast = useToast();
   const params = useParams(); const router = useRouter(); const qc = useQueryClient();
   const id = params.id as string;
 
@@ -220,6 +226,17 @@ export default function CreatorDetailPage() {
   const update = useMutation({
     mutationFn: () => api.updateCreator(id, { name: editName, display_name: editDisplay || undefined, description: editDesc || undefined }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.creators.detail(id) }); setEditing(false); },
+  });
+
+  const [mergeTarget, setMergeTarget] = useState<string | null>(null);
+  const merge = useMutation({
+    mutationFn: (sourceId: string) => api.mergeCreators(id as string, [sourceId]),
+    onSuccess: (data: any) => {
+      toast.success(data.results?.length ? `合并完成: ${data.results.map((r: any) => r.status).join(", ")}` : "合并完成");
+      setMergeTarget(null);
+      qc.invalidateQueries({ queryKey: queryKeys.creators.detail(id as string) });
+    },
+    onError: (e: Error) => toast.error(e.message),
   });
 
   const toggleFavorite = useMutation({
@@ -249,6 +266,11 @@ export default function CreatorDetailPage() {
           </button>
           <button onClick={() => router.push(`/admin/creators/${id}/mapping`)} className="px-3 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">{t("creator_detail.manage_mapping")}</button>
           <button onClick={openEdit} className="px-3 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">{t("creator_detail.edit")}</button>
+          <button onClick={() => { const sid = prompt("输入要合并到此创作者的来源创作者ID:"); if (sid) merge.mutate(sid); }}
+            disabled={merge.isPending}
+            className="px-3 py-2 text-sm border border-orange-300 text-orange-600 rounded hover:bg-orange-50 dark:hover:bg-orange-900/20 disabled:opacity-50">
+            {merge.isPending ? "..." : "合并"}
+          </button>
         </div>
       </PageHeader>
 
@@ -328,6 +350,7 @@ export default function CreatorDetailPage() {
 
 function CreatorWorkTimeline({ creatorId, creatorName }: { creatorId: string; creatorName: string }) {
   const t = useT();
+  const toast = useToast();
   const router = useRouter();
   const timeline = useQuery({
     queryKey: ["creator-timeline", creatorId],

@@ -20,6 +20,22 @@ FALLBACK_TIMEOUT = 600
 FALLBACK_MAX_RETRIES = 3
 FALLBACK_BACKOFF_BASE = 60
 
+
+def _parse_progress(stderr: str) -> dict | None:
+    """Extract download progress info from gallery-dl stderr."""
+    import re as _re
+    info = {}
+    # Match patterns like "[1/50]" or "Downloading 5/10"
+    m = _re.search(r'\[(\d+)/(\d+)\]', stderr)
+    if m:
+        info["current"] = int(m.group(1))
+        info["total"] = int(m.group(2))
+    # Match "x images" or "x files"
+    m = _re.search(r'(\d+)\s*(?:image|file)s?\s*(?:downloaded|found)', stderr, _re.IGNORECASE)
+    if m:
+        info["downloaded"] = int(m.group(1))
+    return info if info else None
+
 # RQ job timeout — must exceed the longest gallery-dl subprocess timeout,
 # otherwise RQ kills the function before subprocess.run finishes.
 RQ_JOB_TIMEOUT = 7200  # 2 hours
