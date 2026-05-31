@@ -67,6 +67,20 @@ export default function SchedulerPage() {
     return c ? (c.display_name || c.name) : creatorId.slice(0, 8);
   };
 
+  const fmtStrategy = (s: Subscription) => {
+    const mode = s.schedule_mode || "inherit";
+    const sysMode = settings.data?.subscription_defaults?.schedule_mode || "interval";
+    if (mode === "manual") return t("subscription_detail.strategy_manual");
+    if (mode === "interval") return t("subscription_detail.strategy_interval") + " · " + s.sync_interval_hours + "h";
+    if (mode === "fixed_time") return t("subscription_detail.strategy_fixed_time") + " · " + (s.scheduled_times || settings.data?.subscription_defaults?.scheduled_times || "—");
+    // inherit
+    const displayMode = sysMode === "fixed_time" ? t("subscription_detail.strategy_fixed_time") : t("subscription_detail.strategy_interval");
+    const detail = sysMode === "fixed_time"
+      ? (settings.data?.subscription_defaults?.scheduled_times || "")
+      : (s.sync_interval_hours + "h");
+    return t("scheduler.strategy_inherit_label").replace("{mode}", displayMode) + (detail ? " · " + detail : "");
+  };
+
   return (
     <main className="max-w-6xl mx-auto p-6">
       <PageHeader title={t("scheduler.title")} description={t("scheduler.desc")} />
@@ -311,7 +325,7 @@ export default function SchedulerPage() {
                   <th className="text-left px-4 py-3 font-medium">{t("scheduler.col_subscription")}</th>
                   <th className="text-left px-4 py-3 font-medium">{t("scheduler.col_creator")}</th>
                   <th className="text-left px-4 py-3 font-medium">{t("scheduler.col_auto_sync")}</th>
-                  <th className="text-left px-4 py-3 font-medium">{t("scheduler.col_interval")}</th>
+                  <th className="text-left px-4 py-3 font-medium">{t("scheduler.col_strategy")}</th>
                   <th className="text-left px-4 py-3 font-medium">{t("scheduler.col_last_sync")}</th>
                   <th className="text-left px-4 py-3 font-medium">{t("scheduler.col_next_sync")}</th>
                   <th className="text-right px-4 py-3 font-medium">{t("scheduler.col_actions")}</th>
@@ -334,7 +348,7 @@ export default function SchedulerPage() {
                           <span className="text-gray-400 dark:text-gray-500 text-xs">{t("scheduler.manual_only")}</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 font-mono text-xs">{s.sync_interval_hours}h</td>
+                      <td className="px-4 py-3 text-xs text-gray-600 dark:text-gray-300 max-w-[180px] truncate" title={fmtStrategy(s)}>{fmtStrategy(s)}</td>
                       <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">
                         {s.last_synced_at ? new Date(s.last_synced_at).toLocaleString() : t("scheduler.never")}
                       </td>

@@ -74,6 +74,8 @@ export default function SubscriptionDetailPage() {
   const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
   const [showAddSource, setShowAddSource] = useState(false);
   const [editing, setEditing] = useState(false); const [editName, setEditName] = useState("");
+  const [editMode, setEditMode] = useState(""); const [editInterval, setEditInterval] = useState(0);
+  const [editTimes, setEditTimes] = useState("");
   const [deleteSsId, setDeleteSsId] = useState<string | null>(null);
   const [toggleId, setToggleId] = useState<string | null>(null);
 
@@ -116,7 +118,7 @@ export default function SubscriptionDetailPage() {
       <Link href="/admin/subscriptions" className="text-sm text-blue-600 hover:underline inline-flex items-center gap-1">&larr; 返回</Link>
       <PageHeader title={s.name || (s.creator_display_name || s.creator_name || getCreatorName(s.creator_id))} description={s.creator_display_name || s.creator_name ? `${t("subscription_detail.creator")} ${s.creator_display_name || s.creator_name}` : undefined}>
         <div className="flex gap-2">
-          <button onClick={() => { setEditName(s.name || ""); setEditing(true); }} className="px-3 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">{t("subscription_detail.edit")}</button>
+          <button onClick={() => { setEditName(s.name || ""); setEditMode(s.schedule_mode || ""); setEditInterval(s.sync_interval_hours || 24); setEditTimes(s.scheduled_times || ""); setEditing(true); }} className="px-3 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">{t("subscription_detail.edit")}</button>
         </div>
       </PageHeader>
 
@@ -128,6 +130,17 @@ export default function SubscriptionDetailPage() {
               <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-28">{t("subscription_detail.creator")}</dt><dd className="cursor-pointer text-blue-600 hover:underline" onClick={() => router.push(`/admin/creators/${s.creator_id}`)}>{s.creator_display_name || s.creator_name || getCreatorName(s.creator_id)}</dd></div>
               <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-28">{t("subscription_detail.status")}</dt><dd><StatusBadge status={s.is_active ? "up" : "down"} /></dd></div>
               <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-28">{t("subscription_detail.auto_sync")}</dt><dd>{s.sync_enabled ? <span className="text-green-600">{t("subscription_detail.sync_enabled")}</span> : <span className="text-gray-400 dark:text-gray-500">{t("subscription_detail.sync_disabled")}</span>}</dd></div>
+              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-28">{t("subscription_detail.sync_strategy")}</dt><dd className="text-xs">
+                {!s.schedule_mode || s.schedule_mode === "inherit" ? (
+                  <span className="text-gray-500">{t("subscription_detail.strategy_inherit")}</span>
+                ) : s.schedule_mode === "manual" ? (
+                  <span className="text-orange-600">{t("subscription_detail.strategy_manual")}</span>
+                ) : s.schedule_mode === "fixed_time" ? (
+                  <span className="text-purple-600">{t("subscription_detail.strategy_fixed_time")}{s.scheduled_times ? " · " + s.scheduled_times : ""}</span>
+                ) : (
+                  <span className="text-blue-600">{t("subscription_detail.strategy_interval")} · {s.sync_interval_hours}h</span>
+                )}
+              </dd></div>
               <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-28">{t("subscription_detail.last_synced")}</dt><dd className="text-xs">{s.last_synced_at ? new Date(s.last_synced_at).toLocaleString() : t("subscription_detail.never_synced")}</dd></div>
               <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-28">{t("subscription_detail.created")}</dt><dd className="text-xs">{new Date(s.created_at).toLocaleString()}</dd></div>
             </dl>
@@ -184,10 +197,46 @@ export default function SubscriptionDetailPage() {
 
       <Modal open={editing} onClose={() => setEditing(false)} title={t("subscription_detail.edit_title")}>
         <div className="space-y-4">
-          <div><label className="block text-sm font-medium mb-1">{t("subscription_detail.name_field")}</label><input value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></div>
+          <div><label className="block text-sm font-medium mb-1">{t("subscription_detail.name_field")}</label><input value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white" /></div>
+          <div>
+            <label className="block text-sm font-medium mb-1">{t("subscription_detail.sync_strategy")}</label>
+            <select value={editMode} onChange={(e) => setEditMode(e.target.value)}
+              className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white">
+              <option value="">{t("subscription_detail.strategy_inherit")}</option>
+              <option value="interval">{t("subscription_detail.strategy_interval")}</option>
+              <option value="fixed_time">{t("subscription_detail.strategy_fixed_time")}</option>
+              <option value="manual">{t("subscription_detail.strategy_manual")}</option>
+            </select>
+            <p className="text-xs text-gray-400 mt-1">{t("subscription_detail.strategy_desc")}</p>
+          </div>
+          {editMode === "interval" && (
+            <div>
+              <label className="block text-sm font-medium mb-1">{t("subdefaults.sync_interval")}</label>
+              <div className="flex items-center gap-1 bg-gray-100 dark:bg-slate-700 rounded-lg px-1 w-fit">
+                <input type="number" min={1} max={168} value={editInterval}
+                  onChange={(e) => setEditInterval(parseInt(e.target.value) || 24)}
+                  className="w-16 border-0 bg-transparent px-2 py-1.5 text-sm font-mono text-center dark:text-white" />
+                <span className="text-xs text-gray-500 dark:text-gray-400 pr-2">hours</span>
+              </div>
+            </div>
+          )}
+          {editMode === "fixed_time" && (
+            <div>
+              <label className="block text-sm font-medium mb-1">{t("subdefaults.scheduled_times")}</label>
+              <input value={editTimes} onChange={(e) => setEditTimes(e.target.value)}
+                placeholder="03:00, 21:00"
+                className="w-full border rounded px-3 py-2 text-sm font-mono dark:bg-slate-700 dark:text-white" />
+              <p className="text-xs text-gray-400 mt-1">{t("subdefaults.scheduled_times.example")}</p>
+            </div>
+          )}
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setEditing(false)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">{t("subscription_detail.cancel")}</button>
-            <button onClick={() => update.mutate({ name: editName || undefined })} disabled={update.isPending} className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">{t("subscription_detail.save")}</button>
+            <button onClick={() => update.mutate({
+              name: editName || undefined,
+              schedule_mode: editMode || null,
+              sync_interval_hours: editMode === "interval" ? editInterval : undefined,
+              scheduled_times: editMode === "fixed_time" ? (editTimes || null) : undefined,
+            })} disabled={update.isPending} className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">{t("subscription_detail.save")}</button>
           </div>
           {update.error && <p className="text-red-600 text-sm">{(update.error as Error).message}</p>}
         </div>

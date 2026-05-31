@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from uuid import UUID
 
@@ -18,6 +18,10 @@ class Subscription(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     sync_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     sync_interval_hours: Mapped[int] = mapped_column(Integer, default=6)
+    schedule_mode: Mapped[str | None] = mapped_column(String(20), nullable=True,
+        comment="NULL=inherit system default, 'interval', 'fixed_time', 'manual'")
+    scheduled_times: Mapped[str | None] = mapped_column(String(100), nullable=True,
+        comment="NULL=inherit system default, e.g. '03:00,21:00'")
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     creator = relationship("Creator", back_populates="subscriptions")
