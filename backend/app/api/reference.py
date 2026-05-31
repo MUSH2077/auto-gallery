@@ -290,7 +290,12 @@ async def import_all_danbooru(data: dict, db: AsyncSession = Depends(get_db)):
     )
     subscription = sub_result.scalar_one_or_none()
     if not subscription:
-        subscription = Subscription(creator_id=creator_id, name=creator_name or None)
+        from app.services.subscription import get_subscription_defaults
+        defaults = await get_subscription_defaults(db)
+        subscription = Subscription(creator_id=creator_id, name=creator_name or None,
+            sync_interval_hours=defaults["sync_interval_hours"],
+            sync_enabled=defaults["sync_enabled"],
+            is_active=defaults["is_active"])
         db.add(subscription)
         await db.flush()
 
@@ -541,7 +546,12 @@ async def url_batch_import_danbooru(data: dict, db: AsyncSession = Depends(get_d
             sub_result = await db.execute(select(Subscription).where(Subscription.creator_id == creator_id))
             subscription = sub_result.scalar_one_or_none()
             if not subscription:
-                subscription = Subscription(creator_id=creator_id)
+                from app.services.subscription import get_subscription_defaults
+                defaults = await get_subscription_defaults(db)
+                subscription = Subscription(creator_id=creator_id,
+                    sync_interval_hours=defaults["sync_interval_hours"],
+                    sync_enabled=defaults["sync_enabled"],
+                    is_active=defaults["is_active"])
                 db.add(subscription)
                 await db.flush()
 
