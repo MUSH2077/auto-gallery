@@ -6,7 +6,6 @@ from pathlib import Path
 from sqlalchemy import select, and_
 
 from app.config import settings
-from app.config import settings
 
 try:
     from zoneinfo import ZoneInfo
@@ -126,18 +125,19 @@ def _should_sync_now(config: dict, last_synced_at, interval_hours: int) -> bool:
 
 async def sync_subscriptions():
     logger.info("Starting subscription auto-sync scan")
-
-    # Use configured timezone for schedule evaluation
-    tz_name = config.get("timezone", "UTC")
-    try:
-        tz = ZoneInfo(tz_name)
-    except Exception:
-        tz = timezone.utc
-    now = datetime.now(tz)
     jobs_created = 0
 
     async with async_session() as db:
         config = await _get_scheduler_config(db)
+
+        # Use configured timezone for schedule evaluation
+        tz_name = config.get("timezone", "UTC")
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = timezone.utc
+        now = datetime.now(tz)
+
         default_interval = int(config.get("default_sync_interval_hours", FALLBACK_INTERVAL_HOURS))
         scan_minutes = int(config.get("scheduler_scan_interval_minutes", FALLBACK_SCAN_MINUTES))
 
