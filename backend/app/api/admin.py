@@ -96,6 +96,44 @@ DEFAULT_DL = {"timeout_seconds": 600, "max_retries": 3, "retry_backoff_base_seco
 
 # ── Settings ──
 
+
+@router.get("/system-info")
+async def system_info():
+    """Return system-level info: disk usage, archive sizes, version."""
+    import os, shutil
+    info = {"version": "0.1.0", "python": "3.12"}
+    # Disk usage
+    for label, path in [("downloads", settings.download_root), ("library", settings.library_root)]:
+        try:
+            usage = shutil.disk_usage(path)
+            info[f"{label}_total_gb"] = round(usage.total / (1024**3), 1)
+            info[f"{label}_used_gb"] = round(usage.used / (1024**3), 1)
+            info[f"{label}_free_gb"] = round(usage.free / (1024**3), 1)
+        except Exception:
+            pass
+    # Archive sizes
+    try:
+        dl_root = Path(settings.download_root)
+        archives = {}
+        for af in dl_root.glob("archive-*.sqlite3"):
+            archives[af.stem.replace("archive-", "")] = round(af.stat().st_size / 1024, 1)
+        info["archives_kb"] = archives
+    except Exception:
+        pass
+    # Directory sizes
+    try:
+        for label, path in [("downloads", settings.download_root), ("library", settings.library_root)]:
+            total = 0
+            for f in Path(path).rglob("*"):
+                if f.is_file():
+                    try: total += f.stat().st_size
+                    except: pass
+            info[f"{label}_size_mb"] = round(total / (1024**2), 1)
+    except Exception:
+        pass
+    return info
+
+
 @router.get("/settings")
 async def get_settings(db: AsyncSession = Depends(get_db)):
     dedup = await _get_setting(db, "dedup", DEFAULT_DEDUP)
