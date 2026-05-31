@@ -17,11 +17,45 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
   const [name, setName] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
+  const [urlInput, setUrlInput] = useState("");
+
+  // Auto-detect name from pasted URL
+  const handleUrlPaste = (val: string) => {
+    setUrlInput(val);
+    if (!name) {
+      // Extract username from common URL patterns
+      let detected = "";
+      const m = val.match(/(?:pixiv\.net\/(?:en\/)?users\/|x\.com\/|twitter\.com\/|iwara\.tv\/users?\/|danbooru\.donmai\.us\/artists\/|weibo\.com\/(?:u\/|n\/|p\/)?|lofter\.com\/people\/|bilibili\.com\/)([\w.-]+)/);
+      if (m) detected = m[1];
+      // Also try pixiv artist ID
+      if (!detected) {
+        const m2 = val.match(/pixiv\.net\/(?:en\/)?users\/(\d+)/);
+        if (m2) detected = "pixiv_" + m2[1];
+      }
+      if (detected && detected !== "home" && detected !== "n") setName(detected);
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <div><label className="block text-sm font-medium mb-1">{t("creators.name_label")}</label><input value={name} onChange={(e) => setName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white" placeholder={t("creators.name_placeholder")} /></div>
-      <div><label className="block text-sm font-medium mb-1">{t("creators.display_name_label")}</label><input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white" /></div>
-      <div><label className="block text-sm font-medium mb-1">{t("creators.description_label")}</label><textarea value={description} onChange={(e) => setDescription(e.target.value)} className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white" rows={3} /></div>
+      <div>
+        <label className="block text-sm font-medium mb-1">{t("creators.source_url_label") || "来源 URL"}</label>
+        <input value={urlInput} onChange={(e) => handleUrlPaste(e.target.value)}
+          className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white font-mono"
+          placeholder="https://www.pixiv.net/users/123456 或 https://x.com/username" />
+        <p className="text-xs text-gray-400 mt-1">粘贴 URL 自动提取创作者名。支持 Pixiv / X / Iwara / Danbooru / Weibo / Lofter / Bilibili。</p>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-sm font-medium mb-1">{t("creators.name_label")} <span className="text-red-400">*</span></label>
+          <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white" placeholder={t("creators.name_placeholder")} />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">{t("creators.display_name_label")}</label>
+          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white" placeholder="可选显示名" />
+        </div>
+      </div>
+      <div><label className="block text-sm font-medium mb-1">{t("creators.description_label")}</label><textarea value={description} onChange={(e) => setDescription(e.target.value)} className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white" rows={2} /></div>
       <div className="flex justify-end gap-3 pt-2">
         <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:text-gray-300">{t("creators.cancel")}</button>
         <button onClick={() => onSubmit({ name, display_name: displayName || undefined, description: description || undefined })} disabled={!name || isPending}

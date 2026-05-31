@@ -309,21 +309,23 @@ export default function CreatorDetailPage() {
           </div>
         </div>
 
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 h-fit">
-          <div className="flex items-center justify-between mb-3"><h3 className="font-medium">{t("creator_detail.subscription")}</h3></div>
-          <SubscriptionPanel creatorId={id} />
-        </div>
+        {/* Right sidebar — Subscription + Danbooru stacked */}
+        <div className="space-y-4">
+          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+            <div className="flex items-center justify-between mb-3"><h3 className="font-medium">{t("creator_detail.subscription")}</h3></div>
+            <SubscriptionPanel creatorId={id} />
+          </div>
 
-        {/* Danbooru Reference */}
-        {c.danbooru_artist_id && (
-          <DanbooruAliasesPanel
-            creatorId={id}
-            danbooru_artist_id={c.danbooru_artist_id}
-            description={c.description}
-            currentDisplayName={c.display_name || c.name}
-            onDisplayNameUpdated={() => qc.invalidateQueries({ queryKey: queryKeys.creators.detail(id) })}
-          />
-        )}
+          {c.danbooru_artist_id && (
+            <DanbooruAliasesPanel
+              creatorId={id}
+              danbooru_artist_id={c.danbooru_artist_id}
+              description={c.description}
+              currentDisplayName={c.display_name || c.name}
+              onDisplayNameUpdated={() => qc.invalidateQueries({ queryKey: queryKeys.creators.detail(id) })}
+            />
+          )}
+        </div>
       </div>
 
       {/* Works by this Creator */}
