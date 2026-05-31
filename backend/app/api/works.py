@@ -2,6 +2,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import RequireAdmin
+from app.models.work import Work
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -110,3 +112,72 @@ async def delete_work(work_id: UUID, db: AsyncSession = Depends(get_db)):
         await svc.delete_work(str(work_id))
     except Exception:
         pass
+
+
+@router.post("/batch-delete")
+async def batch_delete_works(data: dict, db: AsyncSession = Depends(get_db)):
+    """Delete multiple works and their assets by ID list."""
+    ids = data.get("ids", [])
+    if not ids:
+        raise HTTPException(status_code=400, detail="ids list is required")
+    deleted = 0
+    for wid in ids:
+        try:
+            work = await db.get(Work, UUID(wid))
+            if work:
+                await db.delete(work)
+                deleted += 1
+        except Exception:
+            pass
+    await db.commit()
+    # Also remove from search index
+    try:
+        from app.services.search import SearchService
+        svc = SearchService(db)
+        for wid in ids:
+            await svc.delete_work(str(wid))
+    except Exception:
+        pass
+    return {"status": "ok", "deleted": deleted}
+
+
+@router.post("/batch-tag")
+async def batch_tag_works(data: dict, db: AsyncSession = Depends(get_db)):
+    """Add or remove tags on multiple works."""
+    ids = data.get("ids", [])
+    action = data.get("action", "add")  # add | remove
+    tag_name = data.get("tag", "")
+    if not ids or not tag_name:
+        raise HTTPException(status_code=400, detail="ids and tag are required")
+
+    from app.models.tag import Tag
+    from app.models.work_tag import WorkTag
+
+    # Find or create tag
+    normalized = tag_name.strip().lower()
+    result = await db.execute(select(Tag).where(Tag.normalized_name == normalized))
+    tag = result.scalar_one_or_none()
+    if not tag and action == "add":
+        tag = Tag(normalized_name=normalized)
+        db.add(tag)
+        await db.flush()
+
+    updated = 0
+    for wid in ids:
+        try:
+            if action == "add" and tag:
+                exists = await db.execute(
+                    select(WorkTag).where(WorkTag.work_id == UUID(wid), WorkTag.tag_id == tag.id)
+                )
+                if not exists.scalar_one_or_none():
+                    db.add(WorkTag(work_id=UUID(wid), tag_id=tag.id))
+                    updated += 1
+            elif action == "remove" and tag:
+                await db.execute(
+                    sql_delete(WorkTag).where(WorkTag.work_id == UUID(wid), WorkTag.tag_id == tag.id)
+                )
+                updated += 1
+        except Exception:
+            pass
+    await db.commit()
+    return {"status": "ok", "updated": updated}
