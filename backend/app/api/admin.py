@@ -125,6 +125,32 @@ async def import_progress():
         }
 
 
+
+@router.post("/backup/schedule")
+async def schedule_backup(data: dict):
+    """Schedule recurring auto-backup. {enabled: bool, interval_hours: int}"""
+    import redis as redis_lib
+    from rq import Queue
+    from datetime import timedelta
+
+    enabled = data.get("enabled", False)
+    interval = int(data.get("interval_hours", 24))
+    r = redis_lib.from_url(settings.redis_url)
+    q = Queue(name="scheduled", connection=r)
+
+    # Remove existing backup jobs
+    for jid in list(q.scheduled_job_registry.get_job_ids()):
+        job = q.fetch_job(jid)
+        if job and "auto_backup" in str(job.func_name):
+            q.remove(jid)
+
+    if enabled:
+        q.enqueue_in(timedelta(hours=interval),
+            "app.jobs.backup.run_auto_backup", interval=interval, job_timeout=3600)
+        return {"status": "ok", "message": f"Auto-backup enabled, every {interval}h"}
+    return {"status": "ok", "message": "Auto-backup disabled"}
+
+
 @router.get("/system-info")
 async def system_info():
     """Return system-level info: disk usage, archive sizes, version."""
