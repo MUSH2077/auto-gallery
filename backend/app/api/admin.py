@@ -133,7 +133,7 @@ async def schedule_backup(data: dict):
     from rq import Queue
     from datetime import timedelta
 
-    enabled = data.get("enabled", False)
+    enabled = str(data.get("enabled", "")).lower() in ("true", "1", "yes")
     interval = int(data.get("interval_hours", 24))
     r = redis_lib.from_url(settings.redis_url)
     q = Queue(name="scheduled", connection=r)

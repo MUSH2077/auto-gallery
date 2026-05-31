@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, ConfirmDialog } from "@/components";
 import { useT } from "@/lib/i18n";
@@ -73,18 +73,7 @@ export default function DataManagementPage() {
     onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
   });
 
-  
-  const systemInfo = useQuery({ queryKey: ["system-info"], queryFn: () => api.getSystemInfo(), refetchInterval: 30000 });
-
-  const cleanupJSON = useMutation({
-    mutationFn: () => api.cleanupMetadataJSONs(),
-    onSuccess: (d: any) => setResult({ ok: true, msg: `已清理 ${d.removed} 个元数据 JSON 文件` }),
-    onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
-  });
-
-  const importProgress = useQuery({ queryKey: ["import-progress"], queryFn: () => api.getImportProgress(), refetchInterval: 5000 });
-
-const actions = [
+  const actions = [
     {
       key: "all",
       title: t("datamgmt.clear_all"),

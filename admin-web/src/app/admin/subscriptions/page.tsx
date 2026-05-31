@@ -1,6 +1,5 @@
 "use client";
 import { useState, useEffect, Suspense } from "react";
-import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -16,7 +15,6 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
 }) {
   const [creatorId, setCreatorId] = useState(""); const [name, setName] = useState("");
   const t = useT();
-  const toast = useToast();
   const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
   return (
     <div className="space-y-4">
@@ -56,7 +54,6 @@ function buildFilters(filter: FilterMode, search: string) {
 function SubscriptionsContent() {
   const router = useRouter();
   const t = useT();
-  const toast = useToast();
   const sp = useSearchParams();
   const pathname = usePathname();
 
@@ -102,6 +99,7 @@ function SubscriptionsContent() {
 
   const filters = buildFilters(filter, search);
 
+  const subCount = useQuery({ queryKey: ["subCount"], queryFn: () => api.countSubscriptions() });
   const subs = useQuery({
     queryKey: [...queryKeys.subscriptions.all, page, filters],
     queryFn: () => api.listSubscriptions(page * limit, limit, filters),
@@ -127,7 +125,7 @@ function SubscriptionsContent() {
       if (data.status === "error" || data.status === "partial_error") {
         alert((data as any).message || "Sync partially failed");
       } else if (data.job_ids.length === 0) {
-        toast.info(t("subscriptions.sync_no_jobs"));
+        alert(t("subscriptions.sync_no_jobs"));
       }
     },
     onError: (e: Error) => alert(e.message),
