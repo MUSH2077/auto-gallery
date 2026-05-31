@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
+import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
 
@@ -21,6 +22,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
   importName: string; setImportName: (v: string) => void;
 }) {
   const t = useT();
+  const toast = useToast();
   const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
   const qc = useQueryClient();
 
@@ -44,10 +46,10 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
       setSubscribingUrl(null);
-      alert("Subscription source created! Trigger a sync from the Subscriptions page.");
+      toast.info("Subscription source created! Trigger a sync from the Subscriptions page.");
     },
     onError: (err) => {
-      alert(`Failed: ${(err as Error).message}`);
+      toast.info(`Failed: ${(err as Error).message}`);
       setSubscribingUrl(null);
     },
   });
@@ -261,6 +263,7 @@ const DOWNLOADABLE_SOURCES = ["pixiv", "iwara"];
 
 export default function DanbooruReferencePage() {
   const t = useT();
+  const toast = useToast();
   const [searchUrl, setSearchUrl] = useState("");
   const [searchName, setSearchName] = useState("");
   const [searchPixivId, setSearchPixivId] = useState("");
@@ -280,7 +283,7 @@ export default function DanbooruReferencePage() {
   const importMutation = useMutation({
     mutationFn: (creatorId: string) => api.importDanbooruArtist({ creator_id: creatorId, ...searchParams }),
     onSuccess: (data) => {
-      alert(`Imported ${data.imported} links from Danbooru artist "${data.artist_name}"`);
+      toast.info(`Imported ${data.imported} links from Danbooru artist "${data.artist_name}"`);
       qc.invalidateQueries({ queryKey: queryKeys.creators.all });
     },
   });
@@ -291,10 +294,10 @@ export default function DanbooruReferencePage() {
       ...searchParams,
     }),
     onSuccess: (data) => {
-      if (!data.found) { alert("No matching Danbooru artist found."); return; }
+      if (!data.found) { toast.info("No matching Danbooru artist found."); return; }
       qc.invalidateQueries({ queryKey: queryKeys.creators.all });
       qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
-      alert(`Done! Creator: ${data.creator_id?.slice(0, 8)}... | Links: ${data.links_imported} | Sources: ${data.sources_created}`);
+      toast.info(`Done! Creator: ${data.creator_id?.slice(0, 8)}... | Links: ${data.links_imported} | Sources: ${data.sources_created}`);
     },
   });
 
