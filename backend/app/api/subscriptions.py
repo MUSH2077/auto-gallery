@@ -4,12 +4,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import RequireAdmin
-from sqlalchemy import select, and_
+from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
 from app.models.subscription import Subscription
+from app.models.subscription import Subscription as SubModel
 from app.models.subscription_source import SubscriptionSource
 from app.models.download_job import DownloadJob
 from app.schemas.subscription import SubscriptionCreate, SubscriptionRead, SubscriptionUpdate
@@ -23,10 +24,9 @@ router = APIRouter(dependencies=[RequireAdmin])
 
 @router.get("/count")
 async def count_subscriptions(db: AsyncSession = Depends(get_db)):
-    from sqlalchemy import func
-    from app.models.subscription import Subscription as SM
-    result = await db.execute(select(func.count(SM.id)))
-    return {"total": result.scalar() or 0}
+    """Return total number of subscriptions."""
+    result = await db.execute(select(func.count()).select_from(Subscription))
+    return {"count": result.scalar() or 0}
 
 
 @router.get("", response_model=list[SubscriptionRead])
