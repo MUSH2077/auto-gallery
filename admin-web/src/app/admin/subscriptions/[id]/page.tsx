@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useState } from "react";
 import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
@@ -112,6 +113,7 @@ export default function SubscriptionDetailPage() {
 
   return (
     <main className="max-w-4xl mx-auto p-6">
+      <Link href="/admin/subscriptions" className="text-sm text-blue-600 hover:underline inline-flex items-center gap-1">&larr; 返回</Link>
       <PageHeader title={s.name || (s.creator_display_name || s.creator_name || getCreatorName(s.creator_id))} description={s.creator_display_name || s.creator_name ? `${t("subscription_detail.creator")} ${s.creator_display_name || s.creator_name}` : undefined}>
         <div className="flex gap-2">
           <button onClick={() => { setEditName(s.name || ""); setEditing(true); }} className="px-3 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">{t("subscription_detail.edit")}</button>
