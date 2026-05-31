@@ -97,6 +97,34 @@ DEFAULT_DL = {"timeout_seconds": 600, "max_retries": 3, "retry_backoff_base_seco
 # ── Settings ──
 
 
+
+
+@router.post("/cleanup-metadata-jsons")
+async def cleanup_metadata_jsons():
+    """Remove all gallery-dl metadata JSON files from downloads directory."""
+    from app.jobs.import_runner import cleanup_metadata_jsons
+    removed = await cleanup_metadata_jsons(settings.download_root)
+    return {"status": "ok", "removed": removed}
+
+
+@router.get("/import-progress")
+async def import_progress():
+    """Get current import job progress summary."""
+    from app.models.import_job import ImportJob as IJ
+    async with async_session() as db:
+        result = await db.execute(
+            select(IJ).order_by(IJ.created_at.desc()).limit(20)
+        )
+        jobs = result.scalars().all()
+        return {
+            "running": sum(1 for j in jobs if j.status == "running"),
+            "pending": sum(1 for j in jobs if j.status == "pending"),
+            "complete": sum(1 for j in jobs if j.status == "complete"),
+            "failed": sum(1 for j in jobs if j.status == "failed"),
+            "recent": [{"id": str(j.id), "status": j.status, "error": (j.error_log or "")[:200]} for j in jobs[:5]],
+        }
+
+
 @router.get("/system-info")
 async def system_info():
     """Return system-level info: disk usage, archive sizes, version."""

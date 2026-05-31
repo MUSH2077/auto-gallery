@@ -636,6 +636,9 @@ export const api = {
     results: { name: string; url: string; direct_ok: boolean; direct_ms: number; direct_error: string; proxy_ok: boolean | null; proxy_ms: number | null; proxy_error: string }[];
   }>("/api/v1/admin/proxy/test", { method: "POST" }),
 
+  getSystemInfo: () => request<{ version: string; downloads_size_mb: number; library_size_mb: number; downloads_free_gb: number; archives_kb: Record<string, number> }>("/api/v1/admin/system-info"),
+  getImportProgress: () => request<{ running: number; pending: number; complete: number; failed: number; recent: { id: string; status: string; error: string }[] }>("/api/v1/admin/import-progress"),
+  cleanupMetadataJSONs: () => request<{ status: string; removed: number }>("/api/v1/admin/cleanup-metadata-jsons", { method: "POST" }),
   clearEntity: (entity: string) =>
     request<{ status: string; message: string; deleted?: Record<string, number> }>(`/api/v1/admin/clear/${entity}`, { method: "POST" }),
 
