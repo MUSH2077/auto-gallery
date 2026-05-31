@@ -19,6 +19,7 @@ const zh: Record<string, string> = {
   "nav.import": "导入",
   "nav.danbooru": "Danbooru",
   "nav.settings": "设置",
+  "nav.datamgmt": "数据中心",
 
   // Auth
   "auth.login": "登录",
@@ -1199,6 +1200,7 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "nav.import": "Import",
     "nav.danbooru": "Danbooru",
     "nav.settings": "Settings",
+    "nav.datamgmt": "Data Mgmt",
 
     // Auth
     "auth.login": "Sign In",

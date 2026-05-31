@@ -1,10 +1,11 @@
 "use client";
 import { useMemo, useState } from "react";
+import Link from "next/link";
 
 interface DayData {
   date: string;
   total: number;
-  [source: string]: number | string;
+  [source: string]: number | string | string[];
 }
 
 interface TimelineData {
@@ -130,13 +131,30 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
             <span className="font-medium dark:text-white">{selectedDay.date}</span>
             <button onClick={() => setSelectedDay(null)} className="text-gray-400 hover:text-gray-600">×</button>
           </div>
-          <div className="flex gap-3 mt-1 text-xs">
-            {data.sources.map((s) => {
-              const cnt = (selectedDay[s] as number) || 0;
-              if (!cnt) return null;
-              return <span key={s} className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ backgroundColor: sourceColor(s) }} />{s}: {cnt}</span>;
-            })}
-          </div>
+          {data.sources.map((s) => {
+            const cnt = (selectedDay[s] as number) || 0;
+            if (!cnt) return null;
+            const ids = (selectedDay[`${s}_ids`] as string[]) || [];
+            return (
+              <div key={s} className="mt-2">
+                <span className="flex items-center gap-1 text-xs font-medium mb-1">
+                  <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: sourceColor(s) }} />
+                  {s}: {cnt} work{cnt > 1 ? "s" : ""}
+                </span>
+                {ids.length > 0 && (
+                  <div className="flex flex-wrap gap-1 ml-4">
+                    {ids.slice(0, 20).map((wid) => (
+                      <Link key={wid} href={`/admin/works/${wid}`}
+                        className="text-xs px-2 py-0.5 bg-white dark:bg-slate-600 rounded border border-gray-200 dark:border-slate-500 hover:border-blue-400 hover:text-blue-600 dark:hover:text-blue-400 font-mono transition-colors">
+                        {wid.length > 12 ? wid.slice(0, 8) + "..." + wid.slice(-4) : wid}
+                      </Link>
+                    ))}
+                    {ids.length > 20 && <span className="text-xs text-gray-400">+{ids.length - 20} more</span>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

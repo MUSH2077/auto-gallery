@@ -186,11 +186,12 @@ class WorkRepository:
     async def get_creator_timeline(self, creator_id: UUID,
                                     from_date: str | None = None,
                                     to_date: str | None = None) -> tuple[list[dict], list[str]]:
-        """Return per-source work counts per day for a creator timeline grid."""
+        """Return per-source work counts and work IDs per day for a creator timeline grid."""
         cols = [
             func.date(Work.posted_at).label("date"),
             WorkSource.source,
             func.count(Work.id).label("cnt"),
+            func.array_agg(func.distinct(Work.id)).label("work_ids"),
         ]
         stmt = (
             select(*cols)
@@ -211,11 +212,12 @@ class WorkRepository:
         rows = result.all()
         days: dict[str, dict] = {}
         sources: set[str] = set()
-        for date_val, source, cnt in rows:
+        for date_val, source, cnt, work_ids in rows:
             day = str(date_val)
             if day not in days:
                 days[day] = {"date": day, "total": 0}
             days[day][source] = cnt
+            days[day][f"{source}_ids"] = [str(wid) for wid in (work_ids or [])]
             days[day]["total"] += cnt
             sources.add(source)
         return list(days.values()), sorted(sources)
