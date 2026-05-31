@@ -388,43 +388,6 @@ export default function DanbooruReferencePage() {
         <p className="text-blue-700 dark:text-blue-300">Danbooru artists map source profiles (Pixiv, Twitter, Iwara, etc.) to a canonical name. Use any of the three methods below to find the matching Danbooru artist record.</p>
       </div>
 
-      {/* Favorites Sync */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 mb-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="font-medium text-sm">{t("danbooru.favorites_sync")}</h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("danbooru.favorites_sync.desc")}</p>
-          </div>
-          <button
-            onClick={() => {
-              const doSync = async () => {
-                try {
-                  const res = await api.syncDanbooruFavorites();
-                  if (res.status === "ok") {
-                    qc.invalidateQueries({ queryKey: queryKeys.creators.all });
-                    const msg = t("danbooru.favorites_sync.result")
-                      .replace("{total}", String(res.total_favorites || 0))
-                      .replace("{created}", String(res.created))
-                      .replace("{matched}", String(res.matched))
-                      .replace("{errors}", String(res.errors));
-                    alert(msg);
-                  } else {
-                    alert(res.message || "Sync failed");
-                  }
-                } catch (e) {
-                  alert(`Sync error: ${(e as Error).message}`);
-                }
-              };
-              doSync();
-            }}
-            className="px-4 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700 shrink-0"
-          >
-            {t("danbooru.favorites_sync.btn")}
-          </button>
-        </div>
-        <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-2">{t("danbooru.favorites_sync.auth_warn")}</p>
-      </div>
-
       {/* URL Batch Import */}
       <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 mb-6">
         <div className="flex items-center justify-between mb-3">

@@ -200,7 +200,6 @@ export default function GalleryDLConfigPage() {
     username: str(d?.username), password: str(d?.password),
     api_key: str(d?.api_key),
     cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
-    favorite_artists: str(d?.favorite_artists), favorite_tags: str(d?.favorite_tags),
     external: d?.external ?? false,
     metadata: d?.metadata ?? false,
     filename: str(d?.filename), directory: str(d?.directory),
@@ -506,18 +505,6 @@ function DanbooruTab({ data, onChange }: { data: DanbooruSourceConfig; onChange:
 
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.content")}</h4>
       <div className="space-y-3">
-        <div>
-          <TextField label={t("gallerydl.danbooru.favorite_artists")} value={str(data.favorite_artists)}
-            onChange={(v) => set("favorite_artists", v || undefined)}
-            placeholder="ask, wlop, fuetaro" />
-          <p className="text-xs text-gray-400 mt-1">{t("gallerydl.danbooru.favorite_artists.desc")}</p>
-        </div>
-        <div>
-          <TextField label={t("gallerydl.danbooru.favorite_tags")} value={str(data.favorite_tags)}
-            onChange={(v) => set("favorite_tags", v || undefined)}
-            placeholder="kantai_collection, touhou" />
-          <p className="text-xs text-gray-400 mt-1">{t("gallerydl.danbooru.favorite_tags.desc")}</p>
-        </div>
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.metadata_section")}</h4>
       <div className="space-y-1">

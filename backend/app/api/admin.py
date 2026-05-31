@@ -431,8 +431,6 @@ class DanbooruSourceConfig(BaseModel):
     api_key: str | None = None
     cookies_path: str | None = None
     cookie_content: str | None = None
-    favorite_artists: str | None = None
-    favorite_tags: str | None = None
     external: bool | None = None
     metadata: bool | None = None
     filename: str | None = None
@@ -572,8 +570,7 @@ DANBOORU_CONFIG_MAP = {
     "auto_enable_on_import": "auto-enable-on-import",
     "username": "username", "password": "password",
     "api_key": "api-key", "cookies_path": "cookies",
-    "favorite_artists": "favorite-artists", "favorite_tags": "favorite-tags",
-    "external": "external", "metadata": "metadata",
+        "external": "external", "metadata": "metadata",
     "filename": "filename", "directory": "directory",
 }
 

@@ -264,8 +264,6 @@ export interface DanbooruSourceConfig {
   api_key?: string;
   cookies_path?: string;
   cookie_content?: string;
-  favorite_artists?: string;
-  favorite_tags?: string;
   external?: boolean;
   metadata?: boolean;
   filename?: string;
