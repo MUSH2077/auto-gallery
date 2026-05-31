@@ -5,10 +5,35 @@ from sqlalchemy import select, delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.subscription import SubscriptionRepository
-from app.models import SubscriptionSource, DownloadJob, ImportJob, CreatorLink
+from app.models import SubscriptionSource, DownloadJob, ImportJob, CreatorLink, Subscription
 from app.providers import registry
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_SYNC_INTERVAL_HOURS = 6
+DEFAULT_SCAN_MINUTES = 60
+
+
+async def get_subscription_defaults(db: AsyncSession) -> dict:
+    """Read subscription defaults from system_settings table.
+
+    Returns a dict with at minimum: sync_interval_hours, sync_enabled.
+    Used when creating subscriptions to ensure system defaults are applied
+    instead of model-level hardcoded values.
+    """
+    from app.models.system_setting import SystemSetting
+    result = await db.execute(
+        select(SystemSetting).where(SystemSetting.key == "subscription_defaults")
+    )
+    row = result.scalar_one_or_none()
+    defaults = {}
+    if row and row.value:
+        defaults = dict(row.value)
+    return {
+        "sync_interval_hours": int(defaults.get("default_sync_interval_hours", DEFAULT_SYNC_INTERVAL_HOURS)),
+        "sync_enabled": True,
+        "is_active": True,
+    }
 
 
 class SubscriptionService:
@@ -33,7 +58,10 @@ class SubscriptionService:
         return sub
 
     async def create_subscription(self, data: dict):
-        sub = await self.repo.create(data)
+        # Merge system defaults: provided values take precedence over defaults
+        defaults = await get_subscription_defaults(self.db)
+        merged = {**defaults, **{k: v for k, v in data.items() if v is not None}}
+        sub = await self.repo.create(merged)
         await self.db.commit()
         return sub
 

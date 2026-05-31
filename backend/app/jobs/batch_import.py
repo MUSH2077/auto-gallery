@@ -7,6 +7,7 @@ HTTP request timeouts.
 import asyncio
 import json
 import logging
+import os
 import urllib.parse
 import redis as redis_lib
 from uuid import UUID
@@ -17,6 +18,29 @@ from app.database import async_session
 logger = logging.getLogger(__name__)
 
 RESULT_TTL = 3600  # 1 hour
+
+
+def _get_auto_enable_sources() -> set[str]:
+    """Read auto-enable-on-import from gallery-dl config.json per extractor."""
+    try:
+        config_path = os.path.join(
+            os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"), "config.json")
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                cfg = json.load(f)
+            extractors = cfg.get("extractor", {})
+            result = set()
+            for src_name, src_cfg in extractors.items():
+                if src_cfg.get("auto-enable-on-import") is True:
+                    if src_name == "twitter":
+                        result.add("x")
+                    else:
+                        result.add(src_name)
+            if result:
+                return result
+    except Exception:
+        pass
+    return {"pixiv"}
 
 
 def run_batch_import(pixiv_ids: list[str]):
@@ -150,7 +174,12 @@ async def _batch_import(pixiv_ids: list[str]) -> dict:
                     select(Subscription).where(Subscription.creator_id == creator.id))
                 subscription = sub_result.scalar_one_or_none()
                 if not subscription:
-                    subscription = Subscription(creator_id=creator.id)
+                    from app.services.subscription import get_subscription_defaults
+                    defaults = await get_subscription_defaults(db)
+                    subscription = Subscription(creator_id=creator.id,
+                        sync_interval_hours=defaults["sync_interval_hours"],
+                        sync_enabled=defaults["sync_enabled"],
+                        is_active=defaults["is_active"])
                     db.add(subscription)
                     await db.flush()
 
@@ -167,7 +196,7 @@ async def _batch_import(pixiv_ids: list[str]) -> dict:
                     db.add(SubscriptionSource(
                         subscription_id=subscription.id,
                         source=src_type, source_url=raw_url,
-                        is_enabled=(src_type == "pixiv"),
+                        is_enabled=(src_type in _get_auto_enable_sources()),
                     ))
                     sources_count += 1
 
@@ -186,7 +215,7 @@ async def _batch_import(pixiv_ids: list[str]) -> dict:
                         subscription_id=subscription.id,
                         source="danbooru",
                         source_url=danbooru_posts_url,
-                        is_enabled=False,
+                        is_enabled=("danbooru" in _get_auto_enable_sources()),
                     ))
                     sources_count += 1
 
