@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -257,6 +258,7 @@ export default function CreatorDetailPage() {
 
   return (
     <main className="max-w-4xl mx-auto p-6">
+      <Link href="/admin/creators" className="text-sm text-blue-600 hover:underline inline-flex items-center gap-1">&larr; 返回</Link>
       <PageHeader title={c.display_name || c.name}>
         <div className="flex gap-2">
           <button onClick={() => toggleFavorite.mutate(id as string)}

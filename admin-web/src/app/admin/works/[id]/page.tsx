@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useState } from "react";
 import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
@@ -124,7 +125,8 @@ export default function WorkDetailPage() {
       {/* Header */}
       <div className="mb-6 flex items-start gap-3">
         <div className="flex-1 min-w-0">
-          <PageHeader title={w.title || t("work_detail.untitled")}
+          <Link href="/admin/works" className="text-sm text-blue-600 hover:underline inline-flex items-center gap-1">&larr; 返回</Link>
+      <PageHeader title={w.title || t("work_detail.untitled")}
             description={
               <span className="flex items-center gap-3 flex-wrap">
                 {primaryWs && <SourceBadge source={primaryWs.source} />}

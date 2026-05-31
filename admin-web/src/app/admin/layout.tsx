@@ -65,6 +65,7 @@ function UserMenu() {
 
 function AdminNav() {
   const t = useT();
+  const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const links = [
     ["/admin", t("nav.dashboard")],
@@ -86,7 +87,8 @@ function AdminNav() {
         {/* Desktop links */}
         <div className="hidden md:flex items-center gap-3 flex-1 flex-wrap">
           {links.map(([href, label]) => (
-            <Link key={href} href={href} className="hover:text-gray-300 transition-colors">{label}</Link>
+            <Link key={href} href={href}
+                className={`hover:text-gray-300 transition-colors ${pathname === href || (href !== "/admin" && pathname.startsWith(href)) ? "text-white font-medium border-b-2 border-blue-400 pb-0.5" : "text-gray-300"}`}>{label}</Link>
           ))}
         </div>
         <div className="flex items-center gap-1 shrink-0 ml-auto">
