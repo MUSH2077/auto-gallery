@@ -61,48 +61,11 @@ function SearchContent() {
       {!debounced && <EmptyState title={t("search.empty")} description={t("search.empty_desc")} />}
 
       {results.isLoading && debounced && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-20 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
-      {results.data && !results.data.total && !results.data.creators?.length && !results.data.tags?.length && debounced && <EmptyState title={t("search.no_results")} description={t("search.no_results_for").replace("{query}", debounced)} />}
-      {results.data && (results.data.total > 0 || results.data.creators?.length > 0 || results.data.tags?.length > 0) && (
-        <div className="space-y-6">
-          {/* Creators */}
-          {results.data.creators && results.data.creators.length > 0 && (
-            <div>
-              <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">{t("search.creators_section")}</h2>
-              <div className="flex flex-wrap gap-2">
-                {results.data.creators.map((c: any) => (
-                  <div key={c.id} className="bg-white dark:bg-slate-800 rounded-lg shadow px-3 py-2 flex items-center gap-2 cursor-pointer hover:shadow-md transition-shadow" onClick={() => router.push(`/admin/creators/${c.id}`)}>
-                    <span className="text-sm font-medium dark:text-white">{c.display_name || c.name}</span>
-                    {c.name && c.display_name && c.name !== c.display_name && <span className="text-xs text-gray-400">({c.name})</span>}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Tags */}
-          {results.data.tags && results.data.tags.length > 0 && (
-            <div>
-              <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">{t("search.tags_section")}</h2>
-              <div className="flex flex-wrap gap-2">
-                {results.data.tags.map((tag: any) => (
-                  <span key={tag.id} onClick={() => router.push(`/admin/search?q=${encodeURIComponent(tag.normalized_name)}`)}
-                    className="text-xs bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-300 px-2 py-1 rounded cursor-pointer hover:bg-blue-100 hover:text-blue-700 dark:hover:bg-blue-900/30 dark:hover:text-blue-300 transition-colors">
-                    {tag.normalized_name}
-                    {tag.category && <span className="ml-1 text-gray-400">({tag.category})</span>}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Works */}
-          {results.data.total > 0 && (
-            <div>
-              {(results.data.creators?.length > 0 || results.data.tags?.length > 0) && (
-                <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">{t("search.works_section")}</h2>
-              )}
-              <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">{t("search.results_for").replace("{count}", String(results.data.total)).replace("{query}", debounced)}</p>
-              <div className="space-y-2">
+      {results.data && !results.data.total && debounced && <EmptyState title={t("search.no_results")} description={t("search.no_results_for").replace("{query}", debounced)} />}
+      {results.data && results.data.total > 0 && (
+        <div>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">{t("search.results_for").replace("{count}", String(results.data.total)).replace("{query}", debounced)}</p>
+          <div className="space-y-2">
                 {results.data.results.map((r: any, i: number) => (
                   <div key={r.id || i} className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 flex gap-4 cursor-pointer hover:shadow-md transition-shadow" onClick={() => router.push(`/admin/works/${r.id}`)}>
                     {r.thumbnail_asset_id ? (
@@ -137,8 +100,6 @@ function SearchContent() {
               </div>
             </div>
           )}
-        </div>
-      )}
     </main>
   );
 }

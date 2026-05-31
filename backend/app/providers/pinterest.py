@@ -41,13 +41,15 @@ class PinterestProvider(BaseProvider):
         ))
 
     def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
-        return {
+        cfg = {
             "extractor": {
                 "pinterest": {
-                    "directory": [naming_template.template if naming_template else "pinterest/{user}/{board[name]}"],
                 }
             }
         }
+        if naming_template:
+            cfg["extractor"]["pinterest"]["directory"] = naming_template.template
+        return cfg
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:
         user = raw_metadata.get("user", "")

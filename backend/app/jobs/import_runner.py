@@ -251,23 +251,11 @@ async def run_import_job(import_job_id: str):
                         creator_id=creator_id,
                     ))
                     await db.flush()
-                    # Back-fill Creator.display_name if still using Danbooru tag default
-                    if creator_id and sc_data.get("display_name"):
-                        from app.models.creator import Creator as CreatorModel
-                        creator_obj = await db.get(CreatorModel, creator_id)
-                        if creator_obj and creator_obj.display_name == creator_obj.name:
-                            creator_obj.display_name = sc_data["display_name"]
                 elif sc_obj.creator_id is None and dj.subscription_id:
                     # Update existing source_creator with creator link
                     sub = await db.get(Subscription, dj.subscription_id)
                     if sub:
                         sc_obj.creator_id = sub.creator_id
-                        # Also back-fill Creator.display_name if still default
-                        if sc_obj.display_name:
-                            from app.models.creator import Creator as CreatorModel
-                            creator_obj = await db.get(CreatorModel, sub.creator_id)
-                            if creator_obj and creator_obj.display_name == creator_obj.name:
-                                creator_obj.display_name = sc_obj.display_name
 
                 # Work
                 is_ai = _detect_ai_generated(first_raw, provider.source_name)

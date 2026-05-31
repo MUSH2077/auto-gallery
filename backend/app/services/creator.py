@@ -46,6 +46,7 @@ class CreatorService:
         creator = await self.get_creator(creator_id)
         creator = await self.repo.update(creator, data)
         await self.db.commit()
+        await self.db.refresh(creator)
         return creator
 
     async def delete_creator(self, creator_id: UUID):

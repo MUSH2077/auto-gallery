@@ -38,13 +38,15 @@ class LofterProvider(BaseProvider):
         ))
 
     def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
-        return {
+        cfg = {
             "extractor": {
                 "lofter": {
-                    "directory": [naming_template.template if naming_template else "lofter/{blog_name}/{id}"],
                 }
             }
         }
+        if naming_template:
+            cfg["extractor"]["lofter"]["directory"] = naming_template.template
+        return cfg
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:
         blog_name = raw_metadata.get("blog_name", "unknown")

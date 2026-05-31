@@ -135,6 +135,16 @@ export default function GalleryDLConfigPage() {
     },
   });
 
+  const [testResult, setTestResult] = useState<{ source: string; success: boolean; message: string } | null>(null);
+  const testConn = useMutation({
+    mutationFn: async (source: string) => {
+      await save.mutateAsync();
+      return api.testGalleryDLConnection(source);
+    },
+    onSuccess: (data) => { setTestResult(data); setTimeout(() => setTestResult(null), 8000); },
+    onError: (e: Error) => { setTestResult({ source: "", success: false, message: e.message }); },
+  });
+
   useEffect(() => {
     if (config.data && !seeded.current) {
       const d = config.data;
@@ -169,6 +179,7 @@ export default function GalleryDLConfigPage() {
     auto_enable_on_import: d?.auto_enable_on_import ?? false,
     cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
     filename: str(d?.filename), directory: str(d?.directory),
+    strategy: str(d?.strategy, "tweets"),
     include: str(d?.include, "timeline"),
     retweets: d?.retweets ?? false, replies: d?.replies ?? false,
     cards: d?.cards ?? true, videos: d?.videos ?? true,
@@ -191,7 +202,6 @@ export default function GalleryDLConfigPage() {
     cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
     favorite_artists: str(d?.favorite_artists), favorite_tags: str(d?.favorite_tags),
     external: d?.external ?? false,
-    ugoira: d?.ugoira ?? false,
     metadata: d?.metadata ?? false,
     filename: str(d?.filename), directory: str(d?.directory),
   });
@@ -285,6 +295,22 @@ export default function GalleryDLConfigPage() {
           </button>
         </div>
         {save.error && <p className="text-red-600 text-sm mt-2">{(save.error as Error).message}</p>}
+
+        {/* Test Connection */}
+        <div className="flex items-center gap-3 pt-2 border-t mt-4">
+          <button
+            onClick={() => testConn.mutate(activeTab)}
+            disabled={testConn.isPending}
+            className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+          >
+            {testConn.isPending ? t("gallerydl.testing") : t("gallerydl.test_connection")}
+          </button>
+          {testResult && (
+            <span className={`text-xs ${testResult.success ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
+              {testResult.success ? "✓" : "✗"} {testResult.message}
+            </span>
+          )}
+        </div>
       </div>
     </main>
   );
@@ -371,6 +397,12 @@ function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.content")}</h4>
       <div className="grid grid-cols-2 gap-4">
+        <SelectField label={t("gallerydl.strategy")} desc={t("gallerydl.strategy.desc")} value={str(data.strategy, "tweets")} onChange={(v) => set("strategy", v)}
+          options={[
+            { value: "tweets", label: t("gallerydl.strategy_tweets") },
+            { value: "media", label: t("gallerydl.strategy_media") },
+            { value: "with_replies", label: t("gallerydl.strategy_replies") },
+          ]} />
         <SelectField label={t("gallerydl.include")} value={str(data.include, "timeline")} onChange={(v) => set("include", v)}
           options={[
             { value: "timeline", label: t("gallerydl.timeline") }, { value: "media", label: t("gallerydl.media_only") },
@@ -490,7 +522,6 @@ function DanbooruTab({ data, onChange }: { data: DanbooruSourceConfig; onChange:
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.metadata_section")}</h4>
       <div className="space-y-1">
         <ToggleField label={t("gallerydl.danbooru.external")} desc={t("gallerydl.danbooru.external.desc")} value={data.external ?? false} onChange={(v) => set("external", v)} />
-        <ToggleField label={t("gallerydl.ugoira_download")} desc={t("gallerydl.ugoira_download.desc")} value={data.ugoira ?? false} onChange={(v) => set("ugoira", v)} />
         <ToggleField label={t("gallerydl.metadata")} desc={t("gallerydl.metadata.desc")} value={data.metadata ?? false} onChange={(v) => set("metadata", v)} />
       </div>
 

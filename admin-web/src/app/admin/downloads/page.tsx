@@ -69,7 +69,7 @@ function DownloadsContent() {
     if (resetPage) p.delete("p");
     router.replace(`${pathname}?${p.toString()}`, { scroll: false });
   }
-  const jobs = useQuery({ queryKey: [...queryKeys.downloadJobs.all, statusFilter, page], queryFn: () => api.listDownloadJobs(statusFilter || undefined, page * limit, limit), refetchInterval: statusFilter === "" || statusFilter === "pending" || statusFilter === "downloading" ? 10000 : false });
+  const jobs = useQuery({ queryKey: [...queryKeys.downloadJobs.all, statusFilter, page], queryFn: () => api.listDownloadJobs({ status: statusFilter || undefined, offset: page * limit, limit }), refetchInterval: statusFilter === "" || statusFilter === "pending" || statusFilter === "downloading" ? 10000 : false });
 
   return (
     <main className="max-w-7xl mx-auto p-6">

@@ -1,7 +1,7 @@
 """add last_synced_at to subscription_source
 
 Revision ID: f1a2b3c4d5e6
-Revises: ea15eaa99d22
+Revises: c1d2e3f4a5b6
 Create Date: 2025-07-14 00:00:00.000000
 
 """

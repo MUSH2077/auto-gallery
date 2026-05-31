@@ -37,9 +37,10 @@ class SubscriptionDefaults(BaseModel):
     scheduler_scan_interval_minutes: int = 60
     schedule_mode: str = "interval"
     scheduled_times: str = ""
+    timezone: str = "UTC"
     auto_enable_sources: str = "pixiv"
 
-DEFAULT_SUB = {"default_sync_interval_hours": 6, "scheduler_scan_interval_minutes": 60, "schedule_mode": "interval", "scheduled_times": "", "auto_enable_sources": "pixiv"}
+DEFAULT_SUB = {"default_sync_interval_hours": 6, "scheduler_scan_interval_minutes": 60, "schedule_mode": "interval", "scheduled_times": "", "timezone": "UTC", "auto_enable_sources": "pixiv"}
 
 class DownloadDefaults(BaseModel):
     timeout_seconds: int = 600
@@ -372,6 +373,8 @@ async def reindex_search(db: AsyncSession = Depends(get_db)):
 # ── gallery-dl Config ──
 
 class PixivSourceConfig(BaseModel):
+    model_config = {"extra": "ignore"}
+    auto_enable_on_import: bool | None = None
     refresh_token: str | None = None
     cookies_path: str | None = None
     cookie_content: str | None = None
@@ -389,10 +392,13 @@ class PixivSourceConfig(BaseModel):
     sanity: bool | None = None
 
 class TwitterSourceConfig(BaseModel):
+    model_config = {"extra": "ignore"}
+    auto_enable_on_import: bool | None = None
     cookies_path: str | None = None
     cookie_content: str | None = None
     filename: str | None = None
     directory: str | None = None
+    strategy: str | None = "tweets"
     include: str | None = "timeline"
     retweets: bool | None = False
     replies: bool | None = False
@@ -406,6 +412,8 @@ class TwitterSourceConfig(BaseModel):
     max_posts: int | None = None
 
 class IwaraSourceConfig(BaseModel):
+    model_config = {"extra": "ignore"}
+    auto_enable_on_import: bool | None = None
     cookies_path: str | None = None
     cookie_content: str | None = None
     username: str | None = None
@@ -416,6 +424,8 @@ class IwaraSourceConfig(BaseModel):
     include: str | None = None
 
 class DanbooruSourceConfig(BaseModel):
+    model_config = {"extra": "ignore"}
+    auto_enable_on_import: bool | None = None
     username: str | None = None
     password: str | None = None
     api_key: str | None = None
@@ -424,7 +434,6 @@ class DanbooruSourceConfig(BaseModel):
     favorite_artists: str | None = None
     favorite_tags: str | None = None
     external: bool | None = None
-    ugoira: bool | None = None
     metadata: bool | None = None
     filename: str | None = None
     directory: str | None = None
@@ -527,6 +536,7 @@ GALLERYDL_SOURCE_OPTIONS = {
 }
 
 PIXIV_CONFIG_MAP = {
+    "cookie_content": "cookies-content",
     "auto_enable_on_import": "auto-enable-on-import",
     "refresh_token": "refresh-token", "cookies_path": "cookies",
     "filename": "filename", "directory": "directory",
@@ -537,9 +547,10 @@ PIXIV_CONFIG_MAP = {
 }
 
 TWITTER_CONFIG_MAP = {
+    "cookie_content": "cookies-content",
     "auto_enable_on_import": "auto-enable-on-import",
     "cookies_path": "cookies", "filename": "filename",
-    "directory": "directory", "include": "include",
+    "directory": "directory", "strategy": "strategy", "include": "include",
     "retweets": "retweets", "replies": "replies",
     "cards": "cards", "videos": "videos",
     "text_tweets": "text-tweets", "quoted": "quoted",
@@ -548,6 +559,7 @@ TWITTER_CONFIG_MAP = {
 }
 
 IWARA_CONFIG_MAP = {
+    "cookie_content": "cookies-content",
     "auto_enable_on_import": "auto-enable-on-import",
     "cookies_path": "cookies", "username": "username",
     "password": "password", "filename": "filename",
@@ -556,16 +568,18 @@ IWARA_CONFIG_MAP = {
 }
 
 DANBOORU_CONFIG_MAP = {
+    "cookie_content": "cookies-content",
     "auto_enable_on_import": "auto-enable-on-import",
     "username": "username", "password": "password",
     "api_key": "api-key", "cookies_path": "cookies",
     "favorite_artists": "favorite-artists", "favorite_tags": "favorite-tags",
-    "external": "external", "ugoira": "ugoira", "metadata": "metadata",
+    "external": "external", "metadata": "metadata",
     "filename": "filename", "directory": "directory",
 }
 
 
 PINTEREST_CONFIG_MAP = {
+    "cookie_content": "cookies-content",
     "auto_enable_on_import": "auto-enable-on-import",
     "domain": "domain", "stories": "stories",
     "videos": "videos", "sections": "sections",
@@ -574,6 +588,7 @@ PINTEREST_CONFIG_MAP = {
 }
 
 LOFTER_CONFIG_MAP = {
+    "cookie_content": "cookies-content",
     "auto_enable_on_import": "auto-enable-on-import",
     "cookies_path": "cookies", "filename": "filename",
     "directory": "directory",
@@ -600,6 +615,65 @@ BILIBILI_CONFIG_MAP = {
     "filename": "filename",
     "directory": "directory",
 }
+
+def _convert_to_netscape_cookies(raw: str, source: str) -> str:
+    """Convert browser-pasted cookies to Netscape format that gallery-dl expects.
+
+    Accepts:
+    - Header format: ``name1=value1; name2=value2`` (one line)
+    - Line format: ``name=value`` (one per line)
+    - Netscape format: already 7 tab-separated fields (returned as-is)
+
+    Returns Netscape-formatted cookie content.
+    """
+    # If already Netscape format (tab-separated, 7 fields), return as-is
+    lines = [l.strip() for l in raw.split("\n") if l.strip() and not l.startswith("#")]
+    if lines:
+        first = lines[0]
+        if "\t" in first and len(first.split("\t")) >= 6:
+            return raw
+        # Check if it's header-style (contains "; " semicolon separators)
+        if "; " in raw or ";" in raw:
+            # Header format: split by ";" into individual cookies
+            cookies = []
+            for part in raw.replace("; ", ";").split(";"):
+                part = part.strip()
+                if "=" in part:
+                    name, _, value = part.partition("=")
+                    cookies.append((name.strip(), value.strip()))
+        else:
+            # One cookie per line: name=value
+            cookies = []
+            for line in lines:
+                if "=" in line:
+                    name, _, value = line.partition("=")
+                    cookies.append((name.strip(), value.strip()))
+    else:
+        return raw
+
+    if not cookies:
+        return raw
+
+    # Map source to appropriate domain
+    domain_map = {
+        "twitter": ".twitter.com",
+        "x": ".x.com",
+        "pixiv": ".pixiv.net",
+        "danbooru": ".danbooru.donmai.us",
+        "iwara": ".iwara.tv",
+        "pinterest": ".pinterest.com",
+        "lofter": ".lofter.com",
+    }
+    domain = domain_map.get(source, f".{source}.com")
+    far_future = "9999999999"
+
+    out = ["# Netscape HTTP Cookie File"]
+    for name, value in cookies:
+        out.append(f"{domain}\tTRUE\t/\tFALSE\t{far_future}\t{name}\t{value}")
+
+    logger.info("Converted %d cookies to Netscape format for %s", len(cookies), source)
+    return "\n".join(out)
+
 
 def _load_config() -> tuple[dict, str]:
     import json, os
@@ -640,6 +714,104 @@ def _write_source_config(extractor_config: dict, data: BaseModel, schema_map: di
     return extractor_config
 
 
+# ── Gallery-dl connectivity test ──
+
+TEST_URLS = {
+    "pixiv": "https://www.pixiv.net/users/11",
+    "twitter": "https://x.com/X",
+    "iwara": "https://www.iwara.tv/videos",
+    "danbooru": "https://danbooru.donmai.us/posts?tags=rating:s&limit=1",
+    "pinterest": "https://www.pinterest.com/pinterest/",
+    "lofter": "https://www.lofter.com/tag/%E6%8F%92%E7%94%BB",
+    "weibo": "https://weibo.com/u/2803301701",
+    "bilibili": "https://space.bilibili.com/8047632",
+}
+
+AUTH_ERROR_PATTERNS = [
+    (r"(?i)AuthRequired", "Authentication failed — invalid or missing credentials"),
+    (r"(?i)AuthorizationError", "Authorization denied — check account permissions"),
+    (r"(?i)HttpError.*401", "HTTP 401 Unauthorized — check username/password"),
+    (r"(?i)HttpError.*403", "HTTP 403 Forbidden — check account access"),
+    (r"(?i)LoginRequired", "Login required — credentials not provided or invalid"),
+    (r"(?i)NotFoundError", "User/page not found — check the test URL"),
+    (r"(?i)cookie.*(?:expired|invalid|missing)", "Cookie expired or invalid"),
+    (r"(?i)token.*(?:expired|invalid|revoked)", "Token expired or revoked"),
+    (r"(?i)Could not authenticate", "Authentication rejected by server"),
+]
+
+@router.post("/gallerydl-config/test-connection")
+async def test_source_connection(data: dict):
+    """Test gallery-dl connectivity for a given source using current credentials."""
+    source = data.get("source", "")
+    if source not in TEST_URLS:
+        raise HTTPException(status_code=400, detail=f"Unknown source: {source}")
+
+    test_url = TEST_URLS[source]
+    import json as _json, os, re as _re, subprocess, tempfile, shutil
+
+    config, _ = _load_config()
+    tmpdir = tempfile.mkdtemp(prefix="gallerydl-test-")
+    tmp_config = os.path.join(tmpdir, "test-config.json")
+    try:
+        with open(tmp_config, "w") as f:
+            _json.dump(config, f)
+
+        cmd = [
+            "gallery-dl", "--config", tmp_config,
+            "--write-metadata",
+            "--range", "1-1",
+            "--destination", tmpdir,
+            test_url,
+        ]
+
+        logger.info("Testing %s connectivity: %s", source, " ".join(cmd))
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        stderr = result.stderr or ""
+        stdout = result.stdout or ""
+        combined = stdout + stderr
+
+        auth_issue = None
+        for pattern, label in AUTH_ERROR_PATTERNS:
+            if _re.search(pattern, combined):
+                auth_issue = label
+                break
+
+        if result.returncode == 0 and not auth_issue:
+            return {
+                "source": source, "success": True,
+                "message": f"Connection test passed for {source}. Credentials are valid.",
+                "details": stderr[:500] or "(no output)",
+            }
+        elif auth_issue:
+            return {
+                "source": source, "success": False,
+                "message": auth_issue,
+                "details": stderr[:500] or stdout[:500] or "(no output)",
+            }
+        else:
+            return {
+                "source": source, "success": False,
+                "message": f"gallery-dl exited with code {result.returncode}",
+                "details": stderr[:500] or "(no output)",
+            }
+
+    except subprocess.TimeoutExpired:
+        return {
+            "source": source, "success": False,
+            "message": "Connection test timed out after 120s",
+            "details": "The request to the remote server took too long.",
+        }
+    except Exception as e:
+        logger.error("Connection test failed for %s: %s", source, e)
+        return {
+            "source": source, "success": False,
+            "message": f"Test failed: {str(e)[:200]}",
+            "details": str(e),
+        }
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 @router.get("/gallerydl-config")
 async def get_gallerydl_config(source: str | None = None):
     """Get gallery-dl config for one or all sources. Pass ?source=pixiv|twitter|iwara."""
@@ -661,6 +833,19 @@ async def get_gallerydl_config(source: str | None = None):
         "bilibili": get_source("bilibili", BILIBILI_CONFIG_MAP),
         "sources": GALLERYDL_SOURCE_OPTIONS,
     }
+    # Read cookie file contents for sources that have cookies configured
+    for src_name, src_cfg in all_config.items():
+        if isinstance(src_cfg, dict) and src_cfg.get("cookies_path"):
+            cookie_path = os.path.join(
+                os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"),
+                src_cfg["cookies_path"].lstrip("/"))
+            if os.path.exists(cookie_path):
+                try:
+                    with open(cookie_path) as cf:
+                        src_cfg["cookie_content"] = cf.read().strip()
+                except Exception:
+                    pass
+
     if source:
         return {source: all_config.get(source, {}), "sources": GALLERYDL_SOURCE_OPTIONS}
     return all_config
@@ -691,10 +876,11 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
             continue
         cc = getattr(source_data, "cookie_content", None)
         if cc and cc.strip():
+            content = _convert_to_netscape_cookies(cc.strip(), source_name)
             os.makedirs(cookies_dir, exist_ok=True)
             cookie_path = os.path.join(cookies_dir, f"{source_name}.txt")
             with open(cookie_path, "w") as f:
-                f.write(cc.strip() + "\n")
+                f.write(content + "\n")
             # Auto-set cookies_path if not explicitly provided
             if not getattr(source_data, "cookies_path", None):
                 source_data.cookies_path = f"/gallerydl-config/cookies/{source_name}.txt"

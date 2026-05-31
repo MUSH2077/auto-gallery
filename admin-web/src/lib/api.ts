@@ -148,6 +148,11 @@ export interface WorkListItem {
   is_favorite?: boolean;
 }
 
+export interface SearchWorkResult extends WorkListItem {
+  description?: string;
+  tags?: string[];
+}
+
 export interface Work {
   id: string;
   title?: string;
@@ -182,6 +187,7 @@ export interface SubscriptionDefaults {
   scheduler_scan_interval_minutes: number;
   schedule_mode: "interval" | "fixed_time";
   scheduled_times: string;
+  timezone: string;
 }
 
 export interface DownloadDefaults {
@@ -219,6 +225,7 @@ export interface TwitterSourceConfig {
   cookie_content?: string;
   filename?: string;
   directory?: string;
+  strategy?: string;
   include?: string;
   retweets?: boolean;
   replies?: boolean;
@@ -260,7 +267,6 @@ export interface DanbooruSourceConfig {
   favorite_artists?: string;
   favorite_tags?: string;
   external?: boolean;
-  ugoira?: boolean;
   metadata?: boolean;
   filename?: string;
   directory?: string;
@@ -495,8 +501,17 @@ export const api = {
     request<void>(`/api/v1/subscriptions/${subId}/sources/${ssId}`, { method: "DELETE" }),
 
   // Download Jobs
-  listDownloadJobs: (status?: string, offset = 0, limit = 50) =>
-    request<DownloadJob[]>(`/api/v1/download-jobs${status ? `?status=${status}&offset=${offset}&limit=${limit}` : `?offset=${offset}&limit=${limit}`}`),
+  listDownloadJobs: (params?: { status?: string; source?: string; subscription_id?: string; sort_by?: string; sort_order?: string; offset?: number; limit?: number }) => {
+      const q = new URLSearchParams();
+      if (params?.status) q.set("status", params.status);
+      if (params?.source) q.set("source", params.source);
+      if (params?.subscription_id) q.set("subscription_id", params.subscription_id);
+      if (params?.sort_by) q.set("sort_by", params.sort_by);
+      if (params?.sort_order) q.set("sort_order", params.sort_order);
+      q.set("offset", String(params?.offset || 0));
+      q.set("limit", String(params?.limit || 50));
+      return request<DownloadJob[]>(`/api/v1/download-jobs?${q.toString()}`);
+    },
 
   getDownloadJob: (id: string) =>
     request<DownloadJob>(`/api/v1/download-jobs/${id}`),
@@ -506,6 +521,18 @@ export const api = {
 
   retryDownloadJob: (id: string) =>
     request<{ job_id: string; status: string }>(`/api/v1/download-jobs/${id}/retry`, { method: "POST" }),
+
+  getDownloadJobImports: (jobId: string) =>
+    request<any[]>(`/api/v1/download-jobs/${jobId}/imports`),
+
+  clearDownloadJobs: (statuses: string[]) =>
+    request<{ status: string; deleted: number }>(`/api/v1/download-jobs/clear`, { method: "POST", body: JSON.stringify({ statuses }) }),
+
+  killStuckJobs: () =>
+    request<{ status: string; killed: number }>(`/api/v1/download-jobs/kill-stuck`, { method: "POST" }),
+
+  retryAllFailedJobs: () =>
+    request<{ status: string; succeeded: number; failed: number }>(`/api/v1/download-jobs/retry-all`, { method: "POST" }),
 
   pauseDownloadJob: (id: string) =>
     request<{ job_id: string; status: string }>(`/api/v1/download-jobs/${id}/pause`, { method: "POST" }),
@@ -565,7 +592,7 @@ export const api = {
     `/media/${size}/${assetId}`,
 
   // Search
-  search: (q: string, offset = 0, limit = 20) => request<{ results: unknown[]; total: number }>(`/api/v1/search?q=${encodeURIComponent(q)}&offset=${offset}&limit=${limit}`),
+  search: (q: string, offset = 0, limit = 20) => request<{ results: SearchWorkResult[]; total: number; creators?: { id: string; name: string; display_name?: string }[]; tags?: { id: string; normalized_name: string; category?: string }[] }>(`/api/v1/search?q=${encodeURIComponent(q)}&offset=${offset}&limit=${limit}`),
 
   // Import Jobs
   listImportJobs: (status?: string, offset = 0, limit = 50) =>
@@ -687,6 +714,9 @@ export const api = {
 
   updateGalleryDLConfig: (data: { pixiv?: Partial<PixivSourceConfig>; twitter?: Partial<TwitterSourceConfig>; iwara?: Partial<IwaraSourceConfig>; danbooru?: Partial<DanbooruSourceConfig>; pinterest?: Partial<PinterestSourceConfig>; lofter?: Partial<LofterSourceConfig>; weibo?: Partial<WeiboSourceConfig>; bilibili?: Partial<BilibiliSourceConfig> }) =>
     request<{ status: string; message: string; path: string }>("/api/v1/admin/gallerydl-config", { method: "PUT", body: JSON.stringify(data) }),
+
+  testGalleryDLConnection: (source: string) =>
+    request<{ source: string; success: boolean; message: string; details: string }>("/api/v1/admin/gallerydl-config/test-connection", { method: "POST", body: JSON.stringify({ source }) }),
 
   // Naming Templates
   listNamingTemplates: () => request<{ id: string; name: string; source?: string; template: string; is_default: boolean }[]>("/api/v1/admin/naming-templates"),
