@@ -7,6 +7,15 @@
 - Linux 主机（NAS 或服务器），位于本地网络
 - 足够存储媒体库的磁盘空间
 
+## 服务端口
+
+| 服务      | 主机端口 | 容器端口 |
+|-----------|----------|----------|
+| backend   | 8818     | 8000     |
+| admin-web | 13000    | 3000     |
+
+两个端口均可通过 `.env` 中的 `BACKEND_PORT` 和 `ADMIN_WEB_PORT` 配置。
+
 ## 安装步骤
 
 ### 1. 目录结构
@@ -35,6 +44,13 @@ SECRET_KEY=<生成>
 ADMIN_PASSWORD=<生成>
 ```
 
+设置时区：
+
+```bash
+# 例如 Asia/Shanghai, America/New_York, UTC
+TIMEZONE=Asia/Shanghai
+```
+
 本地开发使用 `.env.example` 中的默认开发路径即可。NAS 部署需设置主机路径：
 
 ```bash
@@ -48,32 +64,28 @@ HOST_REDIS=/volume1/auto-gallery/docker/redis
 HOST_MEILISEARCH=/volume1/auto-gallery/docker/meilisearch
 ```
 
-### 3. 启动基础设施
-
-```bash
-docker compose up -d postgres redis meilisearch
-```
-
-等待健康检查通过：
-
-```bash
-docker compose ps
-# 三个服务均应显示 "healthy"
-```
-
-### 4. 数据库迁移
-
-```bash
-docker compose run --rm backend alembic upgrade head
-```
-
-### 5. 启动应用
+### 3. 启动全部服务
 
 ```bash
 docker compose up -d
 ```
 
-### 6. 验证
+此命令启动全部服务：postgres、redis、meilisearch、backend、worker、scheduler 和 admin-web。后端启动时会自动执行数据库迁移，无需单独运行迁移步骤。
+
+等待健康检查通过：
+
+```bash
+docker compose ps
+# 全部服务均应显示 "healthy"
+```
+
+如果仅需启动基础设施服务用于本地开发：
+
+```bash
+docker compose up -d postgres redis meilisearch
+```
+
+### 4. 验证
 
 ```bash
 # 健康检查
@@ -83,7 +95,7 @@ curl http://localhost:8818/api/v1/system/health
 # {"status":"ok","services":{"postgres":"up","redis":"up","meilisearch":"up"}}
 ```
 
-管理后台：`http://<主机IP>:3000`。
+管理后台：`http://<主机IP>:13000`。
 
 ## gallery-dl 配置
 
@@ -104,9 +116,39 @@ curl http://localhost:8818/api/v1/system/health
 }
 ```
 
+### 通过管理后台按来源配置
+
+每个来源（Pixiv、X/Twitter、Iwara、Danbooru、Pinterest、LOFTER、微博、Bilibili）均可通过管理后台 **设置 > gallery-dl 配置** 进行配置，包括：
+
+- 认证（Cookie、Refresh Token、API 密钥、用户名/密码）
+- 内容过滤（作品、收藏、书签、推文、喜欢）
+- 标签语言偏好
+- Ugoira 格式（ZIP 或 GIF）
+- 目录与文件名模式
+- 速率限制（请求间隔）
+- 单次最大帖子数
+- 视频画质偏好
+- 导入时默认启用（按来源）
+
+修改会自动保存到 `config.json`。建议通过管理后台配置 gallery-dl 提取器；手动编辑 `config.json` 亦可作为备选方式。
+
 ### 命名模板
 
-命名模板控制文件在 `LIBRARY_ROOT` 中的组织方式。使用 gallery-dl 的模板语法。默认模板存储在数据库（`naming_template` 表），可通过管理后台编辑。
+命名模板控制文件在 `DOWNLOAD_ROOT` 和 `LIBRARY_ROOT` 中的组织方式。使用 gallery-dl 的模板语法（例如 `pixiv/{user[account]}/{id}`）。可通过以下方式管理：
+
+- **管理后台**：**设置 > 命名模板** -- 按来源创建、编辑和设置默认模板
+- **数据库**：存储在 `naming_template` 表中
+
+## 备份与恢复
+
+系统内建备份与恢复功能，可通过管理后台 **设置 > 备份与恢复** 访问。备份内容包括：
+
+- PostgreSQL 数据库（创作者、订阅、作品、标签、设置、任务历史）
+- gallery-dl 配置（提取器设置、Cookie、认证令牌）
+- 应用配置（命名模板等）
+- 下载归档（archive-*.sqlite3，用于防止重复下载）
+
+可手动创建备份并下载至本地保存。系统每 24 小时自动创建一次备份。恢复功能可上传备份文件并替换当前系统状态。
 
 ## 开发环境
 
@@ -126,13 +168,17 @@ docker compose up -d
 ## 常见问题
 
 ### worker 中找不到 gallery-dl
+
 确认后端镜像已安装 gallery-dl。检查 `backend/requirements.txt` 是否包含 `gallery-dl`。
 
 ### 数据库连接被拒绝
+
 PostgreSQL 可能在后端启动时尚未就绪。Docker Compose 的 `depends_on` 配合 `condition: service_healthy` 可解决此问题。
 
 ### 卷权限被拒绝
+
 确认 Docker 用户（通常 uid 1000）对主机目录有写权限。在 Synology NAS 上可能需要通过 DSM File Station 设置权限。
 
 ### Meilisearch master key 不匹配
+
 `.env` 中的 `MEILI_MASTER_KEY` 必须与后端使用的密钥一致。如果在 Meilisearch 启动后更改，需删除 `docker/meilisearch/` 数据目录后重启。

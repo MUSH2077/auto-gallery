@@ -2,17 +2,17 @@
 
 ## Project Structure
 
-```
+```text
 auto-gallery/
   docker-compose.yaml
   .env.example
   README.md
   docs/
-    architecture.md
-    setup.md
-    development.md
-    providers.md
-    risks.md
+    architecture.md    architecture.zh.md
+    setup.md           setup.zh.md
+    development.md     development.zh.md
+    providers.md       providers.zh.md
+    risks.md           risks.zh.md
   backend/
     Dockerfile
     requirements.txt
@@ -32,12 +32,53 @@ auto-gallery/
       env.py
       versions/
     tests/
-  admin-web/          # future
+  admin-web/
+    Dockerfile
+    package.json
+    tsconfig.json
+    tailwind.config.ts
+    src/
+      app/
+        admin/           # all admin pages
+          creators/      # list, detail, mapping, duplicates
+          subscriptions/ # list, detail
+          jobs/          # download + import unified queue
+          works/         # list, detail
+          tags/          # tag manager
+          scheduler/     # sync schedule + queue
+          search/        # Meilisearch full-text search
+          reference/     # Danbooru reference mapping
+          sources/       # provider capability matrix
+          system/        # system health dashboard
+          settings/      # gallery-dl, dedup, proxy, auth-status, logs, backup, naming-templates
+          data-mgmt/     # storage stats, integrity checks, danger zone
+          merge-candidates/
+          dedup/
+          login/
+      components/        # shared components
+        ConfirmDialog.tsx
+        DataTable.tsx
+        EmptyState.tsx
+        ErrorBoundary.tsx
+        ErrorState.tsx
+        LoadingSkeleton.tsx
+        Modal.tsx
+        PageHeader.tsx
+        SourceBadge.tsx
+        StatusBadge.tsx
+        Toast.tsx
+        WorkGrid.tsx
+      lib/               # typed API client, i18n, auth, theme
+        api.ts
+        auth.tsx
+        i18n.tsx
+        theme.tsx
 ```
 
 ## Backend Development
 
 ### Stack
+
 - Python 3.12
 - FastAPI
 - SQLAlchemy 2.0 (async)
@@ -45,6 +86,13 @@ auto-gallery/
 - PostgreSQL 16
 - Redis (RQ)
 - Meilisearch
+
+### Ports
+
+| Context              | Backend | Admin Web |
+|----------------------|---------|-----------|
+| Host (mapped)        | 8818    | 13000     |
+| Container-internal   | 8000    | 3000      |
 
 ### Running locally (without Docker for iteration)
 
@@ -57,7 +105,7 @@ pip install -r requirements.txt
 # Requires postgres, redis, meilisearch running (via Docker)
 docker compose up -d postgres redis meilisearch
 
-# Run API
+# Run API (container-internal port 8000)
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -87,6 +135,13 @@ docker compose run --rm backend alembic upgrade head
 docker compose run --rm backend alembic downgrade -1
 ```
 
+### Migration safety
+
+- Always review `--autogenerate` output before committing.
+- Watch for: drop tables/columns, constraint changes, column renames (autogenerate sees rename as drop+add).
+- If a migration loses data, explicitly state the reason in the commit message.
+- Test both `alembic upgrade head` and `alembic downgrade -1` before merging.
+
 ### Code conventions
 
 - Business logic in services, never in route handlers
@@ -100,20 +155,90 @@ docker compose run --rm backend alembic downgrade -1
 
 See [docs/providers.md](providers.md) for the full provider interface and implementation guide.
 
-## Admin Web Development (future)
+## Admin Web Development
 
 ### Stack
-- Next.js 14+
-- React 18+
-- TypeScript
-- Tailwind CSS
-- TanStack Query
 
-### Conventions
-- Typed API client (generated or hand-written)
+- Next.js 14 (14.2.18)
+- React 18 (18.3.1)
+- TypeScript (5.7.2)
+- Tailwind CSS (3.4.16)
+- TanStack Query (5.62.0)
+
+### Pages
+
+The admin web is fully built with the following pages:
+
+| Section | Pages |
+|---------|-------|
+| Dashboard | System health, storage, recent activity |
+| Creators | List, detail, identity mapping, duplicates |
+| Subscriptions | List, detail (multi-source config) |
+| Jobs | Unified download + import job queue |
+| Works | Grid/list view, detail with source records and assets |
+| Tags | Tag manager with search and categories |
+| Scheduler | Sync schedule, queue status, scheduler config |
+| Search | Meilisearch full-text search across works, creators, tags |
+| Danbooru Reference | Artist search, URL batch import, Pixiv ID search |
+| Sources | Provider capability matrix, URL validation |
+| Settings > gallery-dl | Per-source extractor config (auth, content, rate limits) |
+| Settings > Dedup | Source-level, cross-source, and perceptual hash dedup toggles |
+| Settings > Proxy | HTTP/HTTPS proxy config for gallery-dl and API calls |
+| Settings > Auth Status | Cookie/token health monitoring per subscription source |
+| Settings > Logs | Live log viewer from in-memory ring buffer |
+| Settings > Backup & Restore | Full system backup creation and restore |
+| Settings > Naming Templates | File organization patterns per source |
+| Settings > Download Defaults | Timeout, retries, backoff, max posts |
+| Settings > Subscription Defaults | Sync interval, schedule mode, timezone |
+| Data Management | Storage stats, integrity checks, cleanup, danger zone |
+
+### Running admin-web locally
+
+```bash
+cd admin-web
+npm install
+
+# Start dev server on port 3000
+npm run dev
+```
+
+The dev server proxies API requests to the backend (configured via `BACKEND_INTERNAL_URL` env var).
+
+### Building for production
+
+```bash
+npm run build
+```
+
+### Admin-web debugging
+
+```bash
+# Check for TypeScript/build errors
+npm run build
+
+# The build output will show any type errors or compilation issues
+```
+
+### i18n (Internationalization)
+
+The admin web supports Chinese and English. All UI strings are defined in `src/lib/i18n.tsx` with both `zh` and `en` values. Language preference is stored in localStorage and defaults to the browser's language.
+
+When adding new UI:
+
+1. Add keys for ALL text that appears in the UI
+2. Use Chinese values that read naturally to a Chinese speaker
+3. Use English values that read naturally to an English speaker
+4. Never display raw i18n key IDs -- if you see a key displayed instead of its value, the key is missing from i18n.tsx
+
+Key format: `namespace.natural_name` (e.g., `jobs.download`, `creators.title`).
+
+### Admin web conventions
+
+- Typed API client in `src/lib/api.ts`
 - Reusable components in `src/components/`
 - Pages keep logic thin; TanStack Query handles server state
 - Mobile-friendly but desktop-optimized
+- Dark mode support via `src/lib/theme.tsx`
 
 ## Debugging
 
@@ -156,4 +281,8 @@ docker compose exec worker gallery-dl --config /gallerydl-config/config.json "ht
 ```bash
 docker compose build backend
 docker compose up -d backend worker scheduler
+
+# Or for admin-web
+docker compose build admin-web
+docker compose up -d admin-web
 ```

@@ -7,6 +7,15 @@
 - Linux host (NAS or server) on local network
 - Sufficient storage for media library
 
+## Server Ports
+
+| Service   | Host Port | Container Port |
+|-----------|-----------|----------------|
+| backend   | 8818      | 8000           |
+| admin-web | 13000     | 3000           |
+
+Both ports are configurable via `BACKEND_PORT` and `ADMIN_WEB_PORT` in `.env`.
+
 ## Installation
 
 ### 1. Directory Structure
@@ -35,6 +44,13 @@ SECRET_KEY=<generate>
 ADMIN_PASSWORD=<generate>
 ```
 
+Set your timezone:
+
+```bash
+# e.g. Asia/Shanghai, America/New_York, UTC
+TIMEZONE=Asia/Shanghai
+```
+
 For local development, use the example dev paths already in `.env.example`. For NAS deployment, set the host paths:
 
 ```bash
@@ -48,42 +64,38 @@ HOST_REDIS=/volume1/auto-gallery/docker/redis
 HOST_MEILISEARCH=/volume1/auto-gallery/docker/meilisearch
 ```
 
-### 3. Start Infrastructure
-
-```bash
-docker compose up -d postgres redis meilisearch
-```
-
-Wait for health checks:
-
-```bash
-docker compose ps
-# All three should show "healthy"
-```
-
-### 4. Database Migrations
-
-```bash
-docker compose run --rm backend alembic upgrade head
-```
-
-### 5. Start Application
+### 3. Start All Services
 
 ```bash
 docker compose up -d
 ```
 
-### 6. Verify
+This starts all services: postgres, redis, meilisearch, backend, worker, scheduler, and admin-web. The backend automatically runs database migrations on startup, so no separate migration step is needed.
+
+Wait for health checks:
+
+```bash
+docker compose ps
+# All services should show "healthy"
+```
+
+If you need to start only the infrastructure services for local development:
+
+```bash
+docker compose up -d postgres redis meilisearch
+```
+
+### 4. Verify
 
 ```bash
 # Health check
-curl http://localhost:8000/api/system/health
+curl http://localhost:8818/api/v1/system/health
 
 # Expected response:
 # {"status":"ok","services":{"postgres":"up","redis":"up","meilisearch":"up"}}
 ```
 
-Admin web is available at `http://<host-ip>:3000`.
+Admin web is available at `http://<host-ip>:13000`.
 
 ## gallery-dl Configuration
 
@@ -104,9 +116,39 @@ Admin web is available at `http://<host-ip>:3000`.
 }
 ```
 
+### Per-Source Configuration via Admin Web
+
+Each source provider (Pixiv, X/Twitter, Iwara, Danbooru, Pinterest, LOFTER, Weibo, Bilibili) can be configured through the admin web UI at **Settings > gallery-dl Config**. This includes:
+
+- Authentication (cookies, refresh tokens, API keys, username/password)
+- Content filters (artworks, bookmarks, favorites, tweets, likes)
+- Tag language preferences
+- Ugoira format (ZIP or GIF)
+- Directory and filename patterns
+- Rate limiting (sleep between requests)
+- Max posts per download
+- Video quality preferences
+- Auto-enable on import (per source)
+
+Changes are saved to `config.json` automatically. The admin web UI is the recommended way to configure gallery-dl extractors; manual editing of `config.json` is also supported as a fallback.
+
 ### Naming Templates
 
-Naming templates control how files are organized in `LIBRARY_ROOT`. They use gallery-dl's template syntax. Default template is stored in the database (`naming_template` table) and can be edited via admin web.
+Naming templates control how files are organized in `DOWNLOAD_ROOT` and `LIBRARY_ROOT`. They use gallery-dl's template syntax (e.g., `pixiv/{user[account]}/{id}`). Templates can be managed via:
+
+- **Admin web**: **Settings > Naming Templates** -- create, edit, and set default templates per source
+- **Database**: stored in the `naming_template` table
+
+## Backup and Restore
+
+The system includes a backup and restore feature accessible via **Settings > Backup & Restore** in the admin web. Backups include:
+
+- PostgreSQL database (creators, subscriptions, works, tags, settings, job history)
+- gallery-dl configuration (extractor settings, cookies, auth tokens)
+- Application configuration (naming templates, etc.)
+- Download archives (archive-*.sqlite3, for preventing duplicate downloads)
+
+Backups can be created manually and downloaded for off-site storage. Automatic backups run every 24 hours. The restore function uploads a backup file and replaces the current system state.
 
 ## Development Setup
 
