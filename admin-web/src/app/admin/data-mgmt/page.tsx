@@ -152,7 +152,7 @@ export default function DataManagementPage() {
   return (
     <main className="max-w-5xl mx-auto p-6">
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("datamgmt.back")}</Link>
+        <Link href="/admin" className="text-sm text-blue-600 hover:underline">&larr; {t("common.back")}</Link>
       </div>
       <PageHeader title={t("datamgmt.title")} description={t("datamgmt.desc")} />
 

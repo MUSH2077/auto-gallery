@@ -77,6 +77,7 @@ function AdminNav() {
     ["/admin/tags", t("nav.tags")],
     ["/admin/scheduler", t("nav.scheduler")],
     ["/admin/reference/danbooru", t("nav.danbooru")],
+    ["/admin/data-mgmt", t("nav.datamgmt")],
     ["/admin/settings", t("nav.settings")],
   ];
 
