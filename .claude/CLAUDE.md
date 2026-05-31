@@ -547,6 +547,38 @@ Admin Web:
 - Use TanStack Query for server state.
 - Design mobile-friendly admin pages but optimize for desktop first.
 
+
+
+## I18n Naming Convention
+
+**CRITICAL**: All i18n keys throughout admin-web MUST use natural, human-readable names that make sense as standalone labels. Never use technical abbreviations or concatenated tech terms as keys.
+
+### Key format
+- Use `namespace.natural_name` pattern where namespace = page/feature area
+- The key's value MUST be a proper Chinese/English label suitable for direct display
+- Never leave a key untranslated — both `zh` and `en` values are required
+- Keys that look like `jobs.download` or `common.select_all` are fine as IDs, but the Chinese VALUE must be natural language (e.g., `"下载队列"` not `"jobs.download"`)
+
+### When adding new UI
+1. First add i18n keys for ALL text that appears in the UI
+2. Use Chinese values that read naturally to a Chinese speaker
+3. Use English values that read naturally to an English speaker
+4. Never display raw i18n key IDs — if you see a key displayed instead of its value, the key is missing from i18n.tsx
+
+### Examples
+| Key | zh (natural) | en (natural) |
+|-----|-------------|---------------|
+| `jobs.download` | 下载队列 | Download Queue |
+| `jobs.clear_failed` | 清除失败任务 | Clear Failed |
+| `jobs.no_dl` | 暂无下载任务 | No download jobs |
+| `creator_detail.works_timeline` | 发布活动 | Activity |
+| `gallerydl.test_connection` | 测试连接 | Test Connection |
+
+### Anti-patterns (DO NOT USE)
+- Keys whose value is the key itself (e.g., `"jobs.download": "jobs.download"`)
+- Untranslated English-only values (every key must have zh + en)
+- Inconsistent naming between zh and en (they should convey the same meaning)
+
 ## Commit Discipline
 
 **CRITICAL**: After completing each phase task, feature milestone, or bug fix, create a git commit automatically. Do NOT wait for the user to ask. This is mandatory.
