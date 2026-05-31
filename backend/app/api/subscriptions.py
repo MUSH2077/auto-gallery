@@ -20,6 +20,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[RequireAdmin])
 
 
+
+@router.get("/count")
+async def count_subscriptions(db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import func
+    from app.models.subscription import Subscription as SM
+    result = await db.execute(select(func.count(SM.id)))
+    return {"total": result.scalar() or 0}
+
+
 @router.get("", response_model=list[SubscriptionRead])
 async def list_subscriptions(
     offset: int = 0, limit: int = 50,

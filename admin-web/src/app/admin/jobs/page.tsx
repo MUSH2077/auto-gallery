@@ -1,6 +1,5 @@
 "use client";
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
@@ -30,7 +29,6 @@ function ProgressBar({ active }: { active: boolean }) {
 
 function ActiveIndicator({ status }: { status: string }) {
   const t = useT();
-  const toast = useToast();
   const isActive = status === "downloading" || status === "running" || status === "importing";
   const color = 
     status === "complete" || status === "downloaded" ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400" :
@@ -50,7 +48,6 @@ function ActiveIndicator({ status }: { status: string }) {
 
 export default function JobsPage() {
   const t = useT();
-  const toast = useToast();
   const router = useRouter();
   const qc = useQueryClient();
 
@@ -144,7 +141,7 @@ export default function JobsPage() {
   const batchDL = useMutation({
     mutationFn: ({ ids, action }: { ids: string[]; action: string }) => api.batchDownloadJobs(ids, action),
     onSuccess: (data: any) => {
-      toast.info(t("jobs.batch_result").replace("{succeeded}", String(data.succeeded)).replace("{failed}", String(data.failed)));
+      alert(t("jobs.batch_result").replace("{succeeded}", String(data.succeeded)).replace("{failed}", String(data.failed)));
       setSelected(new Set()); setSelectAll(false);
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
     },
@@ -178,7 +175,7 @@ export default function JobsPage() {
 
   const handleBatch = (action: string) => {
     const eligible = getEligibleIds(action);
-    if (eligible.length === 0) { toast.info(t("common.no_eligible")); return; }
+    if (eligible.length === 0) { alert(t("common.no_eligible")); return; }
     if (eligible.length < selected.size && !confirm(t("common.partial_selected"))) return;
     batchDL.mutate({ ids: eligible, action });
   };
@@ -332,7 +329,6 @@ export default function JobsPage() {
 // Import jobs for a specific download job
 function ImportJobsList({ downloadJobId }: { downloadJobId: string }) {
   const t = useT();
-  const toast = useToast();
   const imports = useQuery({
     queryKey: ["import-jobs", downloadJobId],
     queryFn: () => api.getDownloadJobImports(downloadJobId),

@@ -505,6 +505,9 @@ function DanbooruTab({ data, onChange }: { data: DanbooruSourceConfig; onChange:
 
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.content")}</h4>
       <div className="space-y-3">
+        <div>
+
+        </div>
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.metadata_section")}</h4>
       <div className="space-y-1">

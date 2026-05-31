@@ -285,7 +285,7 @@ function WorksContent() {
 
       {/* Loading */}
       {works.isLoading && viewMode === "grid" && (
-        <div className="overflow-x-auto grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
           {Array.from({ length: 10 }).map((_, i) => (
             <div key={i} className="bg-white dark:bg-slate-800 rounded-lg shadow p-3 animate-pulse">
               <div className="h-32 bg-gray-200 dark:bg-slate-700 rounded mb-2" />
@@ -308,7 +308,7 @@ function WorksContent() {
 
       {/* Grid View */}
       {works.data && works.data.items?.length > 0 && viewMode === "grid" && (
-        <div className="overflow-x-auto grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-6">
           {works.data.items.map((w: WorkListItem) => <GridCard key={w.id} w={w} onToggleFavorite={(id) => toggleFavorite.mutate(id)} />)}
         </div>
       )}

@@ -410,6 +410,7 @@ export const api = {
   },
 
   getCreator: (id: string) => request<Creator>(`/api/v1/creators/${id}`),
+  countCreators: () => request<{ total: number }>("/api/v1/creators/count"),
   getCreatorTimeline: (creatorId: string, fromDate?: string, toDate?: string) => {
       const q = new URLSearchParams();
       if (fromDate) q.set("from_date", fromDate);
@@ -469,6 +470,7 @@ export const api = {
     if (filters?.never_synced !== undefined) params.set("never_synced", String(filters.never_synced));
     return request<Subscription[]>(`/api/v1/subscriptions?${params.toString()}`);
   },
+  countSubscriptions: () => request<{ total: number }>("/api/v1/subscriptions/count"),
 
   getSubscription: (id: string) => request<Subscription>(`/api/v1/subscriptions/${id}`),
 

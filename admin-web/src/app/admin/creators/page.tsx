@@ -100,6 +100,7 @@ function CreatorsContent() {
 
   const filters = useMemo(() => buildFilters(filter, search), [filter, search]);
 
+  const creatorCount = useQuery({ queryKey: ["creatorCount"], queryFn: () => api.countCreators() });
   const creators = useQuery({
     queryKey: [...queryKeys.creators.all, page, limit, filters],
     queryFn: () => api.listCreators(page * limit, limit, filters as any),

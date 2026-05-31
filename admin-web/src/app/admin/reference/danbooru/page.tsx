@@ -2,7 +2,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
 
@@ -22,7 +21,6 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
   importName: string; setImportName: (v: string) => void;
 }) {
   const t = useT();
-  const toast = useToast();
   const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
   const qc = useQueryClient();
 
@@ -46,10 +44,10 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
       setSubscribingUrl(null);
-      toast.info("Subscription source created! Trigger a sync from the Subscriptions page.");
+      alert("Subscription source created! Trigger a sync from the Subscriptions page.");
     },
     onError: (err) => {
-      toast.info(`Failed: ${(err as Error).message}`);
+      alert(`Failed: ${(err as Error).message}`);
       setSubscribingUrl(null);
     },
   });
@@ -263,7 +261,6 @@ const DOWNLOADABLE_SOURCES = ["pixiv", "iwara"];
 
 export default function DanbooruReferencePage() {
   const t = useT();
-  const toast = useToast();
   const [searchUrl, setSearchUrl] = useState("");
   const [searchName, setSearchName] = useState("");
   const [searchPixivId, setSearchPixivId] = useState("");
@@ -283,7 +280,7 @@ export default function DanbooruReferencePage() {
   const importMutation = useMutation({
     mutationFn: (creatorId: string) => api.importDanbooruArtist({ creator_id: creatorId, ...searchParams }),
     onSuccess: (data) => {
-      toast.info(`Imported ${data.imported} links from Danbooru artist "${data.artist_name}"`);
+      alert(`Imported ${data.imported} links from Danbooru artist "${data.artist_name}"`);
       qc.invalidateQueries({ queryKey: queryKeys.creators.all });
     },
   });
@@ -294,10 +291,10 @@ export default function DanbooruReferencePage() {
       ...searchParams,
     }),
     onSuccess: (data) => {
-      if (!data.found) { toast.info("No matching Danbooru artist found."); return; }
+      if (!data.found) { alert("No matching Danbooru artist found."); return; }
       qc.invalidateQueries({ queryKey: queryKeys.creators.all });
       qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
-      toast.info(`Done! Creator: ${data.creator_id?.slice(0, 8)}... | Links: ${data.links_imported} | Sources: ${data.sources_created}`);
+      alert(`Done! Creator: ${data.creator_id?.slice(0, 8)}... | Links: ${data.links_imported} | Sources: ${data.sources_created}`);
     },
   });
 
@@ -389,6 +386,43 @@ export default function DanbooruReferencePage() {
       <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 text-sm mb-6">
         <p className="font-medium text-blue-800 dark:text-blue-300 mb-1">{t("danbooru.search_info")}</p>
         <p className="text-blue-700 dark:text-blue-300">Danbooru artists map source profiles (Pixiv, Twitter, Iwara, etc.) to a canonical name. Use any of the three methods below to find the matching Danbooru artist record.</p>
+      </div>
+
+      {/* Favorites Sync */}
+      <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 mb-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-medium text-sm">{t("danbooru.favorites_sync")}</h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("danbooru.favorites_sync.desc")}</p>
+          </div>
+          <button
+            onClick={() => {
+              const doSync = async () => {
+                try {
+                  const res = await api.syncDanbooruFavorites();
+                  if (res.status === "ok") {
+                    qc.invalidateQueries({ queryKey: queryKeys.creators.all });
+                    const msg = t("danbooru.favorites_sync.result")
+                      .replace("{total}", String(res.total_favorites || 0))
+                      .replace("{created}", String(res.created))
+                      .replace("{matched}", String(res.matched))
+                      .replace("{errors}", String(res.errors));
+                    alert(msg);
+                  } else {
+                    alert(res.message || "Sync failed");
+                  }
+                } catch (e) {
+                  alert(`Sync error: ${(e as Error).message}`);
+                }
+              };
+              doSync();
+            }}
+            className="px-4 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700 shrink-0"
+          >
+            {t("danbooru.favorites_sync.btn")}
+          </button>
+        </div>
+        <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-2">{t("danbooru.favorites_sync.auth_warn")}</p>
       </div>
 
       {/* URL Batch Import */}
