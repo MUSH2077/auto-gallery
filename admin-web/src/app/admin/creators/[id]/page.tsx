@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, CreatorLink as CreatorLinkType, SourceCreator as SourceCreatorType } from "@/lib/api";
-import { PageHeader, StatusBadge, SourceBadge, EmptyState, Modal, ConfirmDialog } from "@/components";
+import { PageHeader, StatusBadge, SourceBadge, EmptyState, Modal, ConfirmDialog, WorkGrid } from "@/components";
 import { useT } from "@/lib/i18n";
 
 function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () => void }) {
@@ -305,7 +305,7 @@ export default function CreatorDetailPage() {
       </div>
 
       {/* Works by this Creator */}
-      <CreatorWorksSection creatorId={id} creatorName={creator.data?.display_name || creator.data?.name || ""} />
+      <CreatorWorkTimeline creatorId={id} creatorName={creator.data?.display_name || creator.data?.name || ""} />
 
       <Modal open={showAddLink} onClose={() => setShowAddLink(false)} title={t("creator_detail.add_link_title")}><AddLinkForm creatorId={id} onClose={() => setShowAddLink(false)} /></Modal>
       <Modal open={showAddSource} onClose={() => setShowAddSource(false)} title={t("creator_detail.add_source_title")}><AddSourceForm creatorId={id} onClose={() => setShowAddSource(false)} /></Modal>
@@ -326,43 +326,26 @@ export default function CreatorDetailPage() {
 }
 
 
-function CreatorWorksSection({ creatorId, creatorName }: { creatorId: string; creatorName: string }) {
+function CreatorWorkTimeline({ creatorId, creatorName }: { creatorId: string; creatorName: string }) {
   const t = useT();
   const router = useRouter();
-  const works = useQuery({
-    queryKey: ["creator-works", creatorId],
-    queryFn: () => api.listWorks(0, 12, { creator_id: creatorId, sort_by: "posted_at", sort_order: "desc" }),
+  const timeline = useQuery({
+    queryKey: ["creator-timeline", creatorId],
+    queryFn: () => api.getCreatorTimeline(creatorId),
   });
 
-  if (works.isLoading) return null;
-  if (!works.data?.items?.length) return null;
+  if (timeline.isLoading) return <div className="animate-pulse"><div className="h-32 bg-gray-200 dark:bg-slate-700 rounded" /></div>;
+  if (!timeline.data?.days?.length) return <p className="text-sm text-gray-400 dark:text-gray-500">{t("creator_detail.no_works_timeline")}</p>;
 
   return (
     <section className="mb-8">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-lg font-semibold dark:text-white">{t("creator_detail.works_section").replace("{count}", String(works.data.total))}</h2>
+        <h2 className="text-lg font-semibold dark:text-white">{t("creator_detail.works_timeline")}</h2>
         <button onClick={() => router.push(`/admin/works?creator=${creatorId}`)}
           className="text-sm text-blue-600 hover:underline">{t("creator_detail.view_all_works")}</button>
       </div>
-      <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-        {works.data.items.map((w) => (
-          <div key={w.id} className="bg-white dark:bg-slate-800 rounded-lg shadow-sm overflow-hidden cursor-pointer hover:shadow-md transition-shadow" onClick={() => router.push(`/admin/works/${w.id}`)}>
-            <div className="aspect-square bg-gray-100 dark:bg-slate-700 flex items-center justify-center text-gray-400 text-xs overflow-hidden relative">
-              {w.thumbnail_asset_id ? (
-                <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="w-full h-full object-cover" loading="lazy" />
-              ) : (
-                <span>{t("creator_detail.na")}</span>
-              )}
-              {w.asset_count > 1 && (
-                <span className="absolute top-0.5 right-0.5 bg-black/70 text-white text-[10px] px-1 py-0.5 rounded">{w.asset_count}p</span>
-              )}
-            </div>
-            <div className="p-2">
-              <div className="text-xs font-medium truncate dark:text-white">{w.title || t("creator_detail.untitled")}</div>
-              {w.source && <SourceBadge source={w.source} />}
-            </div>
-          </div>
-        ))}
+      <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+        <WorkGrid data={timeline.data} />
       </div>
     </section>
   );

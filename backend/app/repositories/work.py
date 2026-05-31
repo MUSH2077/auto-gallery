@@ -183,3 +183,40 @@ class WorkRepository:
             .where(AssetSource.work_source_id == work_source_id)
         )
         return list(result.scalars().all())
+    async def get_creator_timeline(self, creator_id: UUID,
+                                    from_date: str | None = None,
+                                    to_date: str | None = None) -> tuple[list[dict], list[str]]:
+        """Return per-source work counts per day for a creator timeline grid."""
+        cols = [
+            func.date(Work.posted_at).label("date"),
+            WorkSource.source,
+            func.count(Work.id).label("cnt"),
+        ]
+        stmt = (
+            select(*cols)
+            .select_from(Work)
+            .join(WorkSource, WorkSource.work_id == Work.id)
+            .join(SourceCreator,
+                  (SourceCreator.source_creator_id == WorkSource.source_creator_id)
+                  & (SourceCreator.source == WorkSource.source))
+            .where(SourceCreator.creator_id == creator_id)
+            .where(Work.posted_at.isnot(None))
+        )
+        if from_date:
+            stmt = stmt.where(Work.posted_at >= from_date)
+        if to_date:
+            stmt = stmt.where(Work.posted_at < to_date)
+        stmt = stmt.group_by(func.date(Work.posted_at), WorkSource.source).order_by("date")
+        result = await self.session.execute(stmt)
+        rows = result.all()
+        days: dict[str, dict] = {}
+        sources: set[str] = set()
+        for date_val, source, cnt in rows:
+            day = str(date_val)
+            if day not in days:
+                days[day] = {"date": day, "total": 0}
+            days[day][source] = cnt
+            days[day]["total"] += cnt
+            sources.add(source)
+        return list(days.values()), sorted(sources)
+

@@ -594,3 +594,4 @@ async def url_batch_import_danbooru(data: dict, db: AsyncSession = Depends(get_d
         "not_found": not_found,
         "errors": errors,
         "results": results,
+    }
