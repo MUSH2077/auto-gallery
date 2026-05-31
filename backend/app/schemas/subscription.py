@@ -10,6 +10,8 @@ class SubscriptionCreate(BaseModel):
     is_active: bool = True
     sync_enabled: bool = True
     sync_interval_hours: int = 6
+    schedule_mode: str | None = None
+    scheduled_times: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -19,6 +21,8 @@ class SubscriptionUpdate(BaseModel):
     is_active: bool | None = None
     sync_enabled: bool | None = None
     sync_interval_hours: int | None = None
+    schedule_mode: str | None = None
+    scheduled_times: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -32,6 +36,8 @@ class SubscriptionRead(BaseModel):
     is_active: bool
     sync_enabled: bool
     sync_interval_hours: int = 6
+    schedule_mode: str | None = None
+    scheduled_times: str | None = None
     last_synced_at: datetime | None = None
     created_at: datetime
     updated_at: datetime

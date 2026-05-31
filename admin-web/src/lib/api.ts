@@ -100,6 +100,8 @@ export interface Subscription {
   is_active: boolean;
   sync_enabled: boolean;
   sync_interval_hours: number;
+  schedule_mode?: string | null;
+  scheduled_times?: string | null;
   last_synced_at?: string;
   created_at: string;
   updated_at: string;

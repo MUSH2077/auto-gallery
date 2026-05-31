@@ -46,29 +46,33 @@ async def _read_download_defaults(db) -> dict:
     return {}
 
 
-def _should_sync_now(config: dict, last_synced_at, interval_hours: int) -> bool:
-    """Check whether a sync is due, respecting schedule_mode.
+def _should_sync_now(sub, system_config: dict, last_synced_at, now: datetime, tz) -> bool:
+    """Check whether a sync is due, respecting per-subscription schedule strategy.
 
-    In 'interval' mode: sync when last_synced_at is older than interval_hours.
-    In 'fixed_time' mode: sync ONLY when we are within a tolerance window
-    (±scan_interval minutes) of a scheduled time AND the last sync was before
-    that time.  Also sync if last sync was > 24h ago (catch-up after downtime).
+    Priority: subscription value > system default > hardcoded fallback.
+    sub.schedule_mode=None means inherit from system_config.
+
+    Modes: 'manual'=never, 'interval'=every N hours, 'fixed_time'=at scheduled times.
     """
     if not last_synced_at:
-        return True  # Never synced — always sync
+        return True
 
-    # Use configured timezone for schedule evaluation
-    tz_name = config.get("timezone", "UTC")
-    try:
-        tz = ZoneInfo(tz_name)
-    except Exception:
-        tz = timezone.utc
-    now = datetime.now(tz)
-    mode = config.get("schedule_mode", "interval")
+    mode = sub.schedule_mode or system_config.get("schedule_mode", "interval")
+
+    if mode == "manual":
+        return False
+
+    if mode == "interval":
+        interval_hours = sub.sync_interval_hours or int(
+            system_config.get("default_sync_interval_hours", 6))
+        cutoff = now - timedelta(hours=interval_hours)
+        return last_synced_at < cutoff
 
     if mode == "fixed_time":
-        times_str = config.get("scheduled_times", "")
+        times_str = sub.scheduled_times or system_config.get("scheduled_times", "")
         if not times_str:
+            interval_hours = sub.sync_interval_hours or int(
+                system_config.get("default_sync_interval_hours", 6))
             cutoff = now - timedelta(hours=interval_hours)
             return last_synced_at < cutoff
 
@@ -83,16 +87,14 @@ def _should_sync_now(config: dict, last_synced_at, interval_hours: int) -> bool:
                 continue
 
         if not scheduled:
+            interval_hours = sub.sync_interval_hours or int(
+                system_config.get("default_sync_interval_hours", 6))
             cutoff = now - timedelta(hours=interval_hours)
             return last_synced_at < cutoff
 
-        # Tolerance window: ±half the scan interval around each scheduled time.
-        # This prevents syncing at random times far from the scheduled slot.
-        scan_minutes = int(config.get("scheduler_scan_interval_minutes", 60))
+        scan_minutes = int(system_config.get("scheduler_scan_interval_minutes", 60))
         window_minutes = max(scan_minutes // 2, 15)
 
-        # Check if we are within the tolerance window of ANY scheduled time today.
-        # Also check yesterday (handles late-night windows spanning midnight).
         for day_offset in (0, -1):
             day = now.date() + timedelta(days=day_offset)
             for h, m in scheduled:
@@ -101,8 +103,6 @@ def _should_sync_now(config: dict, last_synced_at, interval_hours: int) -> bool:
                 if diff_minutes <= window_minutes and last_synced_at < st:
                     return True
 
-        # Catch-up: if last sync was more than 24 hours ago AND the most recent
-        # scheduled time has passed, trigger a one-off catch-up.
         if last_synced_at < now - timedelta(hours=24):
             for days_back in range(1, 31):
                 day = now.date() - timedelta(days=days_back)
@@ -118,7 +118,9 @@ def _should_sync_now(config: dict, last_synced_at, interval_hours: int) -> bool:
 
         return False
 
-    # interval mode (default)
+    # Fallback
+    interval_hours = sub.sync_interval_hours or int(
+        system_config.get("default_sync_interval_hours", 6))
     cutoff = now - timedelta(hours=interval_hours)
     return last_synced_at < cutoff
 
@@ -169,8 +171,8 @@ async def sync_subscriptions():
                 if ss.auth_healthy is False:
                     continue
 
-                # Check if sync is due
-                if not _should_sync_now(config, ss.last_synced_at, interval_hours):
+                # Check if sync is due (per-subscription strategy)
+                if not _should_sync_now(sub, config, ss.last_synced_at, now, tz):
                     continue
 
                 # Check if there's a recent job for this subscription source

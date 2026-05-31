@@ -33,6 +33,8 @@ async def get_subscription_defaults(db: AsyncSession) -> dict:
         "sync_interval_hours": int(defaults.get("default_sync_interval_hours", DEFAULT_SYNC_INTERVAL_HOURS)),
         "sync_enabled": True,
         "is_active": True,
+        "schedule_mode": None,
+        "scheduled_times": None,
     }
 
 
