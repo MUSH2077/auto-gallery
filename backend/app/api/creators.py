@@ -103,6 +103,24 @@ async def update_creator(creator_id: UUID, data: CreatorUpdate, db: AsyncSession
         raise HTTPException(status_code=404, detail=str(e))
 
 
+
+
+@router.get("/{creator_id}/timeline")
+async def get_creator_timeline(creator_id: UUID,
+                                from_date: str | None = None,
+                                to_date: str | None = None,
+                                db: AsyncSession = Depends(get_db)):
+    """Return per-source work counts per day for the creator's activity grid."""
+    from app.repositories.work import WorkRepository
+    repo = WorkRepository(db)
+    days, sources = await repo.get_creator_timeline(creator_id, from_date, to_date)
+    return {
+        "creator_id": str(creator_id),
+        "sources": sources,
+        "days": days,
+        "total": sum(d["total"] for d in days),
+    }
+
 @router.delete("/{creator_id}", status_code=204)
 async def delete_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)

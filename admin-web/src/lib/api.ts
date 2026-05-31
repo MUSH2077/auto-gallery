@@ -410,6 +410,12 @@ export const api = {
   },
 
   getCreator: (id: string) => request<Creator>(`/api/v1/creators/${id}`),
+  getCreatorTimeline: (creatorId: string, fromDate?: string, toDate?: string) => {
+      const q = new URLSearchParams();
+      if (fromDate) q.set("from_date", fromDate);
+      if (toDate) q.set("to_date", toDate);
+      return request<{ creator_id: string; sources: string[]; days: { date: string; total: number; [source: string]: number | string }[]; total: number }>(`/api/v1/creators/${creatorId}/timeline?${q.toString()}`);
+    },
 
   createCreator: (data: { name: string; display_name?: string; description?: string; thumbnail_url?: string }) =>
     request<Creator>("/api/v1/creators", { method: "POST", body: JSON.stringify(data) }),

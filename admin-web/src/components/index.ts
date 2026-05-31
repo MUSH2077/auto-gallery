@@ -8,3 +8,4 @@ export { default as DataTable } from "./DataTable";
 export { CardSkeleton, TableSkeleton } from "./LoadingSkeleton";
 export { default as Modal } from "./Modal";
 export { default as ErrorBoundary } from "./ErrorBoundary";
+export { default as WorkGrid } from "./WorkGrid";
