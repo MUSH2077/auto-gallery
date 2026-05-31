@@ -47,8 +47,8 @@ function SearchContent() {
           onClick={() => {
             if (confirm(t("settings.reindex_confirm_msg"))) {
               api.reindexSearch()
-                .then((d) => alert(d.message || d.status))
-                .catch((e: Error) => alert(e.message));
+                .then((d) => toast.info(d.message || d.status))
+                .catch((e: Error) => toast.info(e.message));
             }
           }}>
           {t("settings.reindex")}

@@ -126,12 +126,12 @@ function SubscriptionsContent() {
     onSuccess: (data) => {
       subs.refetch();
       if (data.status === "error" || data.status === "partial_error") {
-        alert((data as any).message || "Sync partially failed");
+        toast.info((data as any).message || "Sync partially failed");
       } else if (data.job_ids.length === 0) {
         toast.info(t("subscriptions.sync_no_jobs"));
       }
     },
-    onError: (e: Error) => alert(e.message),
+    onError: (e: Error) => toast.info(e.message),
   });
 
   const batchDel = useMutation({
