@@ -15,8 +15,8 @@ class XProvider(BaseProvider):
     @property
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            can_download=False,
-            supports_gallerydl=False,
+            can_download=True,
+            supports_gallerydl=True,
             supports_tags=True,
         )
 
@@ -33,15 +33,16 @@ class XProvider(BaseProvider):
         return bool(re.match(r"https?://(?:twitter\.com|x\.com)/\w+(?:/status/\d+)?/?(?:\?.*)?$", url))
 
     def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
-        raise NotImplementedError("X/Twitter download is not supported in this version")
-        return {
+        cfg = {
             "extractor": {
                 "twitter": {
                     "cookies": "/gallerydl-config/cookies/twitter.txt",
-                    "directory": [naming_template.template if naming_template else "x/{user[name]}"],
                 }
             }
         }
+        if naming_template:
+            cfg["extractor"]["twitter"]["directory"] = naming_template.template
+        return cfg
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:
         user = raw_metadata.get("user", {})
@@ -111,6 +112,10 @@ class XProvider(BaseProvider):
             if name:
                 result.append({"source": self.source_name, "original_name": f"@{name}", "category": "mention"})
         return result
+
+    def get_creator_dir_from_url(self, source_url: str) -> str | None:
+        m = re.search(r"(?:twitter\.com|x\.com)/(\w+)(?:/status/\d+)?/?(?:\?.*)?$", source_url)
+        return m.group(1) if m else None
 
     def get_creator_directory_name(self, raw_metadata: dict) -> str:
         user = raw_metadata.get("user", {})

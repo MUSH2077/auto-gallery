@@ -48,7 +48,7 @@ services:
       args:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-}
     image: auto-gallery-backend:latest
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    command: sh -c "mkdir -p /gallerydl-config/cookies && for site in pixiv twitter iwara danbooru pinterest lofter; do touch /gallerydl-config/cookies/\$\$site.txt; done && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "${BACKEND_PORT:-8818}:8000"
     environment:
@@ -63,6 +63,7 @@ services:
       GALLERYDL_CONFIG_ROOT: /gallerydl-config
       APP_CONFIG_ROOT: /app-config
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TIMEZONE: ${TIMEZONE:-UTC}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:13000}
     volumes:
       - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
@@ -99,6 +100,7 @@ services:
       GALLERYDL_CONFIG_ROOT: /gallerydl-config
       APP_CONFIG_ROOT: /app-config
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TIMEZONE: ${TIMEZONE:-UTC}
     volumes:
       - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
       - ${HOST_LIBRARY:-./data/library}:/library
@@ -132,6 +134,7 @@ services:
       GALLERYDL_CONFIG_ROOT: /gallerydl-config
       APP_CONFIG_ROOT: /app-config
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TIMEZONE: ${TIMEZONE:-UTC}
     volumes:
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
       - ${HOST_DOWNLOADS:-./data/downloads}:/downloads

@@ -148,16 +148,31 @@ function WorksContent() {
     search: search || undefined,
     source: sourceFilter || undefined,
     creator_id: creatorFilter || undefined,
-        is_nsfw: nsfwFilter === "all" ? undefined : nsfwFilter === "nsfw",
+    is_nsfw: nsfwFilter === "all" ? undefined : nsfwFilter === "nsfw",
     is_favorite: isFavoriteFilter || undefined,
     is_ai_generated: aiFilter === "all" ? undefined : aiFilter === "ai",
     sort_by: sortBy,
     sort_order: sortOrder,
   }), [search, sourceFilter, creatorFilter, nsfwFilter, isFavoriteFilter, aiFilter, sortBy, sortOrder]);
 
+  const useSearchPageLogic = !!search
+    && !sourceFilter
+    && !creatorFilter
+    && nsfwFilter === "all"
+    && !isFavoriteFilter
+    && aiFilter === "all"
+    && sortBy === "created_at"
+    && sortOrder === "desc";
+
   const works = useQuery({
-    queryKey: [...queryKeys.works.all, page, filters],
-    queryFn: () => api.listWorks(page * limit, limit, filters),
+    queryKey: [...queryKeys.works.all, page, filters, useSearchPageLogic ? "search-api" : "works-api"],
+    queryFn: async () => {
+      if (useSearchPageLogic) {
+        const resp = await api.search(search, page * limit, limit);
+        return { total: resp.total, items: resp.results };
+      }
+      return api.listWorks(page * limit, limit, filters);
+    },
   });
 
   const toggleFavorite = useMutation({
@@ -178,22 +193,20 @@ function WorksContent() {
 
   return (
     <main className="max-w-7xl mx-auto p-6">
-      <PageHeader title={t("works.title")} description={t("works.count", "0 works").replace("{count}", String(works.data?.total ?? 0)).replace("{page}", String(page + 1))} />
+      <PageHeader title={t("works.title")} description={t("works.count", "0 works").replace("{count}", String(works.data?.total ?? 0))} />
 
       {/* Search & Filters */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <input value={inputVal} onChange={(e) => setInputVal(e.target.value)}
           placeholder={t("works.search_title")} className="border rounded px-3 py-1.5 text-sm w-48 dark:bg-slate-700 dark:text-white dark:border-slate-600" />
 
-        {/* Source filter */}
-        <div className="flex gap-0.5 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
+        {/* Source filter — dropdown */}
+        <select value={sourceFilter} onChange={(e) => updateParams({ source: e.target.value || null })}
+          className="border rounded px-2 py-1.5 text-xs dark:bg-slate-700 dark:text-white dark:border-slate-600">
           {SOURCE_FILTERS.map((f) => (
-            <button key={f.key} onClick={() => updateParams({ source: f.key || null })}
-              className={`px-2.5 py-1 text-xs rounded transition-colors ${sourceFilter === f.key ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
-              {f.label}
-            </button>
+            <option key={f.key} value={f.key}>{f.label}</option>
           ))}
-        </div>
+        </select>
 
         {/* Creator filter */}
         {(creators.data?.length || 0) > 0 && (
@@ -236,18 +249,24 @@ function WorksContent() {
           ))}
         </div>
 
-        {/* Sort */}
-        <select value={`${sortBy}-${sortOrder}`} onChange={(e) => {
-          const [k, o] = e.target.value.split("-");
-          updateParams({ sort: k === "created_at" ? null : k, order: o === "desc" ? null : o });
-        }} className="border rounded px-2 py-1.5 text-xs dark:bg-slate-700 dark:text-white dark:border-slate-600">
-          {SORT_OPTIONS.map((s) => (
-            <option key={`${s.key}-desc`} value={`${s.key}-desc`}>{s.label} ↓</option>
-          ))}
-          {SORT_OPTIONS.map((s) => (
-            <option key={`${s.key}-asc`} value={`${s.key}-asc`}>{s.label} ↑</option>
-          ))}
-        </select>
+        {/* Sort — click same field toggles direction */}
+        <div className="flex gap-0.5 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
+          {SORT_OPTIONS.map((s) => {
+            const active = sortBy === s.key;
+            const dir = active ? sortOrder : "desc";
+            const nextDir = dir === "desc" ? "asc" : "desc";
+            return (
+              <button key={s.key}
+                onClick={() => updateParams({
+                  sort: s.key === "created_at" && nextDir === "desc" ? null : s.key,
+                  order: nextDir === "desc" ? null : nextDir,
+                })}
+                className={`px-2.5 py-1 text-xs rounded transition-colors ${active ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
+                {s.label} {active ? (dir === "desc" ? "↓" : "↑") : ""}
+              </button>
+            );
+          })}
+        </div>
 
         <div className="flex-1" />
 

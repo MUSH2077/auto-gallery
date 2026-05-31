@@ -145,7 +145,7 @@ function CreatorsContent() {
 
   return (
     <main className="max-w-6xl mx-auto p-6">
-      <PageHeader title={t("creators.title")} description={t("common.page").replace("{page}", String(page + 1))}>
+      <PageHeader title={t("creators.title")} description={t("creators.count", "0 creators").replace("{count}", String(creators.data?.length ?? 0))}>
         <div className="flex gap-2">
           <button onClick={() => router.push("/admin/creators/duplicates")} className="px-4 py-2 border rounded text-sm hover:bg-gray-50 dark:hover:bg-slate-700 dark:text-gray-300 dark:border-slate-600">{t("creators.duplicates")}</button>
           <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600">{t("creators.new")}</button>

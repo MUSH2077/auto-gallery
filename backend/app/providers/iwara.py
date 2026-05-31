@@ -31,14 +31,16 @@ class IwaraProvider(BaseProvider):
         return bool(re.match(r"https?://(?:www\.)?iwara\.tv/(video|profile|users)/[\w-]+", url))
 
     def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
-        return {
+        cfg = {
             "extractor": {
                 "iwara": {
                     "cookies": "/gallerydl-config/cookies/iwara.txt",
-                    "directory": [naming_template.template if naming_template else "iwara/{user[id]}"],
                 }
             }
         }
+        if naming_template:
+            cfg["extractor"]["iwara"]["directory"] = naming_template.template
+        return cfg
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:
         user = raw_metadata.get("user", {})

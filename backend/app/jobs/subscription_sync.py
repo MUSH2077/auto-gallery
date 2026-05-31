@@ -6,6 +6,12 @@ from pathlib import Path
 from sqlalchemy import select, and_
 
 from app.config import settings
+from app.config import settings
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # Python < 3.9
 from app.database import async_session
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
@@ -42,18 +48,28 @@ async def _read_download_defaults(db) -> dict:
 
 
 def _should_sync_now(config: dict, last_synced_at, interval_hours: int) -> bool:
-    """Check whether a sync is due, respecting schedule_mode."""
+    """Check whether a sync is due, respecting schedule_mode.
+
+    In 'interval' mode: sync when last_synced_at is older than interval_hours.
+    In 'fixed_time' mode: sync ONLY when we are within a tolerance window
+    (±scan_interval minutes) of a scheduled time AND the last sync was before
+    that time.  Also sync if last sync was > 24h ago (catch-up after downtime).
+    """
     if not last_synced_at:
         return True  # Never synced — always sync
 
-    now = datetime.now(timezone.utc)
+    # Use configured timezone for schedule evaluation
+    tz_name = config.get("timezone", "UTC")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = timezone.utc
+    now = datetime.now(tz)
     mode = config.get("schedule_mode", "interval")
 
     if mode == "fixed_time":
-        # Check if we've passed a scheduled time since last sync
         times_str = config.get("scheduled_times", "")
         if not times_str:
-            # Fall back to interval if no times configured
             cutoff = now - timedelta(hours=interval_hours)
             return last_synced_at < cutoff
 
@@ -71,25 +87,36 @@ def _should_sync_now(config: dict, last_synced_at, interval_hours: int) -> bool:
             cutoff = now - timedelta(hours=interval_hours)
             return last_synced_at < cutoff
 
-        # Walk back day by day from today until we find the most recent
-        # scheduled time that falls after last_synced_at.
-        # This handles multi-day downtime correctly.
-        max_lookback = 30  # days
-        for days_back in range(max_lookback):
-            day = now.date() - timedelta(days=days_back)
-            best_time = None
-            for h, m in scheduled:
-                st = datetime(day.year, day.month, day.day, h, m, tzinfo=timezone.utc)
-                if st <= now and (best_time is None or st > best_time):
-                    best_time = st
-            if best_time:
-                if last_synced_at < best_time:
-                    return True
-                return False  # found the most recent time but it's before last sync
+        # Tolerance window: ±half the scan interval around each scheduled time.
+        # This prevents syncing at random times far from the scheduled slot.
+        scan_minutes = int(config.get("scheduler_scan_interval_minutes", 60))
+        window_minutes = max(scan_minutes // 2, 15)
 
-        # If we walked back 30 days and found nothing, fall back to interval
-        cutoff = now - timedelta(hours=interval_hours)
-        return last_synced_at < cutoff
+        # Check if we are within the tolerance window of ANY scheduled time today.
+        # Also check yesterday (handles late-night windows spanning midnight).
+        for day_offset in (0, -1):
+            day = now.date() + timedelta(days=day_offset)
+            for h, m in scheduled:
+                st = datetime(day.year, day.month, day.day, h, m, tzinfo=tz)
+                diff_minutes = abs((now - st).total_seconds()) / 60.0
+                if diff_minutes <= window_minutes and last_synced_at < st:
+                    return True
+
+        # Catch-up: if last sync was more than 24 hours ago AND the most recent
+        # scheduled time has passed, trigger a one-off catch-up.
+        if last_synced_at < now - timedelta(hours=24):
+            for days_back in range(1, 31):
+                day = now.date() - timedelta(days=days_back)
+                best_time = None
+                for h, m in scheduled:
+                    st = datetime(day.year, day.month, day.day, h, m, tzinfo=tz)
+                    if st <= now and (best_time is None or st > best_time):
+                        best_time = st
+                if best_time and last_synced_at < best_time:
+                    return True
+                if best_time:
+                    break
+
         return False
 
     # interval mode (default)
@@ -100,7 +127,13 @@ def _should_sync_now(config: dict, last_synced_at, interval_hours: int) -> bool:
 async def sync_subscriptions():
     logger.info("Starting subscription auto-sync scan")
 
-    now = datetime.now(timezone.utc)
+    # Use configured timezone for schedule evaluation
+    tz_name = config.get("timezone", "UTC")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = timezone.utc
+    now = datetime.now(tz)
     jobs_created = 0
 
     async with async_session() as db:

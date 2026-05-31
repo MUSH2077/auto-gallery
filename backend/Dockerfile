@@ -17,6 +17,12 @@ RUN if [ -n "$PIP_INDEX_URL" ]; then \
       pip install --no-cache-dir -r requirements.txt; \
     fi
 
+# Patch gallery-dl twitter extractor: disable SearchTimeline fallback (query ID broken as of 2025)
+# After UserTweets pagination completes, return instead of falling back to broken search endpoint.
+RUN TWITTER_PY=$(python3 -c "import gallery_dl.extractor.twitter; print(gallery_dl.extractor.twitter.__file__)") && \
+    sed -i 's/^            state = reset = 2$/            return/' "$TWITTER_PY" && \
+    echo "Patched gallery-dl twitter.py: removed SearchTimeline fallback"
+
 COPY . .
 
 RUN mkdir -p /downloads /library /gallerydl-config /app-config

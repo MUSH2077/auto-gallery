@@ -46,15 +46,17 @@ class DanbooruProvider(BaseProvider):
         ))
 
     def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
-        return {
+        cfg = {
             "extractor": {
                 "danbooru": {
                     "username": None,  # filled from config.json at runtime
                     "password": None,
-                    "directory": [naming_template.template if naming_template else "danbooru/{id}"],
                 }
             }
         }
+        if naming_template:
+            cfg["extractor"]["danbooru"]["directory"] = naming_template.template
+        return cfg
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:
         # Danbooru posts have tag_string_artist for the artist name(s)

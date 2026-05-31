@@ -19,8 +19,14 @@ class DownloadService:
         self.sub_repo = SubscriptionRepository(db)
         self.db = db
 
-    async def list_jobs(self, status: str | None = None, offset: int = 0, limit: int = 50):
-        return await self.repo.list_all(status, offset, limit)
+    async def list_jobs(self, status: str | None = None, source: str | None = None,
+                        subscription_id: str | None = None,
+                        sort_by: str = "created_at", sort_order: str = "desc",
+                        offset: int = 0, limit: int = 50):
+        return await self.repo.list_all(status=status, source=source,
+                                        subscription_id=subscription_id,
+                                        sort_by=sort_by, sort_order=sort_order,
+                                        offset=offset, limit=limit)
 
     async def get_job(self, job_id: UUID):
         job = await self.repo.get(job_id)
@@ -73,7 +79,7 @@ class DownloadService:
 
     async def retry_job(self, job_id: UUID):
         job = await self.get_job(job_id)
-        if job.status not in ("failed", "stale", "downloading"):
+        if job.status not in ("failed", "stale", "downloading", "complete"):
             raise ValueError(f"Cannot retry job with status '{job.status}'")
         job = await self.repo.update_status(job, "pending")
         try:
@@ -87,8 +93,8 @@ class DownloadService:
 
     async def delete_job(self, job_id: UUID):
         job = await self.get_job(job_id)
-        if job.status in ("pending", "importing"):
-            raise ValueError(f"Cannot delete job with status '{job.status}'")
+        if job.status in ("importing",):
+            raise ValueError(f"Cannot delete job with status '{job.status}' — import is in progress")
         await self.db.delete(job)
         await self.db.commit()
 
@@ -132,6 +138,18 @@ class DownloadService:
                 results["failed"] += 1
                 results["errors"].append({"id": str(jid), "error": str(e)})
         return results
+
+    async def clear_completed(self, statuses: list[str]) -> int:
+        """Delete all jobs matching given statuses (e.g. complete, failed, stale)."""
+        count = await self.repo.delete_by_status(statuses)
+        await self.db.commit()
+        return count
+
+    async def kill_stuck_jobs(self) -> int:
+        """Mark all downloading jobs as stale."""
+        count = await self.repo.kill_stuck()
+        await self.db.commit()
+        return count
 
     async def list_imports(self, job_id: UUID):
         return await self.repo.list_imports(job_id)

@@ -6,6 +6,23 @@ from app.providers.base import BaseProvider, ProviderCapabilities
 class WeiboProvider(BaseProvider):
     """微博 (Weibo) download provider — user feeds, albums, and statuses."""
 
+    # Weibo usernames must start with a letter, digit, CJK char, or underscore.
+    # Names starting with '-' or other punctuation are invalid / auto-generated junk.
+    _USERNAME_RE = re.compile(r"^[\w一-鿿]")
+
+    @classmethod
+    def _is_valid_username(cls, name: str) -> bool:
+        """Reject usernames that don't match Weibo's naming rules."""
+        if not name or len(name) < 1:
+            return False
+        # Must start with word char or CJK, not punctuation
+        if not cls._USERNAME_RE.match(name):
+            return False
+        # Reserved path keywords
+        if name in ("u", "n", "p", "detail", "status", "home"):
+            return False
+        return True
+
     @property
     def source_name(self) -> str:
         return "weibo"
@@ -23,31 +40,83 @@ class WeiboProvider(BaseProvider):
         )
 
     def normalize_url(self, input_text: str) -> str | None:
-        # Status URL: https://weibo.com/USER/STATUS or https://m.weibo.cn/detail/STATUS
-        match = re.search(r"(?:weibo\.com|weibo\.cn)/(\d+)/(\w+)", input_text)
+        """
+        Normalize Weibo URLs per gallery-dl's official patterns:
+
+        BASE   = https://www.weibo.com  or  https://m.weibo.cn
+        USER   = BASE / [ (u|n|p|profile) / ] USERNAME [/home] [?tabtype=...]
+        STATUS = BASE / USER_ID / STATUS_ID  or  BASE / detail / STATUS_ID
+        """
+        # Status URL: /detail/HEX  or  /DIGIT/HEX
+        match = re.search(
+            r"weibo\.(?:com|cn)/(?:detail/|(?:\d+/))(\w+)", input_text)
         if match:
-            return f"https://weibo.com/{match.group(1)}/{match.group(2)}"
-        # User by numeric ID: https://weibo.com/u/1234567890
-        match = re.search(r"(?:weibo\.com|weibo\.cn)/u/(\d+)", input_text)
+            return f"https://weibo.com/detail/{match.group(1)}"
+
+        # User by numeric ID: /u/1234567890
+        match = re.search(r"weibo\.(?:com|cn)/u/(\d+)", input_text)
         if match:
             return f"https://weibo.com/u/{match.group(1)}"
-        # User by screen name: https://weibo.com/username
-        match = re.search(r"(?:weibo\.com|weibo\.cn)/([\w\u4e00-\u9fff]+)(?:/|$)", input_text)
+
+        # User by screen name with prefix: /n/NAME  or  /p/NAME  or  /profile/NAME
+        match = re.search(
+            r"weibo\.(?:com|cn)/(n|p|profile)/([^/?#]+)", input_text)
         if match:
-            return f"https://weibo.com/{match.group(1)}"
+            name = match.group(2)
+            if self._is_valid_username(name):
+                return f"https://weibo.com/{match.group(1)}/{name}"
+            return None
+
+        # User by bare screen name: /USERNAME  (word chars + CJK)
+        match = re.search(
+            r"weibo\.(?:com|cn)/([\w\u4e00-\u9fff]+)(?:/home)?/?(?:\?.*)?$",
+            input_text)
+        if match:
+            name = match.group(1)
+            if self._is_valid_username(name):
+                return f"https://weibo.com/{name}"
         return None
 
     def validate_url(self, url: str) -> bool:
-        return bool(re.match(
-            r"https?://(?:www\.|m\.)?weibo\.(?:com|cn)/(?:u/\d+|[\w\u4e00-\u9fff]+(?:/\w+)?)?/?(?:\?.*)?$",
-            url,
-        ))
+        # Reject URLs that match nothing useful
+        if not url or not re.search(r"weibo\.(?:com|cn)", url):
+            return False
+
+        # 1) User with prefix: /u/ID, /n/NAME, /p/NAME, /profile/NAME
+        prefixed = re.match(
+            r"https?://(?:www\.|m\.)?weibo\.(?:com|cn)"
+            r"/(u|n|p|profile)/([^/?#]+)"
+            r"(?:/home)?"
+            r"/?(?:\?.*)?$",
+            url)
+        if prefixed:
+            name = prefixed.group(2)
+            return self._is_valid_username(name)
+
+        # 2) User without prefix: /USERNAME[/home] [?tabtype=...]
+        user_match = re.match(
+            r"https?://(?:www\.|m\.)?weibo\.(?:com|cn)"
+            r"/([^/?#]+)"
+            r"(?:/home)?"
+            r"/?(?:\?.*)?$",
+            url)
+        if user_match:
+            return self._is_valid_username(user_match.group(1))
+
+        # 3) Status detail: /detail/HEX  or  /DIGIT/HEX
+        if re.match(
+            r"https?://(?:www\.|m\.)?weibo\.(?:com|cn)"
+            r"/(?:detail|\d+)/\w+"
+            r"/?(?:\?.*)?$",
+            url):
+            return True
+
+        return False
 
     def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
         config: dict = {
             "extractor": {
                 "weibo": {
-                    "directory": [naming_template.template if naming_template else "weibo/{user[id]}/{id}"],
                     "videos": True,
                     "retweets": False,
                 }
@@ -55,6 +124,8 @@ class WeiboProvider(BaseProvider):
         }
         cookies_path = "/gallerydl-config/cookies/weibo.txt"
         config["extractor"]["weibo"]["cookies"] = cookies_path
+        if naming_template:
+            config["extractor"]["weibo"]["directory"] = naming_template.template
         return config
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:

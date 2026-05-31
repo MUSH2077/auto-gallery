@@ -13,9 +13,15 @@ router = APIRouter(dependencies=[RequireAdmin])
 
 
 @router.get("", response_model=list[DownloadJobRead])
-async def list_jobs(status: str | None = None, offset: int = 0, limit: int = 50, db: AsyncSession = Depends(get_db)):
+async def list_jobs(status: str | None = None, source: str | None = None,
+                    subscription_id: str | None = None,
+                    sort_by: str = "created_at", sort_order: str = "desc",
+                    offset: int = 0, limit: int = 50, db: AsyncSession = Depends(get_db)):
     svc = DownloadService(db)
-    return await svc.list_jobs(status, offset, limit)
+    return await svc.list_jobs(status=status, source=source,
+                               subscription_id=subscription_id,
+                               sort_by=sort_by, sort_order=sort_order,
+                               offset=offset, limit=limit)
 
 
 @router.get("/{job_id}", response_model=DownloadJobRead)
@@ -88,6 +94,42 @@ async def batch_jobs(data: dict, db: AsyncSession = Depends(get_db)):
     ids = [UUID(i) for i in ids_raw]
     svc = DownloadService(db)
     return await svc.batch_action(ids, action)
+
+
+@router.post("/clear")
+async def clear_jobs(data: dict, db: AsyncSession = Depends(get_db)):
+    """Delete all jobs matching given statuses."""
+    statuses = data.get("statuses", [])
+    if not statuses or not isinstance(statuses, list):
+        raise HTTPException(status_code=400, detail="statuses list is required")
+    svc = DownloadService(db)
+    count = await svc.clear_completed(statuses)
+    return {"status": "ok", "deleted": count}
+
+
+@router.post("/kill-stuck")
+async def kill_stuck(db: AsyncSession = Depends(get_db)):
+    """Mark all 'downloading' jobs as stale."""
+    svc = DownloadService(db)
+    count = await svc.kill_stuck_jobs()
+    return {"status": "ok", "killed": count}
+
+
+@router.post("/retry-all")
+async def retry_all_failed(db: AsyncSession = Depends(get_db)):
+    """Retry all failed and stale download jobs."""
+    svc = DownloadService(db)
+    jobs = await svc.list_jobs(status="failed")
+    jobs += await svc.list_jobs(status="stale")
+    results = {"succeeded": 0, "failed": 0, "errors": []}
+    for j in jobs:
+        try:
+            await svc.retry_job(j.id)
+            results["succeeded"] += 1
+        except Exception as e:
+            results["failed"] += 1
+            results["errors"].append({"id": str(j.id), "error": str(e)})
+    return {"status": "ok", **results}
 
 
 @router.get("/{job_id}/imports", response_model=list[ImportJobRead])

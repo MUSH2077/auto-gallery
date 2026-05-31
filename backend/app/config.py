@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:13000"
     log_level: str = "INFO"
 
+    timezone: str = "UTC"
+
     model_config = {"env_prefix": "", "case_sensitive": False}
 
 

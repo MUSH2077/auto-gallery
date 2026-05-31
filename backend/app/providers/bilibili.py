@@ -51,17 +51,16 @@ class BilibiliProvider(BaseProvider):
         return any(re.match(p, url) for p in patterns)
 
     def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
-        template = naming_template.template if naming_template else None
-        directory = [template] if template else ["bilibili", "{user[id]}", "{id}"]
         config: dict = {
             "extractor": {
                 "bilibili": {
-                    "directory": directory,
                     "livephoto": True,
                     "sleep-request": "3.0-6.0",
                 }
             }
         }
+        if naming_template:
+            config["extractor"]["bilibili"]["directory"] = naming_template.template
         return config
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:

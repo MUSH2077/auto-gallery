@@ -79,6 +79,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from fastapi.exceptions import RequestValidationError
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    safe_body = "<redacted>"
+    try:
+        raw = await request.body()
+        import json as _json
+        data = _json.loads(raw[:2000])
+        for key in ("password", "token", "secret", "api_key", "cookie_content", "refresh_token", "cookies", "cookies_path"):
+            if key in data:
+                data[key] = "***REDACTED***"
+        safe_body = str(data)
+    except Exception:
+        safe_body = f"<{len(raw)} bytes, parse error>"
+    logger.error("Validation error on %s %s: %s | body: %s",
+                 request.method, request.url.path, exc.errors(), safe_body)
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+
 app.include_router(api_router)
 app.include_router(media_router)
 

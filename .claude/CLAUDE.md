@@ -549,14 +549,16 @@ Admin Web:
 
 ## Commit Discipline
 
-After completing each phase task or feature milestone, create a git commit automatically. Do not wait for the user to ask.
+**CRITICAL**: After completing each phase task, feature milestone, or bug fix, create a git commit automatically. Do NOT wait for the user to ask. This is mandatory.
 
-- Commit when a phase/sub-phase task is done
-- Commit when a bug fix is verified
+- Commit IMMEDIATELY when a phase/sub-phase task is done
+- Commit IMMEDIATELY when a bug fix is verified
+- Commit before starting the next unrelated task
 - Use concise Chinese or English commit messages describing the "why"
 - Follow the existing commit style: `feat:`, `fix:`, `refactor:`, `chore:` prefixes
 - Do not commit incomplete or broken work
 - Verify working tree is clean before starting new work
+- If a task spans multiple commits, create atomic commits per logical change
 
 ## Deliverables
 

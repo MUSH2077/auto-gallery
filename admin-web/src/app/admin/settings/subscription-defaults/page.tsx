@@ -109,6 +109,25 @@ export default function SubscriptionDefaultsPage() {
               </div>
             )}
 
+            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+              <div>
+                <span className="font-medium">{t("subdefaults.timezone")}</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("subdefaults.timezone.desc")}</p>
+              </div>
+              <select
+                value={current.timezone || "UTC"}
+                onChange={(e) => setLocal({ ...current, timezone: e.target.value })}
+                className="border rounded px-2 py-1 text-sm dark:bg-slate-700 dark:text-white"
+              >
+                {["UTC", "Asia/Shanghai", "Asia/Tokyo", "Asia/Seoul", "Asia/Singapore", "Asia/Kolkata",
+                  "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Moscow",
+                  "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+                  "America/Sao_Paulo", "Australia/Sydney", "Pacific/Auckland"].map(tz => (
+                  <option key={tz} value={tz}>{tz}</option>
+                ))}
+              </select>
+            </div>
+
             <h4 className="font-medium text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-2">{t("subdefaults.scheduler")}</h4>
 
             <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">

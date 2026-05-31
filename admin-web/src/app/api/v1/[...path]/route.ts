@@ -29,6 +29,7 @@ async function proxy(request: NextRequest, path: string[]) {
     outboundHeaders.set("X-Admin-Key", adminPassword);
   }
 
+
   const init: RequestInit = {
     method: request.method,
     headers: outboundHeaders,

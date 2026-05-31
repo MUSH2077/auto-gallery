@@ -152,7 +152,7 @@ function SubscriptionsContent() {
 
   return (
     <main className="max-w-6xl mx-auto p-6">
-      <PageHeader title={t("subscriptions.title")} description={subs.data?.length ? t("common.page").replace("{page}", String(page + 1)) : t("subscriptions.desc", "")}>
+      <PageHeader title={t("subscriptions.title")} description={t("subscriptions.count", "0 subscriptions").replace("{count}", String(subs.data?.length ?? 0))}>
         <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600">{t("subscriptions.new")}</button>
       </PageHeader>
 

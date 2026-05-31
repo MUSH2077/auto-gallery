@@ -18,9 +18,9 @@ export default function Dashboard() {
   const health = useQuery({ queryKey: queryKeys.health, queryFn: api.health, refetchInterval: 15000 });
   const sources = useQuery({ queryKey: queryKeys.sources, queryFn: api.sources });
   const storage = useQuery({ queryKey: ["storage"], queryFn: api.storageStats, refetchInterval: 60000 });
-  const failedDownloads = useQuery({ queryKey: [...queryKeys.downloadJobs.all, "failed"], queryFn: () => api.listDownloadJobs("failed", 0, 5) });
+  const failedDownloads = useQuery({ queryKey: [...queryKeys.downloadJobs.all, "failed"], queryFn: () => api.listDownloadJobs({ status: "failed", offset: 0, limit: 5 }) });
   const failedImports = useQuery({ queryKey: [...queryKeys.importJobs.all, "failed"], queryFn: () => api.listImportJobs("failed", 0, 5) });
-  const recentDownloads = useQuery({ queryKey: [...queryKeys.downloadJobs.all, "recent"], queryFn: () => api.listDownloadJobs(undefined, 0, 5) });
+  const recentDownloads = useQuery({ queryKey: [...queryKeys.downloadJobs.all, "recent"], queryFn: () => api.listDownloadJobs({ offset: 0, limit: 5 }) });
   const recentImports = useQuery({ queryKey: [...queryKeys.importJobs.all, "recent"], queryFn: () => api.listImportJobs(undefined, 0, 5) });
 
   return (
