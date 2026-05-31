@@ -2,7 +2,7 @@
 
 ## HIGH Severity
 
-### 0. Multi-user data model transition
+### 1. Multi-user data model transition
 
 **Risk**: The current Phase 1-5 design has no user model. Adding it in Phase 6 requires:
 - Schema migration: add `user_id` to `subscription` table
@@ -24,7 +24,7 @@
 
 ---
 
-### 1. gallery-dl version / output format stability
+### 2. gallery-dl version / output format stability
 
 **Risk**: gallery-dl updates frequently. Pinning a version means site-specific extractors may break when source sites change. Not pinning means output format changes can silently break metadata parsers.
 
@@ -40,9 +40,9 @@
 
 ---
 
-### 2. Cross-source creator identity mapping
+### 3. Cross-source creator identity mapping
 
-**Risk**: Linking accounts across platforms ("Pixiv user 123456" ↔ "@artist_handle on X") is fundamentally hard. Profile URLs are embedded in free-text fields. Many creators use completely different names. Automation will have limited accuracy.
+**Risk**: Linking accounts across platforms ("Pixiv user 123456" <-> "@artist_handle on X") is fundamentally hard. Profile URLs are embedded in free-text fields. Many creators use completely different names. Automation will have limited accuracy.
 
 **Impact**: Manual mapping burden on admin. Fragmented creator records.
 
@@ -50,7 +50,7 @@
 - Accept that automatic mapping will be ~60% accurate at best
 - Start with manual mapping as the primary path
 - Danbooru reference enrichment is a suggestion engine, not an authority
-- Add `creator_link.confidence` field (0.0–1.0) for suggested links
+- Add `creator_link.confidence` field (0.0-1.0) for suggested links
 - Admin review queue for suggested links
 - Do NOT make automatic mapping a dependency for Phases 1-6
 
@@ -58,24 +58,7 @@
 
 ---
 
-### 3. X/Twitter API viability
-
-**Risk**: X has aggressively restricted API access. gallery-dl's X extractor may break permanently or require paid API access.
-
-**Impact**: X/Twitter may not be a viable source for automated downloading.
-
-**Mitigation**:
-- Keep X as a placeholder provider with `can_download = False`
-- Focus Phase 1-8 on Pixiv + local import + manual upload
-- If gallery-dl X support is viable later, activate it
-- If not, X import may require a different approach (browser extension, RSS, manual)
-- The provider abstraction already handles this — no architecture change needed
-
-**Decision**: X is explicitly "no timeline." Re-evaluate after Pixiv pipeline is stable.
-
----
-
-### 4. DOWNLOAD_ROOT → LIBRARY_ROOT atomicity
+### 4. DOWNLOAD_ROOT -> LIBRARY_ROOT atomicity
 
 **Risk**: gallery-dl writes to `DOWNLOAD_ROOT/<job_id>/`. Import moves files to `LIBRARY_ROOT/`. If the worker crashes between these steps:
 - Files in DOWNLOAD_ROOT with no import job (orphaned downloads)
@@ -84,7 +67,7 @@
 **Impact**: Storage waste, broken media URLs, inconsistent database
 
 **Mitigation**:
-- Job state machine: `pending → downloading → downloaded → importing → complete`
+- Job state machine: `pending -> downloading -> downloaded -> importing -> complete`
 - On worker startup, scan DOWNLOAD_ROOT for orphaned directories, reconcile with `download_job` table
 - Import must be fully idempotent: re-running with same files creates no duplicates
 - Use `(source, source_asset_id)` uniqueness to prevent duplicate asset records
@@ -96,15 +79,7 @@
 
 ## MEDIUM Severity
 
-### 5. Queue backend: RQ chosen
-
-**Risk**: RQ vs Celery was undecided. RQ is simpler but has fewer failure-recovery features.
-
-**Decision made**: RQ for v1. Rationale: uses Redis (already in stack), simpler config, job model already abstracts the queue. Migrating RQ → Celery is feasible because `download_job`/`import_job` tables are the source of truth.
-
----
-
-### 6. Meilisearch index consistency
+### 5. Meilisearch index consistency
 
 **Risk**: Dual-writes to PostgreSQL and Meilisearch can drift. Periodic re-indexing means stale search results.
 
@@ -115,43 +90,28 @@
 
 ---
 
-### 7. gallery-dl auth/cookie expiration
+### 6. Provider abstraction leak
 
-**Risk**: Pixiv session cookies expire. Failed auth results in silent download failures.
-
-**Mitigation**:
-- Add `last_successful_auth` timestamp to `subscription_source`
-- Health endpoint detects sources with recent auth failures
-- Admin cookie/config status page shows auth health per source
-- Consider: can we detect HTTP 401/403 in gallery-dl output?
-
----
-
-### 8. Provider abstraction leak
-
-**Risk**: Pixiv metadata (series, caption structure) differs significantly from Iwara (voice actors, 3D tags) and X (hashtags, thread context). Forcing all through identical `parse_*` methods may produce awkward lowest-common-denominator schemas.
+**Risk**: Pixiv metadata (series, caption structure) differs significantly from Iwara (voice actors, 3D tags), X (hashtags, thread context), Danbooru (tag categories), and Weibo (hashtag patterns). Forcing all through identical `parse_*` methods may produce awkward lowest-common-denominator schemas.
 
 **Mitigation**:
-- `raw_metadata` JSONB column is the escape hatch — everything source-specific lives there
+- `raw_metadata` JSONB column is the escape hatch -- everything source-specific lives there
 - Typed fields capture only what maps cleanly
 - Admin web may have provider-specific components that render `raw_metadata` per source
 - Provider `parse_*` methods extract best-effort typed data; nothing is discarded
 
 ---
 
-### 9. Single worker bottleneck
+### 7. Single worker bottleneck
 
 **Risk**: One worker processes one job at a time. A creator with 1000+ works takes hours/days to fully sync.
 
-**Mitigation**:
-- Accept for v1 (personal archive, not real-time service)
-- Worker can be scaled: `docker compose up --scale worker=3`
-- Scaling works as long as each job uses a unique DOWNLOAD_ROOT subdirectory (`<job_id>`)
-- Scheduler can stagger subscription syncs to avoid thundering herd
+**Decision**: ACCEPTED for v1 (personal archive, not real-time service).
+Worker can be scaled: `docker compose up --scale worker=3`. Scaling works as long as each job uses a unique DOWNLOAD_ROOT subdirectory (`<job_id>`). Scheduler can stagger subscription syncs to avoid thundering herd.
 
 ---
 
-### 10. Multi-user storage sharing
+### 8. Multi-user storage sharing
 
 **Risk**: Multiple users subscribing to the same creator would download the same files repeatedly if data isn't shared. Creator/Work/Asset must be global, not per-user. But this creates a privacy consideration: one user's subscription reveals the creator to all users.
 
@@ -166,7 +126,7 @@
 
 ---
 
-### 11. Remote client bandwidth and image loading
+### 9. Remote client bandwidth and image loading
 
 **Risk**: Flutter client loading full-resolution images over mobile data will be slow and consume excessive bandwidth.
 
@@ -181,12 +141,12 @@
 
 ---
 
-### 12. Client auth token lifecycle
+### 10. Client auth token lifecycle
 
 **Risk**: JWT access tokens expire every 15 minutes. Flutter client must transparently refresh. If refresh logic is buggy, user sees auth errors. If refresh token expires (30 days), user must re-login. Remote re-login when not on LAN is impossible without VPN.
 
 **Mitigation**:
-- Flutter HTTP interceptor (dio) handles 401 → refresh → retry transparently
+- Flutter HTTP interceptor (dio) handles 401 -> refresh -> retry transparently
 - Refresh token stored in platform secure storage
 - On refresh failure: clear tokens, redirect to login screen
 - Refresh token expiry: show notification 7 days before expiry
@@ -196,28 +156,126 @@
 
 ---
 
-### 13. NAS HDD I/O performance
+### 11. NAS HDD I/O performance
+
+**Risk**: Gallery-dl downloads and image processing (thumbnail generation, hash computation) are I/O-intensive. On a spinning-disk NAS, initial sync of a large creator may saturate the disk.
+
+**Mitigation**:
 - Generate thumbnails at import time, not on first read request
 - Accept that initial sync of a large creator will be slow
+- pyvips for efficient thumbnail generation (faster, lower memory than Pillow)
+- Worker runs in background; UI is not blocked by slow I/O
+
+**Decision**: Accept initial sync latency. pyvips for efficiency.
+
+---
+
+## RESOLVED
+
+Items below were risks that have been addressed by implementation.
+
+### Risk A: X/Twitter API viability (RESOLVED)
+
+**Original concern**: X had aggressively restricted API access. gallery-dl's X extractor may break permanently or require paid API access.
+
+**Resolution**: X/Twitter is now a fully working downloadable provider. gallery-dl's Twitter extractor works reliably with cookie-based authentication. The `strategy: "tweets"` setting uses the UserTweets GraphQL endpoint which is actively maintained. The deprecated SearchTimeline fallback was removed via a Dockerfile patch. `can_download=True`, `supports_gallerydl=True`, `supports_tags=True`.
+
+---
+
+### Risk B: Queue backend selection (CONFIRMED)
+
+**Original concern**: RQ vs Celery was undecided. RQ is simpler but has fewer failure-recovery features.
+
+**Resolution**: RQ selected and in production use. Uses Redis (already in stack), simpler config. Job model (`download_job`/`import_job`) abstracts the queue. `job_timeout=7200` on all enqueue calls. Migration to Celery remains feasible if needed.
+
+---
+
+### Risk C: gallery-dl auth/cookie expiration (RESOLVED)
+
+**Original concern**: Pixiv session cookies expire. Failed auth results in silent download failures.
+
+**Resolution**: Implemented with:
+- `auth_healthy` boolean on `subscription_source` tracked per-source
+- `last_successful_auth` timestamp on `subscription_source`
+- Auth Status page at **Settings -> Auth Status** showing health per source
+- Connectivity test endpoint `POST /admin/gallerydl-config/test-connection` available per source at **Settings -> gallery-dl Config**
+- Stale job detection: jobs stuck "downloading" for > 2x timeout are marked stale
+- Health endpoint detects sources with recent auth failures
+- Admin web shows auth health indicators per subscription source
+
+---
+
+### Risk D: Iwara gallery-dl support (RESOLVED)
+
+**Original concern**: Unknown whether gallery-dl supports Iwara. If not, Iwara would remain a placeholder.
+
+**Resolution**: Iwara is now a fully working downloadable provider with `can_download=True`, `supports_gallerydl=True`, `supports_tags=True`. Supports video and image downloads with configurable format quality preferences (Source, 1080, 720, etc.). Both username/password and cookie authentication supported.
+
+---
+
+### Risk E: Admin auth mechanism (RESOLVED)
+
+**Original concern**: Need to decide on admin auth before Phase 6.
+
+**Resolution**: JWT authentication with access + refresh token pattern fully implemented. Backend: `auth.py` with `create_access_token`/`decode_access_token`, `auth_api.py` with login/refresh/me endpoints, admin routes require Bearer JWT. Admin-web: `AuthProvider` context in `auth.tsx` wraps the app, transparent token refresh, localStorage persistence, login page with username/password.
+
+---
+
+### Risk F: Schedule tolerance and restart guards (RESOLVED)
+
+**Original concern**: On container restart, the scheduler could enqueue duplicate sync jobs if it re-scans all subscriptions before realizing they were already scheduled.
+
+**Resolution**:
+- `seed_sync.py` checks for existing `sync_subscriptions` jobs in the "scheduled" RQ queue before enqueuing. Only bootstraps if no existing job is found.
+- The scheduler uses a `+-scan_interval/2` tolerance window: a subscription is only synced if the current time falls within half the scan interval of a scheduled time slot.
+- The `_should_sync_now()` function checks whether the last sync occurred before the scheduled time slot, preventing re-trigger of already-completed syncs within the same window.
+- Stale job detection (2x timeout) prevents zombie jobs from blocking subsequent syncs.
+- Catch-up logic: if last sync was > 24h ago, triggers a one-off catch-up sync regardless of time window.
+
+---
+
+### Risk G: Timezone-aware scheduling (RESOLVED)
+
+**Original concern**: The scheduler needed to respect the NAS server's local timezone for fixed-time schedules (e.g. "sync at 2 AM daily").
+
+**Resolution**:
+- `TIMEZONE` configuration in `subscription_defaults` (system_settings table), default `"UTC"`.
+- Per-deployment override: admin can change the timezone in **Settings -> Subscription Defaults**.
+- `ZoneInfo`-based timezone parsing with fallback to UTC on invalid tz names.
+- All schedule time comparisons (`scheduled_times`, `last_synced_at`) are evaluated in the configured timezone.
+- Works for all IANA timezone identifiers (e.g. `"Asia/Shanghai"`, `"America/New_York"`).
+
+---
+
+### Risk H: Dockerfile security patches (RESOLVED)
+
+**Original concern**: gallery-dl's X/Twitter extractor included a SearchTimeline fallback that was known to fail with 401 errors, potentially masking real auth issues.
+
+**Resolution**: Dockerfile applies a sed patch that removes the SearchTimeline fallback from gallery-dl's twitter extractor module. Only the UserTweets GraphQL endpoint is used.
 
 ---
 
 ## LOW Severity
 
-### 11. Alembic migration execution
+### L1. Alembic migration execution
+
 Run via `docker compose run --rm backend alembic upgrade head` before starting the stack. Add a startup check that refuses to start if migrations are pending.
 
-### 12. File naming / reorganization
+### L2. File naming / reorganization
+
 gallery-dl names files during download. Import job can reorganize. Asset paths are stored in DB after import, not before. No risk of broken paths if naming_template changes between download and import.
 
-### 13. Iwara gallery-dl support unknown
-Verify gallery-dl supports Iwara before Phase 8. If not, Iwara remains a placeholder. No architecture impact.
+### L3. Danbooru phase ordering
 
-### 14. Admin auth mechanism
-Decide before Phase 6: simple API key for v1 admin routes. JWT + multi-user later. This does not affect the model layer.
-
-### 15. Danbooru phase ordering
 Creator identity (Phase 4) works without Danbooru (Phase 5). Danbooru enriches identity, doesn't enable it. Correctly ordered.
+
+### L4. gallery-dl archive database
+
+gallery-dl's SQLite archive files track already-downloaded URLs. The scheduler performs periodic VACUUM on archive-*.sqlite3 files in DOWNLOAD_ROOT. If archives grow large, vacuum overhead could coincide with download I/O.
+
+### L5. Provider count growth
+
+As the number of providers grows (currently 8: Pixiv, X, Iwara, Danbooru, Pinterest, LOFTER, Bilibili, Weibo), the admin web settings page and gallery-dl config must scale. Each new provider adds a tab in the gallery-dl config UI and fields in the API. This is manageable but adds documentation and maintenance burden.
 
 ---
 
@@ -225,13 +283,20 @@ Creator identity (Phase 4) works without Danbooru (Phase 5). Danbooru enriches i
 
 | Change | Triggered by risk | Mitigation artifact |
 |---|---|---|
-| RQ selected as queue backend | #5 | [CLAUDE.md](../.claude/CLAUDE.md) — Core Stack |
-| `creator_link.confidence` field added | #2 | [backend-architecture.md](../.claude/skills/backend-architecture.md) — Risk-derived model fields |
-| Job state machine for download_job | #4 | [gallerydl-integration.md](../.claude/skills/gallerydl-integration.md) — Download job state machine |
-| Worker startup orphan reconciliation | #4 | [gallerydl-integration.md](../.claude/skills/gallerydl-integration.md) — Worker startup orphan reconciliation |
-| `last_successful_auth` on subscription_source | #7 | [backend-architecture.md](../.claude/skills/backend-architecture.md) — Risk-derived model fields |
-| `auth_healthy` on subscription_source | #7 | [gallerydl-integration.md](../.claude/skills/gallerydl-integration.md) — Auth health tracking |
-| Admin-triggered Meilisearch re-indexing for v1 | #6 | [backend-architecture.md](../.claude/skills/backend-architecture.md) — Meilisearch sync |
-| Integration smoke test for gallery-dl output format | #1 | [backend-architecture.md](../.claude/skills/backend-architecture.md) — gallery-dl smoke test |
-| X provider explicitly "no timeline" | #3 | [CLAUDE.md](../.claude/CLAUDE.md) — Risk-Derived Decisions |
-| pyvips preferred over Pillow | #10 | [CLAUDE.md](../.claude/CLAUDE.md) — Risk-Derived Decisions |
+| RQ selected as queue backend | #B (was #5) | CLAUDE.md -- Core Stack |
+| `creator_link.confidence` field added | #3 (was #2) | CLAUDE.md -- Risk-Derived Decisions |
+| Job state machine for download_job | #4 | CLAUDE.md -- Risk-Derived Decisions |
+| Worker startup orphan reconciliation | #4 | subscription_sync.py -- stale detection |
+| `last_successful_auth` on subscription_source | #C (was #7) | subscription_source model |
+| `auth_healthy` on subscription_source | #C (was #7) | subscription_source model |
+| Admin-triggered Meilisearch re-indexing for v1 | #5 (was #6) | CLAUDE.md -- Risk-Derived Decisions |
+| Integration smoke test for gallery-dl output format | #2 (was #1) | Test suite |
+| X provider fully enabled (was placeholder) | #A (was #3) | x.py provider -- can_download=True |
+| pyvips preferred over Pillow | #11 | CLAUDE.md -- Risk-Derived Decisions |
+| JWT auth with access+refresh token | #E (was #14) | auth.py, auth_api.py, auth.tsx |
+| Iwara fully enabled (was placeholder) | #D (was #13) | iwara.py provider -- can_download=True |
+| Connectivity test per source | #C (was #7) | admin.py POST /gallerydl-config/test-connection |
+| Auth status page in admin-web | #C (was #7) | Settings -> Auth Status |
+| Scheduler tolerance window + restart dedup | #F (new) | subscription_sync.py, seed_sync.py |
+| Timezone-aware scheduling | #G (new) | subscription_sync.py, ZoneInfo, TIMEZONE config |
+| Dockerfile removes SearchTimeline fallback | #H (new) | Dockerfile |
