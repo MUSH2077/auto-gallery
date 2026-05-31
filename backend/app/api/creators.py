@@ -16,10 +16,9 @@ router = APIRouter(dependencies=[RequireAdmin])
 
 @router.get("/count")
 async def count_creators(db: AsyncSession = Depends(get_db)):
-    from sqlalchemy import func
-    from app.models.creator import Creator as CM
-    result = await db.execute(select(func.count(CM.id)))
-    return {"total": result.scalar() or 0}
+    """Return total number of creators."""
+    result = await db.execute(select(func.count()).select_from(Creator))
+    return {"count": result.scalar() or 0}
 
 
 @router.get("", response_model=list[CreatorRead])
