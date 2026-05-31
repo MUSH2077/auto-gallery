@@ -188,6 +188,230 @@ async def system_info():
     return info
 
 
+@router.get("/storage-breakdown")
+async def storage_breakdown():
+    """Return per-source and per-creator storage breakdown."""
+    dl_root = Path(settings.download_root)
+
+    # Per-source breakdown
+    sources = {}
+    try:
+        for source_dir in dl_root.iterdir():
+            if not source_dir.is_dir():
+                continue
+            source_name = source_dir.name
+            total_size = 0
+            creator_count = 0
+            work_count = 0
+            for creator_dir in source_dir.iterdir():
+                if not creator_dir.is_dir():
+                    continue
+                creator_count += 1
+                for work_dir in creator_dir.iterdir():
+                    if not work_dir.is_dir():
+                        continue
+                    work_count += 1
+                    for f in work_dir.rglob("*"):
+                        if f.is_file():
+                            try:
+                                total_size += f.stat().st_size
+                            except Exception:
+                                pass
+            sources[source_name] = {
+                "size_mb": round(total_size / (1024 ** 2), 1),
+                "creator_count": creator_count,
+                "work_count": work_count,
+            }
+    except Exception:
+        pass
+
+    # Per-creator top breakdown (by storage)
+    creators = []
+    try:
+        creator_sizes: list[tuple[str, str, str, int]] = []  # (name, source, display, size, work_count)
+        for source_dir in dl_root.iterdir():
+            if not source_dir.is_dir():
+                continue
+            src = source_dir.name
+            for creator_dir in source_dir.iterdir():
+                if not creator_dir.is_dir():
+                    continue
+                cname = creator_dir.name
+                csize = 0
+                wc = 0
+                for work_dir in creator_dir.iterdir():
+                    if not work_dir.is_dir():
+                        continue
+                    wc += 1
+                    for f in work_dir.rglob("*"):
+                        if f.is_file():
+                            try:
+                                csize += f.stat().st_size
+                            except Exception:
+                                pass
+                creator_sizes.append((cname, src, cname, csize, wc))
+        # Sort by size descending, top 20
+        creator_sizes.sort(key=lambda x: x[3], reverse=True)
+        for cname, src, display, sz, wc in creator_sizes[:20]:
+            creators.append({
+                "name": cname,
+                "source": src,
+                "size_mb": round(sz / (1024 ** 2), 1),
+                "work_count": wc,
+            })
+    except Exception:
+        pass
+
+    return {"sources": sources, "creators": creators}
+
+
+@router.get("/integrity-check")
+async def integrity_check(db: AsyncSession = Depends(get_db)):
+    """Scan for data integrity issues: orphaned files, missing thumbnails, orphaned records."""
+    from sqlalchemy import text
+    issues = []
+
+    # 1. Orphaned download files (files without work_sources)
+    try:
+        dl_root = Path(settings.download_root)
+        result = await db.execute(text("SELECT source, source_work_id FROM work_sources"))
+        db_work_ids = {(row[0], row[1]) for row in result.fetchall()}
+        orphaned_files = []
+        for source_dir in dl_root.iterdir():
+            if not source_dir.is_dir():
+                continue
+            src = source_dir.name
+            for creator_dir in source_dir.iterdir():
+                if not creator_dir.is_dir():
+                    continue
+                for work_dir in creator_dir.iterdir():
+                    if not work_dir.is_dir():
+                        continue
+                    swid = work_dir.name
+                    if (src, swid) not in db_work_ids:
+                        file_count = sum(1 for _ in work_dir.rglob("*") if _.is_file())
+                        orphaned_files.append({
+                            "path": str(work_dir.relative_to(dl_root)),
+                            "source": src,
+                            "source_work_id": swid,
+                            "file_count": file_count,
+                        })
+        if orphaned_files:
+            issues.append({
+                "type": "orphaned_download_files",
+                "severity": "warning",
+                "count": len(orphaned_files),
+                "description": "下载目录中存在但数据库无对应 work_source 记录的文件",
+                "items": orphaned_files[:50],
+            })
+    except Exception as e:
+        logger.warning("Integrity check - orphaned files: %s", e)
+
+    # 2. Missing thumbnails (works with asset but no thumbnail)
+    try:
+        result = await db.execute(text(
+            "SELECT a.id, a.file_name, ws.source, ws.source_work_id FROM assets a "
+            "JOIN work_sources ws ON a.work_id = ws.work_id "
+            "WHERE a.thumb_sm_path IS NULL OR a.thumb_sm_path = ''"
+        ))
+        missing_thumbs = []
+        for row in result.fetchall():
+            missing_thumbs.append({
+                "asset_id": str(row[0]),
+                "file_name": row[1],
+                "source": row[2],
+                "source_work_id": row[3],
+            })
+        if missing_thumbs:
+            issues.append({
+                "type": "missing_thumbnails",
+                "severity": "warning",
+                "count": len(missing_thumbs),
+                "description": "有资产记录但缺少缩略图的作品",
+                "items": missing_thumbs[:50],
+            })
+    except Exception as e:
+        logger.warning("Integrity check - missing thumbs: %s", e)
+
+    # 3. Orphaned creators (no works, no subscriptions, no source_creators)
+    try:
+        result = await db.execute(text(
+            "SELECT c.id, c.name FROM creators c "
+            "LEFT JOIN works w ON w.creator_id = c.id "
+            "LEFT JOIN subscriptions s ON s.creator_id = c.id "
+            "LEFT JOIN source_creators sc ON sc.creator_id = c.id "
+            "WHERE w.id IS NULL AND s.id IS NULL AND sc.id IS NULL"
+        ))
+        orphaned_creators = [{"id": str(row[0]), "name": row[1]} for row in result.fetchall()]
+        if orphaned_creators:
+            issues.append({
+                "type": "orphaned_creators",
+                "severity": "info",
+                "count": len(orphaned_creators),
+                "description": "无作品、无订阅、无来源账号的孤立创作者",
+                "items": orphaned_creators,
+            })
+    except Exception as e:
+        logger.warning("Integrity check - orphaned creators: %s", e)
+
+    # 4. Orphaned tags (no work_tags associations)
+    try:
+        result = await db.execute(text(
+            "SELECT t.id, t.normalized_name FROM tags t "
+            "LEFT JOIN work_tags wt ON wt.tag_id = t.id "
+            "WHERE wt.tag_id IS NULL"
+        ))
+        orphaned_tags = [{"id": str(row[0]), "name": row[1]} for row in result.fetchall()]
+        if orphaned_tags:
+            issues.append({
+                "type": "orphaned_tags",
+                "severity": "info",
+                "count": len(orphaned_tags),
+                "description": "无关联作品的孤立标签",
+                "items": orphaned_tags,
+            })
+    except Exception as e:
+        logger.warning("Integrity check - orphaned tags: %s", e)
+
+    # 5. Dead links (asset records where file doesn't exist on disk)
+    try:
+        result = await db.execute(text(
+            "SELECT a.id, a.file_path, a.file_name FROM assets a WHERE a.file_path IS NOT NULL"
+        ))
+        dead_links = []
+        for row in result.fetchall():
+            fpath = row[1]
+            if fpath and not os.path.exists(fpath):
+                dead_links.append({
+                    "asset_id": str(row[0]),
+                    "file_path": fpath,
+                    "file_name": row[2],
+                })
+        if dead_links:
+            issues.append({
+                "type": "dead_links",
+                "severity": "error",
+                "count": len(dead_links),
+                "description": "数据库记录指向不存在文件的死链",
+                "items": dead_links[:50],
+            })
+    except Exception as e:
+        logger.warning("Integrity check - dead links: %s", e)
+
+    # 6. DB table stats
+    try:
+        tables = ["works", "assets", "creators", "subscriptions", "tags",
+                   "download_jobs", "import_jobs", "source_creators", "work_sources"]
+        db_stats = {}
+        for table in tables:
+            r = await db.execute(text(f"SELECT COUNT(*) FROM {table}"))
+            db_stats[table] = r.scalar() or 0
+    except Exception:
+        db_stats = {}
+
+    return {"issues": issues, "db_stats": db_stats, "checked_at": datetime.now(timezone.utc).isoformat()}
+
+
 @router.get("/settings")
 async def get_settings(db: AsyncSession = Depends(get_db)):
     dedup = await _get_setting(db, "dedup", DEFAULT_DEDUP)
