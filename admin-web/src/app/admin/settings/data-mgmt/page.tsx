@@ -1,191 +1,512 @@
 "use client";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys } from "@/lib/api";
+import { api } from "@/lib/api";
 import { PageHeader, ConfirmDialog } from "@/components";
 import { useT } from "@/lib/i18n";
 import Link from "next/link";
 
+type Severity = "error" | "warning" | "info";
+
+const SOURCE_COLORS: Record<string, string> = {
+  pixiv: "#0066FF",
+  x: "#1DA1F2",
+  twitter: "#1DA1F2",
+  iwara: "#22C55E",
+  danbooru: "#A855F7",
+  pinterest: "#EF4444",
+  lofter: "#F59E0B",
+  weibo: "#E0245E",
+  local: "#6B7280",
+  manual: "#6B7280",
+};
+
+function getSourceColor(source: string): string {
+  return SOURCE_COLORS[source.toLowerCase()] || "#6B7280";
+}
+
+function formatSize(mb: number): string {
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+  if (mb >= 1) return `${mb.toFixed(1)} MB`;
+  return `${(mb * 1024).toFixed(0)} KB`;
+}
+
+function severityBadge(s: string, t: (k: string) => string) {
+  const sev: Severity = (["error","warning","info"].includes(s) ? s : "info") as Severity;
+  const map: Record<Severity, string> = {
+    error: "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 border-red-200 dark:border-red-800",
+    warning: "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800",
+    info: "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-800",
+  };
+  const label: Record<Severity, string> = {
+    error: t("datamgmt.severity_error"),
+    warning: t("datamgmt.severity_warning"),
+    info: t("datamgmt.severity_info"),
+  };
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full border ${map[sev]}`}>
+      {label[sev]}
+    </span>
+  );
+}
+
 export default function DataManagementPage() {
   const t = useT();
   const qc = useQueryClient();
-  const [confirmAction, setConfirmAction] = useState<string | null>(null);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [confirmAction, setConfirmAction] = useState<string | null>(null);
+  const [integrityItems, setIntegrityItems] = useState<{ type: string; description: string; count: number; items: any[] } | null>(null);
+  const [dangerConfirm, setDangerConfirm] = useState("");
 
-  const clearAll = useMutation({
-    mutationFn: async () => {
-      await api.clearEntity("all");
-      await api.clearFailedJobs();
-      return { message: "All data, files, and Redis failed jobs cleared" };
-    },
-    onSuccess: (d) => {
-      setResult({ ok: true, msg: d.message });
-      qc.invalidateQueries();
-      setConfirmAction(null);
-    },
-    onError: (e) => {
-      setResult({ ok: false, msg: (e as Error).message });
-      setConfirmAction(null);
-    },
-  });
+  // ── Data queries ──
+  const systemInfo = useQuery({ queryKey: ["system-info"], queryFn: () => api.getSystemInfo(), refetchInterval: 60000 });
+  const storageBreakdown = useQuery({ queryKey: ["storage-breakdown"], queryFn: () => api.getStorageBreakdown() });
+  const creatorCount = useQuery({ queryKey: ["creators-count"], queryFn: () => api.countCreators() });
+  const subCount = useQuery({ queryKey: ["subs-count"], queryFn: () => api.countSubscriptions() });
+  const integrity = useQuery({ queryKey: ["integrity-check"], queryFn: () => api.getIntegrityCheck(), enabled: false });
+  const backups = useQuery({ queryKey: ["backups"], queryFn: () => api.listBackups() });
 
-  const clearWorks = useMutation({
-    mutationFn: () => api.clearEntity("works"),
-    onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-    onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
-  });
-
-  const clearCreators = useMutation({
-    mutationFn: () => api.clearEntity("creators"),
-    onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-    onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
-  });
-
-  const clearDownloads = useMutation({
-    mutationFn: async () => {
-      await api.clearEntity("downloads");
-      await api.clearFailedJobs();
-      return { message: "Download history and Redis failed jobs cleared" };
-    },
-    onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-    onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
-  });
-
-  const clearJobs = useMutation({
-    mutationFn: async () => {
-      await api.clearEntity("jobs");
-      await api.clearFailedJobs();
-      return { message: "All download and import jobs cleared" };
-    },
-    onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-    onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
-  });
-
-  const clearTags = useMutation({
-    mutationFn: () => api.clearEntity("tags"),
-    onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-    onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
-  });
-
-  const resetSettings = useMutation({
-    mutationFn: () => api.resetSettings(),
-    onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-    onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
-  });
-
-  
-  const systemInfo = useQuery({ queryKey: ["system-info"], queryFn: () => api.getSystemInfo(), refetchInterval: 30000 });
-
+  // ── Mutations ──
   const cleanupJSON = useMutation({
     mutationFn: () => api.cleanupMetadataJSONs(),
-    onSuccess: (d: any) => setResult({ ok: true, msg: `已清理 ${d.removed} 个元数据 JSON 文件` }),
+    onSuccess: (d: any) => setResult({ ok: true, msg: t("datamgmt.cleanup_json_done").replace("{count}", String(d.removed)) }),
     onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
   });
 
-  const importProgress = useQuery({ queryKey: ["import-progress"], queryFn: () => api.getImportProgress(), refetchInterval: 5000 });
+  const createBackupMut = useMutation({
+    mutationFn: () => api.createBackup(),
+    onSuccess: (d: any) => { setResult({ ok: true, msg: "Backup: " + d.filename + " (" + d.size_mb + " MB)" }); backups.refetch(); },
+    onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
+  });
 
-const actions = [
-    {
-      key: "all",
-      title: t("datamgmt.clear_all"),
-      desc: t("datamgmt.clear_all.desc"),
-      color: "red",
-      mutation: clearAll,
-    },
-    {
-      key: "works",
-      title: t("datamgmt.clear_works"),
-      desc: t("datamgmt.clear_works.desc"),
-      color: "orange",
-      mutation: clearWorks,
-    },
-    {
-      key: "creators",
-      title: t("datamgmt.clear_creators"),
-      desc: t("datamgmt.clear_creators.desc"),
-      color: "orange",
-      mutation: clearCreators,
-    },
-    {
-      key: "downloads",
-      title: t("datamgmt.clear_downloads"),
-      desc: t("datamgmt.clear_downloads.desc"),
-      color: "yellow",
-      mutation: clearDownloads,
-    },
-    {
-      key: "jobs",
-      title: t("datamgmt.clear_jobs"),
-      desc: t("datamgmt.clear_jobs.desc"),
-      color: "yellow",
-      mutation: clearJobs,
-    },
-    {
-      key: "tags",
-      title: t("datamgmt.clear_tags", "Clear Tags"),
-      desc: t("datamgmt.clear_tags.desc", "Delete all tags and tag associations (work_tags, work_source_tags). Works and assets remain intact."),
-      color: "yellow",
-      mutation: clearTags,
-    },
-    {
-      key: "settings",
-      title: t("datamgmt.reset_settings"),
-      desc: t("datamgmt.reset_settings.desc"),
-      color: "blue",
-      mutation: resetSettings,
-    },
+  const runIntegrity = () => integrity.refetch();
+
+  // Danger zone mutations
+  const dangerMutations: Record<string, ReturnType<typeof useMutation>> = {
+    works: useMutation({
+      mutationFn: () => api.clearEntity("works"),
+      onSuccess: (d: any) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+      onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
+    }),
+    creators: useMutation({
+      mutationFn: () => api.clearEntity("creators"),
+      onSuccess: (d: any) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+      onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
+    }),
+    subs: useMutation({
+      mutationFn: async () => {
+        const r = await api.clearEntity("downloads");
+        return r;
+      },
+      onSuccess: (d: any) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+      onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
+    }),
+    tags: useMutation({
+      mutationFn: () => api.clearEntity("tags"),
+      onSuccess: (d: any) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+      onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
+    }),
+    jobs: useMutation({
+      mutationFn: () => api.clearEntity("jobs"),
+      onSuccess: (d: any) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+      onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
+    }),
+    all: useMutation({
+      mutationFn: async () => {
+        await api.clearEntity("all");
+        await api.clearFailedJobs();
+        return { message: "All data cleared" };
+      },
+      onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+      onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
+    }),
+    settings: useMutation({
+      mutationFn: () => api.resetSettings(),
+      onSuccess: (d: any) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+      onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
+    }),
+  };
+
+  const dangerActions = [
+    { key: "works", title: t("datamgmt.danger_clear_works"), desc: t("datamgmt.danger_clear_works_desc"), color: "red" },
+    { key: "creators", title: t("datamgmt.danger_clear_creators"), desc: t("datamgmt.danger_clear_creators_desc"), color: "red" },
+    { key: "subs", title: t("datamgmt.danger_clear_subs"), desc: t("datamgmt.danger_clear_subs_desc"), color: "red" },
+    { key: "tags", title: t("datamgmt.danger_clear_tags"), desc: t("datamgmt.danger_clear_tags_desc"), color: "orange" },
+    { key: "jobs", title: t("datamgmt.danger_clear_jobs"), desc: t("datamgmt.danger_clear_jobs_desc"), color: "orange" },
+    { key: "all", title: t("datamgmt.danger_clear_all"), desc: t("datamgmt.danger_clear_all_desc"), color: "red" },
+    { key: "settings", title: t("datamgmt.danger_reset_settings"), desc: t("datamgmt.danger_reset_settings_desc"), color: "blue" },
   ];
 
+  const dangerUnlocked = dangerConfirm === t("datamgmt.danger_confirm_text");
+
+  // Computed
+  const info = systemInfo.data;
+  const breakdown = storageBreakdown.data;
+  const issues = integrity.data?.issues || [];
+  const dbStats = integrity.data?.db_stats;
+  const lastBackup = backups.data?.backups?.[0];
+  const totalSourceSize = breakdown?.sources
+    ? Object.values(breakdown.sources).reduce((sum, s) => sum + s.size_mb, 0)
+    : 0;
+
   return (
-    <main className="max-w-4xl mx-auto p-6">
+    <main className="max-w-5xl mx-auto p-6">
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("datamgmt.back")}</Link>
       </div>
       <PageHeader title={t("datamgmt.title")} description={t("datamgmt.desc")} />
 
       {result && (
-        <div className={`mb-4 p-3 rounded-lg text-sm ${result.ok ? "bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400" : "bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400"}`}>
-          {result.msg}
+        <div className={`mb-4 p-3 rounded-lg text-sm flex items-center justify-between ${result.ok ? "bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400" : "bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400"}`}>
+          <span>{result.msg}</span>
           <button onClick={() => setResult(null)} className="ml-3 text-xs underline">{t("datamgmt.dismiss")}</button>
         </div>
       )}
 
-      <div className="space-y-3">
-        {actions.map((a) => (
-          <div key={a.key} className={`bg-white dark:bg-slate-800 rounded-lg shadow p-4 flex items-center justify-between border-l-4 ${
-            a.color === "red" ? "border-red-500" : a.color === "orange" ? "border-orange-500" : a.color === "yellow" ? "border-yellow-500" : "border-blue-500"
-          }`}>
-            <div>
-              <h3 className="font-medium text-sm dark:text-white">{a.title}</h3>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{a.desc}</p>
-            </div>
-            <button
-              onClick={() => setConfirmAction(a.key)}
-              disabled={a.mutation.isPending}
-              className={`px-4 py-2 text-sm text-white rounded shrink-0 ml-4 disabled:opacity-50 ${
-                a.color === "red" ? "bg-red-600 hover:bg-red-700" :
-                a.color === "orange" ? "bg-orange-600 hover:bg-orange-700" :
-                a.color === "yellow" ? "bg-yellow-600 hover:bg-yellow-700" :
-                "bg-blue-600 hover:bg-blue-700"
-              }`}
-            >
-              {a.mutation.isPending ? t("datamgmt.processing") : a.key === "settings" ? t("datamgmt.reset") : t("datamgmt.clear")}
-            </button>
+      {/* ═══ Stats Cards ═══ */}
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-6">
+        {[
+          { label: t("datamgmt.stats_works"), value: dbStats?.works ?? "-", color: "blue" },
+          { label: t("datamgmt.stats_assets"), value: dbStats?.assets ?? "-", color: "indigo" },
+          { label: t("datamgmt.stats_creators"), value: creatorCount.data?.count ?? "-", color: "purple" },
+          { label: t("datamgmt.stats_subs"), value: subCount.data?.count ?? "-", color: "green" },
+          { label: t("datamgmt.stats_tags"), value: dbStats?.tags ?? "-", color: "amber" },
+          { label: t("datamgmt.stats_downloads"), value: info ? formatSize(info.downloads_size_mb) : "-", color: "pink" },
+          { label: t("datamgmt.stats_library"), value: info ? formatSize(info.library_size_mb) : "-", color: "teal" },
+        ].map((s) => (
+          <div key={s.label} className="bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 text-center">
+            <div className={`text-xl font-bold ${
+              s.color === "blue" ? "text-blue-600" : s.color === "indigo" ? "text-indigo-600" :
+              s.color === "purple" ? "text-purple-600" : s.color === "green" ? "text-green-600" :
+              s.color === "amber" ? "text-amber-600" : s.color === "pink" ? "text-pink-600" : "text-teal-600"
+            }`}>{s.value}</div>
+            <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{s.label}</div>
           </div>
         ))}
       </div>
 
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        {/* ═══ Storage Distribution ═══ */}
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+          <h3 className="font-medium text-sm mb-3">{t("datamgmt.storage_title")}</h3>
+          {breakdown?.sources && Object.keys(breakdown.sources).length > 0 ? (
+            <div className="space-y-2">
+              {Object.entries(breakdown.sources)
+                .sort(([, a], [, b]) => b.size_mb - a.size_mb)
+                .map(([source, s]) => {
+                  const pct = totalSourceSize > 0 ? (s.size_mb / totalSourceSize) * 100 : 0;
+                  const color = getSourceColor(source);
+                  return (
+                    <div key={source}>
+                      <div className="flex items-center justify-between text-xs mb-0.5">
+                        <span className="font-medium capitalize">{source}</span>
+                        <span className="text-gray-500 dark:text-gray-400">
+                          {formatSize(s.size_mb)} · {s.work_count} {t("datamgmt.storage_works_label")}
+                        </span>
+                      </div>
+                      <div className="w-full h-3 bg-gray-100 dark:bg-slate-700 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full transition-all duration-500" style={{ width: `${Math.max(pct, 2)}%`, backgroundColor: color }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              <div className="pt-2 border-t text-xs text-gray-500 dark:text-gray-400 flex justify-between">
+                <span>Total</span>
+                <span className="font-medium">{formatSize(totalSourceSize)}</span>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-400 dark:text-gray-500 text-center py-6">{t("datamgmt.storage_no_data")}</p>
+          )}
+        </div>
+
+        {/* ═══ Creator Storage Top ═══ */}
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+          <h3 className="font-medium text-sm mb-3">{t("datamgmt.storage_creators_title")}</h3>
+          {breakdown?.creators && breakdown.creators.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-gray-500 dark:text-gray-400 border-b">
+                    <th className="text-left py-1.5 font-medium">#</th>
+                    <th className="text-left py-1.5 font-medium">{t("datamgmt.storage_creator_col")}</th>
+                    <th className="text-left py-1.5 font-medium">{t("datamgmt.storage_source_label")}</th>
+                    <th className="text-right py-1.5 font-medium">{t("datamgmt.storage_works_label")}</th>
+                    <th className="text-right py-1.5 font-medium">Size</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {breakdown.creators.map((c, i) => (
+                    <tr key={`${c.source}/${c.name}`} className="border-b border-gray-50 dark:border-slate-700/50 hover:bg-gray-50 dark:hover:bg-slate-750">
+                      <td className="py-1.5 text-gray-400">{i + 1}</td>
+                      <td className="py-1.5 font-medium truncate max-w-[120px]" title={c.name}>{c.name}</td>
+                      <td className="py-1.5 capitalize">
+                        <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: getSourceColor(c.source) }} />
+                        {c.source}
+                      </td>
+                      <td className="py-1.5 text-right">{c.work_count}</td>
+                      <td className="py-1.5 text-right font-mono text-gray-600 dark:text-gray-300">{formatSize(c.size_mb)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-400 dark:text-gray-500 text-center py-6">{t("datamgmt.storage_no_data")}</p>
+          )}
+        </div>
+      </div>
+
+      {/* ═══ Integrity Check ═══ */}
+      <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-medium text-sm">{t("datamgmt.integrity_title")}</h3>
+          <button
+            onClick={runIntegrity}
+            disabled={integrity.isFetching}
+            className="px-3 py-1.5 text-xs bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50"
+          >
+            {integrity.isFetching ? t("datamgmt.integrity_running") : t("datamgmt.integrity_run")}
+          </button>
+        </div>
+
+        {integrity.data ? (
+          <>
+            {issues.length === 0 ? (
+              <div className="text-center py-6 text-green-600 dark:text-green-400">
+                <div className="text-lg mb-1">&#10003;</div>
+                <p className="text-sm font-medium">{t("datamgmt.integrity_clean")}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("datamgmt.integrity_clean_desc")}</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {issues.map((issue) => (
+                  <div key={issue.type} className={`border rounded-lg p-3 flex items-center justify-between ${
+                    issue.severity === "error" ? "border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-900/10" :
+                    issue.severity === "warning" ? "border-yellow-200 dark:border-yellow-800 bg-yellow-50/50 dark:bg-yellow-900/10" :
+                    "border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-900/10"
+                  }`}>
+                    <div className="flex items-center gap-3">
+                      {severityBadge(issue.severity, t)}
+                      <div>
+                        <p className="text-sm font-medium">
+                          {issue.type === "orphaned_download_files" && t("datamgmt.integrity_orphaned_files")}
+                          {issue.type === "missing_thumbnails" && t("datamgmt.integrity_missing_thumbs")}
+                          {issue.type === "orphaned_creators" && t("datamgmt.integrity_orphaned_creators")}
+                          {issue.type === "orphaned_tags" && t("datamgmt.integrity_orphaned_tags")}
+                          {issue.type === "dead_links" && t("datamgmt.integrity_dead_links")}
+                          <span className="text-gray-500 dark:text-gray-400 font-normal ml-1">({issue.count})</span>
+                        </p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">{issue.description}</p>
+                      </div>
+                    </div>
+                    {issue.items && issue.items.length > 0 && (
+                      <button
+                        onClick={() => setIntegrityItems(issue)}
+                        className="shrink-0 text-xs text-blue-600 hover:underline"
+                      >
+                        {t("datamgmt.integrity_view_items")} ({Math.min(issue.items.length, 50)})
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {dbStats && (
+              <div className="mt-4 pt-3 border-t">
+                <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">{t("datamgmt.integrity_db_stats")}</h4>
+                <div className="grid grid-cols-3 md:grid-cols-5 gap-2">
+                  {Object.entries(dbStats).map(([tbl, count]) => (
+                    <div key={tbl} className="text-center bg-gray-50 dark:bg-slate-700/50 rounded p-2">
+                      <div className="text-sm font-mono font-bold">{count}</div>
+                      <div className="text-[10px] text-gray-500 dark:text-gray-400">{tbl}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {integrity.data.checked_at && (
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-3">
+                {t("datamgmt.integrity_checked_at")}: {new Date(integrity.data.checked_at).toLocaleString()}
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="text-sm text-gray-400 dark:text-gray-500 text-center py-6">
+            {t("datamgmt.integrity_clean_desc")}
+          </p>
+        )}
+
+        {/* Integrity items modal */}
+        {integrityItems && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setIntegrityItems(null)}>
+            <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl p-4 max-w-xl w-full mx-4 max-h-[70vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-medium text-sm">
+                  {t("datamgmt.integrity_items_modal_title")
+                    .replace("{type}", integrityItems.description)
+                    .replace("{count}", String(integrityItems.count))}
+                </h3>
+                <button onClick={() => setIntegrityItems(null)} className="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
+              </div>
+              <div className="space-y-1 max-h-96 overflow-auto">
+                {integrityItems.items.map((item, i) => (
+                  <div key={i} className="text-xs p-2 bg-gray-50 dark:bg-slate-700/50 rounded flex items-center justify-between">
+                    <div className="truncate flex-1">
+                      {item.path && <span className="font-mono text-gray-600 dark:text-gray-300">{item.path}</span>}
+                      {item.file_name && !item.path && <span className="font-mono">{item.file_name}</span>}
+                      {item.name && !item.file_name && !item.path && <span>{item.name}</span>}
+                      {item.id && <span className="text-gray-400 ml-1">({item.id})</span>}
+                    </div>
+                    {item.file_count !== undefined && (
+                      <span className="text-gray-400 ml-2 shrink-0">{item.file_count} {t("datamgmt.integrity_files")}</span>
+                    )}
+                    {item.asset_id && (
+                      <span className="text-gray-400 ml-2 shrink-0 text-[10px]">{item.source}/{item.source_work_id}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        {/* ═══ Cleanup Tools ═══ */}
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+          <h3 className="font-medium text-sm mb-3">{t("datamgmt.cleanup_title")}</h3>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between p-3 border rounded-lg">
+              <div>
+                <p className="text-sm font-medium">{t("datamgmt.cleanup_json")}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">{t("datamgmt.cleanup_json_desc")}</p>
+              </div>
+              <button onClick={() => cleanupJSON.mutate()} disabled={cleanupJSON.isPending}
+                className="shrink-0 ml-3 px-3 py-1.5 text-xs bg-yellow-600 text-white rounded hover:bg-yellow-700 disabled:opacity-50">
+                {cleanupJSON.isPending ? "..." : t("datamgmt.cleanup_json_btn")}
+              </button>
+            </div>
+            <div className="flex items-center justify-between p-3 border rounded-lg">
+              <div>
+                <p className="text-sm font-medium">{t("datamgmt.cleanup_reindex")}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">{t("datamgmt.cleanup_reindex_desc")}</p>
+              </div>
+              <button className="shrink-0 ml-3 px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700">
+                {t("datamgmt.cleanup_reindex_btn")}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* ═══ Backup & Database ═══ */}
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+          <h3 className="font-medium text-sm mb-3">{t("datamgmt.backup_section")}</h3>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-gray-50 dark:bg-slate-700/50 rounded p-3 text-center">
+                <div className="text-xs text-gray-500 dark:text-gray-400">{t("datamgmt.backup_recent")}</div>
+                <div className="text-sm font-medium mt-0.5">
+                  {lastBackup
+                    ? new Date(lastBackup.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+                    : t("datamgmt.backup_none")}
+                </div>
+              </div>
+              <div className="bg-gray-50 dark:bg-slate-700/50 rounded p-3 text-center">
+                <div className="text-xs text-gray-500 dark:text-gray-400">{t("datamgmt.backup_count")}</div>
+                <div className="text-sm font-medium mt-0.5">{backups.data?.backups?.length ?? 0}</div>
+              </div>
+            </div>
+            <button onClick={() => createBackupMut.mutate()} disabled={createBackupMut.isPending}
+              className="w-full px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
+              {createBackupMut.isPending ? t("datamgmt.backup_creating") : t("datamgmt.backup_create")}
+            </button>
+
+            <div className="pt-3 border-t">
+              <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">{t("datamgmt.db_stats_title")}</h4>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                {info && (
+                  <>
+                    <div className="bg-gray-50 dark:bg-slate-700/50 rounded p-2 flex justify-between">
+                      <span className="text-gray-500">{t("datamgmt.db_stats_title")}</span>
+                      <span>{((info.downloads_size_mb || 0) + (info.library_size_mb || 0)).toFixed(1)} MB</span>
+                    </div>
+                    <div className="bg-gray-50 dark:bg-slate-700/50 rounded p-2 flex justify-between">
+                      <span>Meilisearch</span>
+                      <span>-</span>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ═══ Danger Zone ═══ */}
+      <div className="bg-white dark:bg-slate-800 rounded-lg shadow border-2 border-red-300 dark:border-red-800 p-4">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-red-500 text-lg">&#9888;</span>
+          <h3 className="font-medium text-sm text-red-700 dark:text-red-400">{t("datamgmt.danger_title")}</h3>
+        </div>
+        <p className="text-xs text-red-500 dark:text-red-400 mb-4">{t("datamgmt.danger_warning")}</p>
+
+        {/* Confirmation input */}
+        <div className="mb-4">
+          <input
+            type="text"
+            value={dangerConfirm}
+            onChange={(e) => setDangerConfirm(e.target.value)}
+            placeholder={t("datamgmt.danger_confirm_text")}
+            className="w-full max-w-sm border border-red-300 dark:border-red-700 rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white"
+          />
+          <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{t("datamgmt.danger_confirm_hint")}</p>
+        </div>
+
+        <div className="space-y-2">
+          {dangerActions.map((a) => {
+            const m = dangerMutations[a.key];
+            return (
+              <div key={a.key} className={`flex items-center justify-between p-3 rounded-lg border-l-4 ${
+                a.color === "red" ? "border-l-red-500 bg-gray-50 dark:bg-slate-700/30" :
+                a.color === "orange" ? "border-l-orange-500 bg-gray-50 dark:bg-slate-700/30" :
+                "border-l-blue-500 bg-gray-50 dark:bg-slate-700/30"
+              }`}>
+                <div>
+                  <p className="text-sm font-medium dark:text-white">{a.title}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">{a.desc}</p>
+                </div>
+                <button
+                  onClick={() => setConfirmAction(a.key)}
+                  disabled={!dangerUnlocked || m.isPending}
+                  className={`shrink-0 ml-3 px-4 py-1.5 text-xs text-white rounded disabled:opacity-30 transition-opacity ${
+                    a.color === "red" ? "bg-red-600 hover:bg-red-700" :
+                    a.color === "orange" ? "bg-orange-600 hover:bg-orange-700" :
+                    "bg-blue-600 hover:bg-blue-700"
+                  }`}
+                >
+                  {m.isPending ? "..." : a.title}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Global confirm dialog */}
       {confirmAction && (
         <ConfirmDialog
           open
-          title={t("datamgmt.confirm_title").replace("{action}", actions.find((a) => a.key === confirmAction)?.title || "")}
-          message={t("datamgmt.confirm_msg").replace("{action}", confirmAction || "")}
+          title={t("datamgmt.confirm_title").replace("{action}", dangerActions.find((a) => a.key === confirmAction)?.title || confirmAction)}
+          message={t("datamgmt.confirm_msg").replace("{action}", confirmAction)}
           onConfirm={() => {
-            const a = actions.find((a) => a.key === confirmAction);
-            if (a) a.mutation.mutate();
+            const m = dangerMutations[confirmAction];
+            if (m) (m as any).mutate();
           }}
           onCancel={() => setConfirmAction(null)}
-          isPending={actions.find((a) => a.key === confirmAction)?.mutation.isPending || false}
+          isPending={dangerMutations[confirmAction]?.isPending || false}
         />
       )}
     </main>
