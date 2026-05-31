@@ -48,6 +48,14 @@ class BaseProvider(ABC):
     def parse_source_tags(self, raw_metadata: dict) -> list[dict]: ...
 ```
 
+Additional methods:
+
+```python
+    def get_creator_dir_from_url(self, url: str, source_creator_id: str) -> str: ...
+```
+
+`get_creator_dir_from_url()` maps a source URL to a filesystem-safe creator directory name. Implemented by all downloadable providers.
+
 Where:
 
 ```python
@@ -59,6 +67,10 @@ class ProviderCapabilities:
     supports_tags: bool
     is_reference_only: bool
 ```
+
+All 8 downloadable providers (Pixiv, X, Iwara, Danbooru, Weibo, Bilibili, Pinterest, Lofter) have full `build_gallerydl_config()` implementations.
+
+The `auto_enable_on_import` flag is per-source configurable in the gallery-dl settings page. Each source has a toggle that controls whether a newly imported subscription source defaults to `is_enabled=True`. Only Pixiv defaults to auto-enabled; all other sources default to disabled.
 
 ## Provider Registry
 
@@ -74,16 +86,26 @@ downloadable = registry.list_downloadable()
 ## Implemented Providers
 
 ### Pixiv (`pixiv.py`)
-- **Status**: First supported downloadable provider
+- **Status**: Fully supported downloadable provider
 - `source_name`: `"pixiv"`
 - `capabilities.can_download`: True
 - `capabilities.supports_gallerydl`: True
 - URL patterns: `pixiv.net/artworks/<id>`, `pixiv.net/users/<id>` (optionally with `/en/` locale prefix)
 - Uses gallery-dl Pixiv extractor with cookie-based auth
 
+### X / Twitter (`x.py`)
+- **Status**: Downloadable
+- `source_name`: `"x"`
+- `capabilities.can_download`: True
+- `capabilities.supports_gallerydl`: True
+- URL patterns: `x.com/<user>`, `x.com/<user>/status/<id>`, `twitter.com/<user>`
+- Uses gallery-dl Twitter extractor with cookie-based auth
+- Download strategy: `strategy: "tweets"` uses the UserTweets GraphQL endpoint
+- The SearchTimeline fallback endpoint is patched out in the Dockerfile (Twitter has deprecated it)
+- Extractors: timeline, tweets, media, likes, search, list, bookmark, avatar, background
+
 ### Iwara (`iwara.py`)
 - **Status**: Downloadable (gallery-dl >= 1.32.0 required)
-
 - `source_name`: `"iwara"`
 - `capabilities.can_download`: True
 - `capabilities.supports_gallerydl`: True
@@ -91,23 +113,15 @@ downloadable = registry.list_downloadable()
 - Supports auth via username/password or cookie file
 - Extractors: user, user-videos, user-images, user-playlists, videos, images, playlists, favorites, followers, following, search, tag
 
-### X / Twitter (`x.py`)
-- **Status**: Downloadable (gallery-dl built-in Twitter extractor)
-- `source_name`: `"x"`
-- `capabilities.can_download`: True
-- `capabilities.supports_gallerydl`: True
-- URL patterns: `x.com/<user>`, `x.com/<user>/status/<id>`, `twitter.com/<user>`
-- Uses gallery-dl Twitter extractor with cookie-based auth
-- Extractors: timeline, tweets, media, likes, search, list, bookmark, avatar, background
-
 ### Danbooru (`danbooru.py`)
-- **Status**: Downloadable
+- **Status**: Downloadable (and serves as a reference for tag metadata)
 - `source_name`: `"danbooru"`
 - `capabilities.can_download`: True
 - `capabilities.supports_gallerydl`: True
-- `capabilities.supports_tags`: True (5 categories: artist, character, copyright, general, meta)
-- URL patterns: `danbooru.donmai.us/posts?tags=...`, `danbooru.donmai.us/artists/<id>`, `danbooru.donmai.us/pools/<id>`
+- `capabilities.supports_tags`: True (5 tag categories: artist, character, copyright, general, meta)
+- Downloads posts via tag search (`posts?tags=artist_name`)
 - Auth via username/password or API key
+- URL patterns: `danbooru.donmai.us/posts?tags=...`, `danbooru.donmai.us/artists/<id>`, `danbooru.donmai.us/pools/<id>`
 
 ### Danbooru Reference (`danbooru_reference.py`)
 - **Status**: Reference only
@@ -117,25 +131,6 @@ downloadable = registry.list_downloadable()
 - Handles: Danbooru artist tag normalization, URL extraction, creator_link suggestion
 - Does NOT implement `build_gallerydl_config` or `parse_assets`
 
-### Pinterest (`pinterest.py`)
-- **Status**: Downloadable
-- `source_name`: `"pinterest"`
-- `capabilities.can_download`: True
-- `capabilities.supports_gallerydl`: True
-- `capabilities.supports_tags`: False
-- URL patterns: `pinterest.com/pin/<id>`, `pinterest.com/<user>/pins/`, `pinterest.com/<user>/<board>/`
-- Public API only — no authentication required
-
-### Lofter (`lofter.py`)
-- **Status**: Downloadable
-- `source_name`: `"lofter"`
-- `capabilities.can_download`: True
-- `capabilities.supports_gallerydl`: True
-- `capabilities.supports_tags`: False
-- URL patterns: `<blog>.lofter.com/post/<id>`, `<blog>.lofter.com/`
-- Excludes www.lofter.com (not a blog host)
-- No authentication required
-
 ### 微博 / Weibo (`weibo.py`)
 - **Status**: Downloadable
 - `source_name`: `"weibo"`
@@ -143,6 +138,8 @@ downloadable = registry.list_downloadable()
 - `capabilities.supports_gallerydl`: True
 - `capabilities.supports_tags`: True
 - URL patterns: `weibo.com/u/<uid>`, `weibo.com/<username>`, `weibo.com/<uid>/<status_id>`
+- Also supports `weibo.cn` mobile domain
+- Username validation rejects hyphen-prefixed names and bare prefix keywords
 - Tags extracted from `#hashtag#` patterns in post text
 - Cookies optional — set `data/config/gallery-dl/cookies/weibo.txt` for authenticated access
 - gallery-dl rate-limit: 1.0–2.0 s between requests
@@ -161,6 +158,26 @@ downloadable = registry.list_downloadable()
 - Tags extracted from article tag list
 - gallery-dl rate-limit: 3.0–6.0 s between requests
 - `livephoto` files downloaded by default (toggleable via config)
+
+### Pinterest (`pinterest.py`)
+- **Status**: Downloadable
+- `source_name`: `"pinterest"`
+- `capabilities.can_download`: True
+- `capabilities.supports_gallerydl`: True
+- `capabilities.supports_tags`: False
+- URL patterns: `pinterest.com/pin/<id>`, `pinterest.com/<user>/pins/`, `pinterest.com/<user>/<board>/`
+- Public API only — no authentication required
+
+### Lofter (`lofter.py`)
+- **Status**: Downloadable
+- `source_name`: `"lofter"`
+- `capabilities.can_download`: True
+- `capabilities.supports_gallerydl`: True
+- `capabilities.supports_tags`: False
+- URL patterns: `<blog>.lofter.com/post/<id>`, `<blog>.lofter.com/`
+- Excludes www.lofter.com (not a blog host)
+- Must use `["lofter", "{blog_name}", "{id}"]` directory pattern to avoid flat directories merging all posts into one work
+- No authentication required
 
 ### Local Folder (`local.py`)
 - **Status**: Planned

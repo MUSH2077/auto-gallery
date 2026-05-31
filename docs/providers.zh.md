@@ -48,6 +48,14 @@ class BaseProvider(ABC):
     def parse_source_tags(self, raw_metadata: dict) -> list[dict]: ...
 ```
 
+额外方法：
+
+```python
+    def get_creator_dir_from_url(self, url: str, source_creator_id: str) -> str: ...
+```
+
+`get_creator_dir_from_url()` 将来源 URL 映射为文件系统安全的作者目录名。所有可下载 provider 均已实现。
+
 其中：
 
 ```python
@@ -59,6 +67,10 @@ class ProviderCapabilities:
     supports_tags: bool
     is_reference_only: bool
 ```
+
+所有 8 个可下载 provider（Pixiv、X、Iwara、Danbooru、微博、Bilibili、Pinterest、Lofter）均已完整实现 `build_gallerydl_config()`。
+
+`auto_enable_on_import` 标志按来源在 gallery-dl 设置页面中配置。每个来源都有开关，控制新导入的订阅来源是否默认启用。仅 Pixiv 默认自动启用；其余来源均默认禁用。
 
 ## Provider 注册表
 
@@ -74,12 +86,23 @@ downloadable = registry.list_downloadable()
 ## 已实现的 Provider
 
 ### Pixiv (`pixiv.py`)
-- **状态**：首个支持的可下载 provider
+- **状态**：完整支持的可下载 provider
 - `source_name`：`"pixiv"`
 - `capabilities.can_download`：True
 - `capabilities.supports_gallerydl`：True
 - URL 模式：`pixiv.net/artworks/<id>`、`pixiv.net/users/<id>`（可选 `/en/` 语言前缀）
 - 通过 cookie 认证使用 gallery-dl 的 Pixiv 提取器
+
+### X / Twitter (`x.py`)
+- **状态**：可下载
+- `source_name`：`"x"`
+- `capabilities.can_download`：True
+- `capabilities.supports_gallerydl`：True
+- URL 模式：`x.com/<user>`、`x.com/<user>/status/<id>`、`twitter.com/<user>`
+- 使用 gallery-dl 的 Twitter 提取器，cookie 认证
+- 下载策略：`strategy: "tweets"` 使用 UserTweets GraphQL 端点
+- SearchTimeline 回退端点已在 Dockerfile 中修补移除（Twitter 已弃用该端点）
+- 提取器：timeline、tweets、media、likes、search、list、bookmark、avatar、background
 
 ### Iwara (`iwara.py`)
 - **状态**：可下载（需要 gallery-dl >= 1.32.0）
@@ -90,34 +113,38 @@ downloadable = registry.list_downloadable()
 - 支持用户名/密码或 cookie 文件认证
 - 提取器：user、user-videos、user-images、user-playlists、videos、images、playlists、favorites、followers、following、search、tag
 
-### X / Twitter (`x.py`)
-- **状态**：可下载（gallery-dl 内置 Twitter 提取器）
-- `source_name`：`"x"`
+### Danbooru (`danbooru.py`)
+- **状态**：可下载（同时作为标签元数据参考）
+- `source_name`：`"danbooru"`
 - `capabilities.can_download`：True
 - `capabilities.supports_gallerydl`：True
-- URL 模式：`x.com/<user>`、`x.com/<user>/status/<id>`、`twitter.com/<user>`
-- 使用 gallery-dl 的 Twitter 提取器，cookie 认证
-- 提取器：timeline、tweets、media、likes、search、list、bookmark、avatar、background
+- `capabilities.supports_tags`：True（5 种标签分类：artist、character、copyright、general、meta）
+- 通过标签搜索下载帖子（`posts?tags=artist_name`）
+- 通过用户名/密码或 API key 认证
+- URL 模式：`danbooru.donmai.us/posts?tags=...`、`danbooru.donmai.us/artists/<id>`、`danbooru.donmai.us/pools/<id>`
 
 ### Danbooru 参考 (`danbooru_reference.py`)
 - **状态**：仅供参考
+- `source_name`：`"danbooru_reference"`
 - `capabilities.is_reference_only`：True
 - `capabilities.can_download`：False
 - 处理：Danbooru 画师标签规范化、URL 提取、creator_link 建议
 - 不实现 `build_gallerydl_config` 或 `parse_assets`
 
-### 微博 Weibo (`weibo.py`)
+### 微博 / Weibo (`weibo.py`)
 - **状态**：可下载
 - `source_name`：`"weibo"`
 - `capabilities.can_download`：True
 - `capabilities.supports_gallerydl`：True
 - `capabilities.supports_tags`：True
 - URL 模式：`weibo.com/u/<uid>`、`weibo.com/<username>`、`weibo.com/<uid>/<status_id>`
+- 同时支持 `weibo.cn` 移动端域名
+- 用户名验证会拒绝以连字符开头的名称和裸前缀关键词
 - 从帖子文本中的 `#话题#` 模式提取标签
 - Cookie 可选 — 如需认证访问，设置 `data/config/gallery-dl/cookies/weibo.txt`
 - gallery-dl 请求频率限制：1.0–2.0 秒/请求
 
-### 哔哩哔哩 Bilibili (`bilibili.py`)
+### 哔哩哔哩 / Bilibili (`bilibili.py`)
 - **状态**：可下载
 - `source_name`：`"bilibili"`
 - `capabilities.can_download`：True
@@ -131,6 +158,26 @@ downloadable = registry.list_downloadable()
 - 从文章标签列表提取标签
 - gallery-dl 请求频率限制：3.0–6.0 秒/请求
 - 默认下载 `livephoto` 文件（可通过配置关闭）
+
+### Pinterest (`pinterest.py`)
+- **状态**：可下载
+- `source_name`：`"pinterest"`
+- `capabilities.can_download`：True
+- `capabilities.supports_gallerydl`：True
+- `capabilities.supports_tags`：False
+- URL 模式：`pinterest.com/pin/<id>`、`pinterest.com/<user>/pins/`、`pinterest.com/<user>/<board>/`
+- 仅使用公开 API — 无需认证
+
+### Lofter (`lofter.py`)
+- **状态**：可下载
+- `source_name`：`"lofter"`
+- `capabilities.can_download`：True
+- `capabilities.supports_gallerydl`：True
+- `capabilities.supports_tags`：False
+- URL 模式：`<blog>.lofter.com/post/<id>`、`<blog>.lofter.com/`
+- 排除 www.lofter.com（非博客托管地址）
+- 必须使用 `["lofter", "{blog_name}", "{id}"]` 目录模式，避免扁平目录导致所有帖子合并为一个作品
+- 无需认证
 
 ### 本地文件夹 (`local.py`)
 - **状态**：计划中
