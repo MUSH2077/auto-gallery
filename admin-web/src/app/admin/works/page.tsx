@@ -18,7 +18,10 @@ function Img({ assetId, alt, className }: { assetId: string | undefined; alt: st
   );
 }
 
-const GridCard = memo(function GridCard({ w, onToggleFavorite }: { w: WorkListItem; onToggleFavorite: (id: string) => void }) {
+const GridCard = memo(function GridCard({ w, onToggleFavorite, selected, onToggleSelect }: {
+  w: WorkListItem; onToggleFavorite: (id: string) => void;
+  selected?: boolean; onToggleSelect?: (id: string) => void;
+}) {
   const t = useT();
   const router = useRouter();
   const [pageIdx, setPageIdx] = useState(0);
@@ -30,7 +33,14 @@ const GridCard = memo(function GridCard({ w, onToggleFavorite }: { w: WorkListIt
   const nextPage = (e: React.MouseEvent) => { e.stopPropagation(); setPageIdx((pageIdx + 1) % assetIds.length); };
 
   return (
-    <div className="card overflow-hidden cursor-pointer hover:shadow-md transition-shadow group" onClick={() => router.push(`/admin/works/${w.id}`)}>
+    <div className="card overflow-hidden hover:shadow-md transition-shadow group relative">
+        {onToggleSelect && (
+          <input type="checkbox" checked={selected || false}
+            onChange={(e) => { e.stopPropagation(); onToggleSelect(w.id); }}
+            className="absolute top-2 left-2 z-10 w-4 h-4 rounded opacity-0 group-hover:opacity-100 checked:opacity-100 transition-opacity"
+            aria-label={`Select ${w.title || "work"}`} />
+        )}
+        <div className="cursor-pointer" onClick={() => router.push(`/admin/works/${w.id}`)}>
       <div className="h-32 bg-gray-100 dark:bg-slate-700 flex items-center justify-center text-gray-400 text-xs overflow-hidden relative">
         <Img assetId={currentId} alt={w.title || ""} className="w-full h-full object-cover" />
         <button onClick={(e) => { e.stopPropagation(); onToggleFavorite(w.id); }}
@@ -70,7 +80,7 @@ const GridCard = memo(function GridCard({ w, onToggleFavorite }: { w: WorkListIt
         </div>
         <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
           {w.posted_at ? new Date(w.posted_at).toLocaleDateString() : t("works.no_date")}
-        </div>
+        </div>      </div>
       </div>
     </div>
   );
@@ -144,6 +154,12 @@ function WorksContent() {
     router.replace(`${pathname}?${p.toString()}`, { scroll: false });
   }
 
+  // Batch selection
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const toggleSelect = (id: string) => { const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n); };
+  const selectAll = () => { if (!works.data?.items) return; setSelected(selected.size === works.data.items.length ? new Set() : new Set(works.data.items.map((w: any) => w.id))); };
+
+
   const filters = useMemo(() => ({
     search: search || undefined,
     source: sourceFilter || undefined,
@@ -195,13 +211,29 @@ function WorksContent() {
     <main className="max-w-7xl mx-auto p-6 page-transition">
       <PageHeader title={t("works.title")} description={t("works.count", "0 works").replace("{count}", String(works.data?.total ?? 0))} />
 
+      {selected.size > 0 && (
+        <div className="flex items-center gap-2 mb-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg px-4 py-2">
+          <span className="text-xs text-yellow-700 dark:text-yellow-300">{selected.size} selected</span>
+          <button onClick={selectAll} className="px-2 py-0.5 text-xs border border-yellow-300 dark:border-yellow-700 rounded hover:bg-yellow-100 dark:hover:bg-yellow-900/40">
+            {selected.size === (works.data?.items?.length || 0) ? "Deselect all" : "Select all"}
+          </button>
+          <span className="flex-1" />
+          <button onClick={() => { setSelected(new Set()); }} className="px-2 py-0.5 text-xs bg-stone-500 text-white rounded hover:bg-stone-600">Cancel</button>
+        </div>
+      )}
+
       {/* Search & Filters */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <input value={inputVal} onChange={(e) => setInputVal(e.target.value)}
           placeholder={t("works.search_title")} className="border rounded px-3 py-1.5 text-sm w-48 dark:bg-slate-700 dark:text-white dark:border-slate-600" />
+        {(sourceFilter || creatorFilter || nsfwFilter !== "all" || aiFilter !== "all" || isFavoriteFilter) && (
+          <button onClick={() => updateParams({ source: null, creator: null, nsfw: null, ai: null, fav: null })}
+            className="px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded border border-red-200 dark:border-red-800 transition-colors"
+            aria-label="Clear all filters">✕ Clear</button>
+        )}
 
         {/* Source filter — dropdown */}
-        <select value={sourceFilter} onChange={(e) => updateParams({ source: e.target.value || null })}
+        <select value={sourceFilter} onChange={(e) => updateParams({ source: e.target.value || null })} aria-label="Filter by source"
           className="border rounded px-2 py-1.5 text-xs dark:bg-slate-700 dark:text-white dark:border-slate-600">
           {SOURCE_FILTERS.map((f) => (
             <option key={f.key} value={f.key}>{f.label}</option>
@@ -210,7 +242,7 @@ function WorksContent() {
 
         {/* Creator filter */}
         {(creators.data?.length || 0) > 0 && (
-          <select value={creatorFilter} onChange={(e) => updateParams({ creator: e.target.value || null })}
+          <select value={creatorFilter} onChange={(e) => updateParams({ creator: e.target.value || null })} aria-label="Filter by creator"
             className="border rounded px-2 py-1.5 text-xs dark:bg-slate-700 dark:text-white dark:border-slate-600">
             <option value="">{t("works.filter_all_creators")}</option>
             {creators.data?.map((c) => (
@@ -309,7 +341,7 @@ function WorksContent() {
       {/* Grid View */}
       {works.data && works.data.items?.length > 0 && viewMode === "grid" && (
         <div className="overflow-x-auto grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-6">
-          {works.data.items.map((w: WorkListItem) => <GridCard key={w.id} w={w} onToggleFavorite={(id) => toggleFavorite.mutate(id)} />)}
+          {works.data.items.map((w: WorkListItem) => <GridCard key={w.id} w={w} onToggleFavorite={(id) => toggleFavorite.mutate(id)} selected={selected.has(w.id)} onToggleSelect={toggleSelect} />)}
         </div>
       )}
 
