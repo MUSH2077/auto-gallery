@@ -7,6 +7,11 @@ import { useRouter } from "next/navigation";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge } from "@/components";
 
+
+const REFETCH_ACTIVE_MS = 3000;
+const REFETCH_IDLE_MS = 10000;
+const PAGE_LIMIT = 200;
+
 const STATUS_OPTIONS = ["", "pending", "downloading", "paused", "downloaded", "importing", "complete", "failed", "stale"];
 const SOURCE_OPTIONS = ["", "pixiv", "x", "iwara", "danbooru", "pinterest", "lofter", "weibo", "bilibili"];
 
@@ -74,19 +79,19 @@ export default function JobsPage() {
     source: dlSource || undefined,
     sort_by: dlSort,
     sort_order: dlOrder,
-    offset: 0, limit: 200,
+    offset: 0, limit: PAGE_LIMIT,
   }), [dlStatus, dlSource, dlSort, dlOrder]);
 
   const downloads = useQuery({
     queryKey: [...queryKeys.downloadJobs.all, dlParams],
     queryFn: () => api.listDownloadJobs(dlParams),
-    refetchInterval: (dlStatus === "downloading" || !dlStatus) ? 3000 : 10000,
+    refetchInterval: (dlStatus === "downloading" || !dlStatus) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
   });
 
   const imports = useQuery({
     queryKey: [...queryKeys.importJobs.all, imFilter],
-    queryFn: () => api.listImportJobs(imFilter || undefined, 0, 200),
-    refetchInterval: imFilter === "running" || !imFilter ? 3000 : 10000,
+    queryFn: () => api.listImportJobs(imFilter || undefined, 0, PAGE_LIMIT),
+    refetchInterval: (imFilter === "running" || !imFilter) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
   });
 
   // --- Mutations ---
