@@ -55,7 +55,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
         {stats.map((s, i) => (
           <div key={i} className="card-elevated p-5 page-transition" style={{ animationDelay: `${s.delay}ms` }}>
-            <div className="text-2xl md:text-3xl font-bold text-amber-700 dark:text-amber-400 tracking-tight">{s.value}</div>
+            <div className="text-2xl md:text-3xl font-bold text-amber-700 tabular dark:text-amber-400 tracking-tight tabular">{s.value}</div>
             <div className="text-xs text-stone-500 dark:text-stone-400 mt-1 font-medium uppercase tracking-wider">{s.label}</div>
           </div>
         ))}
@@ -90,7 +90,7 @@ export default function Dashboard() {
                 { l: t("dashboard.disk_used"), v: `${storage.data.disk?.total_bytes > 0 ? Math.round((storage.data.disk?.used_bytes || 0) / (storage.data.disk?.total_bytes || 1) * 100) : "?"}%` },
               ].map((x, i) => (
                 <div key={i} className="card p-4 page-transition" style={{ animationDelay: `${300 + i * 50}ms` }}>
-                  <div className="text-xl font-bold text-stone-800 dark:text-stone-200">{x.v}</div>
+                  <div className="text-xl font-bold text-stone-800 dark:text-stone-200 tabular">{x.v}</div>
                   <div className="text-xs text-stone-500 dark:text-stone-400 mt-1">{x.l}</div>
                   {x.n !== undefined && <div className="text-[10px] text-stone-400 mt-0.5">{x.n} files</div>}
                 </div>
