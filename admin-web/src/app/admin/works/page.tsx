@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo, useEffect, Suspense } from "react";
+import { useState, useMemo, useEffect, Suspense, memo } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
@@ -18,7 +18,7 @@ function Img({ assetId, alt, className }: { assetId: string | undefined; alt: st
   );
 }
 
-function GridCard({ w, onToggleFavorite }: { w: WorkListItem; onToggleFavorite: (id: string) => void }) {
+const GridCard = memo(function GridCard({ w, onToggleFavorite }: { w: WorkListItem; onToggleFavorite: (id: string) => void }) {
   const t = useT();
   const router = useRouter();
   const [pageIdx, setPageIdx] = useState(0);
@@ -74,7 +74,7 @@ function GridCard({ w, onToggleFavorite }: { w: WorkListItem; onToggleFavorite: 
       </div>
     </div>
   );
-}
+});
 
 type SortKey = "created_at" | "posted_at" | "title";
 type ViewMode = "grid" | "list";
