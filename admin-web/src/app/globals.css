@@ -30,6 +30,40 @@
   code, pre, .font-mono { font-family: 'JetBrains Mono', monospace; }
 }
 
+
+  /* ── Interface Polish (make-interfaces-feel-better) ── */
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1, h2, h3, h4 { text-wrap: balance; }
+  p, li, dt, dd { text-wrap: pretty; }
+
+  .tabular { font-variant-numeric: tabular-nums; }
+
+  img:not(.no-outline) {
+    outline: 1px solid rgba(0,0,0,0.08);
+    outline-offset: -1px;
+  }
+  @media (prefers-color-scheme: dark) {
+    img:not(.no-outline) { outline-color: rgba(255,255,255,0.08); }
+  }
+
+  button, [role="button"], a.btn, .clickable {
+    min-height: 40px; min-width: 40px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+
 @layer components {
   .card {
     @apply bg-white/80 dark:bg-stone-900/60 backdrop-blur-sm
@@ -41,16 +75,18 @@
            dark:ring-1 dark:ring-amber-700/10;
   }
   .card-interactive {
-    @apply card transition-all duration-300
+    transition-property: transform, box-shadow, border-color;
+    transition-duration: 200ms;
+    transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+    @apply card
            hover:shadow-lg hover:-translate-y-0.5
            dark:hover:ring-amber-600/20;
   }
   .btn-primary {
-    @apply px-5 py-2.5 rounded-lg text-sm font-medium
-           bg-amber-600 hover:bg-amber-700 text-white
-           dark:bg-amber-700 dark:hover:bg-amber-600
-           transition-all duration-200 shadow-sm hover:shadow-md
-           disabled:opacity-40 disabled:cursor-not-allowed;
+    transition-property: transform, background-color, box-shadow, opacity;
+    transition-duration: 150ms;
+    transition-timing-function: ease-out;
+    @apply px-5 py-2.5 rounded-lg text-sm font-medium bg-amber-600 hover:bg-amber-700 text-white dark:bg-amber-700 dark:hover:bg-amber-600 shadow-sm hover:shadow-md disabled:opacity-40 disabled:cursor-not-allowed;
   }
   .btn-ghost {
     @apply px-4 py-2 rounded-lg text-sm
