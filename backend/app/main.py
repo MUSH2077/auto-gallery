@@ -145,11 +145,27 @@ async def health():
     except Exception:
         services["meilisearch"] = "down"
 
+    # Disk space check
+    disk = "unknown"
+    try:
+        import shutil
+        for path, label in [(settings.download_root, "downloads"), (settings.library_root, "library")]:
+            usage = shutil.disk_usage(path)
+            pct = usage.free / usage.total
+            if pct < 0.05:
+                disk = "critical"
+                break
+            elif pct < 0.10:
+                disk = "warning"
+        if disk == "unknown":
+            disk = "ok"
+    except Exception:
+        disk = "unknown"
+
     all_up = all(v == "up" for v in services.values())
     return {
         "status": "ok" if all_up else "degraded",
         "version": "0.1.0",
         "services": services,
-    "services": services,
-    "disk": disk_status,
+        "disk": disk,
     }
