@@ -1,7 +1,7 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { StatusBadge, PageHeader, ErrorState, CardSkeleton } from "@/components";
+import { StatusBadge, ErrorState } from "@/components";
 import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
 
@@ -16,177 +16,101 @@ export default function Dashboard() {
   const t = useT();
   const router = useRouter();
   const health = useQuery({ queryKey: queryKeys.health, queryFn: api.health, refetchInterval: 15000 });
-  const sources = useQuery({ queryKey: queryKeys.sources, queryFn: api.sources });
   const storage = useQuery({ queryKey: ["storage"], queryFn: api.storageStats, refetchInterval: 60000 });
-  const failedDownloads = useQuery({ queryKey: [...queryKeys.downloadJobs.all, "failed"], queryFn: () => api.listDownloadJobs({ status: "failed", offset: 0, limit: 5 }) });
-  const failedImports = useQuery({ queryKey: [...queryKeys.importJobs.all, "failed"], queryFn: () => api.listImportJobs("failed", 0, 5) });
-  const recentDownloads = useQuery({ queryKey: [...queryKeys.downloadJobs.all, "recent"], queryFn: () => api.listDownloadJobs({ offset: 0, limit: 5 }) });
-  const recentImports = useQuery({ queryKey: [...queryKeys.importJobs.all, "recent"], queryFn: () => api.listImportJobs(undefined, 0, 5) });
+  const failedDJ = useQuery({ queryKey: [...queryKeys.downloadJobs.all, "failed"], queryFn: () => api.listDownloadJobs({ status: "failed", offset: 0, limit: 5 }) });
+  const failedIJ = useQuery({ queryKey: [...queryKeys.importJobs.all, "failed"], queryFn: () => api.listImportJobs("failed", 0, 5) });
+
+  const stats = [
+    { label: t("dashboard.download_jobs"), value: String(failedDJ.data?.length ?? 0), sub: "failed", delay: 50 },
+    { label: t("dashboard.import_jobs"), value: String(failedIJ.data?.total ?? 0), sub: "processed", delay: 100 },
+    ...(storage.data ? [
+      { label: t("dashboard.disk_free"), value: fmtBytes(storage.data.disk?.free_bytes || 0), sub: "available", delay: 150 },
+      { label: "Usage", value: `${storage.data.disk?.total_bytes > 0 ? Math.round((storage.data.disk?.used_bytes || 0) / (storage.data.disk?.total_bytes || 1) * 100) : "?"}%`,
+        sub: `${fmtBytes(storage.data.downloads?.size_bytes || 0)} downloads`, delay: 200 },
+    ] : []),
+  ];
+
+  const links = [
+    { to: "/admin/creators", label: t("dashboard.quick_creators") },
+    { to: "/admin/subscriptions", label: t("dashboard.quick_subscriptions") },
+    { to: "/admin/scheduler", label: t("dashboard.quick_scheduler") },
+    { to: "/admin/jobs", label: t("dashboard.quick_download_jobs") },
+    { to: "/admin/works", label: t("dashboard.quick_works") },
+    { to: "/admin/tags", label: t("dashboard.quick_tags") },
+    { to: "/admin/reference/danbooru", label: t("dashboard.quick_danbooru") },
+    { to: "/admin/settings", label: t("dashboard.quick_settings") },
+  ];
 
   return (
-    <main className="max-w-6xl mx-auto p-6">
-      <PageHeader title={t("dashboard.title")} description={t("dashboard.desc")} />
+    <main className="max-w-6xl mx-auto p-6 md:p-10 page-transition">
+      <header className="mb-10">
+        <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-stone-900 dark:text-stone-100"
+          style={{ fontFamily: "'Playfair Display', Georgia, serif" }}>
+          {t("dashboard.title")}
+        </h1>
+        <p className="mt-2 text-stone-500 dark:text-stone-400 text-sm max-w-lg leading-relaxed">{t("dashboard.desc")}</p>
+      </header>
 
-      {/* Services & Storage Row */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-        {/* Services */}
+      {/* Key Stats */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
+        {stats.map((s, i) => (
+          <div key={i} className="card-elevated p-5 page-transition" style={{ animationDelay: `${s.delay}ms` }}>
+            <div className="text-2xl md:text-3xl font-bold text-amber-700 dark:text-amber-400 tracking-tight">{s.value}</div>
+            <div className="text-xs text-stone-500 dark:text-stone-400 mt-1 font-medium uppercase tracking-wider">{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Services + Storage */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-10">
         <section>
-          <h2 className="text-lg font-semibold mb-3">{t("dashboard.services")}</h2>
-          {health.isError ? (
-            <ErrorState message={health.error?.message || t("dashboard.failed_health")} onRetry={() => health.refetch()} />
-          ) : health.isLoading ? (
-            <div className="grid grid-cols-3 gap-3">{Array.from({ length: 3 }).map((_, i) => <CardSkeleton key={i} />)}</div>
-          ) : health.data ? (
+          <h2 className="text-xl font-bold mb-4 text-stone-900 dark:text-stone-100" style={{ fontFamily: "'Playfair Display', Georgia, serif" }}>{t("dashboard.services")}</h2>
+          {health.data ? (
             <div className="grid grid-cols-3 gap-3">
-              {Object.entries(health.data.services).map(([name, status]) => (
-                <div key={name} className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 flex items-center gap-3">
+              {Object.entries(health.data.services).map(([name, status], i) => (
+                <div key={name} className="card-interactive p-4 flex flex-col items-center text-center gap-2 page-transition" style={{ animationDelay: `${250 + i * 50}ms` }}>
                   <StatusBadge status={status as string} />
-                  <span className="font-medium capitalize">{name}</span>
+                  <span className="text-xs font-medium capitalize text-stone-600 dark:text-stone-300">{name}</span>
                 </div>
               ))}
             </div>
-          ) : null}
+          ) : health.isLoading ? (
+            <div className="grid grid-cols-3 gap-3">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="card p-8 skeleton rounded-xl" />)}</div>
+          ) : <ErrorState message={health.error?.message || "Failed"} onRetry={() => health.refetch()} />}
         </section>
 
-        {/* Storage */}
         <section>
-          <h2 className="text-lg font-semibold mb-3">{t("dashboard.storage")}</h2>
-          {storage.isError ? (
-            <ErrorState message={storage.error?.message || t("dashboard.failed_storage")} onRetry={() => storage.refetch()} />
-          ) : storage.isLoading ? (
-            <div className="grid grid-cols-2 gap-3">{Array.from({ length: 4 }).map((_, i) => <CardSkeleton key={i} />)}</div>
-          ) : storage.data ? (
+          <h2 className="text-xl font-bold mb-4 text-stone-900 dark:text-stone-100" style={{ fontFamily: "'Playfair Display', Georgia, serif" }}>{t("dashboard.storage")}</h2>
+          {storage.data ? (
             <div className="grid grid-cols-2 gap-3">
-              <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-                <div className="text-2xl font-bold">{fmtBytes(storage.data.downloads.size_bytes)}</div>
-                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dashboard.downloads_files").replace("{count}", String(storage.data.downloads.file_count))}</div>
-              </div>
-              <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-                <div className="text-2xl font-bold">{fmtBytes(storage.data.library.size_bytes)}</div>
-                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dashboard.library_files").replace("{count}", String(storage.data.library.file_count))}</div>
-              </div>
-              <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-                <div className="text-2xl font-bold">{fmtBytes(storage.data.disk.free_bytes)}</div>
-                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dashboard.disk_free")}</div>
-              </div>
-              <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-                <div className="text-2xl font-bold">{storage.data.disk.total_bytes > 0 ? Math.round((storage.data.disk.used_bytes / storage.data.disk.total_bytes) * 100) : "?"}%</div>
-                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dashboard.disk_used")}</div>
-              </div>
+              {[
+                { l: t("dashboard.downloads_files"), v: fmtBytes(storage.data.downloads?.size_bytes || 0), n: storage.data.downloads?.file_count },
+                { l: t("dashboard.library_files"), v: fmtBytes(storage.data.library?.size_bytes || 0), n: storage.data.library?.file_count },
+                { l: t("dashboard.disk_free"), v: fmtBytes(storage.data.disk?.free_bytes || 0) },
+                { l: t("dashboard.disk_used"), v: `${storage.data.disk?.total_bytes > 0 ? Math.round((storage.data.disk?.used_bytes || 0) / (storage.data.disk?.total_bytes || 1) * 100) : "?"}%` },
+              ].map((x, i) => (
+                <div key={i} className="card p-4 page-transition" style={{ animationDelay: `${300 + i * 50}ms` }}>
+                  <div className="text-xl font-bold text-stone-800 dark:text-stone-200">{x.v}</div>
+                  <div className="text-xs text-stone-500 dark:text-stone-400 mt-1">{x.l}</div>
+                  {x.n !== undefined && <div className="text-[10px] text-stone-400 mt-0.5">{x.n} files</div>}
+                </div>
+              ))}
             </div>
-          ) : null}
+          ) : storage.isLoading ? (
+            <div className="grid grid-cols-2 gap-3">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="card p-8 skeleton rounded-xl" />)}</div>
+          ) : <ErrorState message={storage.error?.message || "Failed"} onRetry={() => storage.refetch()} />}
         </section>
       </div>
 
-      {/* Recent Activity */}
-      <section className="mb-8">
-        <h2 className="text-lg font-semibold mb-3 dark:text-white">{t("dashboard.recent_activity")}</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-            <h3 className="text-sm font-medium mb-2 dark:text-white">{t("dashboard.download_jobs")}</h3>
-            {recentDownloads.isLoading ? <div className="animate-pulse h-16 bg-gray-100 dark:bg-slate-700 rounded" /> :
-             !recentDownloads.data?.length ? <p className="text-xs text-gray-400 dark:text-gray-500">{t("dashboard.no_jobs")}</p> :
-             <div className="space-y-1">
-              {recentDownloads.data.slice(0, 5).map((j) => (
-                <div key={j.id} className="flex items-center justify-between text-xs">
-                  <span className="font-mono text-gray-400 dark:text-gray-500">{j.id.slice(0, 8)}</span>
-                  <span className="text-gray-600 dark:text-gray-300 truncate mx-2 flex-1">{j.source_url?.slice(0, 60)}</span>
-                  <span>{j.status === "complete" || j.status === "downloaded" ? "✅" : j.status === "failed" ? "❌" : "⏳"}</span>
-                </div>
-              ))}
-             </div>}
-          </div>
-          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-            <h3 className="text-sm font-medium mb-2 dark:text-white">{t("dashboard.import_jobs")}</h3>
-            {recentImports.isLoading ? <div className="animate-pulse h-16 bg-gray-100 dark:bg-slate-700 rounded" /> :
-             !recentImports.data?.items?.length ? <p className="text-xs text-gray-400 dark:text-gray-500">{t("dashboard.no_jobs")}</p> :
-             <div className="space-y-1">
-              {recentImports.data.items.slice(0, 5).map((j) => (
-                <div key={j.id} className="flex items-center justify-between text-xs">
-                  <span className="font-mono text-gray-400 dark:text-gray-500">{j.id.slice(0, 8)}</span>
-                  <span className="text-gray-600 dark:text-gray-300 truncate mx-2 flex-1">{j.download_job_id ? j.download_job_id.slice(0, 8) : "—"}</span>
-                  <span>{j.status === "complete" ? "✅" : j.status === "failed" ? "❌" : "⏳"}</span>
-                </div>
-              ))}
-             </div>}
-          </div>
-        </div>
-      </section>
-
-      {/* Recent Failures */}
-      {(failedDownloads.data && failedDownloads.data.length > 0) || (failedImports.data && (failedImports.data.items?.length ?? 0) > 0) ? (
-        <section className="mb-8">
-          <h2 className="text-lg font-semibold mb-3 text-red-700 dark:text-red-400">{t("dashboard.recent_failures")}</h2>
-          <div className="space-y-2">
-            {failedDownloads.data?.slice(0, 3).map((j) => (
-              <div key={j.id} className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm flex items-center justify-between">
-                <div>
-                  <span className="font-mono text-xs text-gray-400 dark:text-gray-500 mr-2">DL {j.id.slice(0, 8)}</span>
-                  <StatusBadge status="failed" />
-                  <span className="text-red-600 ml-2">{(j.error_log || "").slice(0, 120)}</span>
-                </div>
-                <button onClick={() => router.push("/admin/downloads")} className="text-xs text-blue-600 hover:underline shrink-0 ml-4">View</button>
-              </div>
-            ))}
-            {failedImports.data?.items?.slice(0, 3).map((j) => (
-              <div key={j.id} className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm flex items-center justify-between">
-                <div>
-                  <span className="font-mono text-xs text-gray-400 dark:text-gray-500 mr-2">IM {j.id.slice(0, 8)}</span>
-                  <StatusBadge status="failed" />
-                  <span className="text-red-600 ml-2">{(j.error_log || "").slice(0, 120)}</span>
-                </div>
-                <button onClick={() => router.push("/admin/import-jobs")} className="text-xs text-blue-600 hover:underline shrink-0 ml-4">View</button>
-              </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {/* Providers */}
-      <section className="mb-8">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold">{t("dashboard.providers").replace("{count}", String(sources.data?.sources?.length || 0))}</h2>
-          <button onClick={() => router.push("/admin/sources")} className="text-sm text-blue-600 hover:underline">{t("dashboard.view_all")}</button>
-        </div>
-        {sources.isError ? (
-          <ErrorState message={sources.error?.message || t("dashboard.failed_sources")} onRetry={() => sources.refetch()} />
-        ) : sources.isLoading ? (
-          <div className="grid grid-cols-3 gap-3">{Array.from({ length: 6 }).map((_, i) => <CardSkeleton key={i} />)}</div>
-        ) : (
-          <div className="grid grid-cols-3 gap-3">
-            {sources.data?.sources?.slice(0, 6).map((s) => (
-              <div key={s.source_name} className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
-                <div className="font-medium">{s.display_name}</div>
-                <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">{s.source_name}</div>
-                <div className="flex gap-2 mt-2 flex-wrap">
-                  {s.capabilities.can_download && <span className="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded text-xs">{t("dashboard.download")}</span>}
-                  {s.capabilities.supports_gallerydl && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">{t("dashboard.gallerydl")}</span>}
-                  {s.capabilities.supports_tags && <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">{t("dashboard.tags")}</span>}
-                  {s.capabilities.is_reference_only && <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs">{t("dashboard.reference_only")}</span>}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
       {/* Quick Links */}
       <section>
-        <div className="grid grid-cols-4 gap-3">
-          {[
-            { label: t("dashboard.quick_creators"), to: "/admin/creators" },
-            { label: t("dashboard.quick_subscriptions"), to: "/admin/subscriptions" },
-            { label: t("dashboard.quick_scheduler"), to: "/admin/scheduler" },
-            { label: t("dashboard.quick_download_jobs"), to: "/admin/downloads" },
-            { label: t("dashboard.quick_works"), to: "/admin/works" },
-            { label: t("dashboard.quick_tags"), to: "/admin/tags" },
-            { label: t("dashboard.quick_danbooru"), to: "/admin/reference/danbooru" },
-            { label: t("dashboard.quick_settings"), to: "/admin/settings" },
-          ].map((item) => (
+        <h2 className="text-xl font-bold mb-4 text-stone-900 dark:text-stone-100" style={{ fontFamily: "'Playfair Display', Georgia, serif" }}>{t("dashboard.recent_activity")}</h2>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {links.map((item, i) => (
             <button key={item.to} onClick={() => router.push(item.to)}
-              className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 text-left hover:shadow-md transition-shadow">
-              <span className="text-sm font-medium">{item.label}</span>
-              <span className="text-xs text-blue-600 block mt-1">{t("dashboard.view_arrow")}</span>
+              className="card-interactive p-5 text-left group page-transition" style={{ animationDelay: `${400 + i * 50}ms` }}>
+              <span className="text-sm font-medium text-stone-700 dark:text-stone-200 group-hover:text-amber-700 dark:group-hover:text-amber-400 transition-colors">{item.label}</span>
+              <span className="text-xs text-amber-600 dark:text-amber-500 block mt-2 opacity-0 group-hover:opacity-100 transition-opacity">{t("dashboard.view_arrow")} →</span>
             </button>
           ))}
         </div>

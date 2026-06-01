@@ -30,7 +30,7 @@ function GridCard({ w, onToggleFavorite }: { w: WorkListItem; onToggleFavorite: 
   const nextPage = (e: React.MouseEvent) => { e.stopPropagation(); setPageIdx((pageIdx + 1) % assetIds.length); };
 
   return (
-    <div className="bg-white dark:bg-slate-800 rounded-lg shadow overflow-hidden cursor-pointer hover:shadow-md transition-shadow group" onClick={() => router.push(`/admin/works/${w.id}`)}>
+    <div className="card overflow-hidden cursor-pointer hover:shadow-md transition-shadow group" onClick={() => router.push(`/admin/works/${w.id}`)}>
       <div className="h-32 bg-gray-100 dark:bg-slate-700 flex items-center justify-center text-gray-400 text-xs overflow-hidden relative">
         <Img assetId={currentId} alt={w.title || ""} className="w-full h-full object-cover" />
         <button onClick={(e) => { e.stopPropagation(); onToggleFavorite(w.id); }}
@@ -192,7 +192,7 @@ function WorksContent() {
   });
 
   return (
-    <main className="max-w-7xl mx-auto p-6">
+    <main className="max-w-7xl mx-auto p-6 page-transition">
       <PageHeader title={t("works.title")} description={t("works.count", "0 works").replace("{count}", String(works.data?.total ?? 0))} />
 
       {/* Search & Filters */}
@@ -287,7 +287,7 @@ function WorksContent() {
       {works.isLoading && viewMode === "grid" && (
         <div className="overflow-x-auto grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
           {Array.from({ length: 10 }).map((_, i) => (
-            <div key={i} className="bg-white dark:bg-slate-800 rounded-lg shadow p-3 animate-pulse">
+            <div key={i} className="card p-3 animate-pulse">
               <div className="h-32 bg-gray-200 dark:bg-slate-700 rounded mb-2" />
               <div className="h-3 bg-gray-200 dark:bg-slate-700 rounded w-3/4" />
             </div>
@@ -317,7 +317,7 @@ function WorksContent() {
       {works.data && works.data.items?.length > 0 && viewMode === "list" && (
         <div className="space-y-1 mb-6">
           {works.data.items.map((w: WorkListItem) => (
-            <div key={w.id} className="bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 flex items-center gap-3 cursor-pointer hover:shadow-md transition-shadow" onClick={() => router.push(`/admin/works/${w.id}`)}>
+            <div key={w.id} className="card p-3 flex items-center gap-3 cursor-pointer hover:shadow-md transition-shadow" onClick={() => router.push(`/admin/works/${w.id}`)}>
               <div className="w-12 h-12 bg-gray-100 dark:bg-slate-700 rounded overflow-hidden shrink-0">
                 <Img assetId={w.thumbnail_asset_id} alt={w.title || ""} className="w-full h-full object-cover" />
               </div>
