@@ -93,7 +93,7 @@ function AdminNav() {
           ))}
         </div>
         <div className="flex items-center gap-1 shrink-0 ml-auto">
-          <Link href="/admin/search" className="p-1.5 rounded hover:bg-white/10 transition-colors" title={t("nav.search")}>
+          <Link href="/admin/search" className="p-1.5 rounded hover:bg-white/10 transition-colors" title={t("nav.search")} aria-label={t("nav.search")}>
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="11" cy="11" r="8" />
               <path d="M21 21l-4.3-4.3" />
@@ -103,7 +103,7 @@ function AdminNav() {
           <ThemeToggle />
           <UserMenu />
           {/* Hamburger — mobile only */}
-          <button onClick={() => setOpen(!open)} className="md:hidden p-1.5 rounded hover:bg-white/10">
+          <button onClick={() => setOpen(!open)} className="md:hidden p-1.5 rounded hover:bg-white/10" aria-label="Toggle navigation menu">
             <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               {open ? <path d="M18 6L6 18M6 6l12 12" /> : <path d="M4 6h16M4 12h16M4 18h16" />}
             </svg>
@@ -161,8 +161,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     <ErrorBoundary>
       <AuthGuard>
         <div>
+          <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-slate-900 focus:text-white focus:rounded">Skip to content</a>
           <AdminNav />
-          <div className="min-h-[calc(100vh-52px)]">{children}</div>
+          <main id="main-content" className="min-h-[calc(100vh-52px)]">{children}</main>
         </div>
       </AuthGuard>
     </ErrorBoundary>
