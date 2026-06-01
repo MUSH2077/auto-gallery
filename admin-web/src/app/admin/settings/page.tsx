@@ -31,14 +31,14 @@ export default function SettingsPage() {
   ];
 
   return (
-    <main className="max-w-4xl mx-auto p-6">
+    <main className="max-w-4xl mx-auto p-6 md:p-10 page-transition">
       <PageHeader title={t("settings.title")} description={t("settings.desc_default")} />
 
       {/* Config Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
         {cards.map((c) => (
           <Link key={c.href} href={c.href}
-            className="card rounded-lg shadow p-6 hover:shadow-md transition-shadow block">
+            className="card-interactive p-6 block">
             <h2 className="text-lg font-semibold mb-2 dark:text-white">{c.title}</h2>
             <p className="text-sm text-gray-500 dark:text-gray-400">{c.desc}</p>
           </Link>
@@ -47,8 +47,8 @@ export default function SettingsPage() {
 
       {/* Language */}
       <section className="mb-8">
-        <h2 className="text-lg font-semibold mb-3 dark:text-white">{t("settings.language")}</h2>
-        <div className="card rounded-lg shadow p-4">
+        <h2 className="text-xl font-bold mb-3 text-stone-900 dark:text-stone-100" style={{fontFamily: "'Playfair Display', Georgia, serif"}}>{t("settings.language")}</h2>
+        <div className="card p-4">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium dark:text-white">{t("settings.language")}</p>
@@ -82,8 +82,8 @@ export default function SettingsPage() {
 
       {/* Search Index */}
       <section className="mb-8">
-        <h2 className="text-lg font-semibold mb-3 dark:text-white">{t("settings.search_index")}</h2>
-        <div className="card rounded-lg shadow p-4">
+        <h2 className="text-xl font-bold mb-3 text-stone-900 dark:text-stone-100" style={{fontFamily: "'Playfair Display', Georgia, serif"}}>{t("settings.search_index")}</h2>
+        <div className="card p-4">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium dark:text-white">{t("settings.reindex_label")}</p>
@@ -99,13 +99,13 @@ export default function SettingsPage() {
 
       {/* Settings Summary */}
       <section className="mb-8">
-        <h2 className="text-lg font-semibold mb-3 dark:text-white">{t("settings.current_config")}</h2>
+        <h2 className="text-xl font-bold mb-3 text-stone-900 dark:text-stone-100" style={{fontFamily: "'Playfair Display', Georgia, serif"}}>{t("settings.current_config")}</h2>
         {settings.isError ? (
           <ErrorState message={settings.error?.message || t("common.error")} onRetry={() => settings.refetch()} />
         ) : !settings.data ? (
           <div className="card rounded-lg shadow p-4 animate-pulse"><div className="h-20 bg-gray-100 dark:bg-slate-700 rounded" /></div>
         ) : (
-          <div className="card rounded-lg shadow p-4">
+          <div className="card p-4">
             <div className="grid grid-cols-2 gap-3 text-sm">
               {Object.entries(settings.data.dedup || {}).map(([key, value]) => (
                 <div key={key} className="flex justify-between py-1 border-b dark:border-slate-700 last:border-0">
@@ -122,7 +122,7 @@ export default function SettingsPage() {
 
       {/* System Information */}
       <section className="mb-8">
-        <h2 className="text-lg font-semibold mb-3 dark:text-white">{t("settings.system_info")}</h2>
+        <h2 className="text-xl font-bold mb-3 text-stone-900 dark:text-stone-100" style={{fontFamily: "'Playfair Display', Georgia, serif"}}>{t("settings.system_info")}</h2>
         <div className="card rounded-lg shadow p-4 text-sm space-y-2">
           <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">{t("settings.backend_api")}</span><span className="font-mono text-xs dark:text-gray-300">{t("settings.backend_api_val")}</span></div>
           <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">{t("settings.admin_web")}</span><span className="text-xs dark:text-gray-300">{t("settings.admin_web_val")}</span></div>

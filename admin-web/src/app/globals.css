@@ -1,24 +1,84 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;0,800;1,400;1,600&family=JetBrains+Mono:wght@400;500&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-  html {
-    @apply transition-colors duration-200;
+  :root {
+    --amber-50: #fdf8f0;
+    --amber-100: #f7edd9;
+    --amber-200: #eed9ad;
+    --amber-300: #e2c07d;
+    --amber-400: #d4a24d;
+    --amber-500: #c4944a;
+    --amber-600: #a87838;
+    --amber-700: #8c5e2c;
+    --amber-800: #734d25;
+    --amber-900: #5c3d1e;
   }
+  html { @apply transition-colors duration-300; }
   html.dark body {
-    @apply bg-slate-900 text-gray-100;
+    background: linear-gradient(135deg, #1a1410 0%, #0f0c09 50%, #1a1410 100%);
+    @apply text-stone-200 antialiased min-h-screen;
   }
   body {
-    @apply bg-gray-50 text-gray-900 antialiased min-h-screen;
+    background: linear-gradient(135deg, #fdf8f0 0%, #f5f0e8 50%, #fdf8f0 100%);
+    @apply text-stone-800 antialiased min-h-screen;
   }
+  h1, h2, h3 { font-family: 'Playfair Display', Georgia, serif; }
+  code, pre, .font-mono { font-family: 'JetBrains Mono', monospace; }
 }
 
 @layer components {
   .card {
-    @apply bg-white dark:bg-slate-800 dark:border-slate-700;
+    @apply bg-white/80 dark:bg-stone-900/60 backdrop-blur-sm
+           border border-stone-200/60 dark:border-stone-700/40
+           rounded-xl shadow-sm;
   }
-  .card-muted {
-    @apply bg-gray-50 dark:bg-slate-800/50;
+  .card-elevated {
+    @apply card shadow-md dark:shadow-none
+           dark:ring-1 dark:ring-amber-700/10;
+  }
+  .card-interactive {
+    @apply card transition-all duration-300
+           hover:shadow-lg hover:-translate-y-0.5
+           dark:hover:ring-amber-600/20;
+  }
+  .btn-primary {
+    @apply px-5 py-2.5 rounded-lg text-sm font-medium
+           bg-amber-600 hover:bg-amber-700 text-white
+           dark:bg-amber-700 dark:hover:bg-amber-600
+           transition-all duration-200 shadow-sm hover:shadow-md
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-ghost {
+    @apply px-4 py-2 rounded-lg text-sm
+           border border-stone-300 dark:border-stone-600
+           text-stone-700 dark:text-stone-300
+           hover:bg-stone-100 dark:hover:bg-stone-800 transition-all duration-200;
+  }
+  .divider {
+    @apply border-t border-stone-200/60 dark:border-stone-700/40;
+  }
+  .section-title {
+    @apply text-2xl font-bold tracking-tight;
+    font-family: 'Playfair Display', Georgia, serif;
+  }
+  .page-transition {
+    animation: fadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  .skeleton {
+    background: linear-gradient(90deg, transparent 0%, rgba(196,148,74,0.08) 50%, transparent 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
   }
 }
