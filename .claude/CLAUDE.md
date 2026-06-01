@@ -579,6 +579,24 @@ Admin Web:
 - Untranslated English-only values (every key must have zh + en)
 - Inconsistent naming between zh and en (they should convey the same meaning)
 
+
+## Frontend Modification Discipline
+
+**CRITICAL**: When making frontend changes, do NOT add new UI elements (buttons, pages, cards, panels) unless explicitly instructed. If the user says "fix the subtitle" or "change the time picker", only modify the specific element mentioned — do not create new pages or add new navigation links.
+
+- Before modifying any UI, confirm the exact page/component to change
+- If unsure which page the user is referring to, ASK — do not guess
+- When a page doesn''t exist or was deleted, inform the user and ask how to proceed
+- Never add new navigation links, settings cards, or menu items without explicit instruction
+- Prefix your plan with "I will modify [specific page/component] to [specific change]" before touching frontend code
+
+### Examples
+| User says | Correct response |
+|-----------|-----------------|
+| "fix the subtitle" | "Which page? Creator, subscription, or works?" |
+| "change the time input" | "I will modify the subscription-defaults page to replace the text input with a time picker" |
+| "add a test button" | Only add to the specific tab/component mentioned |
+
 ## Commit Discipline
 
 **CRITICAL**: After completing each phase task, feature milestone, or bug fix, create a git commit automatically. Do NOT wait for the user to ask. This is mandatory.
