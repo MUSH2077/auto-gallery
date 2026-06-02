@@ -479,7 +479,8 @@ async def run_import_job(import_job_id: str):
                         r = redis_lib.from_url(settings.redis_url)
                         Queue(connection=r).enqueue_in(
                             timedelta(seconds=60),
-                            "app.jobs.import_runner.run_import_job", import_job_id)
+                            "app.jobs.import_runner.run_import_job", import_job_id,
+                            job_timeout=7200)
                         logger.info("Re-enqueued import job %s for retry", import_job_id)
                     except Exception:
                         logger.warning("Failed to enqueue import retry for %s", import_job_id, exc_info=True)

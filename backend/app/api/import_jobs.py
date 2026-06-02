@@ -93,7 +93,7 @@ async def retry_import_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
         from rq import Queue
         from app.config import settings
         r = redis_lib.from_url(settings.redis_url)
-        Queue(connection=r).enqueue("app.jobs.import_runner.run_import_job", str(job_id))
+        Queue(connection=r).enqueue("app.jobs.import_runner.run_import_job", str(job_id), job_timeout=7200)
     except Exception:
         logger.warning("Failed to enqueue retry for import job %s", job_id, exc_info=True)
 
