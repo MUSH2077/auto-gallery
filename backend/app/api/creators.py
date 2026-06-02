@@ -149,6 +149,19 @@ async def toggle_creator_favorite(creator_id: UUID, db: AsyncSession = Depends(g
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.get("/{creator_id}/sources", response_model=list[SourceCreatorRead])
+async def list_source_creators(creator_id: UUID, db: AsyncSession = Depends(get_db)):
+    """List source accounts for a creator."""
+    from sqlalchemy import select
+    from app.models.source_creator import SourceCreator as SourceCreatorModel
+    result = await db.execute(
+        select(SourceCreatorModel).where(
+            SourceCreatorModel.creator_id == creator_id,
+        ).order_by(SourceCreatorModel.source, SourceCreatorModel.source_creator_id)
+    )
+    return result.scalars().all()
+
+
 @router.post("/{creator_id}/sources", response_model=SourceCreatorRead, status_code=201)
 async def add_source_creator(creator_id: UUID, data: SourceCreatorCreate, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)
