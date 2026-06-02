@@ -102,7 +102,7 @@ export default function CreatorDetailPage() {
 
           {/* Danbooru Reference — clickable alias chips to set display name */}
           {c.danbooru_artist_id ? (
-            <DanbooruAliases artistId={c.danbooru_artist_id} creatorName={c.name} currentDisplay={c.display_name}
+            <DanbooruAliases artistId={c.danbooru_artist_id} currentDisplay={c.display_name}
               onSelectAlias={(alias) => { setEditName(c.name); setEditDisplay(alias); setEditDesc(c.description || ""); setEditing(true); }} />
           ) : null}
 
@@ -156,14 +156,14 @@ export default function CreatorDetailPage() {
   );
 }
 
-function DanbooruAliases({ artistId, creatorName, currentDisplay, onSelectAlias }: {
-  artistId: number; creatorName: string; currentDisplay?: string; onSelectAlias: (alias: string) => void;
+function DanbooruAliases({ artistId, currentDisplay, onSelectAlias }: {
+  artistId: number; currentDisplay?: string; onSelectAlias: (alias: string) => void;
 }) {
   const t = useT();
   const aliases = useQuery({
     queryKey: ["danbooru-artist", artistId],
-    queryFn: () => api.previewDanbooruArtist({ name: creatorName }),
-    staleTime: 5 * 60 * 1000,
+    queryFn: () => api.getDanbooruArtist(artistId),
+    staleTime: 10 * 60 * 1000,
   });
 
   if (aliases.isLoading) {

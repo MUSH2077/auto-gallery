@@ -52,6 +52,41 @@ def _is_source_auto_enabled(source: str) -> bool:
 router = APIRouter(dependencies=[RequireAdmin])
 
 
+@router.get("/danbooru/artist/{artist_id}")
+async def get_danbooru_artist(artist_id: int):
+    """Get Danbooru artist detail by ID (for alias chips on Creator Detail page)."""
+    artist = await asyncio.to_thread(danbooru_svc.get_artist, artist_id)
+    if not artist:
+        raise HTTPException(status_code=404, detail="Artist not found on Danbooru")
+    pixiv_display_name = None
+    from app.database import async_session
+    from app.models.source_creator import SourceCreator
+    from sqlalchemy import select as sa_select
+    pixiv_ids = []
+    for u in artist.get("urls", []):
+        raw = u.get("normalized_url") or u.get("url", "")
+        m = re.search(r'pixiv\.net/(?:en/)?users/(\d+)', raw)
+        if m: pixiv_ids.append(m.group(1))
+    if pixiv_ids:
+        async with async_session() as db:
+            result = await db.execute(
+                sa_select(SourceCreator).where(
+                    SourceCreator.source == "pixiv",
+                    SourceCreator.source_creator_id.in_(pixiv_ids),
+                ).limit(1))
+            sc = result.scalar_one_or_none()
+            if sc and sc.display_name:
+                pixiv_display_name = sc.display_name
+    return {
+        "artist": {
+            "id": artist["id"],
+            "name": artist["name"],
+            "other_names": artist.get("other_names", []),
+            "pixiv_display_name": pixiv_display_name,
+        }
+    }
+
+
 @router.get("/providers")
 async def list_reference_providers():
     return {"providers": [{"source_name": "danbooru_reference", "display_name": "Danbooru", "capabilities": {"is_reference_only": True}}]}

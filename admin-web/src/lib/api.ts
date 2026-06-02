@@ -670,6 +670,10 @@ export const api = {
   listMergeCandidates: () => request<{ candidates: { title: string; source_count: number; sources: string[]; work_ids: string[] }[]; total: number }>("/api/v1/admin/merge-candidates"),
 
   // Danbooru Reference
+  getDanbooruArtist: (artistId: number) =>
+    request<{
+      artist: { id: number; name: string; other_names: string[]; pixiv_display_name?: string | null };
+    }>(`/api/v1/reference/danbooru/artist/${artistId}`),
   previewDanbooruArtist: (params: { url?: string; pixiv_id?: string; name?: string }) =>
     request<{
       status: string; found?: boolean; message?: string;
