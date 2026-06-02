@@ -405,20 +405,16 @@ async def batch_import_danbooru_artists(data: dict):
     r = redis_lib.from_url(settings.redis_url)
     q = Queue(connection=r)
 
-    # Use a unique batch_id for scoped Redis keys (supports concurrent imports)
-    batch_id = str(uuid.uuid4())
-
-    job = q.enqueue("app.jobs.batch_import.run_batch_import", pixiv_ids, batch_id,
+    job = q.enqueue("app.jobs.batch_import.run_batch_import", pixiv_ids, job.id,
                     job_timeout=3600,  # 1 hour max
                     result_ttl=3600)
 
-    logger.info("Enqueued batch import job %s (batch_id=%s) with %d pixiv_ids (%d duplicates removed, %d already exist)",
-                job.id, batch_id, len(pixiv_ids), deduped, len(existing_ids))
+    logger.info("Enqueued batch import job %s with %d pixiv_ids (%d duplicates removed, %d already exist)",
+                job.id, len(pixiv_ids), deduped, len(existing_ids))
     return {
         "status": "ok",
         "message": f"Batch import enqueued ({len(pixiv_ids)} IDs" + (f", {deduped} duplicates removed)" if deduped > 0 else ")"),
         "job_id": job.id,
-        "batch_id": batch_id,
         "total": len(pixiv_ids),
         "duplicates_removed": deduped,
         "already_exists": [{"pixiv_id": pid, "creator_name": existing_map[pid]["name"], "creator_id": existing_map[pid]["creator_id"]} for pid in existing_ids],
@@ -496,22 +492,18 @@ async def url_batch_import_danbooru(data: dict):
     if len(urls) > 100:
         raise HTTPException(status_code=400, detail="Too many URLs (max 100 per request)")
 
-    # Use a unique batch_id for scoped Redis keys (supports concurrent imports)
-    batch_id = str(uuid_mod.uuid4())
-
     r = redis_lib.from_url(settings.redis_url)
     q = Queue(connection=r)
 
-    job = q.enqueue("app.jobs.batch_import.run_url_batch_import", urls, batch_id,
+    job = q.enqueue("app.jobs.batch_import.run_url_batch_import", urls, job.id,
                     job_timeout=3600,
                     result_ttl=3600)
 
-    logger.info("Enqueued URL batch import job %s (batch_id=%s) with %d URLs",
-                job.id, batch_id, len(urls))
+    logger.info("Enqueued URL batch import job %s with %d URLs",
+                job.id, len(urls))
     return {
         "status": "ok",
         "message": f"URL batch import enqueued ({len(urls)} URLs)",
         "job_id": job.id,
-        "batch_id": batch_id,
         "total": len(urls),
     }
