@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, SubscriptionDefaults, DownloadDefaults } from "@/lib/api";
 import { PageHeader, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
+import { useToast } from "@/components/Toast";
 import Link from "next/link";
 
 const TIMEZONES = ["UTC", "Asia/Shanghai", "Asia/Tokyo", "Asia/Seoul", "Asia/Singapore", "Asia/Kolkata",
@@ -33,6 +34,7 @@ function ScheduledTimePicker({ value, onChange }: { value: string; onChange: (v:
 }
 
 export default function SchedulerDefaultsPage() {
+  const toast = useToast();
   const t = useT();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
@@ -42,7 +44,7 @@ export default function SchedulerDefaultsPage() {
   const save = useMutation({
     mutationFn: (data: { subscription_defaults: SubscriptionDefaults; download_defaults: DownloadDefaults }) =>
       api.updateAdminSettings(data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.admin.settings }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.admin.settings }); toast.success({ message: t("notification.saved") }); },
   });
 
   if (!subLocal && settings.data?.subscription_defaults) setSubLocal({ ...settings.data.subscription_defaults });
@@ -157,7 +159,7 @@ export default function SchedulerDefaultsPage() {
             {save.isPending ? t("common.saving") : t("subdefaults.save")}
           </button>
         </div>
-        {save.isSuccess && <p className="text-green-600 text-sm">{t("subdefaults.saved")}</p>}
+        
         {save.error && <p className="text-red-600 text-sm">{(save.error as Error).message}</p>}
       </div>
     </main>

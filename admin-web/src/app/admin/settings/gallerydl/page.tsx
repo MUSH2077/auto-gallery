@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { PixivSourceConfig, TwitterSourceConfig, IwaraSourceConfig, DanbooruSourceConfig, PinterestSourceConfig, LofterSourceConfig, WeiboSourceConfig, BilibiliSourceConfig, GalleryDLSourceMeta } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useToast } from "@/components/Toast";
 import { PageHeader, ErrorState } from "@/components";
 import Link from "next/link";
 
@@ -11,6 +12,7 @@ type TabKey = "pixiv" | "twitter" | "iwara" | "danbooru" | "pinterest" | "lofter
 
 function useGalleryTabs() {
   const t = useT();
+  const toast = useToast();
   return [
     { key: "pixiv" as TabKey, label: t("gallerydl.tab.pixiv"), color: "border-blue-500" },
     { key: "twitter" as TabKey, label: t("gallerydl.tab.twitter"), color: "border-gray-700" },
@@ -289,7 +291,7 @@ export default function GalleryDLConfigPage() {
 
         <div className="flex justify-end pt-4 border-t">
           <button onClick={() => save.mutate()} disabled={save.isPending}
-            className={`px-6 py-2 rounded text-sm font-medium text-white ${saved === activeTab ? "bg-green-600" : "bg-slate-900 hover:bg-slate-800"} disabled:opacity-50`}>
+            className={`px-6 py-2 rounded text-sm font-medium text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-50`}>
             {save.isPending ? t("common.saving") : saved === activeTab ? t("common.saved") : `${t("gallerydl.save")} (${tabs.find(tab => tab.key === activeTab)?.label})`}
           </button>
         </div>

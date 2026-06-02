@@ -4,10 +4,12 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, ProxySettings } from "@/lib/api";
 import { PageHeader, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
+import { useToast } from "@/components/Toast";
 import Link from "next/link";
 
 function TestResults({ data, proxyEnabled }: { data: any | null; proxyEnabled: boolean }) {
   const t = useT();
+  const toast = useToast();
   if (!data) return null;
   const { results, proxy_reachable, proxy_reachable_error } = data;
   return (
@@ -78,14 +80,15 @@ function TestResults({ data, proxyEnabled }: { data: any | null; proxyEnabled: b
 
 export default function ProxySettingsPage() {
   const t = useT();
+  const toast = useToast();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
   const [local, setLocal] = useState<ProxySettings | null>(null);
-  const [saved, setSaved] = useState(false);
+  
 
   const save = useMutation({
     mutationFn: (data: ProxySettings) => api.updateAdminSettings({ proxy: data }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.admin.settings }); setSaved(true); setTimeout(() => setSaved(false), 2000); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.admin.settings }); toast.success({ message: t("notification.saved") }); },
   });
   const testProxy = useMutation({ mutationFn: () => api.testProxy() });
 
@@ -159,8 +162,8 @@ export default function ProxySettingsPage() {
           </div>
 
           <div className="mt-4 flex justify-end items-center">
-            {saved && <span className="mr-3 text-green-600 dark:text-green-400 text-sm">{t("common.saved")}</span>}
-            {save.error && <span className="mr-3 text-red-600 text-sm">{(save.error as Error).message}</span>}
+            
+            
             <button onClick={() => save.mutate(current)} disabled={save.isPending}
               className="px-6 py-2.5 bg-slate-900 dark:bg-slate-700 text-white rounded-lg text-sm font-medium hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50 transition-colors">
               {save.isPending ? t("common.saving") : t("proxy.save")}

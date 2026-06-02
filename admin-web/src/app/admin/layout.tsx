@@ -6,6 +6,7 @@ import { useT } from "@/lib/i18n";
 import { ThemeToggle, LangToggle } from "@/lib/theme";
 import { useAuth } from "@/lib/auth";
 import ErrorBoundary from "@/components/ErrorBoundary";
+import { NotificationBell } from "@/components/NotificationCenter";
 
 export const dynamic = 'force-dynamic';
 
@@ -99,6 +100,7 @@ function AdminNav() {
               <path d="M21 21l-4.3-4.3" />
             </svg>
           </Link>
+          <NotificationBell />
           <LangToggle />
           <ThemeToggle />
           <UserMenu />

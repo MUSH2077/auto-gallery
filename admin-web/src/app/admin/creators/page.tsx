@@ -5,6 +5,7 @@ import { api, queryKeys } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, ConfirmDialog, Modal } from "@/components";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useT } from "@/lib/i18n";
+import { useToast } from "@/components/Toast";
 
 type FilterMode = "all" | "active" | "inactive" | "has_danbooru" | "has_subscription" | "no_subscription" | "favorites";
 
@@ -14,6 +15,7 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
   onClose: () => void;
 }) {
   const t = useT();
+  const toast = useToast();
   const [name, setName] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
@@ -84,6 +86,7 @@ function buildFilters(mode: FilterMode, search: string) {
 
 function CreatorsContent() {
   const t = useT();
+  const toast = useToast();
   const router = useRouter();
   const sp = useSearchParams();
   const pathname = usePathname();
@@ -142,17 +145,18 @@ function CreatorsContent() {
 
   const create = useMutation({
     mutationFn: (data: { name: string; display_name?: string; description?: string }) => api.createCreator(data),
-    onSuccess: () => { setShowCreate(false); creators.refetch(); },
+    onSuccess: () => { setShowCreate(false); creators.refetch(); toast.success({ message: t("notification.created") }); },
+    onError: (e: Error) => toast.error({ message: e.message }),
   });
 
   const del = useMutation({
     mutationFn: (id: string) => api.deleteCreator(id),
-    onSuccess: () => { setDeleteId(null); creators.refetch(); },
+    onSuccess: () => { setDeleteId(null); creators.refetch(); toast.success({ message: t("notification.deleted") }); },
   });
 
   const batchDel = useMutation({
     mutationFn: (ids: string[]) => api.batchDeleteCreators(ids),
-    onSuccess: () => { setSelected(new Set()); setConfirmBatchDel(false); creators.refetch(); },
+    onSuccess: () => { setSelected(new Set()); setConfirmBatchDel(false); creators.refetch(); toast.success({ message: t("notification.deleted") }); },
   });
 
   const toggleSelect = (id: string) => {

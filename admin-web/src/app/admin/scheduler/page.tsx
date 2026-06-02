@@ -2,6 +2,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, Subscription } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useToast } from "@/components/Toast";
 import { PageHeader, EmptyState, ErrorState } from "@/components";
 import { useRouter } from "next/navigation";
 
@@ -16,6 +17,7 @@ function fmtNextSync(sub: Subscription): string {
 
 export default function SchedulerPage() {
   const t = useT();
+  const toast = useToast();
   const router = useRouter();
   const qc = useQueryClient();
 
