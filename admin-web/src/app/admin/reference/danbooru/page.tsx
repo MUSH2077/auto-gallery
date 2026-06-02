@@ -304,12 +304,43 @@ export default function DanbooruReferencePage() {
   });
 
   const [batchJobId, setBatchJobId] = useState<string | null>(null);
+  const [batchImportType, setBatchImportType] = useState<"pixiv" | "url" | null>(null);
   const batchActivityId = useRef<string | null>(null);
+
+  // Persist job_id to sessionStorage so it survives client-side navigation
+  const persistJob = (jobId: string, importType: "pixiv" | "url", total: number) => {
+    try {
+      sessionStorage.setItem("danbooru_batch_job", JSON.stringify({ jobId, importType, total, startedAt: Date.now() }));
+    } catch {}
+  };
+
+  const clearPersistedJob = () => {
+    try { sessionStorage.removeItem("danbooru_batch_job"); } catch {}
+  };
+
+  // Mount recovery: if we had an active job, resume polling
+  useEffect(() => {
+    try {
+      const stored = sessionStorage.getItem("danbooru_batch_job");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        // Only recover jobs started in the last 2 hours
+        if (Date.now() - parsed.startedAt < 2 * 60 * 60 * 1000) {
+          setBatchJobId(parsed.jobId);
+          setBatchImportType(parsed.importType);
+        } else {
+          clearPersistedJob();
+        }
+      }
+    } catch {}
+  }, []);
 
   const enqueueBatch = useMutation({
     mutationFn: (ids: string[]) => api.batchImportDanbooru(ids),
     onSuccess: (data) => {
       setBatchJobId(data.job_id);
+      setBatchImportType("pixiv");
+      persistJob(data.job_id, "pixiv", data.total);
       // Register in global notification center so it survives navigation
       const actId = notify.addActivity({
         type: "job",
@@ -324,14 +355,25 @@ export default function DanbooruReferencePage() {
     },
   });
 
-  // URL batch import (synchronous, returns per-URL results directly)
+  // URL batch import (now async via RQ — same pattern as Pixiv batch)
   const [urlBatchInput, setUrlBatchInput] = useState("");
   const [showUrlBatch, setShowUrlBatch] = useState(false);
   const urlBatchImport = useMutation({
     mutationFn: (urls: string[]) => api.urlBatchImportDanbooru(urls),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.creators.all });
-      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+    onSuccess: (data) => {
+      setBatchJobId(data.job_id);
+      setBatchImportType("url");
+      persistJob(data.job_id, "url", data.total);
+      const actId = notify.addActivity({
+        type: "job",
+        title: "URL Batch Import",
+        message: `Processing ${data.total} URLs`,
+        status: "running",
+        progress: 0,
+        link: "/admin/reference/danbooru",
+      });
+      if (batchActivityId.current) notify.removeActivity(batchActivityId.current);
+      batchActivityId.current = actId;
     },
   });
 
@@ -341,6 +383,9 @@ export default function DanbooruReferencePage() {
       .map((s) => s.trim())
       .filter((s) => s.startsWith("http"));
     if (urls.length === 0) return;
+    setBatchJobId(null);
+    if (batchActivityId.current) { notify.removeActivity(batchActivityId.current); batchActivityId.current = null; }
+    qc.removeQueries({ queryKey: ["batch-import-status"] });
     urlBatchImport.mutate(urls);
   };
 
@@ -350,7 +395,6 @@ export default function DanbooruReferencePage() {
     queryFn: () => api.getBatchImportStatus(batchJobId || undefined),
     enabled: !!batchJobId,
     refetchInterval: (query) => query.state.data?.status === "completed" ? false : 2000,
-    // Keep previous data hidden when switching to a new job
     placeholderData: undefined,
   });
 
@@ -364,7 +408,7 @@ export default function DanbooruReferencePage() {
       const pct = batchProgress.total > 0 ? Math.round((batchProgress.current / batchProgress.total) * 100) : 0;
       notify.updateActivity(batchActivityId.current, {
         progress: pct,
-        message: `Processing ${batchProgress.current}/${batchProgress.total} · ${batchProgress.imported} imported · ${batchProgress.errors} errors`,
+        message: `Processing ${batchProgress.current}/${batchProgress.total} · ${batchProgress.imported || 0} imported · ${batchProgress.errors || 0} errors`,
       });
     }
   }, [batchProgress, notify]);
@@ -373,10 +417,11 @@ export default function DanbooruReferencePage() {
     if (batchResult) {
       qc.invalidateQueries({ queryKey: queryKeys.creators.all });
       qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+      clearPersistedJob();
       if (batchActivityId.current) {
         notify.updateActivity(batchActivityId.current, {
           status: "completed",
-          message: `Imported ${batchResult.imported_count}, low conf ${batchResult.low_confidence_count}, not found ${batchResult.not_found_count}, errors ${batchResult.error_count}`,
+          message: `Imported ${batchResult.imported_count || batchResult.imported?.length || 0}, not found ${batchResult.not_found_count || batchResult.not_found?.length || 0}, errors ${batchResult.error_count || batchResult.errors?.length || 0}`,
           progress: 100,
         });
       }
@@ -391,6 +436,7 @@ export default function DanbooruReferencePage() {
     if (ids.length === 0) return;
     // Clear old state and query cache before starting new batch
     setBatchJobId(null);
+    clearPersistedJob();
     if (batchActivityId.current) { notify.removeActivity(batchActivityId.current); batchActivityId.current = null; }
     qc.removeQueries({ queryKey: ["batch-import-status"] });
     enqueueBatch.mutate(ids);
@@ -467,53 +513,8 @@ export default function DanbooruReferencePage() {
             {urlBatchImport.error && (
               <p className="text-red-600 text-sm">{(urlBatchImport.error as Error).message}</p>
             )}
-            {urlBatchImport.data && (
-              <div className="mt-4 space-y-3">
-                {/* Summary */}
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded p-3 text-center">
-                    <div className="text-xl font-bold text-green-700 dark:text-green-400">{urlBatchImport.data.imported}</div>
-                    <div className="text-xs text-green-600">{t("danbooru.batch_result_imported")}</div>
-                  </div>
-                  <div className="bg-gray-50 dark:bg-slate-800/50 border border-gray-200 dark:border-slate-700 rounded p-3 text-center">
-                    <div className="text-xl font-bold text-gray-600 dark:text-gray-400">{urlBatchImport.data.not_found}</div>
-                    <div className="text-xs text-gray-500">{t("danbooru.batch_result_not_found")}</div>
-                  </div>
-                  <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded p-3 text-center">
-                    <div className="text-xl font-bold text-red-700 dark:text-red-400">{urlBatchImport.data.errors}</div>
-                    <div className="text-xs text-red-600">{t("danbooru.batch_result_errors")}</div>
-                  </div>
-                </div>
-                {/* Per-URL results */}
-                <div className="space-y-1 max-h-72 overflow-y-auto">
-                  {urlBatchImport.data.results.map((r, i) => (
-                    <div key={i} className={`rounded p-2 text-xs flex items-start justify-between gap-2 border ${
-                      r.status === "imported" ? "bg-green-50 dark:bg-green-900/20 border-green-100 dark:border-green-900" :
-                      r.status === "not_found" ? "bg-gray-50 dark:bg-slate-800/50 border-gray-200 dark:border-slate-700" :
-                      "bg-red-50 dark:bg-red-900/20 border-red-100 dark:border-red-900"
-                    }`}>
-                      <div className="min-w-0 flex-1">
-                        <div className="font-mono text-gray-600 dark:text-gray-400 truncate">{r.url}</div>
-                        {r.artist_name && (
-                          <div className="mt-1 font-medium text-gray-800 dark:text-gray-200">{r.artist_name}</div>
-                        )}
-                        {r.message && (
-                          <div className="mt-1 text-gray-500">{r.message}</div>
-                        )}
-                      </div>
-                      <div className="shrink-0 text-right">
-                        {r.status === "imported" && (
-                          <span className="text-green-600">
-                            {r.created_new ? "New" : "Exists"} · {r.links_imported} links · {r.sources_created} src
-                          </span>
-                        )}
-                        {r.status === "not_found" && <span className="text-gray-400">Not found</span>}
-                        {r.status === "error" && <span className="text-red-500">Error</span>}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+            {urlBatchImport.isSuccess && !batchResult && (
+              <p className="text-xs text-blue-600 dark:text-blue-400 mt-2">Job enqueued — see progress below.</p>
             )}
           </div>
         )}
@@ -571,7 +572,7 @@ export default function DanbooruReferencePage() {
                 </div>
               )}
               {batchResult && (
-                <button onClick={() => { setBatchJobId(null); }} className="text-xs text-blue-600 hover:underline">{t("common.close")}</button>
+                <button onClick={() => { setBatchJobId(null); clearPersistedJob(); }} className="text-xs text-blue-600 hover:underline">{t("common.close")}</button>
               )}
             </div>
             {enqueueBatch.error && (

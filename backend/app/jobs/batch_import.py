@@ -1,7 +1,7 @@
-"""RQ job: batch import Pixiv user IDs via Danbooru one-click flow.
+"""RQ job: batch import Pixiv user IDs and URLs via Danbooru one-click flow.
 
 Runs asynchronously in the RQ worker so it can handle large batches without
-HTTP request timeouts.
+HTTP request timeouts. Redis keys are scoped by job_id to support concurrent imports.
 """
 
 import asyncio
@@ -10,14 +10,19 @@ import logging
 import os
 import urllib.parse
 import redis as redis_lib
-from uuid import UUID
 
 from app.config import settings
 from app.database import async_session
 
 logger = logging.getLogger(__name__)
 
-RESULT_TTL = 3600  # 1 hour
+PROGRESS_TTL = 300   # 5 minutes for in-progress data
+RESULT_TTL = 3600    # 1 hour for completed results
+
+
+def _redis_keys(job_id: str) -> tuple[str, str]:
+    """Return (progress_key, result_key) scoped to this job."""
+    return (f"batch_import:{job_id}:progress", f"batch_import:{job_id}:result")
 
 
 def _get_auto_enable_sources() -> set[str]:
@@ -43,12 +48,17 @@ def _get_auto_enable_sources() -> set[str]:
     return {"pixiv"}
 
 
-def run_batch_import(pixiv_ids: list[str]):
-    """Entry point for RQ worker (sync wrapper around async main)."""
-    return asyncio.run(_batch_import(pixiv_ids))
+def run_batch_import(pixiv_ids: list[str], job_id: str = ""):
+    """Entry point for RQ worker — Pixiv ID batch import."""
+    return asyncio.run(_batch_import(pixiv_ids, job_id))
 
 
-async def _batch_import(pixiv_ids: list[str]) -> dict:
+def run_url_batch_import(urls: list[str], job_id: str = ""):
+    """Entry point for RQ worker — URL batch import."""
+    return asyncio.run(_url_batch_import(urls, job_id))
+
+
+async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
     """Process a batch of Pixiv user IDs: search Danbooru, auto-import."""
     from app.models.creator import Creator
     from app.models.creator_link import CreatorLink
@@ -65,6 +75,7 @@ async def _batch_import(pixiv_ids: list[str]) -> dict:
 
     total = len(pixiv_ids)
     r = redis_lib.from_url(settings.redis_url)
+    progress_key, result_key = _redis_keys(job_id)
 
     async with async_session() as db:
         for idx, pid in enumerate(pixiv_ids):
@@ -72,9 +83,8 @@ async def _batch_import(pixiv_ids: list[str]) -> dict:
             if not pid:
                 continue
 
-            # Update progress in Redis
             try:
-                r.setex("batch_import:progress", 300, json.dumps({
+                r.setex(progress_key, PROGRESS_TTL, json.dumps({
                     "current": idx + 1, "total": total,
                     "imported": len(imported), "errors": len(errors),
                 }))
@@ -122,8 +132,6 @@ async def _batch_import(pixiv_ids: list[str]) -> dict:
                     if not creator.danbooru_artist_id:
                         creator.danbooru_artist_id = artist_id
                 else:
-                    # name = Danbooru canonical tag (slug, used for dedup)
-                    # display_name = Pixiv username if available, else Danbooru tag
                     from app.models.source_creator import SourceCreator
                     sc_result = await db.execute(
                         select(SourceCreator).where(
@@ -200,7 +208,6 @@ async def _batch_import(pixiv_ids: list[str]) -> dict:
                     ))
                     sources_count += 1
 
-                # Also create Danbooru subscription source (default disabled)
                 danbooru_posts_url = (
                     f"https://danbooru.donmai.us/posts?tags={urllib.parse.quote(artist_name)}"
                 )
@@ -251,13 +258,193 @@ async def _batch_import(pixiv_ids: list[str]) -> dict:
         "errors": errors,
     }
 
-    # Store final result in Redis
     try:
-        r.setex("batch_import:result", RESULT_TTL, json.dumps(result, default=str))
-        r.delete("batch_import:progress")
+        r.setex(result_key, RESULT_TTL, json.dumps(result, default=str))
+        r.delete(progress_key)
     except Exception:
         pass
 
     logger.info("Batch import complete: %d imported, %d low, %d not found, %d errors",
                 len(imported), len(low_confidence), len(not_found), len(errors))
+    return result
+
+
+async def _url_batch_import(urls: list[str], job_id: str) -> dict:
+    """Process a batch of URLs: look up each on Danbooru, auto-import."""
+    from app.models.creator import Creator
+    from app.models.creator_link import CreatorLink
+    from app.models.subscription import Subscription
+    from app.models.subscription_source import SubscriptionSource
+    from app.services import danbooru as danbooru_svc
+    from app.services.creator_dedup import find_existing_creator
+    from sqlalchemy import select
+
+    imported = []
+    not_found = []
+    errors = []
+
+    total = len(urls)
+    r = redis_lib.from_url(settings.redis_url)
+    progress_key, result_key = _redis_keys(job_id)
+
+    async with async_session() as db:
+        for idx, url in enumerate(urls):
+            url = str(url).strip()
+            if not url:
+                continue
+
+            try:
+                r.setex(progress_key, PROGRESS_TTL, json.dumps({
+                    "current": idx + 1, "total": total,
+                    "imported": len(imported), "errors": len(errors),
+                }))
+            except Exception:
+                pass
+
+            try:
+                artist, links = await asyncio.to_thread(
+                    danbooru_svc.search_and_extract,
+                    source_url=url,
+                    pixiv_id=None,
+                    artist_name=None,
+                )
+                if not artist:
+                    not_found.append({
+                        "url": url,
+                        "message": "No matching Danbooru artist found",
+                    })
+                    continue
+
+                canonical_name = artist.get("name", "Unknown")
+                existing = await find_existing_creator(
+                    db, danbooru_artist_id=artist.get("id"))
+                if existing:
+                    creator = existing
+                    created_new = False
+                else:
+                    creator = Creator(
+                        name=canonical_name,
+                        display_name=canonical_name,
+                    )
+                    db.add(creator)
+                    await db.flush()
+                    created_new = True
+
+                if creator.danbooru_artist_id is None:
+                    creator.danbooru_artist_id = artist.get("id")
+
+                links_created = 0
+                for link_data in links:
+                    existing_link = await db.execute(
+                        select(CreatorLink).where(
+                            CreatorLink.creator_id == creator.id,
+                            CreatorLink.url == link_data["url"],
+                        )
+                    )
+                    if existing_link.scalar_one_or_none():
+                        continue
+                    db.add(CreatorLink(
+                        creator_id=creator.id,
+                        url=link_data["url"],
+                        link_type=link_data["link_type"],
+                        source=link_data["source"],
+                        confidence=link_data["confidence"],
+                        is_verified=link_data["is_verified"],
+                        notes=link_data.get("notes"),
+                    ))
+                    links_created += 1
+
+                sub_result = await db.execute(
+                    select(Subscription).where(
+                        Subscription.creator_id == creator.id))
+                subscription = sub_result.scalar_one_or_none()
+                if not subscription:
+                    from app.services.subscription import get_subscription_defaults
+                    defaults = await get_subscription_defaults(db)
+                    subscription = Subscription(
+                        creator_id=creator.id,
+                        sync_interval_hours=defaults["sync_interval_hours"],
+                        sync_enabled=defaults["sync_enabled"],
+                        is_active=defaults["is_active"],
+                    )
+                    db.add(subscription)
+                    await db.flush()
+
+                sources_created = 0
+                for link_data in links:
+                    if not danbooru_svc.is_downloadable_url(link_data["url"]):
+                        continue
+                    src_type = danbooru_svc._classify_url(link_data["url"])
+                    existing_ss = await db.execute(
+                        select(SubscriptionSource).where(
+                            SubscriptionSource.subscription_id == subscription.id,
+                            SubscriptionSource.source_url == link_data["url"],
+                        )
+                    )
+                    if existing_ss.scalar_one_or_none():
+                        continue
+                    db.add(SubscriptionSource(
+                        subscription_id=subscription.id,
+                        source=src_type,
+                        source_url=link_data["url"],
+                        is_enabled=(src_type in _get_auto_enable_sources()),
+                    ))
+                    sources_created += 1
+
+                danbooru_posts_url = (
+                    f"https://danbooru.donmai.us/posts?tags={urllib.parse.quote(canonical_name)}"
+                )
+                existing_ds = await db.execute(
+                    select(SubscriptionSource).where(
+                        SubscriptionSource.subscription_id == subscription.id,
+                        SubscriptionSource.source == "danbooru",
+                    )
+                )
+                if not existing_ds.scalar_one_or_none():
+                    db.add(SubscriptionSource(
+                        subscription_id=subscription.id,
+                        source="danbooru",
+                        source_url=danbooru_posts_url,
+                        is_enabled=("danbooru" in _get_auto_enable_sources()),
+                    ))
+                    sources_created += 1
+
+                await db.commit()
+
+                imported.append({
+                    "url": url,
+                    "creator_id": str(creator.id),
+                    "artist_name": canonical_name,
+                    "artist_id": artist.get("id"),
+                    "links_imported": links_created,
+                    "sources_created": sources_created,
+                    "created_new": created_new,
+                })
+
+            except Exception as e:
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
+                errors.append({"url": url, "error": str(e)})
+                logger.exception("URL batch import failed for url=%s", url)
+
+    result = {
+        "total": total,
+        "imported_count": len(imported),
+        "not_found_count": len(not_found),
+        "error_count": len(errors),
+        "imported": imported,
+        "not_found": not_found,
+        "errors": errors,
+    }
+
+    try:
+        r.setex(result_key, RESULT_TTL, json.dumps(result, default=str))
+        r.delete(progress_key)
+    except Exception:
+        pass
+
+    logger.info("URL batch import complete: %d imported, %d not found, %d errors",
+                len(imported), len(not_found), len(errors))
     return result
