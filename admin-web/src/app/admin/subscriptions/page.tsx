@@ -107,6 +107,11 @@ function SubscriptionsContent() {
     queryKey: [...queryKeys.subscriptions.all, page, filters],
     queryFn: () => api.listSubscriptions(page * limit, limit, filters),
   });
+  const systemSettings = useQuery({
+    queryKey: queryKeys.admin.settings,
+    queryFn: api.getAdminSettings,
+  });
+  const sysDefaults = systemSettings.data?.subscription_defaults;
 
   const create = useMutation({
     mutationFn: (data: { creator_id: string; name?: string }) => api.createSubscription(data),
@@ -217,7 +222,15 @@ function SubscriptionsContent() {
               </div>
               <div className="flex items-center gap-3 shrink-0 text-xs" onClick={(e) => e.stopPropagation()}>
                 {s.sync_enabled ? <span className="text-green-600 dark:text-green-400">{t("subscriptions.auto_sync")}</span> : <span className="text-gray-400">{t("subscriptions.manual")}</span>}
-                <span className="text-gray-400 dark:text-gray-500">{s.sync_interval_hours}h</span>
+                <span className="text-gray-400 dark:text-gray-500">{
+  s.schedule_mode === "fixed_time" ? (s.scheduled_times || t("scheduler.fixed_time")) :
+  s.schedule_mode === "manual" ? t("subscriptions.manual") :
+  s.schedule_mode === "interval" ? `${s.sync_interval_hours}h` :
+  // Inherit from system
+  sysDefaults?.schedule_mode === "fixed_time" ? t("scheduler.fixed_time") :
+  sysDefaults?.schedule_mode === "interval" ? `${s.sync_interval_hours || sysDefaults?.default_sync_interval_hours}h` :
+  `${s.sync_interval_hours}h`
+}</span>
                 <span className="text-gray-400 dark:text-gray-500 hidden sm:inline">{s.last_synced_at ? `${t("subscriptions.last_sync")} ${new Date(s.last_synced_at).toLocaleDateString()}` : t("subscriptions.never")}</span>
                 <button onClick={(e) => { e.stopPropagation(); syncNow.mutate(s.id); }} disabled={syncNow.isPending}
                   className="text-blue-600 hover:underline disabled:opacity-50">
