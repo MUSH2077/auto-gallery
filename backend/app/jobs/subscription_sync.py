@@ -279,7 +279,7 @@ async def sync_subscriptions():
         import redis as redis_lib
         from rq import Queue
         r = redis_lib.from_url(settings.redis_url)
-        Queue(connection=r).enqueue_in(
+        Queue(name="scheduled", connection=r).enqueue_in(
             timedelta(minutes=max(scan_minutes, 5)),
             "app.jobs.subscription_sync.sync_subscriptions",
         )
