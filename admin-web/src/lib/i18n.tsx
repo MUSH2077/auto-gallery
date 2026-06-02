@@ -1213,6 +1213,8 @@ const zh: Record<string, string> = {
   "notification.batch_import": "Danbooru 批量导入",
   "notification.sync_started": "同步已启动",
   "notification.sync_complete": "同步完成 · {count} 个任务",
+  "notifications.title": "消息中心",
+  "notifications.desc": "所有系统通知和任务活动。",
 };
 
 const en: Record<string, string> = {};
@@ -2401,6 +2403,8 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "notification.batch_import": "Danbooru Batch Import",
     "notification.sync_started": "Sync Started",
     "notification.sync_complete": "Sync Complete · {count} jobs",
+    "notifications.title": "Notifications",
+    "notifications.desc": "All system notifications and task activity.",
   });
   return result;
 }

@@ -74,6 +74,7 @@ function AdminNav() {
     ["/admin/creators", t("nav.creators")],
     ["/admin/subscriptions", t("nav.subscriptions")],
     ["/admin/jobs", t("nav.jobs")],
+    ["/admin/notifications", t("notifications.title")],
     ["/admin/works", t("nav.works")],
     ["/admin/tags", t("nav.tags")],
     ["/admin/scheduler", t("nav.scheduler")],

@@ -284,12 +284,18 @@ export function NotificationBell() {
         <div className="absolute right-0 mt-2 w-80 max-h-[480px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl z-50 text-slate-800 dark:text-slate-100 overflow-hidden">
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200 dark:border-slate-700">
             <span className="text-sm font-semibold">{t("notification.recent")}</span>
-            {(items.length > 0 || batchJob) && (
-              <button onClick={() => { clearRecent(); }}
-                className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
-                {t("notification.clear_all")}
+            <div className="flex items-center gap-3">
+              <button onClick={() => { setOpen(false); router.push("/admin/notifications"); }}
+                className="text-xs text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-colors">
+                {t("notifications.title")} →
               </button>
-            )}
+              {(items.length > 0 || batchJob) && (
+                <button onClick={() => { clearRecent(); }}
+                  className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+                  {t("notification.clear_all")}
+                </button>
+              )}
+            </div>
           </div>
           <div className="overflow-y-auto max-h-[420px]">
             {!hasRecent ? (
