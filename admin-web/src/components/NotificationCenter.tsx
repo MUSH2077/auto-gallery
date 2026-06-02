@@ -178,6 +178,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     queryKey: ["batch-import-status-global", batchJob?.jobId],
     queryFn: () => api.getBatchImportStatus(batchJob?.jobId || undefined),
     enabled: !!batchJob?.jobId,
+    staleTime: 0, // Always refetch on mount to restore result after navigation
     refetchInterval: (query) => {
       if (!batchJob) return false;
       return query.state.data?.status === "completed" ? false : 2000;
