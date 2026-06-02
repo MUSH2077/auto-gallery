@@ -698,9 +698,7 @@ export const api = {
 
   urlBatchImportDanbooru: (urls: string[]) =>
     request<{
-      status: string; total: number; imported: number; not_found: number; errors: number;
-      results: { url: string; status: string; message?: string; artist_name?: string;
-                 creator_id?: string; created_new?: boolean; links_imported?: number; sources_created?: number }[];
+      status: string; message: string; job_id: string; batch_id: string; total: number;
     }>(
       "/api/v1/reference/danbooru/url-batch-import",
       { method: "POST", body: JSON.stringify({ urls }) }),
