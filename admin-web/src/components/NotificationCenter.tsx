@@ -1,9 +1,11 @@
 "use client";
 import { createContext, useContext, useState, useCallback, useRef, useEffect, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
+import { api } from "@/lib/api";
 
-type ActivityStatus = "running" | "completed" | "error";
+type ActivityStatus = "running" | "completed" | "error" | "pending";
 
 export interface ActivityItem {
   id: string;
@@ -16,12 +18,29 @@ export interface ActivityItem {
   link?: string;
 }
 
+// Batch import job state managed at layout level (survives navigation)
+export interface BatchJobState {
+  jobId: string;
+  importType: "pixiv" | "url";
+  total: number;
+  startedAt: number;
+  progress: { current: number; total: number; imported: number; errors: number } | null;
+  result: any | null;
+  status: "pending" | "running" | "completed" | "error";
+}
+
+const STORAGE_KEY = "danbooru_batch_job";
+
 interface NotificationCtx {
   items: ActivityItem[];
   addActivity: (item: Omit<ActivityItem, "id" | "timestamp">) => string;
   updateActivity: (id: string, patch: Partial<Pick<ActivityItem, "status" | "message" | "progress">>) => void;
   removeActivity: (id: string) => void;
   clearRecent: () => void;
+  // Batch job managed globally (polling runs at layout level)
+  batchJob: BatchJobState | null;
+  startBatchJob: (jobId: string, importType: "pixiv" | "url", total: number) => void;
+  clearBatchJob: () => void;
 }
 
 const NotificationContext = createContext<NotificationCtx>({
@@ -30,6 +49,9 @@ const NotificationContext = createContext<NotificationCtx>({
   updateActivity: () => {},
   removeActivity: () => {},
   clearRecent: () => {},
+  batchJob: null,
+  startBatchJob: () => {},
+  clearBatchJob: () => {},
 });
 
 let _activityId = 0;
@@ -37,9 +59,14 @@ const MAX_ITEMS = 50;
 const COMPLETED_TTL = 30_000;
 
 export function NotificationProvider({ children }: { children: ReactNode }) {
+  const t = useT();
+  const qc = useQueryClient();
   const [items, setItems] = useState<ActivityItem[]>([]);
+  const [batchJob, setBatchJob] = useState<BatchJobState | null>(null);
+  const [batchActivityId, setBatchActivityId] = useState<string | null>(null);
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
+  // ─── Activity log ───
   useEffect(() => {
     const timers = timersRef.current;
     return () => { timers.forEach((t) => clearTimeout(t)); timers.clear(); };
@@ -93,8 +120,107 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     setItems((prev) => prev.filter((a) => a.status === "running"));
   }, []);
 
+  // ─── Batch job (global, survives navigation) ───
+  const startBatchJob = useCallback((jobId: string, importType: "pixiv" | "url", total: number) => {
+    const state: BatchJobState = {
+      jobId, importType, total,
+      startedAt: Date.now(),
+      progress: null, result: null,
+      status: "running",
+    };
+    setBatchJob(state);
+    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ jobId, importType, total, startedAt: Date.now() })); } catch {}
+
+    const actId = addActivity({
+      type: "job",
+      title: importType === "pixiv" ? t("notification.batch_import") : "URL Batch Import",
+      message: `Processing ${total} ${importType === "pixiv" ? "IDs" : "URLs"}`,
+      status: "running", progress: 0,
+      link: "/admin/reference/danbooru",
+    });
+    setBatchActivityId(actId);
+  }, [addActivity, t]);
+
+  const clearBatchJob = useCallback(() => {
+    setBatchJob(null);
+    setBatchActivityId(null);
+    try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
+  }, []);
+
+  // Mount recovery: restore batch job from sessionStorage
+  useEffect(() => {
+    try {
+      const stored = sessionStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Date.now() - parsed.startedAt < 2 * 60 * 60 * 1000) {
+          setBatchJob({
+            jobId: parsed.jobId, importType: parsed.importType, total: parsed.total,
+            startedAt: parsed.startedAt, progress: null, result: null, status: "running",
+          });
+          const actId = addActivity({
+            type: "job",
+            title: parsed.importType === "pixiv" ? t("notification.batch_import") : "URL Batch Import",
+            message: `Resuming ${parsed.total} ${parsed.importType === "pixiv" ? "IDs" : "URLs"}`,
+            status: "running", progress: 0,
+            link: "/admin/reference/danbooru",
+          });
+          setBatchActivityId(actId);
+        } else {
+          try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
+        }
+      }
+    } catch {}
+  }, []); // eslint-disable-line
+
+  // ─── Global polling (layout level — never unmounts on page navigation) ───
+  const batchStatusQuery = useQuery({
+    queryKey: ["batch-import-status-global", batchJob?.jobId],
+    queryFn: () => api.getBatchImportStatus(batchJob?.jobId || undefined),
+    enabled: !!batchJob?.jobId,
+    refetchInterval: (query) => {
+      if (!batchJob) return false;
+      return query.state.data?.status === "completed" ? false : 2000;
+    },
+  });
+
+  // Sync polling results to batch job state
+  useEffect(() => {
+    if (!batchJob || !batchStatusQuery.data) return;
+    const data = batchStatusQuery.data;
+
+    if (data.progress) {
+      setBatchJob((prev) => prev ? { ...prev, progress: data.progress } : prev);
+      if (batchActivityId) {
+        const pct = data.progress.total > 0
+          ? Math.round((data.progress.current / data.progress.total) * 100) : 0;
+        updateActivity(batchActivityId, {
+          progress: pct,
+          message: `Processing ${data.progress.current}/${data.progress.total} · ${data.progress.imported || 0} imported`,
+        });
+      }
+    }
+
+    if (data.result) {
+      setBatchJob((prev) => prev ? { ...prev, result: data.result, status: "completed", progress: null } : prev);
+      if (batchActivityId) {
+        const r = data.result;
+        updateActivity(batchActivityId, {
+          status: "completed",
+          message: `Imported ${r.imported_count || r.imported?.length || 0}, not found ${r.not_found_count || r.not_found?.length || 0}, errors ${r.error_count || r.errors?.length || 0}`,
+          progress: 100,
+        });
+      }
+      qc.invalidateQueries({ queryKey: ["creators"] });
+      qc.invalidateQueries({ queryKey: ["subscriptions"] });
+    }
+  }, [batchStatusQuery.data, batchJob?.jobId]); // eslint-disable-line
+
   return (
-    <NotificationContext.Provider value={{ items, addActivity, updateActivity, removeActivity, clearRecent }}>
+    <NotificationContext.Provider value={{
+      items, addActivity, updateActivity, removeActivity, clearRecent,
+      batchJob, startBatchJob, clearBatchJob,
+    }}>
       {children}
     </NotificationContext.Provider>
   );
@@ -104,11 +230,11 @@ export function useNotifications(): NotificationCtx {
   return useContext(NotificationContext);
 }
 
-/** Bell icon + badge + dropdown shown in the admin nav bar */
+// ─── Notification Bell ───
 export function NotificationBell() {
   const t = useT();
   const router = useRouter();
-  const { items, removeActivity, clearRecent } = useNotifications();
+  const { items, removeActivity, clearRecent, batchJob } = useNotifications();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -120,8 +246,9 @@ export function NotificationBell() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-  const activeCount = items.filter((a) => a.status === "running").length;
-  const hasRecent = items.length > 0;
+  const activeCount = (batchJob?.status === "running" ? 1 : 0)
+    + items.filter((a) => a.status === "running").length;
+  const hasRecent = items.length > 0 || !!batchJob;
 
   const statusIcon = (status: ActivityStatus) => {
     if (status === "running") {
@@ -174,66 +301,79 @@ export function NotificationBell() {
         <div className="absolute right-0 mt-2 w-80 max-h-[480px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl z-50 text-slate-800 dark:text-slate-100 overflow-hidden">
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200 dark:border-slate-700">
             <span className="text-sm font-semibold">{t("notification.recent")}</span>
-            {items.length > 0 && (
-              <button
-                onClick={() => clearRecent()}
-                className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
-              >
+            {(items.length > 0 || batchJob) && (
+              <button onClick={() => { clearRecent(); }}
+                className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
                 {t("notification.clear_all")}
               </button>
             )}
           </div>
-
           <div className="overflow-y-auto max-h-[420px]">
             {!hasRecent ? (
               <div className="px-4 py-8 text-center text-sm text-slate-400 dark:text-slate-500">
                 {t("notification.empty")}
               </div>
             ) : (
-              items.map((a) => (
-                <div
-                  key={a.id}
-                  className={`px-4 py-2.5 border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors ${
-                    a.link ? "cursor-pointer" : "cursor-default"
-                  }`}
-                  onClick={() => {
-                    if (a.link) {
-                      setOpen(false);
-                      router.push(a.link);
-                    }
-                  }}
-                >
-                  <div className="flex items-start gap-2.5">
-                    <div className="mt-0.5">{statusIcon(a.status)}</div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className={`text-sm truncate ${a.status === "running" ? "font-medium" : ""}`}>{a.title}</p>
-                        <span className="text-[10px] text-slate-400 shrink-0">{timeAgo(a.timestamp)}</span>
+              <>
+                {batchJob && (
+                  <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors cursor-pointer"
+                    onClick={() => { setOpen(false); router.push("/admin/reference/danbooru"); }}>
+                    <div className="flex items-start gap-2.5">
+                      <div className="mt-0.5">{statusIcon(batchJob.status)}</div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">
+                          {batchJob.importType === "pixiv" ? t("notification.batch_import") : "URL Batch Import"}
+                        </p>
+                        {batchJob.progress && (
+                          <>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              {batchJob.progress.current}/{batchJob.progress.total} · {batchJob.progress.imported} imported
+                            </p>
+                            <div className="w-full h-1 bg-slate-200 dark:bg-slate-600 rounded-full overflow-hidden mt-1.5">
+                              <div className="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
+                                style={{ width: `${(batchJob.progress.current / batchJob.progress.total) * 100}%` }} />
+                            </div>
+                          </>
+                        )}
+                        {batchJob.result && (
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            Done: {batchJob.result.imported_count || batchJob.result.imported?.length || 0} imported
+                          </p>
+                        )}
+                        <span className="text-[10px] text-slate-400">{timeAgo(batchJob.startedAt)}</span>
                       </div>
-                      {a.message && (
-                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">{a.message}</p>
-                      )}
-                      {a.status === "running" && a.progress !== undefined && (
-                        <div className="w-full h-1 bg-slate-200 dark:bg-slate-600 rounded-full overflow-hidden mt-1.5">
-                          <div
-                            className="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
-                            style={{ width: `${a.progress}%` }}
-                          />
-                        </div>
-                      )}
                     </div>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); removeActivity(a.id); }}
-                      className="text-slate-300 hover:text-slate-500 dark:hover:text-slate-400 shrink-0 mt-0.5"
-                      aria-label="Dismiss"
-                    >
-                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                        <path d="M18 6L6 18M6 6l12 12" />
-                      </svg>
-                    </button>
                   </div>
-                </div>
-              ))
+                )}
+                {items.map((a) => (
+                  <div key={a.id}
+                    className={`px-4 py-2.5 border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors ${a.link ? "cursor-pointer" : "cursor-default"}`}
+                    onClick={() => { if (a.link) { setOpen(false); router.push(a.link); } }}>
+                    <div className="flex items-start gap-2.5">
+                      <div className="mt-0.5">{statusIcon(a.status)}</div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className={`text-sm truncate ${a.status === "running" ? "font-medium" : ""}`}>{a.title}</p>
+                          <span className="text-[10px] text-slate-400 shrink-0">{timeAgo(a.timestamp)}</span>
+                        </div>
+                        {a.message && <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">{a.message}</p>}
+                        {a.status === "running" && a.progress !== undefined && (
+                          <div className="w-full h-1 bg-slate-200 dark:bg-slate-600 rounded-full overflow-hidden mt-1.5">
+                            <div className="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
+                              style={{ width: `${a.progress}%` }} />
+                          </div>
+                        )}
+                      </div>
+                      <button onClick={(e) => { e.stopPropagation(); removeActivity(a.id); }}
+                        className="text-slate-300 hover:text-slate-500 dark:hover:text-slate-400 shrink-0 mt-0.5" aria-label="Dismiss">
+                        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                          <path d="M18 6L6 18M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </>
             )}
           </div>
         </div>
