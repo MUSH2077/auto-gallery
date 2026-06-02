@@ -398,8 +398,9 @@ export default function DanbooruReferencePage() {
     placeholderData: undefined,
   });
 
-  // Only use results from the current job (guard against stale Redis data)
-  const batchResult = batchJobId ? batchStatus.data?.result : null;
+  // Decouple result display from job_id so we can stop polling without hiding results
+  const [displayResult, setDisplayResult] = useState<any>(null);
+  const batchResult = batchJobId ? batchStatus.data?.result : displayResult;
   const batchProgress = batchJobId ? batchStatus.data?.progress : null;
 
   // Sync progress to global notification center
@@ -414,10 +415,14 @@ export default function DanbooruReferencePage() {
   }, [batchProgress, notify]);
 
   useEffect(() => {
-    if (batchResult) {
+    if (batchResult && batchJobId) {
+      // Keep result visible while stopping polling (navigation fix)
+      setDisplayResult(batchResult);
+      setBatchJobId(null);
+      setBatchImportType(null);
+      clearPersistedJob();
       qc.invalidateQueries({ queryKey: queryKeys.creators.all });
       qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
-      clearPersistedJob();
       if (batchActivityId.current) {
         notify.updateActivity(batchActivityId.current, {
           status: "completed",
@@ -426,7 +431,7 @@ export default function DanbooruReferencePage() {
         });
       }
     }
-  }, [batchResult, qc, notify]);
+  }, [batchResult, batchJobId, qc, notify]);
 
   const handleBatchSubmit = () => {
     const ids = batchInput
@@ -436,6 +441,7 @@ export default function DanbooruReferencePage() {
     if (ids.length === 0) return;
     // Clear old state and query cache before starting new batch
     setBatchJobId(null);
+    setDisplayResult(null);
     clearPersistedJob();
     if (batchActivityId.current) { notify.removeActivity(batchActivityId.current); batchActivityId.current = null; }
     qc.removeQueries({ queryKey: ["batch-import-status"] });
@@ -572,7 +578,7 @@ export default function DanbooruReferencePage() {
                 </div>
               )}
               {batchResult && (
-                <button onClick={() => { setBatchJobId(null); clearPersistedJob(); }} className="text-xs text-blue-600 hover:underline">{t("common.close")}</button>
+                <button onClick={() => { setBatchJobId(null); setDisplayResult(null); clearPersistedJob(); }} className="text-xs text-blue-600 hover:underline">{t("common.close")}</button>
               )}
             </div>
             {enqueueBatch.error && (
