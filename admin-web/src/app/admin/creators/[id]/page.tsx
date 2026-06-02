@@ -100,6 +100,12 @@ export default function CreatorDetailPage() {
             ) : <p className="text-xs text-stone-400">{t("creator_detail.no_links")}</p>}
           </div>
 
+          {/* Danbooru Reference — clickable alias chips to set display name */}
+          {c.danbooru_artist_id ? (
+            <DanbooruAliases artistId={c.danbooru_artist_id} creatorName={c.name} currentDisplay={c.display_name}
+              onSelectAlias={(alias) => { setEditName(c.name); setEditDisplay(alias); setEditDesc(c.description || ""); setEditing(true); }} />
+          ) : null}
+
           {/* Source Creators */}
           {sourceCreators.data?.length ? (
             <div className="card-elevated p-6">
@@ -147,6 +153,78 @@ export default function CreatorDetailPage() {
         </div>
       </Modal>
     </main>
+  );
+}
+
+function DanbooruAliases({ artistId, creatorName, currentDisplay, onSelectAlias }: {
+  artistId: number; creatorName: string; currentDisplay?: string; onSelectAlias: (alias: string) => void;
+}) {
+  const t = useT();
+  const aliases = useQuery({
+    queryKey: ["danbooru-artist", artistId],
+    queryFn: () => api.previewDanbooruArtist({ name: creatorName }),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  if (aliases.isLoading) {
+    return (
+      <div className="card-elevated p-6">
+        <div className="animate-pulse space-y-2">
+          <div className="h-4 bg-stone-200 dark:bg-stone-700 rounded w-1/3" />
+          <div className="flex gap-2"><div className="h-6 bg-stone-200 dark:bg-stone-700 rounded w-16" /><div className="h-6 bg-stone-200 dark:bg-stone-700 rounded w-20" /></div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!aliases.data?.artist) {
+    return (
+      <div className="card-elevated p-6">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400 mb-2">{t("creator_detail.danbooru_ref")}</h3>
+        <p className="text-xs text-stone-400">Danbooru #{artistId}</p>
+      </div>
+    );
+  }
+
+  const artist = aliases.data.artist;
+  const names = [
+    ...(artist.pixiv_display_name ? [{ label: artist.pixiv_display_name, type: "pixiv" as const }] : []),
+    ...(artist.other_names || []).map((n: string) => ({ label: n, type: "danbooru" as const })),
+  ];
+
+  if (names.length === 0) return null;
+
+  return (
+    <div className="card-elevated p-6">
+      <h3 className="text-sm font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400 mb-2">{t("creator_detail.danbooru_ref")}</h3>
+      <p className="text-[10px] text-stone-400 mb-3">
+        {t("creator_detail.danbooru_aliases_hint")}
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {names.map(({ label, type }) => {
+          const isActive = currentDisplay === label;
+          return (
+            <button
+              key={label}
+              type="button"
+              onClick={() => onSelectAlias(label)}
+              title={t("creator_detail.set_display_name_as").replace("{name}", label)}
+              className={`text-xs px-2 py-1 rounded-full border transition-colors cursor-pointer ${
+                isActive
+                  ? "bg-amber-100 border-amber-400 text-amber-800 dark:bg-amber-900/40 dark:border-amber-600 dark:text-amber-300"
+                  : type === "pixiv"
+                    ? "bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-300 dark:hover:bg-blue-900/40"
+                    : "bg-stone-100 border-stone-300 text-stone-700 hover:bg-stone-200 dark:bg-stone-700 dark:border-stone-600 dark:text-stone-300 dark:hover:bg-stone-600"
+              }`}
+            >
+              {type === "pixiv" && <span className="opacity-60 mr-0.5">P</span>}
+              {label}
+              {isActive && <span className="ml-1 text-[10px]">✓</span>}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
