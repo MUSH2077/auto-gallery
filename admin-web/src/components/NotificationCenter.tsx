@@ -114,12 +114,6 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     setItems((prev) => prev.filter((a) => a.id !== id));
   }, []);
 
-  const clearRecent = useCallback(() => {
-    timersRef.current.forEach((t) => clearTimeout(t));
-    timersRef.current.clear();
-    setItems((prev) => prev.filter((a) => a.status === "running"));
-  }, []);
-
   // ─── Batch job (global, survives navigation) ───
   const startBatchJob = useCallback((jobId: string, importType: "pixiv" | "url", total: number) => {
     const state: BatchJobState = {
@@ -147,26 +141,32 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
   }, []);
 
-  // Mount recovery: restore batch job from sessionStorage
+  const clearRecent = useCallback(() => {
+    timersRef.current.forEach((t) => clearTimeout(t));
+    timersRef.current.clear();
+    setItems((prev) => prev.filter((a) => a.status === "running"));
+    // Also clear completed/error batch jobs
+    if (batchJob && batchJob.status !== "running") {
+      clearBatchJob();
+    }
+  }, [batchJob, clearBatchJob]);
+
+  // Mount recovery: restore batch job from sessionStorage (only if recent)
   useEffect(() => {
     try {
       const stored = sessionStorage.getItem(STORAGE_KEY);
       if (stored) {
         const parsed = JSON.parse(stored);
-        if (Date.now() - parsed.startedAt < 2 * 60 * 60 * 1000) {
+        const age = Date.now() - parsed.startedAt;
+        // Only recover jobs started in the last 5 minutes (progress TTL is 300s).
+        // Older jobs have expired Redis keys and would get stuck as "running".
+        if (age < 5 * 60 * 1000) {
           setBatchJob({
             jobId: parsed.jobId, importType: parsed.importType, total: parsed.total,
             startedAt: parsed.startedAt, progress: null, result: null, status: "running",
           });
-          const actId = addActivity({
-            type: "job",
-            title: parsed.importType === "pixiv" ? t("notification.batch_import") : "URL Batch Import",
-            message: `Resuming ${parsed.total} ${parsed.importType === "pixiv" ? "IDs" : "URLs"}`,
-            status: "running", progress: 0,
-            link: "/admin/reference/danbooru",
-          });
-          setBatchActivityId(actId);
         } else {
+          // Job is too old — clean up
           try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
         }
       }
@@ -215,6 +215,22 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       qc.invalidateQueries({ queryKey: ["creators"] });
       qc.invalidateQueries({ queryKey: ["subscriptions"] });
     }
+
+    // Handle expired/stuck jobs: no progress AND no result means Redis keys are gone
+    if (!data.progress && !data.result) {
+      const elapsed = Date.now() - batchJob.startedAt;
+      // If job started more than 10 minutes ago with no data, mark as error
+      if (elapsed > 10 * 60 * 1000) {
+        setBatchJob((prev) => prev ? { ...prev, status: "error", progress: null } : prev);
+        if (batchActivityId) {
+          updateActivity(batchActivityId, {
+            status: "error",
+            message: "Job result expired or lost (Redis TTL elapsed).",
+          });
+        }
+        try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
+      }
+    }
   }, [batchStatusQuery.data, batchJob?.jobId]); // eslint-disable-line
 
   return (
@@ -235,7 +251,7 @@ export function useNotifications(): NotificationCtx {
 export function NotificationBell() {
   const t = useT();
   const router = useRouter();
-  const { items, removeActivity, clearRecent, batchJob } = useNotifications();
+  const { items, removeActivity, clearRecent, clearBatchJob, batchJob } = useNotifications();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -325,6 +341,9 @@ export function NotificationBell() {
                         <p className="text-sm font-medium truncate">
                           {batchJob.importType === "pixiv" ? t("notification.batch_import") : "URL Batch Import"}
                         </p>
+                        {batchJob.status === "error" && (
+                          <p className="text-xs text-red-400 mt-0.5">Job expired or failed</p>
+                        )}
                         {batchJob.progress && (
                           <>
                             <p className="text-xs text-slate-500 mt-0.5">
@@ -343,6 +362,17 @@ export function NotificationBell() {
                         )}
                         <span className="text-[10px] text-slate-400">{timeAgo(batchJob.startedAt)}</span>
                       </div>
+                      {batchJob.status !== "running" && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); clearBatchJob(); }}
+                          className="text-slate-300 hover:text-slate-500 dark:hover:text-slate-400 shrink-0 mt-0.5"
+                          aria-label="Dismiss"
+                        >
+                          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                            <path d="M18 6L6 18M6 6l12 12" />
+                          </svg>
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
