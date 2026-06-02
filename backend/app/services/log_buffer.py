@@ -1,6 +1,7 @@
 """In-memory ring buffer for accessing recent application logs via API."""
 
 import logging
+import traceback
 from collections import deque
 from datetime import datetime, timezone
 
@@ -10,16 +11,25 @@ _buffer: deque[dict] = deque(maxlen=MAX_ENTRIES)
 
 
 class RingBufferHandler(logging.Handler):
-    """Logging handler that stores recent log entries in a ring buffer."""
+    """Stores recent log entries in a ring buffer, including tracebacks."""
 
     def emit(self, record: logging.LogRecord):
         try:
             ts = datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat()
+            msg = record.getMessage()
+
+            # Capture exception traceback if present
+            if record.exc_info and record.exc_info[1]:
+                exc_text = traceback.format_exception(*record.exc_info)
+                msg = msg + "\n" + "".join(exc_text)
+            elif record.exc_text:
+                msg = msg + "\n" + record.exc_text
+
             _buffer.append({
                 "ts": ts,
                 "level": record.levelname,
                 "name": record.name,
-                "msg": self.format(record),
+                "msg": msg,
             })
         except Exception:
             pass
@@ -29,7 +39,6 @@ def install():
     """Install the ring buffer handler on the root logger."""
     handler = RingBufferHandler()
     handler.setLevel(logging.INFO)
-    handler.setFormatter(logging.Formatter("%(message)s"))
     logging.getLogger().addHandler(handler)
 
 
@@ -40,7 +49,6 @@ def get_recent(limit: int = 200, level: str | None = None, name_filter: str | No
         entries = [e for e in entries if e["level"].upper() == level.upper()]
     if name_filter:
         entries = [e for e in entries if name_filter.lower() in e["name"].lower()]
-    # reversed(entries) puts newest first; [:limit] keeps the most recent N
     return list(reversed(entries))[:limit]
 
 
