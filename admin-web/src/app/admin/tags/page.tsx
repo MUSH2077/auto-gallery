@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { api, queryKeys, Tag } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useToast } from "@/components/Toast";
 import { PageHeader, EmptyState, ErrorState, Modal, ConfirmDialog } from "@/components";
 
 const CATEGORIES = ["general", "artist", "series", "character", "meta"];
@@ -61,6 +62,7 @@ function bubbleStyleDark(tag: Tag, minCount: number, maxCount: number) {
 
 export default function TagsPage() {
   const t = useT();
+  const toast = useToast();
   const router = useRouter();
   const qc = useQueryClient();
   const [search, setSearch] = useState("");

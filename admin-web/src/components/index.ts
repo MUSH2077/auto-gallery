@@ -10,3 +10,4 @@ export { default as Modal } from "./Modal";
 export { default as ErrorBoundary } from "./ErrorBoundary";
 export { default as WorkGrid } from "./WorkGrid";
 export { ToastProvider, useToast } from "./Toast";
+export { NotificationProvider, NotificationBell, useNotifications } from "./NotificationCenter";

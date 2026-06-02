@@ -183,7 +183,7 @@ export default function JobsPage() {
 
   const handleBatch = (action: string) => {
     const eligible = getEligibleIds(action);
-    if (eligible.length === 0) { toast.info(t("common.no_eligible")); return; }
+    if (eligible.length === 0) { toast.warning({ message: t("common.no_eligible") }); return; }
     if (eligible.length < selected.size && !confirm(t("common.partial_selected"))) return;
     batchDL.mutate({ ids: eligible, action });
   };

@@ -126,12 +126,12 @@ function SubscriptionsContent() {
     onSuccess: (data) => {
       subs.refetch();
       if (data.status === "error" || data.status === "partial_error") {
-        toast.info((data as any).message || "Sync partially failed");
+        toast.warning({ message: (data as any).message || "Sync partially failed" });
       } else if (data.job_ids.length === 0) {
-        toast.info(t("subscriptions.sync_no_jobs"));
+        toast.warning({ message: t("subscriptions.sync_no_jobs") });
       }
     },
-    onError: (e: Error) => toast.info(e.message),
+    onError: (e: Error) => toast.error({ message: e.message }),
   });
 
   const batchDel = useMutation({
@@ -141,7 +141,7 @@ function SubscriptionsContent() {
 
   const batchSync = useMutation({
     mutationFn: (params: { ids: string[]; enable: boolean }) => api.batchToggleSyncSubscriptions(params.ids, params.enable),
-    onSuccess: () => { setSelected(new Set()); subs.refetch(); },
+    onSuccess: () => { setSelected(new Set()); subs.refetch(); toast.success({ message: t("notification.updated") }); },
   });
 
   const toggleSelect = (id: string) => {

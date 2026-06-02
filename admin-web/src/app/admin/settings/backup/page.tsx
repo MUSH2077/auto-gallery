@@ -5,8 +5,10 @@ import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import Link from "next/link";
 import { PageHeader, ConfirmDialog, EmptyState, ErrorState } from "@/components";
+import { useToast } from "@/components/Toast";
 
 export default function BackupPage() {
+  const toast = useToast();
   const t = useT();
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -22,13 +24,10 @@ export default function BackupPage() {
   const createBackup = useMutation({
     mutationFn: () => api.createBackup(),
     onSuccess: (data) => {
-      setResult({
-        ok: true,
-        msg: t("backup.created").replace("{filename}", data.filename).replace("{size}", String(data.size_mb)),
-      });
+      toast.success({ message: t("backup.created").replace("{filename}", data.filename).replace("{size}", String(data.size_mb)) });
       qc.invalidateQueries({ queryKey: ["backups"] });
     },
-    onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
+    onError: (e) => toast.error({ message: (e as Error).message }),
   });
 
   const handleRestoreClick = () => {

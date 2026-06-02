@@ -1,8 +1,9 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { useToast } from "@/components/Toast";
+import { useNotifications } from "@/components/NotificationCenter";
 import { useT } from "@/lib/i18n";
 import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
 
@@ -46,10 +47,10 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
       setSubscribingUrl(null);
-      toast.info("Subscription source created! Trigger a sync from the Subscriptions page.");
+      toast.success({ title: t("notification.created"), message: "Subscription source created! Trigger a sync from the Subscriptions page." });
     },
     onError: (err) => {
-      toast.info(`Failed: ${(err as Error).message}`);
+      toast.error({ message: (err as Error).message });
       setSubscribingUrl(null);
     },
   });
@@ -263,6 +264,7 @@ const DOWNLOADABLE_SOURCES = ["pixiv", "iwara"];
 
 export default function DanbooruReferencePage() {
   const t = useT();
+  const notify = useNotifications();
   const toast = useToast();
   const [searchUrl, setSearchUrl] = useState("");
   const [searchName, setSearchName] = useState("");
@@ -283,7 +285,7 @@ export default function DanbooruReferencePage() {
   const importMutation = useMutation({
     mutationFn: (creatorId: string) => api.importDanbooruArtist({ creator_id: creatorId, ...searchParams }),
     onSuccess: (data) => {
-      toast.info(`Imported ${data.imported} links from Danbooru artist "${data.artist_name}"`);
+      toast.success({ message: `Imported ${data.imported} links from Danbooru artist "${data.artist_name}"` });
       qc.invalidateQueries({ queryKey: queryKeys.creators.all });
     },
   });
@@ -294,19 +296,31 @@ export default function DanbooruReferencePage() {
       ...searchParams,
     }),
     onSuccess: (data) => {
-      if (!data.found) { toast.info("No matching Danbooru artist found."); return; }
+      if (!data.found) { toast.warning({ message: "No matching Danbooru artist found." }); return; }
       qc.invalidateQueries({ queryKey: queryKeys.creators.all });
       qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
-      toast.info(`Done! Creator: ${data.creator_id?.slice(0, 8)}... | Links: ${data.links_imported} | Sources: ${data.sources_created}`);
+      toast.success({ message: `Done! Creator: ${data.creator_id?.slice(0, 8)}... | Links: ${data.links_imported} | Sources: ${data.sources_created}` });
     },
   });
 
   const [batchJobId, setBatchJobId] = useState<string | null>(null);
+  const batchActivityId = useRef<string | null>(null);
 
   const enqueueBatch = useMutation({
     mutationFn: (ids: string[]) => api.batchImportDanbooru(ids),
     onSuccess: (data) => {
       setBatchJobId(data.job_id);
+      // Register in global notification center so it survives navigation
+      const actId = notify.addActivity({
+        type: "job",
+        title: t("notification.batch_import"),
+        message: `Processing ${data.total} IDs`,
+        status: "running",
+        progress: 0,
+        link: "/admin/reference/danbooru",
+      });
+      if (batchActivityId.current) notify.removeActivity(batchActivityId.current);
+      batchActivityId.current = actId;
     },
   });
 
@@ -344,12 +358,30 @@ export default function DanbooruReferencePage() {
   const batchResult = batchJobId ? batchStatus.data?.result : null;
   const batchProgress = batchJobId ? batchStatus.data?.progress : null;
 
+  // Sync progress to global notification center
+  useEffect(() => {
+    if (batchProgress && batchActivityId.current) {
+      const pct = batchProgress.total > 0 ? Math.round((batchProgress.current / batchProgress.total) * 100) : 0;
+      notify.updateActivity(batchActivityId.current, {
+        progress: pct,
+        message: `Processing ${batchProgress.current}/${batchProgress.total} · ${batchProgress.imported} imported · ${batchProgress.errors} errors`,
+      });
+    }
+  }, [batchProgress, notify]);
+
   useEffect(() => {
     if (batchResult) {
       qc.invalidateQueries({ queryKey: queryKeys.creators.all });
       qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+      if (batchActivityId.current) {
+        notify.updateActivity(batchActivityId.current, {
+          status: "completed",
+          message: `Imported ${batchResult.imported_count}, low conf ${batchResult.low_confidence_count}, not found ${batchResult.not_found_count}, errors ${batchResult.error_count}`,
+          progress: 100,
+        });
+      }
     }
-  }, [batchResult, qc]);
+  }, [batchResult, qc, notify]);
 
   const handleBatchSubmit = () => {
     const ids = batchInput
@@ -359,6 +391,7 @@ export default function DanbooruReferencePage() {
     if (ids.length === 0) return;
     // Clear old state and query cache before starting new batch
     setBatchJobId(null);
+    if (batchActivityId.current) { notify.removeActivity(batchActivityId.current); batchActivityId.current = null; }
     qc.removeQueries({ queryKey: ["batch-import-status"] });
     enqueueBatch.mutate(ids);
   };

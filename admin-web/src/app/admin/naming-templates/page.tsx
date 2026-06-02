@@ -4,12 +4,14 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, Modal, ConfirmDialog } from "@/components";
 import { useT } from "@/lib/i18n";
+import { useToast } from "@/components/Toast";
 
 function TemplateForm({ template, onClose, onSave, isPending }: {
   template?: { id?: string; name: string; source?: string; template: string; is_default: boolean };
   onClose: () => void; onSave: (d: Record<string, unknown>) => void; isPending: boolean;
 }) {
   const t = useT();
+  const toast = useToast();
   const [name, setName] = useState(template?.name || "");
   const [source, setSource] = useState(template?.source || "");
   const [tpl, setTpl] = useState(template?.template || "");
@@ -30,6 +32,7 @@ function TemplateForm({ template, onClose, onSave, isPending }: {
 
 export default function NamingTemplatesPage() {
   const t = useT();
+  const toast = useToast();
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [editTpl, setEditTpl] = useState<Record<string, unknown> | null>(null);

@@ -1195,6 +1195,24 @@ const zh: Record<string, string> = {
   "theme.light": "浅色",
   "theme.dark": "深色",
   "theme.system": "跟随系统",
+
+  // Notifications
+  "notification.bell_label": "通知",
+  "notification.empty": "暂无通知",
+  "notification.recent": "最近活动",
+  "notification.clear_all": "清空全部",
+  "notification.running": "运行中",
+  "notification.completed": "已完成",
+  "notification.error": "失败",
+  "notification.saved": "已保存",
+  "notification.deleted": "已删除",
+  "notification.created": "已创建",
+  "notification.updated": "已更新",
+  "notification.save_failed": "保存失败",
+  "notification.operation_failed": "操作失败",
+  "notification.batch_import": "Danbooru 批量导入",
+  "notification.sync_started": "同步已启动",
+  "notification.sync_complete": "同步完成 · {count} 个任务",
 };
 
 const en: Record<string, string> = {};
@@ -2365,6 +2383,24 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "theme.light": "Light",
     "theme.dark": "Dark",
     "theme.system": "System",
+
+    // Notifications
+    "notification.bell_label": "Notifications",
+    "notification.empty": "No notifications",
+    "notification.recent": "Recent Activity",
+    "notification.clear_all": "Clear All",
+    "notification.running": "Running",
+    "notification.completed": "Completed",
+    "notification.error": "Failed",
+    "notification.saved": "Saved",
+    "notification.deleted": "Deleted",
+    "notification.created": "Created",
+    "notification.updated": "Updated",
+    "notification.save_failed": "Save Failed",
+    "notification.operation_failed": "Operation Failed",
+    "notification.batch_import": "Danbooru Batch Import",
+    "notification.sync_started": "Sync Started",
+    "notification.sync_complete": "Sync Complete · {count} jobs",
   });
   return result;
 }

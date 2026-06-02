@@ -4,17 +4,19 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, ErrorState, ConfirmDialog } from "@/components";
 import { useT, useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/Toast";
 import Link from "next/link";
 
 export default function SettingsPage() {
+  const toast = useToast();
   const t = useT();
   const { lang, setLang } = useI18n();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
   const reindex = useMutation({
     mutationFn: api.reindexSearch,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.admin.settings }); setConfirmReindex(false); },
-    onError: () => { setConfirmReindex(false); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.admin.settings }); setConfirmReindex(false); toast.success({ message: "Reindex started" }); },
+    onError: (e: Error) => { setConfirmReindex(false); toast.error({ message: e.message }); },
   });
   const [confirmReindex, setConfirmReindex] = useState(false);
 
