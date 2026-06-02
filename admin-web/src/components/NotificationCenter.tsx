@@ -63,7 +63,6 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
   const [items, setItems] = useState<ActivityItem[]>([]);
   const [batchJob, setBatchJob] = useState<BatchJobState | null>(null);
-  const [batchActivityId, setBatchActivityId] = useState<string | null>(null);
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   // ─── Activity log ───
@@ -124,20 +123,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     };
     setBatchJob(state);
     try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ jobId, importType, total, startedAt: Date.now() })); } catch {}
-
-    const actId = addActivity({
-      type: "job",
-      title: importType === "pixiv" ? t("notification.batch_import") : "URL Batch Import",
-      message: `Processing ${total} ${importType === "pixiv" ? "IDs" : "URLs"}`,
-      status: "running", progress: 0,
-      link: "/admin/reference/danbooru",
-    });
-    setBatchActivityId(actId);
-  }, [addActivity, t]);
+  }, [t]);
 
   const clearBatchJob = useCallback(() => {
     setBatchJob(null);
-    setBatchActivityId(null);
     try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
   }, []);
 
@@ -192,26 +181,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
     if (data.progress) {
       setBatchJob((prev) => prev ? { ...prev, progress: data.progress } : prev);
-      if (batchActivityId) {
-        const pct = data.progress.total > 0
-          ? Math.round((data.progress.current / data.progress.total) * 100) : 0;
-        updateActivity(batchActivityId, {
-          progress: pct,
-          message: `Processing ${data.progress.current}/${data.progress.total} · ${data.progress.imported || 0} imported`,
-        });
-      }
     }
 
     if (data.result) {
       setBatchJob((prev) => prev ? { ...prev, result: data.result, status: "completed", progress: null } : prev);
-      if (batchActivityId) {
-        const r = data.result;
-        updateActivity(batchActivityId, {
-          status: "completed",
-          message: `Imported ${r.imported_count || r.imported?.length || 0}, not found ${r.not_found_count || r.not_found?.length || 0}, errors ${r.error_count || r.errors?.length || 0}`,
-          progress: 100,
-        });
-      }
       qc.invalidateQueries({ queryKey: ["creators"] });
       qc.invalidateQueries({ queryKey: ["subscriptions"] });
     }
@@ -219,15 +192,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // Handle expired/stuck jobs: no progress AND no result means Redis keys are gone
     if (!data.progress && !data.result) {
       const elapsed = Date.now() - batchJob.startedAt;
-      // If job started more than 10 minutes ago with no data, mark as error
       if (elapsed > 10 * 60 * 1000) {
         setBatchJob((prev) => prev ? { ...prev, status: "error", progress: null } : prev);
-        if (batchActivityId) {
-          updateActivity(batchActivityId, {
-            status: "error",
-            message: "Job result expired or lost (Redis TTL elapsed).",
-          });
-        }
         try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
       }
     }
