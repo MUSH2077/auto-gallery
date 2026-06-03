@@ -231,7 +231,7 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     #   work_dir name (source_work_id) → work_sources.source_creator_id
     #   → source_creators.creator_id → creators.display_name
     creator_display: dict[tuple[str, str], str] = {}
-                creator_id_map: dict[tuple[str, str], str] = {}  # (source, dir_name) → display_name
+    creator_id_map: dict[tuple[str, str], str] = {}  # (source, dir_name) → display_name
     try:
         from app.models.work_source import WorkSource
         from app.models.source_creator import SourceCreator
