@@ -12,8 +12,8 @@ docker compose build backend admin-web
 # Run database migrations
 docker compose exec backend alembic upgrade head
 
-# Deploy (recreate changed containers)
-docker compose up -d --force-recreate backend worker admin-web
+# Deploy all services (backend code changes affect all three)
+docker compose up -d --force-recreate backend worker scheduler admin-web
 
 # View logs
 docker compose logs --tail 50 -f backend
