@@ -71,6 +71,7 @@ Constraint and skill files in `.claude/`:
 - [deduplication.md](../.claude/constraints/deduplication.md) — dedup policy, opt-in only
 - [docker.md](../.claude/constraints/docker.md) — services, container paths, volume mapping
 - [security.md](../.claude/constraints/security.md) — subprocess, URL validation, auth (admin + JWT), CORS, /media
+- [filesystem-paths.md](../.claude/constraints/filesystem-paths.md) — naming templates, directory structure, path assumptions
 - [client-api.md](../.claude/constraints/client-api.md) — user model, client-facing APIs, albums, mobile response design
 - [remote-access.md](../.claude/constraints/remote-access.md) — LAN/VPN/reverse-proxy, HTTPS, network architecture
 
