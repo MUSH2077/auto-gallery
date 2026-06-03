@@ -1488,6 +1488,16 @@ async def get_auth_status(db: AsyncSession = Depends(get_db)):
 
 BACKUP_DIR = Path(settings.download_root) / ".backups"
 
+ALL_BACKUP_CONTENTS = ["database", "gallerydl-config", "app-config", "download-archives", "library-metadata"]
+
+BACKUP_CONTENT_LABELS = {
+    "database": "PostgreSQL database dump",
+    "gallerydl-config": "gallery-dl config + cookies",
+    "app-config": "Application runtime config",
+    "download-archives": "Download archive files (per-source SQLite)",
+    "library-metadata": "Library metadata.json files",
+}
+
 
 def _parse_db_url(url: str) -> dict:
     """Parse DATABASE_URL into pg_dump-compatible components."""
@@ -1502,62 +1512,127 @@ def _parse_db_url(url: str) -> dict:
     }
 
 
-@router.post("/backup")
-async def create_backup():
-    """Create a full system backup (DB dump + configs + download archives).
+def _estimate_component_sizes() -> dict[str, int]:
+    """Estimate the size of each backup component (bytes)."""
+    sizes: dict[str, int] = {}
+    # Database: rough estimate from pg_dump (we can't know exactly without running it)
+    sizes["database"] = 0  # Will be measured during actual backup
 
-    Returns the backup filename and size. Download via GET /admin/backup/download.
+    # gallery-dl config
+    config_src = Path(os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"))
+    if config_src.exists():
+        sizes["gallerydl-config"] = sum(f.stat().st_size for f in config_src.rglob("*") if f.is_file())
+    else:
+        sizes["gallerydl-config"] = 0
+
+    # App config
+    app_src = Path(os.environ.get("APP_CONFIG_ROOT", "/app-config"))
+    if app_src.exists():
+        sizes["app-config"] = sum(f.stat().st_size for f in app_src.rglob("*") if f.is_file())
+    else:
+        sizes["app-config"] = 0
+
+    # Download archives
+    dl_root = Path(settings.download_root)
+    sizes["download-archives"] = sum(
+        af.stat().st_size for af in dl_root.glob("archive-*.sqlite3") if af.is_file())
+
+    # Library metadata
+    lib_root = Path(settings.library_root)
+    if lib_root.exists():
+        sizes["library-metadata"] = sum(
+            f.stat().st_size for f in lib_root.rglob("metadata.json") if f.is_file())
+    else:
+        sizes["library-metadata"] = 0
+
+    return sizes
+
+
+@router.get("/backup/estimate")
+async def estimate_backup_sizes():
+    """Return estimated sizes for each backup component."""
+    return {"components": {k: round(v / 1024, 1) for k, v in _estimate_component_sizes().items()}}
+
+
+@router.post("/backup")
+async def create_backup(data: dict | None = None):
+    """Create a system backup with optional content selection.
+
+    Body (optional): {contents: ["database", "gallerydl-config", ...]}
+    Defaults to all components if not specified.
     """
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     filename = f"auto-gallery-backup_{ts}.tar.gz"
     filepath = BACKUP_DIR / filename
 
-    db = _parse_db_url(settings.database_url)
+    selected = (data or {}).get("contents", list(ALL_BACKUP_CONTENTS))
+    selected = [c for c in selected if c in ALL_BACKUP_CONTENTS]
+    if not selected:
+        selected = list(ALL_BACKUP_CONTENTS)
+
+    db_info = _parse_db_url(settings.database_url)
     tmpdir = tempfile.mkdtemp(prefix="ag-backup-")
+    sizes: dict[str, int] = {}
 
     try:
         # 1. PostgreSQL dump
-        dump_path = os.path.join(tmpdir, "database.sql")
-        env = os.environ.copy()
-        env["PGPASSWORD"] = db["password"]
-        result = subprocess.run(
-            ["pg_dump", "-h", db["host"], "-p", db["port"], "-U", db["user"],
-             "-d", db["dbname"], "--no-owner", "--no-acl", "-f", dump_path],
-            capture_output=True, text=True, env=env, timeout=120,
-        )
-        if result.returncode != 0:
-            logger.error("pg_dump failed: %s", result.stderr)
-            raise RuntimeError(f"Database dump failed: {result.stderr[:500]}")
+        if "database" in selected:
+            dump_path = os.path.join(tmpdir, "database.sql")
+            env = os.environ.copy()
+            env["PGPASSWORD"] = db_info["password"]
+            result = subprocess.run(
+                ["pg_dump", "-h", db_info["host"], "-p", db_info["port"], "-U", db_info["user"],
+                 "-d", db_info["dbname"], "--no-owner", "--no-acl", "-f", dump_path],
+                capture_output=True, text=True, env=env, timeout=120)
+            if result.returncode != 0:
+                raise RuntimeError(f"Database dump failed: {result.stderr[:500]}")
+            sizes["database"] = os.path.getsize(dump_path)
 
-        # 2. Config files
-        config_src = Path(os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"))
-        config_dst = os.path.join(tmpdir, "gallerydl-config")
-        if config_src.exists():
-            shutil.copytree(str(config_src), config_dst, symlinks=False, ignore_dangling_symlinks=True,
-                            ignore=shutil.ignore_patterns("*.pyc", "__pycache__", ".git"))
+        # 2. gallery-dl config
+        if "gallerydl-config" in selected:
+            config_src = Path(os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"))
+            config_dst = os.path.join(tmpdir, "gallerydl-config")
+            if config_src.exists():
+                shutil.copytree(str(config_src), config_dst, symlinks=False, ignore_dangling_symlinks=True,
+                                ignore=shutil.ignore_patterns("*.pyc", "__pycache__", ".git"))
 
-        app_config_src = Path(os.environ.get("APP_CONFIG_ROOT", "/app-config"))
-        app_config_dst = os.path.join(tmpdir, "app-config")
-        if app_config_src.exists():
-            shutil.copytree(str(app_config_src), app_config_dst, symlinks=False, ignore_dangling_symlinks=True,
-                            ignore=shutil.ignore_patterns("*.pyc", "__pycache__", ".git"))
+        # 3. App config
+        if "app-config" in selected:
+            app_config_src = Path(os.environ.get("APP_CONFIG_ROOT", "/app-config"))
+            app_config_dst = os.path.join(tmpdir, "app-config")
+            if app_config_src.exists():
+                shutil.copytree(str(app_config_src), app_config_dst, symlinks=False, ignore_dangling_symlinks=True,
+                                ignore=shutil.ignore_patterns("*.pyc", "__pycache__", ".git"))
 
-        # 3. Download archives
-        dl_root = Path(settings.download_root)
-        archives_dst = os.path.join(tmpdir, "download-archives")
-        os.makedirs(archives_dst, exist_ok=True)
-        for af in dl_root.glob("archive-*.sqlite3"):
-            shutil.copy2(str(af), os.path.join(archives_dst, af.name))
+        # 4. Download archives
+        if "download-archives" in selected:
+            dl_root = Path(settings.download_root)
+            archives_dst = os.path.join(tmpdir, "download-archives")
+            os.makedirs(archives_dst, exist_ok=True)
+            for af in dl_root.glob("archive-*.sqlite3"):
+                shutil.copy2(str(af), os.path.join(archives_dst, af.name))
+                sizes[f"archive:{af.stem}"] = af.stat().st_size
 
-        # 4. Backup manifest
+        # 5. Library metadata
+        if "library-metadata" in selected:
+            lib_root = Path(settings.library_root)
+            lib_dst = os.path.join(tmpdir, "library-metadata")
+            if lib_root.exists():
+                for mf in lib_root.rglob("metadata.json"):
+                    rel = mf.relative_to(lib_root)
+                    dest = Path(lib_dst) / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(str(mf), str(dest))
+
+        # Manifest
         manifest = {
             "created_at": ts,
-            "version": "0.1.0",
-            "contents": ["database", "gallerydl-config", "app-config", "download-archives"],
+            "version": "0.2.0",
+            "contents": selected,
+            "component_sizes": {k: v for k, v in sizes.items()},
         }
         with open(os.path.join(tmpdir, "manifest.json"), "w") as f:
-            import json
             json.dump(manifest, f, indent=2)
 
         # Create tar.gz
@@ -1566,19 +1641,122 @@ async def create_backup():
                 tar.add(os.path.join(tmpdir, item), arcname=item)
 
         file_size = os.path.getsize(filepath)
-        logger.info("Backup created: %s (%.1f MB)", filename, file_size / 1024 / 1024)
+        logger.info("Backup created: %s (%.1f MB) contents=%s", filename, file_size / 1024 / 1024, selected)
 
-        # Clean up old backups (keep last 5)
+        # Keep last 10 backups
         existing = sorted(BACKUP_DIR.glob("auto-gallery-backup_*.tar.gz"))
-        for old in existing[:-5]:
+        for old in existing[:-10]:
             old.unlink()
-            logger.info("Removed old backup: %s", old.name)
 
         return {
             "status": "ok",
             "filename": filename,
             "size_bytes": file_size,
             "size_mb": round(file_size / 1024 / 1024, 1),
+            "contents": selected,
+            "component_sizes": {k: round(v / 1024, 1) for k, v in sizes.items()},
+        }
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@router.post("/backup/restore")
+async def restore_backup(file: UploadFile = File(...)):
+    """Restore from a backup tar.gz file."""
+    if not file.filename or not file.filename.endswith(".tar.gz"):
+        raise HTTPException(status_code=400, detail="Only .tar.gz backup files are accepted")
+
+    tmpdir = tempfile.mkdtemp(prefix="ag-restore-")
+    restored: list[str] = []
+    errors: list[str] = []
+
+    try:
+        tmp_file = os.path.join(tmpdir, "backup.tar.gz")
+        with open(tmp_file, "wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                f.write(chunk)
+
+        manifest = {}
+        with tarfile.open(tmp_file, "r:gz") as tar:
+            try:
+                mf = tar.extractfile("manifest.json")
+                if mf:
+                    manifest = json.loads(mf.read())
+            except Exception:
+                pass
+            tar.extractall(tmpdir)
+
+        # Restore database
+        dump_path = os.path.join(tmpdir, "database.sql")
+        if os.path.exists(dump_path):
+            db = _parse_db_url(settings.database_url)
+            env = os.environ.copy()
+            env["PGPASSWORD"] = db["password"]
+            result = subprocess.run(
+                ["psql", "-h", db["host"], "-p", db["port"], "-U", db["user"],
+                 "-d", db["dbname"], "-f", dump_path],
+                capture_output=True, text=True, env=env, timeout=120)
+            if result.returncode != 0:
+                errors.append(f"Database restore failed: {result.stderr[:500]}")
+            else:
+                restored.append("database")
+
+        # Restore gallery-dl config
+        gdl_src = os.path.join(tmpdir, "gallerydl-config")
+        if os.path.exists(gdl_src):
+            gdl_dst = Path(os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"))
+            try:
+                if gdl_dst.exists():
+                    shutil.rmtree(str(gdl_dst))
+                shutil.copytree(gdl_src, str(gdl_dst))
+                restored.append("gallerydl-config")
+            except Exception as e:
+                errors.append(f"gallerydl-config restore failed: {e}")
+
+        # Restore app config
+        app_src = os.path.join(tmpdir, "app-config")
+        if os.path.exists(app_src):
+            app_dst = Path(os.environ.get("APP_CONFIG_ROOT", "/app-config"))
+            try:
+                if app_dst.exists():
+                    shutil.rmtree(str(app_dst))
+                shutil.copytree(app_src, str(app_dst))
+                restored.append("app-config")
+            except Exception as e:
+                errors.append(f"app-config restore failed: {e}")
+
+        # Restore download archives
+        archives_src = os.path.join(tmpdir, "download-archives")
+        if os.path.exists(archives_src):
+            dl_root = Path(settings.download_root)
+            try:
+                for af in Path(archives_src).glob("archive-*.sqlite3"):
+                    shutil.copy2(str(af), str(dl_root / af.name))
+                restored.append("download-archives")
+            except Exception as e:
+                errors.append(f"download-archives restore failed: {e}")
+
+        # Restore library metadata
+        lib_src = os.path.join(tmpdir, "library-metadata")
+        if os.path.exists(lib_src):
+            lib_root = Path(settings.library_root)
+            try:
+                for mf in Path(lib_src).rglob("metadata.json"):
+                    rel = mf.relative_to(lib_src)
+                    dest = lib_root / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(str(mf), str(dest))
+                restored.append("library-metadata")
+            except Exception as e:
+                errors.append(f"library-metadata restore failed: {e}")
+
+        logger.info("Restored backup %s: restored=%s errors=%s", file.filename, restored, errors)
+        return {
+            "status": "ok" if not errors else "partial",
+            "restored": restored,
+            "errors": errors,
+            "manifest": manifest,
         }
 
     finally:
@@ -1592,22 +1770,23 @@ async def download_backup(filename: str | None = None):
     existing = sorted(BACKUP_DIR.glob("auto-gallery-backup_*.tar.gz"))
     if not existing:
         return {"status": "error", "message": "No backups available"}
-
-    target = None
-    if filename:
-        target = BACKUP_DIR / filename
-    else:
-        target = existing[-1]
-
+    target = BACKUP_DIR / filename if filename else existing[-1]
     if not target.exists():
         return {"status": "error", "message": f"Backup not found: {filename}"}
-
     return FileResponse(
-        str(target),
-        media_type="application/gzip",
-        filename=target.name,
-        headers={"Content-Disposition": f'attachment; filename="{target.name}"'},
-    )
+        str(target), media_type="application/gzip", filename=target.name,
+        headers={"Content-Disposition": f'attachment; filename="{target.name}"'})
+
+
+@router.delete("/backup/{filename}")
+async def delete_backup(filename: str):
+    """Delete a specific backup file."""
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    target = BACKUP_DIR / filename
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"Backup not found: {filename}")
+    target.unlink()
+    return {"status": "ok", "message": f"Deleted {filename}"}
 
 
 @router.get("/backup/list")

@@ -754,13 +754,25 @@ export const api = {
     request<void>(`/api/v1/admin/naming-templates/${id}`, { method: "DELETE" }),
 
   // Backup & Restore
-  createBackup: () =>
-    request<{ status: string; filename: string; size_bytes: number; size_mb: number }>(
-      "/api/v1/admin/backup", { method: "POST" }),
+  createBackup: (contents?: string[]) =>
+    request<{ status: string; filename: string; size_bytes: number; size_mb: number; contents: string[]; component_sizes: Record<string, number> }>(
+      "/api/v1/admin/backup", { method: "POST", body: JSON.stringify({ contents: contents || ["database", "gallerydl-config", "app-config", "download-archives", "library-metadata"] }) }),
 
   listBackups: () =>
-    request<{ backups: { filename: string; size_mb: number; created_at: string }[] }>(
+    request<{ backups: { filename: string; size_mb: number; created_at: string; contents: string[]; component_sizes?: Record<string, number>; version?: string }[] }>(
       "/api/v1/admin/backup/list"),
+
+  estimateBackupSizes: () =>
+    request<{ components: Record<string, number> }>("/api/v1/admin/backup/estimate"),
+
+  restoreBackup: (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return fetch("/api/v1/admin/backup/restore", { method: "POST", body: formData }).then(r => r.json()) as Promise<{ status: string; restored: string[]; errors: string[]; manifest: any }>;
+  },
+
+  deleteBackup: (filename: string) =>
+    request<{ status: string; message: string }>(`/api/v1/admin/backup/${encodeURIComponent(filename)}`, { method: "DELETE" }),
 
   downloadBackup: (filename?: string) => {
     const params = filename ? `?filename=${encodeURIComponent(filename)}` : "";
