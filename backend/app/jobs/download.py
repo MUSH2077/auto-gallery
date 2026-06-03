@@ -288,7 +288,7 @@ async def run_download_job(job_id: str):
                 await db2.commit()
 
         # Always try partial import recovery
-        metadata_count, _ = _count_download_artifacts(job.source)
+        metadata_count, _ = _count_download_artifacts(job.source, j.download_dir if j else None)
         if metadata_count > 0:
             logger.info("Partial recovery: found %d metadata JSONs after unexpected error for job %s", metadata_count, job_id)
             await _enqueue_import(str(job_uuid), f"partial import after unexpected error (found {metadata_count} metadata files)")
@@ -355,7 +355,7 @@ async def run_download_job(job_id: str):
         # Full success — but only enqueue import if there are new metadata JSONs.
         # gallery-dl exits 0 even when all files were skipped (already in archive),
         # or when the source has no content at all.
-        metadata_count, image_count = _count_download_artifacts(job.source)
+        metadata_count, image_count = _count_download_artifacts(job.source, j.download_dir if j else None)
         if metadata_count > 0:
             await _enqueue_import(str(job_uuid))
         else:
@@ -390,14 +390,14 @@ async def run_download_job(job_id: str):
 
     elif result is not None and result.returncode != 0:
         # Non-zero exit — maybe partial files were downloaded
-        metadata_count, _ = _count_download_artifacts(job.source)
+        metadata_count, _ = _count_download_artifacts(job.source, j.download_dir if j else None)
         if metadata_count > 0:
             logger.info("Partial recovery: found %d metadata JSONs after failure for job %s", metadata_count, job_id)
             await _enqueue_import(str(job_uuid), f"partial import after download failure (found {metadata_count} metadata files)")
 
     else:
         # Timeout — attempt partial import recovery
-        metadata_count, _ = _count_download_artifacts(job.source)
+        metadata_count, _ = _count_download_artifacts(job.source, j.download_dir if j else None)
         if metadata_count > 0:
             logger.info("Partial recovery: found %d metadata JSONs after timeout for job %s", metadata_count, job_id)
             await _enqueue_import(str(job_uuid), f"partial import after timeout (found {metadata_count} metadata files)")
