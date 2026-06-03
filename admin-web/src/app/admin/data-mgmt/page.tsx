@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageHeader, ConfirmDialog } from "@/components";
 import { useT } from "@/lib/i18n";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 type Severity = "error" | "warning" | "info";
 
@@ -52,6 +52,7 @@ function severityBadge(s: string, t: (k: string) => string) {
 
 export default function DataManagementPage() {
   const t = useT();
+  const router = useRouter();
   const qc = useQueryClient();
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [confirmAction, setConfirmAction] = useState<string | null>(null);
@@ -151,9 +152,6 @@ export default function DataManagementPage() {
 
   return (
     <main className="max-w-5xl mx-auto p-6">
-      <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin" className="text-sm text-blue-600 hover:underline">&larr; {t("common.back")}</Link>
-      </div>
       <PageHeader title={t("datamgmt.title")} description={t("datamgmt.desc")} />
 
       {result && (
@@ -237,9 +235,13 @@ export default function DataManagementPage() {
                 </thead>
                 <tbody>
                   {breakdown.creators.map((c, i) => (
-                    <tr key={`${c.source}/${c.name}`} className="border-b border-gray-50 dark:border-slate-700/50 hover:bg-gray-50 dark:hover:bg-slate-750">
+                    <tr key={`${c.source}/${c.name}`} className="border-b border-gray-50 dark:border-slate-700/50 hover:bg-gray-50 dark:hover:bg-slate-750 cursor-pointer"
+                        onClick={() => c.creator_id && router.push(`/admin/creators/${c.creator_id}`)}
+                        title={c.creator_id ? "View creator detail" : ""}>
                       <td className="py-1.5 text-gray-400">{i + 1}</td>
-                      <td className="py-1.5 font-medium truncate max-w-[120px]" title={c.display_name || c.name}>{c.display_name || c.name}</td>
+                      <td className="py-1.5 font-medium truncate max-w-[120px]" title={c.display_name || c.name}>
+                        <span className={c.creator_id ? "text-blue-600 dark:text-blue-400 hover:underline" : ""}>{c.display_name || c.name}</span>
+                      </td>
                       <td className="py-1.5 capitalize">
                         <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: getSourceColor(c.source) }} />
                         {c.source}

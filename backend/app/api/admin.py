@@ -230,7 +230,8 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     # not match any DB field. We cross-reference via work_sources:
     #   work_dir name (source_work_id) → work_sources.source_creator_id
     #   → source_creators.creator_id → creators.display_name
-    creator_display: dict[tuple[str, str], str] = {}  # (source, dir_name) → display_name
+    creator_display: dict[tuple[str, str], str] = {}
+                creator_id_map: dict[tuple[str, str], str] = {}  # (source, dir_name) → display_name
     try:
         from app.models.work_source import WorkSource
         from app.models.source_creator import SourceCreator
@@ -276,19 +277,26 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
                             SourceCreator.source_creator_id,
                             Creator.display_name,
                             Creator.name,
+                            Creator.id,
                         )
                         .join(Creator, Creator.id == SourceCreator.creator_id)
                         .where(SourceCreator.source_creator_id.in_(list(sc_ids)))
                     )
                     sc_to_display: dict[str, str] = {}
+                    sc_to_creator_id: dict[str, str] = {}
                     for row in sc_result:
-                        scid, cdisplay, cname = row[0], row[1], row[2]
+                        scid, cdisplay, cname, cid = row[0], row[1], row[2], str(row[3]) if row[3] else None
                         sc_to_display[scid] = cdisplay or cname or scid
+                        if cid:
+                            sc_to_creator_id[scid] = cid
 
                     for src, dir_name, work_id in lookup_pairs:
                         scid = work_to_sc.get(work_id)
                         if scid and scid in sc_to_display:
                             creator_display[(src, dir_name)] = sc_to_display[scid]
+                            cid = sc_to_creator_id.get(scid)
+                            if cid:
+                                creator_id_map[(src, dir_name)] = cid
                         else:
                             creator_display[(src, dir_name)] = dir_name
     except Exception:
@@ -323,13 +331,17 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
         # Sort by size descending, top 20
         creator_sizes.sort(key=lambda x: x[3], reverse=True)
         for cname, display, src, sz, wc in creator_sizes[:20]:
-            creators.append({
+            entry = {
                 "name": cname,
                 "display_name": display,
                 "source": src,
                 "size_mb": round(sz / (1024 ** 2), 1),
                 "work_count": wc,
-            })
+            }
+            cid = creator_id_map.get((src, cname))
+            if cid:
+                entry["creator_id"] = cid
+            creators.append(entry)
     except Exception:
         pass
 
