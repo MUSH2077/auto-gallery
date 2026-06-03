@@ -131,6 +131,84 @@ async def get_creator_timeline(creator_id: UUID,
         "total": sum(d["total"] for d in days),
     }
 
+@router.get("/{creator_id}/stats")
+async def get_creator_stats(creator_id: UUID, db: AsyncSession = Depends(get_db)):
+    """Return creator statistics: tag distribution, source breakdown, monthly posting frequency."""
+    from app.models.work_source import WorkSource
+    from app.models.work_tag import WorkTag
+    from app.models.tag import Tag
+    from app.models.source_creator import SourceCreator
+    from sqlalchemy import func, and_
+
+    # Works per source
+    ws_rows = await db.execute(
+        select(WorkSource.source, func.count(WorkSource.id).label("cnt"))
+        .join(SourceCreator, and_(
+            SourceCreator.source == WorkSource.source,
+            SourceCreator.source_creator_id == WorkSource.source_creator_id))
+        .where(SourceCreator.creator_id == creator_id)
+        .group_by(WorkSource.source)
+        .order_by(func.count(WorkSource.id).desc())
+    )
+    source_breakdown = [{"source": row[0], "count": row[1]} for row in ws_rows]
+
+    # Top tags
+    tag_rows = await db.execute(
+        select(Tag.normalized_name, func.count(WorkTag.work_id).label("cnt"))
+        .join(WorkTag, WorkTag.tag_id == Tag.id)
+        .join(WorkSource, WorkSource.work_id == WorkTag.work_id)
+        .join(SourceCreator, and_(
+            SourceCreator.source == WorkSource.source,
+            SourceCreator.source_creator_id == WorkSource.source_creator_id))
+        .where(SourceCreator.creator_id == creator_id)
+        .group_by(Tag.normalized_name)
+        .order_by(func.count(WorkTag.work_id).desc())
+        .limit(20)
+    )
+    tag_distribution = [{"tag": row[0], "count": row[1]} for row in tag_rows]
+
+    # Monthly posting frequency
+    month_rows = await db.execute(
+        select(
+            func.substring(WorkSource.posted_at, 1, 7).label("month"),
+            func.count(WorkSource.id).label("cnt"))
+        .join(SourceCreator, and_(
+            SourceCreator.source == WorkSource.source,
+            SourceCreator.source_creator_id == WorkSource.source_creator_id))
+        .where(SourceCreator.creator_id == creator_id)
+        .group_by("month")
+        .order_by("month")
+    )
+    monthly = [{"month": row[0], "count": row[1]} for row in month_rows]
+
+    # Totals
+    total_works = sum(s["count"] for s in source_breakdown)
+    total_tags = len(tag_distribution)
+
+    # Asset count
+    from app.models.asset_source import AssetSource
+    asset_result = await db.execute(
+        select(func.count(AssetSource.id))
+        .select_from(WorkSource)
+        .join(AssetSource, AssetSource.work_source_id == WorkSource.id)
+        .join(SourceCreator, and_(
+            SourceCreator.source == WorkSource.source,
+            SourceCreator.source_creator_id == WorkSource.source_creator_id))
+        .where(SourceCreator.creator_id == creator_id)
+    )
+    total_assets = asset_result.scalar() or 0
+
+    return {
+        "creator_id": str(creator_id),
+        "total_works": total_works,
+        "total_assets": total_assets,
+        "total_tags": total_tags,
+        "source_breakdown": source_breakdown,
+        "tag_distribution": tag_distribution,
+        "monthly_frequency": monthly,
+    }
+
+
 @router.delete("/{creator_id}", status_code=204)
 async def delete_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)

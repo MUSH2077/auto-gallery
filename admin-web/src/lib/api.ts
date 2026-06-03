@@ -422,6 +422,14 @@ export const api = {
       return request<{ creator_id: string; sources: string[]; days: { date: string; total: number; [source: string]: number | string }[]; total: number }>(`/api/v1/creators/${creatorId}/timeline?${q.toString()}`);
     },
 
+  getCreatorStats: (id: string) =>
+    request<{
+      creator_id: string; total_works: number; total_assets: number; total_tags: number;
+      source_breakdown: { source: string; count: number }[];
+      tag_distribution: { tag: string; count: number }[];
+      monthly_frequency: { month: string; count: number }[];
+    }>(`/api/v1/creators/${id}/stats`),
+
   createCreator: (data: { name: string; display_name?: string; description?: string; thumbnail_url?: string }) =>
     request<Creator>("/api/v1/creators", { method: "POST", body: JSON.stringify(data) }),
 
