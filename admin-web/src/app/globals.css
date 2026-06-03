@@ -186,4 +186,15 @@
     background-size: 200% 100%;
     animation: shimmer 1.5s infinite;
   }
+  .page-item {
+    opacity: 0;
+    animation: fadeUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation-delay: var(--delay, 0ms);
+  }
+  @keyframes barGrow {
+    from { width: 0% !important; }
+  }
+  .animate-bar-grow {
+    animation: barGrow 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+  }
 }
