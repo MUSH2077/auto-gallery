@@ -189,7 +189,7 @@ async def system_info():
 
 
 @router.get("/storage-breakdown")
-async def storage_breakdown():
+async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     """Return per-source and per-creator storage breakdown."""
     dl_root = Path(settings.download_root)
 
@@ -225,10 +225,79 @@ async def storage_breakdown():
     except Exception:
         pass
 
+    # ── Resolve creator display names from the database ──
+    # The filesystem uses naming-template-derived directory names which may
+    # not match any DB field. We cross-reference via work_sources:
+    #   work_dir name (source_work_id) → work_sources.source_creator_id
+    #   → source_creators.creator_id → creators.display_name
+    creator_display: dict[tuple[str, str], str] = {}  # (source, dir_name) → display_name
+    try:
+        from app.models.work_source import WorkSource
+        from app.models.source_creator import SourceCreator
+        from app.models.creator import Creator
+
+        if dl_root.exists():
+            # Collect one sample work_id per creator directory for lookup
+            lookup_pairs: list[tuple[str, str, str]] = []  # (source, creator_dir, work_id)
+            for source_dir in dl_root.iterdir():
+                if not source_dir.is_dir():
+                    continue
+                src = source_dir.name
+                for creator_dir in source_dir.iterdir():
+                    if not creator_dir.is_dir():
+                        continue
+                    for work_dir in creator_dir.iterdir():
+                        if work_dir.is_dir():
+                            lookup_pairs.append((src, creator_dir.name, work_dir.name))
+                            break  # first work is enough for lookup
+
+            if lookup_pairs:
+                work_ids = [p[2] for p in lookup_pairs]
+                # Batch query work_sources
+                ws_result = await db.execute(
+                    select(
+                        WorkSource.source,
+                        WorkSource.source_work_id,
+                        WorkSource.source_creator_id,
+                    ).where(WorkSource.source_work_id.in_(work_ids))
+                )
+                # work_id → source_creator_id
+                work_to_sc: dict[str, str] = {}
+                for row in ws_result:
+                    ws_src, ws_wid, ws_scid = row[0], row[1], row[2]
+                    if ws_scid:
+                        work_to_sc[ws_wid] = ws_scid
+
+                # source_creator_id → creator display_name
+                sc_ids = set(work_to_sc.values())
+                if sc_ids:
+                    sc_result = await db.execute(
+                        select(
+                            SourceCreator.source_creator_id,
+                            Creator.display_name,
+                            Creator.name,
+                        )
+                        .join(Creator, Creator.id == SourceCreator.creator_id)
+                        .where(SourceCreator.source_creator_id.in_(list(sc_ids)))
+                    )
+                    sc_to_display: dict[str, str] = {}
+                    for row in sc_result:
+                        scid, cdisplay, cname = row[0], row[1], row[2]
+                        sc_to_display[scid] = cdisplay or cname or scid
+
+                    for src, dir_name, work_id in lookup_pairs:
+                        scid = work_to_sc.get(work_id)
+                        if scid and scid in sc_to_display:
+                            creator_display[(src, dir_name)] = sc_to_display[scid]
+                        else:
+                            creator_display[(src, dir_name)] = dir_name
+    except Exception:
+        pass
+
     # Per-creator top breakdown (by storage)
     creators = []
     try:
-        creator_sizes: list[tuple[str, str, str, int]] = []  # (name, source, display, size, work_count)
+        creator_sizes: list[tuple[str, str, str, int, int]] = []  # (name, display, source, size, work_count)
         for source_dir in dl_root.iterdir():
             if not source_dir.is_dir():
                 continue
@@ -249,12 +318,14 @@ async def storage_breakdown():
                                 csize += f.stat().st_size
                             except Exception:
                                 pass
-                creator_sizes.append((cname, src, cname, csize, wc))
+                display = creator_display.get((src, cname), cname)
+                creator_sizes.append((cname, display, src, csize, wc))
         # Sort by size descending, top 20
         creator_sizes.sort(key=lambda x: x[3], reverse=True)
-        for cname, src, display, sz, wc in creator_sizes[:20]:
+        for cname, display, src, sz, wc in creator_sizes[:20]:
             creators.append({
                 "name": cname,
+                "display_name": display,
                 "source": src,
                 "size_mb": round(sz / (1024 ** 2), 1),
                 "work_count": wc,
