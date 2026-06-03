@@ -1,6 +1,6 @@
 # Provider Design Skill
 
-Guidance for implementing source providers. Read `.claude/constraints/source-abstraction.md` before implementing any provider.
+Guidance for implementing source providers. Read `.claude/constraints/source-abstraction.md` and `.claude/constraints/creator-display-name.md` before implementing any provider.
 
 ## Provider interface (base.py)
 
