@@ -83,8 +83,8 @@ def _should_sync_now(sub, system_config: dict, last_synced_at, now: datetime, tz
                 parts = t.split(":")
                 h = int(parts[0])
                 m = int(parts[1]) if len(parts) > 1 else 0
-                s = int(parts[2]) if len(parts) > 2 else 0
-                scheduled.append((h, m, s))
+                sec = int(parts[2]) if len(parts) > 2 else 0
+                scheduled.append((h, m, sec))
             except ValueError:
                 continue
 
@@ -99,8 +99,8 @@ def _should_sync_now(sub, system_config: dict, last_synced_at, now: datetime, tz
 
         for day_offset in (0, -1):
             day = now.date() + timedelta(days=day_offset)
-            for h, m in scheduled:
-                st = datetime(day.year, day.month, day.day, h, m, s, tzinfo=tz)
+            for h, m, s_val in scheduled:
+                st = datetime(day.year, day.month, day.day, h, m, s_val, tzinfo=tz)
                 diff_minutes = abs((now - st).total_seconds()) / 60.0
                 if diff_minutes <= window_minutes and last_synced_at < st:
                     return True
@@ -109,8 +109,8 @@ def _should_sync_now(sub, system_config: dict, last_synced_at, now: datetime, tz
             for days_back in range(1, 31):
                 day = now.date() - timedelta(days=days_back)
                 best_time = None
-                for h, m in scheduled:
-                    st = datetime(day.year, day.month, day.day, h, m, s, tzinfo=tz)
+                for h, m, s_val in scheduled:
+                    st = datetime(day.year, day.month, day.day, h, m, s_val, tzinfo=tz)
                     if st <= now and (best_time is None or st > best_time):
                         best_time = st
                 if best_time and last_synced_at < best_time:

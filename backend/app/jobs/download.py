@@ -106,7 +106,7 @@ def _count_new_artifacts(source: str, json_before: set[str]) -> tuple[int, int]:
     new_jsons = json_after - json_before
 
     if not new_jsons:
-        return (0, 0)
+        return (0, 0, set())
 
     # Count images only in directories that contain new JSONs
     # (avoids counting files from other creators' past downloads)
@@ -120,7 +120,7 @@ def _count_new_artifacts(source: str, json_before: set[str]) -> tuple[int, int]:
             if p.is_file() and p.suffix.lower() in IMG_EXTS:
                 img_count += 1
 
-    return (len(new_jsons), img_count)
+    return (len(new_jsons), img_count, new_jsons)
 
 
 AUTH_WARNING_PATTERNS = [
@@ -132,8 +132,12 @@ AUTH_WARNING_PATTERNS = [
 ]
 
 
-async def _enqueue_import(download_job_id: str, import_error: str | None = None):
-    """Create an import job and enqueue it. Returns import_job_id or None."""
+async def _enqueue_import(download_job_id: str, import_error: str | None = None, new_json_paths: set[str] | None = None):
+    """Create an import job and enqueue it. Returns import_job_id or None.
+
+    If new_json_paths is provided, stores the file list in Redis so the
+    import runner can process exactly those files without re-scanning.
+    """
     try:
         async with async_session() as db:
             repo = DownloadJobRepository(db)
@@ -145,6 +149,18 @@ async def _enqueue_import(download_job_id: str, import_error: str | None = None)
             })
             await db.commit()
             import_job_id = str(import_job.id)
+
+        # Store new JSON file paths in Redis for the import runner
+        if new_json_paths:
+            try:
+                r = redis_lib.from_url(settings.redis_url)
+                r.setex(
+                    f"import:{import_job_id}:files",
+                    7200,  # 2h TTL
+                    json.dumps(list(new_json_paths)),
+                )
+            except Exception:
+                logger.warning("Failed to store import file list for %s", import_job_id, exc_info=True)
 
         import redis as redis_lib
         from rq import Queue
@@ -320,7 +336,7 @@ async def run_download_job(job_id: str):
                 await db2.commit()
 
         # Always try partial import recovery
-        metadata_count, _ = _count_new_artifacts(job.source, json_before)
+        metadata_count, _, new_json_paths = _count_new_artifacts(job.source, json_before)
         if metadata_count > 0:
             logger.info("Partial recovery: found %d metadata JSONs after unexpected error for job %s", metadata_count, job_id)
             await _enqueue_import(str(job_uuid), f"partial import after unexpected error (found {metadata_count} metadata files)")
@@ -387,9 +403,9 @@ async def run_download_job(job_id: str):
         # Full success — but only enqueue import if there are new metadata JSONs.
         # gallery-dl exits 0 even when all files were skipped (already in archive),
         # or when the source has no content at all.
-        metadata_count, image_count = _count_new_artifacts(job.source, json_before)
+        metadata_count, image_count, new_json_paths = _count_new_artifacts(job.source, json_before)
         if metadata_count > 0:
-            await _enqueue_import(str(job_uuid))
+            await _enqueue_import(str(job_uuid), new_json_paths=new_json_paths)
         else:
             # No new metadata JSONs — distinguish "already imported" from "nothing to download"
             # Check stderr for warnings that explain the zero-download result
@@ -422,14 +438,14 @@ async def run_download_job(job_id: str):
 
     elif result is not None and result.returncode != 0:
         # Non-zero exit — maybe partial files were downloaded
-        metadata_count, _ = _count_new_artifacts(job.source, json_before)
+        metadata_count, _, new_json_paths = _count_new_artifacts(job.source, json_before)
         if metadata_count > 0:
             logger.info("Partial recovery: found %d metadata JSONs after failure for job %s", metadata_count, job_id)
             await _enqueue_import(str(job_uuid), f"partial import after download failure (found {metadata_count} metadata files)")
 
     else:
         # Timeout — attempt partial import recovery
-        metadata_count, _ = _count_new_artifacts(job.source, json_before)
+        metadata_count, _, new_json_paths = _count_new_artifacts(job.source, json_before)
         if metadata_count > 0:
             logger.info("Partial recovery: found %d metadata JSONs after timeout for job %s", metadata_count, job_id)
             await _enqueue_import(str(job_uuid), f"partial import after timeout (found {metadata_count} metadata files)")
