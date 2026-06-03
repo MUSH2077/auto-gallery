@@ -77,22 +77,50 @@ def _cleanup_temp_config(path: str | None):
             pass
 
 
-def _count_download_artifacts(source: str) -> tuple[int, int]:
-    """Walk source dir once, return (metadata_json_count, image_file_count)."""
+def _snapshot_metadata_jsons(source: str) -> set[str]:
+    """Return a set of absolute paths to all metadata JSON files for a source.
+
+    Used to detect which files were created by THIS gallery-dl invocation
+    via before/after diff — works regardless of naming template configuration.
+    """
+    source_root = Path(settings.download_root) / source
+    if not source_root.exists():
+        return set()
+    return {str(p) for p in source_root.rglob("*.json") if p.is_file()}
+
+
+def _count_new_artifacts(source: str, json_before: set[str]) -> tuple[int, int]:
+    """Count NEW metadata JSONs and image files created since snapshot.
+
+    Compares current filesystem against json_before to detect only files
+    produced by the current gallery-dl run. Image count is scoped to
+    directories containing new JSONs, avoiding files from other creators.
+    """
     source_root = Path(settings.download_root) / source
     if not source_root.exists():
         return (0, 0)
+
     IMG_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
-    json_count = 0
+
+    json_after = {str(p) for p in source_root.rglob("*.json") if p.is_file()}
+    new_jsons = json_after - json_before
+
+    if not new_jsons:
+        return (0, 0)
+
+    # Count images only in directories that contain new JSONs
+    # (avoids counting files from other creators' past downloads)
+    new_dirs = {str(Path(jp).parent) for jp in new_jsons}
     img_count = 0
-    for p in source_root.rglob("*"):
-        if not p.is_file():
+    for d in new_dirs:
+        dir_path = Path(d)
+        if not dir_path.exists():
             continue
-        if p.suffix == ".json":
-            json_count += 1
-        elif p.suffix.lower() in IMG_EXTS:
-            img_count += 1
-    return (json_count, img_count)
+        for p in dir_path.iterdir():
+            if p.is_file() and p.suffix.lower() in IMG_EXTS:
+                img_count += 1
+
+    return (len(new_jsons), img_count)
 
 
 AUTH_WARNING_PATTERNS = [
@@ -228,6 +256,10 @@ async def run_download_job(job_id: str):
                 new_query = url_parse.urlencode({"tags": tags}, doseq=True)
                 source_url = url_parse.urlunparse(parsed._replace(query=new_query))
 
+    # Snapshot metadata JSONs before running gallery-dl to detect new files.
+    # This works regardless of the naming template configuration.
+    json_before: set[str] = _snapshot_metadata_jsons(job.source)
+
     result = None
     try:
         config_path = os.path.join(
@@ -288,7 +320,7 @@ async def run_download_job(job_id: str):
                 await db2.commit()
 
         # Always try partial import recovery
-        metadata_count, _ = _count_download_artifacts(job.source, j.download_dir if j else None)
+        metadata_count, _ = _count_new_artifacts(job.source, json_before)
         if metadata_count > 0:
             logger.info("Partial recovery: found %d metadata JSONs after unexpected error for job %s", metadata_count, job_id)
             await _enqueue_import(str(job_uuid), f"partial import after unexpected error (found {metadata_count} metadata files)")
@@ -355,7 +387,7 @@ async def run_download_job(job_id: str):
         # Full success — but only enqueue import if there are new metadata JSONs.
         # gallery-dl exits 0 even when all files were skipped (already in archive),
         # or when the source has no content at all.
-        metadata_count, image_count = _count_download_artifacts(job.source, j.download_dir if j else None)
+        metadata_count, image_count = _count_new_artifacts(job.source, json_before)
         if metadata_count > 0:
             await _enqueue_import(str(job_uuid))
         else:
@@ -390,14 +422,14 @@ async def run_download_job(job_id: str):
 
     elif result is not None and result.returncode != 0:
         # Non-zero exit — maybe partial files were downloaded
-        metadata_count, _ = _count_download_artifacts(job.source, j.download_dir if j else None)
+        metadata_count, _ = _count_new_artifacts(job.source, json_before)
         if metadata_count > 0:
             logger.info("Partial recovery: found %d metadata JSONs after failure for job %s", metadata_count, job_id)
             await _enqueue_import(str(job_uuid), f"partial import after download failure (found {metadata_count} metadata files)")
 
     else:
         # Timeout — attempt partial import recovery
-        metadata_count, _ = _count_download_artifacts(job.source, j.download_dir if j else None)
+        metadata_count, _ = _count_new_artifacts(job.source, json_before)
         if metadata_count > 0:
             logger.info("Partial recovery: found %d metadata JSONs after timeout for job %s", metadata_count, job_id)
             await _enqueue_import(str(job_uuid), f"partial import after timeout (found {metadata_count} metadata files)")
