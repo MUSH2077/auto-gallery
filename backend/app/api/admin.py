@@ -1685,6 +1685,10 @@ async def restore_backup(file: UploadFile = File(...)):
                     manifest = json.loads(mf.read())
             except Exception:
                 pass
+            # Safe extraction: reject paths with .. or absolute paths
+            for member in tar.getmembers():
+                if member.name.startswith('/') or '..' in member.name:
+                    raise HTTPException(status_code=400, detail=f"Invalid archive member: {member.name}")
             tar.extractall(tmpdir)
 
         # Restore database
@@ -1763,6 +1767,14 @@ async def restore_backup(file: UploadFile = File(...)):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def _validate_backup_filename(filename: str) -> Path:
+    """Resolve and validate a backup filename stays within BACKUP_DIR."""
+    target = (BACKUP_DIR / filename).resolve()
+    if not str(target).startswith(str(BACKUP_DIR.resolve())):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    return target
+
+
 @router.get("/backup/download")
 async def download_backup(filename: str | None = None):
     """Download a backup file. If filename not specified, returns the latest."""
@@ -1770,7 +1782,7 @@ async def download_backup(filename: str | None = None):
     existing = sorted(BACKUP_DIR.glob("auto-gallery-backup_*.tar.gz"))
     if not existing:
         return {"status": "error", "message": "No backups available"}
-    target = BACKUP_DIR / filename if filename else existing[-1]
+    target = _validate_backup_filename(filename) if filename else existing[-1]
     if not target.exists():
         return {"status": "error", "message": f"Backup not found: {filename}"}
     return FileResponse(
@@ -1782,7 +1794,7 @@ async def download_backup(filename: str | None = None):
 async def delete_backup(filename: str):
     """Delete a specific backup file."""
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    target = BACKUP_DIR / filename
+    target = _validate_backup_filename(filename)
     if not target.exists():
         raise HTTPException(status_code=404, detail=f"Backup not found: {filename}")
     target.unlink()
