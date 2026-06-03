@@ -84,7 +84,7 @@ export default function CreatorDetailPage() {
           {/* Links */}
           <div className="card-elevated p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">{t("creator_detail.links")} ({links.data?.length || 0})</h3>
+              <h3 className="text-sm font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">{t("creator_detail.links").replace("{count}", String(links.data?.length || 0))}</h3>
               <button onClick={() => setShowAddLink(true)} className="text-xs text-amber-700 dark:text-amber-400 hover:underline">+ Add</button>
             </div>
             {links.data?.length ? (
