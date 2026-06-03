@@ -646,7 +646,7 @@ export const api = {
   cleanupMetadataJSONs: () => request<{ status: string; removed: number }>("/api/v1/admin/cleanup-metadata-jsons", { method: "POST" }),
   getStorageBreakdown: () => request<{
     sources: Record<string, { size_mb: number; creator_count: number; work_count: number }>;
-    creators: { name: string; source: string; size_mb: number; work_count: number }[];
+    creators: { name: string; display_name: string; source: string; size_mb: number; work_count: number }[];
   }>("/api/v1/admin/storage-breakdown"),
   getIntegrityCheck: () => request<{
     issues: { type: string; severity: string; count: number; description: string; items: any[] }[];

@@ -239,7 +239,7 @@ export default function DataManagementPage() {
                   {breakdown.creators.map((c, i) => (
                     <tr key={`${c.source}/${c.name}`} className="border-b border-gray-50 dark:border-slate-700/50 hover:bg-gray-50 dark:hover:bg-slate-750">
                       <td className="py-1.5 text-gray-400">{i + 1}</td>
-                      <td className="py-1.5 font-medium truncate max-w-[120px]" title={c.name}>{c.name}</td>
+                      <td className="py-1.5 font-medium truncate max-w-[120px]" title={c.display_name || c.name}>{c.display_name || c.name}</td>
                       <td className="py-1.5 capitalize">
                         <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: getSourceColor(c.source) }} />
                         {c.source}
