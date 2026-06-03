@@ -7,62 +7,108 @@ import Link from "next/link";
 import { PageHeader, ConfirmDialog, EmptyState, ErrorState } from "@/components";
 import { useToast } from "@/components/Toast";
 
+const ALL_CONTENTS = ["database", "gallerydl-config", "app-config", "download-archives", "library-metadata"] as const;
+
+const CONTENT_ICONS: Record<string, string> = {
+  database: "🗄",
+  "gallerydl-config": "⚙",
+  "app-config": "📋",
+  "download-archives": "📦",
+  "library-metadata": "📄",
+};
+
+function fmtKB(kb: number): string {
+  if (kb >= 1024) return `${(kb / 1024).toFixed(1)} MB`;
+  return `${kb.toFixed(0)} KB`;
+}
+
+function contentBadgeColor(content: string): string {
+  const colors: Record<string, string> = {
+    database: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+    "gallerydl-config": "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
+    "app-config": "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+    "download-archives": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+    "library-metadata": "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400",
+  };
+  return colors[content] || "bg-gray-100 text-gray-700";
+}
+
 export default function BackupPage() {
   const toast = useToast();
   const t = useT();
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const [selected, setSelected] = useState<Set<string>>(new Set(ALL_CONTENTS));
   const [confirmRestore, setConfirmRestore] = useState(false);
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
+  const [restoreManifest, setRestoreManifest] = useState<any>(null);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
 
-  const backups = useQuery({
-    queryKey: ["backups"],
-    queryFn: api.listBackups,
-  });
+  const backups = useQuery({ queryKey: ["backups"], queryFn: api.listBackups });
+  const estimate = useQuery({ queryKey: ["backup-estimate"], queryFn: () => api.estimateBackupSizes() });
 
-  const createBackup = useMutation({
-    mutationFn: () => api.createBackup(),
-    onSuccess: (data) => {
+  const toggle = (c: string) => {
+    const next = new Set(selected);
+    next.has(c) ? next.delete(c) : next.add(c);
+    setSelected(next);
+  };
+  const toggleAll = () => setSelected(selected.size === ALL_CONTENTS.length ? new Set() : new Set(ALL_CONTENTS));
+  const selectedArr = [...selected];
+  const estTotal = estimate.data?.components
+    ? selectedArr.reduce((sum, c) => sum + (estimate.data!.components[c] || 0), 0) : 0;
+
+  const handleCreate = async () => {
+    setIsCreating(true);
+    try {
+      const data = await api.createBackup(selectedArr);
       toast.success({ message: t("backup.created").replace("{filename}", data.filename).replace("{size}", String(data.size_mb)) });
       qc.invalidateQueries({ queryKey: ["backups"] });
-    },
-    onError: (e) => toast.error({ message: (e as Error).message }),
-  });
-
-  const handleRestoreClick = () => {
-    fileRef.current?.click();
+    } catch (e) { toast.error({ message: (e as Error).message }); }
+    setIsCreating(false);
   };
 
-  const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleRestoreClick = () => fileRef.current?.click();
+
+  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      setRestoreFile(file);
-      setConfirmRestore(true);
-    }
+    if (!file) return;
+    setRestoreFile(file);
+    setConfirmRestore(true);
     if (fileRef.current) fileRef.current.value = "";
   };
 
   const doRestore = async () => {
     if (!restoreFile) return;
+    setIsRestoring(true);
     setConfirmRestore(false);
     try {
-      const formData = new FormData();
-      formData.append("file", restoreFile);
-      const res = await fetch("/api/v1/admin/backup/restore", {
-        method: "POST",
-        body: formData,
-      });
-      const data = await res.json();
-      if (data.status === "ok") {
-        setResult({ ok: true, msg: t("backup.restored") });
+      const data = await api.restoreBackup(restoreFile);
+      if (data.status === "ok" || data.status === "partial") {
+        setResult({ ok: data.status === "ok", msg: t("backup.restored").replace("{count}", String(data.restored.length)) + (data.errors.length ? ` (${data.errors.length} errors)` : "") });
         qc.invalidateQueries();
       } else {
-        setResult({ ok: false, msg: data.message || "Restore failed" });
+        setResult({ ok: false, msg: data.errors?.join("; ") || "Restore failed" });
       }
-    } catch (e) {
-      setResult({ ok: false, msg: (e as Error).message });
-    }
+    } catch (e) { setResult({ ok: false, msg: (e as Error).message }); }
+    setIsRestoring(false);
+    setRestoreFile(null);
+  };
+
+  const handleDelete = async (filename: string) => {
+    try { await api.deleteBackup(filename); qc.invalidateQueries({ queryKey: ["backups"] }); }
+    catch (e) { toast.error({ message: (e as Error).message }); }
+    setDeleteTarget(null);
+  };
+
+  const doDownload = (filename: string) => {
+    const a = document.createElement("a");
+    a.href = api.downloadBackup(filename);
+    a.download = filename;
+    a.click();
   };
 
   return (
@@ -72,10 +118,9 @@ export default function BackupPage() {
       </div>
       <PageHeader title={t("backup.title")} description={t("backup.desc")} />
 
-      {/* Result message */}
       {result && (
-        <div className={`mb-4 p-3 rounded-lg text-sm ${result.ok ? "bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400" : "bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400"}`}>
-          {result.msg}
+        <div className={`mb-4 p-3 rounded-lg text-sm flex items-center justify-between ${result.ok ? "bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400" : "bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400"}`}>
+          <span>{result.msg}</span>
           <button onClick={() => setResult(null)} className="ml-3 text-xs underline">{t("common.close")}</button>
         </div>
       )}
@@ -83,59 +128,81 @@ export default function BackupPage() {
       {/* Create Backup */}
       <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6 mb-6">
         <div className="flex items-center justify-between mb-4">
-          <div>
-            <h3 className="font-medium dark:text-white">{t("backup.create")}</h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("backup.desc")}</p>
+          <h3 className="font-medium dark:text-white">{t("backup.create")}</h3>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-gray-500 dark:text-gray-400">
+              {t("backup.estimated_size")}: <span className="font-mono font-medium">{fmtKB(estTotal)}</span>
+            </span>
+            <button onClick={handleCreate} disabled={isCreating || selected.size === 0}
+              className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
+              {isCreating ? t("backup.creating") : t("backup.create")}
+            </button>
           </div>
-          <button
-            onClick={() => createBackup.mutate()}
-            disabled={createBackup.isPending}
-            className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50"
-          >
-            {createBackup.isPending ? t("backup.creating") : t("backup.create")}
-          </button>
         </div>
 
-        <div className="border-t dark:border-slate-700 pt-4">
-          <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">{t("backup.contents")}</h4>
-          <ul className="text-xs text-gray-500 dark:text-gray-400 space-y-1 list-disc list-inside">
-            <li>{t("backup.item_db")}</li>
-            <li>{t("backup.item_config")}</li>
-            <li>{t("backup.item_appconfig")}</li>
-            <li>{t("backup.item_archives")}</li>
-          </ul>
+        <label className="flex items-center gap-2 mb-3 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+          <input type="checkbox" checked={selected.size === ALL_CONTENTS.length} onChange={toggleAll} className="rounded" />
+          {t("backup.select_all")}
+        </label>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          {ALL_CONTENTS.map((c) => {
+            const size = estimate.data?.components?.[c];
+            const checked = selected.has(c);
+            const keyMap: Record<string, string> = {
+              database: "db", "gallerydl-config": "config", "app-config": "appconfig",
+              "download-archives": "archives", "library-metadata": "library",
+            };
+            const sk = keyMap[c] || c;
+            return (
+              <label key={c} className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                checked ? "border-slate-400 dark:border-slate-500 bg-slate-50 dark:bg-slate-700/30"
+                  : "border-gray-200 dark:border-slate-600 hover:border-gray-300 dark:hover:border-slate-500"}`}>
+                <input type="checkbox" checked={checked} onChange={() => toggle(c)} className="mt-0.5 rounded" />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-sm">{CONTENT_ICONS[c] || ""}</span>
+                    <span className="text-sm font-medium dark:text-white">{t(`backup.item_${sk}`)}</span>
+                    {size !== undefined && <span className="text-xs text-gray-400 dark:text-gray-500 ml-auto">{fmtKB(size)}</span>}
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 ml-6">{t(`backup.item_${sk}_desc`)}</p>
+                </div>
+              </label>
+            );
+          })}
         </div>
       </div>
 
       {/* Existing Backups */}
       <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6 mb-6">
-        <h3 className="font-medium dark:text-white mb-4">{t("backup.download")}</h3>
-        {backups.isLoading && (
-          <div className="animate-pulse space-y-2">
-            {Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-10 bg-gray-100 dark:bg-slate-700 rounded" />)}
-          </div>
-        )}
+        <h3 className="font-medium dark:text-white mb-4">{t("backup.list_title")}</h3>
+        {backups.isLoading && <div className="animate-pulse space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-16 bg-gray-100 dark:bg-slate-700 rounded" />)}</div>}
         {backups.error && <ErrorState message={(backups.error as Error).message} onRetry={() => backups.refetch()} />}
-        {backups.data?.backups && backups.data.backups.length === 0 && (
-          <EmptyState title={t("backup.no_backups")} description={t("backup.no_backups_desc")} />
-        )}
+        {backups.data?.backups && backups.data.backups.length === 0 && <EmptyState title={t("backup.no_backups")} description={t("backup.no_backups_desc")} />}
         {backups.data?.backups && backups.data.backups.length > 0 && (
           <div className="space-y-2">
             {backups.data.backups.map((b) => (
-              <div key={b.filename} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-slate-700/50 rounded-lg text-sm">
-                <div>
-                  <div className="font-medium dark:text-white">{b.filename}</div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">
-                    {b.size_mb} MB &middot; {new Date(b.created_at).toLocaleString()}
+              <div key={b.filename} className="flex items-start justify-between p-3 bg-gray-50 dark:bg-slate-700/50 rounded-lg text-sm">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium dark:text-white font-mono text-xs">{b.filename}</span>
+                    {b.version && <span className="text-[10px] text-gray-400 dark:text-gray-500">{t("backup.manifest_version")} {b.version}</span>}
                   </div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{b.size_mb} MB &middot; {new Date(b.created_at).toLocaleString()}</div>
+                  {b.contents && b.contents.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {b.contents.map((c: string) => (
+                        <span key={c} className={`text-[10px] px-1.5 py-0.5 rounded-full ${contentBadgeColor(c)}`}>
+                          {c}{b.component_sizes?.[c] !== undefined ? ` ${fmtKB(b.component_sizes![c])}` : ""}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <a
-                  href={api.downloadBackup(b.filename)}
-                  className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
-                  download
-                >
-                  {t("backup.download")}
-                </a>
+                <div className="flex items-center gap-2 ml-3 shrink-0">
+                  <button onClick={() => doDownload(b.filename)} className="px-2.5 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">{t("backup.download")}</button>
+                  <button onClick={() => setDeleteTarget(b.filename)} className="px-2.5 py-1 text-xs bg-red-500 text-white rounded hover:bg-red-600">&times;</button>
+                </div>
               </div>
             ))}
           </div>
@@ -147,23 +214,26 @@ export default function BackupPage() {
         <h3 className="font-medium dark:text-white mb-1">{t("backup.restore_title")}</h3>
         <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">{t("backup.restore_desc")}</p>
         <input ref={fileRef} type="file" accept=".tar.gz" className="hidden" onChange={handleFileSelected} />
-        <button
-          onClick={handleRestoreClick}
-          className="px-4 py-2 bg-red-600 text-white rounded text-sm hover:bg-red-700"
-        >
-          {t("backup.restore_btn")}
+        <button onClick={handleRestoreClick} disabled={isRestoring}
+          className="px-4 py-2 bg-red-600 text-white rounded text-sm hover:bg-red-700 disabled:opacity-50">
+          {isRestoring ? t("backup.restoring") : t("backup.restore_btn")}
         </button>
       </div>
 
-      {confirmRestore && (
-        <ConfirmDialog
-          open
-          title={t("backup.restore_title")}
+      {confirmRestore && restoreFile && (
+        <ConfirmDialog open title={t("backup.restore_title")}
           message={t("backup.restore_confirm")}
           onConfirm={doRestore}
-          onCancel={() => setConfirmRestore(false)}
-          isPending={false}
-        />
+          onCancel={() => { setConfirmRestore(false); setRestoreFile(null); }}
+          isPending={isRestoring} />
+      )}
+
+      {deleteTarget && (
+        <ConfirmDialog open title={t("backup.delete_confirm")}
+          message={`${t("backup.delete_confirm")}\n\n${deleteTarget}`}
+          onConfirm={() => handleDelete(deleteTarget)}
+          onCancel={() => setDeleteTarget(null)}
+          isPending={false} />
       )}
     </main>
   );
