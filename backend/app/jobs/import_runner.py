@@ -109,30 +109,48 @@ async def run_import_job(import_job_id: str):
             return
         provider = registry.get(dj.source)
 
-        # Scan the permanent downloads directory (no job_id subdir)
-        # gallery-dl config "directory": ["pixiv", "{user[account]}", "{id}"]
-        # creates: /downloads/pixiv/{user[account]}/{work_id}/{work_id}_p0.jpg
-        # with JSON: /downloads/pixiv/{user[account]}/{work_id}/{work_id}_p0.jpg.json
+        # Get new JSON file paths from Redis (stored by download runner via snapshot diff).
+        # This avoids re-scanning the filesystem which is unreliable due to:
+        # - Naming template output directories not matching download_dir hint
+        # - Concurrent imports processing the same JSONs
+        # - Race conditions between snapshot and re-scan
+        import redis as _redis
+        _r = _redis.from_url(settings.redis_url)
+        _files_key = f"import:{import_job_id}:files"
+        _files_raw = _r.get(_files_key)
+        _new_json_paths: list[str] | None = None
+        if _files_raw:
+            try:
+                _new_json_paths = json.loads(_files_raw)
+                _r.delete(_files_key)  # Clean up after reading
+            except Exception:
+                logger.warning("Failed to parse import file list for %s", import_job_id, exc_info=True)
+
         source_root = Path(settings.download_root) / provider.source_name
-        if not source_root.exists():
-            async with async_session() as db:
-                ij = await db.get(ImportJob, job_uuid)
-                if ij:
-                    ij.status = "failed"
-                    ij.error_log = f"Source directory not found: {source_root}"
-                    await db.commit()
-            return
 
-        # Narrow scan to the specific creator sub-directory when available
-        # (avoids scanning the entire source library on every import)
-        if dj.download_dir:
-            candidate_root = source_root / dj.download_dir
-            scan_root = candidate_root if candidate_root.exists() else source_root
+        if _new_json_paths:
+            # Use the exact file list from the download runner's snapshot diff
+            all_json_files = sorted(Path(p) for p in _new_json_paths if Path(p).exists())
+            logger.info("Import %s: processing %d files from download snapshot (%d already gone)",
+                       import_job_id, len(all_json_files), len(_new_json_paths) - len(all_json_files))
         else:
-            scan_root = source_root
+            # Fallback: scan filesystem (legacy path for jobs created before this fix)
+            if not source_root.exists():
+                async with async_session() as db:
+                    ij = await db.get(ImportJob, job_uuid)
+                    if ij:
+                        ij.status = "failed"
+                        ij.error_log = f"Source directory not found: {source_root}"
+                        await db.commit()
+                return
 
-        # Find per-file metadata JSONs from --write-metadata
-        all_json_files = sorted(scan_root.rglob("*.json"))
+            if dj.download_dir:
+                candidate_root = source_root / dj.download_dir
+                scan_root = candidate_root if candidate_root.exists() else source_root
+            else:
+                scan_root = source_root
+
+            all_json_files = sorted(scan_root.rglob("*.json"))
 
         if not all_json_files:
             async with async_session() as db:
