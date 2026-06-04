@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, WorkListItem } from "@/lib/api";
 import { Modal, RepositoryCard, SourceBadge, StatusBadge, WorkGrid } from "@/components";
@@ -26,23 +26,30 @@ function runningRepoCount(repos: CreatorRepository[]) {
   return repos.filter((r) => r.latest_job && ["pending", "downloading", "downloaded", "importing"].includes(r.latest_job.status)).length;
 }
 
-function HorizontalBarChart({ data, maxKey, labelKey, colorFn }: {
+function HorizontalBarChart({ data, maxKey, labelKey, colorFn, onItemClick }: {
   data: { [k: string]: any }[];
   maxKey: string;
   labelKey: string;
   colorFn: (item: any, i: number) => string;
+  onItemClick?: (item: any) => void;
 }) {
   const max = data.length > 0 ? Math.max(...data.map((d) => d[maxKey] as number)) : 1;
   return (
     <div className="space-y-2">
       {data.map((item, i) => (
-        <div key={`${item[labelKey]}-${i}`} className="flex items-center gap-2 text-xs">
+        <button
+          key={`${item[labelKey]}-${i}`}
+          type="button"
+          onClick={() => onItemClick?.(item)}
+          disabled={!onItemClick}
+          className={`flex w-full items-center gap-2 text-xs ${onItemClick ? "rounded-md px-1 py-0.5 text-left hover:bg-[#f6f8fa] dark:hover:bg-[#21262d]" : ""}`}
+        >
           <span className="w-24 truncate text-right text-[#57606a] dark:text-[#8b949e]">{String(item[labelKey])}</span>
           <div className="h-2 flex-1 overflow-hidden rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
             <div className="h-full rounded-full" style={{ width: `${((item[maxKey] as number) / max) * 100}%`, backgroundColor: colorFn(item, i) }} />
           </div>
           <span className="w-10 shrink-0 text-right font-mono text-[#57606a] dark:text-[#8b949e]">{(item[maxKey] as number).toLocaleString()}</span>
-        </div>
+        </button>
       ))}
     </div>
   );
@@ -86,16 +93,107 @@ function WorkPreviewCard({ work }: { work: WorkListItem }) {
   );
 }
 
+function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
+  creatorId: string;
+  selectedTag: string;
+  onTagChange: (tag: string) => void;
+}) {
+  const t = useT();
+  const [page, setPage] = useState(0);
+  const [search, setSearch] = useState("");
+  const limit = 12;
+
+  useEffect(() => {
+    setPage(0);
+  }, [creatorId, selectedTag, search]);
+
+  const filteredWorks = useQuery({
+    queryKey: ["creator-works-tab", creatorId, selectedTag, search, page],
+    queryFn: () => api.listWorks(page * limit, limit, {
+      creator_id: creatorId,
+      tag: selectedTag || undefined,
+      search: search || undefined,
+      sort_by: "posted_at",
+      sort_order: "desc",
+    }),
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-md border border-[#d8dee4] bg-white p-4 dark:border-[#30363d] dark:bg-[#161b22]">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-base font-semibold">Works</h2>
+            <p className="mt-1 text-sm text-[#57606a] dark:text-[#8b949e]">Filtered to this creator. Click a tag in Overview to narrow this list.</p>
+          </div>
+          <Link href={`/admin/works?creator=${creatorId}${selectedTag ? `&tag=${encodeURIComponent(selectedTag)}` : ""}`} className="btn-ghost">
+            Open full gallery
+          </Link>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t("works.search_title")}
+            className="min-w-0 flex-1 rounded-md border border-[#d8dee4] px-3 py-2 text-sm dark:border-[#30363d] dark:bg-[#0d1117] dark:text-white md:max-w-xs"
+          />
+          {selectedTag && (
+            <button
+              type="button"
+              onClick={() => onTagChange("")}
+              className="inline-flex items-center gap-2 rounded-full border border-[#0969da]/30 bg-[#ddf4ff] px-3 py-1.5 text-sm font-medium text-[#0969da] hover:bg-[#b6e3ff] dark:border-[#58a6ff]/40 dark:bg-[#1f6feb26] dark:text-[#58a6ff]"
+              title={`Clear tag filter: ${selectedTag}`}
+            >
+              <span className="max-w-[14rem] truncate">#{selectedTag}</span>
+              <span aria-hidden="true">&times;</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {filteredWorks.isLoading && (
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-48 animate-pulse rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />)}
+        </div>
+      )}
+      {filteredWorks.error && <div className="card p-5 text-sm text-[#cf222e]">{(filteredWorks.error as Error).message}</div>}
+      {filteredWorks.data && filteredWorks.data.items.length === 0 && (
+        <div className="card p-8 text-center text-sm text-[#57606a] dark:text-[#8b949e]">
+          {selectedTag ? `No works tagged #${selectedTag} for this creator.` : "No works found for this creator."}
+        </div>
+      )}
+      {filteredWorks.data && filteredWorks.data.items.length > 0 && (
+        <>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+            {filteredWorks.data.items.map((w) => <WorkPreviewCard key={w.id} work={w} />)}
+          </div>
+          <div className="flex items-center justify-center gap-2">
+            <button disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))} className="btn-ghost disabled:opacity-40">
+              {t("works.prev")}
+            </button>
+            <span className="px-3 py-1 text-sm text-[#57606a] dark:text-[#8b949e]">
+              {t("works.page").replace("{page}", String(page + 1))}
+            </span>
+            <button disabled={(page + 1) * limit >= filteredWorks.data.total} onClick={() => setPage((p) => p + 1)} className="btn-ghost disabled:opacity-40">
+              {t("works.next")}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function CreatorDetailPage() {
   const t = useT();
   const toast = useToast();
   const params = useParams();
-  const router = useRouter();
   const qc = useQueryClient();
   const id = params.id as string;
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [showAddLink, setShowAddLink] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [worksTag, setWorksTag] = useState("");
   const [editName, setEditName] = useState("");
   const [editDisplay, setEditDisplay] = useState("");
   const [editDesc, setEditDesc] = useState("");
@@ -166,6 +264,11 @@ export default function CreatorDetailPage() {
   const subscriptionHref = overview.data?.subscriptions[0]?.id
     ? `/admin/subscriptions/${overview.data.subscriptions[0].id}`
     : `/admin/subscriptions?q=${encodeURIComponent(c?.display_name || c?.name || "")}`;
+
+  const openWorksTag = (tag: string) => {
+    setWorksTag(tag);
+    setActiveTab("works");
+  };
 
   const tabs = useMemo(() => [
     { key: "overview" as const, label: "Overview", count: undefined },
@@ -290,7 +393,26 @@ export default function CreatorDetailPage() {
                 {st?.tag_distribution?.length ? (
                   <section className="card p-4">
                     <h2 className="mb-4 text-base font-semibold">{t("creator_detail.tag_distribution")}</h2>
-                    <HorizontalBarChart data={st.tag_distribution.slice(0, 10)} maxKey="count" labelKey="tag" colorFn={(_, i) => CHART_COLORS[i % CHART_COLORS.length]} />
+                    <HorizontalBarChart
+                      data={st.tag_distribution.slice(0, 10)}
+                      maxKey="count"
+                      labelKey="tag"
+                      colorFn={(_, i) => CHART_COLORS[i % CHART_COLORS.length]}
+                      onItemClick={(item) => openWorksTag(String(item.tag))}
+                    />
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {st.tag_distribution.slice(0, 12).map((item) => (
+                        <button
+                          key={item.tag}
+                          type="button"
+                          onClick={() => openWorksTag(item.tag)}
+                          className="rounded-full border border-[#d8dee4] bg-[#f6f8fa] px-2.5 py-1 text-xs font-medium text-[#0969da] hover:border-[#0969da]/40 hover:bg-[#ddf4ff] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#58a6ff] dark:hover:bg-[#1f6feb26]"
+                          title={`Search #${item.tag} in this creator's works`}
+                        >
+                          #{item.tag}
+                        </button>
+                      ))}
+                    </div>
                   </section>
                 ) : null}
               </div>
@@ -338,14 +460,7 @@ export default function CreatorDetailPage() {
           )}
 
           {activeTab === "works" && (
-            <div className="space-y-4">
-              <div className="card p-4">
-                <h2 className="text-base font-semibold">Works</h2>
-                <p className="mt-1 text-sm text-[#57606a] dark:text-[#8b949e]">This tab keeps the creator filter and links into the full gallery browser.</p>
-                <button onClick={() => router.push(`/admin/works?creator=${id}`)} className="btn-primary mt-4">Open filtered gallery</button>
-              </div>
-              {works.data?.items?.length ? <div className="grid grid-cols-2 gap-3 md:grid-cols-3">{works.data.items.map((w) => <WorkPreviewCard key={w.id} work={w} />)}</div> : null}
-            </div>
+            <CreatorWorksExplorer creatorId={id} selectedTag={worksTag} onTagChange={setWorksTag} />
           )}
 
           {activeTab === "links" && (

@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -30,10 +30,62 @@ interface AssetData {
   created_at: string;
 }
 
+function FullImageLightbox({ asset, onClose }: { asset: AssetData | null; onClose: () => void }) {
+  useEffect(() => {
+    if (!asset) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [asset, onClose]);
+
+  if (!asset) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex flex-col bg-black/95"
+      role="dialog"
+      aria-modal="true"
+      aria-label={asset.file_name}
+      onClick={onClose}
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3 text-white">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium">{asset.file_name}</div>
+          {asset.width && asset.height && <div className="text-xs text-white/60">{asset.width} &times; {asset.height}</div>}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <a
+            href={api.mediaUrl(asset.id, "original")}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-md border border-white/20 px-3 py-1.5 text-sm text-white hover:bg-white/10"
+            onClick={(e) => e.stopPropagation()}
+          >
+            Open original
+          </a>
+          <button onClick={onClose} className="rounded-md border border-white/20 px-3 py-1.5 text-sm text-white hover:bg-white/10" aria-label="Close full image">
+            Close
+          </button>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-4" onClick={(e) => e.stopPropagation()}>
+        <img
+          src={api.mediaUrl(asset.id, "original")}
+          alt={asset.file_name}
+          className="mx-auto h-auto max-h-none max-w-full object-contain"
+        />
+      </div>
+    </div>
+  );
+}
+
 function AllPages({ workId, sources }: { workId: string; sources: WorkSourceData[] }) {
   const t = useT();
   const assets = useQuery({ queryKey: ["works", workId, "assets"], queryFn: () => api.getWorkAssets(workId) });
   const [activeIndex, setActiveIndex] = useState(0);
+  const [fullAsset, setFullAsset] = useState<AssetData | null>(null);
 
   if (assets.isLoading) return <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 animate-pulse"><div className="h-24 bg-gray-100 dark:bg-slate-700 rounded" /></div>;
   if (!assets.data || !assets.data.length) return <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4"><EmptyState title={t("work_detail.no_assets_title", "No assets")} description={t("work_detail.no_assets")} /></div>;
@@ -47,8 +99,18 @@ function AllPages({ workId, sources }: { workId: string; sources: WorkSourceData
       <h3 className="font-medium mb-2 text-sm">{t("work_detail.pages_section").replace("{count}", String(totalPages))}</h3>
       {current && (
         <div className="mb-3">
-          <img src={api.mediaUrl(current.id, "preview")} alt={current.file_name}
-            className="w-full rounded-lg object-contain max-h-96 bg-gray-100 dark:bg-slate-700" />
+          <button
+            type="button"
+            onClick={() => setFullAsset(current)}
+            className="group relative block w-full overflow-hidden rounded-lg bg-gray-100 dark:bg-slate-700"
+            title={t("work_detail.view_full", "View full image")}
+          >
+            <img src={api.mediaUrl(current.id, "preview")} alt={current.file_name}
+              className="max-h-96 w-full object-contain transition-transform group-hover:scale-[1.01]" />
+            <span className="absolute bottom-2 right-2 rounded-md bg-black/70 px-2 py-1 text-xs font-medium text-white opacity-0 transition-opacity group-hover:opacity-100">
+              View full
+            </span>
+          </button>
           <p className="text-xs text-gray-400 dark:text-gray-500 mt-1 text-center">{activeIndex + 1} / {totalPages}</p>
         </div>
       )}
@@ -74,6 +136,7 @@ function AllPages({ workId, sources }: { workId: string; sources: WorkSourceData
           )}
         </div>
       )}
+      <FullImageLightbox asset={fullAsset} onClose={() => setFullAsset(null)} />
     </div>
   );
 }

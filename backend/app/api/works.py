@@ -26,6 +26,7 @@ async def list_works(
     search: str | None = None,
     source: str | None = None,
     creator_id: str | None = None,
+    tag: str | None = None,
     is_nsfw: bool | None = None,
     is_favorite: bool | None = None,
     is_ai_generated: bool | None = None,
@@ -36,7 +37,7 @@ async def list_works(
     repo = WorkRepository(db)
     works, total = await repo.list_all(
         offset=offset, limit=limit,
-        search=search, source=source, creator_id=creator_id,
+        search=search, source=source, creator_id=creator_id, tag=tag,
         is_nsfw=is_nsfw, is_favorite=is_favorite,
         is_ai_generated=is_ai_generated,
         sort_by=sort_by, sort_order=sort_order,
