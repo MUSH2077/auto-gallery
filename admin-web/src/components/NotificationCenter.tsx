@@ -337,7 +337,7 @@ export function NotificationBell() {
                       {batchJob.status !== "running" && (
                         <button
                           onClick={(e) => { e.stopPropagation(); clearBatchJob(); }}
-                          className="text-slate-300 hover:text-slate-500 dark:hover:text-slate-400 shrink-0 mt-0.5"
+                          className="mt-0.5 shrink-0 text-[#8b949e] hover:text-[#57606a] dark:hover:text-[#e6edf3]"
                           aria-label="Dismiss"
                         >
                           <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
@@ -368,7 +368,7 @@ export function NotificationBell() {
                         )}
                       </div>
                       <button onClick={(e) => { e.stopPropagation(); removeActivity(a.id); }}
-                        className="text-slate-300 hover:text-slate-500 dark:hover:text-slate-400 shrink-0 mt-0.5" aria-label="Dismiss">
+                        className="mt-0.5 shrink-0 text-[#8b949e] hover:text-[#57606a] dark:hover:text-[#e6edf3]" aria-label="Dismiss">
                         <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                           <path d="M18 6L6 18M6 6l12 12" />
                         </svg>

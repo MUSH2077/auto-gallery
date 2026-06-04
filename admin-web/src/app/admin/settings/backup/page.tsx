@@ -126,7 +126,7 @@ export default function BackupPage() {
       )}
 
       {/* Create Backup */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6 mb-6">
+      <div className="card p-6 mb-6">
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-medium dark:text-white">{t("backup.create")}</h3>
           <div className="flex items-center gap-3">
@@ -134,7 +134,7 @@ export default function BackupPage() {
               {t("backup.estimated_size")}: <span className="font-mono font-medium">{fmtKB(estTotal)}</span>
             </span>
             <button onClick={handleCreate} disabled={isCreating || selected.size === 0}
-              className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
+              className="btn-primary">
               {isCreating ? t("backup.creating") : t("backup.create")}
             </button>
           </div>
@@ -174,9 +174,9 @@ export default function BackupPage() {
       </div>
 
       {/* Existing Backups */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6 mb-6">
+      <div className="card p-6 mb-6">
         <h3 className="font-medium dark:text-white mb-4">{t("backup.list_title")}</h3>
-        {backups.isLoading && <div className="animate-pulse space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-16 bg-gray-100 dark:bg-slate-700 rounded" />)}</div>}
+        {backups.isLoading && <div className="animate-pulse space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />)}</div>}
         {backups.error && <ErrorState message={(backups.error as Error).message} onRetry={() => backups.refetch()} />}
         {backups.data?.backups && backups.data.backups.length === 0 && <EmptyState title={t("backup.no_backups")} description={t("backup.no_backups_desc")} />}
         {backups.data?.backups && backups.data.backups.length > 0 && (
@@ -200,8 +200,8 @@ export default function BackupPage() {
                   )}
                 </div>
                 <div className="flex items-center gap-2 ml-3 shrink-0">
-                  <button onClick={() => doDownload(b.filename)} className="px-2.5 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">{t("backup.download")}</button>
-                  <button onClick={() => setDeleteTarget(b.filename)} className="px-2.5 py-1 text-xs bg-red-500 text-white rounded hover:bg-red-600">&times;</button>
+                  <button onClick={() => doDownload(b.filename)} className="btn-ghost px-2.5 py-1 text-xs">{t("backup.download")}</button>
+                  <button onClick={() => setDeleteTarget(b.filename)} className="btn-danger px-2.5 py-1 text-xs">&times;</button>
                 </div>
               </div>
             ))}
@@ -210,12 +210,12 @@ export default function BackupPage() {
       </div>
 
       {/* Restore */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6">
+      <div className="card p-6">
         <h3 className="font-medium dark:text-white mb-1">{t("backup.restore_title")}</h3>
         <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">{t("backup.restore_desc")}</p>
         <input ref={fileRef} type="file" accept=".tar.gz" className="hidden" onChange={handleFileSelected} />
         <button onClick={handleRestoreClick} disabled={isRestoring}
-          className="px-4 py-2 bg-red-600 text-white rounded text-sm hover:bg-red-700 disabled:opacity-50">
+          className="btn-danger">
           {isRestoring ? t("backup.restoring") : t("backup.restore_btn")}
         </button>
       </div>

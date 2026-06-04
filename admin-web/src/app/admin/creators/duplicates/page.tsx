@@ -47,12 +47,12 @@ export default function CreatorDuplicatesPage() {
     <main className="max-w-5xl mx-auto p-6">
       <PageHeader title={t("duplicates.title")} description={t("duplicates.desc")} />
 
-      <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 text-sm mb-6">
+      <div className="mb-6 rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm text-[#9a6700] dark:border-[#d29922]/30 dark:bg-[#d29922]/15 dark:text-[#f2cc60]">
         <strong>{t("duplicates.warning")}</strong> {t("duplicates.warning_detail")}
       </div>
 
       {dups.isLoading && (
-        <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-24 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>
+        <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-24 rounded-md bg-[#eaeef2] animate-pulse dark:bg-[#21262d]" />)}</div>
       )}
       {dups.error && <ErrorState message={(dups.error as Error).message} onRetry={() => dups.refetch()} />}
       {dups.data && dups.data.duplicates.length === 0 && (
@@ -60,20 +60,20 @@ export default function CreatorDuplicatesPage() {
       )}
 
       {dups.data?.duplicates.map((group, gi) => (
-        <div key={gi} className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 mb-4">
+        <div key={gi} className="card mb-4 p-4">
           <div className="flex items-center justify-between mb-3">
             <div>
-              <span className="text-xs px-2 py-0.5 rounded bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 font-mono">
+              <span className="badge font-mono">
                 {group.reason.replace(/_/g, " ")}
               </span>
-              <span className="text-sm text-gray-500 dark:text-gray-400 ml-2">{group.description}</span>
+              <span className="ml-2 text-sm text-[#57606a] dark:text-[#8b949e]">{group.description}</span>
             </div>
-            <span className="text-xs text-gray-400">{group.creator_ids.length} {t("duplicates.creators_count")}</span>
+            <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{group.creator_ids.length} {t("duplicates.creators_count")}</span>
           </div>
 
           <div className="space-y-2">
             {group.creator_ids.map((cid, i) => (
-              <div key={cid} className="flex items-center gap-3 p-2 rounded border dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700/50">
+              <div key={cid} className="flex items-center gap-3 rounded-md border border-[#d8dee4] p-2 transition-colors hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
                 <input
                   type="checkbox"
                   checked={selectedSources.has(cid)}
@@ -87,9 +87,9 @@ export default function CreatorDuplicatesPage() {
                   >
                     {group.creator_names[i] || cid.slice(0, 8)}
                   </button>
-                  <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">{cid.slice(0, 8)}...</span>
+                  <span className="font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{cid.slice(0, 8)}...</span>
                 </div>
-                <span className="text-xs text-gray-400 shrink-0">
+                <span className="shrink-0 text-xs text-[#57606a] dark:text-[#8b949e]">
                   {cid === group.creator_ids[0] ? t("duplicates.keep_target") : t("duplicates.merge_into")}
                 </span>
               </div>
@@ -100,25 +100,25 @@ export default function CreatorDuplicatesPage() {
 
       {/* Merge action bar */}
       {selectedSources.size > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-slate-800 border-t dark:border-slate-700 shadow-lg p-4 flex items-center justify-between z-30">
+        <div className="fixed right-0 bottom-0 left-0 z-30 flex items-center justify-between border-t border-[#d8dee4] bg-white p-4 shadow-lg dark:border-[#30363d] dark:bg-[#161b22]">
           <div>
             <span className="text-sm font-medium">
               {t("duplicates.target")} <span className="font-mono text-blue-600">{selectedTarget?.slice(0, 8)}...</span>
             </span>
-            <span className="text-sm text-gray-500 dark:text-gray-400 ml-4">
+            <span className="ml-4 text-sm text-[#57606a] dark:text-[#8b949e]">
               {t("duplicates.source_selected").replace("{count}", String(selectedSources.size))}
             </span>
           </div>
           <div className="flex gap-3">
             <button
               onClick={() => { setSelectedSources(new Set()); setSelectedTarget(null); }}
-              className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:text-gray-300"
+              className="btn-ghost"
             >
               {t("duplicates.cancel")}
             </button>
             <button
               onClick={() => setConfirmMerge(true)}
-              className="px-4 py-2 text-sm bg-red-600 text-white rounded hover:bg-red-700"
+              className="btn-danger"
             >
               {t("duplicates.merge_btn").replace("{count}", String(selectedSources.size))}
             </button>

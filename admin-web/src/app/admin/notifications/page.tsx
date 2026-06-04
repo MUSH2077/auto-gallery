@@ -11,13 +11,13 @@ function BatchJobCard({ job, t }: { job: BatchJobState; t: (k: string) => string
   const statusBadge = () => {
     switch (job.status) {
       case "running":
-        return <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse">{t("notification.running")}</span>;
+        return <span className="badge border-[#ddf4ff] bg-[#ddf4ff] text-[#0969da] dark:border-[#1f6feb]/30 dark:bg-[#1f6feb]/15 dark:text-[#58a6ff] animate-pulse">{t("notification.running")}</span>;
       case "completed":
-        return <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">{t("notification.completed")}</span>;
+        return <span className="badge border-[#dafbe1] bg-[#dafbe1] text-[#1a7f37] dark:border-[#238636]/30 dark:bg-[#238636]/15 dark:text-[#56d364]">{t("notification.completed")}</span>;
       case "error":
-        return <span className="px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">{t("notification.error")}</span>;
+        return <span className="badge border-[#ffebe9] bg-[#ffebe9] text-[#cf222e] dark:border-[#da3633]/30 dark:bg-[#da3633]/15 dark:text-[#ff7b72]">{t("notification.error")}</span>;
       default:
-        return <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400">{job.status}</span>;
+        return <span className="badge">{job.status}</span>;
     }
   };
 
@@ -33,14 +33,14 @@ function BatchJobCard({ job, t }: { job: BatchJobState; t: (k: string) => string
             </h3>
             {statusBadge()}
           </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400">{timeStr}</p>
+          <p className="text-xs text-[#57606a] dark:text-[#8b949e]">{timeStr}</p>
           {job.progress && (
             <div className="mt-3">
-              <div className="flex justify-between text-xs text-slate-500 mb-1">
+              <div className="mb-1 flex justify-between text-xs text-[#57606a] dark:text-[#8b949e]">
                 <span>{job.progress.current}/{job.progress.total}</span>
                 <span>{job.progress.imported} imported</span>
               </div>
-              <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2">
+              <div className="h-2 w-full rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
                 <div className="bg-blue-500 h-2 rounded-full transition-all duration-500"
                   style={{ width: `${(job.progress.current / job.progress.total) * 100}%` }} />
               </div>
@@ -60,21 +60,21 @@ function BatchJobCard({ job, t }: { job: BatchJobState; t: (k: string) => string
                 <div className="text-lg font-bold text-red-700 dark:text-red-400">{job.result.not_found_count || job.result.not_found?.length || 0}</div>
                 <div className="text-[10px] text-red-600">{t("danbooru.batch_result_not_found")}</div>
               </div>
-              <div className="bg-gray-50 dark:bg-slate-800/50 rounded p-2 text-center">
-                <div className="text-lg font-bold text-gray-700 dark:text-gray-400">{job.result.error_count || job.result.errors?.length || 0}</div>
-                <div className="text-[10px] text-gray-500">{t("danbooru.batch_result_errors")}</div>
+              <div className="rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-2 text-center dark:border-[#30363d] dark:bg-[#0d1117]">
+                <div className="text-lg font-bold text-[#57606a] dark:text-[#8b949e]">{job.result.error_count || job.result.errors?.length || 0}</div>
+                <div className="text-[10px] text-[#57606a] dark:text-[#8b949e]">{t("danbooru.batch_result_errors")}</div>
               </div>
             </div>
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
           <button onClick={() => router.push("/admin/reference/danbooru")}
-            className="px-3 py-1 text-xs rounded bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">
+            className="btn-ghost px-3 py-1 text-xs">
             {t("common.view")}
           </button>
           {job.status !== "running" && (
             <button onClick={() => clearBatchJob()}
-              className="px-3 py-1 text-xs rounded text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">
+              className="btn-danger px-3 py-1 text-xs">
               {t("common.close")}
             </button>
           )}
@@ -108,14 +108,14 @@ export default function NotificationsPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <h3 className="text-sm font-semibold dark:text-white">{a.title}</h3>
-                    {a.status === "running" && <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse">{t("notification.running")}</span>}
-                    {a.status === "completed" && <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">{t("notification.completed")}</span>}
-                    {a.status === "error" && <span className="px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">{t("notification.error")}</span>}
+                    {a.status === "running" && <span className="badge border-[#ddf4ff] bg-[#ddf4ff] text-[#0969da] dark:border-[#1f6feb]/30 dark:bg-[#1f6feb]/15 dark:text-[#58a6ff] animate-pulse">{t("notification.running")}</span>}
+                    {a.status === "completed" && <span className="badge border-[#dafbe1] bg-[#dafbe1] text-[#1a7f37] dark:border-[#238636]/30 dark:bg-[#238636]/15 dark:text-[#56d364]">{t("notification.completed")}</span>}
+                    {a.status === "error" && <span className="badge border-[#ffebe9] bg-[#ffebe9] text-[#cf222e] dark:border-[#da3633]/30 dark:bg-[#da3633]/15 dark:text-[#ff7b72]">{t("notification.error")}</span>}
                   </div>
-                  {a.message && <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{a.message}</p>}
-                  <p className="text-[10px] text-slate-400 mt-1">{new Date(a.timestamp).toLocaleString()}</p>
+                  {a.message && <p className="mt-0.5 text-xs text-[#57606a] dark:text-[#8b949e]">{a.message}</p>}
+                  <p className="mt-1 text-[10px] text-[#57606a] dark:text-[#8b949e]">{new Date(a.timestamp).toLocaleString()}</p>
                   {a.status === "running" && a.progress !== undefined && (
-                    <div className="mt-2 w-full bg-slate-200 dark:bg-slate-700 rounded-full h-1.5">
+                    <div className="mt-2 h-1.5 w-full rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
                       <div className="bg-blue-500 h-1.5 rounded-full transition-all duration-500" style={{ width: `${a.progress}%` }} />
                     </div>
                   )}
@@ -123,12 +123,12 @@ export default function NotificationsPage() {
                 <div className="flex items-center gap-1 shrink-0">
                   {a.link && (
                     <button onClick={() => router.push(a.link!)}
-                      className="px-3 py-1 text-xs rounded bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">
+                      className="btn-ghost px-3 py-1 text-xs">
                       {t("common.view")}
                     </button>
                   )}
                   <button onClick={() => removeActivity(a.id)}
-                    className="px-3 py-1 text-xs rounded text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">
+                    className="btn-danger px-3 py-1 text-xs">
                     {t("common.close")}
                   </button>
                 </div>
@@ -138,7 +138,7 @@ export default function NotificationsPage() {
           {items.length > 0 && (
             <div className="flex justify-end pt-2">
               <button onClick={clearRecent}
-                className="px-4 py-1.5 text-xs rounded bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors text-slate-600 dark:text-slate-400">
+                className="btn-ghost px-4 py-1.5 text-xs">
                 {t("notification.clear_all")}
               </button>
             </div>
