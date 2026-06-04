@@ -577,12 +577,12 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
 
     targets = [
         {"name": "Pixiv", "url": "https://www.pixiv.net"},
-        {"name": "Pixiv API", "url": "https://app-api.pixiv.net"},
         {"name": "Danbooru", "url": "https://danbooru.donmai.us"},
         {"name": "Danbooru API", "url": "https://danbooru.donmai.us/artists.json?limit=1"},
         {"name": "Iwara", "url": "https://www.iwara.tv"},
-        {"name": "Iwara API", "url": "https://api.iwara.tv"},
         {"name": "Twitter/X", "url": "https://x.com"},
+        {"name": "Pinterest", "url": "https://www.pinterest.com"},
+        {"name": "LOFTER", "url": "https://www.lofter.com"},
         {"name": "GitHub", "url": "https://github.com"},
         {"name": "Google", "url": "https://www.google.com"},
     ]
