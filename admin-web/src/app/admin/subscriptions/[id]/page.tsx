@@ -4,8 +4,8 @@ import { useState } from "react";
 import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys, SubscriptionSource as SS, ProviderInfo } from "@/lib/api";
-import { PageHeader, StatusBadge, SourceBadge, Modal, ConfirmDialog, ErrorState, EmptyState } from "@/components";
+import { api, CreatorRepository, queryKeys, SubscriptionSource as SS, ProviderInfo } from "@/lib/api";
+import { PageHeader, StatusBadge, Modal, ConfirmDialog, ErrorState, EmptyState, RepositoryCard } from "@/components";
 
 function AddSourceForm({ subId, onClose }: { subId: string; onClose: () => void }) {
   const [source, setSource] = useState("pixiv"); const [sourceUrl, setSourceUrl] = useState(""); const [sourceCreatorId, setSourceCreatorId] = useState("");
@@ -71,6 +71,7 @@ export default function SubscriptionDetailPage() {
 
   const sub = useQuery({ queryKey: queryKeys.subscriptions.detail(id), queryFn: () => api.getSubscription(id) });
   const sources = useQuery({ queryKey: queryKeys.subscriptions.sources(id), queryFn: () => api.listSubscriptionSources(id) });
+  const providerInfos = useQuery({ queryKey: queryKeys.sources, queryFn: api.sources });
   const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
   const [showAddSource, setShowAddSource] = useState(false);
   const [editing, setEditing] = useState(false); const [editName, setEditName] = useState("");
@@ -112,19 +113,42 @@ export default function SubscriptionDetailPage() {
   if (sub.error) return <main className="max-w-4xl mx-auto p-6"><ErrorState message={(sub.error as Error).message} onRetry={() => sub.refetch()} /></main>;
   if (!sub.data) return null;
   const s = sub.data;
+  const providerMap = new Map((providerInfos.data?.sources || []).map((p: ProviderInfo) => [p.source_name, p]));
+  const toRepo = (ss: SS): CreatorRepository => {
+    const provider = providerMap.get(ss.source);
+    return {
+      id: ss.id,
+      subscription_id: ss.subscription_id,
+      source: ss.source,
+      source_display_name: provider?.display_name || ss.source,
+      source_creator_id: ss.source_creator_id,
+      source_url: ss.source_url,
+      is_enabled: ss.is_enabled,
+      auth_healthy: ss.auth_healthy,
+      last_successful_auth: ss.last_successful_auth,
+      last_synced_at: ss.last_synced_at,
+      can_download: !!provider?.capabilities.can_download,
+      supports_gallerydl: !!provider?.capabilities.supports_gallerydl,
+      url_valid: !!ss.source_url,
+      is_repository: !!provider?.capabilities.can_download && !!ss.source_url,
+      latest_job: null,
+      created_at: ss.created_at,
+      updated_at: ss.updated_at,
+    };
+  };
 
   return (
-    <main className="max-w-4xl mx-auto p-6">
-      <Link href="/admin/subscriptions" className="text-sm text-blue-600 hover:underline inline-flex items-center gap-1">&larr; 返回</Link>
+    <main className="max-w-5xl mx-auto p-6">
+      <Link href="/admin/subscriptions" className="inline-flex items-center gap-1 text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">&larr; 返回</Link>
       <PageHeader title={s.name || (s.creator_display_name || s.creator_name || getCreatorName(s.creator_id))} description={s.creator_display_name || s.creator_name ? `${t("subscription_detail.creator")} ${s.creator_display_name || s.creator_name}` : undefined}>
         <div className="flex gap-2">
-          <button onClick={() => { setEditName(s.name || ""); setEditMode(s.schedule_mode || ""); setEditInterval(s.sync_interval_hours || 24); setEditTimes(s.scheduled_times || ""); setEditing(true); }} className="px-3 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">{t("subscription_detail.edit")}</button>
+          <button onClick={() => { setEditName(s.name || ""); setEditMode(s.schedule_mode || ""); setEditInterval(s.sync_interval_hours || 24); setEditTimes(s.scheduled_times || ""); setEditing(true); }} className="btn-primary">{t("subscription_detail.edit")}</button>
         </div>
       </PageHeader>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div className="col-span-2">
-          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 mb-4">
+          <div className="card p-4 mb-4">
             <h3 className="font-medium mb-3">{t("subscription_detail.details")}</h3>
             <dl className="text-sm space-y-2">
               <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-28">{t("subscription_detail.creator")}</dt><dd className="cursor-pointer text-blue-600 hover:underline" onClick={() => router.push(`/admin/creators/${s.creator_id}`)}>{s.creator_display_name || s.creator_name || getCreatorName(s.creator_id)}</dd></div>
@@ -146,40 +170,20 @@ export default function SubscriptionDetailPage() {
             </dl>
           </div>
 
-          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+          <div className="card p-4">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-medium">{t("subscription_detail.sources_title").replace("{count}", String(sources.data?.length || 0))}</h3>
-              <button onClick={() => setShowAddSource(true)} className="text-xs px-3 py-1 bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">{t("subscription_detail.add_source")}</button>
+              <button onClick={() => setShowAddSource(true)} className="btn-primary">{t("subscription_detail.add_source")}</button>
             </div>
             {sources.data && sources.data.length > 0 ? (
               <div className="space-y-2">
                 {sources.data.map((ss: SS) => (
-                  <div key={ss.id} className="border rounded-lg p-3 text-sm">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <SourceBadge source={ss.source} />
-                        <span className="font-medium">{ss.source_creator_id || ss.source_url?.split("/").pop() || "—"}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button onClick={() => setToggleId(ss.id)}
-                          className={`text-xs px-2 py-0.5 rounded ${ss.is_enabled ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
-                          {ss.is_enabled ? t("subscription_detail.sync_enabled") : t("subscription_detail.sync_disabled")}
-                        </button>
-                        <button onClick={() => startSync.mutate(ss.id)} disabled={startSync.isPending}
-                          className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 disabled:opacity-50">
-                          {startSync.isPending ? t("subscription_detail.syncing") : t("subscription_detail.sync_now")}
-                        </button>
-                        <button onClick={() => setDeleteSsId(ss.id)} className="text-xs text-red-500 hover:text-red-700 dark:text-red-400">{t("subscription_detail.remove_source")}</button>
-                      </div>
-                    </div>
-                    <div className="text-xs text-gray-500 dark:text-gray-400 space-y-1">
-                      {ss.source_url && <div>{t("subscription_detail.source_url")} <span className="text-blue-600">{ss.source_url}</span></div>}
-                      <div className="flex gap-4">
-                        <span>{t("subscription_detail.auth_healthy")} <StatusBadge status={ss.auth_healthy ? "up" : "down"} /></span>
-                        {ss.last_successful_auth && <span>{t("subscription_detail.last_auth")} {new Date(ss.last_successful_auth).toLocaleDateString()}</span>}
-                      </div>
-                    </div>
-                  </div>
+                  <RepositoryCard key={ss.id} repo={toRepo(ss)}
+                    onSync={() => startSync.mutate(ss.id)}
+                    onToggle={() => setToggleId(ss.id)}
+                    onDelete={() => setDeleteSsId(ss.id)}
+                    syncPending={startSync.isPending}
+                    togglePending={toggleSource.isPending} />
                 ))}
               </div>
             ) : (
@@ -189,9 +193,14 @@ export default function SubscriptionDetailPage() {
           </div>
         </div>
 
-        <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 h-fit text-sm">
-          <h4 className="font-medium text-blue-800 dark:text-blue-300 mb-2">{t("subscription_detail.multi_source_title")}</h4>
-          <p className="text-blue-700">{t("subscription_detail.multi_source_desc")}</p>
+        <div className="card h-fit p-4 text-sm">
+          <h4 className="font-medium mb-2">{t("subscription_detail.multi_source_title")}</h4>
+          <p className="text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.multi_source_desc")}</p>
+          <div className="mt-4 space-y-2 border-t border-[#d8dee4] pt-4 text-xs dark:border-[#30363d]">
+            <div className="flex justify-between"><span>Repositories</span><span className="font-semibold">{sources.data?.length || 0}</span></div>
+            <div className="flex justify-between"><span>Enabled</span><span className="font-semibold">{sources.data?.filter((x) => x.is_enabled).length || 0}</span></div>
+            <div className="flex justify-between"><span>Last sync</span><span className="font-semibold">{s.last_synced_at ? new Date(s.last_synced_at).toLocaleDateString() : t("subscription_detail.never_synced")}</span></div>
+          </div>
         </div>
       </div>
 

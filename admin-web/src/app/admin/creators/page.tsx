@@ -9,6 +9,12 @@ import { useToast } from "@/components/Toast";
 
 type FilterMode = "all" | "active" | "inactive" | "has_danbooru" | "has_subscription" | "no_subscription" | "favorites";
 
+function fmtLastSync(value?: string) {
+  if (!value) return "never synced";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? "sync unknown" : `last sync ${d.toLocaleDateString()}`;
+}
+
 function CreateForm({ isPending, error, onSubmit, onClose }: {
   isPending: boolean; error: Error | null;
   onSubmit: (data: { name: string; display_name?: string; description?: string }) => void;
@@ -186,29 +192,35 @@ function CreatorsContent() {
     <main className="max-w-6xl mx-auto p-6">
       <PageHeader title={t("creators.title")} description={t("creators.count", "0 creators").replace("{count}", String(creatorCount.data?.count ?? 0))}>
         <div className="flex gap-2">
-          <button onClick={() => router.push("/admin/creators/duplicates")} className="px-4 py-2 border rounded text-sm hover:bg-gray-50 dark:hover:bg-slate-700 dark:text-gray-300 dark:border-slate-600">{t("creators.duplicates")}</button>
-          <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600">{t("creators.new")}</button>
+          <button onClick={() => router.push("/admin/creators/duplicates")} className="btn-ghost">{t("creators.duplicates")}</button>
+          <button onClick={() => setShowCreate(true)} className="btn-primary">{t("creators.new")}</button>
         </div>
       </PageHeader>
 
       {/* Toolbar */}
       <div className="flex items-center gap-3 mb-4 flex-wrap">
-        <input value={inputVal} onChange={(e) => handleSearchChange(e.target.value)} placeholder={t("creators.search")} className="border rounded px-3 py-2 text-sm w-48 dark:bg-slate-700 dark:text-white dark:border-slate-600" />
-        <div className="flex gap-1 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
+        <input value={inputVal} onChange={(e) => handleSearchChange(e.target.value)} placeholder={t("creators.search")} className="w-56 rounded-md border border-[#d8dee4] px-3 py-1.5 text-sm dark:border-[#30363d] dark:bg-[#0d1117] dark:text-white" />
+        <div className="flex gap-1 rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-0.5 dark:border-[#30363d] dark:bg-[#161b22]">
           {FILTERS.map((f) => (
             <button key={f.key} onClick={() => handleFilterChange(f.key)}
-              className={`px-3 py-1 text-xs rounded transition-colors ${filter === f.key ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
+              className={`rounded px-3 py-1 text-xs transition-colors ${filter === f.key ? "bg-white font-medium shadow-sm dark:bg-[#30363d]" : "text-[#57606a] hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3]"}`}>
               {f.label}
             </button>
           ))}
         </div>
         <div className="flex-1" />
-        {selected.size > 0 && (
-          <button onClick={() => setConfirmBatchDel(true)} className="px-3 py-1.5 text-xs bg-red-600 text-white rounded hover:bg-red-700">
+      </div>
+
+      {selected.size > 0 && (
+        <div className="sticky top-2 z-20 mb-4 flex items-center gap-3 rounded-md border border-[#d8dee4] bg-white px-4 py-2 shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
+          <span className="text-sm font-medium">{selected.size} selected</span>
+          <button onClick={() => setSelected(new Set())} className="btn-ghost">Clear</button>
+          <span className="flex-1" />
+          <button onClick={() => setConfirmBatchDel(true)} className="rounded-md border border-[#cf222e]/40 px-3 py-1.5 text-sm font-medium text-[#cf222e] hover:bg-[#ffebe9] dark:text-[#f85149] dark:hover:bg-[#f8514926]">
             {t("creators.delete_selected").replace("{count}", String(selected.size))}
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Select all */}
       {creators.data && creators.data.length > 0 && (
@@ -230,27 +242,35 @@ function CreatorsContent() {
       )}
 
       {creators.data && creators.data.length > 0 && (
-        <div className="space-y-1">
+        <div className="overflow-hidden rounded-md border border-[#d8dee4] bg-white dark:border-[#30363d] dark:bg-[#161b22]">
           {creators.data.map((c) => (
-            <div key={c.id} className={`bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 flex items-center gap-3 cursor-pointer hover:shadow-md transition-colors ${selected.has(c.id) ? "ring-2 ring-blue-500" : ""}`} onClick={() => router.push(`/admin/creators/${c.id}`)}>
+            <div key={c.id} className={`flex cursor-pointer items-center gap-3 border-b border-[#d8dee4] p-4 last:border-b-0 hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d] ${selected.has(c.id) ? "bg-[#ddf4ff] dark:bg-[#1f6feb26]" : ""}`} onClick={() => router.push(`/admin/creators/${c.id}`)}>
               <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggleSelect(c.id)} className="rounded shrink-0" onClick={(e) => e.stopPropagation()} />
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#d8dee4] bg-[#0969da] text-sm font-semibold text-white dark:border-[#30363d]">
+                {(c.display_name || c.name).slice(0, 2).toUpperCase()}
+              </div>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-sm truncate">{c.display_name || c.name}</span>
-                  {c.display_name && <span className="text-xs text-gray-400 dark:text-gray-500 truncate">{c.name}</span>}
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="truncate text-sm font-semibold text-[#0969da] dark:text-[#58a6ff]">{c.display_name || c.name}</span>
+                  {c.display_name && <span className="truncate font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{c.name}</span>}
                   {c.is_active ? <span className="w-1.5 h-1.5 bg-green-500 rounded-full shrink-0" /> : <span className="w-1.5 h-1.5 bg-gray-300 rounded-full shrink-0" />}
                 </div>
-                {c.description && <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-1">{c.description}</p>}
+                {c.description && <p className="mt-1 line-clamp-1 text-xs text-[#57606a] dark:text-[#8b949e]">{c.description}</p>}
+                <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-[#57606a] dark:text-[#8b949e]">
+                  <span>{c.repository_count ?? 0} repositories</span>
+                  <span>{c.source_count ?? 0} sources</span>
+                  <span>{fmtLastSync(c.last_synced_at)}</span>
+                </div>
               </div>
               <div className="flex items-center gap-2 shrink-0 text-xs" onClick={(e) => e.stopPropagation()}>
-                {(c as any).danbooru_artist_id && <span className="px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 rounded font-mono text-[10px]">D#{String((c as any).danbooru_artist_id)}</span>}
-                {(c as any).has_subscription && <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded text-[10px]">{t("creators.sub_badge")}</span>}
+                {(c as any).danbooru_artist_id && <span className="rounded-full bg-purple-100 px-2 py-0.5 font-mono text-[10px] text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">D#{String((c as any).danbooru_artist_id)}</span>}
+                {(c.subscription_count ?? 0) > 0 && <span className="rounded-full bg-[#dafbe1] px-2 py-0.5 text-[10px] text-[#1a7f37] dark:bg-[#2ea04326] dark:text-[#3fb950]">{t("creators.sub_badge")}</span>}
                 <button onClick={(e) => { e.stopPropagation(); toggleFavorite.mutate(c.id); }}
                   className={`text-lg ${c.is_favorite ? "text-yellow-500" : "text-gray-300 dark:text-gray-600 hover:text-yellow-400"}`}
                   title={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}>
                   {c.is_favorite ? "★" : "☆"}
                 </button>
-                <button onClick={(e) => { e.stopPropagation(); setDeleteId(c.id); }} className="text-red-500 hover:text-red-700 dark:text-red-400">{t("creators.del")}</button>
+                <button onClick={(e) => { e.stopPropagation(); setDeleteId(c.id); }} className="text-[#cf222e] hover:underline dark:text-[#f85149]">{t("creators.del")}</button>
               </div>
             </div>
           ))}

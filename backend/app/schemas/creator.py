@@ -34,6 +34,10 @@ class CreatorRead(BaseModel):
     is_active: bool
     danbooru_artist_id: int | None = None
     is_favorite: bool
+    subscription_count: int | None = None
+    source_count: int | None = None
+    repository_count: int | None = None
+    last_synced_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

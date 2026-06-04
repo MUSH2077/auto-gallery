@@ -7,27 +7,39 @@
 
 @layer base {
   :root {
-    --amber-50: #fdf8f0;
-    --amber-100: #f7edd9;
-    --amber-200: #eed9ad;
-    --amber-300: #e2c07d;
-    --amber-400: #d4a24d;
-    --amber-500: #c4944a;
-    --amber-600: #a87838;
-    --amber-700: #8c5e2c;
-    --amber-800: #734d25;
-    --amber-900: #5c3d1e;
+    --ag-bg: #f6f8fa;
+    --ag-surface: #ffffff;
+    --ag-subtle: #f6f8fa;
+    --ag-border: #d8dee4;
+    --ag-muted: #57606a;
+    --ag-text: #24292f;
+    --ag-accent: #0969da;
+    --ag-success: #1a7f37;
+    --ag-danger: #cf222e;
+  }
+  html.dark {
+    --ag-bg: #0d1117;
+    --ag-surface: #161b22;
+    --ag-subtle: #21262d;
+    --ag-border: #30363d;
+    --ag-muted: #8b949e;
+    --ag-text: #e6edf3;
+    --ag-accent: #58a6ff;
+    --ag-success: #3fb950;
+    --ag-danger: #f85149;
   }
   html { @apply transition-colors duration-300; }
   html.dark body {
-    background: linear-gradient(135deg, #1a1410 0%, #0f0c09 50%, #1a1410 100%);
-    @apply text-stone-200 antialiased min-h-screen;
+    background: var(--ag-bg);
+    color: var(--ag-text);
+    @apply antialiased min-h-screen;
   }
   body {
-    background: linear-gradient(135deg, #fdf8f0 0%, #f5f0e8 50%, #fdf8f0 100%);
-    @apply text-stone-800 antialiased min-h-screen;
+    background: var(--ag-bg);
+    color: var(--ag-text);
+    @apply antialiased min-h-screen;
   }
-  h1, h2, h3 { font-family: 'Playfair Display', Georgia, serif; }
+  h1, h2, h3 { font-family: inherit; }
   code, pre, .font-mono { font-family: 'JetBrains Mono', monospace; }
 }
 
@@ -135,40 +147,38 @@
 
 @layer components {
   .card {
-    @apply bg-white/80 dark:bg-stone-900/60 backdrop-blur-sm
-           border border-stone-200/60 dark:border-stone-700/40
-           rounded-xl shadow-sm;
+    @apply bg-white dark:bg-[#161b22]
+           border border-[#d8dee4] dark:border-[#30363d]
+           rounded-md shadow-sm;
   }
   .card-elevated {
-    @apply card shadow-md dark:shadow-none
-           dark:ring-1 dark:ring-amber-700/10;
+    @apply card shadow-sm dark:shadow-none;
   }
   .card-interactive {
     transition-property: transform, box-shadow, border-color;
     transition-duration: 200ms;
     transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
     @apply card
-           hover:shadow-lg hover:-translate-y-0.5
-           dark:hover:ring-amber-600/20;
+           hover:border-[#0969da] dark:hover:border-[#58a6ff];
   }
   .btn-primary {
     transition-property: transform, background-color, box-shadow, opacity;
     transition-duration: 150ms;
     transition-timing-function: ease-out;
-    @apply px-5 py-2.5 rounded-lg text-sm font-medium bg-amber-600 hover:bg-amber-700 text-white dark:bg-amber-700 dark:hover:bg-amber-600 shadow-sm hover:shadow-md disabled:opacity-40 disabled:cursor-not-allowed;
+    @apply px-3 py-1.5 rounded-md text-sm font-medium bg-[#1f883d] hover:bg-[#1a7f37] text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed;
   }
   .btn-ghost {
-    @apply px-4 py-2 rounded-lg text-sm
-           border border-stone-300 dark:border-stone-600
-           text-stone-700 dark:text-stone-300
-           hover:bg-stone-100 dark:hover:bg-stone-800 transition-all duration-200;
+    @apply px-3 py-1.5 rounded-md text-sm
+           border border-[#d8dee4] dark:border-[#30363d]
+           text-[#24292f] dark:text-[#e6edf3]
+           hover:bg-[#f6f8fa] dark:hover:bg-[#21262d] transition-colors duration-150;
   }
   .divider {
-    @apply border-t border-stone-200/60 dark:border-stone-700/40;
+    @apply border-t border-[#d8dee4] dark:border-[#30363d];
   }
   .section-title {
-    @apply text-2xl font-bold tracking-tight;
-    font-family: 'Playfair Display', Georgia, serif;
+    @apply text-base font-semibold tracking-normal;
+    font-family: inherit;
   }
   .page-transition {
     animation: fadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);

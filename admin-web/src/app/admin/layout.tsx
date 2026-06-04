@@ -28,7 +28,7 @@ function UserMenu() {
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 px-2 py-1 rounded hover:bg-white/10 transition-colors text-sm"
+        className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-[#21262d] transition-colors text-sm"
         title={user?.display_name || user?.username}
       >
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -38,11 +38,11 @@ function UserMenu() {
         <span className="hidden sm:inline max-w-[100px] truncate">{user?.display_name || user?.username}</span>
       </button>
       {open && (
-        <div className="absolute right-0 mt-1 w-44 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded shadow-lg z-50 text-slate-800 dark:text-slate-100 text-sm overflow-hidden">
+        <div className="absolute right-0 mt-1 w-44 bg-white dark:bg-[#161b22] border border-[#d8dee4] dark:border-[#30363d] rounded-md shadow-lg z-50 text-[#24292f] dark:text-[#e6edf3] text-sm overflow-hidden">
           <Link
             href="/admin/settings/profile"
             onClick={() => setOpen(false)}
-            className="flex items-center gap-2 px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+            className="flex items-center gap-2 px-3 py-2 hover:bg-[#f6f8fa] dark:hover:bg-[#21262d] transition-colors"
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
@@ -51,7 +51,7 @@ function UserMenu() {
           </Link>
           <button
             onClick={() => { setOpen(false); logout(); }}
-            className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-left text-red-500 dark:text-red-400"
+            className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[#f6f8fa] dark:hover:bg-[#21262d] transition-colors text-left text-[#cf222e] dark:text-[#f85149]"
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" />
@@ -84,18 +84,18 @@ function AdminNav() {
   ];
 
   return (
-    <nav className="bg-slate-900 text-white px-4 sm:px-6 py-3">
+    <nav className="bg-[#24292f] dark:bg-[#010409] text-white px-4 sm:px-6 py-3 border-b border-[#57606a]/30 dark:border-[#30363d]">
       <div className="flex items-center gap-4 text-sm">
-        <Link href="/admin" className="font-bold text-base shrink-0">auto-gallery</Link>
+        <Link href="/admin" className="font-semibold text-base shrink-0 tracking-tight">auto-gallery</Link>
         {/* Desktop links */}
         <div className="hidden md:flex items-center gap-3 flex-1 flex-wrap">
           {links.map(([href, label]) => (
             <Link key={href} href={href}
-                className={`hover:text-gray-300 transition-colors ${pathname === href || (href !== "/admin" && pathname.startsWith(href)) ? "text-white font-medium border-b-2 border-blue-400 pb-0.5" : "text-gray-300"}`}>{label}</Link>
+                className={`rounded-md px-2 py-1 transition-colors ${pathname === href || (href !== "/admin" && pathname.startsWith(href)) ? "bg-white/10 text-white font-medium" : "text-gray-300 hover:bg-white/10 hover:text-white"}`}>{label}</Link>
           ))}
         </div>
         <div className="flex items-center gap-1 shrink-0 ml-auto">
-          <Link href="/admin/search" className="p-1.5 rounded hover:bg-white/10 transition-colors" title={t("nav.search")} aria-label={t("nav.search")}>
+          <Link href="/admin/search" className="p-1.5 rounded-md hover:bg-white/10 transition-colors" title={t("nav.search")} aria-label={t("nav.search")}>
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="11" cy="11" r="8" />
               <path d="M21 21l-4.3-4.3" />
@@ -106,7 +106,7 @@ function AdminNav() {
           <ThemeToggle />
           <UserMenu />
           {/* Hamburger — mobile only */}
-          <button onClick={() => setOpen(!open)} className="md:hidden p-1.5 rounded hover:bg-white/10" aria-label="Toggle navigation menu">
+          <button onClick={() => setOpen(!open)} className="md:hidden p-1.5 rounded-md hover:bg-white/10" aria-label="Toggle navigation menu">
             <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               {open ? <path d="M18 6L6 18M6 6l12 12" /> : <path d="M4 6h16M4 12h16M4 18h16" />}
             </svg>
@@ -115,13 +115,13 @@ function AdminNav() {
       </div>
       {/* Mobile menu */}
       {open && (
-        <div className="md:hidden mt-3 pt-3 border-t border-slate-700 flex flex-col gap-2 pb-1">
+        <div className="md:hidden mt-3 pt-3 border-t border-[#57606a]/40 flex flex-col gap-1 pb-1">
           {links.map(([href, label]) => (
             <Link key={href} href={href} onClick={() => setOpen(false)}
-              className="hover:text-gray-300 transition-colors px-1 py-1 text-sm">{label}</Link>
+              className="hover:bg-white/10 hover:text-white rounded-md transition-colors px-2 py-1 text-sm">{label}</Link>
           ))}
           <Link href="/admin/search" onClick={() => setOpen(false)}
-            className="hover:text-gray-300 transition-colors px-1 py-1 text-sm">{t("nav.search")}</Link>
+            className="hover:bg-white/10 hover:text-white rounded-md transition-colors px-2 py-1 text-sm">{t("nav.search")}</Link>
         </div>
       )}
     </nav>
