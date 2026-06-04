@@ -217,6 +217,7 @@ const zh: Record<string, string> = {
   "creator_detail.tag_distribution": "标签统计",
   "creator_detail.posting_frequency": "发布频率",
   "creator_detail.source_accounts": "源账户",
+  "creator_detail.view_subscription": "查看订阅",
 
   // Creators - Mapping
   "mapping.title": "映射：{name}",
@@ -1452,6 +1453,7 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "creator_detail.tag_distribution": "Tag Distribution",
     "creator_detail.posting_frequency": "Posting Frequency",
     "creator_detail.source_accounts": "Source Accounts",
+    "creator_detail.view_subscription": "View Subscription",
 
     "mapping.title": "Mapping: {name}",
     "mapping.desc": "Manage multi-source identity mapping",
