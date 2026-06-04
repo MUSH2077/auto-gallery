@@ -7,13 +7,7 @@ import { StatusBadge, SourceBadge, Modal, WorkGrid } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 
-const SOURCE_COLORS: Record<string, string> = {
-  pixiv: "#0066FF", x: "#1DA1F2", twitter: "#1DA1F2", iwara: "#22C55E",
-  danbooru: "#A855F7", pinterest: "#E60023", lofter: "#F97316",
-  weibo: "#E6162D", bilibili: "#00A7D1", local: "#6B7280", manual: "#6B7280",
-};
-
-const CHART_COLORS = ["#0066FF", "#22C55E", "#A855F7", "#F97316", "#1DA1F2", "#E60023", "#E6162D", "#6B7280"];
+import { SOURCE_COLORS, CHART_COLORS } from "@/lib/sourceColors";
 
 function AnimatedNumber({ value }: { value: number }) {
   return (

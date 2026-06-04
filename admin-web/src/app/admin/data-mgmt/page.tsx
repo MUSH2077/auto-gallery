@@ -5,25 +5,9 @@ import { api } from "@/lib/api";
 import { PageHeader, ConfirmDialog } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useRouter } from "next/navigation";
+import { getSourceColor } from "@/lib/sourceColors";
 
 type Severity = "error" | "warning" | "info";
-
-const SOURCE_COLORS: Record<string, string> = {
-  pixiv: "#0066FF",
-  x: "#1DA1F2",
-  twitter: "#1DA1F2",
-  iwara: "#22C55E",
-  danbooru: "#A855F7",
-  pinterest: "#EF4444",
-  lofter: "#F59E0B",
-  weibo: "#E0245E",
-  local: "#6B7280",
-  manual: "#6B7280",
-};
-
-function getSourceColor(source: string): string {
-  return SOURCE_COLORS[source.toLowerCase()] || "#6B7280";
-}
 
 function formatSize(mb: number): string {
   if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;

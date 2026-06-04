@@ -14,14 +14,14 @@ function useGalleryTabs() {
   const t = useT();
   const toast = useToast();
   return [
-    { key: "pixiv" as TabKey, label: t("gallerydl.tab.pixiv"), color: "border-blue-500" },
-    { key: "twitter" as TabKey, label: t("gallerydl.tab.twitter"), color: "border-gray-700" },
-    { key: "iwara" as TabKey, label: t("gallerydl.tab.iwara"), color: "border-pink-500" },
-    { key: "danbooru" as TabKey, label: t("gallerydl.tab.danbooru"), color: "border-yellow-700" },
-    { key: "pinterest" as TabKey, label: t("gallerydl.tab.pinterest"), color: "border-red-500" },
-    { key: "lofter" as TabKey, label: t("gallerydl.tab.lofter"), color: "border-teal-500" },
-    { key: "weibo" as TabKey, label: t("gallerydl.tab.weibo"), color: "border-orange-500" },
-    { key: "bilibili" as TabKey, label: t("gallerydl.tab.bilibili"), color: "border-cyan-500" },
+    { key: "pixiv" as TabKey, label: t("gallerydl.tab.pixiv"), color: "border-[#0066FF]" },
+    { key: "twitter" as TabKey, label: t("gallerydl.tab.twitter"), color: "border-[#6B7280]" },
+    { key: "iwara" as TabKey, label: t("gallerydl.tab.iwara"), color: "border-[#EC4899]" },
+    { key: "danbooru" as TabKey, label: t("gallerydl.tab.danbooru"), color: "border-[#B45309]" },
+    { key: "pinterest" as TabKey, label: t("gallerydl.tab.pinterest"), color: "border-[#EF4444]" },
+    { key: "lofter" as TabKey, label: t("gallerydl.tab.lofter"), color: "border-[#14B8A6]" },
+    { key: "weibo" as TabKey, label: t("gallerydl.tab.weibo"), color: "border-[#F97316]" },
+    { key: "bilibili" as TabKey, label: t("gallerydl.tab.bilibili"), color: "border-[#06B6D4]" },
   ];
 }
 
