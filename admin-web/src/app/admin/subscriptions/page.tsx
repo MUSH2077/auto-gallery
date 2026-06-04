@@ -29,20 +29,20 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
     <div className="space-y-4">
       <div>
         <label className="block text-sm font-medium mb-1">{t("subscriptions.creator_label")}</label>
-        <select value={creatorId} onChange={(e) => setCreatorId(e.target.value)} className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white">
+        <select value={creatorId} onChange={(e) => setCreatorId(e.target.value)} className="select w-full">
           <option value="">{t("subscriptions.select_creator")}</option>
           {creators.data?.map((c) => <option key={c.id} value={c.id}>{c.display_name || c.name}</option>)}
         </select>
       </div>
-      <div><label className="block text-sm font-medium mb-1">{t("subscriptions.label_field")}</label><input value={name} onChange={(e) => setName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white" placeholder={t("subscriptions.label_placeholder")} /></div>
+      <div><label className="block text-sm font-medium mb-1">{t("subscriptions.label_field")}</label><input value={name} onChange={(e) => setName(e.target.value)} className="input w-full" placeholder={t("subscriptions.label_placeholder")} /></div>
       <div className="flex justify-end gap-3 pt-2">
-        <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:text-gray-300">{t("subscriptions.cancel")}</button>
+        <button onClick={onClose} className="btn-ghost">{t("subscriptions.cancel")}</button>
         <button onClick={() => onSubmit({ creator_id: creatorId, name: name || undefined })} disabled={!creatorId || isPending}
-          className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
+          className="btn-primary">
           {isPending ? t("subscriptions.creating") : t("subscriptions.subscribe")}
         </button>
       </div>
-      {error && <p className="text-red-600 text-sm">{error.message}</p>}
+      {error && <p className="text-sm text-[#cf222e] dark:text-[#f85149]">{error.message}</p>}
     </div>
   );
 }
@@ -173,12 +173,12 @@ function SubscriptionsContent() {
       </PageHeader>
 
       {/* Toolbar */}
-      <div className="flex items-center gap-3 mb-4 flex-wrap">
-        <input value={inputVal} onChange={(e) => { setInputVal(e.target.value); }} placeholder={t("subscriptions.search")} className="w-56 rounded-md border border-[#d8dee4] px-3 py-1.5 text-sm dark:border-[#30363d] dark:bg-[#0d1117] dark:text-white" />
-        <div className="flex gap-1 rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-0.5 dark:border-[#30363d] dark:bg-[#161b22]">
+      <div className="toolbar mb-4">
+        <input value={inputVal} onChange={(e) => { setInputVal(e.target.value); }} placeholder={t("subscriptions.search")} className="input w-56 py-1.5" />
+        <div className="segmented-control">
           {FILTERS.map((f) => (
             <button key={f.key} onClick={() => updateParams({ filter: f.key === "all" ? null : f.key })}
-              className={`rounded px-3 py-1 text-xs transition-colors ${filter === f.key ? "bg-white font-medium shadow-sm dark:bg-[#30363d]" : "text-[#57606a] hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3]"}`}>
+              className={`segment ${filter === f.key ? "segment-active" : ""}`}>
               {f.label}
             </button>
           ))}
@@ -190,7 +190,7 @@ function SubscriptionsContent() {
               className="btn-primary disabled:opacity-50">{t("subscriptions.enable_sync")}</button>
             <button onClick={() => batchSync.mutate({ ids: [...selected], enable: false })} disabled={batchSync.isPending}
               className="btn-ghost disabled:opacity-50">{t("subscriptions.disable_sync")}</button>
-            <button onClick={() => setConfirmBatchDel(true)} className="rounded-md border border-[#cf222e]/40 px-3 py-1.5 text-sm font-medium text-[#cf222e] hover:bg-[#ffebe9] dark:text-[#f85149] dark:hover:bg-[#f8514926]">
+            <button onClick={() => setConfirmBatchDel(true)} className="btn-danger">
               {t("subscriptions.delete_selected").replace("{count}", String(selected.size))}
             </button>
           </div>
@@ -199,16 +199,16 @@ function SubscriptionsContent() {
 
       {/* Select all */}
       {subs.data && subs.data.length > 0 && (
-        <label className="flex items-center gap-2 mb-2 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+        <label className="mb-2 flex cursor-pointer items-center gap-2 text-xs text-[#57606a] dark:text-[#8b949e]">
           <input type="checkbox" checked={selected.size === subs.data.length && subs.data.length > 0} onChange={selectAll} className="rounded" />
           {t("subscriptions.select_all")}
         </label>
       )}
 
       {/* Content */}
-      {subs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
+      {subs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-[#eaeef2] dark:bg-[#21262d] animate-pulse" />)}</div>}
       {subs.error && <ErrorState message={(subs.error as Error).message} />}
-      {subs.data && !subs.data.length && <EmptyState title={t("subscriptions.no_subs")} description={t("subscriptions.no_subs_desc")} action={<button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm">{t("subscriptions.create_sub")}</button>} />}
+      {subs.data && !subs.data.length && <EmptyState title={t("subscriptions.no_subs")} description={t("subscriptions.no_subs_desc")} action={<button onClick={() => setShowCreate(true)} className="btn-primary">{t("subscriptions.create_sub")}</button>} />}
 
       {subs.data && subs.data.length > 0 && (
         <div className="overflow-hidden rounded-md border border-[#d8dee4] bg-white dark:border-[#30363d] dark:bg-[#161b22]">
@@ -258,9 +258,9 @@ function SubscriptionsContent() {
       {/* Pagination */}
       {subs.data && subs.data.length > 0 && (
         <div className="flex gap-2 justify-center mt-4">
-          <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.prev")}</button>
-          <span className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400">{t("common.page").replace("{page}", String(page + 1))}</span>
-          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!subs.data || subs.data.length < limit} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.next")}</button>
+          <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)} className="btn-ghost disabled:opacity-30">{t("common.prev")}</button>
+          <span className="px-3 py-1 text-sm text-[#57606a] dark:text-[#8b949e]">{t("common.page").replace("{page}", String(page + 1))}</span>
+          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!subs.data || subs.data.length < limit} className="btn-ghost disabled:opacity-30">{t("common.next")}</button>
         </div>
       )}
 
