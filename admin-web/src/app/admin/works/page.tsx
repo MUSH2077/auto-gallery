@@ -125,6 +125,7 @@ function WorksContent() {
   const sortOrder = (sp.get("order") as "desc" | "asc") ?? "desc";
   const sourceFilter = sp.get("source") ?? "";
   const creatorFilter = sp.get("creator") ?? "";
+  const tagFilter = sp.get("tag") ?? "";
   const nsfwFilter = sp.get("nsfw") ?? "all";
   const isFavoriteFilter = sp.get("fav") === "1";
   const aiFilter = (sp.get("ai") as "all" | "human" | "ai") ?? "all";
@@ -164,16 +165,18 @@ function WorksContent() {
     search: search || undefined,
     source: sourceFilter || undefined,
     creator_id: creatorFilter || undefined,
+    tag: tagFilter || undefined,
     is_nsfw: nsfwFilter === "all" ? undefined : nsfwFilter === "nsfw",
     is_favorite: isFavoriteFilter || undefined,
     is_ai_generated: aiFilter === "all" ? undefined : aiFilter === "ai",
     sort_by: sortBy,
     sort_order: sortOrder,
-  }), [search, sourceFilter, creatorFilter, nsfwFilter, isFavoriteFilter, aiFilter, sortBy, sortOrder]);
+  }), [search, sourceFilter, creatorFilter, tagFilter, nsfwFilter, isFavoriteFilter, aiFilter, sortBy, sortOrder]);
 
   const useSearchPageLogic = !!search
     && !sourceFilter
     && !creatorFilter
+    && !tagFilter
     && nsfwFilter === "all"
     && !isFavoriteFilter
     && aiFilter === "all"
@@ -226,10 +229,20 @@ function WorksContent() {
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <input value={inputVal} onChange={(e) => setInputVal(e.target.value)}
           placeholder={t("works.search_title")} className="border rounded px-3 py-1.5 text-sm w-48 dark:bg-slate-700 dark:text-white dark:border-slate-600" />
-        {(sourceFilter || creatorFilter || nsfwFilter !== "all" || aiFilter !== "all" || isFavoriteFilter) && (
-          <button onClick={() => updateParams({ source: null, creator: null, nsfw: null, ai: null, fav: null })}
+        {(sourceFilter || creatorFilter || tagFilter || nsfwFilter !== "all" || aiFilter !== "all" || isFavoriteFilter) && (
+          <button onClick={() => updateParams({ source: null, creator: null, tag: null, nsfw: null, ai: null, fav: null })}
             className="px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded border border-red-200 dark:border-red-800 transition-colors"
             aria-label="Clear all filters">✕ Clear</button>
+        )}
+        {tagFilter && (
+          <button
+            onClick={() => updateParams({ tag: null })}
+            className="inline-flex max-w-[12rem] items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300"
+            title={`Clear tag filter: ${tagFilter}`}
+          >
+            <span className="truncate">#{tagFilter}</span>
+            <span aria-hidden="true">&times;</span>
+          </button>
         )}
 
         {/* Source filter — dropdown */}
@@ -335,7 +348,7 @@ function WorksContent() {
 
       {/* Empty */}
       {works.data && !works.data.items?.length && (
-        <EmptyState title={t("works.no_works")} description={search || sourceFilter || creatorFilter ? t("works.no_works_filter") : t("works.no_works_desc")} />
+        <EmptyState title={t("works.no_works")} description={search || sourceFilter || creatorFilter || tagFilter ? t("works.no_works_filter") : t("works.no_works_desc")} />
       )}
 
       {/* Grid View */}

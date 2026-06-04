@@ -3,7 +3,7 @@ from uuid import UUID
 from sqlalchemy import select, func, and_, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Work, WorkSource, Asset, AssetSource, SourceCreator
+from app.models import Work, WorkSource, Asset, AssetSource, SourceCreator, Tag, WorkTag
 
 
 class WorkRepository:
@@ -14,6 +14,7 @@ class WorkRepository:
                        search: str | None = None,
                        source: str | None = None,
                        creator_id: str | None = None,
+                       tag: str | None = None,
                        is_nsfw: bool | None = None,
                        is_favorite: bool | None = None,
                        is_ai_generated: bool | None = None,
@@ -107,6 +108,14 @@ class WorkRepository:
                     select(WorkSource.work_id)
                     .join(SourceCreator, SourceCreator.source_creator_id == WorkSource.source_creator_id)
                     .where(SourceCreator.creator_id == UUID(creator_id))
+                )
+            )
+        if tag:
+            conditions.append(
+                Work.id.in_(
+                    select(WorkTag.work_id)
+                    .join(Tag, Tag.id == WorkTag.tag_id)
+                    .where(Tag.normalized_name == tag)
                 )
             )
 
@@ -221,4 +230,3 @@ class WorkRepository:
             days[day]["total"] += cnt
             sources.add(source)
         return list(days.values()), sorted(sources)
-
