@@ -1059,6 +1059,8 @@ def _convert_to_netscape_cookies(raw: str, source: str) -> str:
         "iwara": ".iwara.tv",
         "pinterest": ".pinterest.com",
         "lofter": ".lofter.com",
+        "weibo": ".weibo.com",
+        "bilibili": ".bilibili.com",
     }
     domain = domain_map.get(source, f".{source}.com")
     far_future = "9999999999"
@@ -1145,10 +1147,23 @@ async def test_source_connection(data: dict):
     test_url = TEST_URLS[source]
     import json as _json, os, re as _re, subprocess, tempfile, shutil
 
-    config, _ = _load_config()
     tmpdir = tempfile.mkdtemp(prefix="gallerydl-test-")
     tmp_config = os.path.join(tmpdir, "test-config.json")
     try:
+        from app.providers import registry as _registry
+        from app.services.settings import (
+            build_effective_gallerydl_config,
+            source_key_for_extractor,
+        )
+
+        provider_source = source_key_for_extractor(source)
+        provider_config = {}
+        try:
+            provider = _registry.get(provider_source)
+            provider_config = provider.build_gallerydl_config(None, None)
+        except KeyError:
+            provider_config = {}
+        config = build_effective_gallerydl_config(provider_source, provider_config)
         with open(tmp_config, "w") as f:
             _json.dump(config, f)
 
@@ -1160,8 +1175,18 @@ async def test_source_connection(data: dict):
             test_url,
         ]
 
-        logger.info("Testing %s connectivity: %s", source, " ".join(cmd))
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        env = os.environ.copy()
+        proxy_enabled = False
+        try:
+            from app.services.proxy import _load_proxy_config, get_proxy_env
+            proxy_config = await _load_proxy_config()
+            proxy_enabled = bool(proxy_config.get("enabled", False))
+            env.update(get_proxy_env(proxy_config))
+        except Exception:
+            logger.warning("Failed to apply proxy env for gallery-dl test", exc_info=True)
+
+        logger.info("Testing %s connectivity: %s (proxy=%s)", source, " ".join(cmd), proxy_enabled)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
         stderr = result.stderr or ""
         stdout = result.stdout or ""
         combined = stdout + stderr

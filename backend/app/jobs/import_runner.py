@@ -15,6 +15,7 @@ from app.models.subscription import Subscription
 from app.models.import_job import ImportJob
 from app.models.download_job import DownloadJob
 from app.providers import registry
+from app.services.subscription_enqueue import mark_source_sync_success
 
 logger = logging.getLogger(__name__)
 
@@ -472,6 +473,8 @@ async def run_import_job(import_job_id: str):
                 dj = await db.get(DownloadJob, ij.download_job_id)
                 if dj:
                     dj.status = "complete"
+                    if dj.subscription_source_id:
+                        await mark_source_sync_success(db, dj.subscription_source_id)
                 await db.commit()
 
         logger.info("Import complete: %d works, %d assets, %d multi-page (batched)",

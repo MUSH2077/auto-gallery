@@ -124,6 +124,7 @@ export interface SubscriptionSource {
   last_successful_auth?: string;
   auth_healthy: boolean;
   last_synced_at?: string;
+  last_attempted_at?: string;
   created_at: string;
   updated_at: string;
 }
@@ -147,6 +148,7 @@ export interface CreatorRepository {
   auth_healthy: boolean;
   last_successful_auth?: string | null;
   last_synced_at?: string | null;
+  last_attempted_at?: string | null;
   can_download: boolean;
   supports_gallerydl: boolean;
   url_valid: boolean;
