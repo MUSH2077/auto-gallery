@@ -105,30 +105,32 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     updateProgress,
   };
 
-  const bgColors: Record<ToastType, string> = {
-    success: "bg-green-600", error: "bg-red-600", info: "bg-blue-600", warning: "bg-yellow-500",
+  const toneClasses: Record<ToastType, string> = {
+    success: "border-[#1a7f37]/30 bg-[#dafbe1] text-[#1a7f37] dark:border-[#3fb950]/30 dark:bg-[#2ea04326] dark:text-[#3fb950]",
+    error: "border-[#cf222e]/30 bg-[#ffebe9] text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]",
+    info: "border-[#0969da]/30 bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff]/30 dark:bg-[#1f6feb26] dark:text-[#58a6ff]",
+    warning: "border-[#bf8700]/30 bg-[#fff8c5] text-[#9a6700] dark:border-[#d29922]/30 dark:bg-[#bb800926] dark:text-[#d29922]",
   };
 
   const icons: Record<ToastType, string> = {
     success: "✓", error: "✗", info: "ℹ", warning: "⚠",
   };
 
-  const textColors: Record<ToastType, string> = {
-    success: "text-white", error: "text-white", info: "text-white", warning: "text-black",
-  };
-
   const progressColors: Record<ToastType, string> = {
-    success: "bg-green-400", error: "bg-red-400", info: "bg-blue-400", warning: "bg-yellow-600",
+    success: "bg-[#1a7f37] dark:bg-[#3fb950]",
+    error: "bg-[#cf222e] dark:bg-[#f85149]",
+    info: "bg-[#0969da] dark:bg-[#58a6ff]",
+    warning: "bg-[#bf8700] dark:bg-[#d29922]",
   };
 
   return (
     <ToastContext.Provider value={ctx}>
       {children}
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm" role="log" aria-live="polite">
+      <div className="fixed bottom-4 right-4 z-50 flex max-w-sm flex-col gap-2" role="log" aria-live="polite">
         {toasts.map((t) => (
           <div
             key={t.id}
-            className={`${bgColors[t.type]} ${textColors[t.type]} px-4 py-3 rounded-lg shadow-lg text-sm flex flex-col gap-1 transition-all duration-300 ${
+            className={`${toneClasses[t.type]} flex flex-col gap-1 rounded-md border px-4 py-3 text-sm shadow-lg transition-all duration-300 ${
               t.entering ? "opacity-0 translate-x-4" : t.exiting ? "opacity-0 -translate-x-4" : "opacity-100 translate-x-0"
             }`}
             role="status"
@@ -143,14 +145,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 {t.action && (
                   <button
                     onClick={() => { t.action!.onClick(); dismiss(t.id); }}
-                    className="px-2 py-0.5 rounded bg-white/20 hover:bg-white/30 text-xs font-medium transition-colors"
+                    className="rounded-md border border-current/25 px-2 py-0.5 text-xs font-medium transition-colors hover:bg-white/40 dark:hover:bg-white/10"
                   >
                     {t.action.label}
                   </button>
                 )}
                 <button
                   onClick={() => dismiss(t.id)}
-                  className="opacity-60 hover:opacity-100 ml-1 text-lg leading-none"
+                  className="ml-1 text-lg leading-none opacity-60 hover:opacity-100"
                   aria-label="Dismiss"
                 >
                   &times;
@@ -158,7 +160,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               </div>
             </div>
             {t.progress !== undefined && (
-              <div className="w-full h-1 bg-white/20 rounded-full overflow-hidden">
+              <div className="h-1 w-full overflow-hidden rounded-full bg-current/15">
                 <div
                   className={`h-full ${progressColors[t.type]} rounded-full transition-all duration-300 ease-out`}
                   style={{ width: `${t.progress}%` }}

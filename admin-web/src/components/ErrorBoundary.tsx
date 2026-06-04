@@ -8,19 +8,19 @@ interface State { hasError: boolean; error: Error | null }
 function ErrorFallback({ error }: { error: Error | null }) {
   const t = useT();
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-slate-900">
-      <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl max-w-lg w-full mx-4 p-8 text-center">
+    <div className="flex min-h-screen items-center justify-center bg-[#f6f8fa] dark:bg-[#0d1117]">
+      <div className="card mx-4 w-full max-w-lg p-8 text-center">
         <div className="text-4xl mb-4">⚠</div>
-        <h2 className="text-xl font-semibold mb-2 dark:text-white">{t("common.something_wrong")}</h2>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+        <h2 className="mb-2 text-xl font-semibold text-[#24292f] dark:text-[#e6edf3]">{t("common.something_wrong")}</h2>
+        <p className="mb-4 text-sm text-[#57606a] dark:text-[#8b949e]">
           {t("common.unexpected_error")}
         </p>
-        <pre className="text-xs text-left text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/30 rounded p-3 mb-4 overflow-auto max-h-32">
+        <pre className="mb-4 max-h-32 overflow-auto rounded-md border border-[#cf222e]/30 bg-[#ffebe9] p-3 text-left text-xs text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">
           {error?.message || t("common.unknown_error")}
         </pre>
         <button
           onClick={() => window.location.reload()}
-          className="px-6 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800"
+          className="btn-primary"
         >
           {t("common.reload_page")}
         </button>

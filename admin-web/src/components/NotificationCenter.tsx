@@ -281,8 +281,8 @@ export function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-80 max-h-[480px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl z-50 text-slate-800 dark:text-slate-100 overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200 dark:border-slate-700">
+        <div className="absolute right-0 z-50 mt-2 max-h-[480px] w-80 overflow-hidden rounded-md border border-[#d8dee4] bg-white text-[#24292f] shadow-xl dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#e6edf3]">
+          <div className="flex items-center justify-between border-b border-[#d8dee4] px-4 py-2.5 dark:border-[#30363d]">
             <span className="text-sm font-semibold">{t("notification.recent")}</span>
             <div className="flex items-center gap-3">
               <button onClick={() => { setOpen(false); router.push("/admin/notifications"); }}
@@ -291,7 +291,7 @@ export function NotificationBell() {
               </button>
               {(items.length > 0 || batchJob) && (
                 <button onClick={() => { clearRecent(); }}
-                  className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+                  className="text-xs text-[#57606a] transition-colors hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3]">
                   {t("notification.clear_all")}
                 </button>
               )}
@@ -299,13 +299,13 @@ export function NotificationBell() {
           </div>
           <div className="overflow-y-auto max-h-[420px]">
             {!hasRecent ? (
-              <div className="px-4 py-8 text-center text-sm text-slate-400 dark:text-slate-500">
+              <div className="px-4 py-8 text-center text-sm text-[#57606a] dark:text-[#8b949e]">
                 {t("notification.empty")}
               </div>
             ) : (
               <>
                 {batchJob && (
-                  <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors cursor-pointer"
+                  <div className="cursor-pointer border-b border-[#d8dee4] px-4 py-2.5 transition-colors hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]"
                     onClick={() => { setOpen(false); router.push("/admin/reference/danbooru"); }}>
                     <div className="flex items-start gap-2.5">
                       <div className="mt-0.5">{statusIcon(batchJob.status)}</div>
@@ -318,21 +318,21 @@ export function NotificationBell() {
                         )}
                         {batchJob.progress && (
                           <>
-                            <p className="text-xs text-slate-500 mt-0.5">
+                            <p className="mt-0.5 text-xs text-[#57606a] dark:text-[#8b949e]">
                               {batchJob.progress.current}/{batchJob.progress.total} · {batchJob.progress.imported} imported
                             </p>
-                            <div className="w-full h-1 bg-slate-200 dark:bg-slate-600 rounded-full overflow-hidden mt-1.5">
+                            <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
                               <div className="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
                                 style={{ width: `${(batchJob.progress.current / batchJob.progress.total) * 100}%` }} />
                             </div>
                           </>
                         )}
                         {batchJob.result && (
-                          <p className="text-xs text-slate-500 mt-0.5">
+                          <p className="mt-0.5 text-xs text-[#57606a] dark:text-[#8b949e]">
                             Done: {batchJob.result.imported_count || batchJob.result.imported?.length || 0} imported
                           </p>
                         )}
-                        <span className="text-[10px] text-slate-400">{timeAgo(batchJob.startedAt)}</span>
+                        <span className="text-[10px] text-[#57606a] dark:text-[#8b949e]">{timeAgo(batchJob.startedAt)}</span>
                       </div>
                       {batchJob.status !== "running" && (
                         <button
@@ -350,18 +350,18 @@ export function NotificationBell() {
                 )}
                 {items.map((a) => (
                   <div key={a.id}
-                    className={`px-4 py-2.5 border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors ${a.link ? "cursor-pointer" : "cursor-default"}`}
+                    className={`border-b border-[#d8dee4] px-4 py-2.5 transition-colors hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d] ${a.link ? "cursor-pointer" : "cursor-default"}`}
                     onClick={() => { if (a.link) { setOpen(false); router.push(a.link); } }}>
                     <div className="flex items-start gap-2.5">
                       <div className="mt-0.5">{statusIcon(a.status)}</div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-2">
                           <p className={`text-sm truncate ${a.status === "running" ? "font-medium" : ""}`}>{a.title}</p>
-                          <span className="text-[10px] text-slate-400 shrink-0">{timeAgo(a.timestamp)}</span>
+                          <span className="shrink-0 text-[10px] text-[#57606a] dark:text-[#8b949e]">{timeAgo(a.timestamp)}</span>
                         </div>
-                        {a.message && <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">{a.message}</p>}
+                        {a.message && <p className="mt-0.5 truncate text-xs text-[#57606a] dark:text-[#8b949e]">{a.message}</p>}
                         {a.status === "running" && a.progress !== undefined && (
-                          <div className="w-full h-1 bg-slate-200 dark:bg-slate-600 rounded-full overflow-hidden mt-1.5">
+                          <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
                             <div className="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
                               style={{ width: `${a.progress}%` }} />
                           </div>

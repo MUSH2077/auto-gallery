@@ -31,16 +31,16 @@ export default function Modal({ open, onClose, title, children }: {
 
   if (!open) return null;
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 pt-20"
+    <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 px-4 pt-16"
       onClick={onClose} role="dialog" aria-modal="true" aria-label={title}>
-      <div ref={modalRef} className="bg-white dark:bg-stone-800 rounded-xl shadow-xl max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto"
+      <div ref={modalRef} className="w-full max-w-lg max-h-[82vh] overflow-y-auto rounded-md border border-[#d8dee4] bg-white shadow-xl dark:border-[#30363d] dark:bg-[#161b22]"
         onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-6 py-4 border-b dark:border-stone-700">
-          <h2 className="text-lg font-semibold dark:text-stone-100">{title}</h2>
+        <div className="flex items-center justify-between border-b border-[#d8dee4] px-4 py-3 dark:border-[#30363d]">
+          <h2 className="text-base font-semibold text-[#24292f] dark:text-[#e6edf3]">{title}</h2>
           <button onClick={onClose} aria-label="Close dialog"
-            className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 text-xl leading-none">&times;</button>
+            className="btn-icon border-0 text-lg leading-none">&times;</button>
         </div>
-        <div className="px-6 py-4">{children}</div>
+        <div className="px-4 py-4">{children}</div>
       </div>
     </div>
   );

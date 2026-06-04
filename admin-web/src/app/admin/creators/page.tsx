@@ -49,29 +49,29 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
       <div>
         <label className="block text-sm font-medium mb-1">{t("creators.source_url_label") || "来源 URL"}</label>
         <input value={urlInput} onChange={(e) => handleUrlPaste(e.target.value)}
-          className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white font-mono"
+          className="input w-full font-mono"
           placeholder="https://www.pixiv.net/users/123456 或 https://x.com/username" />
-        <p className="text-xs text-gray-400 mt-1">粘贴 URL 自动提取创作者名。支持 Pixiv / X / Iwara / Danbooru / Weibo / Lofter / Bilibili。</p>
+        <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">粘贴 URL 自动提取创作者名。支持 Pixiv / X / Iwara / Danbooru / Weibo / Lofter / Bilibili。</p>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-sm font-medium mb-1">{t("creators.name_label")} <span className="text-red-400">*</span></label>
-          <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white" placeholder={t("creators.name_placeholder")} />
+          <input value={name} onChange={(e) => setName(e.target.value)} className="input w-full" placeholder={t("creators.name_placeholder")} />
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">{t("creators.display_name_label")}</label>
-          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white" placeholder="可选显示名" />
+          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="input w-full" placeholder="可选显示名" />
         </div>
       </div>
-      <div><label className="block text-sm font-medium mb-1">{t("creators.description_label")}</label><textarea value={description} onChange={(e) => setDescription(e.target.value)} className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white" rows={2} /></div>
+      <div><label className="block text-sm font-medium mb-1">{t("creators.description_label")}</label><textarea value={description} onChange={(e) => setDescription(e.target.value)} className="textarea w-full" rows={2} /></div>
       <div className="flex justify-end gap-3 pt-2">
-        <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:text-gray-300">{t("creators.cancel")}</button>
+        <button onClick={onClose} className="btn-ghost">{t("creators.cancel")}</button>
         <button onClick={() => onSubmit({ name, display_name: displayName || undefined, description: description || undefined })} disabled={!name || isPending}
-          className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
+          className="btn-primary">
           {isPending ? t("creators.creating") : t("creators.create")}
         </button>
       </div>
-      {error && <p className="text-red-600 text-sm">{error.message}</p>}
+      {error && <p className="text-sm text-[#cf222e] dark:text-[#f85149]">{error.message}</p>}
     </div>
   );
 }
@@ -198,12 +198,12 @@ function CreatorsContent() {
       </PageHeader>
 
       {/* Toolbar */}
-      <div className="flex items-center gap-3 mb-4 flex-wrap">
-        <input value={inputVal} onChange={(e) => handleSearchChange(e.target.value)} placeholder={t("creators.search")} className="w-56 rounded-md border border-[#d8dee4] px-3 py-1.5 text-sm dark:border-[#30363d] dark:bg-[#0d1117] dark:text-white" />
-        <div className="flex gap-1 rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-0.5 dark:border-[#30363d] dark:bg-[#161b22]">
+      <div className="toolbar mb-4">
+        <input value={inputVal} onChange={(e) => handleSearchChange(e.target.value)} placeholder={t("creators.search")} className="input w-56 py-1.5" />
+        <div className="segmented-control">
           {FILTERS.map((f) => (
             <button key={f.key} onClick={() => handleFilterChange(f.key)}
-              className={`rounded px-3 py-1 text-xs transition-colors ${filter === f.key ? "bg-white font-medium shadow-sm dark:bg-[#30363d]" : "text-[#57606a] hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3]"}`}>
+              className={`segment ${filter === f.key ? "segment-active" : ""}`}>
               {f.label}
             </button>
           ))}
@@ -216,7 +216,7 @@ function CreatorsContent() {
           <span className="text-sm font-medium">{selected.size} selected</span>
           <button onClick={() => setSelected(new Set())} className="btn-ghost">Clear</button>
           <span className="flex-1" />
-          <button onClick={() => setConfirmBatchDel(true)} className="rounded-md border border-[#cf222e]/40 px-3 py-1.5 text-sm font-medium text-[#cf222e] hover:bg-[#ffebe9] dark:text-[#f85149] dark:hover:bg-[#f8514926]">
+          <button onClick={() => setConfirmBatchDel(true)} className="btn-danger">
             {t("creators.delete_selected").replace("{count}", String(selected.size))}
           </button>
         </div>
@@ -224,20 +224,20 @@ function CreatorsContent() {
 
       {/* Select all */}
       {creators.data && creators.data.length > 0 && (
-        <label className="flex items-center gap-2 mb-2 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+        <label className="mb-2 flex cursor-pointer items-center gap-2 text-xs text-[#57606a] dark:text-[#8b949e]">
           <input type="checkbox" checked={selected.size === creators.data.length && creators.data.length > 0} onChange={selectAll} className="rounded" />
           {t("creators.select_all")}
         </label>
       )}
 
       {/* Content */}
-      {creators.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
+      {creators.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-[#eaeef2] dark:bg-[#21262d] animate-pulse" />)}</div>}
       {creators.error && <ErrorState message={(creators.error as Error).message} onRetry={() => creators.refetch()} />}
       {creators.data && !creators.data.length && (
         <EmptyState
           title={search || filter !== "all" ? t("works.no_works_filter") : t("creators.no_creators")}
           description={search || filter !== "all" ? undefined : t("creators.no_creators_desc")}
-          action={(!search && filter === "all") ? <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm">{t("creators.create_creator")}</button> : undefined}
+          action={(!search && filter === "all") ? <button onClick={() => setShowCreate(true)} className="btn-primary">{t("creators.create_creator")}</button> : undefined}
         />
       )}
 
@@ -280,9 +280,9 @@ function CreatorsContent() {
       {/* Pagination */}
       {(creators.data?.length || 0) > 0 && (
         <div className="flex gap-2 justify-center mt-4">
-          <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.prev")}</button>
-          <span className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400">{t("common.page").replace("{page}", String(page + 1))}</span>
-          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!creators.data || creators.data.length < limit} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.next")}</button>
+          <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)} className="btn-ghost disabled:opacity-30">{t("common.prev")}</button>
+          <span className="px-3 py-1 text-sm text-[#57606a] dark:text-[#8b949e]">{t("common.page").replace("{page}", String(page + 1))}</span>
+          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!creators.data || creators.data.length < limit} className="btn-ghost disabled:opacity-30">{t("common.next")}</button>
         </div>
       )}
 

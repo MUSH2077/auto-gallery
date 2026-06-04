@@ -197,25 +197,25 @@ export default function JobsPage() {
     <main className="max-w-7xl mx-auto p-6">
       <PageHeader title={t("jobs.download")} description={downloads.data ? `${downloads.data?.length} ${t("common.items")}` : ""}>
         <div className="flex gap-2">
-          <button onClick={handleSelectAll} className="px-3 py-1.5 text-xs bg-slate-100 dark:bg-slate-700 rounded hover:bg-slate-200 dark:hover:bg-slate-600">{selectAll ? t("common.deselect_all") : t("common.select_all")}</button>
-          <button onClick={() => handleClear(["failed", "stale"])} className="px-3 py-1.5 text-xs bg-red-100 dark:bg-red-900/30 text-red-700 rounded hover:bg-red-200 dark:hover:bg-red-900/50">{t("jobs.clear_failed")}</button>
-          <button onClick={() => handleClear(["complete"])} className="px-3 py-1.5 text-xs bg-green-100 dark:bg-green-900/30 text-green-700 rounded hover:bg-green-200 dark:hover:bg-green-900/50">{t("jobs.clear_complete")}</button>
-          <button onClick={() => killStuck.mutate()} disabled={killStuck.isPending} className="px-3 py-1.5 text-xs bg-orange-100 dark:bg-orange-900/30 text-orange-700 rounded hover:bg-orange-200 dark:hover:bg-orange-900/50 disabled:opacity-50">{t("jobs.kill_stuck")}</button>
-          <button onClick={() => retryAllFailed.mutate()} disabled={retryAllFailed.isPending} className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">{t("jobs.retry_all_failed")}</button>
+          <button onClick={handleSelectAll} className="btn-ghost text-xs">{selectAll ? t("common.deselect_all") : t("common.select_all")}</button>
+          <button onClick={() => handleClear(["failed", "stale"])} className="btn-danger text-xs">{t("jobs.clear_failed")}</button>
+          <button onClick={() => handleClear(["complete"])} className="btn-ghost text-xs">{t("jobs.clear_complete")}</button>
+          <button onClick={() => killStuck.mutate()} disabled={killStuck.isPending} className="btn-ghost text-xs">{t("jobs.kill_stuck")}</button>
+          <button onClick={() => retryAllFailed.mutate()} disabled={retryAllFailed.isPending} className="btn-primary text-xs">{t("jobs.retry_all_failed")}</button>
         </div>
       </PageHeader>
 
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-2 mb-4">
-        <select value={dlStatus} onChange={(e) => setDlStatus(e.target.value)} className="border rounded px-2 py-1.5 text-xs dark:bg-slate-700 dark:text-white dark:border-slate-600">
+      <div className="toolbar mb-4">
+        <select value={dlStatus} onChange={(e) => setDlStatus(e.target.value)} className="select px-2 py-1.5 text-xs">
           <option value="">{t("jobs.filter_all_status")}</option>
           {STATUS_OPTIONS.filter(Boolean).map(s => <option key={s} value={s}>{s}</option>)}
         </select>
-        <select value={dlSource} onChange={(e) => setDlSource(e.target.value)} className="border rounded px-2 py-1.5 text-xs dark:bg-slate-700 dark:text-white dark:border-slate-600">
+        <select value={dlSource} onChange={(e) => setDlSource(e.target.value)} className="select px-2 py-1.5 text-xs">
           <option value="">{t("jobs.filter_all_source")}</option>
           {SOURCE_OPTIONS.filter(Boolean).map(s => <option key={s} value={s}>{s}</option>)}
         </select>
-        <select value={`${dlSort}-${dlOrder}`} onChange={(e) => { const [k, o] = e.target.value.split("-"); setDlSort(k); setDlOrder(o); }} className="border rounded px-2 py-1.5 text-xs dark:bg-slate-700 dark:text-white dark:border-slate-600">
+        <select value={`${dlSort}-${dlOrder}`} onChange={(e) => { const [k, o] = e.target.value.split("-"); setDlSort(k); setDlOrder(o); }} className="select px-2 py-1.5 text-xs">
           <option value="created_at-desc">{t("jobs.sort_newest")}</option>
           <option value="created_at-asc">{t("jobs.sort_oldest")}</option>
           <option value="status-asc">{t("jobs.sort_status")}</option>
@@ -223,8 +223,8 @@ export default function JobsPage() {
         </select>
 
         {selected.size > 0 && (
-          <div className="flex gap-1 ml-auto bg-yellow-50 dark:bg-yellow-900/20 rounded px-3 py-1.5 items-center">
-            <span className="text-xs text-yellow-700 dark:text-yellow-300">{selected.size} {t("common.selected")}</span>
+          <div className="ml-auto flex items-center gap-1 rounded-md border border-[#bf8700]/30 bg-[#fff8c5] px-3 py-1.5 dark:bg-[#bb800926]">
+            <span className="text-xs text-[#9a6700] dark:text-[#d29922]">{selected.size} {t("common.selected")}</span>
             <button onClick={() => handleBatch("pause")} className="px-2 py-0.5 text-xs bg-yellow-500 text-white rounded hover:bg-yellow-600">{t("jobs.batch_pause")}</button>
             <button onClick={() => handleBatch("resume")} className="px-2 py-0.5 text-xs bg-green-500 text-white rounded hover:bg-green-600">{t("jobs.batch_resume")}</button>
             <button onClick={() => handleBatch("retry")} className="px-2 py-0.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600">{t("jobs.batch_retry")}</button>
@@ -235,7 +235,7 @@ export default function JobsPage() {
 
       {/* Download Jobs list */}
       <section className="mb-8">
-        {downloads.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-14 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
+        {downloads.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-14 rounded-md bg-[#eaeef2] dark:bg-[#21262d] animate-pulse" />)}</div>}
         {downloads.error && <ErrorState message={(downloads.error as Error).message} onRetry={() => downloads.refetch()} />}
         {downloads.data && !downloads.data?.length && <EmptyState title={t("jobs.no_dl")} description={t("jobs.no_dl_desc")} />}
         {downloads.data && downloads.data?.length > 0 && (
@@ -244,12 +244,12 @@ export default function JobsPage() {
               const active = j.status === "downloading" || j.status === "pending";
               return (
                 <div key={j.id}>
-                  <div className={`bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 text-sm flex items-center gap-3 ${active ? "border-l-2 border-blue-500" : j.status === "failed" ? "border-l-2 border-red-400" : j.status === "paused" ? "border-l-2 border-yellow-400" : j.status === "stale" ? "border-l-2 border-orange-400" : ""}`}>
+                  <div className={`card flex items-center gap-3 p-3 text-sm ${active ? "border-l-2 border-l-[#0969da]" : j.status === "failed" ? "border-l-2 border-l-[#cf222e]" : j.status === "paused" ? "border-l-2 border-l-[#bf8700]" : j.status === "stale" ? "border-l-2 border-l-[#d29922]" : ""}`}>
                     <input type="checkbox" checked={selected.has(j.id)} onChange={() => toggleSelect(j.id)} className="w-4 h-4 rounded border-gray-300 shrink-0" />
                     <ActiveIndicator status={j.status} />
-                    <span className="font-mono text-xs text-gray-400 dark:text-gray-500 w-16 shrink-0">{j.id.slice(0, 8)}</span>
+                    <span className="w-16 shrink-0 font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{j.id.slice(0, 8)}</span>
                     {j.source && <SourceBadge source={j.source} />}
-                    <span className="truncate text-gray-600 dark:text-gray-300 flex-1 min-w-0 text-xs" title={j.source_url}>{j.source_url}</span>
+                    <span className="min-w-0 flex-1 truncate text-xs text-[#57606a] dark:text-[#8b949e]" title={j.source_url}>{j.source_url}</span>
                     <ProgressBar active={active} />
                     {active ? (
                       <Elapsed since={j.created_at} active={true} />
@@ -293,7 +293,7 @@ export default function JobsPage() {
       <section className="mb-8">
         <h3 className="text-base font-semibold mb-2 flex items-center gap-3">
           {t("jobs.import")}
-          <select value={imFilter} onChange={(e) => setImFilter(e.target.value)} className="border rounded px-2 py-1 text-xs font-normal dark:bg-slate-700 dark:text-white dark:border-slate-600">
+          <select value={imFilter} onChange={(e) => setImFilter(e.target.value)} className="select px-2 py-1 text-xs font-normal">
             <option value="">{t("jobs.filter_all_status")}</option>
             <option value="pending">pending</option>
             <option value="running">running</option>
@@ -301,14 +301,14 @@ export default function JobsPage() {
             <option value="failed">failed</option>
           </select>
         </h3>
-        {imports.isLoading && <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-12 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
-        {imports.data?.items && !imports.data?.items.length && <p className="text-sm text-gray-400 dark:text-gray-500">{t("jobs.no_im")}</p>}
+        {imports.isLoading && <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-12 rounded-md bg-[#eaeef2] dark:bg-[#21262d] animate-pulse" />)}</div>}
+        {imports.data?.items && !imports.data?.items.length && <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("jobs.no_im")}</p>}
         {imports.data?.items && imports.data?.items.length > 0 && (
           <div className="space-y-1">
             {imports.data?.items?.map((j: any) => {
               const active = j.status === "running";
               return (
-                <div key={j.id} className={`bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 text-sm flex items-center gap-3 ${active ? "border-l-2 border-blue-500" : j.status === "failed" ? "border-l-2 border-red-400" : ""}`}>
+                <div key={j.id} className={`card flex items-center gap-3 p-3 text-sm ${active ? "border-l-2 border-l-[#0969da]" : j.status === "failed" ? "border-l-2 border-l-[#cf222e]" : ""}`}>
                   <ActiveIndicator status={j.status} />
                   <span className="font-mono text-xs text-gray-400 dark:text-gray-500 w-16 shrink-0">{j.id.slice(0, 8)}</span>
                   <span className="font-mono text-xs text-gray-400 truncate flex-1">{j.download_job_id?.slice(0, 8) || "-"}</span>
