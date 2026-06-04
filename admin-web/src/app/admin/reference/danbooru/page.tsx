@@ -63,7 +63,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
 
   return (
     <div className="mt-4 space-y-4">
-      <div className="bg-white dark:bg-slate-800 border rounded-lg p-4">
+      <div className="card p-4">
         <h3 className="font-medium mb-2">{t("danbooru.artist_label").replace("{id}", String(artist.id)).replace("{name}", artist.name)}</h3>
         {artist.other_names.length > 0 && (
           <div className="flex flex-wrap items-center gap-1 mb-1">
@@ -137,7 +137,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
         {importAllError && <p className="text-red-600 text-xs mt-2">{importAllError}</p>}
       </div>
 
-      <div className="bg-white dark:bg-slate-800 border rounded-lg p-4">
+      <div className="card p-4">
         {/* Downloadable URLs with Subscribe buttons */}
         {downloadableUrls.length > 0 && (
           <div className="mt-3">
@@ -201,7 +201,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
 
       {/* Import all links */}
       {links.length > 0 && (
-        <div className="bg-white dark:bg-slate-800 border rounded-lg p-4">
+        <div className="card p-4">
           <h3 className="font-medium mb-2">{t("danbooru.import_links_count").replace("{count}", String(links.length))}</h3>
           <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Creates creator_link records for all of this artist's associated URLs in Danbooru.</p>
           <div className="space-y-2 mb-4">
@@ -224,7 +224,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
               </select>
             </div>
             <button onClick={() => onImport(selectedCreator)} disabled={!selectedCreator || importPending}
-              className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50 shrink-0">
+              className="btn-primary shrink-0">
               {importPending ? t("danbooru.importing") : t("danbooru.import_links_btn").replace("{count}", String(links.length))}
             </button>
           </div>
@@ -401,7 +401,7 @@ export default function DanbooruReferencePage() {
       </div>
 
       {/* URL Batch Import */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 mb-6">
+      <div className="card p-4 mb-6">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-medium text-sm">{t("danbooru.url_batch_title")}</h3>
           <button onClick={() => setShowUrlBatch(!showUrlBatch)} className="text-xs text-blue-600 hover:underline">
@@ -451,7 +451,7 @@ export default function DanbooruReferencePage() {
       </div>
 
       {/* Batch Import */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 mb-6">
+      <div className="card p-4 mb-6">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-medium text-sm">{t("danbooru.batch_title")}</h3>
           <button onClick={() => setShowBatch(!showBatch)}
@@ -609,47 +609,47 @@ export default function DanbooruReferencePage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+        <div className="card p-4">
           <h3 className="font-medium mb-1 text-sm">{t("danbooru.search_url_title")}</h3>
           <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">{t("danbooru.search_url_desc")}</p>
           <input value={searchUrl} onChange={(e) => setSearchUrl(e.target.value)}
             placeholder={t("danbooru.url_placeholder")}
             className="w-full border rounded px-3 py-2 text-sm mb-2" />
           <button onClick={() => handleSearch("url")} disabled={!searchUrl.trim()}
-            className="w-full px-3 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
+            className="btn-primary w-full">
             {t("danbooru.search_btn")}
           </button>
         </div>
 
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+        <div className="card p-4">
           <h3 className="font-medium mb-1 text-sm">{t("danbooru.search_pixiv_title")}</h3>
           <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">{t("danbooru.search_pixiv_desc")}</p>
           <input value={searchPixivId} onChange={(e) => setSearchPixivId(e.target.value)}
             placeholder={t("danbooru.pixiv_id_placeholder")}
             className="w-full border rounded px-3 py-2 text-sm mb-2" />
           <button onClick={() => handleSearch("pixiv_id")} disabled={!searchPixivId.trim()}
-            className="w-full px-3 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
+            className="btn-primary w-full">
             {t("danbooru.search_btn")}
           </button>
         </div>
 
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+        <div className="card p-4">
           <h3 className="font-medium mb-1 text-sm">{t("danbooru.search_name_title")}</h3>
           <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">{t("danbooru.search_name_desc")}</p>
           <input value={searchName} onChange={(e) => setSearchName(e.target.value)}
             placeholder={t("danbooru.name_placeholder")}
             className="w-full border rounded px-3 py-2 text-sm mb-2" />
           <button onClick={() => handleSearch("name")} disabled={!searchName.trim()}
-            className="w-full px-3 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
+            className="btn-primary w-full">
             {t("danbooru.search_btn")}
           </button>
         </div>
       </div>
 
-      {preview.isLoading && <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 animate-pulse"><div className="h-24 bg-gray-100 dark:bg-slate-700 rounded" /></div>}
+      {preview.isLoading && <div className="card p-4 animate-pulse"><div className="h-24 rounded-md bg-[#eaeef2] dark:bg-[#21262d]" /></div>}
       {preview.error && <ErrorState message={(preview.error as Error).message} />}
       {preview.data && !preview.data.found && (
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+        <div className="card p-4">
           <EmptyState title={t("danbooru.no_match")} description={preview.data.message || "No matching Danbooru artist found."} />
         </div>
       )}

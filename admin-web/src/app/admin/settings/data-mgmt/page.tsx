@@ -143,7 +143,7 @@ export default function DataManagementPage() {
 
       <div className="space-y-3">
         {actions.map((a) => (
-          <div key={a.key} className={`bg-white dark:bg-slate-800 rounded-lg shadow p-4 flex items-center justify-between border-l-4 ${
+          <div key={a.key} className={`card p-4 flex items-center justify-between border-l-4 ${
             a.color === "red" ? "border-red-500" : a.color === "orange" ? "border-orange-500" : a.color === "yellow" ? "border-yellow-500" : "border-blue-500"
           }`}>
             <div>
@@ -153,7 +153,7 @@ export default function DataManagementPage() {
             <button
               onClick={() => setConfirmAction(a.key)}
               disabled={a.mutation.isPending}
-              className={`px-4 py-2 text-sm text-white rounded shrink-0 ml-4 disabled:opacity-50 ${
+              className={`shrink-0 ml-4 btn-primary ${
                 a.color === "red" ? "bg-red-600 hover:bg-red-700" :
                 a.color === "orange" ? "bg-orange-600 hover:bg-orange-700" :
                 a.color === "yellow" ? "bg-yellow-600 hover:bg-yellow-700" :

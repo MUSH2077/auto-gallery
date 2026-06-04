@@ -31,8 +31,8 @@ export default function DownloadDefaultsPage() {
     return (
       <main className="max-w-4xl mx-auto p-6">
         <div className="animate-pulse space-y-4">
-          <div className="h-8 bg-gray-200 rounded w-1/3" />
-          <div className="h-48 bg-gray-200 rounded" />
+          <div className="h-8 rounded-md bg-[#eaeef2] dark:bg-[#21262d] w-1/3" />
+          <div className="h-48 rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />
         </div>
       </main>
     );
@@ -56,7 +56,7 @@ export default function DownloadDefaultsPage() {
 
       {!current ? null : (
         <>
-          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6 space-y-5 text-sm">
+          <div className="card p-6 space-y-5 text-sm">
             <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
               <div>
                 <span className="font-medium">{t("dldefaults.timeout")}</span>
@@ -135,7 +135,7 @@ export default function DownloadDefaultsPage() {
             <button
               onClick={() => save.mutate(current)}
               disabled={save.isPending}
-              className="px-6 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50"
+              className="btn-primary px-6"
             >
               {save.isPending ? t("common.saving") : t("dldefaults.save")}
             </button>

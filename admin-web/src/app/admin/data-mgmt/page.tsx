@@ -156,7 +156,7 @@ export default function DataManagementPage() {
           { label: t("datamgmt.stats_downloads"), value: info ? formatSize(info.downloads_size_mb) : "-", color: "pink" },
           { label: t("datamgmt.stats_library"), value: info ? formatSize(info.library_size_mb) : "-", color: "teal" },
         ].map((s) => (
-          <div key={s.label} className="bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 text-center">
+          <div key={s.label} className="card p-3 text-center">
             <div className={`text-xl font-bold ${
               s.color === "blue" ? "text-blue-600" : s.color === "indigo" ? "text-indigo-600" :
               s.color === "purple" ? "text-purple-600" : s.color === "green" ? "text-green-600" :
@@ -169,7 +169,7 @@ export default function DataManagementPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         {/* ═══ Storage Distribution ═══ */}
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+        <div className="card p-4">
           <h3 className="font-medium text-sm mb-3">{t("datamgmt.storage_title")}</h3>
           {breakdown?.sources && Object.keys(breakdown.sources).length > 0 ? (
             <div className="space-y-2">
@@ -203,7 +203,7 @@ export default function DataManagementPage() {
         </div>
 
         {/* ═══ Creator Storage Top ═══ */}
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+        <div className="card p-4">
           <h3 className="font-medium text-sm mb-3">{t("datamgmt.storage_creators_title")}</h3>
           {breakdown?.creators && breakdown.creators.length > 0 ? (
             <div className="overflow-x-auto">
@@ -244,13 +244,13 @@ export default function DataManagementPage() {
       </div>
 
       {/* ═══ Integrity Check ═══ */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 mb-6">
+      <div className="card p-4 mb-6">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-medium text-sm">{t("datamgmt.integrity_title")}</h3>
           <button
             onClick={runIntegrity}
             disabled={integrity.isFetching}
-            className="px-3 py-1.5 text-xs bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50"
+            className="btn-primary px-3 py-1.5 text-xs"
           >
             {integrity.isFetching ? t("datamgmt.integrity_running") : t("datamgmt.integrity_run")}
           </button>
@@ -328,7 +328,7 @@ export default function DataManagementPage() {
         {/* Integrity items modal */}
         {integrityItems && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setIntegrityItems(null)}>
-            <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl p-4 max-w-xl w-full mx-4 max-h-[70vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="card-elevated p-4 max-w-xl w-full mx-4 max-h-[70vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
               <div className="flex items-center justify-between mb-3">
                 <h3 className="font-medium text-sm">
                   {t("datamgmt.integrity_items_modal_title")
@@ -362,7 +362,7 @@ export default function DataManagementPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         {/* ═══ Cleanup Tools ═══ */}
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+        <div className="card p-4">
           <h3 className="font-medium text-sm mb-3">{t("datamgmt.cleanup_title")}</h3>
           <div className="space-y-3">
             <div className="flex items-center justify-between p-3 border rounded-lg">
@@ -388,7 +388,7 @@ export default function DataManagementPage() {
         </div>
 
         {/* ═══ Backup & Database ═══ */}
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+        <div className="card p-4">
           <h3 className="font-medium text-sm mb-3">{t("datamgmt.backup_section")}</h3>
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
@@ -406,7 +406,7 @@ export default function DataManagementPage() {
               </div>
             </div>
             <button onClick={() => createBackupMut.mutate()} disabled={createBackupMut.isPending}
-              className="w-full px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
+              className="btn-primary w-full">
               {createBackupMut.isPending ? t("datamgmt.backup_creating") : t("datamgmt.backup_create")}
             </button>
 
@@ -432,7 +432,7 @@ export default function DataManagementPage() {
       </div>
 
       {/* ═══ Danger Zone ═══ */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg shadow border-2 border-red-300 dark:border-red-800 p-4">
+      <div className="card border-[#ff8182] p-4 dark:border-[#da3633]">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-red-500 text-lg">&#9888;</span>
           <h3 className="font-medium text-sm text-red-700 dark:text-red-400">{t("datamgmt.danger_title")}</h3>
@@ -446,7 +446,7 @@ export default function DataManagementPage() {
             value={dangerConfirm}
             onChange={(e) => setDangerConfirm(e.target.value)}
             placeholder={t("datamgmt.danger_confirm_text")}
-            className="w-full max-w-sm border border-red-300 dark:border-red-700 rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white"
+            className="input w-full max-w-sm border-[#ff8182] dark:border-[#da3633]"
           />
           <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{t("datamgmt.danger_confirm_hint")}</p>
         </div>

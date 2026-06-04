@@ -48,7 +48,7 @@ export default function ProfilePage() {
       <PageHeader title={t("auth.profile")} />
 
       {/* User Info */}
-      <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 mb-6">
+      <div className="card p-5 mb-6">
         <h2 className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-3">{t("auth.account_info")}</h2>
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-700 dark:text-blue-300 font-bold text-lg">
@@ -62,7 +62,7 @@ export default function ProfilePage() {
       </div>
 
       {/* Change Password */}
-      <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
+      <div className="card p-5">
         <h2 className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-4">{t("auth.change_password")}</h2>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
@@ -75,7 +75,7 @@ export default function ProfilePage() {
               required
               value={currentPassword}
               onChange={(e) => setCurrentPassword(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              className="input w-full"
             />
           </div>
           <div>
@@ -88,7 +88,7 @@ export default function ProfilePage() {
               required
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              className="input w-full"
             />
           </div>
           <div>
@@ -101,7 +101,7 @@ export default function ProfilePage() {
               required
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              className="input w-full"
             />
           </div>
 

@@ -44,12 +44,12 @@ export default function SchedulerPage() {
     <main className="max-w-6xl mx-auto p-6">
       <PageHeader title={t("scheduler.title")} description={t("scheduler.desc")}>
         <button onClick={() => { syncNow.mutate(); }} disabled={syncNow.isPending}
-          className="px-5 py-2.5 bg-slate-900 dark:bg-slate-700 text-white rounded-lg text-sm font-medium hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50 transition-colors">
+          className="btn-primary px-5 py-2.5">
           {syncNow.isPending ? t("scheduler.syncing") : t("scheduler.sync_now")}
         </button>
         {queue.data && queue.data.failed_jobs > 0 && (
           <button onClick={() => { clearFailed.mutate(); }} disabled={clearFailed.isPending}
-            className="px-5 py-2.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors">
+            className="btn-danger px-5 py-2.5">
             {clearFailed.isPending ? "..." : t("scheduler.clear_all")}
           </button>
         )}
@@ -62,9 +62,9 @@ export default function SchedulerPage() {
             { label: "Scheduled", value: queue.data.scheduled_queue, color: "text-purple-600" },
             { label: "Failed", value: queue.data.failed_jobs, color: "text-red-600" },
             ].map((s) => (
-            <div key={s.label} className="bg-white dark:bg-slate-800 rounded-lg shadow-sm p-4 text-center">
+            <div key={s.label} className="card p-4 text-center">
               <div className={`text-2xl font-bold ${s.color}`}>{s.value}</div>
-              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{s.label}</div>
+              <div className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{s.label}</div>
             </div>
           ))}
         </div>
@@ -73,20 +73,20 @@ export default function SchedulerPage() {
       {/* Subscription list */}
       <section>
         <h3 className="text-base font-semibold mb-3 dark:text-white">{t("scheduler.sync_schedule")}</h3>
-        {subs.isLoading ? <div className="animate-pulse space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-12 bg-gray-200 dark:bg-slate-700 rounded" />)}</div> :
+        {subs.isLoading ? <div className="animate-pulse space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-12 rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />)}</div> :
          subs.data && !subs.data.length ? <EmptyState title={t("scheduler.no_subscriptions")} description={t("scheduler.no_subscriptions_desc")} /> :
          subs.data && subs.data.length > 0 ? (
-          <div className="bg-white dark:bg-slate-800 rounded-lg shadow overflow-hidden">
-            <div className="divide-y dark:divide-slate-700">
+          <div className="table-shell">
+            <div className="divide-y divide-[#d8dee4] dark:divide-[#30363d]">
               {subs.data.map((s: Subscription) => {
                 const creator = creators.data?.find((c) => c.id === s.creator_id);
                 return (
-                  <div key={s.id} className="flex items-center gap-4 px-4 py-3 text-sm hover:bg-gray-50 dark:hover:bg-slate-700/50">
-                    <span className="text-xs text-gray-400 font-mono w-12">{s.id.slice(0, 6)}</span>
+                  <div key={s.id} className="flex items-center gap-4 px-4 py-3 text-sm transition-colors hover:bg-[#f6f8fa] dark:hover:bg-[#21262d]">
+                    <span className="w-12 font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{s.id.slice(0, 6)}</span>
                     <span className="flex-1 font-medium truncate dark:text-white">{creator?.display_name || creator?.name || s.id.slice(0, 8)}</span>
-                    <span className="text-xs text-gray-500 w-32 text-center">{getStrategyLabel(s)}</span>
+                    <span className="w-32 text-center text-xs text-[#57606a] dark:text-[#8b949e]">{getStrategyLabel(s)}</span>
                     {s.last_synced_at ? (
-                      <span className="text-xs text-gray-400 w-20 text-right">{fmtNextSync(s)}</span>
+                      <span className="w-20 text-right text-xs text-[#57606a] dark:text-[#8b949e]">{fmtNextSync(s)}</span>
                     ) : (
                       <span className="text-xs text-yellow-600 w-20 text-right">{t("scheduler.never")}</span>
                     )}

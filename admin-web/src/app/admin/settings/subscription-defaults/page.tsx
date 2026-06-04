@@ -27,7 +27,7 @@ function ScheduledTimePicker({ value, onChange }: { value: string; onChange: (v:
   return (
     <div className="space-y-2">
       {times.length === 0 && (
-        <button onClick={addTime} className="px-3 py-1.5 text-xs bg-slate-100 dark:bg-slate-700 rounded hover:bg-slate-200 dark:hover:bg-slate-600">
+        <button onClick={addTime} className="btn-ghost px-3 py-1.5 text-xs">
           + 添加时间
         </button>
       )}
@@ -38,7 +38,7 @@ function ScheduledTimePicker({ value, onChange }: { value: string; onChange: (v:
             step="1"
             value={t.length <= 5 ? t + ":00" : t}
             onChange={(e) => setTime(i, e.target.value)}
-            className="border rounded px-2 py-1 text-sm font-mono dark:bg-slate-700 dark:text-white w-36"
+            className="input px-2 py-1 font-mono w-36"
           />
           <span className="text-xs text-gray-400 font-mono">{t}</span>
           <button onClick={() => removeTime(i)} className="text-red-500 hover:text-red-700 text-lg leading-none" title="Remove">×</button>
@@ -76,8 +76,8 @@ export default function SubscriptionDefaultsPage() {
     return (
       <main className="max-w-4xl mx-auto p-6">
         <div className="animate-pulse space-y-4">
-          <div className="h-8 bg-gray-200 rounded w-1/3" />
-          <div className="h-48 bg-gray-200 rounded" />
+          <div className="h-8 rounded-md bg-[#eaeef2] dark:bg-[#21262d] w-1/3" />
+          <div className="h-48 rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />
         </div>
       </main>
     );
@@ -96,7 +96,7 @@ export default function SubscriptionDefaultsPage() {
 
       {!current ? null : (
         <>
-          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6 space-y-5 text-sm">
+          <div className="card p-6 space-y-5 text-sm">
             <h4 className="font-medium text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("subdefaults.sync_timing")}</h4>
 
             <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
@@ -107,7 +107,7 @@ export default function SubscriptionDefaultsPage() {
               <select
                 value={current.schedule_mode || "interval"}
                 onChange={(e) => setLocal({ ...current, schedule_mode: e.target.value as "interval" | "fixed_time" })}
-                className="border rounded px-2 py-1 text-sm dark:bg-slate-700 dark:text-white"
+                className="select px-2 py-1"
               >
                 <option value="interval">{t("subdefaults.interval")}</option>
                 <option value="fixed_time">{t("subdefaults.fixed_time")}</option>
@@ -145,7 +145,7 @@ export default function SubscriptionDefaultsPage() {
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("subdefaults.timezone.desc")}</p>
               </div>
               <select value={current.timezone || "UTC"} onChange={(e) => setLocal({ ...current, timezone: e.target.value })}
-                className="border rounded px-2 py-1 text-sm dark:bg-slate-700 dark:text-white">
+                className="select px-2 py-1">
                 {["UTC", "Asia/Shanghai", "Asia/Tokyo", "Asia/Seoul", "Asia/Singapore", "Asia/Kolkata",
                   "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Moscow",
                   "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
@@ -170,7 +170,7 @@ export default function SubscriptionDefaultsPage() {
 
           <div className="mt-4 flex justify-end">
             <button onClick={() => save.mutate(current)} disabled={save.isPending}
-              className="px-6 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
+              className="btn-primary px-6">
               {save.isPending ? t("common.saving") : t("subdefaults.save")}
             </button>
           </div>

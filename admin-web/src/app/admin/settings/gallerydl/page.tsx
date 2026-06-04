@@ -84,7 +84,7 @@ function SelectField({ label, desc, value, onChange, options }: {
       <label className="block text-sm font-medium mb-1">{label}</label>
       {desc && <p className="text-xs text-gray-400 dark:text-gray-500 mb-1">{desc}</p>}
       <select value={value} onChange={(e) => onChange(e.target.value)}
-        className="w-full border rounded px-3 py-2 text-sm bg-white dark:bg-slate-800">
+        className="select w-full">
         {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
     </div>
@@ -273,13 +273,13 @@ export default function GalleryDLConfigPage() {
 
       {/* Unsupported banner */}
       {currentMeta && !currentMeta.supported && (
-        <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-6 text-sm text-yellow-800 dark:text-yellow-300">
+        <div className="mb-6 rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm text-[#9a6700] dark:border-[#d29922]/30 dark:bg-[#d29922]/15 dark:text-[#f2cc60]">
           <strong>{currentMeta.name} {t("gallerydl.unsupported")}</strong> {currentMeta.description}
         </div>
       )}
 
       {/* Tab content */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6 space-y-5">
+      <div className="card p-6 space-y-5">
         {activeTab === "pixiv" && <PixivTab data={pixiv} onChange={setPixiv} />}
         {activeTab === "twitter" && <TwitterTab data={twitter} onChange={setTwitter} />}
         {activeTab === "iwara" && <IwaraTab data={iwara} onChange={setIwara} />}
@@ -291,7 +291,7 @@ export default function GalleryDLConfigPage() {
 
         <div className="flex justify-end pt-4 border-t">
           <button onClick={() => save.mutate()} disabled={save.isPending}
-            className={`px-6 py-2 rounded text-sm font-medium text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-50`}>
+            className="btn-primary px-6">
             {save.isPending ? t("common.saving") : saved === activeTab ? t("common.saved") : `${t("gallerydl.save")} (${tabs.find(tab => tab.key === activeTab)?.label})`}
           </button>
         </div>
@@ -336,7 +336,7 @@ function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: P
       <div>
         <label className="block text-sm font-medium mb-1">{t("gallerydl.cookie_content")}</label>
         <textarea value={str(data.cookie_content)} onChange={(e) => set("cookie_content", e.target.value || undefined)}
-          rows={3} className="w-full border rounded px-3 py-2 text-xs font-mono dark:bg-slate-700 dark:text-white"
+          rows={3} className="textarea w-full font-mono text-xs"
           placeholder="Paste cookie text here. Auto-saved to /gallerydl-config/cookies/pixiv.txt" />
         <p className="text-xs text-gray-400 mt-1">{t("gallerydl.cookies_help")}</p>
       </div>
@@ -392,7 +392,7 @@ function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (
       <div>
         <label className="block text-sm font-medium mb-1">{t("gallerydl.cookie_content")}</label>
         <textarea value={str(data.cookie_content)} onChange={(e) => set("cookie_content", e.target.value || undefined)}
-          rows={3} className="w-full border rounded px-3 py-2 text-xs font-mono dark:bg-slate-700 dark:text-white"
+          rows={3} className="textarea w-full font-mono text-xs"
           placeholder="Paste cookie text here. Auto-saved to /gallerydl-config/cookies/twitter.txt" />
         <p className="text-xs text-gray-400 mt-1">{t("gallerydl.cookies_help")}</p>
       </div>
@@ -452,7 +452,7 @@ function IwaraTab({ data, onChange }: { data: IwaraSourceConfig; onChange: (d: I
       <div>
         <label className="block text-sm font-medium mb-1">{t("gallerydl.cookie_content")}</label>
         <textarea value={str(data.cookie_content)} onChange={(e) => set("cookie_content", e.target.value || undefined)}
-          rows={3} className="w-full border rounded px-3 py-2 text-xs font-mono dark:bg-slate-700 dark:text-white"
+          rows={3} className="textarea w-full font-mono text-xs"
           placeholder="Paste cookie text here. Auto-saved to /gallerydl-config/cookies/iwara.txt" />
         <p className="text-xs text-gray-400 mt-1">{t("gallerydl.cookies_help")}</p>
       </div>
@@ -500,7 +500,7 @@ function DanbooruTab({ data, onChange }: { data: DanbooruSourceConfig; onChange:
       <div>
         <label className="block text-sm font-medium mb-1">{t("gallerydl.cookie_content")}</label>
         <textarea value={str(data.cookie_content)} onChange={(e) => set("cookie_content", e.target.value || undefined)}
-          rows={3} className="w-full border rounded px-3 py-2 text-xs font-mono dark:bg-slate-700 dark:text-white"
+          rows={3} className="textarea w-full font-mono text-xs"
           placeholder="Paste cookie text here. Auto-saved to /gallerydl-config/cookies/danbooru.txt" />
         <p className="text-xs text-gray-400 mt-1">{t("gallerydl.danbooru.cookies_help")}</p>
       </div>
@@ -614,7 +614,7 @@ function WeiboTab({ data, onChange }: { data: WeiboSourceConfig; onChange: (d: W
       <div>
         <label className="block text-sm font-medium mb-1">{t("gallerydl.cookie_content")}</label>
         <textarea value={str(data.cookie_content)} onChange={(e) => set("cookie_content", e.target.value || undefined)}
-          rows={3} className="w-full border rounded px-3 py-2 text-xs font-mono dark:bg-slate-700 dark:text-white"
+          rows={3} className="textarea w-full font-mono text-xs"
           placeholder="Paste cookie text here. Auto-saved to /gallerydl-config/cookies/weibo.txt" />
         <p className="text-xs text-gray-400 mt-1">{t("gallerydl.cookies_help")}</p>
       </div>
