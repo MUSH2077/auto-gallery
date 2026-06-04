@@ -278,6 +278,29 @@ function NamingReferencePanel({
 
       <div className="space-y-4 p-4">
         <div className="grid gap-3 md:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">Directory pattern</label>
+            <input
+              type="text"
+              value={directory}
+              onChange={(event) => onDirectoryChange(event.target.value)}
+              className="input w-full font-mono text-xs"
+              placeholder={reference.defaultDirectory}
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">Filename pattern</label>
+            <input
+              type="text"
+              value={filename}
+              onChange={(event) => onFilenameChange(event.target.value)}
+              className="input w-full font-mono text-xs"
+              placeholder={reference.defaultFilename}
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
           <div className="rounded-md border border-[#d0d7de] bg-white p-3 dark:border-[#30363d] dark:bg-[#0d1117]">
             <div className="flex items-center justify-between gap-3">
               <span className="text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">Directory template</span>
@@ -615,10 +638,6 @@ function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: P
           ]} />
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
-      <div className="grid grid-cols-2 gap-4">
-        <TextField label={t("gallerydl.dir_pattern")} desc={t("gallerydl.dir_pattern.desc")} value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} />
-        <TextField label={t("gallerydl.filename_pattern")} desc={t("gallerydl.filename_pattern.desc")} value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} placeholder="{id}_p{num}.{extension}" />
-      </div>
       <NamingReferencePanel
         source="pixiv"
         directory={str(data.directory)}
@@ -692,10 +711,6 @@ function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (
         <ToggleField label={t("gallerydl.articles")} desc={t("gallerydl.articles.desc")} value={data.articles ?? false} onChange={(v) => set("articles", v)} />
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
-      <div className="grid grid-cols-2 gap-4">
-        <TextField label={t("gallerydl.dir_pattern")} value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} placeholder="twitter/{user[name]}" />
-        <TextField label={t("gallerydl.filename_pattern")} value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} placeholder="{tweet_id}_{num}.{extension}" />
-      </div>
       <NamingReferencePanel
         source="twitter"
         directory={str(data.directory)}
@@ -744,10 +759,6 @@ function IwaraTab({ data, onChange }: { data: IwaraSourceConfig; onChange: (d: I
           ]} />
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.file_org")}</h4>
-      <div className="grid grid-cols-2 gap-4">
-        <TextField label={t("gallerydl.dir_pattern")} value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} placeholder="iwara/{user[name]}" />
-        <TextField label={t("gallerydl.filename_pattern")} value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} />
-      </div>
       <NamingReferencePanel
         source="iwara"
         directory={str(data.directory)}
@@ -797,10 +808,6 @@ function DanbooruTab({ data, onChange }: { data: DanbooruSourceConfig; onChange:
       </div>
 
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.file_org")}</h4>
-      <div className="grid grid-cols-2 gap-4">
-        <TextField label={t("gallerydl.dir_pattern")} value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} placeholder="danbooru/{artist[name]}" />
-        <TextField label={t("gallerydl.filename_pattern")} value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} />
-      </div>
       <NamingReferencePanel
         source="danbooru"
         directory={str(data.directory)}
@@ -851,14 +858,6 @@ function PinterestTab({ data, onChange }: { data: PinterestSourceConfig; onChang
         onChange={(v) => set("domain", v || undefined)} placeholder="auto" />
       <p className="text-xs text-gray-400 dark:text-gray-500">{t("gallerydl.domain.desc")}</p>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
-      <div className="grid grid-cols-2 gap-4">
-        <TextField label={t("gallerydl.dir_pattern")} value={data.directory || ""}
-          onChange={(v) => set("directory", v || undefined)}
-          placeholder="{category}/{user}/{board[name]}" />
-        <TextField label={t("gallerydl.filename_pattern")} value={data.filename || ""}
-          onChange={(v) => set("filename", v || undefined)}
-          placeholder="{id}_{num}.{extension}" />
-      </div>
       <NamingReferencePanel
         source="pinterest"
         directory={data.directory || ""}
@@ -882,14 +881,6 @@ function LofterTab({ data, onChange }: { data: LofterSourceConfig; onChange: (d:
           value={data.auto_enable_on_import ?? false} onChange={(v) => set("auto_enable_on_import", v)} />
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
-      <div className="grid grid-cols-2 gap-4">
-        <TextField label={t("gallerydl.dir_pattern")} value={data.directory || ""}
-          onChange={(v) => set("directory", v || undefined)}
-          placeholder="{category}/{blog_name}" />
-        <TextField label={t("gallerydl.filename_pattern")} value={data.filename || ""}
-          onChange={(v) => set("filename", v || undefined)}
-          placeholder="{id}_{num}.{extension}" />
-      </div>
       <NamingReferencePanel
         source="lofter"
         directory={data.directory || ""}
@@ -931,10 +922,6 @@ function WeiboTab({ data, onChange }: { data: WeiboSourceConfig; onChange: (d: W
         <ToggleField label={t("gallerydl.text_posts")} desc={t("gallerydl.text_posts.desc")} value={data.text ?? false} onChange={(v) => set("text", v)} />
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
-      <div className="grid grid-cols-2 gap-4">
-        <TextField label={t("gallerydl.dir_pattern")} value={str(data.directory)} onChange={(v) => set("directory", v || undefined)} placeholder="weibo/{user[screen_name]}" />
-        <TextField label={t("gallerydl.filename_pattern")} value={str(data.filename)} onChange={(v) => set("filename", v || undefined)} placeholder="{id}_{num}.{extension}" />
-      </div>
       <NamingReferencePanel
         source="weibo"
         directory={str(data.directory)}
@@ -968,12 +955,6 @@ function BilibiliTab({ data, onChange }: { data: BilibiliSourceConfig; onChange:
         <p className="text-xs text-gray-400 mt-1">{t("gallerydl.bilibili.sleep_request.desc")}</p>
       </div>
       <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
-      <div className="grid grid-cols-2 gap-4">
-        <TextField label={t("gallerydl.dir_pattern")} value={str(data.directory)}
-          onChange={(v) => set("directory", v || undefined)} placeholder="bilibili/{user[name]}/{id}" />
-        <TextField label={t("gallerydl.filename_pattern")} value={str(data.filename)}
-          onChange={(v) => set("filename", v || undefined)} placeholder="{id}_{num}.{extension}" />
-      </div>
       <NamingReferencePanel
         source="bilibili"
         directory={str(data.directory)}
