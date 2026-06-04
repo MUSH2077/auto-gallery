@@ -4,11 +4,10 @@ export default function PageHeader({ title, description, children }: { title: st
   return (
     <div className="flex items-center justify-between mb-8">
       <div>
-        <h1 className="text-2xl md:text-3xl font-bold text-stone-900 dark:text-stone-100 tracking-tight"
-          style={{ fontFamily: "'Playfair Display', Georgia, serif" }}>
+        <h1 className="text-2xl md:text-3xl font-semibold text-[#24292f] dark:text-[#e6edf3] tracking-normal">
           {title}
         </h1>
-        {description && <div className="text-sm text-stone-500 dark:text-stone-400 mt-1.5">{description}</div>}
+        {description && <div className="text-sm text-[#57606a] dark:text-[#8b949e] mt-1.5">{description}</div>}
       </div>
       {children && <div className="flex gap-2 shrink-0">{children}</div>}
     </div>

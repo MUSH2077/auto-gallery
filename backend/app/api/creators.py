@@ -209,6 +209,127 @@ async def get_creator_stats(creator_id: UUID, db: AsyncSession = Depends(get_db)
     }
 
 
+@router.get("/{creator_id}/subscription-overview")
+async def get_creator_subscription_overview(creator_id: UUID, db: AsyncSession = Depends(get_db)):
+    """Return subscription sources as GitHub-like repository candidates for a creator."""
+    from app.models.subscription import Subscription
+    from app.models.subscription_source import SubscriptionSource
+    from app.models.download_job import DownloadJob
+    from app.providers import registry
+
+    sub_rows = await db.execute(
+        select(Subscription)
+        .where(Subscription.creator_id == creator_id)
+        .order_by(Subscription.created_at.desc())
+    )
+    subscriptions = list(sub_rows.scalars().all())
+    subscription_ids = [s.id for s in subscriptions]
+
+    if not subscription_ids:
+        return {
+            "creator_id": str(creator_id),
+            "subscriptions": [],
+            "repositories": [],
+            "summary": {
+                "subscription_count": 0,
+                "repository_count": 0,
+                "enabled_repository_count": 0,
+                "running_job_count": 0,
+            },
+        }
+
+    source_rows = await db.execute(
+        select(SubscriptionSource)
+        .where(SubscriptionSource.subscription_id.in_(subscription_ids))
+        .order_by(SubscriptionSource.source, SubscriptionSource.created_at.desc())
+    )
+    sub_sources = list(source_rows.scalars().all())
+
+    repositories = []
+    running_statuses = {"pending", "downloading", "downloaded", "importing"}
+    running_job_count = 0
+
+    for ss in sub_sources:
+        can_download = False
+        supports_gallerydl = False
+        url_valid = False
+        provider_name = ss.source
+        provider_display_name = ss.source
+
+        try:
+            provider = registry.get(ss.source)
+            provider_name = provider.source_name
+            provider_display_name = provider.display_name
+            can_download = bool(provider.capabilities.can_download)
+            supports_gallerydl = bool(provider.capabilities.supports_gallerydl)
+            url_valid = bool(ss.source_url and provider.validate_url(ss.source_url))
+        except Exception:
+            url_valid = False
+
+        latest_job_row = await db.execute(
+            select(DownloadJob)
+            .where(DownloadJob.subscription_source_id == ss.id)
+            .order_by(DownloadJob.created_at.desc())
+            .limit(1)
+        )
+        latest_job = latest_job_row.scalar_one_or_none()
+        latest_job_payload = None
+        if latest_job:
+            if latest_job.status in running_statuses:
+                running_job_count += 1
+            latest_job_payload = {
+                "id": str(latest_job.id),
+                "status": latest_job.status,
+                "created_at": latest_job.created_at.isoformat() if latest_job.created_at else None,
+                "updated_at": latest_job.updated_at.isoformat() if latest_job.updated_at else None,
+                "error_log_excerpt": (latest_job.error_log or "")[:240] or None,
+            }
+
+        is_repository = bool(can_download and url_valid and ss.source_url)
+        repositories.append({
+            "id": str(ss.id),
+            "subscription_id": str(ss.subscription_id),
+            "source": provider_name,
+            "source_display_name": provider_display_name,
+            "source_url": ss.source_url,
+            "source_creator_id": ss.source_creator_id,
+            "is_enabled": ss.is_enabled,
+            "auth_healthy": ss.auth_healthy,
+            "last_successful_auth": ss.last_successful_auth.isoformat() if ss.last_successful_auth else None,
+            "last_synced_at": ss.last_synced_at.isoformat() if ss.last_synced_at else None,
+            "can_download": can_download,
+            "supports_gallerydl": supports_gallerydl,
+            "url_valid": url_valid,
+            "is_repository": is_repository,
+            "latest_job": latest_job_payload,
+            "created_at": ss.created_at.isoformat() if ss.created_at else None,
+            "updated_at": ss.updated_at.isoformat() if ss.updated_at else None,
+        })
+
+    return {
+        "creator_id": str(creator_id),
+        "subscriptions": [{
+            "id": str(s.id),
+            "name": s.name,
+            "is_active": s.is_active,
+            "sync_enabled": s.sync_enabled,
+            "sync_interval_hours": s.sync_interval_hours,
+            "schedule_mode": s.schedule_mode,
+            "scheduled_times": s.scheduled_times,
+            "last_synced_at": s.last_synced_at.isoformat() if s.last_synced_at else None,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+            "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+        } for s in subscriptions],
+        "repositories": repositories,
+        "summary": {
+            "subscription_count": len(subscriptions),
+            "repository_count": sum(1 for r in repositories if r["is_repository"]),
+            "enabled_repository_count": sum(1 for r in repositories if r["is_repository"] and r["is_enabled"]),
+            "running_job_count": running_job_count,
+        },
+    }
+
+
 @router.delete("/{creator_id}", status_code=204)
 async def delete_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)
@@ -279,5 +400,4 @@ async def delete_creator_link(creator_id: UUID, link_id: UUID, db: AsyncSession 
         await svc.delete_link(link_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-
 

@@ -1,285 +1,384 @@
 "use client";
-import { useState, useMemo } from "react";
+
+import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys, CreatorLink as CreatorLinkType } from "@/lib/api";
-import { StatusBadge, SourceBadge, Modal, WorkGrid } from "@/components";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, WorkListItem } from "@/lib/api";
+import { Modal, RepositoryCard, SourceBadge, StatusBadge, WorkGrid } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
+import { CHART_COLORS, SOURCE_COLORS } from "@/lib/sourceColors";
 
-import { SOURCE_COLORS, CHART_COLORS } from "@/lib/sourceColors";
+type TabKey = "overview" | "repositories" | "works" | "links";
 
-function AnimatedNumber({ value }: { value: number }) {
-  return (
-    <span className="tabular-nums font-bold" style={{ fontVariantNumeric: "tabular-nums" }}>
-      {value.toLocaleString()}
-    </span>
-  );
+function initials(name: string) {
+  return name.trim().slice(0, 2).toUpperCase();
 }
 
-function ProgressBar({ value, max, color, className }: { value: number; max: number; color: string; className?: string }) {
-  const pct = max > 0 ? Math.min((value / max) * 100, 100) : 0;
-  return (
-    <div className={`w-full h-1.5 bg-stone-100 dark:bg-stone-700 rounded-full overflow-hidden ${className || ""}`}>
-      <div className="h-full rounded-full transition-all duration-700 ease-out animate-bar-grow"
-        style={{ width: `${pct}%`, backgroundColor: color }} />
-    </div>
-  );
+function formatDate(value?: string | null) {
+  if (!value) return "Never";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? "Unknown" : d.toLocaleString();
 }
 
-function HorizontalBarChart({ data, maxKey, labelKey, colorFn, className }: {
+function runningRepoCount(repos: CreatorRepository[]) {
+  return repos.filter((r) => r.latest_job && ["pending", "downloading", "downloaded", "importing"].includes(r.latest_job.status)).length;
+}
+
+function HorizontalBarChart({ data, maxKey, labelKey, colorFn }: {
   data: { [k: string]: any }[];
   maxKey: string;
   labelKey: string;
   colorFn: (item: any, i: number) => string;
-  className?: string;
 }) {
   const max = data.length > 0 ? Math.max(...data.map((d) => d[maxKey] as number)) : 1;
   return (
-    <div className={`space-y-1.5 ${className || ""}`}>
+    <div className="space-y-2">
       {data.map((item, i) => (
-        <div key={i} className="flex items-center gap-2 text-xs page-item" style={{ animationDelay: `${i * 40}ms` }}>
-          <span className="w-20 truncate text-right text-stone-600 dark:text-stone-400 shrink-0">{String(item[labelKey])}</span>
-          <div className="flex-1 h-2 bg-stone-100 dark:bg-stone-700 rounded-full overflow-hidden">
-            <div className="h-full rounded-full transition-all duration-700 ease-out animate-bar-grow"
-              style={{ width: `${((item[maxKey] as number) / max) * 100}%`, backgroundColor: colorFn(item, i) }} />
+        <div key={`${item[labelKey]}-${i}`} className="flex items-center gap-2 text-xs">
+          <span className="w-24 truncate text-right text-[#57606a] dark:text-[#8b949e]">{String(item[labelKey])}</span>
+          <div className="h-2 flex-1 overflow-hidden rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
+            <div className="h-full rounded-full" style={{ width: `${((item[maxKey] as number) / max) * 100}%`, backgroundColor: colorFn(item, i) }} />
           </div>
-          <span className="w-10 text-right tabular-nums text-stone-500 dark:text-stone-400 shrink-0">{(item[maxKey] as number).toLocaleString()}</span>
+          <span className="w-10 shrink-0 text-right font-mono text-[#57606a] dark:text-[#8b949e]">{(item[maxKey] as number).toLocaleString()}</span>
         </div>
       ))}
     </div>
   );
 }
 
-// Mini monthly posting heat strip
-function MonthStrip({ data, className }: { data: { month: string; count: number }[]; className?: string }) {
+function MonthStrip({ data }: { data: { month: string; count: number }[] }) {
   if (!data.length) return null;
   const max = Math.max(...data.map((d) => d.count), 1);
   return (
-    <div className={`flex items-end gap-[2px] h-12 ${className || ""}`}>
-      {data.slice(-48).map((d, i) => {
-        const h = Math.max(2, (d.count / max) * 100);
-        return (
-          <div key={d.month} className="flex-1 min-w-[3px] rounded-t-sm transition-all duration-300 hover:opacity-70 cursor-default"
-            style={{ height: `${h}%`, backgroundColor: "#0066FF", opacity: 0.3 + (d.count / max) * 0.7 }}
-            title={`${d.month}: ${d.count} works`} />
-        );
-      })}
+    <div className="flex h-12 items-end gap-[2px]">
+      {data.slice(-48).map((d) => (
+        <div key={d.month}
+          className="min-w-[3px] flex-1 rounded-t-sm bg-[#0969da] transition-opacity hover:opacity-75"
+          style={{ height: `${Math.max(2, (d.count / max) * 100)}%`, opacity: 0.3 + (d.count / max) * 0.7 }}
+          title={`${d.month}: ${d.count} works`} />
+      ))}
     </div>
   );
 }
 
+function WorkPreviewCard({ work }: { work: WorkListItem }) {
+  const t = useT();
+  const assetId = work.preview_asset_ids?.[0] || work.thumbnail_asset_id;
+  return (
+    <Link href={`/admin/works/${work.id}`} className="group overflow-hidden rounded-md border border-[#d8dee4] bg-white transition-colors hover:border-[#0969da]/50 dark:border-[#30363d] dark:bg-[#161b22] dark:hover:border-[#58a6ff]/50">
+      <div className="aspect-[4/3] bg-[#f6f8fa] dark:bg-[#21262d]">
+        {assetId ? (
+          <img src={api.mediaUrl(assetId, "thumb")} alt={work.title || t("creator_detail.untitled")} className="h-full w-full object-cover" loading="lazy" />
+        ) : (
+          <div className="flex h-full items-center justify-center text-xs text-[#57606a] dark:text-[#8b949e]">{t("works.na")}</div>
+        )}
+      </div>
+      <div className="p-3">
+        <div className="truncate text-sm font-medium group-hover:text-[#0969da] dark:group-hover:text-[#58a6ff]">{work.title || t("creator_detail.untitled")}</div>
+        <div className="mt-1 flex items-center gap-2 text-xs text-[#57606a] dark:text-[#8b949e]">
+          {work.source && <SourceBadge source={work.source} />}
+          <span>{work.posted_at ? new Date(work.posted_at).toLocaleDateString() : t("works.no_date")}</span>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
 export default function CreatorDetailPage() {
-  const t = useT(); const toast = useToast();
-  const params = useParams(); const router = useRouter(); const qc = useQueryClient();
+  const t = useT();
+  const toast = useToast();
+  const params = useParams();
+  const router = useRouter();
+  const qc = useQueryClient();
   const id = params.id as string;
-  const creator = useQuery({ queryKey: queryKeys.creators.detail(id), queryFn: () => api.getCreator(id) });
-  const links = useQuery({ queryKey: queryKeys.creators.links(id), queryFn: () => api.listCreatorLinks(id) });
-  const timeline = useQuery({ queryKey: ["creator-timeline", id], queryFn: () => api.getCreatorTimeline(id) });
-  const stats = useQuery({ queryKey: ["creator-stats", id], queryFn: () => api.getCreatorStats(id) });
+  const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [showAddLink, setShowAddLink] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [editName, setEditName] = useState(""); const [editDisplay, setEditDisplay] = useState(""); const [editDesc, setEditDesc] = useState("");
+  const [editName, setEditName] = useState("");
+  const [editDisplay, setEditDisplay] = useState("");
+  const [editDesc, setEditDesc] = useState("");
 
-  // Debounce edit modal values
+  const creator = useQuery({ queryKey: queryKeys.creators.detail(id), queryFn: () => api.getCreator(id) });
+  const links = useQuery({ queryKey: queryKeys.creators.links(id), queryFn: () => api.listCreatorLinks(id) });
+  const timeline = useQuery({ queryKey: ["creator-timeline", id], queryFn: () => api.getCreatorTimeline(id), refetchInterval: 15000 });
+  const stats = useQuery({ queryKey: ["creator-stats", id], queryFn: () => api.getCreatorStats(id), refetchInterval: 15000 });
+  const works = useQuery({
+    queryKey: ["creator-latest-works", id],
+    queryFn: () => api.listWorks(0, 6, { creator_id: id, sort_by: "posted_at", sort_order: "desc" }),
+    refetchInterval: 15000,
+  });
+  const overview = useQuery({
+    queryKey: ["creator-subscription-overview", id],
+    queryFn: () => api.getCreatorSubscriptionOverview(id),
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const running = data ? Math.max(data.summary.running_job_count, runningRepoCount(data.repositories)) : 0;
+      return running > 0 ? 4000 : 12000;
+    },
+  });
+
   const openEdit = () => {
     if (!creator.data) return;
-    setEditName(creator.data.name); setEditDisplay(creator.data.display_name || ""); setEditDesc(creator.data.description || ""); setEditing(true);
+    setEditName(creator.data.name);
+    setEditDisplay(creator.data.display_name || "");
+    setEditDesc(creator.data.description || "");
+    setEditing(true);
   };
+
   const update = useMutation({
     mutationFn: () => api.updateCreator(id, { name: editName, display_name: editDisplay || undefined, description: editDesc || undefined }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.creators.detail(id) }); setEditing(false); toast.success("已保存"); },
     onError: (e: Error) => toast.error(e.message),
   });
+
   const toggleFavorite = useMutation({
-    mutationFn: (cid: string) => api.toggleCreatorFavorite(cid),
+    mutationFn: () => api.toggleCreatorFavorite(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.creators.detail(id) }),
   });
 
-  const st = stats.data;
+  const syncRepo = useMutation({
+    mutationFn: (repo: CreatorRepository) => api.createDownloadJob({
+      subscription_id: repo.subscription_id,
+      subscription_source_id: repo.id,
+      source: repo.source,
+      source_url: repo.source_url || "",
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["creator-subscription-overview", id] });
+      qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+      toast.success("Sync queued");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
 
-  if (creator.isLoading) return <main className="max-w-6xl mx-auto p-6 md:p-10"><div className="space-y-6">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="rounded-2xl bg-white dark:bg-stone-800 p-8 animate-pulse" />)}</div></main>;
-  if (creator.error) return <main className="max-w-6xl mx-auto p-10"><div className="rounded-2xl bg-white dark:bg-stone-800 p-6 text-red-600">{(creator.error as Error).message}</div></main>;
-  if (!creator.data) return null;
+  const toggleRepo = useMutation({
+    mutationFn: (repo: CreatorRepository) => api.updateSubscriptionSource(repo.subscription_id, repo.id, { is_enabled: !repo.is_enabled }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["creator-subscription-overview", id] }),
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const c = creator.data;
+  const st = stats.data;
+  const repos = overview.data?.repositories || [];
+  const legalRepos = repos.filter((r) => r.is_repository);
+  const subscriptionHref = overview.data?.subscriptions[0]?.id
+    ? `/admin/subscriptions/${overview.data.subscriptions[0].id}`
+    : `/admin/subscriptions?q=${encodeURIComponent(c?.display_name || c?.name || "")}`;
+
+  const tabs = useMemo(() => [
+    { key: "overview" as const, label: "Overview", count: undefined },
+    { key: "repositories" as const, label: "Repositories", count: overview.data?.summary.repository_count ?? legalRepos.length },
+    { key: "works" as const, label: "Works", count: st?.total_works },
+    { key: "links" as const, label: "Links", count: links.data?.length || 0 },
+  ], [overview.data?.summary.repository_count, legalRepos.length, st?.total_works, links.data?.length]);
+
+  if (creator.isLoading) {
+    return <main className="mx-auto max-w-7xl p-6"><div className="space-y-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-28 animate-pulse rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />)}</div></main>;
+  }
+  if (creator.error) {
+    return <main className="mx-auto max-w-7xl p-6"><div className="card p-5 text-[#cf222e]">{(creator.error as Error).message}</div></main>;
+  }
+  if (!c) return null;
 
   return (
-    <main className="max-w-6xl mx-auto p-4 md:p-8 page-transition">
-      {/* ═══ Hero ═══ */}
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8 page-item">
-        <div>
-          <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-stone-900 dark:text-stone-100"
-            style={{ fontFamily: "'Playfair Display', Georgia, serif" }}>
-            {c.display_name || c.name}
-          </h1>
-          {c.display_name && c.display_name !== c.name && (
-            <p className="text-stone-400 dark:text-stone-500 text-sm mt-0.5 font-mono">{c.name}</p>
-          )}
-          <div className="flex items-center gap-3 mt-2">
-            <StatusBadge status={c.is_active ? "up" : "down"} />
-            {c.is_favorite && <span className="text-amber-500 text-lg">★</span>}
-            {c.danbooru_artist_id && (
-              <a href={`https://danbooru.donmai.us/artists/${c.danbooru_artist_id}`} target="_blank" rel="noopener"
-                className="text-xs text-amber-700 dark:text-amber-400 hover:underline font-mono">danbooru #{c.danbooru_artist_id}</a>
-            )}
+    <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mb-6 flex flex-col gap-4 border-b border-[#d8dee4] pb-5 dark:border-[#30363d] md:flex-row md:items-end md:justify-between">
+        <div className="flex min-w-0 items-center gap-4">
+          <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full border border-[#d8dee4] bg-gradient-to-br from-[#0969da] to-[#8250df] text-2xl font-semibold text-white dark:border-[#30363d]">
+            {initials(c.display_name || c.name)}
+          </div>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="truncate text-2xl font-semibold tracking-normal text-[#24292f] dark:text-[#e6edf3]">{c.display_name || c.name}</h1>
+              {c.is_favorite && <span className="rounded-full border border-[#bf8700]/30 bg-[#fff8c5] px-2 py-0.5 text-xs text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]">Favorite</span>}
+            </div>
+            {c.display_name && c.display_name !== c.name && <p className="mt-0.5 font-mono text-sm text-[#57606a] dark:text-[#8b949e]">{c.name}</p>}
+            <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-[#57606a] dark:text-[#8b949e]">
+              <StatusBadge status={c.is_active ? "up" : "down"} />
+              {c.danbooru_artist_id && (
+                <a href={`https://danbooru.donmai.us/artists/${c.danbooru_artist_id}`} target="_blank" rel="noopener noreferrer"
+                  className="font-mono text-[#0969da] hover:underline dark:text-[#58a6ff]">
+                  danbooru #{c.danbooru_artist_id}
+                </a>
+              )}
+              <span>{overview.data?.summary.repository_count ?? 0} repositories</span>
+              {overview.data?.summary.running_job_count ? <span className="text-[#0969da] dark:text-[#58a6ff]">{overview.data.summary.running_job_count} running</span> : null}
+            </div>
           </div>
         </div>
-        <div className="flex gap-2 shrink-0">
-          <button onClick={() => toggleFavorite.mutate(id)}
-            className={`text-xl px-3 py-2 rounded-xl border transition-all duration-200 ${c.is_favorite ? "border-amber-300 bg-amber-50 dark:bg-amber-900/20 text-amber-600 shadow-sm" : "border-stone-200 dark:border-stone-600 text-stone-400 hover:text-amber-500 hover:border-amber-200"}`}>
-            {c.is_favorite ? "★" : "☆"}
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => toggleFavorite.mutate()} className="btn-ghost">
+            {c.is_favorite ? "Unstar" : "Star"}
           </button>
-          <button onClick={() => router.push(`/admin/subscriptions?q=${encodeURIComponent(c.display_name || c.name)}`)}
-            className="px-4 py-2 border border-stone-200 dark:border-stone-600 rounded-xl text-sm font-medium hover:bg-stone-50 dark:hover:bg-stone-700/50 transition-colors text-stone-700 dark:text-stone-300">
-            {t("creator_detail.view_subscription") || "Subscription"} ↗
-          </button>
-          <button onClick={openEdit} className="px-4 py-2 bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 rounded-xl text-sm font-medium hover:bg-stone-800 dark:hover:bg-stone-200 transition-colors">✎ {t("creator_detail.edit")}</button>
+          <Link href={subscriptionHref} className="btn-ghost">
+            Subscription
+          </Link>
+          <button onClick={openEdit} className="btn-primary">Edit profile</button>
         </div>
       </div>
 
-      {/* ═══ Quick Stats Bar ═══ */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8 page-item" style={{ animationDelay: "100ms" }}>
-        {[
-          { label: t("creator_detail.stat_works") || "Works", value: st?.total_works, color: "text-blue-600" },
-          { label: t("creator_detail.stat_assets") || "Assets", value: st?.total_assets, color: "text-green-600" },
-          { label: t("creator_detail.stat_tags") || "Tags", value: st?.total_tags, color: "text-purple-600" },
-          { label: t("creator_detail.stat_sources") || "Sources", value: st?.source_breakdown?.length, color: "text-amber-600" },
-        ].map((s, i) => (
-          <div key={i} className="rounded-2xl bg-white dark:bg-stone-800 p-4 shadow-sm border border-stone-100 dark:border-stone-700/50 hover:shadow-md transition-shadow">
-            <div className={`text-2xl font-bold tabular-nums ${s.color}`}>
-              {s.value !== undefined ? s.value.toLocaleString() : "—"}
-            </div>
-            <div className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">{s.label}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* ═══ Main Grid ═══ */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 mb-10">
-        {/* Left Sidebar (2/5) */}
-        <div className="lg:col-span-2 space-y-5 page-item" style={{ animationDelay: "150ms" }}>
-          {/* Details */}
-          <div className="rounded-2xl bg-white dark:bg-stone-800 p-5 shadow-sm border border-stone-100 dark:border-stone-700/50">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-stone-400 dark:text-stone-500 mb-4">{t("creator_detail.details")}</h3>
-            {c.description && (
-              <p className="text-sm text-stone-700 dark:text-stone-300 leading-relaxed whitespace-pre-wrap mb-4">{c.description}</p>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr]">
+        <aside className="space-y-4">
+          <section className="card p-4">
+            <h2 className="mb-2 text-sm font-semibold">Profile</h2>
+            {c.description ? (
+              <p className="whitespace-pre-wrap text-sm leading-6 text-[#24292f] dark:text-[#e6edf3]">{c.description}</p>
+            ) : (
+              <p className="text-sm text-[#57606a] dark:text-[#8b949e]">No description yet.</p>
             )}
-            <div className="flex items-center justify-between text-xs py-1.5 border-t border-stone-100 dark:border-stone-700/50">
-              <span className="text-stone-500">{t("creator_detail.status")}</span><StatusBadge status={c.is_active ? "up" : "down"} />
-            </div>
-            <div className="flex items-center justify-between text-xs py-1.5">
-              <span className="text-stone-500">{t("creator_detail.created")}</span>
-              <span className="text-stone-600 dark:text-stone-400">{new Date(c.created_at).toLocaleDateString()}</span>
-            </div>
-          </div>
+            <dl className="mt-4 space-y-2 border-t border-[#d8dee4] pt-4 text-sm dark:border-[#30363d]">
+              <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">Works</dt><dd className="font-semibold">{st?.total_works?.toLocaleString() ?? "-"}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">Assets</dt><dd className="font-semibold">{st?.total_assets?.toLocaleString() ?? "-"}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">Sources</dt><dd className="font-semibold">{st?.source_breakdown?.length ?? "-"}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">Created</dt><dd>{new Date(c.created_at).toLocaleDateString()}</dd></div>
+            </dl>
+          </section>
 
-          {/* Links */}
-          <div className="rounded-2xl bg-white dark:bg-stone-800 p-5 shadow-sm border border-stone-100 dark:border-stone-700/50">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-stone-400 dark:text-stone-500">{t("creator_detail.links").replace("{count}", String(links.data?.length || 0))}</h3>
-              <button onClick={() => setShowAddLink(true)} className="text-xs text-amber-700 dark:text-amber-400 hover:underline">+ Add</button>
+          <section className="card p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">External links</h2>
+              <button onClick={() => setShowAddLink(true)} className="text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">Add</button>
             </div>
             {links.data?.length ? (
-              <div className="space-y-1.5">
-                {links.data.map((l: CreatorLinkType) => (
-                  <div key={l.id} className="flex items-center gap-2 text-xs py-1 px-2 rounded-lg hover:bg-stone-50 dark:hover:bg-stone-700/30 transition-colors">
+              <div className="space-y-2">
+                {links.data.slice(0, 8).map((l: CreatorLinkType) => (
+                  <a key={l.id} href={l.url} target="_blank" rel="noopener noreferrer"
+                    className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-sm hover:bg-[#f6f8fa] dark:hover:bg-[#21262d]">
                     <SourceBadge source={l.link_type} />
-                    <a href={l.url} target="_blank" className="text-blue-600 dark:text-blue-400 hover:underline truncate flex-1">{l.url}</a>
-                    <span className="text-stone-400 font-mono">{l.confidence.toFixed(1)}</span>
-                  </div>
+                    <span className="truncate text-[#0969da] dark:text-[#58a6ff]">{l.url}</span>
+                  </a>
                 ))}
               </div>
-            ) : <p className="text-xs text-stone-400">{t("creator_detail.no_links")}</p>}
-          </div>
+            ) : <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.no_links")}</p>}
+          </section>
 
-          {/* Danbooru Aliases */}
           {c.danbooru_artist_id && (
-            <div className="page-item" style={{ animationDelay: "200ms" }}>
-              <DanbooruAliases artistId={c.danbooru_artist_id} currentDisplay={c.display_name}
-                onSelectAlias={(alias) => { setEditName(c.name); setEditDisplay(alias); setEditDesc(c.description || ""); setEditing(true); }} />
-            </div>
+            <DanbooruAliases artistId={c.danbooru_artist_id} currentDisplay={c.display_name}
+              onSelectAlias={(alias) => { setEditName(c.name); setEditDisplay(alias); setEditDesc(c.description || ""); setEditing(true); }} />
           )}
+        </aside>
 
+        <section className="min-w-0">
+          <nav className="mb-4 flex gap-1 overflow-x-auto border-b border-[#d8dee4] dark:border-[#30363d]" aria-label="Creator sections">
+            {tabs.map((tab) => (
+              <button key={tab.key} onClick={() => setActiveTab(tab.key)}
+                className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${activeTab === tab.key ? "border-[#fd8c73] font-semibold text-[#24292f] dark:text-[#e6edf3]" : "border-transparent text-[#57606a] hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3]"}`}>
+                {tab.label}{tab.count !== undefined && <span className="ml-2 rounded-full bg-[#eaeef2] px-2 py-0.5 text-xs font-medium text-[#57606a] dark:bg-[#30363d] dark:text-[#8b949e]">{tab.count}</span>}
+              </button>
+            ))}
+          </nav>
 
-        </div>
-
-        {/* Right Charts (3/5) */}
-        <div className="lg:col-span-3 space-y-5 page-item" style={{ animationDelay: "200ms" }}>
-          {/* Source Breakdown */}
-          {st?.source_breakdown && st.source_breakdown.length > 0 && (
-            <div className="rounded-2xl bg-white dark:bg-stone-800 p-5 shadow-sm border border-stone-100 dark:border-stone-700/50">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-stone-400 dark:text-stone-500 mb-4">{t("creator_detail.source_breakdown") || "Source Breakdown"}</h3>
-              <div className="flex flex-wrap gap-4">
-                <div className="flex-1 min-w-[140px]">
-                  <HorizontalBarChart
-                    data={st.source_breakdown}
-                    maxKey="count" labelKey="source"
-                    colorFn={(d) => SOURCE_COLORS[d.source as string] || CHART_COLORS[0]}
-                  />
+          {activeTab === "overview" && (
+            <div className="space-y-5">
+              <section className="card p-4">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <h2 className="text-base font-semibold">{t("creator_detail.works_timeline")}</h2>
+                  <Link href={`/admin/works?creator=${id}`} className="text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("creator_detail.view_all_works")}</Link>
                 </div>
-                <div className="flex flex-col gap-1.5 justify-center text-xs">
-                  {st.source_breakdown.map((s, i) => (
-                    <div key={s.source} className="flex items-center gap-2">
-                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: SOURCE_COLORS[s.source] || CHART_COLORS[i % CHART_COLORS.length] }} />
-                      <span className="capitalize text-stone-600 dark:text-stone-400">{s.source}</span>
-                      <span className="font-mono tabular-nums text-stone-500">{s.count}</span>
-                    </div>
-                  ))}
+                <WorkGrid data={timeline.data} loading={timeline.isLoading} />
+              </section>
+
+              <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+                {st?.source_breakdown?.length ? (
+                  <section className="card p-4">
+                    <h2 className="mb-4 text-base font-semibold">{t("creator_detail.source_breakdown")}</h2>
+                    <HorizontalBarChart data={st.source_breakdown} maxKey="count" labelKey="source" colorFn={(d) => SOURCE_COLORS[d.source as string] || CHART_COLORS[0]} />
+                  </section>
+                ) : null}
+                {st?.tag_distribution?.length ? (
+                  <section className="card p-4">
+                    <h2 className="mb-4 text-base font-semibold">{t("creator_detail.tag_distribution")}</h2>
+                    <HorizontalBarChart data={st.tag_distribution.slice(0, 10)} maxKey="count" labelKey="tag" colorFn={(_, i) => CHART_COLORS[i % CHART_COLORS.length]} />
+                  </section>
+                ) : null}
+              </div>
+
+              {st?.monthly_frequency?.length ? (
+                <section className="card p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <h2 className="text-base font-semibold">{t("creator_detail.posting_frequency")}</h2>
+                    <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{st.monthly_frequency.length} months</span>
+                  </div>
+                  <MonthStrip data={st.monthly_frequency} />
+                </section>
+              ) : null}
+
+              <section className="card p-4">
+                <div className="mb-4 flex items-center justify-between">
+                  <h2 className="text-base font-semibold">Latest works</h2>
+                  <Link href={`/admin/works?creator=${id}`} className="text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">Open works</Link>
                 </div>
-              </div>
+                {works.data?.items?.length ? (
+                  <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+                    {works.data.items.map((w) => <WorkPreviewCard key={w.id} work={w} />)}
+                  </div>
+                ) : <p className="text-sm text-[#57606a] dark:text-[#8b949e]">No works imported yet.</p>}
+              </section>
             </div>
           )}
 
-          {/* Tag Distribution */}
-          {st?.tag_distribution && st.tag_distribution.length > 0 && (
-            <div className="rounded-2xl bg-white dark:bg-stone-800 p-5 shadow-sm border border-stone-100 dark:border-stone-700/50">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-stone-400 dark:text-stone-500 mb-4">{t("creator_detail.tag_distribution") || "Top Tags"}</h3>
-              <HorizontalBarChart
-                data={st.tag_distribution.slice(0, 12)}
-                maxKey="count" labelKey="tag"
-                colorFn={(_, i) => CHART_COLORS[i % CHART_COLORS.length]}
-              />
+          {activeTab === "repositories" && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-[#d8dee4] bg-white p-3 dark:border-[#30363d] dark:bg-[#161b22]">
+                <div>
+                  <h2 className="text-base font-semibold">Repositories</h2>
+                  <p className="text-sm text-[#57606a] dark:text-[#8b949e]">Downloadable gallery-dl subscription URLs for this creator.</p>
+                </div>
+                <Link href={subscriptionHref} className="btn-primary">Manage subscription</Link>
+              </div>
+              {repos.length ? repos.map((repo) => (
+                <RepositoryCard key={repo.id} repo={repo} onSync={(r) => syncRepo.mutate(r as CreatorRepository)} onToggle={(r) => toggleRepo.mutate(r as CreatorRepository)}
+                  syncPending={syncRepo.isPending} togglePending={toggleRepo.isPending} />
+              )) : (
+                <div className="card p-8 text-center text-sm text-[#57606a] dark:text-[#8b949e]">No subscription URLs yet.</div>
+              )}
             </div>
           )}
 
-          {/* Monthly Posting Heat Strip */}
-          {st?.monthly_frequency && st.monthly_frequency.length > 0 && (
-            <div className="rounded-2xl bg-white dark:bg-stone-800 p-5 shadow-sm border border-stone-100 dark:border-stone-700/50">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-stone-400 dark:text-stone-500">{t("creator_detail.posting_frequency") || "Posting Frequency"}</h3>
-                <span className="text-[10px] text-stone-400">{st.monthly_frequency.length} months</span>
+          {activeTab === "works" && (
+            <div className="space-y-4">
+              <div className="card p-4">
+                <h2 className="text-base font-semibold">Works</h2>
+                <p className="mt-1 text-sm text-[#57606a] dark:text-[#8b949e]">This tab keeps the creator filter and links into the full gallery browser.</p>
+                <button onClick={() => router.push(`/admin/works?creator=${id}`)} className="btn-primary mt-4">Open filtered gallery</button>
               </div>
-              <MonthStrip data={st.monthly_frequency} />
-              <div className="flex justify-between text-[10px] text-stone-400 mt-1.5">
-                <span>{st.monthly_frequency[0]?.month}</span>
-                <span>{st.monthly_frequency[st.monthly_frequency.length - 1]?.month}</span>
-              </div>
+              {works.data?.items?.length ? <div className="grid grid-cols-2 gap-3 md:grid-cols-3">{works.data.items.map((w) => <WorkPreviewCard key={w.id} work={w} />)}</div> : null}
             </div>
           )}
-        </div>
+
+          {activeTab === "links" && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between rounded-md border border-[#d8dee4] bg-white p-3 dark:border-[#30363d] dark:bg-[#161b22]">
+                <div>
+                  <h2 className="text-base font-semibold">External links</h2>
+                  <p className="text-sm text-[#57606a] dark:text-[#8b949e]">Reference profiles and identity links. Downloadable URLs live in Repositories.</p>
+                </div>
+                <button onClick={() => setShowAddLink(true)} className="btn-primary">Add link</button>
+              </div>
+              {links.data?.length ? links.data.map((l: CreatorLinkType) => (
+                <div key={l.id} className="rounded-md border border-[#d8dee4] bg-white p-4 dark:border-[#30363d] dark:bg-[#161b22]">
+                  <div className="flex items-center gap-2">
+                    <SourceBadge source={l.link_type} />
+                    <a href={l.url} target="_blank" rel="noopener noreferrer" className="truncate text-sm font-medium text-[#0969da] hover:underline dark:text-[#58a6ff]">{l.url}</a>
+                  </div>
+                  <div className="mt-2 text-xs text-[#57606a] dark:text-[#8b949e]">Confidence {l.confidence.toFixed(1)} · {l.is_verified ? "verified" : "unverified"}</div>
+                </div>
+              )) : <div className="card p-8 text-center text-sm text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.no_links")}</div>}
+            </div>
+          )}
+        </section>
       </div>
 
-      {/* ═══ Works Timeline ═══ */}
-      <div className="rounded-2xl bg-white dark:bg-stone-800 p-5 shadow-sm border border-stone-100 dark:border-stone-700/50 mb-10 page-item" style={{ animationDelay: "300ms" }}>
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="text-lg font-bold text-stone-900 dark:text-stone-100" style={{ fontFamily: "'Playfair Display', Georgia, serif" }}>
-            {t("creator_detail.works_timeline")}
-          </h2>
-          <button onClick={() => router.push(`/admin/works?creator=${id}`)}
-            className="text-xs text-amber-700 dark:text-amber-400 hover:underline transition-colors">{t("creator_detail.view_all_works")} →</button>
-        </div>
-        <WorkGrid data={timeline.data} loading={timeline.isLoading} />
-      </div>
-
-      {/* Modals */}
       <Modal open={showAddLink} onClose={() => setShowAddLink(false)} title="Add Link">
         <AddLinkForm creatorId={id} onClose={() => setShowAddLink(false)} />
       </Modal>
       <Modal open={editing} onClose={() => setEditing(false)} title={t("creator_detail.edit_title")}>
         <div className="space-y-4">
-          <div><label className="block text-sm font-medium mb-1">{t("creator_detail.name_field")}</label><input value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm dark:bg-stone-800 dark:text-white dark:border-stone-600" /></div>
-          <div><label className="block text-sm font-medium mb-1">{t("creator_detail.display_name_field")}</label><input value={editDisplay} onChange={(e) => setEditDisplay(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm dark:bg-stone-800 dark:text-white dark:border-stone-600" /></div>
-          <div><label className="block text-sm font-medium mb-1">{t("creator_detail.description_field")}</label><textarea value={editDesc} onChange={(e) => setEditDesc(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm dark:bg-stone-800 dark:text-white dark:border-stone-600" rows={3} /></div>
+          <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.name_field")}</label><input value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full rounded-md border border-[#d8dee4] px-3 py-2 text-sm dark:border-[#30363d] dark:bg-[#0d1117] dark:text-white" /></div>
+          <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.display_name_field")}</label><input value={editDisplay} onChange={(e) => setEditDisplay(e.target.value)} className="w-full rounded-md border border-[#d8dee4] px-3 py-2 text-sm dark:border-[#30363d] dark:bg-[#0d1117] dark:text-white" /></div>
+          <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.description_field")}</label><textarea value={editDesc} onChange={(e) => setEditDesc(e.target.value)} className="w-full rounded-md border border-[#d8dee4] px-3 py-2 text-sm dark:border-[#30363d] dark:bg-[#0d1117] dark:text-white" rows={4} /></div>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setEditing(false)} className="btn-ghost">{t("creator_detail.cancel")}</button>
             <button onClick={() => update.mutate()} disabled={update.isPending} className="btn-primary">{t("creator_detail.save")}</button>
@@ -290,7 +389,6 @@ export default function CreatorDetailPage() {
   );
 }
 
-// ── DanbooruAliases Component ──
 function DanbooruAliases({ artistId, currentDisplay, onSelectAlias }: {
   artistId: number; currentDisplay?: string; onSelectAlias: (alias: string) => void;
 }) {
@@ -302,21 +400,13 @@ function DanbooruAliases({ artistId, currentDisplay, onSelectAlias }: {
   });
 
   if (aliases.isLoading) {
-    return (
-      <div className="rounded-2xl bg-white dark:bg-stone-800 p-5 shadow-sm border border-stone-100 dark:border-stone-700/50">
-        <div className="animate-pulse space-y-2">
-          <div className="h-3 bg-stone-200 dark:bg-stone-700 rounded w-1/3" />
-          <div className="flex gap-2"><div className="h-5 bg-stone-200 dark:bg-stone-700 rounded w-14" /><div className="h-5 bg-stone-200 dark:bg-stone-700 rounded w-18" /></div>
-        </div>
-      </div>
-    );
+    return <div className="card p-4"><div className="h-12 animate-pulse rounded-md bg-[#eaeef2] dark:bg-[#21262d]" /></div>;
   }
-
   if (!aliases.data?.artist) {
     return (
-      <div className="rounded-2xl bg-white dark:bg-stone-800 p-5 shadow-sm border border-stone-100 dark:border-stone-700/50">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-stone-400 dark:text-stone-500 mb-2">{t("creator_detail.danbooru_ref")}</h3>
-        <p className="text-xs text-stone-400">Danbooru #{artistId}</p>
+      <div className="card p-4">
+        <h3 className="mb-2 text-sm font-semibold">{t("creator_detail.danbooru_ref")}</h3>
+        <p className="text-xs text-[#57606a] dark:text-[#8b949e]">Danbooru #{artistId}</p>
       </div>
     );
   }
@@ -326,28 +416,26 @@ function DanbooruAliases({ artistId, currentDisplay, onSelectAlias }: {
     ...(artist.pixiv_display_name ? [{ label: artist.pixiv_display_name, type: "pixiv" as const }] : []),
     ...(artist.other_names || []).map((n: string) => ({ label: n, type: "danbooru" as const })),
   ];
-  if (names.length === 0) return null;
+  if (!names.length) return null;
 
   return (
-    <div className="rounded-2xl bg-white dark:bg-stone-800 p-5 shadow-sm border border-stone-100 dark:border-stone-700/50">
-      <h3 className="text-xs font-semibold uppercase tracking-wider text-stone-400 dark:text-stone-500 mb-2">{t("creator_detail.danbooru_ref")}</h3>
-      <p className="text-[10px] text-stone-400 mb-3">{t("creator_detail.danbooru_aliases_hint")}</p>
+    <div className="card p-4">
+      <h3 className="mb-2 text-sm font-semibold">{t("creator_detail.danbooru_ref")}</h3>
+      <p className="mb-3 text-xs text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.danbooru_aliases_hint")}</p>
       <div className="flex flex-wrap gap-1.5">
         {names.map(({ label, type }) => {
           const isActive = currentDisplay === label;
           return (
             <button key={label} type="button" onClick={() => onSelectAlias(label)}
               title={t("creator_detail.set_display_name_as").replace("{name}", label)}
-              className={`text-[11px] px-2.5 py-1 rounded-full border transition-all duration-150 cursor-pointer ${
+              className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
                 isActive
-                  ? "bg-amber-100 border-amber-400 text-amber-800 dark:bg-amber-900/40 dark:border-amber-600 dark:text-amber-300 scale-105"
+                  ? "border-[#0969da] bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#58a6ff]"
                   : type === "pixiv"
-                    ? "bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-300 dark:hover:bg-blue-900/40 hover:scale-105"
-                    : "bg-stone-100 border-stone-200 text-stone-600 hover:bg-stone-200 dark:bg-stone-700 dark:border-stone-600 dark:text-stone-300 dark:hover:bg-stone-600 hover:scale-105"
+                    ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300"
+                    : "border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] hover:bg-[#eaeef2] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]"
               }`}>
-              {type === "pixiv" && <span className="opacity-50 mr-0.5 text-[10px]">P</span>}
               {label}
-              {isActive && <span className="ml-1">✓</span>}
             </button>
           );
         })}
@@ -356,11 +444,11 @@ function DanbooruAliases({ artistId, currentDisplay, onSelectAlias }: {
   );
 }
 
-// ── AddLinkForm Component ──
 function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () => void }) {
-  const t = useT();
-  const [url, setUrl] = useState(""); const [linkType, setLinkType] = useState("website");
-  const toast = useToast(); const qc = useQueryClient();
+  const [url, setUrl] = useState("");
+  const [linkType, setLinkType] = useState("website");
+  const toast = useToast();
+  const qc = useQueryClient();
   const create = useMutation({
     mutationFn: () => api.createCreatorLink(creatorId, { url, link_type: linkType }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.creators.links(creatorId) }); onClose(); toast.success("Link added"); },
@@ -368,10 +456,10 @@ function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () =>
   });
   return (
     <div className="space-y-4">
-      <div><label className="block text-sm font-medium mb-1">URL</label><input value={url} onChange={(e) => setUrl(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm dark:bg-stone-800 dark:text-white dark:border-stone-600" placeholder="https://..." /></div>
-      <div><label className="block text-sm font-medium mb-1">Type</label>
-        <select value={linkType} onChange={(e) => setLinkType(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm dark:bg-stone-800 dark:text-white dark:border-stone-600">
-          {["website", "pixiv", "x", "iwara", "danbooru", "other"].map(o => <option key={o} value={o}>{o}</option>)}
+      <div><label className="mb-1 block text-sm font-medium">URL</label><input value={url} onChange={(e) => setUrl(e.target.value)} className="w-full rounded-md border border-[#d8dee4] px-3 py-2 text-sm dark:border-[#30363d] dark:bg-[#0d1117] dark:text-white" placeholder="https://..." /></div>
+      <div><label className="mb-1 block text-sm font-medium">Type</label>
+        <select value={linkType} onChange={(e) => setLinkType(e.target.value)} className="w-full rounded-md border border-[#d8dee4] px-3 py-2 text-sm dark:border-[#30363d] dark:bg-[#0d1117] dark:text-white">
+          {["website", "pixiv", "x", "iwara", "danbooru", "other"].map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
       </div>
       <div className="flex justify-end gap-3 pt-2">

@@ -62,6 +62,10 @@ export interface Creator {
   is_active: boolean;
   danbooru_artist_id?: number;
   is_favorite: boolean;
+  subscription_count?: number;
+  source_count?: number;
+  repository_count?: number;
+  last_synced_at?: string;
   created_at: string;
   updated_at: string;
 }
@@ -103,6 +107,9 @@ export interface Subscription {
   schedule_mode?: string | null;
   scheduled_times?: string | null;
   last_synced_at?: string;
+  source_count?: number;
+  enabled_source_count?: number;
+  latest_job_status?: string;
   created_at: string;
   updated_at: string;
 }
@@ -116,8 +123,60 @@ export interface SubscriptionSource {
   is_enabled: boolean;
   last_successful_auth?: string;
   auth_healthy: boolean;
+  last_synced_at?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface RepositoryLatestJob {
+  id: string;
+  status: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  error_log_excerpt?: string | null;
+}
+
+export interface CreatorRepository {
+  id: string;
+  subscription_id: string;
+  source: string;
+  source_display_name?: string;
+  source_creator_id?: string;
+  source_url?: string;
+  is_enabled: boolean;
+  auth_healthy: boolean;
+  last_successful_auth?: string | null;
+  last_synced_at?: string | null;
+  can_download: boolean;
+  supports_gallerydl: boolean;
+  url_valid: boolean;
+  is_repository: boolean;
+  latest_job?: RepositoryLatestJob | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface CreatorSubscriptionOverview {
+  creator_id: string;
+  subscriptions: {
+    id: string;
+    name?: string | null;
+    is_active: boolean;
+    sync_enabled: boolean;
+    sync_interval_hours: number;
+    schedule_mode?: string | null;
+    scheduled_times?: string | null;
+    last_synced_at?: string | null;
+    created_at?: string | null;
+    updated_at?: string | null;
+  }[];
+  repositories: CreatorRepository[];
+  summary: {
+    subscription_count: number;
+    repository_count: number;
+    enabled_repository_count: number;
+    running_job_count: number;
+  };
 }
 
 export interface DownloadJob {
@@ -429,6 +488,9 @@ export const api = {
       tag_distribution: { tag: string; count: number }[];
       monthly_frequency: { month: string; count: number }[];
     }>(`/api/v1/creators/${id}/stats`),
+
+  getCreatorSubscriptionOverview: (id: string) =>
+    request<CreatorSubscriptionOverview>(`/api/v1/creators/${id}/subscription-overview`),
 
   createCreator: (data: { name: string; display_name?: string; description?: string; thumbnail_url?: string }) =>
     request<Creator>("/api/v1/creators", { method: "POST", body: JSON.stringify(data) }),

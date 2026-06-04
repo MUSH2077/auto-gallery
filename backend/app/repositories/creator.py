@@ -1,9 +1,9 @@
 from uuid import UUID
 
-from sqlalchemy import select, or_, and_
+from sqlalchemy import select, or_, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Creator, SourceCreator, CreatorLink, Subscription
+from app.models import Creator, SourceCreator, CreatorLink, Subscription, SubscriptionSource
 
 
 class CreatorRepository:
@@ -39,11 +39,54 @@ class CreatorRepository:
         if is_favorite is not None:
             conditions.append(Creator.is_favorite == is_favorite)
 
-        stmt = select(Creator).offset(offset).limit(limit).order_by(Creator.name)
+        subscription_count = (
+            select(func.count(Subscription.id))
+            .where(Subscription.creator_id == Creator.id)
+            .correlate(Creator)
+            .scalar_subquery()
+        )
+        source_count = (
+            select(func.count(SourceCreator.id))
+            .where(SourceCreator.creator_id == Creator.id)
+            .correlate(Creator)
+            .scalar_subquery()
+        )
+        repository_count = (
+            select(func.count(SubscriptionSource.id))
+            .select_from(Subscription)
+            .join(SubscriptionSource, SubscriptionSource.subscription_id == Subscription.id)
+            .where(Subscription.creator_id == Creator.id)
+            .where(SubscriptionSource.source_url.isnot(None))
+            .correlate(Creator)
+            .scalar_subquery()
+        )
+        last_synced_at = (
+            select(func.max(SubscriptionSource.last_synced_at))
+            .select_from(Subscription)
+            .join(SubscriptionSource, SubscriptionSource.subscription_id == Subscription.id)
+            .where(Subscription.creator_id == Creator.id)
+            .correlate(Creator)
+            .scalar_subquery()
+        )
+
+        stmt = (
+            select(Creator, subscription_count, source_count, repository_count, last_synced_at)
+            .offset(offset)
+            .limit(limit)
+            .order_by(Creator.name)
+        )
         if conditions:
             stmt = stmt.where(and_(*conditions))
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        creators = []
+        for row in result:
+            creator = row[0]
+            creator.subscription_count = row[1] or 0
+            creator.source_count = row[2] or 0
+            creator.repository_count = row[3] or 0
+            creator.last_synced_at = row[4]
+            creators.append(creator)
+        return creators
 
     async def get(self, creator_id: UUID) -> Creator | None:
         return await self.session.get(Creator, creator_id)
