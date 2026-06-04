@@ -13,6 +13,8 @@ from app.config import settings
 from app.database import async_session
 from app.models.subscription_source import SubscriptionSource
 from app.repositories.download_job import DownloadJobRepository
+from app.services.settings import build_effective_gallerydl_config, get_download_defaults
+from app.services.subscription_enqueue import mark_source_sync_success
 
 logger = logging.getLogger(__name__)
 
@@ -44,14 +46,8 @@ RQ_JOB_TIMEOUT = 7200  # 2 hours
 async def _read_download_defaults():
     """Read download job defaults from system_settings table."""
     try:
-        from app.models.system_setting import SystemSetting
         async with async_session() as db:
-            result = await db.execute(
-                select(SystemSetting).where(SystemSetting.key == "download_defaults")
-            )
-            row = result.scalar_one_or_none()
-            if row and row.value:
-                return row.value
+            return await get_download_defaults(db)
     except Exception:
         logger.warning("Failed to read download_defaults, using fallbacks", exc_info=True)
     return {}
@@ -139,6 +135,9 @@ async def _enqueue_import(download_job_id: str, import_error: str | None = None,
     import runner can process exactly those files without re-scanning.
     """
     try:
+        import redis as redis_lib
+        from rq import Queue
+
         async with async_session() as db:
             repo = DownloadJobRepository(db)
             extra = {"error_log": import_error} if import_error else {}
@@ -162,8 +161,6 @@ async def _enqueue_import(download_job_id: str, import_error: str | None = None,
             except Exception:
                 logger.warning("Failed to store import file list for %s", import_job_id, exc_info=True)
 
-        import redis as redis_lib
-        from rq import Queue
         r = redis_lib.from_url(settings.redis_url)
         Queue(connection=r).enqueue(
             "app.jobs.import_runner.run_import_job", import_job_id,
@@ -193,6 +190,10 @@ async def run_download_job(job_id: str):
             return
 
         await repo.update_status(job, "downloading")
+        if job.subscription_source_id:
+            ss = await db.get(SubscriptionSource, job.subscription_source_id)
+            if ss:
+                ss.last_attempted_at = datetime.now(timezone.utc)
         await db.commit()
 
     dl_defaults = await _read_download_defaults()
@@ -223,7 +224,12 @@ async def run_download_job(job_id: str):
                 _naming_tpl = _nt_result.scalar_one_or_none()
         except Exception:
             logger.debug("Failed to load naming template for source %s", job.source, exc_info=True)
-        _cfg = _prov.build_gallerydl_config(None, _naming_tpl)
+        _provider_cfg = _prov.build_gallerydl_config(None, None)
+        _cfg = build_effective_gallerydl_config(
+            job.source,
+            _provider_cfg,
+            _naming_tpl.template if _naming_tpl else None,
+        )
         if _cfg:
             job_config_path = os.path.join(
                 os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"),
@@ -231,6 +237,12 @@ async def run_download_job(job_id: str):
             os.makedirs(os.path.dirname(job_config_path), exist_ok=True)
             with open(job_config_path, "w") as f:
                 json.dump(_cfg, f)
+            async with async_session() as _cfg_db:
+                from app.repositories.download_job import DownloadJobRepository as _DJRepo
+                _cfg_j = await _DJRepo(_cfg_db).get(job_uuid)
+                if _cfg_j:
+                    _cfg_j.gallerydl_config_path = job_config_path
+                    await _cfg_db.commit()
         # Record creator dir so import_runner can scope its scan
         try:
             _creator_dir = _prov.get_creator_dir_from_url(job.source_url)
@@ -434,6 +446,8 @@ async def run_download_job(job_id: str):
                 j3 = await repo3.get(job_uuid)
                 if j3:
                     await repo3.update_status(j3, new_status, new_error)
+                    if new_status == "complete" and j3.subscription_source_id:
+                        await mark_source_sync_success(db3, j3.subscription_source_id)
                     await db3.commit()
 
     elif result is not None and result.returncode != 0:

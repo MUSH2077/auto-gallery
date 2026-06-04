@@ -1,5 +1,4 @@
 import logging
-from datetime import datetime, timezone, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,14 +6,12 @@ from app.auth import RequireAdmin
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.database import get_db
 from app.models.subscription import Subscription
-from app.models.subscription import Subscription as SubModel
 from app.models.subscription_source import SubscriptionSource
-from app.models.download_job import DownloadJob
 from app.schemas.subscription import SubscriptionCreate, SubscriptionRead, SubscriptionUpdate
 from app.schemas.subscription_source import SubscriptionSourceCreate, SubscriptionSourceRead, SubscriptionSourceUpdate
+from app.services.subscription_enqueue import enqueue_subscription_source_sync
 from app.services.subscription import SubscriptionService
 
 logger = logging.getLogger(__name__)
@@ -96,67 +93,24 @@ async def trigger_subscription_sync(subscription_id: UUID, db: AsyncSession = De
     if not sub_sources:
         return {"status": "ok", "message": "No enabled sources", "job_ids": []}
 
-    now = datetime.now(timezone.utc)
     job_ids = []
-    enqueue_errors = []
+    skipped = []
+    errors = []
 
     for ss in sub_sources:
-        if not ss.source_url:
-            continue
+        result = await enqueue_subscription_source_sync(db, ss.id, trigger="manual_subscription")
+        if result["status"] == "enqueued":
+            job_ids.append(result["job_id"])
+        elif result["status"] == "error":
+            errors.append(result)
+        else:
+            skipped.append(result)
 
-        from app.providers import registry
-        provider = registry.get(ss.source)
-        if not provider or not provider.capabilities.can_download:
-            continue
-        if not provider.validate_url(ss.source_url):
-            continue
-
-        # Guard against duplicate: skip if recent job exists for this source
-        interval_cutoff = now - timedelta(hours=sub.sync_interval_hours)
-        recent = await db.execute(
-            select(DownloadJob).where(
-                and_(
-                    DownloadJob.subscription_source_id == ss.id,
-                    DownloadJob.status.in_(["pending", "downloading", "downloaded", "importing"]),
-                    DownloadJob.created_at >= interval_cutoff,
-                )
-            ).limit(1)
-        )
-        if recent.scalar_one_or_none():
-            continue
-
-        job = DownloadJob(
-            subscription_id=sub.id,
-            subscription_source_id=ss.id,
-            source=ss.source,
-            source_url=ss.source_url,
-            status="pending",
-        )
-        db.add(job)
-        await db.flush()
-
-        try:
-            import redis as redis_lib
-            from rq import Queue
-            r = redis_lib.from_url(settings.redis_url)
-            Queue(name="scheduled", connection=r).enqueue(
-                "app.jobs.download.run_download_job", str(job.id), job_timeout=7200)
-            job_ids.append(str(job.id))
-        except Exception as e:
-            logger.error("Failed to enqueue download job %s: %s", job.id, e)
-            job.status = "failed"
-            job.error_log = f"Enqueue failed: {e}"
-            enqueue_errors.append(str(e))
-
-    if job_ids:
-        sub.last_synced_at = now
-    await db.commit()
-
-    if enqueue_errors and not job_ids:
-        return {"status": "error", "message": "All enqueue attempts failed", "job_ids": [], "errors": enqueue_errors}
-    if enqueue_errors:
-        return {"status": "partial_error", "message": f"Enqueued {len(job_ids)} jobs, {len(enqueue_errors)} failed", "job_ids": job_ids, "errors": enqueue_errors}
-    return {"status": "ok", "message": f"Enqueued {len(job_ids)} download jobs", "job_ids": job_ids}
+    if errors and not job_ids:
+        return {"status": "error", "message": "All enqueue attempts failed", "job_ids": [], "skipped": skipped, "errors": errors}
+    if errors:
+        return {"status": "partial_error", "message": f"Enqueued {len(job_ids)} jobs, {len(errors)} failed", "job_ids": job_ids, "skipped": skipped, "errors": errors}
+    return {"status": "ok", "message": f"Enqueued {len(job_ids)} download jobs", "job_ids": job_ids, "skipped": skipped}
 
 
 @router.get("/{subscription_id}", response_model=SubscriptionRead)

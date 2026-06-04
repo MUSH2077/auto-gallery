@@ -262,7 +262,8 @@ async def get_creator_subscription_overview(creator_id: UUID, db: AsyncSession =
             provider_display_name = provider.display_name
             can_download = bool(provider.capabilities.can_download)
             supports_gallerydl = bool(provider.capabilities.supports_gallerydl)
-            url_valid = bool(ss.source_url and provider.validate_url(ss.source_url))
+            normalized_url = provider.normalize_url(ss.source_url) if ss.source_url else None
+            url_valid = bool(ss.source_url and provider.validate_url(normalized_url or ss.source_url))
         except Exception:
             url_valid = False
 
@@ -297,6 +298,7 @@ async def get_creator_subscription_overview(creator_id: UUID, db: AsyncSession =
             "auth_healthy": ss.auth_healthy,
             "last_successful_auth": ss.last_successful_auth.isoformat() if ss.last_successful_auth else None,
             "last_synced_at": ss.last_synced_at.isoformat() if ss.last_synced_at else None,
+            "last_attempted_at": ss.last_attempted_at.isoformat() if ss.last_attempted_at else None,
             "can_download": can_download,
             "supports_gallerydl": supports_gallerydl,
             "url_valid": url_valid,
@@ -400,4 +402,3 @@ async def delete_creator_link(creator_id: UUID, link_id: UUID, db: AsyncSession 
         await svc.delete_link(link_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-

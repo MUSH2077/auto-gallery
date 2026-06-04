@@ -6,7 +6,7 @@ import SourceBadge from "./SourceBadge";
 
 type RepoLike = Pick<CreatorRepository,
   "id" | "subscription_id" | "source" | "source_display_name" | "source_creator_id" |
-  "source_url" | "is_enabled" | "auth_healthy" | "last_synced_at" |
+  "source_url" | "is_enabled" | "auth_healthy" | "last_synced_at" | "last_attempted_at" |
   "can_download" | "url_valid" | "is_repository" | "latest_job"
 >;
 
@@ -108,6 +108,7 @@ export default function RepositoryCard({
               {repo.auth_healthy ? "Auth healthy" : "Auth issue"}
             </span>
             <span>Last sync {relativeTime(repo.last_synced_at)}</span>
+            <span>Last try {relativeTime(repo.last_attempted_at)}</span>
             <JobPill job={repo.latest_job} />
           </div>
           {disabledReason && <p className="mt-2 text-xs text-[#9a6700] dark:text-[#d29922]">{disabledReason}</p>}
