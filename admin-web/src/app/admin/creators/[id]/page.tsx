@@ -81,7 +81,6 @@ export default function CreatorDetailPage() {
   const id = params.id as string;
   const creator = useQuery({ queryKey: queryKeys.creators.detail(id), queryFn: () => api.getCreator(id) });
   const links = useQuery({ queryKey: queryKeys.creators.links(id), queryFn: () => api.listCreatorLinks(id) });
-  const sourceCreators = useQuery({ queryKey: ["source-creators", id], queryFn: () => api.listSourceCreators(id) });
   const timeline = useQuery({ queryKey: ["creator-timeline", id], queryFn: () => api.getCreatorTimeline(id) });
   const stats = useQuery({ queryKey: ["creator-stats", id], queryFn: () => api.getCreatorStats(id) });
   const [showAddLink, setShowAddLink] = useState(false);
@@ -136,6 +135,10 @@ export default function CreatorDetailPage() {
             className={`text-xl px-3 py-2 rounded-xl border transition-all duration-200 ${c.is_favorite ? "border-amber-300 bg-amber-50 dark:bg-amber-900/20 text-amber-600 shadow-sm" : "border-stone-200 dark:border-stone-600 text-stone-400 hover:text-amber-500 hover:border-amber-200"}`}>
             {c.is_favorite ? "★" : "☆"}
           </button>
+          <button onClick={() => router.push(`/admin/subscriptions?q=${encodeURIComponent(c.display_name || c.name)}`)}
+            className="px-4 py-2 border border-stone-200 dark:border-stone-600 rounded-xl text-sm font-medium hover:bg-stone-50 dark:hover:bg-stone-700/50 transition-colors text-stone-700 dark:text-stone-300">
+            {t("creator_detail.view_subscription") || "Subscription"} ↗
+          </button>
           <button onClick={openEdit} className="px-4 py-2 bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 rounded-xl text-sm font-medium hover:bg-stone-800 dark:hover:bg-stone-200 transition-colors">✎ {t("creator_detail.edit")}</button>
         </div>
       </div>
@@ -146,7 +149,7 @@ export default function CreatorDetailPage() {
           { label: t("creator_detail.stat_works") || "Works", value: st?.total_works, color: "text-blue-600" },
           { label: t("creator_detail.stat_assets") || "Assets", value: st?.total_assets, color: "text-green-600" },
           { label: t("creator_detail.stat_tags") || "Tags", value: st?.total_tags, color: "text-purple-600" },
-          { label: t("creator_detail.stat_sources") || "Sources", value: sourceCreators.data?.length, color: "text-amber-600" },
+          { label: t("creator_detail.stat_sources") || "Sources", value: st?.source_breakdown?.length, color: "text-amber-600" },
         ].map((s, i) => (
           <div key={i} className="rounded-2xl bg-white dark:bg-stone-800 p-4 shadow-sm border border-stone-100 dark:border-stone-700/50 hover:shadow-md transition-shadow">
             <div className={`text-2xl font-bold tabular-nums ${s.color}`}>
@@ -203,21 +206,7 @@ export default function CreatorDetailPage() {
             </div>
           )}
 
-          {/* Source Accounts */}
-          {sourceCreators.data?.length ? (
-            <div className="rounded-2xl bg-white dark:bg-stone-800 p-5 shadow-sm border border-stone-100 dark:border-stone-700/50">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-stone-400 dark:text-stone-500 mb-3">{t("creator_detail.source_accounts") || "Source Accounts"}</h3>
-              <div className="space-y-1.5">
-                {sourceCreators.data.map((sc: any) => (
-                  <div key={sc.id} className="flex items-center gap-2 text-xs py-1 px-2 rounded-lg hover:bg-stone-50 dark:hover:bg-stone-700/30 transition-colors">
-                    <SourceBadge source={sc.source} />
-                    <span className="font-mono text-stone-500">{sc.source_creator_id}</span>
-                    {sc.display_name && <span className="text-stone-600 dark:text-stone-400">{sc.display_name}</span>}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
+
         </div>
 
         {/* Right Charts (3/5) */}
