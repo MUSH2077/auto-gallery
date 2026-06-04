@@ -15,13 +15,9 @@ interface TimelineData {
   total: number;
 }
 
-const SOURCE_COLORS: Record<string, string> = {
-  pixiv: "#0066FF", x: "#1DA1F2", twitter: "#1DA1F2", iwara: "#22C55E",
-  danbooru: "#A855F7", pinterest: "#E60023", lofter: "#F97316",
-  weibo: "#E6162D", bilibili: "#00A7D1", local: "#6B7280", manual: "#6B7280",
-};
+import { SOURCE_COLORS, CHART_COLORS } from "@/lib/sourceColors";
 
-function sourceColor(source: string): string { return SOURCE_COLORS[source] || "#6B7280"; }
+function sourceColor(source: string): string { return SOURCE_COLORS[source] || "#9CA3AF"; }
 
 function shadeColor(source: string, count: number): string {
   if (count === 0) return "rgba(128,128,128,0.08)";

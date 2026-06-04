@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys, ProviderInfo } from "@/lib/api";
+import { getSourceColor } from "@/lib/sourceColors";
 import { PageHeader, EmptyState } from "@/components";
 import { useT } from "@/lib/i18n";
 
@@ -15,6 +16,32 @@ const DEFAULT_URLS: Record<string, string> = {
   danbooru_reference: "https://danbooru.donmai.us/artists/12345",
   local: "/path/to/local/folder",
   manual: "(manual upload — no URL required)",
+  weibo: "https://weibo.com/u/1234567890",
+  bilibili: "https://space.bilibili.com/123456",
+  xiaohongshu: "https://www.xiaohongshu.com/user/profile/abc123",
+  youtube: "https://www.youtube.com/@channelname",
+  deviantart: "https://www.deviantart.com/username",
+  artstation: "https://www.artstation.com/username",
+  instagram: "https://www.instagram.com/username/",
+  tiktok: "https://www.tiktok.com/@username",
+  bluesky: "https://bsky.app/profile/username.bsky.social",
+  mastodon: "https://mastodon.social/@username",
+  misskey: "https://misskey.io/@username",
+  fantia: "https://fantia.jp/fanclubs/12345",
+  fanbox: "https://username.fanbox.cc",
+  skeb: "https://skeb.jp/@username",
+  patreon: "https://www.patreon.com/username",
+  boosty: "https://boosty.to/username",
+  gumroad: "https://username.gumroad.com",
+  nicovideo: "https://www.nicovideo.jp/user/12345",
+  vimeo: "https://vimeo.com/username",
+  carrd: "https://username.carrd.co",
+  aboutme: "https://about.me/username",
+  linktree: "https://linktr.ee/username",
+  threads: "https://www.threads.net/@username",
+  reddit: "https://www.reddit.com/user/username",
+  tumblr: "https://username.tumblr.com",
+  facebook: "https://www.facebook.com/username",
 };
 
 const SOURCE_DESCRIPTIONS: Record<string, string> = {
@@ -27,6 +54,32 @@ const SOURCE_DESCRIPTIONS: Record<string, string> = {
   pinterest: "Pinterest pins, boards, and user all-pins. Downloads images from pin pages, user profiles, and board collections. No tag system.",
   lofter: "LOFTER blog posts and images. Chinese blogging platform popular with artists. Downloads post images. No tag metadata from gallery-dl.",
   manual: "Manual upload of individual files through the admin interface. Does not use gallery-dl. For one-off additions.",
+  weibo: "Weibo user timelines and media posts. Chinese microblogging platform. Downloads images from user pages.",
+  bilibili: "Bilibili user videos and covers. Chinese video platform. Downloads video thumbnails and metadata.",
+  xiaohongshu: "Xiaohongshu (RED) user posts and media. Chinese lifestyle platform. Downloads post images.",
+  youtube: "YouTube channel videos and thumbnails. Downloads video metadata and cover images.",
+  deviantart: "DeviantArt user galleries and artwork. Downloads images with tag metadata.",
+  artstation: "ArtStation user portfolios and projects. Downloads high-resolution artwork.",
+  instagram: "Instagram user posts and stories. Downloads images from public profiles.",
+  tiktok: "TikTok user videos. Downloads public videos without watermark.",
+  bluesky: "Bluesky user posts and media. AT Protocol-based social network. Downloads post images.",
+  mastodon: "Mastodon user posts and media. Federated social network. Downloads post images.",
+  misskey: "Misskey user notes and media. Federated microblogging platform.",
+  fantia: "Fantia creator posts and media. Japanese creator support platform. Downloads images.",
+  fanbox: "Pixiv Fanbox creator posts. Japanese creator support platform. Downloads images.",
+  skeb: "Skeb creator commissions. Japanese commission platform.",
+  patreon: "Patreon creator posts. International creator support platform. Downloads public posts.",
+  boosty: "Boosty creator posts. Creator support platform. Downloads public posts.",
+  gumroad: "Gumroad creator products. Digital product platform.",
+  nicovideo: "Niconico video pages. Japanese video platform.",
+  vimeo: "Vimeo video pages. Professional video platform.",
+  carrd: "Carrd profile pages. Single-page website builder.",
+  aboutme: "About.me profile pages. Personal profile platform.",
+  linktree: "Linktree profile pages. Link aggregator platform.",
+  threads: "Threads user profiles. Meta's text-based social network.",
+  reddit: "Reddit user posts and subreddits. Downloads images from public posts.",
+  tumblr: "Tumblr blog posts. Downloads images from public blogs.",
+  facebook: "Facebook public pages and posts. Downloads public media.",
 };
 
 const URL_PATTERNS: Record<string, RegExp> = {
@@ -39,6 +92,32 @@ const URL_PATTERNS: Record<string, RegExp> = {
   lofter: /[\w-]+\.lofter\.com(\/post\/[\w_]+)?/,
   local: /.+/,
   manual: /.+/,
+  weibo: /weibo\.(?:com|cn)\/(?:u\/\d+|[\w一-鿿]+)/,
+  bilibili: /bilibili\.com\/video\/BV[\w]+|space\.bilibili\.com\/\d+/,
+  xiaohongshu: /xiaohongshu\.com\/user\/profile\/[\w-]+/,
+  youtube: /youtube\.com\/(?:@[\w-]+|channel\/[\w-]+|c\/[\w-]+)/,
+  deviantart: /deviantart\.com\/[\w-]+/,
+  artstation: /artstation\.com\/[\w-]+/,
+  instagram: /instagram\.com\/[\w.-]+\/?/,
+  tiktok: /tiktok\.com\/@[\w.-]+/,
+  bluesky: /bsky\.app\/profile\/[\w.-]+/,
+  mastodon: /mastodon\.\w+\/@[\w.]+/,
+  misskey: /misskey\.\w+\/@[\w.]+/,
+  fantia: /fantia\.jp\/fanclubs\/\d+/,
+  fanbox: /[\w-]+\.fanbox\.cc/,
+  skeb: /skeb\.jp\/@[\w-]+/,
+  patreon: /patreon\.com\/[\w-]+/,
+  boosty: /boosty\.to\/[\w-]+/,
+  gumroad: /[\w-]+\.gumroad\.com/,
+  nicovideo: /nicovideo\.jp\/user\/\d+/,
+  vimeo: /vimeo\.com\/[\w-]+/,
+  carrd: /[\w-]+\.carrd\.co/,
+  aboutme: /about\.me\/[\w-]+/,
+  linktree: /linktr\.ee\/[\w-]+/,
+  threads: /threads\.net\/@[\w.]+/,
+  reddit: /reddit\.com\/u(?:ser)?\/[\w-]+/,
+  tumblr: /[\w-]+\.tumblr\.com/,
+  facebook: /facebook\.com\/[\w.-]+/,
 };
 
 function ProviderCard({ s }: { s: ProviderInfo }) {
@@ -60,7 +139,7 @@ function ProviderCard({ s }: { s: ProviderInfo }) {
   return (
     <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
       <div className="flex items-center justify-between mb-2">
-        <span className="font-medium text-lg">{s.display_name}</span>
+        <span className="w-3 h-3 rounded-full inline-block mr-2 shrink-0" style={{ backgroundColor: getSourceColor(s.source_name) }} /><span className="font-medium text-lg">{s.display_name}</span>
         <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">{s.source_name}</span>
       </div>
       <p className="text-xs text-gray-500 dark:text-gray-400 mb-3 leading-relaxed">{SOURCE_DESCRIPTIONS[s.source_name] || t("sources.no_desc")}</p>
