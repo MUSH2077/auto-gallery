@@ -7,6 +7,7 @@ from app.config import settings
 from app.repositories.download_job import DownloadJobRepository
 from app.repositories.subscription import SubscriptionRepository
 from app.providers import registry
+from app.services.job_manifest import append_manifest_event, update_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,8 @@ class DownloadService:
             "source_url": normalized_url,
             "status": "pending",
         })
+        update_manifest(job, trigger="manual_url", source=source, source_url=normalized_url)
+        append_manifest_event(job, "created", trigger="manual_url")
         await self.db.commit()
 
         try:
@@ -81,6 +84,8 @@ class DownloadService:
             r = redis_lib.from_url(settings.redis_url)
             q = Queue(connection=r)
             q.enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
+            append_manifest_event(job, "enqueued", queue="default")
+            await self.db.commit()
         except Exception:
             logger.warning("Failed to enqueue download job %s", job.id, exc_info=True)
 
@@ -91,6 +96,7 @@ class DownloadService:
         if job.status not in ("failed", "stale", "downloading", "complete"):
             raise ValueError(f"Cannot retry job with status '{job.status}'")
         job = await self.repo.update_status(job, "pending")
+        job.error_log = None
         try:
             import redis as redis_lib
             from rq import Queue
@@ -119,6 +125,7 @@ class DownloadService:
         if job.status not in ("paused",):
             raise ValueError(f"Cannot resume job with status '{job.status}'")
         job = await self.repo.update_status(job, "pending")
+        job.error_log = None
         try:
             import redis as redis_lib
             from rq import Queue

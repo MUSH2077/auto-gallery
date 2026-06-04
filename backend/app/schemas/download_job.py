@@ -22,6 +22,9 @@ class DownloadJobRead(BaseModel):
     status: str
     retry_count: int
     error_log: str | None = None
+    gallerydl_config_path: str | None = None
+    download_dir: str | None = None
+    manifest: dict | None = None
     created_at: datetime
     updated_at: datetime
 

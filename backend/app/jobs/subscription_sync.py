@@ -15,6 +15,8 @@ from app.database import async_session
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.models.download_job import DownloadJob
+from app.repositories.download_job import DownloadJobRepository
+from app.services.locks import redis_lock
 from app.services.settings import get_download_defaults, get_scheduler_config
 from app.services.subscription_enqueue import enqueue_subscription_source_sync
 
@@ -106,6 +108,14 @@ def _should_sync_now(sub, system_config: dict, last_synced_at, now: datetime, tz
 
 
 async def sync_subscriptions():
+    with redis_lock("lock:subscription-sync-scan", ttl_seconds=300) as acquired:
+        if not acquired:
+            logger.info("Subscription auto-sync scan already running; skipping")
+            return
+        await _sync_subscriptions_locked()
+
+
+async def _sync_subscriptions_locked():
     logger.info("Starting subscription auto-sync scan")
     jobs_created = 0
     skipped_count = 0
@@ -175,12 +185,13 @@ async def sync_subscriptions():
                 )
             )
             stale_jobs = stale_result.scalars().all()
+            stale_repo = DownloadJobRepository(stale_db)
             for sj in stale_jobs:
-                sj.status = "stale"
                 if sj.error_log:
-                    sj.error_log += "\n[auto] Marked stale: stuck downloading for > 2x timeout"
+                    error_log = sj.error_log + "\n[auto] Marked stale: stuck downloading for > 2x timeout"
                 else:
-                    sj.error_log = "[auto] Marked stale: stuck downloading for > 2x timeout"
+                    error_log = "[auto] Marked stale: stuck downloading for > 2x timeout"
+                await stale_repo.update_status(sj, "stale", error_log)
                 logger.warning("Marked download job %s as stale (stuck downloading)", sj.id)
             if stale_jobs:
                 await stale_db.commit()

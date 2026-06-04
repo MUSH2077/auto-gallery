@@ -1233,6 +1233,69 @@ async def test_source_connection(data: dict):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+@router.get("/gallerydl-config/effective")
+async def get_effective_gallerydl_config(
+    source: str,
+    subscription_source_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Preview the effective per-job gallery-dl config used by workers."""
+    from uuid import UUID
+
+    from sqlalchemy import select as _select
+
+    from app.models.naming_template import NamingTemplate
+    from app.models.subscription_source import SubscriptionSource
+    from app.providers import registry as _registry
+    from app.services.job_manifest import redacted_manifest_config
+    from app.services.settings import (
+        build_effective_gallerydl_config,
+        extractor_key_for_source,
+        source_key_for_extractor,
+    )
+
+    provider_source = source_key_for_extractor(source)
+    source_url = None
+    if subscription_source_id:
+        ss = await db.get(SubscriptionSource, UUID(subscription_source_id))
+        if not ss:
+            raise HTTPException(status_code=404, detail="Subscription source not found")
+        provider_source = ss.source
+        source_url = ss.source_url
+
+    try:
+        provider = _registry.get(provider_source)
+    except KeyError:
+        raise HTTPException(status_code=400, detail={
+            "code": "unknown_provider",
+            "message": f"Unknown source provider: {provider_source}",
+            "retryable": False,
+        })
+
+    naming_result = await db.execute(
+        _select(NamingTemplate)
+        .where(NamingTemplate.source == provider_source, NamingTemplate.is_default == True)
+        .limit(1)
+    )
+    naming_template = naming_result.scalar_one_or_none()
+    provider_config = provider.build_gallerydl_config(None, None)
+    effective = build_effective_gallerydl_config(
+        provider_source,
+        provider_config,
+        naming_template.template if naming_template else None,
+    )
+
+    url_valid = bool(source_url and provider.validate_url(provider.normalize_url(source_url) or source_url)) if source_url else None
+    return {
+        "source": provider_source,
+        "extractor": extractor_key_for_source(provider_source),
+        "source_url": source_url,
+        "url_valid": url_valid,
+        "naming_template": naming_template.template if naming_template else None,
+        "config": redacted_manifest_config(effective),
+    }
+
+
 @router.get("/gallerydl-config")
 async def get_gallerydl_config(source: str | None = None):
     """Get gallery-dl config for one or all sources. Pass ?source=pixiv|twitter|iwara."""
@@ -1486,6 +1549,9 @@ async def get_auth_status(db: AsyncSession = Depends(get_db)):
             "source_url": ss.source_url,
             "source_creator_id": ss.source_creator_id,
             "auth_healthy": ss.auth_healthy,
+            "auth_status": ss.auth_status,
+            "auth_error_reason": ss.auth_error_reason,
+            "last_auth_checked_at": ss.last_auth_checked_at.isoformat() if ss.last_auth_checked_at else None,
             "last_successful_auth": ss.last_successful_auth.isoformat() if ss.last_successful_auth else None,
             "is_enabled": ss.is_enabled,
             "subscription": {

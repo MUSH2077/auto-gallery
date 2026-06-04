@@ -7,6 +7,7 @@ from sqlalchemy import select, func
 
 from app.database import get_db
 from app.models.import_job import ImportJob
+from app.services.job_state import transition_import_job
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,7 @@ async def retry_import_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Import job not found")
     if job.status not in ("failed", "stale"):
         raise HTTPException(status_code=400, detail=f"Cannot retry job with status '{job.status}'")
-    job.status = "pending"
+    transition_import_job(job, "pending")
     job.error_log = None
     await db.commit()
 
