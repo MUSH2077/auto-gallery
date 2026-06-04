@@ -39,6 +39,12 @@ export interface HealthResponse {
   status: string;
   version: string;
   services: Record<string, string>;
+  business?: {
+    queues?: Record<string, number>;
+    jobs?: Record<string, number>;
+    scheduler?: Record<string, string | null>;
+    gallerydl?: Record<string, unknown>;
+  };
 }
 
 export interface ProviderInfo {
@@ -125,6 +131,9 @@ export interface SubscriptionSource {
   auth_healthy: boolean;
   last_synced_at?: string;
   last_attempted_at?: string;
+  auth_status?: string | null;
+  auth_error_reason?: string | null;
+  last_auth_checked_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -149,6 +158,9 @@ export interface CreatorRepository {
   last_successful_auth?: string | null;
   last_synced_at?: string | null;
   last_attempted_at?: string | null;
+  auth_status?: string | null;
+  auth_error_reason?: string | null;
+  last_auth_checked_at?: string | null;
   can_download: boolean;
   supports_gallerydl: boolean;
   url_valid: boolean;
@@ -190,6 +202,9 @@ export interface DownloadJob {
   status: string;
   retry_count: number;
   error_log?: string;
+  gallerydl_config_path?: string | null;
+  download_dir?: string | null;
+  manifest?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 }
@@ -408,6 +423,9 @@ export interface AuthStatusItem {
   source_url: string;
   source_creator_id?: string;
   auth_healthy: boolean | null;
+  auth_status?: string | null;
+  auth_error_reason?: string | null;
+  last_auth_checked_at?: string | null;
   last_successful_auth: string | null;
   is_enabled: boolean;
   subscription: {
@@ -807,6 +825,11 @@ export const api = {
 
   // gallery-dl Config
   getGalleryDLConfig: (source?: string) => request<GalleryDLMultiConfig>(`/api/v1/admin/gallerydl-config${source ? `?source=${source}` : ""}`),
+  getEffectiveGalleryDLConfig: (source: string, subscriptionSourceId?: string) => {
+    const q = new URLSearchParams({ source });
+    if (subscriptionSourceId) q.set("subscription_source_id", subscriptionSourceId);
+    return request<{ source: string; extractor: string; source_url?: string | null; url_valid?: boolean | null; naming_template?: string | null; config: Record<string, unknown> }>(`/api/v1/admin/gallerydl-config/effective?${q.toString()}`);
+  },
 
   updateGalleryDLConfig: (data: { pixiv?: Partial<PixivSourceConfig>; twitter?: Partial<TwitterSourceConfig>; iwara?: Partial<IwaraSourceConfig>; danbooru?: Partial<DanbooruSourceConfig>; pinterest?: Partial<PinterestSourceConfig>; lofter?: Partial<LofterSourceConfig>; weibo?: Partial<WeiboSourceConfig>; bilibili?: Partial<BilibiliSourceConfig> }) =>
     request<{ status: string; message: string; path: string }>("/api/v1/admin/gallerydl-config", { method: "PUT", body: JSON.stringify(data) }),

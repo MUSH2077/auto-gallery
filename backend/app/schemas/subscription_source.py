@@ -33,6 +33,9 @@ class SubscriptionSourceRead(BaseModel):
     auth_healthy: bool
     last_synced_at: datetime | None = None
     last_attempted_at: datetime | None = None
+    auth_status: str | None = None
+    auth_error_reason: str | None = None
+    last_auth_checked_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

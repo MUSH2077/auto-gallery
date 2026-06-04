@@ -15,6 +15,9 @@ from app.models.subscription import Subscription
 from app.models.import_job import ImportJob
 from app.models.download_job import DownloadJob
 from app.providers import registry
+from app.repositories.download_job import DownloadJobRepository
+from app.services.job_manifest import append_manifest_event, update_manifest
+from app.services.job_state import transition_import_job
 from app.services.subscription_enqueue import mark_source_sync_success
 
 logger = logging.getLogger(__name__)
@@ -98,7 +101,7 @@ async def run_import_job(import_job_id: str):
         import_job = r.scalar_one_or_none()
         if not import_job:
             return
-        import_job.status = "running"
+        transition_import_job(import_job, "running")
         await db.commit()
 
     try:
@@ -140,8 +143,7 @@ async def run_import_job(import_job_id: str):
                 async with async_session() as db:
                     ij = await db.get(ImportJob, job_uuid)
                     if ij:
-                        ij.status = "failed"
-                        ij.error_log = f"Source directory not found: {source_root}"
+                        transition_import_job(ij, "failed", f"Source directory not found: {source_root}")
                         await db.commit()
                 return
 
@@ -157,8 +159,7 @@ async def run_import_job(import_job_id: str):
             async with async_session() as db:
                 ij = await db.get(ImportJob, job_uuid)
                 if ij:
-                    ij.status = "failed"
-                    ij.error_log = "No metadata JSON files found"
+                    transition_import_job(ij, "failed", "No metadata JSON files found")
                     await db.commit()
             return
 
@@ -179,8 +180,7 @@ async def run_import_job(import_job_id: str):
             async with async_session() as db:
                 ij = await db.get(ImportJob, job_uuid)
                 if ij:
-                    ij.status = "failed"
-                    ij.error_log = "Could not extract work IDs from any JSON"
+                    transition_import_job(ij, "failed", "Could not extract work IDs from any JSON")
                     await db.commit()
             return
 
@@ -468,11 +468,14 @@ async def run_import_job(import_job_id: str):
         async with async_session() as db:
             ij = await db.get(ImportJob, job_uuid)
             if ij:
-                ij.status = "complete"
+                transition_import_job(ij, "complete")
                 # Also mark the parent download job as complete
-                dj = await db.get(DownloadJob, ij.download_job_id)
+                dj_repo = DownloadJobRepository(db)
+                dj = await dj_repo.get(ij.download_job_id)
                 if dj:
-                    dj.status = "complete"
+                    await dj_repo.update_status(dj, "complete")
+                    update_manifest(dj, import_stats=stats)
+                    append_manifest_event(dj, "import_complete", **stats)
                     if dj.subscription_source_id:
                         await mark_source_sync_success(db, dj.subscription_source_id)
                 await db.commit()
@@ -489,8 +492,7 @@ async def run_import_job(import_job_id: str):
                 # Check if this is a first failure — if so, retry once
                 already_retried = ij.error_log and "RETRY_ATTEMPT" in (ij.error_log or "")
                 if not already_retried:
-                    ij.status = "pending"
-                    ij.error_log = f"RETRY_ATTEMPT\n{error_text}"
+                    transition_import_job(ij, "pending", f"RETRY_ATTEMPT\n{error_text}")
                     await db.commit()
                     # Re-enqueue with backoff
                     try:
@@ -506,8 +508,7 @@ async def run_import_job(import_job_id: str):
                     except Exception:
                         logger.warning("Failed to enqueue import retry for %s", import_job_id, exc_info=True)
                 else:
-                    ij.status = "failed"
-                    ij.error_log = error_text
+                    transition_import_job(ij, "failed", error_text)
                     await db.commit()
 
 async def cleanup_metadata_jsons(download_root: str = None):

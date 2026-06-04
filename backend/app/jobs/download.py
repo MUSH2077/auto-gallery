@@ -13,6 +13,7 @@ from app.config import settings
 from app.database import async_session
 from app.models.subscription_source import SubscriptionSource
 from app.repositories.download_job import DownloadJobRepository
+from app.services.job_manifest import append_manifest_event, update_manifest
 from app.services.settings import build_effective_gallerydl_config, get_download_defaults
 from app.services.subscription_enqueue import mark_source_sync_success
 
@@ -146,6 +147,10 @@ async def _enqueue_import(download_job_id: str, import_error: str | None = None,
                 "status": "pending",
                 **extra,
             })
+            download_job = await repo.get(UUID(download_job_id))
+            if download_job:
+                await repo.update_status(download_job, "importing", import_error)
+                append_manifest_event(download_job, "import_job_created", import_job_id=str(import_job.id), reason=import_error)
             await db.commit()
             import_job_id = str(import_job.id)
 
@@ -242,6 +247,8 @@ async def run_download_job(job_id: str):
                 _cfg_j = await _DJRepo(_cfg_db).get(job_uuid)
                 if _cfg_j:
                     _cfg_j.gallerydl_config_path = job_config_path
+                    update_manifest(_cfg_j, gallerydl_config_path=job_config_path, effective_gallerydl_config=_cfg)
+                    append_manifest_event(_cfg_j, "effective_config_written", path=job_config_path)
                     await _cfg_db.commit()
         # Record creator dir so import_runner can scope its scan
         try:
@@ -252,6 +259,7 @@ async def run_download_job(job_id: str):
                     _dir_j = await _DJRepo(_dir_db).get(job_uuid)
                     if _dir_j and not _dir_j.download_dir:
                         _dir_j.download_dir = _creator_dir
+                        update_manifest(_dir_j, download_dir=_creator_dir)
                         await _dir_db.commit()
         except Exception:
             logger.debug("Failed to record download_dir for job %s", job_id, exc_info=True)
@@ -323,14 +331,45 @@ async def run_download_job(job_id: str):
         except Exception:
             logger.warning("Failed to apply proxy env for download job %s", job_id, exc_info=True)
 
+        async with async_session() as _manifest_db:
+            _manifest_repo = DownloadJobRepository(_manifest_db)
+            _manifest_job = await _manifest_repo.get(job_uuid)
+            if _manifest_job:
+                update_manifest(
+                    _manifest_job,
+                    command=cmd,
+                    archive_path=archive_path,
+                    range=f"1-{max_posts}",
+                    proxy_enabled=proxy_enabled,
+                )
+                append_manifest_event(_manifest_job, "gallerydl_started", source_url=source_url)
+                await _manifest_db.commit()
+
         logger.info("Running gallery-dl: %s (timeout=%ds, proxy=%s)", " ".join(cmd), dl_timeout, proxy_enabled)
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=dl_timeout, env=env)
         logger.info("gallery-dl exit=%d, stdout=%d bytes, stderr=%d bytes", result.returncode, len(result.stdout), len(result.stderr))
         if result.returncode != 0:
             logger.warning("gallery-dl stderr (last 500): %s", result.stderr[-500:] if result.stderr else "(none)")
+        async with async_session() as _manifest_db:
+            _manifest_job = await DownloadJobRepository(_manifest_db).get(job_uuid)
+            if _manifest_job:
+                update_manifest(
+                    _manifest_job,
+                    gallerydl_returncode=result.returncode,
+                    stdout_bytes=len(result.stdout or ""),
+                    stderr_bytes=len(result.stderr or ""),
+                )
+                append_manifest_event(_manifest_job, "gallerydl_finished", returncode=result.returncode)
+                await _manifest_db.commit()
 
     except subprocess.TimeoutExpired:
         logger.warning("gallery-dl timed out after %ds for job %s", dl_timeout, job_id)
+        async with async_session() as _manifest_db:
+            _manifest_job = await DownloadJobRepository(_manifest_db).get(job_uuid)
+            if _manifest_job:
+                update_manifest(_manifest_job, gallerydl_timeout_seconds=dl_timeout)
+                append_manifest_event(_manifest_job, "gallerydl_timeout", timeout_seconds=dl_timeout)
+                await _manifest_db.commit()
         result = None  # result is None signals timeout to the handlers below
 
     except Exception as e:
@@ -395,8 +434,14 @@ async def run_download_job(job_id: str):
                     if result is not None and result.returncode == 0 and not auth_issue:
                         source.last_successful_auth = datetime.now(timezone.utc)
                         source.auth_healthy = True
+                        source.auth_status = "healthy"
+                        source.auth_error_reason = None
+                        source.last_auth_checked_at = datetime.now(timezone.utc)
                     elif auth_issue:
                         source.auth_healthy = False
+                        source.auth_status = "unhealthy"
+                        source.auth_error_reason = auth_issue
+                        source.last_auth_checked_at = datetime.now(timezone.utc)
                         logger.warning("Auth issue for subscription_source %s: %s", source.id, auth_issue)
         else:
             # Timeout — subprocess.TimeoutExpired was caught
@@ -416,6 +461,12 @@ async def run_download_job(job_id: str):
         # gallery-dl exits 0 even when all files were skipped (already in archive),
         # or when the source has no content at all.
         metadata_count, image_count, new_json_paths = _count_new_artifacts(job.source, json_before)
+        async with async_session() as _manifest_db:
+            _manifest_job = await DownloadJobRepository(_manifest_db).get(job_uuid)
+            if _manifest_job:
+                update_manifest(_manifest_job, metadata_json_count=metadata_count, image_count=image_count)
+                append_manifest_event(_manifest_job, "artifacts_counted", metadata_json_count=metadata_count, image_count=image_count)
+                await _manifest_db.commit()
         if metadata_count > 0:
             await _enqueue_import(str(job_uuid), new_json_paths=new_json_paths)
         else:

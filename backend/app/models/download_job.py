@@ -1,4 +1,5 @@
 from sqlalchemy import ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from uuid import UUID
 
@@ -17,6 +18,7 @@ class DownloadJob(TimestampMixin, Base):
     error_log: Mapped[str | None] = mapped_column(Text)
     gallerydl_config_path: Mapped[str | None] = mapped_column(String(2000))
     download_dir: Mapped[str | None] = mapped_column(String(2000))
+    manifest: Mapped[dict | None] = mapped_column(JSONB)
 
     subscription = relationship("Subscription", back_populates="download_jobs")
     import_jobs = relationship("ImportJob", back_populates="download_job")
