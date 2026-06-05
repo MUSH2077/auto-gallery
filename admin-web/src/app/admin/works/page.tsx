@@ -8,13 +8,19 @@ import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
 
 function Img({ assetId, alt, className }: { assetId: string | undefined; alt: string; className?: string }) {
   const t = useT();
-  const [err, setErr] = useState(false);
-  if (!assetId || err) {
+  const [mode, setMode] = useState<"thumb" | "preview" | "error">("thumb");
+  useEffect(() => setMode("thumb"), [assetId]);
+  if (!assetId || mode === "error") {
     return <div className={`${className || ""} flex items-center justify-center bg-[#f6f8fa] text-xs text-[#8c959f] dark:bg-[#21262d]`}>{t("works.na")}</div>;
   }
   return (
-    <img src={api.mediaUrl(assetId, "thumb")} alt={alt} className={className} loading="lazy"
-      onError={() => setErr(true)} />
+    <img
+      src={api.mediaUrl(assetId, mode)}
+      alt={alt}
+      className={className}
+      loading="lazy"
+      onError={() => setMode(mode === "thumb" ? "preview" : "error")}
+    />
   );
 }
 

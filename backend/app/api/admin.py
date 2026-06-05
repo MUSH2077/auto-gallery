@@ -1179,6 +1179,34 @@ def _write_source_config(extractor_config: dict, data: BaseModel, schema_map: di
     return extractor_config
 
 
+def _rebuild_managed_postprocessors(config: dict, pixiv_ugoira: str | None) -> list[dict]:
+    """Rebuild auto-gallery managed gallery-dl postprocessors.
+
+    The metadata postprocessor is required by the import pipeline. The ugoira
+    postprocessor is controlled by the current Pixiv config and must survive
+    saves from other provider tabs.
+    """
+    postprocessors = config.setdefault("postprocessors", [])
+    postprocessors[:] = [
+        pp for pp in postprocessors
+        if not (isinstance(pp, dict) and pp.get("name") in ("ugoira", "metadata"))
+    ]
+
+    if pixiv_ugoira in ("gif", "webm", "mp4"):
+        postprocessors.append({
+            "name": "ugoira",
+            "extension": pixiv_ugoira,
+            "keep-files": False,
+        })
+
+    postprocessors.append({
+        "name": "metadata",
+        "event": "after",
+        "filename": "{filename}.json",
+    })
+    return postprocessors
+
+
 # ── Gallery-dl connectivity test ──
 
 TEST_URLS = {
@@ -1478,27 +1506,10 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
 
     config["extractor"] = extractors
 
-    # Ensure metadata postprocessor is always present (for import pipeline)
-    config.setdefault("postprocessors", [])
-    pp_list = config["postprocessors"]
-    # Remove old metadata entries
-    pp_list[:] = [p for p in pp_list if p.get("name") not in ("ugoira", "metadata")]
-    # Add metadata PP (always, for import JSONs)
-    pp_list.append({
-        "name": "metadata",
-        "event": "after",
-        "filename": "{filename}.json",
-    })
-
-    # Configure ugoira postprocessor based on Pixiv ugoira format
-    if data.pixiv is not None and data.pixiv.ugoira is not None:
-        ugoira = data.pixiv.ugoira
-        if ugoira in ("gif", "webm", "mp4"):
-            pp_list.insert(0, {
-                "name": "ugoira",
-                "extension": ugoira,
-                "keep-files": False,
-            })
+    # Ensure managed postprocessors match the final saved config. This keeps
+    # Pixiv GIF conversion stable even when saving a non-Pixiv provider tab.
+    pixiv_ugoira = extractors.get("pixiv", {}).get("ugoira")
+    _rebuild_managed_postprocessors(config, pixiv_ugoira)
 
     with open(config_path, "w") as f:
         json.dump(config, f, indent=2)

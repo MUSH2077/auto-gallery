@@ -17,6 +17,9 @@ class DownloadJobRead(BaseModel):
     id: UUID
     subscription_id: UUID
     subscription_source_id: UUID | None = None
+    creator_id: UUID | None = None
+    creator_name: str | None = None
+    subscription_name: str | None = None
     source: str
     source_url: str
     status: str
