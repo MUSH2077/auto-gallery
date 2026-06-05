@@ -135,7 +135,7 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={t("works.search_title")}
-            className="min-w-0 flex-1 rounded-md border border-[#d8dee4] px-3 py-2 text-sm dark:border-[#30363d] dark:bg-[#0d1117] dark:text-white md:max-w-xs"
+            className="input min-w-0 flex-1 md:max-w-xs"
           />
           {selectedTag && (
             <button
@@ -491,9 +491,9 @@ export default function CreatorDetailPage() {
       </Modal>
       <Modal open={editing} onClose={() => setEditing(false)} title={t("creator_detail.edit_title")}>
         <div className="space-y-4">
-          <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.name_field")}</label><input value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full rounded-md border border-[#d8dee4] px-3 py-2 text-sm dark:border-[#30363d] dark:bg-[#0d1117] dark:text-white" /></div>
-          <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.display_name_field")}</label><input value={editDisplay} onChange={(e) => setEditDisplay(e.target.value)} className="w-full rounded-md border border-[#d8dee4] px-3 py-2 text-sm dark:border-[#30363d] dark:bg-[#0d1117] dark:text-white" /></div>
-          <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.description_field")}</label><textarea value={editDesc} onChange={(e) => setEditDesc(e.target.value)} className="w-full rounded-md border border-[#d8dee4] px-3 py-2 text-sm dark:border-[#30363d] dark:bg-[#0d1117] dark:text-white" rows={4} /></div>
+          <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.name_field")}</label><input value={editName} onChange={(e) => setEditName(e.target.value)} className="input w-full" /></div>
+          <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.display_name_field")}</label><input value={editDisplay} onChange={(e) => setEditDisplay(e.target.value)} className="input w-full" /></div>
+          <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.description_field")}</label><textarea value={editDesc} onChange={(e) => setEditDesc(e.target.value)} className="textarea w-full" rows={4} /></div>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setEditing(false)} className="btn-ghost">{t("creator_detail.cancel")}</button>
             <button onClick={() => update.mutate()} disabled={update.isPending} className="btn-primary">{t("creator_detail.save")}</button>
@@ -571,9 +571,9 @@ function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () =>
   });
   return (
     <div className="space-y-4">
-      <div><label className="mb-1 block text-sm font-medium">URL</label><input value={url} onChange={(e) => setUrl(e.target.value)} className="w-full rounded-md border border-[#d8dee4] px-3 py-2 text-sm dark:border-[#30363d] dark:bg-[#0d1117] dark:text-white" placeholder="https://..." /></div>
+      <div><label className="mb-1 block text-sm font-medium">URL</label><input value={url} onChange={(e) => setUrl(e.target.value)} className="input w-full" placeholder="https://..." /></div>
       <div><label className="mb-1 block text-sm font-medium">Type</label>
-        <select value={linkType} onChange={(e) => setLinkType(e.target.value)} className="w-full rounded-md border border-[#d8dee4] px-3 py-2 text-sm dark:border-[#30363d] dark:bg-[#0d1117] dark:text-white">
+        <select value={linkType} onChange={(e) => setLinkType(e.target.value)} className="select w-full">
           {["website", "pixiv", "x", "iwara", "danbooru", "other"].map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
       </div>

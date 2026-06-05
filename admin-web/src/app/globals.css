@@ -132,6 +132,40 @@
            placeholder:text-[#8c959f]
            dark:border-[#30363d] dark:bg-[#0d1117] dark:text-[#e6edf3]
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0969da]/35 dark:focus-visible:ring-[#58a6ff]/35;
+    color-scheme: light;
+  }
+  html.dark .input, html.dark .select, html.dark .textarea {
+    color-scheme: dark;
+  }
+  .input:disabled, .select:disabled, .textarea:disabled {
+    @apply cursor-not-allowed bg-[#f6f8fa] text-[#8c959f] opacity-70
+           dark:bg-[#21262d] dark:text-[#6e7681];
+  }
+  .input:invalid, .select:invalid, .textarea:invalid {
+    @apply border-[#cf222e]/60 dark:border-[#f85149]/60;
+  }
+  .input:-webkit-autofill,
+  .select:-webkit-autofill,
+  .textarea:-webkit-autofill {
+    -webkit-text-fill-color: var(--ag-text);
+    box-shadow: 0 0 0 1000px var(--ag-surface) inset;
+    transition: background-color 9999s ease-out;
+  }
+  html.dark .input:-webkit-autofill,
+  html.dark .select:-webkit-autofill,
+  html.dark .textarea:-webkit-autofill {
+    box-shadow: 0 0 0 1000px #0d1117 inset;
+  }
+  input[type="checkbox"], input[type="radio"] {
+    accent-color: var(--ag-accent);
+  }
+  input[type="range"] {
+    accent-color: var(--ag-accent);
+  }
+  input[type="checkbox"]:focus-visible,
+  input[type="radio"]:focus-visible,
+  input[type="range"]:focus-visible {
+    @apply outline-none ring-2 ring-[#0969da]/35 dark:ring-[#58a6ff]/35;
   }
   .textarea {
     @apply min-h-[84px];

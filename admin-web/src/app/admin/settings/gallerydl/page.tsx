@@ -188,7 +188,7 @@ function TextField({ label, desc, value, onChange, type, placeholder }: {
       <label className="block text-sm font-medium mb-1">{label}</label>
       {desc && <p className="text-xs text-gray-400 dark:text-gray-500 mb-1">{desc}</p>}
       <input type={type || "text"} value={value} onChange={(e) => onChange(e.target.value)}
-        className="w-full border rounded px-3 py-2 text-sm font-mono" placeholder={placeholder} />
+        className="input w-full font-mono" placeholder={placeholder} />
     </div>
   );
 }
@@ -201,7 +201,7 @@ function NumberField({ label, desc, value, onChange, placeholder }: {
       <label className="block text-sm font-medium mb-1">{label}</label>
       {desc && <p className="text-xs text-gray-400 dark:text-gray-500 mb-1">{desc}</p>}
       <input type="text" value={value} onChange={(e) => onChange(e.target.value)}
-        className="w-32 border rounded px-3 py-2 text-sm font-mono" placeholder={placeholder} />
+        className="input w-32 font-mono" placeholder={placeholder} />
     </div>
   );
 }

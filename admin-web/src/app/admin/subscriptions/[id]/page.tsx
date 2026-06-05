@@ -221,10 +221,10 @@ export default function SubscriptionDetailPage() {
           {editMode === "interval" && (
             <div>
               <label className="block text-sm font-medium mb-1">{t("subdefaults.sync_interval")}</label>
-              <div className="flex w-fit items-center gap-1 rounded-md border border-[#d8dee4] bg-[#f6f8fa] px-1 dark:border-[#30363d] dark:bg-[#21262d]">
+              <div className="flex w-fit items-center gap-1">
                 <input type="number" min={1} max={168} value={editInterval}
                   onChange={(e) => setEditInterval(parseInt(e.target.value) || 24)}
-                  className="w-16 border-0 bg-transparent px-2 py-1.5 text-sm font-mono text-center dark:text-white" />
+                  className="input w-16 px-2 py-1.5 text-center font-mono" />
                 <span className="pr-2 text-xs text-[#57606a] dark:text-[#8b949e]">hours</span>
               </div>
             </div>

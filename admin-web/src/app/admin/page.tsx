@@ -21,12 +21,12 @@ export default function Dashboard() {
   const failedIJ = useQuery({ queryKey: [...queryKeys.importJobs.all, "failed"], queryFn: () => api.listImportJobs("failed", 0, 5) });
 
   const stats = [
-    { label: t("dashboard.download_jobs"), value: String(failedDJ.data?.length ?? 0), sub: "failed", delay: 50 },
-    { label: t("dashboard.import_jobs"), value: String(failedIJ.data?.total ?? 0), sub: "processed", delay: 100 },
+    { label: t("dashboard.download_jobs"), value: String(failedDJ.data?.length ?? 0), sub: t("dashboard.failed"), delay: 50 },
+    { label: t("dashboard.import_jobs"), value: String(failedIJ.data?.total ?? 0), sub: t("dashboard.processed"), delay: 100 },
     ...(storage.data ? [
-      { label: t("dashboard.disk_free"), value: fmtBytes(storage.data.disk?.free_bytes || 0), sub: "available", delay: 150 },
-      { label: "Usage", value: `${storage.data.disk?.total_bytes > 0 ? Math.round((storage.data.disk?.used_bytes || 0) / (storage.data.disk?.total_bytes || 1) * 100) : "?"}%`,
-        sub: `${fmtBytes(storage.data.downloads?.size_bytes || 0)} downloads`, delay: 200 },
+      { label: t("dashboard.disk_free"), value: fmtBytes(storage.data.disk?.free_bytes || 0), sub: t("dashboard.available"), delay: 150 },
+      { label: t("dashboard.usage"), value: `${storage.data.disk?.total_bytes > 0 ? Math.round((storage.data.disk?.used_bytes || 0) / (storage.data.disk?.total_bytes || 1) * 100) : "?"}%`,
+        sub: t("dashboard.original_media_sub", { size: fmtBytes(storage.data.downloads?.size_bytes || 0) }), delay: 200 },
     ] : []),
   ];
 
@@ -84,15 +84,15 @@ export default function Dashboard() {
           {storage.data ? (
             <div className="grid grid-cols-2 gap-3">
               {[
-                { l: t("dashboard.downloads_files"), v: fmtBytes(storage.data.downloads?.size_bytes || 0), n: storage.data.downloads?.file_count },
-                { l: t("dashboard.library_files"), v: fmtBytes(storage.data.library?.size_bytes || 0), n: storage.data.library?.file_count },
+                { l: t("dashboard.downloads_files", { count: storage.data.downloads?.file_count ?? 0 }), v: fmtBytes(storage.data.downloads?.size_bytes || 0), n: storage.data.downloads?.file_count },
+                { l: t("dashboard.library_files", { count: storage.data.library?.file_count ?? 0 }), v: fmtBytes(storage.data.library?.size_bytes || 0), n: storage.data.library?.file_count },
                 { l: t("dashboard.disk_free"), v: fmtBytes(storage.data.disk?.free_bytes || 0) },
                 { l: t("dashboard.disk_used"), v: `${storage.data.disk?.total_bytes > 0 ? Math.round((storage.data.disk?.used_bytes || 0) / (storage.data.disk?.total_bytes || 1) * 100) : "?"}%` },
               ].map((x, i) => (
                 <div key={i} className="card p-4 page-transition" style={{ animationDelay: `${300 + i * 50}ms` }}>
                   <div className="tabular text-xl font-semibold text-[#24292f] dark:text-[#e6edf3]">{x.v}</div>
                   <div className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{x.l}</div>
-                  {x.n !== undefined && <div className="mt-0.5 text-[10px] text-[#8c959f] dark:text-[#6e7681]">{x.n} files</div>}
+                  {x.n !== undefined && <div className="mt-0.5 text-[10px] text-[#8c959f] dark:text-[#6e7681]">{t("dashboard.file_count", { count: x.n })}</div>}
                 </div>
               ))}
             </div>
@@ -110,7 +110,7 @@ export default function Dashboard() {
             <button key={item.to} onClick={() => router.push(item.to)}
               className="card-interactive group p-4 text-left page-transition" style={{ animationDelay: `${400 + i * 50}ms` }}>
               <span className="text-sm font-medium text-[#24292f] transition-colors group-hover:text-[#0969da] dark:text-[#e6edf3] dark:group-hover:text-[#58a6ff]">{item.label}</span>
-              <span className="mt-2 block text-xs text-[#57606a] opacity-0 transition-opacity group-hover:opacity-100 dark:text-[#8b949e]">{t("dashboard.view_arrow")} →</span>
+              <span className="mt-2 block text-xs text-[#57606a] opacity-0 transition-opacity group-hover:opacity-100 dark:text-[#8b949e]">{t("dashboard.view_arrow")}</span>
             </button>
           ))}
         </div>

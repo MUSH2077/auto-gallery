@@ -2,6 +2,8 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
 
 type Lang = "zh" | "en";
+type I18nVars = Record<string, string | number | boolean | null | undefined>;
+type TFunction = (key: string, fallbackOrVars?: string | I18nVars, vars?: I18nVars) => string;
 
 const STORAGE_KEY = "auto-gallery-lang";
 
@@ -50,8 +52,14 @@ const zh: Record<string, string> = {
   "dashboard.failed_storage": "无法加载存储信息",
   "dashboard.downloads_files": "下载 · {count} 个文件",
   "dashboard.library_files": "库 · {count} 个文件",
+  "dashboard.file_count": "{count} 个文件",
   "dashboard.disk_free": "磁盘可用",
   "dashboard.disk_used": "磁盘已用",
+  "dashboard.available": "可用",
+  "dashboard.processed": "已处理",
+  "dashboard.failed": "失败",
+  "dashboard.usage": "使用率",
+  "dashboard.original_media_sub": "{size} 原图仓库",
   "dashboard.recent_activity": "最近活动",
   "dashboard.download_jobs": "下载任务",
   "dashboard.import_jobs": "导入任务",
@@ -1300,8 +1308,14 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "dashboard.failed_storage": "Failed to load storage",
     "dashboard.downloads_files": "Downloads · {count} files",
     "dashboard.library_files": "Library · {count} files",
+    "dashboard.file_count": "{count} files",
     "dashboard.disk_free": "Disk free",
     "dashboard.disk_used": "Disk used",
+    "dashboard.available": "available",
+    "dashboard.processed": "processed",
+    "dashboard.failed": "failed",
+    "dashboard.usage": "Usage",
+    "dashboard.original_media_sub": "{size} original media",
     "dashboard.recent_activity": "Recent Activity",
     "dashboard.download_jobs": "Download Jobs",
     "dashboard.import_jobs": "Import Jobs",
@@ -2478,15 +2492,23 @@ const dictionaries: Record<Lang, Record<string, string>> = { zh, en: enBuilt };
 
 interface I18nContextType {
   lang: Lang;
-  t: (key: string, fallback?: string) => string;
+  t: TFunction;
   setLang: (l: Lang) => void;
 }
 
 const I18nContext = createContext<I18nContextType>({
   lang: "zh",
-  t: (k, fb) => fb || k,
+  t: (k, fb) => (typeof fb === "string" ? fb : k),
   setLang: () => {},
 });
+
+function interpolate(template: string, vars?: I18nVars): string {
+  if (!vars) return template;
+  return template.replace(/\{([^{}]+)\}/g, (match, name: string) => {
+    const value = vars[name];
+    return value === undefined || value === null ? match : String(value);
+  });
+}
 
 export function useI18n() {
   return useContext(I18nContext);
@@ -2507,9 +2529,12 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     try { localStorage.setItem(STORAGE_KEY, l); } catch {}
   }, []);
 
-  const t = useCallback(
-    (key: string, fallback?: string) => {
-      return dictionaries[lang]?.[key] || dictionaries.en[key] || fallback || key;
+  const t = useCallback<TFunction>(
+    (key, fallbackOrVars, vars) => {
+      const fallback = typeof fallbackOrVars === "string" ? fallbackOrVars : undefined;
+      const interpolationVars = typeof fallbackOrVars === "object" ? fallbackOrVars : vars;
+      const value = dictionaries[lang]?.[key] || dictionaries.en[key] || fallback || key;
+      return interpolate(value, interpolationVars);
     },
     [lang]
   );

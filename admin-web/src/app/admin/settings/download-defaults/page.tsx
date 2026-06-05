@@ -66,7 +66,7 @@ export default function DownloadDefaultsPage() {
                 type="number" min={60} max={3600} step={60}
                 value={current.timeout_seconds}
                 onChange={(e) => setNum("timeout_seconds", parseInt(e.target.value) || 600)}
-                className="w-20 border rounded px-2 py-1 text-sm font-mono text-center"
+                className="input w-20 px-2 py-1 text-center font-mono"
               />
             </div>
 
@@ -79,7 +79,7 @@ export default function DownloadDefaultsPage() {
                 type="number" min={0} max={10}
                 value={current.max_retries}
                 onChange={(e) => setNum("max_retries", parseInt(e.target.value) || 3)}
-                className="w-20 border rounded px-2 py-1 text-sm font-mono text-center"
+                className="input w-20 px-2 py-1 text-center font-mono"
               />
             </div>
 
@@ -92,7 +92,7 @@ export default function DownloadDefaultsPage() {
                 type="number" min={10} max={600} step={10}
                 value={current.retry_backoff_base_seconds}
                 onChange={(e) => setNum("retry_backoff_base_seconds", parseInt(e.target.value) || 60)}
-                className="w-20 border rounded px-2 py-1 text-sm font-mono text-center"
+                className="input w-20 px-2 py-1 text-center font-mono"
               />
             </div>
 
@@ -105,7 +105,7 @@ export default function DownloadDefaultsPage() {
                 type="number" min={10} max={10000} step={10}
                 value={current.max_posts}
                 onChange={(e) => setNum("max_posts", parseInt(e.target.value) || 200)}
-                className="w-20 border rounded px-2 py-1 text-sm font-mono text-center"
+                className="input w-20 px-2 py-1 text-center font-mono"
               />
             </div>
 

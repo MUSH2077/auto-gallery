@@ -119,7 +119,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
           )}
           <input type="text" value={importName} onChange={(e) => setImportName(e.target.value)}
             placeholder="留空则自动使用 Danbooru 标签名"
-            className="w-full border rounded px-2 py-1 text-xs" />
+            className="input w-full px-2 py-1 text-xs" />
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => onImportAll(importName)} disabled={importAllPending}
@@ -152,7 +152,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
                   </div>
                   <div className="flex items-center gap-2">
                     <select value={selectedCreator} onChange={(e) => setSelectedCreator(e.target.value)}
-                      className="border rounded px-2 py-1 text-xs">
+                      className="select px-2 py-1 text-xs">
                       <option value="">{t("danbooru.select_creator")}</option>
                       {creators.data?.map((c) => <option key={c.id} value={c.id}>{c.display_name || c.name}</option>)}
                     </select>
@@ -218,7 +218,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
             <div className="flex-1">
               <label className="block text-xs font-medium mb-1">{t("danbooru.target_creator")}</label>
               <select value={selectedCreator} onChange={(e) => setSelectedCreator(e.target.value)}
-                className="w-full border rounded px-3 py-2 text-sm">
+                className="select w-full">
                 <option value="">{t("danbooru.select_creator")}</option>
                 {creators.data?.map((c) => <option key={c.id} value={c.id}>{c.display_name || c.name}</option>)}
               </select>
@@ -423,7 +423,7 @@ export default function DanbooruReferencePage() {
               onChange={(e) => setUrlBatchInput(e.target.value)}
               placeholder={"https://www.pixiv.net/users/123456\nhttps://twitter.com/artist_name\nhttps://www.iwara.tv/profile/..."}
               rows={5}
-              className="w-full border rounded px-3 py-2 text-sm font-mono resize-y"
+              className="textarea w-full resize-y font-mono"
             />
             <div className="flex items-center gap-3">
               <button
@@ -474,7 +474,7 @@ export default function DanbooruReferencePage() {
               onChange={(e) => setBatchInput(e.target.value)}
               placeholder={t("danbooru.batch_placeholder")}
               rows={5}
-              className="w-full border rounded px-3 py-2 text-sm font-mono resize-y"
+              className="textarea w-full resize-y font-mono"
             />
             <div className="flex items-center gap-3">
               <button
@@ -614,7 +614,7 @@ export default function DanbooruReferencePage() {
           <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">{t("danbooru.search_url_desc")}</p>
           <input value={searchUrl} onChange={(e) => setSearchUrl(e.target.value)}
             placeholder={t("danbooru.url_placeholder")}
-            className="w-full border rounded px-3 py-2 text-sm mb-2" />
+            className="input mb-2 w-full" />
           <button onClick={() => handleSearch("url")} disabled={!searchUrl.trim()}
             className="btn-primary w-full">
             {t("danbooru.search_btn")}
@@ -626,7 +626,7 @@ export default function DanbooruReferencePage() {
           <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">{t("danbooru.search_pixiv_desc")}</p>
           <input value={searchPixivId} onChange={(e) => setSearchPixivId(e.target.value)}
             placeholder={t("danbooru.pixiv_id_placeholder")}
-            className="w-full border rounded px-3 py-2 text-sm mb-2" />
+            className="input mb-2 w-full" />
           <button onClick={() => handleSearch("pixiv_id")} disabled={!searchPixivId.trim()}
             className="btn-primary w-full">
             {t("danbooru.search_btn")}
@@ -638,7 +638,7 @@ export default function DanbooruReferencePage() {
           <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">{t("danbooru.search_name_desc")}</p>
           <input value={searchName} onChange={(e) => setSearchName(e.target.value)}
             placeholder={t("danbooru.name_placeholder")}
-            className="w-full border rounded px-3 py-2 text-sm mb-2" />
+            className="input mb-2 w-full" />
           <button onClick={() => handleSearch("name")} disabled={!searchName.trim()}
             className="btn-primary w-full">
             {t("danbooru.search_btn")}
