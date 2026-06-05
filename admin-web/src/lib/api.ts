@@ -193,6 +193,125 @@ export interface CreatorSubscriptionOverview {
   };
 }
 
+export interface WorkbenchSummary {
+  updated_at: string;
+  queue: {
+    default: number;
+    scheduled: number;
+    failed: number;
+    started?: number;
+    active_download_count: number;
+    active_import_count: number;
+    failed_download_count: number;
+    failed_import_count: number;
+    stale_download_count: number;
+    stale_import_count: number;
+    stale_count: number;
+  };
+  scheduler: {
+    enabled: boolean;
+    mode: string;
+    timezone: string;
+    scheduled_times?: string | null;
+    scan_interval_minutes: number;
+    next_scan_at?: string | null;
+  };
+  storage: {
+    original_media_size_bytes: number;
+    original_media_file_count: number;
+    library_size_bytes: number;
+    library_file_count: number;
+    disk_total_bytes: number;
+    disk_free_bytes: number;
+    disk_used_bytes: number;
+    disk_used_percent?: number | null;
+    disk_free_percent?: number | null;
+    risk_level: "ok" | "warning" | "critical" | "unknown" | string;
+  };
+  health: Record<string, string>;
+  attention: {
+    auth_unhealthy_count: number;
+    failed_download_count: number;
+    failed_import_count: number;
+    stale_job_count: number;
+    low_disk_warning: boolean;
+    scheduler_disabled_warning: boolean;
+  };
+  recent: {
+    download_jobs: {
+      id: string;
+      subscription_id: string;
+      subscription_source_id?: string | null;
+      source: string;
+      source_url: string;
+      status: string;
+      created_at?: string | null;
+      updated_at?: string | null;
+      error_log_excerpt?: string | null;
+    }[];
+    import_jobs: {
+      id: string;
+      download_job_id: string;
+      status: string;
+      created_at?: string | null;
+      updated_at?: string | null;
+      error_log_excerpt?: string | null;
+    }[];
+    works: {
+      id: string;
+      title?: string | null;
+      thumbnail_asset_id?: string | null;
+      created_at?: string | null;
+    }[];
+    successful_syncs: {
+      source_id: string;
+      subscription_id: string;
+      creator_id: string;
+      creator_name: string;
+      source: string;
+      source_url?: string | null;
+      last_synced_at?: string | null;
+    }[];
+  };
+}
+
+export interface SchedulerDecisionItem {
+  subscription_id: string;
+  subscription_name?: string | null;
+  subscription_active: boolean;
+  subscription_sync_enabled: boolean;
+  creator_id: string;
+  creator_name: string;
+  source_id: string;
+  source: string;
+  source_display_name?: string | null;
+  source_url?: string | null;
+  source_creator_id?: string | null;
+  source_enabled: boolean;
+  effective_mode: string;
+  timezone: string;
+  scheduled_times?: string | null;
+  sync_interval_hours: number;
+  last_synced_at?: string | null;
+  last_attempted_at?: string | null;
+  due: boolean;
+  decision: string;
+  reason: string;
+  next_due_at?: string | null;
+  window_start?: string | null;
+  window_end?: string | null;
+  auth_healthy: boolean;
+  url_valid: boolean;
+  can_download: boolean;
+}
+
+export interface SchedulerDecisionsResponse {
+  updated_at: string;
+  scheduler_enabled: boolean;
+  timezone: string;
+  items: SchedulerDecisionItem[];
+}
+
 export interface DownloadJob {
   id: string;
   subscription_id: string;
@@ -457,6 +576,10 @@ export interface AuthStatusResponse {
 export const api = {
   // System
   health: () => request<HealthResponse>("/api/v1/system/health"),
+
+  workbench: () => request<WorkbenchSummary>("/api/v1/system/workbench"),
+
+  schedulerDecisions: () => request<SchedulerDecisionsResponse>("/api/v1/system/scheduler-decisions"),
 
   systemLogs: (limit?: number, level?: string, nameFilter?: string) => {
     const params = new URLSearchParams();
@@ -892,6 +1015,8 @@ export const api = {
 
 export const queryKeys = {
   health: ["health"] as const,
+  workbench: ["system", "workbench"] as const,
+  schedulerDecisions: ["system", "scheduler-decisions"] as const,
   sources: ["sources"] as const,
   creators: {
     all: ["creators"] as const,

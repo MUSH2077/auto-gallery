@@ -146,6 +146,92 @@ def _should_sync_now(sub, system_config: dict, last_synced_at, now: datetime, tz
     return bool(_schedule_decision(sub, system_config, last_synced_at, last_attempted_at, now, tz)["due"])
 
 
+def _next_fixed_time_window(
+    times_str: str | None,
+    now: datetime,
+    tz,
+    scan_minutes: int,
+) -> dict:
+    scheduled = _parse_scheduled_times(times_str)
+    if not scheduled:
+        return {"next_due_at": None, "window_start": None, "window_end": None}
+
+    window = timedelta(minutes=max(scan_minutes, 5) + 5)
+    candidates = []
+    for day_offset in (0, 1):
+        day = now.date() + timedelta(days=day_offset)
+        for h, m, s_val in scheduled:
+            start = datetime(day.year, day.month, day.day, h, m, s_val, tzinfo=tz)
+            end = start + window
+            if now <= end:
+                candidates.append((start, end))
+    if not candidates:
+        return {"next_due_at": None, "window_start": None, "window_end": None}
+
+    start, end = min(candidates, key=lambda item: item[0])
+    return {
+        "next_due_at": start.isoformat(),
+        "window_start": start.isoformat(),
+        "window_end": end.isoformat(),
+    }
+
+
+def schedule_decision_snapshot(
+    sub,
+    system_config: dict,
+    last_synced_at,
+    last_attempted_at,
+    now: datetime,
+    tz,
+) -> dict:
+    """Read-only schedule explanation used by APIs and tests.
+
+    This mirrors the enqueue scanner decision without mutating any source state.
+    """
+    decision = _schedule_decision(sub, system_config, last_synced_at, last_attempted_at, now, tz)
+    mode = decision.get("mode") or sub.schedule_mode or system_config.get("schedule_mode", "interval")
+    scan_minutes = int(system_config.get("scheduler_scan_interval_minutes", FALLBACK_SCAN_MINUTES))
+
+    next_due_at = None
+    window_start = decision.get("window_start")
+    window_end = decision.get("window_end")
+
+    if mode == "interval":
+        if last_synced_at:
+            interval_hours = sub.sync_interval_hours or int(
+                system_config.get("default_sync_interval_hours", FALLBACK_INTERVAL_HOURS))
+            next_due = _as_tz(last_synced_at, tz) + timedelta(hours=interval_hours)
+            next_due_at = next_due.isoformat()
+        else:
+            next_due_at = now.isoformat()
+    elif mode == "fixed_time":
+        fixed = _next_fixed_time_window(
+            sub.scheduled_times or system_config.get("scheduled_times", ""),
+            now,
+            tz,
+            scan_minutes,
+        )
+        next_due_at = fixed["next_due_at"]
+        window_start = window_start or fixed["window_start"]
+        window_end = window_end or fixed["window_end"]
+    elif mode == "manual":
+        next_due_at = None
+    else:
+        if last_synced_at:
+            interval_hours = sub.sync_interval_hours or int(
+                system_config.get("default_sync_interval_hours", FALLBACK_INTERVAL_HOURS))
+            next_due_at = (_as_tz(last_synced_at, tz) + timedelta(hours=interval_hours)).isoformat()
+        else:
+            next_due_at = now.isoformat()
+
+    return {
+        **decision,
+        "next_due_at": next_due_at,
+        "window_start": window_start,
+        "window_end": window_end,
+    }
+
+
 def sync_subscriptions():
     asyncio.run(sync_subscriptions_async())
 
