@@ -86,23 +86,44 @@ async def queue_stats():
     try:
         import redis as redis_lib
         from rq import Queue
-        from rq.registry import FailedJobRegistry
+        from rq.registry import FailedJobRegistry, ScheduledJobRegistry
         from app.config import settings as app_settings
+        from app.database import async_session
+        from app.services.settings import get_scheduler_config
 
         r = redis_lib.from_url(app_settings.redis_url)
         default_q = Queue(connection=r)
         scheduled_q = Queue(name="scheduled", connection=r)
         failed_reg = FailedJobRegistry(queue=default_q)
         sched_failed_reg = FailedJobRegistry(queue=scheduled_q)
+        scheduled_registry = ScheduledJobRegistry(queue=scheduled_q)
+        sync_jobs = []
+        for job_id in scheduled_registry.get_job_ids():
+            job = scheduled_q.fetch_job(job_id)
+            if job and "sync_subscriptions" in (job.func_name or ""):
+                sync_jobs.append((job, scheduled_registry.get_scheduled_time(job)))
+        next_sync_scan_at = None
+        if sync_jobs:
+            _job, next_sync_scan_at = min(sync_jobs, key=lambda item: item[1])
+            if next_sync_scan_at:
+                next_sync_scan_at = next_sync_scan_at.isoformat()
+        async with async_session() as db:
+            scheduler_config = await get_scheduler_config(db)
 
         return {
             "default_queue": len(default_q),
             "scheduled_queue": len(scheduled_q),
             "failed_jobs": failed_reg.count + sched_failed_reg.count,
+            "scheduler_enabled": bool(scheduler_config.get("scheduler_enabled", True)),
+            "scheduler_mode": scheduler_config.get("schedule_mode", "interval"),
+            "scheduler_timezone": scheduler_config.get("timezone", "UTC"),
+            "scheduled_times": scheduler_config.get("scheduled_times", ""),
+            "scheduler_scan_interval_minutes": int(scheduler_config.get("scheduler_scan_interval_minutes", 60)),
+            "next_sync_scan_at": next_sync_scan_at,
         }
     except Exception:
         logger.warning("Failed to fetch queue stats", exc_info=True)
-        return {"default_queue": -1, "scheduled_queue": -1, "failed_jobs": -1}
+        return {"default_queue": -1, "scheduled_queue": -1, "failed_jobs": -1, "scheduler_enabled": True}
 
 
 @router.get("/system/logs")

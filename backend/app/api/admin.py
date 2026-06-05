@@ -35,12 +35,13 @@ class DedupSettings(BaseModel):
 class SubscriptionDefaults(BaseModel):
     default_sync_interval_hours: int = 6
     scheduler_scan_interval_minutes: int = 60
+    scheduler_enabled: bool = True
     schedule_mode: str = "interval"
     scheduled_times: str = ""
     timezone: str = "UTC"
     auto_enable_sources: str = "pixiv"
 
-DEFAULT_SUB = {"default_sync_interval_hours": 6, "scheduler_scan_interval_minutes": 60, "schedule_mode": "interval", "scheduled_times": "", "timezone": "UTC", "auto_enable_sources": "pixiv"}
+DEFAULT_SUB = {"default_sync_interval_hours": 6, "scheduler_scan_interval_minutes": 60, "scheduler_enabled": True, "schedule_mode": "interval", "scheduled_times": "", "timezone": "UTC", "auto_enable_sources": "pixiv"}
 
 class DownloadDefaults(BaseModel):
     timeout_seconds: int = 600
@@ -69,7 +70,9 @@ class AdminSettingsUpdate(BaseModel):
 async def _get_setting(db: AsyncSession, key: str, default: dict = None) -> dict:
     result = await db.execute(select(SystemSetting).where(SystemSetting.key == key))
     row = result.scalar_one_or_none()
-    return row.value if row else (default or {})
+    if row and isinstance(row.value, dict):
+        return {**(default or {}), **row.value}
+    return default or {}
 
 
 async def _put_setting(db: AsyncSession, key: str, value: dict):
@@ -192,6 +195,45 @@ async def system_info():
 async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     """Return per-source and per-creator storage breakdown."""
     dl_root = Path(settings.download_root)
+    lib_root = Path(settings.library_root)
+
+    def _safe_file_size(path: Path) -> int:
+        try:
+            return path.stat().st_size if path.is_file() else 0
+        except Exception:
+            return 0
+
+    def _safe_dir_size(path: Path) -> int:
+        total = 0
+        try:
+            if not path.exists():
+                return 0
+            for f in path.rglob("*"):
+                if f.is_file():
+                    total += _safe_file_size(f)
+        except Exception:
+            return total
+        return total
+
+    archive_bytes = 0
+    try:
+        archive_bytes = sum(_safe_file_size(af) for af in dl_root.glob("archive-*.sqlite3"))
+    except Exception:
+        pass
+
+    backup_bytes = 0
+    for backup_root in (dl_root / ".backups", Path(settings.app_config_root) / "backups"):
+        backup_bytes += _safe_dir_size(backup_root)
+
+    original_media_bytes = 0
+    try:
+        for source_dir in dl_root.iterdir():
+            if source_dir.is_dir() and source_dir.name != ".backups":
+                original_media_bytes += _safe_dir_size(source_dir)
+    except Exception:
+        original_media_bytes = _safe_dir_size(dl_root) - archive_bytes - backup_bytes
+
+    library_index_bytes = _safe_dir_size(lib_root)
 
     # Per-source breakdown
     sources = {}
@@ -345,7 +387,32 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
-    return {"sources": sources, "creators": creators}
+    return {
+        "sources": sources,
+        "creators": creators,
+        "layers": {
+            "original_media_store": {
+                "path": str(dl_root),
+                "size_mb": round(max(original_media_bytes, 0) / (1024 ** 2), 1),
+                "description": "Original media files stored long-term in DOWNLOAD_ROOT.",
+            },
+            "library_index": {
+                "path": str(lib_root),
+                "size_mb": round(library_index_bytes / (1024 ** 2), 1),
+                "description": "Metadata and thumbnails stored in LIBRARY_ROOT.",
+            },
+            "download_archives": {
+                "path": str(dl_root),
+                "size_mb": round(archive_bytes / (1024 ** 2), 1),
+                "description": "gallery-dl archive sqlite files used to avoid duplicate downloads.",
+            },
+            "backups": {
+                "path": f"{dl_root / '.backups'}; {Path(settings.app_config_root) / 'backups'}",
+                "size_mb": round(backup_bytes / (1024 ** 2), 1),
+                "description": "Backup archives created by admin backup tools.",
+            },
+        },
+    }
 
 
 @router.get("/integrity-check")

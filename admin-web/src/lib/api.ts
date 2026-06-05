@@ -263,6 +263,7 @@ export interface DedupSettings {
 export interface SubscriptionDefaults {
   default_sync_interval_hours: number;
   scheduler_scan_interval_minutes: number;
+  scheduler_enabled: boolean;
   schedule_mode: "interval" | "fixed_time";
   scheduled_times: string;
   timezone: string;
@@ -471,7 +472,17 @@ export const api = {
     disk: { total_bytes: number; free_bytes: number; used_bytes: number };
   }>("/api/v1/system/storage"),
 
-  queueStats: () => request<{ default_queue: number; scheduled_queue: number; failed_jobs: number }>("/api/v1/system/queue-stats"),
+  queueStats: () => request<{
+    default_queue: number;
+    scheduled_queue: number;
+    failed_jobs: number;
+    scheduler_enabled?: boolean;
+    scheduler_mode?: string;
+    scheduler_timezone?: string;
+    scheduled_times?: string;
+    scheduler_scan_interval_minutes?: number;
+    next_sync_scan_at?: string | null;
+  }>("/api/v1/system/queue-stats"),
 
   // Sources
   sources: () => request<{ sources: ProviderInfo[] }>("/api/v1/sources"),
@@ -738,6 +749,7 @@ export const api = {
   getStorageBreakdown: () => request<{
     sources: Record<string, { size_mb: number; creator_count: number; work_count: number }>;
     creators: { name: string; display_name: string; source: string; size_mb: number; work_count: number; creator_id?: string }[];
+    layers?: Record<string, { path: string; size_mb: number; description: string }>;
   }>("/api/v1/admin/storage-breakdown"),
   getIntegrityCheck: () => request<{
     issues: { type: string; severity: string; count: number; description: string; items: any[] }[];

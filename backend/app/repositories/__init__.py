@@ -1,13 +1,5 @@
-from app.repositories.creator import CreatorRepository
-from app.repositories.subscription import SubscriptionRepository
-from app.repositories.download_job import DownloadJobRepository
-from app.repositories.work import WorkRepository
-from app.repositories.tag import TagRepository
+"""Repository package.
 
-__all__ = [
-    "CreatorRepository",
-    "SubscriptionRepository",
-    "DownloadJobRepository",
-    "WorkRepository",
-    "TagRepository",
-]
+Keep this module lightweight. Import concrete repositories from their own
+modules to avoid circular imports during RQ job loading.
+"""

@@ -1,5 +1,6 @@
 import logging
 import sqlite3
+import asyncio
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -26,7 +27,115 @@ FALLBACK_INTERVAL_HOURS = 6
 FALLBACK_SCAN_MINUTES = 60
 
 
-def _should_sync_now(sub, system_config: dict, last_synced_at, now: datetime, tz) -> bool:
+def _as_tz(value: datetime | None, tz) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(tz)
+
+
+def _parse_scheduled_times(times_str: str | None) -> list[tuple[int, int, int]]:
+    scheduled: list[tuple[int, int, int]] = []
+    for raw in (times_str or "").split(","):
+        t = raw.strip()
+        if not t:
+            continue
+        try:
+            parts = t.split(":")
+            h = int(parts[0])
+            m = int(parts[1]) if len(parts) > 1 else 0
+            sec = int(parts[2]) if len(parts) > 2 else 0
+            if 0 <= h <= 23 and 0 <= m <= 59 and 0 <= sec <= 59:
+                scheduled.append((h, m, sec))
+        except (ValueError, IndexError):
+            continue
+    return scheduled
+
+
+def _schedule_decision(
+    sub,
+    system_config: dict,
+    last_synced_at,
+    last_attempted_at,
+    now: datetime,
+    tz,
+) -> dict:
+    """Return a scheduler decision with a reason and optional fixed-time window."""
+    mode = sub.schedule_mode or system_config.get("schedule_mode", "interval")
+
+    if mode == "manual":
+        return {"due": False, "mode": mode, "reason": "manual_mode"}
+
+    if mode == "interval":
+        if not last_synced_at:
+            return {"due": True, "mode": mode, "reason": "never_synced_interval"}
+        interval_hours = sub.sync_interval_hours or int(
+            system_config.get("default_sync_interval_hours", FALLBACK_INTERVAL_HOURS))
+        cutoff = now - timedelta(hours=interval_hours)
+        last_synced = _as_tz(last_synced_at, tz)
+        return {
+            "due": bool(last_synced and last_synced < cutoff),
+            "mode": mode,
+            "reason": "interval_due" if last_synced and last_synced < cutoff else "interval_not_due",
+        }
+
+    if mode == "fixed_time":
+        times_str = sub.scheduled_times or system_config.get("scheduled_times", "")
+        scheduled = _parse_scheduled_times(times_str)
+        if not scheduled:
+            if not last_synced_at:
+                return {"due": True, "mode": mode, "reason": "never_synced_interval_fallback"}
+            interval_hours = sub.sync_interval_hours or int(
+                system_config.get("default_sync_interval_hours", FALLBACK_INTERVAL_HOURS))
+            cutoff = now - timedelta(hours=interval_hours)
+            last_synced = _as_tz(last_synced_at, tz)
+            return {
+                "due": bool(last_synced and last_synced < cutoff),
+                "mode": mode,
+                "reason": "interval_fallback_due" if last_synced and last_synced < cutoff else "interval_fallback_not_due",
+            }
+
+        scan_minutes = int(system_config.get("scheduler_scan_interval_minutes", FALLBACK_SCAN_MINUTES))
+        window = timedelta(minutes=max(scan_minutes, 5) + 5)
+        last_synced = _as_tz(last_synced_at, tz)
+        last_attempted = _as_tz(last_attempted_at, tz)
+
+        for day_offset in (0, -1):
+            day = now.date() + timedelta(days=day_offset)
+            for h, m, s_val in scheduled:
+                st = datetime(day.year, day.month, day.day, h, m, s_val, tzinfo=tz)
+                window_end = st + window
+                if not (st <= now <= window_end):
+                    continue
+                payload = {
+                    "mode": mode,
+                    "window_start": st.isoformat(),
+                    "window_end": window_end.isoformat(),
+                    "scheduled_time": st.time().isoformat(),
+                }
+                if last_synced and last_synced >= st:
+                    return {**payload, "due": False, "reason": "already_synced_in_window"}
+                if last_attempted and last_attempted >= st:
+                    return {**payload, "due": False, "reason": "already_attempted_in_window"}
+                return {**payload, "due": True, "reason": "fixed_time_window_due"}
+
+        return {"due": False, "mode": mode, "reason": "outside_fixed_time_window"}
+
+    if not last_synced_at:
+        return {"due": True, "mode": mode, "reason": "never_synced_interval_fallback"}
+    interval_hours = sub.sync_interval_hours or int(
+        system_config.get("default_sync_interval_hours", FALLBACK_INTERVAL_HOURS))
+    cutoff = now - timedelta(hours=interval_hours)
+    last_synced = _as_tz(last_synced_at, tz)
+    return {
+        "due": bool(last_synced and last_synced < cutoff),
+        "mode": mode,
+        "reason": "unknown_mode_interval_due" if last_synced and last_synced < cutoff else "unknown_mode_interval_not_due",
+    }
+
+
+def _should_sync_now(sub, system_config: dict, last_synced_at, now: datetime, tz, last_attempted_at=None) -> bool:
     """Check whether a sync is due, respecting per-subscription schedule strategy.
 
     Priority: subscription value > system default > hardcoded fallback.
@@ -34,80 +143,14 @@ def _should_sync_now(sub, system_config: dict, last_synced_at, now: datetime, tz
 
     Modes: 'manual'=never, 'interval'=every N hours, 'fixed_time'=at scheduled times.
     """
-    if not last_synced_at:
-        return True
-
-    mode = sub.schedule_mode or system_config.get("schedule_mode", "interval")
-
-    if mode == "manual":
-        return False
-
-    if mode == "interval":
-        interval_hours = sub.sync_interval_hours or int(
-            system_config.get("default_sync_interval_hours", 6))
-        cutoff = now - timedelta(hours=interval_hours)
-        return last_synced_at < cutoff
-
-    if mode == "fixed_time":
-        times_str = sub.scheduled_times or system_config.get("scheduled_times", "")
-        if not times_str:
-            interval_hours = sub.sync_interval_hours or int(
-                system_config.get("default_sync_interval_hours", 6))
-            cutoff = now - timedelta(hours=interval_hours)
-            return last_synced_at < cutoff
-
-        scheduled = []
-        for t in times_str.split(","):
-            t = t.strip()
-            try:
-                parts = t.split(":")
-                h = int(parts[0])
-                m = int(parts[1]) if len(parts) > 1 else 0
-                sec = int(parts[2]) if len(parts) > 2 else 0
-                scheduled.append((h, m, sec))
-            except ValueError:
-                continue
-
-        if not scheduled:
-            interval_hours = sub.sync_interval_hours or int(
-                system_config.get("default_sync_interval_hours", 6))
-            cutoff = now - timedelta(hours=interval_hours)
-            return last_synced_at < cutoff
-
-        scan_minutes = int(system_config.get("scheduler_scan_interval_minutes", 60))
-        window_minutes = max(scan_minutes, 30)
-
-        for day_offset in (0, -1):
-            day = now.date() + timedelta(days=day_offset)
-            for h, m, s_val in scheduled:
-                st = datetime(day.year, day.month, day.day, h, m, s_val, tzinfo=tz)
-                diff_minutes = abs((now - st).total_seconds()) / 60.0
-                if diff_minutes <= window_minutes and last_synced_at < st:
-                    return True
-
-        if last_synced_at < now - timedelta(hours=24):
-            for days_back in range(1, 31):
-                day = now.date() - timedelta(days=days_back)
-                best_time = None
-                for h, m, s_val in scheduled:
-                    st = datetime(day.year, day.month, day.day, h, m, s_val, tzinfo=tz)
-                    if st <= now and (best_time is None or st > best_time):
-                        best_time = st
-                if best_time and last_synced_at < best_time:
-                    return True
-                if best_time:
-                    break
-
-        return False
-
-    # Fallback
-    interval_hours = sub.sync_interval_hours or int(
-        system_config.get("default_sync_interval_hours", 6))
-    cutoff = now - timedelta(hours=interval_hours)
-    return last_synced_at < cutoff
+    return bool(_schedule_decision(sub, system_config, last_synced_at, last_attempted_at, now, tz)["due"])
 
 
-async def sync_subscriptions():
+def sync_subscriptions():
+    asyncio.run(sync_subscriptions_async())
+
+
+async def sync_subscriptions_async():
     with redis_lock("lock:subscription-sync-scan", ttl_seconds=300) as acquired:
         if not acquired:
             logger.info("Subscription auto-sync scan already running; skipping")
@@ -133,6 +176,7 @@ async def _sync_subscriptions_locked():
 
         default_interval = int(config.get("default_sync_interval_hours", FALLBACK_INTERVAL_HOURS))
         scan_minutes = int(config.get("scheduler_scan_interval_minutes", FALLBACK_SCAN_MINUTES))
+        scheduler_enabled = bool(config.get("scheduler_enabled", True))
 
         # Find all active, sync-enabled subscriptions
         subs = await db.execute(
@@ -155,22 +199,34 @@ async def _sync_subscriptions_locked():
             sub_sources = sources.scalars().all()
 
             for ss in sub_sources:
+                log_context = {"source_id": str(ss.id), "source": ss.source, "timezone": tz_name}
+                if not scheduler_enabled:
+                    skipped_count += 1
+                    logger.debug("Auto-sync skipped source: scheduler disabled", extra={**log_context, "decision": "scheduler_disabled"})
+                    continue
+
                 # Skip if auth is known to be unhealthy
                 if ss.auth_healthy is False:
+                    skipped_count += 1
+                    logger.debug("Auto-sync skipped source: auth unhealthy", extra={**log_context, "decision": "auth_unhealthy"})
                     continue
 
                 # Check if sync is due (per-subscription strategy)
-                if not _should_sync_now(sub, config, ss.last_synced_at, now, tz):
+                decision = _schedule_decision(sub, config, ss.last_synced_at, ss.last_attempted_at, now, tz)
+                if not decision["due"]:
+                    skipped_count += 1
+                    logger.debug("Auto-sync skipped source: not due", extra={**log_context, **decision})
                     continue
 
                 result = await enqueue_subscription_source_sync(db, ss.id, trigger="scheduler")
                 if result["status"] == "enqueued":
                     jobs_created += 1
-                    logger.info("Auto-sync created download job %s for source=%s url=%s",
-                                result["job_id"], ss.source, result.get("source_url"))
+                    logger.info("Auto-sync created download job",
+                                extra={**log_context, **decision, "job_id": result["job_id"], "source_url": result.get("source_url")})
                 else:
                     skipped_count += 1
-                    logger.debug("Auto-sync skipped source %s: %s", ss.id, result.get("skip_reason") or result)
+                    logger.debug("Auto-sync skipped source after enqueue check",
+                                 extra={**log_context, **decision, "skip_reason": result.get("skip_reason") or result})
 
     # Stale job detection: mark download jobs stuck "downloading" for too long
     try:
@@ -213,8 +269,8 @@ async def _sync_subscriptions_locked():
         logger.debug("Archive maintenance skipped", exc_info=True)
 
     mode = config.get("schedule_mode", "interval")
-    logger.info("Auto-sync scan complete: %d jobs created, %d skipped (mode=%s, scan_every=%dm, default_interval=%dh)",
-                jobs_created, skipped_count, mode, scan_minutes, default_interval)
+    logger.info("Auto-sync scan complete: %d jobs created, %d skipped (enabled=%s, mode=%s, timezone=%s, scan_every=%dm, default_interval=%dh)",
+                jobs_created, skipped_count, config.get("scheduler_enabled", True), mode, config.get("timezone", "UTC"), scan_minutes, default_interval)
 
     # Re-schedule for next scan
     try:
@@ -223,7 +279,7 @@ async def _sync_subscriptions_locked():
         r = redis_lib.from_url(settings.redis_url)
         Queue(name="scheduled", connection=r).enqueue_in(
             timedelta(minutes=max(scan_minutes, 5)),
-            "app.jobs.subscription_sync.sync_subscriptions",
+            sync_subscriptions,
         )
     except Exception as e:
         logger.error("Failed to re-schedule auto-sync: %s", e)
