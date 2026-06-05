@@ -24,14 +24,14 @@ subscriptions, jobs, search, and gallery-dl configuration.
 
 | Dashboard | Creator detail |
 |---|---|
-| ![Dashboard placeholder](docs/assets/dashboard.svg) | ![Creator detail placeholder](docs/assets/creator-detail.svg) |
+| ![Sanitized dashboard demo](docs/assets/dashboard.svg) | ![Sanitized creator detail demo](docs/assets/creator-detail.svg) |
 
 | Repositories | Work detail | gallery-dl settings |
 |---|---|---|
-| ![Repositories placeholder](docs/assets/repositories.svg) | ![Work detail placeholder](docs/assets/works-detail.svg) | ![gallery-dl settings placeholder](docs/assets/gallerydl-settings.svg) |
+| ![Sanitized repositories demo](docs/assets/repositories.svg) | ![Sanitized work detail demo](docs/assets/works-detail.svg) | ![Sanitized gallery-dl settings demo](docs/assets/gallerydl-settings.svg) |
 
-The SVGs above are sanitized placeholders. Replace them with real screenshots
-before a tagged public release.
+The SVGs above are sanitized demo screenshots built from fictional data. They
+do not include private creators, credentials, local paths, or downloaded media.
 
 ## Highlights
 
@@ -112,9 +112,9 @@ For a full deployment guide, see [docs/setup.md](docs/setup.md).
 ```text
 Sources
   -> gallery-dl worker jobs
-    -> DOWNLOAD_ROOT per-job/per-work directories
-      -> import pipeline
-        -> LIBRARY_ROOT metadata, assets, thumbnails
+    -> gallery-dl job output
+      -> Original Media Store (DOWNLOAD_ROOT)
+        -> Library Index (LIBRARY_ROOT metadata + thumbnails)
           -> PostgreSQL canonical data
           -> Meilisearch full-text index
           -> Next.js admin web
@@ -161,7 +161,7 @@ creator URLs, private media, or database dumps in issues or pull requests.
 
 ## Roadmap
 
-- Replace README placeholder assets with sanitized real screenshots.
+- Add more sanitized demo screenshots and short workflow videos.
 - Improve provider compatibility smoke tests.
 - Add richer backup/restore validation.
 - Add local folder import and manual upload flows.

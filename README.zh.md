@@ -19,13 +19,13 @@ auto-gallery 通过 Docker Compose 运行，使用 gallery-dl 下载、导入、
 
 | 仪表盘 | 创作者详情 |
 |---|---|
-| ![Dashboard placeholder](docs/assets/dashboard.svg) | ![Creator detail placeholder](docs/assets/creator-detail.svg) |
+| ![脱敏仪表盘演示](docs/assets/dashboard.svg) | ![脱敏创作者详情演示](docs/assets/creator-detail.svg) |
 
 | Repositories / 订阅 | 作品详情 | gallery-dl 设置 |
 |---|---|---|
-| ![Repositories placeholder](docs/assets/repositories.svg) | ![Work detail placeholder](docs/assets/works-detail.svg) | ![gallery-dl settings placeholder](docs/assets/gallerydl-settings.svg) |
+| ![脱敏订阅仓库演示](docs/assets/repositories.svg) | ![脱敏作品详情演示](docs/assets/works-detail.svg) | ![脱敏 gallery-dl 设置演示](docs/assets/gallerydl-settings.svg) |
 
-上方 SVG 是脱敏占位图。正式打 tag 前建议替换为真实后台截图。
+上方 SVG 是基于虚构数据制作的脱敏演示截图，不包含真实创作者、凭据、本地路径或已下载媒体。
 
 ## 功能亮点
 
@@ -98,9 +98,9 @@ http://<host>:13000
 ```text
 Sources
   -> gallery-dl worker jobs
-    -> DOWNLOAD_ROOT per-job/per-work directories
-      -> import pipeline
-        -> LIBRARY_ROOT metadata, assets, thumbnails
+    -> gallery-dl job output
+      -> Original Media Store (DOWNLOAD_ROOT)
+        -> Library Index (LIBRARY_ROOT metadata + thumbnails)
           -> PostgreSQL canonical data
           -> Meilisearch full-text index
           -> Next.js admin web
@@ -139,7 +139,7 @@ auto-gallery 用于归档你有权访问和下载的内容。你需要自行遵�
 
 ## Roadmap
 
-- 将 README 占位图替换为脱敏真实截图。
+- 增加更多脱敏演示截图和简短工作流视频。
 - 增强 provider 兼容性 smoke tests。
 - 完善备份/恢复校验。
 - 支持本地文件夹导入和手动上传。
