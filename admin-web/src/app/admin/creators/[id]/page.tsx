@@ -8,18 +8,13 @@ import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, Sche
 import { Modal, RepositoryCard, SourceBadge, StatusBadge, WorkGrid } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
+import { useI18nFormat } from "@/lib/i18n-format";
 import { CHART_COLORS, SOURCE_COLORS } from "@/lib/sourceColors";
 
 type TabKey = "overview" | "repositories" | "works" | "links";
 
 function initials(name: string) {
   return name.trim().slice(0, 2).toUpperCase();
-}
-
-function formatDate(value?: string | null) {
-  if (!value) return "Never";
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? "Unknown" : d.toLocaleString();
 }
 
 function runningRepoCount(repos: CreatorRepository[]) {
@@ -33,6 +28,7 @@ function HorizontalBarChart({ data, maxKey, labelKey, colorFn, onItemClick }: {
   colorFn: (item: any, i: number) => string;
   onItemClick?: (item: any) => void;
 }) {
+  const fmt = useI18nFormat();
   const max = data.length > 0 ? Math.max(...data.map((d) => d[maxKey] as number)) : 1;
   return (
     <div className="space-y-2">
@@ -48,7 +44,7 @@ function HorizontalBarChart({ data, maxKey, labelKey, colorFn, onItemClick }: {
           <div className="h-2 flex-1 overflow-hidden rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
             <div className="h-full rounded-full" style={{ width: `${((item[maxKey] as number) / max) * 100}%`, backgroundColor: colorFn(item, i) }} />
           </div>
-          <span className="w-10 shrink-0 text-right font-mono text-[#57606a] dark:text-[#8b949e]">{(item[maxKey] as number).toLocaleString()}</span>
+          <span className="w-10 shrink-0 text-right font-mono text-[#57606a] dark:text-[#8b949e]">{fmt.number(item[maxKey] as number)}</span>
         </button>
       ))}
     </div>
@@ -72,6 +68,7 @@ function MonthStrip({ data }: { data: { month: string; count: number }[] }) {
 
 function WorkPreviewCard({ work }: { work: WorkListItem }) {
   const t = useT();
+  const fmt = useI18nFormat();
   const assetId = work.preview_asset_ids?.[0] || work.thumbnail_asset_id;
   return (
     <Link href={`/admin/works/${work.id}`} className="group overflow-hidden rounded-md border border-[#d8dee4] bg-white transition-colors hover:border-[#0969da]/50 dark:border-[#30363d] dark:bg-[#161b22] dark:hover:border-[#58a6ff]/50">
@@ -86,7 +83,7 @@ function WorkPreviewCard({ work }: { work: WorkListItem }) {
         <div className="truncate text-sm font-medium group-hover:text-[#0969da] dark:group-hover:text-[#58a6ff]">{work.title || t("creator_detail.untitled")}</div>
         <div className="mt-1 flex items-center gap-2 text-xs text-[#57606a] dark:text-[#8b949e]">
           {work.source && <SourceBadge source={work.source} />}
-          <span>{work.posted_at ? new Date(work.posted_at).toLocaleDateString() : t("works.no_date")}</span>
+          <span>{work.posted_at ? fmt.date(work.posted_at) : t("works.no_date")}</span>
         </div>
       </div>
     </Link>
@@ -99,6 +96,7 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
   onTagChange: (tag: string) => void;
 }) {
   const t = useT();
+  const fmt = useI18nFormat();
   const [page, setPage] = useState(0);
   const [search, setSearch] = useState("");
   const limit = 12;
@@ -123,11 +121,11 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
       <div className="rounded-md border border-[#d8dee4] bg-white p-4 dark:border-[#30363d] dark:bg-[#161b22]">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <h2 className="text-base font-semibold">Works</h2>
-            <p className="mt-1 text-sm text-[#57606a] dark:text-[#8b949e]">Filtered to this creator. Click a tag in Overview to narrow this list.</p>
+            <h2 className="text-base font-semibold">{t("creator_detail.works_title")}</h2>
+            <p className="mt-1 text-sm text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.works_filter_hint")}</p>
           </div>
           <Link href={`/admin/works?creator=${creatorId}${selectedTag ? `&tag=${encodeURIComponent(selectedTag)}` : ""}`} className="btn-ghost">
-            Open full gallery
+            {t("creator_detail.open_full_gallery")}
           </Link>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -142,7 +140,7 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
               type="button"
               onClick={() => onTagChange("")}
               className="inline-flex items-center gap-2 rounded-full border border-[#0969da]/30 bg-[#ddf4ff] px-3 py-1.5 text-sm font-medium text-[#0969da] hover:bg-[#b6e3ff] dark:border-[#58a6ff]/40 dark:bg-[#1f6feb26] dark:text-[#58a6ff]"
-              title={`Clear tag filter: ${selectedTag}`}
+              title={t("creator_detail.clear_tag_filter", { tag: selectedTag })}
             >
               <span className="max-w-[14rem] truncate">#{selectedTag}</span>
               <span aria-hidden="true">&times;</span>
@@ -159,7 +157,7 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
       {filteredWorks.error && <div className="card p-5 text-sm text-[#cf222e]">{(filteredWorks.error as Error).message}</div>}
       {filteredWorks.data && filteredWorks.data.items.length === 0 && (
         <div className="card p-8 text-center text-sm text-[#57606a] dark:text-[#8b949e]">
-          {selectedTag ? `No works tagged #${selectedTag} for this creator.` : "No works found for this creator."}
+          {selectedTag ? t("creator_detail.no_tagged_works", { tag: selectedTag }) : t("creator_detail.no_creator_works")}
         </div>
       )}
       {filteredWorks.data && filteredWorks.data.items.length > 0 && (
@@ -172,7 +170,7 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
               {t("works.prev")}
             </button>
             <span className="px-3 py-1 text-sm text-[#57606a] dark:text-[#8b949e]">
-              {t("works.page").replace("{page}", String(page + 1))}
+              {t("works.page", { page: page + 1 })}
             </span>
             <button disabled={(page + 1) * limit >= filteredWorks.data.total} onClick={() => setPage((p) => p + 1)} className="btn-ghost disabled:opacity-40">
               {t("works.next")}
@@ -186,6 +184,7 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
 
 export default function CreatorDetailPage() {
   const t = useT();
+  const fmt = useI18nFormat();
   const toast = useToast();
   const params = useParams();
   const qc = useQueryClient();
@@ -236,7 +235,7 @@ export default function CreatorDetailPage() {
 
   const update = useMutation({
     mutationFn: () => api.updateCreator(id, { name: editName, display_name: editDisplay || undefined, description: editDesc || undefined }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.creators.detail(id) }); setEditing(false); toast.success("已保存"); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.creators.detail(id) }); setEditing(false); toast.success(t("common.saved")); },
     onError: (e: Error) => toast.error(e.message),
   });
 
@@ -256,7 +255,7 @@ export default function CreatorDetailPage() {
       qc.invalidateQueries({ queryKey: ["creator-subscription-overview", id] });
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
       qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
-      toast.success("Sync queued");
+      toast.success(t("creator_detail.sync_queued"));
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -302,11 +301,11 @@ export default function CreatorDetailPage() {
   };
 
   const tabs = useMemo(() => [
-    { key: "overview" as const, label: "Overview", count: undefined },
-    { key: "repositories" as const, label: "Repositories", count: overview.data?.summary.repository_count ?? legalRepos.length },
-    { key: "works" as const, label: "Works", count: st?.total_works },
-    { key: "links" as const, label: "Links", count: links.data?.length || 0 },
-  ], [overview.data?.summary.repository_count, legalRepos.length, st?.total_works, links.data?.length]);
+    { key: "overview" as const, label: t("creator_detail.tabs_overview"), count: undefined },
+    { key: "repositories" as const, label: t("creator_detail.tabs_repositories"), count: overview.data?.summary.repository_count ?? legalRepos.length },
+    { key: "works" as const, label: t("creator_detail.tabs_works"), count: st?.total_works },
+    { key: "links" as const, label: t("creator_detail.tabs_links"), count: links.data?.length || 0 },
+  ], [t, overview.data?.summary.repository_count, legalRepos.length, st?.total_works, links.data?.length]);
 
   if (creator.isLoading) {
     return <main className="mx-auto max-w-7xl p-6"><div className="space-y-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-28 animate-pulse rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />)}</div></main>;
@@ -326,7 +325,7 @@ export default function CreatorDetailPage() {
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="truncate text-2xl font-semibold tracking-normal text-[#24292f] dark:text-[#e6edf3]">{c.display_name || c.name}</h1>
-              {c.is_favorite && <span className="rounded-full border border-[#bf8700]/30 bg-[#fff8c5] px-2 py-0.5 text-xs text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]">Favorite</span>}
+              {c.is_favorite && <span className="rounded-full border border-[#bf8700]/30 bg-[#fff8c5] px-2 py-0.5 text-xs text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]">{t("creator_detail.favorite")}</span>}
             </div>
             {c.display_name && c.display_name !== c.name && <p className="mt-0.5 font-mono text-sm text-[#57606a] dark:text-[#8b949e]">{c.name}</p>}
             <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-[#57606a] dark:text-[#8b949e]">
@@ -337,43 +336,43 @@ export default function CreatorDetailPage() {
                   danbooru #{c.danbooru_artist_id}
                 </a>
               )}
-              <span>{overview.data?.summary.repository_count ?? 0} repositories</span>
-              {overview.data?.summary.running_job_count ? <span className="text-[#0969da] dark:text-[#58a6ff]">{overview.data.summary.running_job_count} running</span> : null}
+              <span>{t("creator_detail.repositories_count", { count: overview.data?.summary.repository_count ?? 0 })}</span>
+              {overview.data?.summary.running_job_count ? <span className="text-[#0969da] dark:text-[#58a6ff]">{t("creator_detail.running_count", { count: overview.data.summary.running_job_count })}</span> : null}
             </div>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <button onClick={() => toggleFavorite.mutate()} className="btn-ghost">
-            {c.is_favorite ? "Unstar" : "Star"}
+            {c.is_favorite ? t("creator_detail.unstar") : t("creator_detail.star")}
           </button>
           <Link href={subscriptionHref} className="btn-ghost">
-            Subscription
+            {t("creator_detail.subscription")}
           </Link>
-          <button onClick={openEdit} className="btn-primary">Edit profile</button>
+          <button onClick={openEdit} className="btn-primary">{t("creator_detail.edit_profile")}</button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr]">
         <aside className="space-y-4">
           <section className="card p-4">
-            <h2 className="mb-2 text-sm font-semibold">Profile</h2>
+            <h2 className="mb-2 text-sm font-semibold">{t("creator_detail.profile")}</h2>
             {c.description ? (
               <p className="whitespace-pre-wrap text-sm leading-6 text-[#24292f] dark:text-[#e6edf3]">{c.description}</p>
             ) : (
-              <p className="text-sm text-[#57606a] dark:text-[#8b949e]">No description yet.</p>
+              <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.no_description")}</p>
             )}
             <dl className="mt-4 space-y-2 border-t border-[#d8dee4] pt-4 text-sm dark:border-[#30363d]">
-              <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">Works</dt><dd className="font-semibold">{st?.total_works?.toLocaleString() ?? "-"}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">Assets</dt><dd className="font-semibold">{st?.total_assets?.toLocaleString() ?? "-"}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">Sources</dt><dd className="font-semibold">{st?.source_breakdown?.length ?? "-"}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">Created</dt><dd>{new Date(c.created_at).toLocaleDateString()}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.stat_works")}</dt><dd className="font-semibold">{st?.total_works != null ? fmt.number(st.total_works) : "-"}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.stat_assets")}</dt><dd className="font-semibold">{st?.total_assets != null ? fmt.number(st.total_assets) : "-"}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.stat_sources")}</dt><dd className="font-semibold">{st?.source_breakdown?.length ?? "-"}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.created")}</dt><dd>{fmt.date(c.created_at)}</dd></div>
             </dl>
           </section>
 
           <section className="card p-4">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold">External links</h2>
-              <button onClick={() => setShowAddLink(true)} className="text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">Add</button>
+              <h2 className="text-sm font-semibold">{t("creator_detail.external_links")}</h2>
+              <button onClick={() => setShowAddLink(true)} className="text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("creator_detail.add")}</button>
             </div>
             {links.data?.length ? (
               <div className="space-y-2">
@@ -438,7 +437,7 @@ export default function CreatorDetailPage() {
                           type="button"
                           onClick={() => openWorksTag(item.tag)}
                           className="rounded-full border border-[#d8dee4] bg-[#f6f8fa] px-2.5 py-1 text-xs font-medium text-[#0969da] hover:border-[#0969da]/40 hover:bg-[#ddf4ff] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#58a6ff] dark:hover:bg-[#1f6feb26]"
-                          title={`Search #${item.tag} in this creator's works`}
+                          title={t("creator_detail.search_tag_title", { tag: item.tag })}
                         >
                           #{item.tag}
                         </button>
@@ -452,7 +451,7 @@ export default function CreatorDetailPage() {
                 <section className="card p-4">
                   <div className="mb-3 flex items-center justify-between">
                     <h2 className="text-base font-semibold">{t("creator_detail.posting_frequency")}</h2>
-                    <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{st.monthly_frequency.length} months</span>
+                    <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.months_count", { count: st.monthly_frequency.length })}</span>
                   </div>
                   <MonthStrip data={st.monthly_frequency} />
                 </section>
@@ -460,14 +459,14 @@ export default function CreatorDetailPage() {
 
               <section className="card p-4">
                 <div className="mb-4 flex items-center justify-between">
-                  <h2 className="text-base font-semibold">Latest works</h2>
-                  <Link href={`/admin/works?creator=${id}`} className="text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">Open works</Link>
+                  <h2 className="text-base font-semibold">{t("creator_detail.latest_works")}</h2>
+                  <Link href={`/admin/works?creator=${id}`} className="text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("creator_detail.open_works")}</Link>
                 </div>
                 {works.data?.items?.length ? (
                   <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
                     {works.data.items.map((w) => <WorkPreviewCard key={w.id} work={w} />)}
                   </div>
-                ) : <p className="text-sm text-[#57606a] dark:text-[#8b949e]">No works imported yet.</p>}
+                ) : <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.no_imported_works")}</p>}
               </section>
             </div>
           )}
@@ -476,18 +475,18 @@ export default function CreatorDetailPage() {
             <div className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-[#d8dee4] bg-white p-3 dark:border-[#30363d] dark:bg-[#161b22]">
                 <div>
-                  <h2 className="text-base font-semibold">Repositories</h2>
-                  <p className="text-sm text-[#57606a] dark:text-[#8b949e]">Downloadable gallery-dl subscription URLs for this creator.</p>
+                  <h2 className="text-base font-semibold">{t("creator_detail.repositories_title")}</h2>
+                  <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.repositories_desc")}</p>
                 </div>
-                <Link href={subscriptionHref} className="btn-primary">Manage subscription</Link>
+                <Link href={subscriptionHref} className="btn-primary">{t("creator_detail.manage_subscription")}</Link>
               </div>
               <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
                 {[
-                  ["Enabled repos", repoSummary.enabled, `${legalRepos.length} legal`],
-                  ["Running jobs", repoSummary.running, "active queue"],
-                  ["Failed jobs", repoSummary.failed, "needs review"],
-                  ["Auth issues", repoSummary.authIssues, "source auth"],
-                  ["Last success", repoSummary.lastSuccess ? formatDate(repoSummary.lastSuccess) : "Never", "source sync"],
+                  [t("creator_detail.enabled_repos"), repoSummary.enabled, t("creator_detail.legal_repos", { count: legalRepos.length })],
+                  [t("creator_detail.running_jobs"), repoSummary.running, t("creator_detail.active_queue")],
+                  [t("creator_detail.failed_jobs"), repoSummary.failed, t("creator_detail.needs_review")],
+                  [t("creator_detail.auth_issues"), repoSummary.authIssues, t("creator_detail.source_auth")],
+                  [t("creator_detail.last_success"), repoSummary.lastSuccess ? fmt.dateTime(repoSummary.lastSuccess) : t("creator_detail.never"), t("creator_detail.source_sync")],
                 ].map(([label, value, sub]) => (
                   <div key={label} className="card p-3">
                     <div className="truncate text-sm font-semibold text-[#24292f] dark:text-[#e6edf3]">{value}</div>
@@ -501,7 +500,7 @@ export default function CreatorDetailPage() {
                   syncPending={syncRepo.isPending} togglePending={toggleRepo.isPending} />
               )) : (
                 <div className="card p-8 text-center text-sm text-[#57606a] dark:text-[#8b949e]">
-                  No subscription URLs yet. Add a supported gallery-dl source URL from the subscription settings to create this creator's first repository.
+                  {t("creator_detail.no_subscription_urls")}
                 </div>
               )}
             </div>
@@ -515,10 +514,10 @@ export default function CreatorDetailPage() {
             <div className="space-y-3">
               <div className="flex items-center justify-between rounded-md border border-[#d8dee4] bg-white p-3 dark:border-[#30363d] dark:bg-[#161b22]">
                 <div>
-                  <h2 className="text-base font-semibold">External links</h2>
-                  <p className="text-sm text-[#57606a] dark:text-[#8b949e]">Reference profiles and identity links. Downloadable URLs live in Repositories.</p>
+                  <h2 className="text-base font-semibold">{t("creator_detail.external_links")}</h2>
+                  <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.links_desc")}</p>
                 </div>
-                <button onClick={() => setShowAddLink(true)} className="btn-primary">Add link</button>
+                <button onClick={() => setShowAddLink(true)} className="btn-primary">{t("creator_detail.add_link_short")}</button>
               </div>
               {links.data?.length ? links.data.map((l: CreatorLinkType) => (
                 <div key={l.id} className="rounded-md border border-[#d8dee4] bg-white p-4 dark:border-[#30363d] dark:bg-[#161b22]">
@@ -526,7 +525,7 @@ export default function CreatorDetailPage() {
                     <SourceBadge source={l.link_type} />
                     <a href={l.url} target="_blank" rel="noopener noreferrer" className="truncate text-sm font-medium text-[#0969da] hover:underline dark:text-[#58a6ff]">{l.url}</a>
                   </div>
-                  <div className="mt-2 text-xs text-[#57606a] dark:text-[#8b949e]">Confidence {l.confidence.toFixed(1)} · {l.is_verified ? "verified" : "unverified"}</div>
+                  <div className="mt-2 text-xs text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.confidence_state", { value: l.confidence.toFixed(1), state: l.is_verified ? t("creator_detail.verified") : t("creator_detail.unverified") })}</div>
                 </div>
               )) : <div className="card p-8 text-center text-sm text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.no_links")}</div>}
             </div>
@@ -534,7 +533,7 @@ export default function CreatorDetailPage() {
         </section>
       </div>
 
-      <Modal open={showAddLink} onClose={() => setShowAddLink(false)} title="Add Link">
+      <Modal open={showAddLink} onClose={() => setShowAddLink(false)} title={t("creator_detail.add_link_modal")}>
         <AddLinkForm creatorId={id} onClose={() => setShowAddLink(false)} />
       </Modal>
       <Modal open={editing} onClose={() => setEditing(false)} title={t("creator_detail.edit_title")}>
@@ -590,7 +589,7 @@ function DanbooruAliases({ artistId, currentDisplay, onSelectAlias }: {
           const isActive = currentDisplay === label;
           return (
             <button key={label} type="button" onClick={() => onSelectAlias(label)}
-              title={t("creator_detail.set_display_name_as").replace("{name}", label)}
+              title={t("creator_detail.set_display_name_as", { name: label })}
               className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
                 isActive
                   ? "border-[#0969da] bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#58a6ff]"
@@ -608,26 +607,27 @@ function DanbooruAliases({ artistId, currentDisplay, onSelectAlias }: {
 }
 
 function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () => void }) {
+  const t = useT();
   const [url, setUrl] = useState("");
   const [linkType, setLinkType] = useState("website");
   const toast = useToast();
   const qc = useQueryClient();
   const create = useMutation({
     mutationFn: () => api.createCreatorLink(creatorId, { url, link_type: linkType }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.creators.links(creatorId) }); onClose(); toast.success("Link added"); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.creators.links(creatorId) }); onClose(); toast.success(t("creator_detail.link_added")); },
     onError: (e: Error) => toast.error(e.message),
   });
   return (
     <div className="space-y-4">
-      <div><label className="mb-1 block text-sm font-medium">URL</label><input value={url} onChange={(e) => setUrl(e.target.value)} className="input w-full" placeholder="https://..." /></div>
-      <div><label className="mb-1 block text-sm font-medium">Type</label>
+      <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.url_label")}</label><input value={url} onChange={(e) => setUrl(e.target.value)} className="input w-full" placeholder="https://..." /></div>
+      <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.type_label")}</label>
         <select value={linkType} onChange={(e) => setLinkType(e.target.value)} className="select w-full">
           {["website", "pixiv", "x", "iwara", "danbooru", "other"].map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
       </div>
       <div className="flex justify-end gap-3 pt-2">
-        <button onClick={onClose} className="btn-ghost">Cancel</button>
-        <button onClick={() => create.mutate()} disabled={!url || create.isPending} className="btn-primary">Add</button>
+        <button onClick={onClose} className="btn-ghost">{t("common.cancel")}</button>
+        <button onClick={() => create.mutate()} disabled={!url || create.isPending} className="btn-primary">{t("creator_detail.add")}</button>
       </div>
     </div>
   );

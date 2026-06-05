@@ -1,6 +1,8 @@
 "use client";
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { useT } from "@/lib/i18n";
+import { useI18nFormat } from "@/lib/i18n-format";
 
 interface DayData {
   date: string;
@@ -28,6 +30,8 @@ function shadeColor(source: string, count: number): string {
 }
 
 export default function WorkGrid({ data, loading }: { data?: TimelineData; loading?: boolean }) {
+  const t = useT();
+  const fmt = useI18nFormat();
   const [selectedDay, setSelectedDay] = useState<DayData | null>(null);
   const [yearOffset, setYearOffset] = useState(0);
 
@@ -59,10 +63,10 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
     const monthLabels: { label: string; col: number }[] = [];
     for (let w = 0; w < weeks.length; w++) {
       const midDay = weeks[w][3];
-      if (midDay.getUTCDate() <= 7) monthLabels.push({ label: midDay.toLocaleString("en", { month: "short", timeZone: "UTC" }), col: w });
+      if (midDay.getUTCDate() <= 7) monthLabels.push({ label: midDay.toLocaleString(fmt.locale, { month: "short", timeZone: "UTC" }), col: w });
     }
     return { weeks, months: monthLabels, dayMap };
-  }, [data, yearOffset]);
+  }, [data, yearOffset, fmt.locale]);
 
   if (loading) return <div className="animate-pulse"><div className="h-32 rounded-md bg-[#eaeef2] dark:bg-[#21262d]" /></div>;
   if (!data?.days?.length) return null;
@@ -77,7 +81,7 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
           <span className="text-sm font-medium dark:text-white">{new Date(Date.UTC(new Date().getUTCFullYear() + yearOffset, 0, 1)).getUTCFullYear()}</span>
           <button onClick={() => setYearOffset(yearOffset + 1)} className="btn-ghost px-2 py-0.5 text-xs">→</button>
         </div>
-        <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{data.total} works</span>
+        <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("workgrid.work_count", { count: data.total })}</span>
       </div>
 
       <div className="overflow-x-auto">
@@ -107,11 +111,11 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
       </div>
 
       <div className="flex items-center gap-3 mt-3 text-xs flex-wrap">
-        <span className="text-[#57606a] dark:text-[#8b949e]">Less</span>
+        <span className="text-[#57606a] dark:text-[#8b949e]">{t("common.less")}</span>
         {[0, 1, 2, 3, 4].map((lvl) => (
           <div key={lvl} className="w-3 h-3 rounded-sm" style={{ backgroundColor: lvl === 0 ? "rgba(128,128,128,0.08)" : `rgba(100,100,100,${[0,0.2,0.4,0.65,1][lvl]})` }} />
         ))}
-        <span className="text-[#57606a] dark:text-[#8b949e]">More</span>
+        <span className="text-[#57606a] dark:text-[#8b949e]">{t("common.more")}</span>
         <span className="mx-2 text-[#d8dee4] dark:text-[#30363d]">|</span>
         {data.sources.map((s) => (
           <span key={s} className="flex items-center gap-1">
@@ -135,7 +139,7 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
               <div key={s} className="mt-2">
                 <span className="flex items-center gap-1 text-xs font-medium mb-1">
                   <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: sourceColor(s) }} />
-                  {s}: {cnt} work{cnt > 1 ? "s" : ""}
+                  {t("workgrid.day_source_count", { source: s, count: cnt })}
                 </span>
                 {ids.length > 0 && (
                   <div className="flex flex-wrap gap-1 ml-4">
@@ -145,7 +149,7 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
                         {wid.length > 12 ? wid.slice(0, 8) + "..." + wid.slice(-4) : wid}
                       </Link>
                     ))}
-                    {ids.length > 20 && <span className="text-xs text-[#57606a] dark:text-[#8b949e]">+{ids.length - 20} more</span>}
+                    {ids.length > 20 && <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("common.more_count", { count: ids.length - 20 })}</span>}
                   </div>
                 )}
               </div>
