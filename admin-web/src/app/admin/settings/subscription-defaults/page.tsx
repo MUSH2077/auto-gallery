@@ -137,7 +137,7 @@ export default function SubscriptionDefaultsPage() {
                 <input type="number" min={1} max={168}
                   value={current.default_sync_interval_hours}
                   onChange={(e) => setLocal({ ...current, default_sync_interval_hours: parseInt(e.target.value) || 6 })}
-                  className="w-20 border rounded px-2 py-1 text-sm font-mono text-center"
+                  className="input w-20 px-2 py-1 text-center font-mono"
                 />
               </div>
             ) : (
@@ -177,7 +177,7 @@ export default function SubscriptionDefaultsPage() {
               <input type="number" min={5} max={1440}
                 value={current.scheduler_scan_interval_minutes}
                 onChange={(e) => setLocal({ ...current, scheduler_scan_interval_minutes: parseInt(e.target.value) || 60 })}
-                className="w-20 border rounded px-2 py-1 text-sm font-mono text-center"
+                className="input w-20 px-2 py-1 text-center font-mono"
               />
             </div>
           </div>

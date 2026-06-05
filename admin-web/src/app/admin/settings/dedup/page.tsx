@@ -71,10 +71,10 @@ export default function DedupSettingsPage() {
                 <span className="font-medium text-sm dark:text-white">{t("dedup.phash")}</span>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{t("dedup.phash.desc")}</p>
               </div>
-              <div className="flex items-center gap-1 bg-gray-100 dark:bg-slate-700 rounded-lg px-1">
+              <div className="flex items-center gap-1">
                 <input type="number" min={0} max={64} value={current.phash_threshold}
                   onChange={(e) => setLocal({ ...current, phash_threshold: parseInt(e.target.value) || 0 })}
-                  className="w-14 border-0 bg-transparent px-2 py-1.5 text-sm font-mono text-center dark:text-white" />
+                  className="input w-16 px-2 py-1.5 text-center font-mono" />
                 <span className="text-xs text-gray-500 dark:text-gray-400 pr-2">bits</span>
               </div>
             </div>
