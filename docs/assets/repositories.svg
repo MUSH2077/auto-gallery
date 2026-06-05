@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">repositories screenshot placeholder</title>
+  <desc id="desc">Placeholder for subscription URL repositories.</desc>
+  <rect width="1200" height="720" fill="#f6f8fa"/>
+  <rect x="80" y="64" width="1040" height="92" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <rect x="80" y="188" width="1040" height="112" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <rect x="80" y="324" width="1040" height="112" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <rect x="80" y="460" width="1040" height="112" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="120" y="120" fill="#24292f" font-family="Arial, sans-serif" font-size="28" font-weight="700">Repositories / subscriptions</text>
+  <text x="120" y="636" fill="#57606a" font-family="Arial, sans-serif" font-size="24">Repositories screenshot placeholder</text>
+</svg>

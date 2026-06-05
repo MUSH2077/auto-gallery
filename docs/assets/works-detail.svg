@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">work detail screenshot placeholder</title>
+  <desc id="desc">Placeholder for the work detail page with media preview.</desc>
+  <rect width="1200" height="720" fill="#f6f8fa"/>
+  <rect x="64" y="64" width="640" height="560" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <rect x="744" y="64" width="392" height="420" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <rect x="792" y="112" width="296" height="296" rx="6" fill="#d8dee4"/>
+  <rect x="744" y="512" width="392" height="112" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="104" y="120" fill="#24292f" font-family="Arial, sans-serif" font-size="28" font-weight="700">Work detail</text>
+  <text x="104" y="660" fill="#57606a" font-family="Arial, sans-serif" font-size="24">Work detail screenshot placeholder</text>
+</svg>
