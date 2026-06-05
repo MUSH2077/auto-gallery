@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useState, useEffect, useMemo } from "react";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
@@ -324,6 +325,22 @@ export default function JobsPage() {
                     <ActiveIndicator status={j.status} />
                     <span className="w-16 shrink-0 font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{j.id.slice(0, 8)}</span>
                     {j.source && <SourceBadge source={j.source} />}
+                    <div className="min-w-[9rem] max-w-[12rem] shrink-0 leading-tight">
+                      <Link
+                        href={`/admin/subscriptions/${j.subscription_id}`}
+                        className="block truncate text-xs font-medium text-[#0969da] hover:underline dark:text-[#58a6ff]"
+                        title={j.creator_name || j.subscription_name || j.subscription_id}
+                      >
+                        {j.creator_name || j.subscription_name || j.subscription_id.slice(0, 8)}
+                      </Link>
+                      <Link
+                        href={`/admin/subscriptions/${j.subscription_id}`}
+                        className="block truncate text-[11px] text-[#57606a] hover:underline dark:text-[#8b949e]"
+                        title={j.subscription_name || j.subscription_id}
+                      >
+                        {j.subscription_name || `${t("jobs.subscription")} ${j.subscription_id.slice(0, 8)}`}
+                      </Link>
+                    </div>
                     <span className="min-w-0 flex-1 truncate text-xs text-[#57606a] dark:text-[#8b949e]" title={j.source_url}>{j.source_url}</span>
                     <ProgressBar active={active} />
                     <JobLifecycle status={j.status} />

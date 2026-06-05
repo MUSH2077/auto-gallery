@@ -1,6 +1,13 @@
 """Tests for AI and NSFW detection functions in import_runner."""
 
-from app.jobs.import_runner import _detect_ai_generated, _detect_nsfw
+from app.jobs.import_runner import (
+    ASSET_EXTENSIONS,
+    _can_compute_phash,
+    _can_generate_thumbnail,
+    _detect_ai_generated,
+    _detect_nsfw,
+    _mime_type,
+)
 
 
 class TestDetectAIGenerated:
@@ -63,3 +70,17 @@ class TestDetectNSFW:
 
     def test_unknown_source_safe(self):
         assert _detect_nsfw({"rating": "e"}, "unknown") is False
+
+
+class TestUgoiraAssetHandling:
+    def test_gif_is_previewable_asset_without_phash(self):
+        assert ".gif" in ASSET_EXTENSIONS
+        assert _mime_type(".gif") == "image/gif"
+        assert _can_generate_thumbnail(".gif") is True
+        assert _can_compute_phash(".gif") is False
+
+    def test_zip_is_archive_asset_without_thumbnail_or_phash(self):
+        assert ".zip" in ASSET_EXTENSIONS
+        assert _mime_type(".zip") == "application/zip"
+        assert _can_generate_thumbnail(".zip") is False
+        assert _can_compute_phash(".zip") is False

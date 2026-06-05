@@ -4,6 +4,7 @@ from app.services.settings import (
     merge_gallerydl_effective_config,
     source_key_for_extractor,
 )
+from app.api.admin import _rebuild_managed_postprocessors
 
 
 def test_x_source_maps_to_twitter_extractor():
@@ -50,3 +51,61 @@ def test_naming_template_overrides_gallerydl_directory():
     )
     assert effective["extractor"]["pixiv"]["directory"] == ["pixiv", "{user[id]}", "{id}"]
     assert effective["extractor"]["pixiv"]["cookies"] == "/default.txt"
+
+
+def test_pixiv_gif_rebuilds_managed_postprocessors():
+    config = {"postprocessors": [{"name": "custom"}, {"name": "metadata"}]}
+
+    postprocessors = _rebuild_managed_postprocessors(config, "gif")
+
+    assert postprocessors == [
+        {"name": "custom"},
+        {"name": "ugoira", "extension": "gif", "keep-files": False},
+        {"name": "metadata", "event": "after", "filename": "{filename}.json"},
+    ]
+
+
+def test_pixiv_ugoira_survives_non_pixiv_save_when_final_config_is_gif():
+    config = {
+        "extractor": {"pixiv": {"ugoira": "gif"}},
+        "postprocessors": [{"name": "metadata"}],
+    }
+
+    _rebuild_managed_postprocessors(config, config["extractor"]["pixiv"]["ugoira"])
+
+    assert {"name": "ugoira", "extension": "gif", "keep-files": False} in config["postprocessors"]
+    assert {"name": "metadata", "event": "after", "filename": "{filename}.json"} in config["postprocessors"]
+
+
+def test_pixiv_zip_removes_managed_ugoira_postprocessor():
+    config = {
+        "postprocessors": [
+            {"name": "custom"},
+            {"name": "ugoira", "extension": "gif", "keep-files": False},
+            {"name": "metadata", "event": "after", "filename": "{filename}.json"},
+        ]
+    }
+
+    postprocessors = _rebuild_managed_postprocessors(config, "zip")
+
+    assert postprocessors == [
+        {"name": "custom"},
+        {"name": "metadata", "event": "after", "filename": "{filename}.json"},
+    ]
+
+
+def test_effective_gallerydl_config_includes_user_ugoira_postprocessor():
+    effective = build_effective_gallerydl_config(
+        "pixiv",
+        {"extractor": {"pixiv": {"cookies": "/default.txt"}}},
+        user_config={
+            "extractor": {"pixiv": {"ugoira": "gif"}},
+            "postprocessors": [
+                {"name": "ugoira", "extension": "gif", "keep-files": False},
+                {"name": "metadata", "event": "after", "filename": "{filename}.json"},
+            ],
+        },
+    )
+
+    assert {"name": "ugoira", "extension": "gif", "keep-files": False} in effective["postprocessors"]
+    assert {"name": "metadata", "event": "after", "filename": "{filename}.json"} in effective["postprocessors"]

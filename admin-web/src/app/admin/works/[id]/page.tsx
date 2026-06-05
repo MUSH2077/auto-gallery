@@ -30,7 +30,13 @@ interface AssetData {
   created_at: string;
 }
 
+function isArchiveAsset(asset: AssetData | null | undefined) {
+  if (!asset) return false;
+  return asset.mime_type === "application/zip" || asset.file_name.toLowerCase().endsWith(".zip");
+}
+
 function FullImageLightbox({ asset, onClose }: { asset: AssetData | null; onClose: () => void }) {
+  const t = useT();
   useEffect(() => {
     if (!asset) return;
     const onKey = (event: KeyboardEvent) => {
@@ -40,7 +46,7 @@ function FullImageLightbox({ asset, onClose }: { asset: AssetData | null; onClos
     return () => document.removeEventListener("keydown", onKey);
   }, [asset, onClose]);
 
-  if (!asset) return null;
+  if (!asset || isArchiveAsset(asset)) return null;
 
   return (
     <div
@@ -63,10 +69,10 @@ function FullImageLightbox({ asset, onClose }: { asset: AssetData | null; onClos
             className="rounded-md border border-white/20 px-3 py-1.5 text-sm text-white hover:bg-white/10"
             onClick={(e) => e.stopPropagation()}
           >
-            Open original
+            {t("work_detail.open_original")}
           </a>
-          <button onClick={onClose} className="rounded-md border border-white/20 px-3 py-1.5 text-sm text-white hover:bg-white/10" aria-label="Close full image">
-            Close
+          <button onClick={onClose} className="rounded-md border border-white/20 px-3 py-1.5 text-sm text-white hover:bg-white/10" aria-label={t("common.close")}>
+            {t("common.close")}
           </button>
         </div>
       </div>
@@ -78,6 +84,33 @@ function FullImageLightbox({ asset, onClose }: { asset: AssetData | null; onClos
         />
       </div>
     </div>
+  );
+}
+
+function AssetThumb({ asset, active, index, onClick }: { asset: AssetData; active: boolean; index: number; onClick: () => void }) {
+  const t = useT();
+  const [mode, setMode] = useState<"thumb" | "preview" | "error">("thumb");
+  useEffect(() => setMode("thumb"), [asset.id]);
+  const archive = isArchiveAsset(asset);
+  return (
+    <button
+      onClick={onClick}
+      className={`h-16 w-16 shrink-0 overflow-hidden rounded-md border-2 ${active ? "border-[#0969da] dark:border-[#58a6ff]" : "border-[#d8dee4] hover:border-[#8c959f] dark:border-[#30363d]"}`}
+      title={asset.file_name}
+    >
+      {archive || mode === "error" ? (
+        <span className="flex h-full w-full items-center justify-center bg-[#f6f8fa] text-[10px] font-medium text-[#57606a] dark:bg-[#21262d] dark:text-[#8b949e]">
+          {archive ? t("work_detail.archive_short") : t("works.na")}
+        </span>
+      ) : (
+        <img
+          src={api.mediaUrl(asset.id, mode)}
+          alt={`Page ${index + 1}`}
+          className="h-full w-full object-cover"
+          onError={() => setMode(mode === "thumb" ? "preview" : "error")}
+        />
+      )}
+    </button>
   );
 }
 
@@ -93,33 +126,42 @@ function AllPages({ workId, sources }: { workId: string; sources: WorkSourceData
   const current = assets.data[activeIndex] as AssetData;
   const totalPages = assets.data.length;
   const ws = sources[0];
+  const currentIsArchive = isArchiveAsset(current);
 
   return (
     <div className="card p-4">
-      <h3 className="font-medium mb-2 text-sm">{t("work_detail.pages_section").replace("{count}", String(totalPages))}</h3>
+      <h3 className="font-medium mb-2 text-sm">{t("work_detail.pages_section", { count: totalPages })}</h3>
       {current && (
         <div className="mb-3">
-          <button
-            type="button"
-            onClick={() => setFullAsset(current)}
-            className="group relative block w-full overflow-hidden rounded-md bg-[#f6f8fa] dark:bg-[#21262d]"
-            title={t("work_detail.view_full", "View full image")}
-          >
-            <img src={api.mediaUrl(current.id, "preview")} alt={current.file_name}
-              className="max-h-96 w-full object-contain transition-transform group-hover:scale-[1.01]" />
-            <span className="absolute bottom-2 right-2 rounded-md bg-black/70 px-2 py-1 text-xs font-medium text-white opacity-0 transition-opacity group-hover:opacity-100">
-              View full
-            </span>
-          </button>
+          {currentIsArchive ? (
+            <div className="rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-6 text-center dark:border-[#30363d] dark:bg-[#21262d]">
+              <div className="mx-auto mb-2 flex h-16 w-16 items-center justify-center rounded-md border border-[#d8dee4] bg-white font-mono text-sm font-semibold text-[#57606a] dark:border-[#30363d] dark:bg-[#0d1117] dark:text-[#8b949e]">ZIP</div>
+              <div className="text-sm font-medium text-[#24292f] dark:text-[#e6edf3]">{t("work_detail.archive_asset")}</div>
+              <div className="mt-1 truncate text-xs text-[#57606a] dark:text-[#8b949e]">{current.file_name}</div>
+              <a href={api.mediaUrl(current.id, "original")} className="btn-ghost mt-3 inline-flex text-xs" target="_blank" rel="noopener noreferrer">
+                {t("work_detail.download_original")}
+              </a>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setFullAsset(current)}
+              className="group relative block w-full overflow-hidden rounded-md bg-[#f6f8fa] dark:bg-[#21262d]"
+              title={t("work_detail.view_full", "View full image")}
+            >
+              <img src={api.mediaUrl(current.id, "preview")} alt={current.file_name}
+                className="max-h-96 w-full object-contain transition-transform group-hover:scale-[1.01]" />
+              <span className="absolute bottom-2 right-2 rounded-md bg-black/70 px-2 py-1 text-xs font-medium text-white opacity-0 transition-opacity group-hover:opacity-100">
+                {t("work_detail.view_full")}
+              </span>
+            </button>
+          )}
           <p className="mt-1 text-center text-xs text-[#57606a] dark:text-[#8b949e]">{activeIndex + 1} / {totalPages}</p>
         </div>
       )}
       <div className="flex gap-2 overflow-x-auto pb-1">
         {assets.data.map((a, i) => (
-          <button key={a.id} onClick={() => setActiveIndex(i)}
-            className={`h-16 w-16 shrink-0 overflow-hidden rounded-md border-2 ${i === activeIndex ? "border-[#0969da] dark:border-[#58a6ff]" : "border-[#d8dee4] hover:border-[#8c959f] dark:border-[#30363d]"}`}>
-            <img src={api.mediaUrl(a.id, "thumb")} alt={`Page ${i + 1}`} className="w-full h-full object-cover" />
-          </button>
+          <AssetThumb key={a.id} asset={a as AssetData} active={i === activeIndex} index={i} onClick={() => setActiveIndex(i)} />
         ))}
       </div>
 

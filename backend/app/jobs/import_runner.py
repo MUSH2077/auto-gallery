@@ -23,6 +23,8 @@ from app.services.subscription_enqueue import mark_source_sync_success
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+ARCHIVE_EXTENSIONS = {".zip"}
+ASSET_EXTENSIONS = IMAGE_EXTENSIONS | ARCHIVE_EXTENSIONS
 
 
 def _detect_ai_generated(raw: dict, source: str) -> bool:
@@ -91,7 +93,17 @@ def _mime_type(suffix: str) -> str:
         return "image/webp"
     if s == ".gif":
         return "image/gif"
+    if s == ".zip":
+        return "application/zip"
     return "application/octet-stream"
+
+
+def _can_generate_thumbnail(suffix: str) -> bool:
+    return suffix.lower() in IMAGE_EXTENSIONS
+
+
+def _can_compute_phash(suffix: str) -> bool:
+    return suffix.lower() in IMAGE_EXTENSIONS and suffix.lower() not in {".gif"}
 
 
 async def run_import_job(import_job_id: str):
@@ -226,16 +238,16 @@ async def run_import_job(import_job_id: str):
                             logger.warning("Failed to unlink JSON %s", jf, exc_info=True)
                     continue
 
-            # Image files are in the SAME directory as the JSONs
+            # Media assets are in the SAME directory as the JSONs
             # (gallery-dl per-work directories, no moving needed)
             work_dir = first_file.parent
-            image_files = sorted(
+            asset_files = sorted(
                 [p for p in work_dir.iterdir()
-                 if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS],
+                 if p.is_file() and p.suffix.lower() in ASSET_EXTENSIONS],
                 key=lambda p: p.stem,
             )
 
-            if not image_files:
+            if not asset_files:
                 for jf, _ in items:
                     try:
                         jf.unlink()
@@ -244,9 +256,9 @@ async def run_import_job(import_job_id: str):
                 continue
 
             stats["works"] += 1
-            if len(image_files) > 1:
+            if len(asset_files) > 1:
                 stats["multi_page"] += 1
-            stats["assets"] += len(image_files)
+            stats["assets"] += len(asset_files)
 
             # Create DB records — files stay in place
             async with async_session() as db:
@@ -304,9 +316,9 @@ async def run_import_job(import_job_id: str):
                            / dir_name / src_work_id)
                 lib_dir.mkdir(parents=True, exist_ok=True)
 
-                # Assets from the image files (already in final location)
-                for idx, fp in enumerate(image_files):
-                    dims = _get_image_dims(fp)
+                # Assets from the media files (already in final location)
+                for idx, fp in enumerate(asset_files):
+                    dims = _get_image_dims(fp) if fp.suffix.lower() in IMAGE_EXTENSIONS else None
                     width, height = dims if dims else (None, None)
 
                     dl_rel = str(fp.relative_to(settings.download_root))
@@ -322,14 +334,15 @@ async def run_import_job(import_job_id: str):
                     await db.flush()
 
                     # Generate per-page thumbnail: {stem}.thumbnail.webp (e.g. 8232932_p0.thumbnail.webp)
-                    from app.services.thumbnail import generate_thumbnail
-                    tp = generate_thumbnail(str(fp), lib_dir, name=f"{fp.stem}.thumbnail")
-                    if tp:
-                        asset.thumb_sm_path = str(
-                            Path(tp).relative_to(settings.library_root))
+                    if _can_generate_thumbnail(fp.suffix):
+                        from app.services.thumbnail import generate_thumbnail
+                        tp = generate_thumbnail(str(fp), lib_dir, name=f"{fp.stem}.thumbnail")
+                        if tp:
+                            asset.thumb_sm_path = str(
+                                Path(tp).relative_to(settings.library_root))
 
                     # Compute pHash for image files (skip animated/video types)
-                    if fp.suffix.lower() in IMAGE_EXTENSIONS and fp.suffix.lower() not in {".gif"}:
+                    if _can_compute_phash(fp.suffix):
                         try:
                             import imagehash
                             from PIL import Image as _PILImage
@@ -382,7 +395,7 @@ async def run_import_job(import_job_id: str):
                 # Write metadata.json to library
                 try:
                     assets_meta = []
-                    for fp in image_files:
+                    for fp in asset_files:
                         assets_meta.append({"file_name": fp.name})
                     with open(lib_dir / "metadata.json", "w") as mf:
                         json.dump({
@@ -401,7 +414,7 @@ async def run_import_job(import_job_id: str):
                 tag_names = [t.normalized_name for t in (await db.execute(
                     select(Tag.normalized_name).join(WorkTag).where(WorkTag.work_id == work.id)
                 )).all()]
-                asset_count = len(image_files)
+                asset_count = len(asset_files)
                 meili_docs.append({
                     "id": str(work.id),
                     "title": work.title or "",
@@ -439,9 +452,9 @@ async def run_import_job(import_job_id: str):
 
             # Remove empty directories (no images left)
             try:
-                remaining_images = [p for p in work_dir.iterdir()
-                                    if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS]
-                if not remaining_images:
+                remaining_assets = [p for p in work_dir.iterdir()
+                                    if p.is_file() and p.suffix.lower() in ASSET_EXTENSIONS]
+                if not remaining_assets:
                     for leftover in work_dir.iterdir():
                         try:
                             leftover.unlink()

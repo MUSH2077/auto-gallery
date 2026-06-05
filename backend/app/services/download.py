@@ -2,8 +2,11 @@ import logging
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.config import settings
+from app.models.creator import Creator
+from app.models.subscription import Subscription
 from app.repositories.download_job import DownloadJobRepository
 from app.repositories.subscription import SubscriptionRepository
 from app.providers import registry
@@ -20,20 +23,60 @@ class DownloadService:
         self.sub_repo = SubscriptionRepository(db)
         self.db = db
 
+    async def _enrich_job_context(self, jobs):
+        if not jobs:
+            return jobs
+        sub_ids = {job.subscription_id for job in jobs if job.subscription_id}
+        if not sub_ids:
+            return jobs
+
+        result = await self.db.execute(
+            select(
+                Subscription.id,
+                Subscription.name,
+                Subscription.creator_id,
+                Creator.display_name,
+                Creator.name,
+            )
+            .join(Creator, Creator.id == Subscription.creator_id)
+            .where(Subscription.id.in_(sub_ids))
+        )
+        context = {
+            sub_id: {
+                "subscription_name": sub_name,
+                "creator_id": creator_id,
+                "creator_name": creator_display_name or creator_name,
+            }
+            for sub_id, sub_name, creator_id, creator_display_name, creator_name in result.all()
+        }
+        for job in jobs:
+            item = context.get(job.subscription_id)
+            if item:
+                job.subscription_name = item["subscription_name"]
+                job.creator_id = item["creator_id"]
+                job.creator_name = item["creator_name"]
+            else:
+                job.subscription_name = None
+                job.creator_id = None
+                job.creator_name = None
+        return jobs
+
     async def list_jobs(self, status: str | None = None, source: str | None = None,
                         subscription_id: str | None = None,
                         sort_by: str = "created_at", sort_order: str = "desc",
                         offset: int = 0, limit: int = 50):
-        return await self.repo.list_all(status=status, source=source,
+        jobs = await self.repo.list_all(status=status, source=source,
                                         subscription_id=subscription_id,
                                         sort_by=sort_by, sort_order=sort_order,
                                         offset=offset, limit=limit)
+        return await self._enrich_job_context(jobs)
 
     async def get_job(self, job_id: UUID):
         job = await self.repo.get(job_id)
         if not job:
             raise ValueError("DownloadJob not found")
-        return job
+        enriched = await self._enrich_job_context([job])
+        return enriched[0]
 
     async def create_job(self, data: dict) -> dict:
         source = data.get("source", "")

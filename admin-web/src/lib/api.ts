@@ -316,6 +316,9 @@ export interface DownloadJob {
   id: string;
   subscription_id: string;
   subscription_source_id?: string;
+  creator_id?: string | null;
+  creator_name?: string | null;
+  subscription_name?: string | null;
   source: string;
   source_url: string;
   status: string;
@@ -804,7 +807,7 @@ export const api = {
 
   getWorkSources: (id: string) => request<unknown[]>(`/api/v1/works/${id}/sources`),
 
-  getWorkAssets: (id: string) => request<{id:string;file_name:string;file_path:string;width?:number;height?:number;mime_type?:string;thumb_sm_path?:string;thumb_md_path?:string}[]>(`/api/v1/works/${id}/assets`),
+  getWorkAssets: (id: string) => request<{id:string;file_name:string;file_path:string;width?:number;height?:number;mime_type?:string;thumb_sm_path?:string;thumb_md_path?:string;created_at:string}[]>(`/api/v1/works/${id}/assets`),
 
   getWorkTags: (id: string) => request<{id:string;normalized_name:string;category?:string}[]>(`/api/v1/works/${id}/tags`),
 
