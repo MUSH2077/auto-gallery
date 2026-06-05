@@ -17,11 +17,15 @@ from app.database import async_session, engine
 # File-based log persistence with rotation
 import logging.handlers, os as _os
 _log_dir = _os.path.join(settings.app_config_root, "logs")
-_os.makedirs(_log_dir, exist_ok=True)
-_file_handler = logging.handlers.RotatingFileHandler(
-    _os.path.join(_log_dir, "backend.log"), maxBytes=10*1024*1024, backupCount=5)
-_file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-logging.getLogger().addHandler(_file_handler)
+try:
+    _os.makedirs(_log_dir, exist_ok=True)
+    _file_handler = logging.handlers.RotatingFileHandler(
+        _os.path.join(_log_dir, "backend.log"), maxBytes=10 * 1024 * 1024, backupCount=5
+    )
+    _file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    logging.getLogger().addHandler(_file_handler)
+except OSError:
+    pass
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO),
                     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
