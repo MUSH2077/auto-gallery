@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">creator detail screenshot placeholder</title>
+  <desc id="desc">Placeholder for the GitHub-like creator detail page.</desc>
+  <rect width="1200" height="720" fill="#f6f8fa"/>
+  <rect x="56" y="56" width="260" height="560" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <circle cx="186" cy="164" r="72" fill="#0969da"/>
+  <rect x="88" y="276" width="196" height="20" rx="4" fill="#24292f"/>
+  <rect x="88" y="316" width="156" height="14" rx="4" fill="#8c959f"/>
+  <rect x="356" y="56" width="788" height="72" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <rect x="356" y="160" width="788" height="456" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="420" y="96" fill="#24292f" font-family="Arial, sans-serif" font-size="24" font-weight="700">Creator overview</text>
+  <text x="420" y="660" fill="#57606a" font-family="Arial, sans-serif" font-size="24">Creator detail screenshot placeholder</text>
+</svg>

@@ -14,11 +14,7 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // Already logged in → go to dashboard
-  if (isAuthenticated) {
-    router.replace("/admin");
-    return null;
-  }
+  if (isAuthenticated) { router.replace("/admin"); return null; }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -35,74 +31,67 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-900 px-4">
-      {/* Top-right controls */}
-      <div className="absolute top-4 right-4 flex items-center gap-1">
+    <main className="flex min-h-screen items-center justify-center bg-[#f6f8fa] px-4 py-10 text-[#24292f] dark:bg-[#0d1117] dark:text-[#e6edf3]">
+      <div className="absolute right-4 top-4 flex items-center gap-2">
         <LangToggle />
         <ThemeToggle />
       </div>
 
-      <div className="w-full max-w-sm">
-        <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">auto-gallery</h1>
-          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">{t("auth.admin_panel")}</p>
+      <section className="w-full max-w-sm">
+        <div className="mb-6 text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-md border border-[#d8dee4] bg-white text-lg font-semibold tracking-tight shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
+            AG
+          </div>
+          <h1 className="text-2xl font-semibold tracking-normal">auto-gallery</h1>
+          <p className="mt-1 text-sm text-[#57606a] dark:text-[#8b949e]">{t("auth.admin_panel")}</p>
         </div>
 
-        <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-6">
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <form onSubmit={handleSubmit} className="card p-5">
+          <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                {t("auth.username")}
-              </label>
+              <label className="mb-1.5 block text-sm font-medium" htmlFor="username">{t("auth.username")}</label>
               <input
+                id="username"
                 type="text"
                 autoComplete="username"
                 required
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                className="input w-full"
                 placeholder="admin"
               />
             </div>
+
             <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                {t("auth.password")}
-              </label>
+              <label className="mb-1.5 block text-sm font-medium" htmlFor="password">{t("auth.password")}</label>
               <input
+                id="password"
                 type="password"
                 autoComplete="current-password"
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                placeholder="••••••"
+                className="input w-full"
+                placeholder="••••••••"
               />
             </div>
 
             {error && (
-              <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-3 py-2">
+              <div className="rounded-md border border-[#cf222e]/30 bg-[#ffebe9] px-3 py-2 text-sm text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">
                 {error}
               </div>
             )}
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-medium rounded-lg transition-colors text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-            >
-              {loading ? (
-                <span className="flex items-center justify-center gap-2">
-                  <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                  </svg>
-                  {t("auth.logging_in")}
-                </span>
-              ) : t("auth.login_button")}
+            <button type="submit" disabled={loading} className="btn-primary w-full">
+              {loading ? t("auth.logging_in") : t("auth.login_button")}
             </button>
-          </form>
-        </div>
-      </div>
-    </div>
+          </div>
+        </form>
+
+        <p className="mt-5 text-center text-xs text-[#57606a] dark:text-[#8b949e]">
+          v0.1.0 · secure admin access
+        </p>
+      </section>
+    </main>
   );
 }

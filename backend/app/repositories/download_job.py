@@ -4,6 +4,8 @@ from sqlalchemy import select, delete as sql_delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DownloadJob, ImportJob
+from app.services.job_manifest import append_manifest_event
+from app.services.job_state import transition_download_job
 
 
 class DownloadJobRepository:
@@ -46,9 +48,9 @@ class DownloadJobRepository:
         return job
 
     async def update_status(self, job: DownloadJob, status: str, error_log: str | None = None) -> DownloadJob:
-        job.status = status
-        if error_log:
-            job.error_log = error_log
+        old_status = job.status
+        transition_download_job(job, status, error_log)
+        append_manifest_event(job, "status_changed", from_status=old_status, to_status=status, error_log=error_log)
         await self.session.flush()
         return job
 
@@ -66,11 +68,9 @@ class DownloadJobRepository:
         )
         jobs = result.scalars().all()
         for j in jobs:
-            j.status = "stale"
-            if j.error_log:
-                j.error_log += "\n[manual] Force-stale by user"
-            else:
-                j.error_log = "[manual] Force-stale by user"
+            error_log = f"{j.error_log or ''}\n[manual] Force-stale by user".strip()
+            transition_download_job(j, "stale", error_log)
+            append_manifest_event(j, "status_changed", from_status="downloading", to_status="stale", error_log=error_log)
         await self.session.flush()
         return len(jobs)
 

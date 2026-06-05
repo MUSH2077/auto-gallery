@@ -15,13 +15,9 @@ interface TimelineData {
   total: number;
 }
 
-const SOURCE_COLORS: Record<string, string> = {
-  pixiv: "#0066FF", x: "#1DA1F2", twitter: "#1DA1F2", iwara: "#22C55E",
-  danbooru: "#A855F7", pinterest: "#E60023", lofter: "#F97316",
-  weibo: "#E6162D", bilibili: "#00A7D1", local: "#6B7280", manual: "#6B7280",
-};
+import { SOURCE_COLORS, CHART_COLORS } from "@/lib/sourceColors";
 
-function sourceColor(source: string): string { return SOURCE_COLORS[source] || "#6B7280"; }
+function sourceColor(source: string): string { return SOURCE_COLORS[source] || "#9CA3AF"; }
 
 function shadeColor(source: string, count: number): string {
   if (count === 0) return "rgba(128,128,128,0.08)";
@@ -68,7 +64,7 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
     return { weeks, months: monthLabels, dayMap };
   }, [data, yearOffset]);
 
-  if (loading) return <div className="animate-pulse"><div className="h-32 bg-gray-200 dark:bg-slate-700 rounded" /></div>;
+  if (loading) return <div className="animate-pulse"><div className="h-32 rounded-md bg-[#eaeef2] dark:bg-[#21262d]" /></div>;
   if (!data?.days?.length) return null;
 
   const cellSize = 11, gap = 2, step = cellSize + gap;
@@ -77,17 +73,17 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
     <div>
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <button onClick={() => setYearOffset(yearOffset - 1)} className="px-2 py-0.5 text-xs border rounded hover:bg-gray-100 dark:hover:bg-slate-700 dark:border-slate-600">←</button>
+          <button onClick={() => setYearOffset(yearOffset - 1)} className="btn-ghost px-2 py-0.5 text-xs">←</button>
           <span className="text-sm font-medium dark:text-white">{new Date(Date.UTC(new Date().getUTCFullYear() + yearOffset, 0, 1)).getUTCFullYear()}</span>
-          <button onClick={() => setYearOffset(yearOffset + 1)} className="px-2 py-0.5 text-xs border rounded hover:bg-gray-100 dark:hover:bg-slate-700 dark:border-slate-600">→</button>
+          <button onClick={() => setYearOffset(yearOffset + 1)} className="btn-ghost px-2 py-0.5 text-xs">→</button>
         </div>
-        <span className="text-xs text-gray-400">{data.total} works</span>
+        <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{data.total} works</span>
       </div>
 
       <div className="overflow-x-auto">
         <svg width={weeks.length * step + 40} height={7 * step + 20} className="text-xs">
           {months.map((m, i) => (
-            <text key={i} x={m.col * step + 10} y={10} className="fill-gray-400 dark:fill-gray-500" fontSize="9">{m.label}</text>
+            <text key={i} x={m.col * step + 10} y={10} className="fill-[#57606a] dark:fill-[#8b949e]" fontSize="9">{m.label}</text>
           ))}
           {weeks.map((week, wi) =>
             week.map((day, di) => {
@@ -111,25 +107,25 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
       </div>
 
       <div className="flex items-center gap-3 mt-3 text-xs flex-wrap">
-        <span className="text-gray-400">Less</span>
+        <span className="text-[#57606a] dark:text-[#8b949e]">Less</span>
         {[0, 1, 2, 3, 4].map((lvl) => (
           <div key={lvl} className="w-3 h-3 rounded-sm" style={{ backgroundColor: lvl === 0 ? "rgba(128,128,128,0.08)" : `rgba(100,100,100,${[0,0.2,0.4,0.65,1][lvl]})` }} />
         ))}
-        <span className="text-gray-400">More</span>
-        <span className="mx-2 text-gray-300 dark:text-gray-600">|</span>
+        <span className="text-[#57606a] dark:text-[#8b949e]">More</span>
+        <span className="mx-2 text-[#d8dee4] dark:text-[#30363d]">|</span>
         {data.sources.map((s) => (
           <span key={s} className="flex items-center gap-1">
             <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: sourceColor(s) }} />
-            <span className="text-gray-500 dark:text-gray-400">{s}</span>
+            <span className="text-[#57606a] dark:text-[#8b949e]">{s}</span>
           </span>
         ))}
       </div>
 
       {selectedDay && (
-        <div className="mt-3 p-3 bg-gray-50 dark:bg-slate-700/50 rounded text-sm">
+        <div className="mt-3 rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-3 text-sm dark:border-[#30363d] dark:bg-[#0d1117]">
           <div className="flex items-center justify-between">
             <span className="font-medium dark:text-white">{selectedDay.date}</span>
-            <button onClick={() => setSelectedDay(null)} className="text-gray-400 hover:text-gray-600">×</button>
+            <button onClick={() => setSelectedDay(null)} className="text-[#57606a] hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3]">×</button>
           </div>
           {data.sources.map((s) => {
             const cnt = (selectedDay[s] as number) || 0;
@@ -145,11 +141,11 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
                   <div className="flex flex-wrap gap-1 ml-4">
                     {ids.slice(0, 20).map((wid) => (
                       <Link key={wid} href={`/admin/works/${wid}`}
-                        className="text-xs px-2 py-0.5 bg-white dark:bg-slate-600 rounded border border-gray-200 dark:border-slate-500 hover:border-blue-400 hover:text-blue-600 dark:hover:text-blue-400 font-mono transition-colors">
+                        className="rounded-md border border-[#d8dee4] bg-white px-2 py-0.5 font-mono text-xs transition-colors hover:border-[#0969da] hover:text-[#0969da] dark:border-[#30363d] dark:bg-[#161b22] dark:hover:border-[#58a6ff] dark:hover:text-[#58a6ff]">
                         {wid.length > 12 ? wid.slice(0, 8) + "..." + wid.slice(-4) : wid}
                       </Link>
                     ))}
-                    {ids.length > 20 && <span className="text-xs text-gray-400">+{ids.length - 20} more</span>}
+                    {ids.length > 20 && <span className="text-xs text-[#57606a] dark:text-[#8b949e]">+{ids.length - 20} more</span>}
                   </div>
                 )}
               </div>

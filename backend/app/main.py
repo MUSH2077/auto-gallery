@@ -17,11 +17,15 @@ from app.database import async_session, engine
 # File-based log persistence with rotation
 import logging.handlers, os as _os
 _log_dir = _os.path.join(settings.app_config_root, "logs")
-_os.makedirs(_log_dir, exist_ok=True)
-_file_handler = logging.handlers.RotatingFileHandler(
-    _os.path.join(_log_dir, "backend.log"), maxBytes=10*1024*1024, backupCount=5)
-_file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-logging.getLogger().addHandler(_file_handler)
+try:
+    _os.makedirs(_log_dir, exist_ok=True)
+    _file_handler = logging.handlers.RotatingFileHandler(
+        _os.path.join(_log_dir, "backend.log"), maxBytes=10 * 1024 * 1024, backupCount=5
+    )
+    _file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    logging.getLogger().addHandler(_file_handler)
+except OSError:
+    pass
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO),
                     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -163,9 +167,79 @@ async def health():
         disk = "unknown"
 
     all_up = all(v == "up" for v in services.values())
+    business = {
+        "queues": {},
+        "jobs": {},
+        "scheduler": {},
+        "gallerydl": {},
+    }
+    try:
+        import redis as redis_lib
+        from rq import Queue
+        from rq.registry import ScheduledJobRegistry
+
+        r = redis_lib.from_url(settings.redis_url)
+        default_q = Queue(connection=r)
+        scheduled_q = Queue(name="scheduled", connection=r)
+        scheduled_reg = ScheduledJobRegistry(queue=scheduled_q)
+        business["queues"] = {
+            "default": len(default_q),
+            "scheduled": len(scheduled_q),
+            "scheduled_registry": scheduled_reg.count,
+        }
+        sync_jobs = [
+            scheduled_q.fetch_job(job_id)
+            for job_id in scheduled_reg.get_job_ids()
+        ]
+        business["scheduler"] = {
+            "sync_scheduled": str(any(j and "sync_subscriptions" in (j.func_name or "") for j in sync_jobs)).lower(),
+        }
+        r.close()
+    except Exception:
+        logger.debug("Business queue health skipped", exc_info=True)
+
+    try:
+        from sqlalchemy import func, select
+        from app.models import DownloadJob, ImportJob, SubscriptionSource
+
+        async with async_session() as session:
+            download_counts = await session.execute(
+                select(DownloadJob.status, func.count(DownloadJob.id)).group_by(DownloadJob.status)
+            )
+            import_counts = await session.execute(
+                select(ImportJob.status, func.count(ImportJob.id)).group_by(ImportJob.status)
+            )
+            auth_unhealthy = await session.execute(
+                select(func.count(SubscriptionSource.id)).where(SubscriptionSource.auth_healthy == False)
+            )
+        business["jobs"] = {
+            "downloads": {status: count for status, count in download_counts.all()},
+            "imports": {status: count for status, count in import_counts.all()},
+            "auth_unhealthy_sources": auth_unhealthy.scalar() or 0,
+        }
+    except Exception:
+        logger.debug("Business DB health skipped", exc_info=True)
+
+    try:
+        import json
+        import subprocess
+        config_path = os.path.join(settings.gallerydl_config_root, "config.json")
+        version = subprocess.run(["gallery-dl", "--version"], capture_output=True, text=True, timeout=5)
+        config_readable = True
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                json.load(f)
+        business["gallerydl"] = {
+            "version": (version.stdout or version.stderr or "").strip(),
+            "config_readable": config_readable,
+        }
+    except Exception:
+        business["gallerydl"] = {"version": None, "config_readable": False}
+
     return {
         "status": "ok" if all_up else "degraded",
         "version": "0.1.0",
         "services": services,
         "disk": disk,
+        "business": business,
     }

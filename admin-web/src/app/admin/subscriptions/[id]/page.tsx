@@ -4,8 +4,8 @@ import { useState } from "react";
 import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys, SubscriptionSource as SS, ProviderInfo } from "@/lib/api";
-import { PageHeader, StatusBadge, SourceBadge, Modal, ConfirmDialog, ErrorState, EmptyState } from "@/components";
+import { api, CreatorRepository, queryKeys, SubscriptionSource as SS, ProviderInfo } from "@/lib/api";
+import { PageHeader, StatusBadge, Modal, ConfirmDialog, ErrorState, EmptyState, RepositoryCard } from "@/components";
 
 function AddSourceForm({ subId, onClose }: { subId: string; onClose: () => void }) {
   const [source, setSource] = useState("pixiv"); const [sourceUrl, setSourceUrl] = useState(""); const [sourceCreatorId, setSourceCreatorId] = useState("");
@@ -40,26 +40,26 @@ function AddSourceForm({ subId, onClose }: { subId: string; onClose: () => void 
     <div className="space-y-4">
       <div>
         <label className="block text-sm font-medium mb-1">{t("subscription_detail.source_field")}</label>
-        <select value={source} onChange={(e) => handleSourceChange(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
+        <select value={source} onChange={(e) => handleSourceChange(e.target.value)} className="select w-full">
           {sources.data?.sources?.filter((s: ProviderInfo) => s.capabilities.can_download || s.capabilities.can_import_local).map((s: ProviderInfo) => <option key={s.source_name} value={s.source_name}>{s.display_name} ({s.source_name})</option>)}
         </select>
-        <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{t("subscription_detail.multi_source_hint")}</p>
+        <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.multi_source_hint")}</p>
       </div>
       <div>
         <label className="block text-sm font-medium mb-1">{t("subscription_detail.source_creator_id")}</label>
-        <input value={sourceCreatorId} onChange={(e) => handleIdChange(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder={t("subscription_detail.source_creator_id_placeholder")} />
-        <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{t("subscription_detail.source_creator_id_hint")}</p>
+        <input value={sourceCreatorId} onChange={(e) => handleIdChange(e.target.value)} className="input w-full" placeholder={t("subscription_detail.source_creator_id_placeholder")} />
+        <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.source_creator_id_hint")}</p>
       </div>
       <div>
         <label className="block text-sm font-medium mb-1">{t("subscription_detail.source_url_field")}</label>
-        <input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} className="w-full border rounded px-3 py-2 text-sm font-mono" placeholder={urlHint} />
-        <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{t("subscription_detail.source_url_hint")} {urlHint}</p>
+        <input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} className="input w-full font-mono" placeholder={urlHint} />
+        <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.source_url_hint")} {urlHint}</p>
       </div>
       <div className="flex justify-end gap-3 pt-2">
-        <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">{t("subscription_detail.cancel")}</button>
-        <button onClick={() => create.mutate()} disabled={create.isPending} className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">{create.isPending ? t("subscription_detail.adding") : t("subscription_detail.add_source_btn")}</button>
+        <button onClick={onClose} className="btn-ghost">{t("subscription_detail.cancel")}</button>
+        <button onClick={() => create.mutate()} disabled={create.isPending} className="btn-primary">{create.isPending ? t("subscription_detail.adding") : t("subscription_detail.add_source_btn")}</button>
       </div>
-      {create.error && <p className="text-red-600 text-sm">{(create.error as Error).message}</p>}
+      {create.error && <p className="text-sm text-[#cf222e] dark:text-[#f85149]">{(create.error as Error).message}</p>}
     </div>
   );
 }
@@ -71,6 +71,7 @@ export default function SubscriptionDetailPage() {
 
   const sub = useQuery({ queryKey: queryKeys.subscriptions.detail(id), queryFn: () => api.getSubscription(id) });
   const sources = useQuery({ queryKey: queryKeys.subscriptions.sources(id), queryFn: () => api.listSubscriptionSources(id) });
+  const providerInfos = useQuery({ queryKey: queryKeys.sources, queryFn: api.sources });
   const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
   const [showAddSource, setShowAddSource] = useState(false);
   const [editing, setEditing] = useState(false); const [editName, setEditName] = useState("");
@@ -108,29 +109,52 @@ export default function SubscriptionDetailPage() {
     return c ? (c.display_name || c.name) : creatorId.slice(0, 8);
   };
 
-  if (sub.isLoading) return <main className="max-w-4xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 bg-gray-200 rounded w-1/4" /><div className="h-32 bg-gray-200 rounded" /></div></main>;
+  if (sub.isLoading) return <main className="max-w-4xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 w-1/4 rounded bg-[#eaeef2] dark:bg-[#21262d]" /><div className="h-32 rounded bg-[#eaeef2] dark:bg-[#21262d]" /></div></main>;
   if (sub.error) return <main className="max-w-4xl mx-auto p-6"><ErrorState message={(sub.error as Error).message} onRetry={() => sub.refetch()} /></main>;
   if (!sub.data) return null;
   const s = sub.data;
+  const providerMap = new Map((providerInfos.data?.sources || []).map((p: ProviderInfo) => [p.source_name, p]));
+  const toRepo = (ss: SS): CreatorRepository => {
+    const provider = providerMap.get(ss.source);
+    return {
+      id: ss.id,
+      subscription_id: ss.subscription_id,
+      source: ss.source,
+      source_display_name: provider?.display_name || ss.source,
+      source_creator_id: ss.source_creator_id,
+      source_url: ss.source_url,
+      is_enabled: ss.is_enabled,
+      auth_healthy: ss.auth_healthy,
+      last_successful_auth: ss.last_successful_auth,
+      last_synced_at: ss.last_synced_at,
+      can_download: !!provider?.capabilities.can_download,
+      supports_gallerydl: !!provider?.capabilities.supports_gallerydl,
+      url_valid: !!ss.source_url,
+      is_repository: !!provider?.capabilities.can_download && !!ss.source_url,
+      latest_job: null,
+      created_at: ss.created_at,
+      updated_at: ss.updated_at,
+    };
+  };
 
   return (
-    <main className="max-w-4xl mx-auto p-6">
-      <Link href="/admin/subscriptions" className="text-sm text-blue-600 hover:underline inline-flex items-center gap-1">&larr; 返回</Link>
+    <main className="max-w-5xl mx-auto p-6">
+      <Link href="/admin/subscriptions" className="inline-flex items-center gap-1 text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">&larr; 返回</Link>
       <PageHeader title={s.name || (s.creator_display_name || s.creator_name || getCreatorName(s.creator_id))} description={s.creator_display_name || s.creator_name ? `${t("subscription_detail.creator")} ${s.creator_display_name || s.creator_name}` : undefined}>
         <div className="flex gap-2">
-          <button onClick={() => { setEditName(s.name || ""); setEditMode(s.schedule_mode || ""); setEditInterval(s.sync_interval_hours || 24); setEditTimes(s.scheduled_times || ""); setEditing(true); }} className="px-3 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">{t("subscription_detail.edit")}</button>
+          <button onClick={() => { setEditName(s.name || ""); setEditMode(s.schedule_mode || ""); setEditInterval(s.sync_interval_hours || 24); setEditTimes(s.scheduled_times || ""); setEditing(true); }} className="btn-primary">{t("subscription_detail.edit")}</button>
         </div>
       </PageHeader>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div className="col-span-2">
-          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 mb-4">
+          <div className="card p-4 mb-4">
             <h3 className="font-medium mb-3">{t("subscription_detail.details")}</h3>
             <dl className="text-sm space-y-2">
-              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-28">{t("subscription_detail.creator")}</dt><dd className="cursor-pointer text-blue-600 hover:underline" onClick={() => router.push(`/admin/creators/${s.creator_id}`)}>{s.creator_display_name || s.creator_name || getCreatorName(s.creator_id)}</dd></div>
-              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-28">{t("subscription_detail.status")}</dt><dd><StatusBadge status={s.is_active ? "up" : "down"} /></dd></div>
-              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-28">{t("subscription_detail.auto_sync")}</dt><dd>{s.sync_enabled ? <span className="text-green-600">{t("subscription_detail.sync_enabled")}</span> : <span className="text-gray-400 dark:text-gray-500">{t("subscription_detail.sync_disabled")}</span>}</dd></div>
-              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-28">{t("subscription_detail.sync_strategy")}</dt><dd className="text-xs">
+              <div className="flex gap-2"><dt className="w-28 text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.creator")}</dt><dd className="cursor-pointer text-[#0969da] hover:underline dark:text-[#58a6ff]" onClick={() => router.push(`/admin/creators/${s.creator_id}`)}>{s.creator_display_name || s.creator_name || getCreatorName(s.creator_id)}</dd></div>
+              <div className="flex gap-2"><dt className="w-28 text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.status")}</dt><dd><StatusBadge status={s.is_active ? "up" : "down"} /></dd></div>
+              <div className="flex gap-2"><dt className="w-28 text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.auto_sync")}</dt><dd>{s.sync_enabled ? <span className="text-[#1a7f37] dark:text-[#3fb950]">{t("subscription_detail.sync_enabled")}</span> : <span className="text-[#8c959f] dark:text-[#6e7681]">{t("subscription_detail.sync_disabled")}</span>}</dd></div>
+              <div className="flex gap-2"><dt className="w-28 text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.sync_strategy")}</dt><dd className="text-xs">
                 {!s.schedule_mode || s.schedule_mode === "inherit" ? (
                   <span className="text-gray-500">{t("subscription_detail.strategy_inherit")}</span>
                 ) : s.schedule_mode === "manual" ? (
@@ -141,45 +165,25 @@ export default function SubscriptionDetailPage() {
                   <span className="text-blue-600">{t("subscription_detail.strategy_interval")} · {s.sync_interval_hours}h</span>
                 )}
               </dd></div>
-              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-28">{t("subscription_detail.last_synced")}</dt><dd className="text-xs">{s.last_synced_at ? new Date(s.last_synced_at).toLocaleString() : t("subscription_detail.never_synced")}</dd></div>
-              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-28">{t("subscription_detail.created")}</dt><dd className="text-xs">{new Date(s.created_at).toLocaleString()}</dd></div>
+              <div className="flex gap-2"><dt className="w-28 text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.last_synced")}</dt><dd className="text-xs">{s.last_synced_at ? new Date(s.last_synced_at).toLocaleString() : t("subscription_detail.never_synced")}</dd></div>
+              <div className="flex gap-2"><dt className="w-28 text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.created")}</dt><dd className="text-xs">{new Date(s.created_at).toLocaleString()}</dd></div>
             </dl>
           </div>
 
-          <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-4">
+          <div className="card p-4">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-medium">{t("subscription_detail.sources_title").replace("{count}", String(sources.data?.length || 0))}</h3>
-              <button onClick={() => setShowAddSource(true)} className="text-xs px-3 py-1 bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">{t("subscription_detail.add_source")}</button>
+              <button onClick={() => setShowAddSource(true)} className="btn-primary">{t("subscription_detail.add_source")}</button>
             </div>
             {sources.data && sources.data.length > 0 ? (
               <div className="space-y-2">
                 {sources.data.map((ss: SS) => (
-                  <div key={ss.id} className="border rounded-lg p-3 text-sm">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <SourceBadge source={ss.source} />
-                        <span className="font-medium">{ss.source_creator_id || ss.source_url?.split("/").pop() || "—"}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button onClick={() => setToggleId(ss.id)}
-                          className={`text-xs px-2 py-0.5 rounded ${ss.is_enabled ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
-                          {ss.is_enabled ? t("subscription_detail.sync_enabled") : t("subscription_detail.sync_disabled")}
-                        </button>
-                        <button onClick={() => startSync.mutate(ss.id)} disabled={startSync.isPending}
-                          className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 disabled:opacity-50">
-                          {startSync.isPending ? t("subscription_detail.syncing") : t("subscription_detail.sync_now")}
-                        </button>
-                        <button onClick={() => setDeleteSsId(ss.id)} className="text-xs text-red-500 hover:text-red-700 dark:text-red-400">{t("subscription_detail.remove_source")}</button>
-                      </div>
-                    </div>
-                    <div className="text-xs text-gray-500 dark:text-gray-400 space-y-1">
-                      {ss.source_url && <div>{t("subscription_detail.source_url")} <span className="text-blue-600">{ss.source_url}</span></div>}
-                      <div className="flex gap-4">
-                        <span>{t("subscription_detail.auth_healthy")} <StatusBadge status={ss.auth_healthy ? "up" : "down"} /></span>
-                        {ss.last_successful_auth && <span>{t("subscription_detail.last_auth")} {new Date(ss.last_successful_auth).toLocaleDateString()}</span>}
-                      </div>
-                    </div>
-                  </div>
+                  <RepositoryCard key={ss.id} repo={toRepo(ss)}
+                    onSync={() => startSync.mutate(ss.id)}
+                    onToggle={() => setToggleId(ss.id)}
+                    onDelete={() => setDeleteSsId(ss.id)}
+                    syncPending={startSync.isPending}
+                    togglePending={toggleSource.isPending} />
                 ))}
               </div>
             ) : (
@@ -189,34 +193,39 @@ export default function SubscriptionDetailPage() {
           </div>
         </div>
 
-        <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 h-fit text-sm">
-          <h4 className="font-medium text-blue-800 dark:text-blue-300 mb-2">{t("subscription_detail.multi_source_title")}</h4>
-          <p className="text-blue-700">{t("subscription_detail.multi_source_desc")}</p>
+        <div className="card h-fit p-4 text-sm">
+          <h4 className="font-medium mb-2">{t("subscription_detail.multi_source_title")}</h4>
+          <p className="text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.multi_source_desc")}</p>
+          <div className="mt-4 space-y-2 border-t border-[#d8dee4] pt-4 text-xs dark:border-[#30363d]">
+            <div className="flex justify-between"><span>Repositories</span><span className="font-semibold">{sources.data?.length || 0}</span></div>
+            <div className="flex justify-between"><span>Enabled</span><span className="font-semibold">{sources.data?.filter((x) => x.is_enabled).length || 0}</span></div>
+            <div className="flex justify-between"><span>Last sync</span><span className="font-semibold">{s.last_synced_at ? new Date(s.last_synced_at).toLocaleDateString() : t("subscription_detail.never_synced")}</span></div>
+          </div>
         </div>
       </div>
 
       <Modal open={editing} onClose={() => setEditing(false)} title={t("subscription_detail.edit_title")}>
         <div className="space-y-4">
-          <div><label className="block text-sm font-medium mb-1">{t("subscription_detail.name_field")}</label><input value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white" /></div>
+          <div><label className="block text-sm font-medium mb-1">{t("subscription_detail.name_field")}</label><input value={editName} onChange={(e) => setEditName(e.target.value)} className="input w-full" /></div>
           <div>
             <label className="block text-sm font-medium mb-1">{t("subscription_detail.sync_strategy")}</label>
             <select value={editMode} onChange={(e) => setEditMode(e.target.value)}
-              className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white">
+              className="select w-full">
               <option value="">{t("subscription_detail.strategy_inherit")}</option>
               <option value="interval">{t("subscription_detail.strategy_interval")}</option>
               <option value="fixed_time">{t("subscription_detail.strategy_fixed_time")}</option>
               <option value="manual">{t("subscription_detail.strategy_manual")}</option>
             </select>
-            <p className="text-xs text-gray-400 mt-1">{t("subscription_detail.strategy_desc")}</p>
+            <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.strategy_desc")}</p>
           </div>
           {editMode === "interval" && (
             <div>
               <label className="block text-sm font-medium mb-1">{t("subdefaults.sync_interval")}</label>
-              <div className="flex items-center gap-1 bg-gray-100 dark:bg-slate-700 rounded-lg px-1 w-fit">
+              <div className="flex w-fit items-center gap-1 rounded-md border border-[#d8dee4] bg-[#f6f8fa] px-1 dark:border-[#30363d] dark:bg-[#21262d]">
                 <input type="number" min={1} max={168} value={editInterval}
                   onChange={(e) => setEditInterval(parseInt(e.target.value) || 24)}
                   className="w-16 border-0 bg-transparent px-2 py-1.5 text-sm font-mono text-center dark:text-white" />
-                <span className="text-xs text-gray-500 dark:text-gray-400 pr-2">hours</span>
+                <span className="pr-2 text-xs text-[#57606a] dark:text-[#8b949e]">hours</span>
               </div>
             </div>
           )}
@@ -225,20 +234,20 @@ export default function SubscriptionDetailPage() {
               <label className="block text-sm font-medium mb-1">{t("subdefaults.scheduled_times")}</label>
               <input value={editTimes} onChange={(e) => setEditTimes(e.target.value)}
                 placeholder="03:00, 21:00"
-                className="w-full border rounded px-3 py-2 text-sm font-mono dark:bg-slate-700 dark:text-white" />
-              <p className="text-xs text-gray-400 mt-1">{t("subdefaults.scheduled_times.example")}</p>
+                className="input w-full font-mono" />
+              <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{t("subdefaults.scheduled_times.example")}</p>
             </div>
           )}
           <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => setEditing(false)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">{t("subscription_detail.cancel")}</button>
+            <button onClick={() => setEditing(false)} className="btn-ghost">{t("subscription_detail.cancel")}</button>
             <button onClick={() => update.mutate({
               name: editName || undefined,
               schedule_mode: editMode || null,
               sync_interval_hours: editMode === "interval" ? editInterval : undefined,
               scheduled_times: editMode === "fixed_time" ? (editTimes || null) : undefined,
-            })} disabled={update.isPending} className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600">{t("subscription_detail.save")}</button>
+            })} disabled={update.isPending} className="btn-primary">{t("subscription_detail.save")}</button>
           </div>
-          {update.error && <p className="text-red-600 text-sm">{(update.error as Error).message}</p>}
+          {update.error && <p className="text-sm text-[#cf222e] dark:text-[#f85149]">{(update.error as Error).message}</p>}
         </div>
       </Modal>
 

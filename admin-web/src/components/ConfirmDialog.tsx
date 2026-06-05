@@ -13,17 +13,21 @@ export default function ConfirmDialog({ open, title, message, onConfirm, onCance
   const t = useT();
   if (!open) return null;
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
-        <h3 className="text-lg font-semibold mb-2 dark:text-white">{title}</h3>
-        <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">{message}</p>
-        {error && <p className="text-red-600 dark:text-red-400 text-sm mb-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded p-2">{error}</p>}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+      <div className="w-full max-w-md rounded-md border border-[#d8dee4] bg-white shadow-xl dark:border-[#30363d] dark:bg-[#161b22]">
+        <div className="border-b border-[#d8dee4] px-4 py-3 dark:border-[#30363d]">
+          <h3 className="text-base font-semibold text-[#24292f] dark:text-[#e6edf3]">{title}</h3>
+        </div>
+        <div className="px-4 py-4">
+        <p className="mb-4 text-sm leading-6 text-[#57606a] dark:text-[#8b949e]">{message}</p>
+        {error && <p className="mb-3 rounded-md border border-[#cf222e]/30 bg-[#ffebe9] p-2 text-sm text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">{error}</p>}
         <div className="flex justify-end gap-3">
-          <button onClick={onCancel} disabled={isPending} className="px-4 py-2 text-sm rounded border dark:border-slate-600 hover:bg-gray-50 dark:hover:bg-slate-700 dark:text-gray-300 disabled:opacity-50">{t("common.cancel")}</button>
+          <button onClick={onCancel} disabled={isPending} className="btn-ghost">{t("common.cancel")}</button>
           <button onClick={onConfirm} disabled={isPending}
-            className="px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">
+            className="btn-danger">
             {isPending ? t("common.processing") : t("common.confirm")}
           </button>
+        </div>
         </div>
       </div>
     </div>

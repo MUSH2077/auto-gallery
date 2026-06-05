@@ -7,36 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.subscription import SubscriptionRepository
 from app.models import SubscriptionSource, DownloadJob, ImportJob, CreatorLink, Subscription
 from app.providers import registry
+from app.services.settings import get_subscription_defaults
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_SYNC_INTERVAL_HOURS = 6
-DEFAULT_SCAN_MINUTES = 60
-
-
-async def get_subscription_defaults(db: AsyncSession) -> dict:
-    """Read subscription defaults from system_settings table.
-
-    Returns a dict with at minimum: sync_interval_hours, sync_enabled.
-    Used when creating subscriptions to ensure system defaults are applied
-    instead of model-level hardcoded values.
-    """
-    from app.models.system_setting import SystemSetting
-    result = await db.execute(
-        select(SystemSetting).where(SystemSetting.key == "subscription_defaults")
-    )
-    row = result.scalar_one_or_none()
-    defaults = {}
-    if row and row.value:
-        defaults = dict(row.value)
-    return {
-        "sync_interval_hours": int(defaults.get("default_sync_interval_hours", DEFAULT_SYNC_INTERVAL_HOURS)),
-        "sync_enabled": True,
-        "is_active": True,
-        "schedule_mode": None,
-        "scheduled_times": None,
-    }
-
 
 class SubscriptionService:
     def __init__(self, db: AsyncSession):
@@ -97,10 +70,16 @@ class SubscriptionService:
 
     async def add_source(self, data: dict):
         source = data.get("source", "")
-        provider = registry.get(source)
+        try:
+            provider = registry.get(source)
+        except KeyError:
+            raise ValueError(f"Unknown source provider: {source}")
         url = data.get("source_url", "")
-        if url and not provider.validate_url(url):
-            raise ValueError(f"Invalid URL for source '{source}': {url}")
+        if url:
+            normalized = provider.normalize_url(url) or url
+            if not provider.validate_url(normalized):
+                raise ValueError(f"Invalid URL for source '{source}': {url}")
+            data["source_url"] = normalized
         ss = await self.repo.add_source(data)
         await self.db.commit()
 
@@ -118,6 +97,15 @@ class SubscriptionService:
         ss = await self.repo.get_source(ss_id)
         if not ss:
             raise ValueError("SubscriptionSource not found")
+        if "source_url" in data and data.get("source_url"):
+            try:
+                provider = registry.get(ss.source)
+            except KeyError:
+                raise ValueError(f"Unknown source provider: {ss.source}")
+            normalized = provider.normalize_url(data["source_url"]) or data["source_url"]
+            if not provider.validate_url(normalized):
+                raise ValueError(f"Invalid URL for source '{ss.source}': {data['source_url']}")
+            data["source_url"] = normalized
         ss = await self.repo.update_source(ss, data)
         await self.db.commit()
         return ss

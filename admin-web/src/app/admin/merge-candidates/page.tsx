@@ -14,11 +14,11 @@ export default function MergeCandidatesPage() {
     <main className="max-w-4xl mx-auto p-6">
       <PageHeader title={t("merge.title")} description={t("merge.desc")} />
 
-      <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 text-sm mb-6">
+      <div className="mb-6 rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm text-[#9a6700] dark:border-[#d29922]/30 dark:bg-[#d29922]/15 dark:text-[#f2cc60]">
         <strong>{t("merge.warning")}</strong> {t("merge.warning_detail")}
       </div>
 
-      {mc.isLoading && <div className="animate-pulse space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-16 bg-gray-100 dark:bg-slate-700 rounded" />)}</div>}
+      {mc.isLoading && <div className="animate-pulse space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />)}</div>}
       {mc.error && <ErrorState message={(mc.error as Error).message} />}
 
       {mc.data && mc.data.candidates.length === 0 && (
@@ -26,11 +26,11 @@ export default function MergeCandidatesPage() {
       )}
 
       {mc.data?.candidates.map((c, i) => (
-        <div key={i} className="bg-white dark:bg-slate-800 rounded-lg shadow p-4 mb-2 text-sm">
+        <div key={i} className="card mb-2 p-4 text-sm">
           <div className="font-medium mb-2">{c.title}</div>
           <div className="flex items-center gap-2 mb-2">
             {c.sources.map((s) => <SourceBadge key={s} source={s} />)}
-            <span className="text-xs text-gray-500 dark:text-gray-400">{c.source_count} {t("merge.sources_count")}</span>
+            <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{c.source_count} {t("merge.sources_count")}</span>
           </div>
           <div className="flex gap-2 flex-wrap">
             {c.work_ids.map((wid) => (

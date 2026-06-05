@@ -48,7 +48,7 @@ services:
       args:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-}
     image: auto-gallery-backend:latest
-    command: sh -c "mkdir -p /gallerydl-config/cookies && for site in pixiv twitter iwara danbooru pinterest lofter; do touch /gallerydl-config/cookies/\$\$site.txt; done && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    command: sh -c "mkdir -p /gallerydl-config/cookies && for site in pixiv twitter iwara danbooru pinterest lofter weibo bilibili; do touch /gallerydl-config/cookies/\$\$site.txt; done && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "${BACKEND_PORT:-8818}:8000"
     environment:

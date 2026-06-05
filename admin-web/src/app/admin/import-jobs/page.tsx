@@ -40,15 +40,15 @@ function JobRow({ job }: { job: ImportJob }) {
 
   return (
     <>
-      <tr className="border-b dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">
+      <tr className="table-row">
         <td className="px-4 py-3">
-          <div className="font-mono text-xs text-gray-400 dark:text-gray-500">{job.id.slice(0, 8)}</div>
+          <div className="font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{job.id.slice(0, 8)}</div>
         </td>
         <td className="px-4 py-3">
-          <div className="font-mono text-xs text-gray-400 dark:text-gray-500">{job.download_job_id.slice(0, 8)}</div>
+          <div className="font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{job.download_job_id.slice(0, 8)}</div>
         </td>
         <td className="px-4 py-3"><StatusBadge status={job.status} /></td>
-        <td className="px-4 py-3 text-xs text-gray-400 dark:text-gray-500">{new Date(job.created_at).toLocaleString()}</td>
+        <td className="px-4 py-3 text-xs text-[#57606a] dark:text-[#8b949e]">{new Date(job.created_at).toLocaleString()}</td>
         <td className="px-4 py-3">
           <div className="flex gap-2">
             {job.error_log && (
@@ -56,13 +56,13 @@ function JobRow({ job }: { job: ImportJob }) {
             )}
             {canRetry && (
               <button onClick={() => setConfirmRetry(true)} disabled={retry.isPending}
-                className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 disabled:opacity-50">
+                className="btn-ghost px-2 py-0.5 text-xs">
                 {retry.isPending ? "..." : t("imports.retry")}
               </button>
             )}
             {canDelete && (
               <button onClick={() => setConfirmDelete(true)} disabled={deleteJob.isPending}
-                className="text-xs px-2 py-0.5 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded hover:bg-red-200 disabled:opacity-50">
+                className="btn-danger px-2 py-0.5 text-xs">
                 {deleteJob.isPending ? "..." : t("imports.del")}
               </button>
             )}
@@ -70,8 +70,8 @@ function JobRow({ job }: { job: ImportJob }) {
         </td>
       </tr>
       {showLog && job.error_log && (
-        <tr><td colSpan={5} className="px-4 py-3 bg-gray-50 dark:bg-slate-800/50">
-          <pre className="text-xs font-mono whitespace-pre-wrap max-h-48 overflow-auto bg-gray-100 dark:bg-slate-700 p-3 rounded">{job.error_log}</pre>
+        <tr><td colSpan={5} className="border-b border-[#d8dee4] bg-[#f6f8fa] px-4 py-3 dark:border-[#30363d] dark:bg-[#0d1117]">
+          <pre className="max-h-48 overflow-auto rounded-md border border-[#d8dee4] bg-white p-3 font-mono text-xs whitespace-pre-wrap text-[#24292f] dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#e6edf3]">{job.error_log}</pre>
         </td></tr>
       )}
       {confirmRetry && <ConfirmDialog open title={t("imports.retry_title")} message={t("imports.retry_msg").replace("{id}", job.id.slice(0, 8))} onConfirm={() => retry.mutate()} onCancel={() => setConfirmRetry(false)} isPending={retry.isPending} error={(retry.error as Error)?.message} />}
@@ -111,7 +111,7 @@ function ImportJobsContent() {
     <main className="max-w-7xl mx-auto p-6">
       <PageHeader title={t("imports.title")} description={(jobs.data?.total ?? 0) > 0 ? t("common.page").replace("{page}", String(page + 1)) : t("imports.desc")}>
         <button onClick={() => scan.mutate()} disabled={scan.isPending}
-          className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
+          className="btn-primary">
           {scan.isPending ? t("imports.scanning") : t("imports.scan")}
         </button>
       </PageHeader>
@@ -119,24 +119,26 @@ function ImportJobsContent() {
         <Link href="/admin/jobs" className="text-sm text-blue-600 hover:underline">&larr; {t("imports.view_jobs")}</Link>
       </div>
 
-      <div className="flex gap-2 mb-4 flex-wrap">
+      <div className="toolbar mb-4 flex-wrap">
+        <div className="segmented-control">
         {STATUS_OPTIONS.map((s) => (
           <button key={s} onClick={() => updateParams({ status: s || null })}
-            className={`px-3 py-1 rounded text-xs font-medium border ${statusFilter === s ? "bg-slate-900 dark:bg-slate-600 text-white border-slate-900 dark:border-slate-500" : "bg-white dark:bg-slate-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-600"}`}>
+            className={`segment ${statusFilter === s ? "segment-active" : ""}`}>
             {s || t("imports.filter_all", "All")}
           </button>
         ))}
-        <button onClick={() => jobs.refetch()} className="ml-auto px-3 py-1 text-xs border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">{t("imports.refresh")}</button>
+        </div>
+        <button onClick={() => jobs.refetch()} className="btn-ghost ml-auto px-3 py-1 text-xs">{t("imports.refresh")}</button>
       </div>
 
-      {jobs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-10 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
+      {jobs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-10 rounded-md bg-[#eaeef2] animate-pulse dark:bg-[#21262d]" />)}</div>}
       {jobs.error && <ErrorState message={(jobs.error as Error).message} onRetry={() => jobs.refetch()} />}
       {jobs.data && !jobs.data.items?.length && <EmptyState title={t("imports.no_jobs")} description={t("imports.no_jobs_desc")} />}
 
       {jobs.data && jobs.data.items?.length > 0 && (
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow overflow-x-auto">
+        <div className="table-shell">
           <table className="w-full text-sm">
-            <thead><tr className="border-b dark:border-slate-700 bg-gray-50 dark:bg-slate-800/50">
+            <thead><tr className="table-head">
               <th className="text-left px-4 py-3">{t("imports.col_id")}</th>
               <th className="text-left px-4 py-3">{t("imports.col_dl_job")}</th>
               <th className="text-left px-4 py-3">{t("imports.col_status")}</th>
@@ -151,10 +153,10 @@ function ImportJobsContent() {
       {(jobs.data?.total ?? 0) > 0 && (
         <div className="flex gap-2 justify-center mt-4">
           <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)}
-            className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.prev")}</button>
-          <span className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400">{t("common.page").replace("{page}", String(page + 1))}</span>
+            className="btn-ghost px-3 py-1 text-sm disabled:opacity-30">{t("common.prev")}</button>
+          <span className="px-3 py-1 text-sm text-[#57606a] dark:text-[#8b949e]">{t("common.page").replace("{page}", String(page + 1))}</span>
           <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!jobs.data || (page + 1) * limit >= jobs.data.total}
-            className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.next")}</button>
+            className="btn-ghost px-3 py-1 text-sm disabled:opacity-30">{t("common.next")}</button>
         </div>
       )}
     </main>

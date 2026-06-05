@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, DedupSettings } from "@/lib/api";
 import { PageHeader, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
+import { useToast } from "@/components/Toast";
 import Link from "next/link";
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: () => void }) {
@@ -17,20 +18,21 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: () => void 
 
 export default function DedupSettingsPage() {
   const t = useT();
+  const toast = useToast();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
   const [local, setLocal] = useState<DedupSettings | null>(null);
-  const [saved, setSaved] = useState(false);
+  
 
   const save = useMutation({
     mutationFn: (data: DedupSettings) => api.updateAdminSettings({ dedup: data }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.admin.settings }); setSaved(true); setTimeout(() => setSaved(false), 2000); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.admin.settings }); toast.success({ message: t("notification.saved") }); },
   });
 
   const current = local || settings.data?.dedup;
 
   if (settings.isError) return <main className="max-w-4xl mx-auto p-6"><ErrorState message={settings.error?.message || t("dedup.failed")} onRetry={() => settings.refetch()} /></main>;
-  if (!settings.data) return <main className="max-w-4xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 bg-gray-200 rounded w-1/3" /><div className="h-64 bg-gray-200 rounded" /></div></main>;
+  if (!settings.data) return <main className="max-w-4xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 rounded-md bg-[#eaeef2] dark:bg-[#21262d] w-1/3" /><div className="h-64 rounded-md bg-[#eaeef2] dark:bg-[#21262d]" /></div></main>;
   if (!local && settings.data.dedup) setLocal({ ...settings.data.dedup });
 
   const toggle = (key: keyof DedupSettings) => {
@@ -49,7 +51,7 @@ export default function DedupSettingsPage() {
 
       {current && (
         <>
-          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-6 space-y-1">
+          <div className="card p-6 space-y-1">
             {([
               ["source_level_enabled", t("dedup.source_level.desc")],
               ["cross_source_enabled", t("dedup.cross_source.desc")],
@@ -78,16 +80,16 @@ export default function DedupSettingsPage() {
             </div>
           </div>
 
-          <div className="mt-4 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-100 dark:border-yellow-900/50 rounded-xl text-sm text-yellow-800 dark:text-yellow-300">
+          <div className="mt-4 rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm text-[#9a6700] dark:border-[#d29922]/30 dark:bg-[#d29922]/15 dark:text-[#f2cc60]">
             <strong>&#9888; {t("dedup.warning")}</strong>
             {current.auto_merge && <span className="block mt-1 text-red-600 dark:text-red-400 font-medium">{t("dedup.warning_auto")}</span>}
           </div>
 
           <div className="mt-4 flex justify-end items-center">
-            {saved && <span className="mr-3 text-green-600 dark:text-green-400 text-sm">{t("common.saved")}</span>}
+            
             {save.error && <span className="mr-3 text-red-600 text-sm">{(save.error as Error).message}</span>}
             <button onClick={() => save.mutate(current)} disabled={save.isPending}
-              className="px-6 py-2.5 bg-slate-900 dark:bg-slate-700 text-white rounded-lg text-sm font-medium hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50 transition-colors">
+              className="btn-primary px-6">
               {save.isPending ? t("common.saving") : t("dedup.save")}
             </button>
           </div>

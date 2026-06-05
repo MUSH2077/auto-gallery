@@ -7,6 +7,7 @@ from app.config import settings
 from app.repositories.download_job import DownloadJobRepository
 from app.repositories.subscription import SubscriptionRepository
 from app.providers import registry
+from app.services.job_manifest import append_manifest_event, update_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -41,21 +42,30 @@ class DownloadService:
 
         # If subscription_source_id is provided, look up its source_url
         ss_uuid = subscription_source_id if isinstance(subscription_source_id, UUID) else UUID(subscription_source_id) if subscription_source_id else None
-        if ss_uuid and not source_url:
-            ss = await self.sub_repo.get_source(ss_uuid)
-            if ss:
-                source = ss.source
-                source_url = ss.source_url or ""
-                data["source"] = source
+        if ss_uuid:
+            from app.services.subscription_enqueue import enqueue_subscription_source_sync
+            result = await enqueue_subscription_source_sync(self.db, ss_uuid, trigger="manual_source")
+            if result["status"] == "enqueued":
+                return {"job_id": result["job_id"], "status": "pending", "source_url": result["source_url"]}
+            if result.get("job_id") and result.get("skip_reason") == "already_running":
+                running = await self.repo.get(UUID(result["job_id"]))
+                return {
+                    "job_id": result["job_id"],
+                    "status": running.status if running else "pending",
+                    "source_url": running.source_url if running else source_url,
+                }
+            raise ValueError(result.get("skip_reason") or result.get("error") or "Unable to enqueue source sync")
 
         if not source_url:
             raise ValueError("source_url is required")
 
-        provider = registry.get(source)
-        if not provider.validate_url(source_url):
-            raise ValueError(f"Invalid URL for source '{source}': {source_url}")
-
+        try:
+            provider = registry.get(source)
+        except KeyError:
+            raise ValueError(f"Unknown source provider: {source}")
         normalized_url = provider.normalize_url(source_url) or source_url
+        if not provider.validate_url(normalized_url):
+            raise ValueError(f"Invalid URL for source '{source}': {source_url}")
 
         job = await self.repo.create({
             "subscription_id": data["subscription_id"],
@@ -64,6 +74,8 @@ class DownloadService:
             "source_url": normalized_url,
             "status": "pending",
         })
+        update_manifest(job, trigger="manual_url", source=source, source_url=normalized_url)
+        append_manifest_event(job, "created", trigger="manual_url")
         await self.db.commit()
 
         try:
@@ -72,6 +84,8 @@ class DownloadService:
             r = redis_lib.from_url(settings.redis_url)
             q = Queue(connection=r)
             q.enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
+            append_manifest_event(job, "enqueued", queue="default")
+            await self.db.commit()
         except Exception:
             logger.warning("Failed to enqueue download job %s", job.id, exc_info=True)
 
@@ -82,6 +96,7 @@ class DownloadService:
         if job.status not in ("failed", "stale", "downloading", "complete"):
             raise ValueError(f"Cannot retry job with status '{job.status}'")
         job = await self.repo.update_status(job, "pending")
+        job.error_log = None
         try:
             import redis as redis_lib
             from rq import Queue
@@ -110,6 +125,7 @@ class DownloadService:
         if job.status not in ("paused",):
             raise ValueError(f"Cannot resume job with status '{job.status}'")
         job = await self.repo.update_status(job, "pending")
+        job.error_log = None
         try:
             import redis as redis_lib
             from rq import Queue

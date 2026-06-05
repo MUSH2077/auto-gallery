@@ -1,0 +1,31 @@
+name: Provider request
+description: Request support or compatibility work for a source provider.
+title: "[Provider]: "
+labels: ["provider"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Only request providers or URLs you are authorized to access. Do not post private cookies or paid/private content URLs.
+  - type: input
+    id: provider
+    attributes:
+      label: Provider name
+      placeholder: Example: Pixiv, X/Twitter, Weibo
+    validations:
+      required: true
+  - type: textarea
+    id: urls
+    attributes:
+      label: Public sample URLs
+      description: Provide public, non-sensitive examples where possible.
+  - type: textarea
+    id: gallerydl
+    attributes:
+      label: gallery-dl behavior
+      description: Does gallery-dl support this URL today? Include sanitized output if available.
+  - type: textarea
+    id: auth
+    attributes:
+      label: Authentication requirements
+      description: Cookie, username/password, API key, public only, unknown.
