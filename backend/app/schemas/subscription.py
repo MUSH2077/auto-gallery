@@ -39,6 +39,9 @@ class SubscriptionRead(BaseModel):
     schedule_mode: str | None = None
     scheduled_times: str | None = None
     last_synced_at: datetime | None = None
+    source_count: int | None = None
+    enabled_source_count: int | None = None
+    latest_job_status: str | None = None
     created_at: datetime
     updated_at: datetime
 

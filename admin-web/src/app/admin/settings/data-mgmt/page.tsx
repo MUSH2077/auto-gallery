@@ -3,10 +3,12 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, ConfirmDialog } from "@/components";
+import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import Link from "next/link";
 
 export default function DataManagementPage() {
+  const toast = useToast();
   const t = useT();
   const qc = useQueryClient();
   const [confirmAction, setConfirmAction] = useState<string | null>(null);
@@ -19,26 +21,26 @@ export default function DataManagementPage() {
       return { message: "All data, files, and Redis failed jobs cleared" };
     },
     onSuccess: (d) => {
-      setResult({ ok: true, msg: d.message });
+      toast.success({ message: d.message });
       qc.invalidateQueries();
       setConfirmAction(null);
     },
     onError: (e) => {
-      setResult({ ok: false, msg: (e as Error).message });
+      toast.error({ message: (e as Error).message });
       setConfirmAction(null);
     },
   });
 
   const clearWorks = useMutation({
     mutationFn: () => api.clearEntity("works"),
-    onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-    onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
+    onSuccess: (d) => { toast.success({ message: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+    onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
   });
 
   const clearCreators = useMutation({
     mutationFn: () => api.clearEntity("creators"),
-    onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-    onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
+    onSuccess: (d) => { toast.success({ message: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+    onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
   });
 
   const clearDownloads = useMutation({
@@ -47,8 +49,8 @@ export default function DataManagementPage() {
       await api.clearFailedJobs();
       return { message: "Download history and Redis failed jobs cleared" };
     },
-    onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-    onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
+    onSuccess: (d) => { toast.success({ message: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+    onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
   });
 
   const clearJobs = useMutation({
@@ -57,20 +59,20 @@ export default function DataManagementPage() {
       await api.clearFailedJobs();
       return { message: "All download and import jobs cleared" };
     },
-    onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-    onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
+    onSuccess: (d) => { toast.success({ message: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+    onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
   });
 
   const clearTags = useMutation({
     mutationFn: () => api.clearEntity("tags"),
-    onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-    onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
+    onSuccess: (d) => { toast.success({ message: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+    onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
   });
 
   const resetSettings = useMutation({
     mutationFn: () => api.resetSettings(),
-    onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-    onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
+    onSuccess: (d) => { toast.success({ message: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+    onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
   });
 
   const actions = [
@@ -141,7 +143,7 @@ export default function DataManagementPage() {
 
       <div className="space-y-3">
         {actions.map((a) => (
-          <div key={a.key} className={`bg-white dark:bg-slate-800 rounded-lg shadow p-4 flex items-center justify-between border-l-4 ${
+          <div key={a.key} className={`card p-4 flex items-center justify-between border-l-4 ${
             a.color === "red" ? "border-red-500" : a.color === "orange" ? "border-orange-500" : a.color === "yellow" ? "border-yellow-500" : "border-blue-500"
           }`}>
             <div>
@@ -151,7 +153,7 @@ export default function DataManagementPage() {
             <button
               onClick={() => setConfirmAction(a.key)}
               disabled={a.mutation.isPending}
-              className={`px-4 py-2 text-sm text-white rounded shrink-0 ml-4 disabled:opacity-50 ${
+              className={`shrink-0 ml-4 btn-primary ${
                 a.color === "red" ? "bg-red-600 hover:bg-red-700" :
                 a.color === "orange" ? "bg-orange-600 hover:bg-orange-700" :
                 a.color === "yellow" ? "bg-yellow-600 hover:bg-yellow-700" :

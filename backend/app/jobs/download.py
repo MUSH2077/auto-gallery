@@ -13,6 +13,9 @@ from app.config import settings
 from app.database import async_session
 from app.models.subscription_source import SubscriptionSource
 from app.repositories.download_job import DownloadJobRepository
+from app.services.job_manifest import append_manifest_event, update_manifest
+from app.services.settings import build_effective_gallerydl_config, get_download_defaults
+from app.services.subscription_enqueue import mark_source_sync_success
 
 logger = logging.getLogger(__name__)
 
@@ -44,14 +47,8 @@ RQ_JOB_TIMEOUT = 7200  # 2 hours
 async def _read_download_defaults():
     """Read download job defaults from system_settings table."""
     try:
-        from app.models.system_setting import SystemSetting
         async with async_session() as db:
-            result = await db.execute(
-                select(SystemSetting).where(SystemSetting.key == "download_defaults")
-            )
-            row = result.scalar_one_or_none()
-            if row and row.value:
-                return row.value
+            return await get_download_defaults(db)
     except Exception:
         logger.warning("Failed to read download_defaults, using fallbacks", exc_info=True)
     return {}
@@ -77,22 +74,50 @@ def _cleanup_temp_config(path: str | None):
             pass
 
 
-def _count_download_artifacts(source: str) -> tuple[int, int]:
-    """Walk source dir once, return (metadata_json_count, image_file_count)."""
+def _snapshot_metadata_jsons(source: str) -> set[str]:
+    """Return a set of absolute paths to all metadata JSON files for a source.
+
+    Used to detect which files were created by THIS gallery-dl invocation
+    via before/after diff — works regardless of naming template configuration.
+    """
+    source_root = Path(settings.download_root) / source
+    if not source_root.exists():
+        return set()
+    return {str(p) for p in source_root.rglob("*.json") if p.is_file()}
+
+
+def _count_new_artifacts(source: str, json_before: set[str]) -> tuple[int, int]:
+    """Count NEW metadata JSONs and image files created since snapshot.
+
+    Compares current filesystem against json_before to detect only files
+    produced by the current gallery-dl run. Image count is scoped to
+    directories containing new JSONs, avoiding files from other creators.
+    """
     source_root = Path(settings.download_root) / source
     if not source_root.exists():
         return (0, 0)
+
     IMG_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
-    json_count = 0
+
+    json_after = {str(p) for p in source_root.rglob("*.json") if p.is_file()}
+    new_jsons = json_after - json_before
+
+    if not new_jsons:
+        return (0, 0, set())
+
+    # Count images only in directories that contain new JSONs
+    # (avoids counting files from other creators' past downloads)
+    new_dirs = {str(Path(jp).parent) for jp in new_jsons}
     img_count = 0
-    for p in source_root.rglob("*"):
-        if not p.is_file():
+    for d in new_dirs:
+        dir_path = Path(d)
+        if not dir_path.exists():
             continue
-        if p.suffix == ".json":
-            json_count += 1
-        elif p.suffix.lower() in IMG_EXTS:
-            img_count += 1
-    return (json_count, img_count)
+        for p in dir_path.iterdir():
+            if p.is_file() and p.suffix.lower() in IMG_EXTS:
+                img_count += 1
+
+    return (len(new_jsons), img_count, new_jsons)
 
 
 AUTH_WARNING_PATTERNS = [
@@ -104,9 +129,16 @@ AUTH_WARNING_PATTERNS = [
 ]
 
 
-async def _enqueue_import(download_job_id: str, import_error: str | None = None):
-    """Create an import job and enqueue it. Returns import_job_id or None."""
+async def _enqueue_import(download_job_id: str, import_error: str | None = None, new_json_paths: set[str] | None = None):
+    """Create an import job and enqueue it. Returns import_job_id or None.
+
+    If new_json_paths is provided, stores the file list in Redis so the
+    import runner can process exactly those files without re-scanning.
+    """
     try:
+        import redis as redis_lib
+        from rq import Queue
+
         async with async_session() as db:
             repo = DownloadJobRepository(db)
             extra = {"error_log": import_error} if import_error else {}
@@ -115,11 +147,25 @@ async def _enqueue_import(download_job_id: str, import_error: str | None = None)
                 "status": "pending",
                 **extra,
             })
+            download_job = await repo.get(UUID(download_job_id))
+            if download_job:
+                await repo.update_status(download_job, "importing", import_error)
+                append_manifest_event(download_job, "import_job_created", import_job_id=str(import_job.id), reason=import_error)
             await db.commit()
             import_job_id = str(import_job.id)
 
-        import redis as redis_lib
-        from rq import Queue
+        # Store new JSON file paths in Redis for the import runner
+        if new_json_paths:
+            try:
+                r = redis_lib.from_url(settings.redis_url)
+                r.setex(
+                    f"import:{import_job_id}:files",
+                    7200,  # 2h TTL
+                    json.dumps(list(new_json_paths)),
+                )
+            except Exception:
+                logger.warning("Failed to store import file list for %s", import_job_id, exc_info=True)
+
         r = redis_lib.from_url(settings.redis_url)
         Queue(connection=r).enqueue(
             "app.jobs.import_runner.run_import_job", import_job_id,
@@ -149,6 +195,10 @@ async def run_download_job(job_id: str):
             return
 
         await repo.update_status(job, "downloading")
+        if job.subscription_source_id:
+            ss = await db.get(SubscriptionSource, job.subscription_source_id)
+            if ss:
+                ss.last_attempted_at = datetime.now(timezone.utc)
         await db.commit()
 
     dl_defaults = await _read_download_defaults()
@@ -179,7 +229,12 @@ async def run_download_job(job_id: str):
                 _naming_tpl = _nt_result.scalar_one_or_none()
         except Exception:
             logger.debug("Failed to load naming template for source %s", job.source, exc_info=True)
-        _cfg = _prov.build_gallerydl_config(None, _naming_tpl)
+        _provider_cfg = _prov.build_gallerydl_config(None, None)
+        _cfg = build_effective_gallerydl_config(
+            job.source,
+            _provider_cfg,
+            _naming_tpl.template if _naming_tpl else None,
+        )
         if _cfg:
             job_config_path = os.path.join(
                 os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"),
@@ -187,6 +242,14 @@ async def run_download_job(job_id: str):
             os.makedirs(os.path.dirname(job_config_path), exist_ok=True)
             with open(job_config_path, "w") as f:
                 json.dump(_cfg, f)
+            async with async_session() as _cfg_db:
+                from app.repositories.download_job import DownloadJobRepository as _DJRepo
+                _cfg_j = await _DJRepo(_cfg_db).get(job_uuid)
+                if _cfg_j:
+                    _cfg_j.gallerydl_config_path = job_config_path
+                    update_manifest(_cfg_j, gallerydl_config_path=job_config_path, effective_gallerydl_config=_cfg)
+                    append_manifest_event(_cfg_j, "effective_config_written", path=job_config_path)
+                    await _cfg_db.commit()
         # Record creator dir so import_runner can scope its scan
         try:
             _creator_dir = _prov.get_creator_dir_from_url(job.source_url)
@@ -196,6 +259,7 @@ async def run_download_job(job_id: str):
                     _dir_j = await _DJRepo(_dir_db).get(job_uuid)
                     if _dir_j and not _dir_j.download_dir:
                         _dir_j.download_dir = _creator_dir
+                        update_manifest(_dir_j, download_dir=_creator_dir)
                         await _dir_db.commit()
         except Exception:
             logger.debug("Failed to record download_dir for job %s", job_id, exc_info=True)
@@ -227,6 +291,10 @@ async def run_download_job(job_id: str):
                 tags += "+-ai_generated"
                 new_query = url_parse.urlencode({"tags": tags}, doseq=True)
                 source_url = url_parse.urlunparse(parsed._replace(query=new_query))
+
+    # Snapshot metadata JSONs before running gallery-dl to detect new files.
+    # This works regardless of the naming template configuration.
+    json_before: set[str] = _snapshot_metadata_jsons(job.source)
 
     result = None
     try:
@@ -263,14 +331,45 @@ async def run_download_job(job_id: str):
         except Exception:
             logger.warning("Failed to apply proxy env for download job %s", job_id, exc_info=True)
 
+        async with async_session() as _manifest_db:
+            _manifest_repo = DownloadJobRepository(_manifest_db)
+            _manifest_job = await _manifest_repo.get(job_uuid)
+            if _manifest_job:
+                update_manifest(
+                    _manifest_job,
+                    command=cmd,
+                    archive_path=archive_path,
+                    range=f"1-{max_posts}",
+                    proxy_enabled=proxy_enabled,
+                )
+                append_manifest_event(_manifest_job, "gallerydl_started", source_url=source_url)
+                await _manifest_db.commit()
+
         logger.info("Running gallery-dl: %s (timeout=%ds, proxy=%s)", " ".join(cmd), dl_timeout, proxy_enabled)
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=dl_timeout, env=env)
         logger.info("gallery-dl exit=%d, stdout=%d bytes, stderr=%d bytes", result.returncode, len(result.stdout), len(result.stderr))
         if result.returncode != 0:
             logger.warning("gallery-dl stderr (last 500): %s", result.stderr[-500:] if result.stderr else "(none)")
+        async with async_session() as _manifest_db:
+            _manifest_job = await DownloadJobRepository(_manifest_db).get(job_uuid)
+            if _manifest_job:
+                update_manifest(
+                    _manifest_job,
+                    gallerydl_returncode=result.returncode,
+                    stdout_bytes=len(result.stdout or ""),
+                    stderr_bytes=len(result.stderr or ""),
+                )
+                append_manifest_event(_manifest_job, "gallerydl_finished", returncode=result.returncode)
+                await _manifest_db.commit()
 
     except subprocess.TimeoutExpired:
         logger.warning("gallery-dl timed out after %ds for job %s", dl_timeout, job_id)
+        async with async_session() as _manifest_db:
+            _manifest_job = await DownloadJobRepository(_manifest_db).get(job_uuid)
+            if _manifest_job:
+                update_manifest(_manifest_job, gallerydl_timeout_seconds=dl_timeout)
+                append_manifest_event(_manifest_job, "gallerydl_timeout", timeout_seconds=dl_timeout)
+                await _manifest_db.commit()
         result = None  # result is None signals timeout to the handlers below
 
     except Exception as e:
@@ -288,7 +387,7 @@ async def run_download_job(job_id: str):
                 await db2.commit()
 
         # Always try partial import recovery
-        metadata_count, _ = _count_download_artifacts(job.source)
+        metadata_count, _, new_json_paths = _count_new_artifacts(job.source, json_before)
         if metadata_count > 0:
             logger.info("Partial recovery: found %d metadata JSONs after unexpected error for job %s", metadata_count, job_id)
             await _enqueue_import(str(job_uuid), f"partial import after unexpected error (found {metadata_count} metadata files)")
@@ -335,8 +434,14 @@ async def run_download_job(job_id: str):
                     if result is not None and result.returncode == 0 and not auth_issue:
                         source.last_successful_auth = datetime.now(timezone.utc)
                         source.auth_healthy = True
+                        source.auth_status = "healthy"
+                        source.auth_error_reason = None
+                        source.last_auth_checked_at = datetime.now(timezone.utc)
                     elif auth_issue:
                         source.auth_healthy = False
+                        source.auth_status = "unhealthy"
+                        source.auth_error_reason = auth_issue
+                        source.last_auth_checked_at = datetime.now(timezone.utc)
                         logger.warning("Auth issue for subscription_source %s: %s", source.id, auth_issue)
         else:
             # Timeout — subprocess.TimeoutExpired was caught
@@ -355,9 +460,15 @@ async def run_download_job(job_id: str):
         # Full success — but only enqueue import if there are new metadata JSONs.
         # gallery-dl exits 0 even when all files were skipped (already in archive),
         # or when the source has no content at all.
-        metadata_count, image_count = _count_download_artifacts(job.source)
+        metadata_count, image_count, new_json_paths = _count_new_artifacts(job.source, json_before)
+        async with async_session() as _manifest_db:
+            _manifest_job = await DownloadJobRepository(_manifest_db).get(job_uuid)
+            if _manifest_job:
+                update_manifest(_manifest_job, metadata_json_count=metadata_count, image_count=image_count)
+                append_manifest_event(_manifest_job, "artifacts_counted", metadata_json_count=metadata_count, image_count=image_count)
+                await _manifest_db.commit()
         if metadata_count > 0:
-            await _enqueue_import(str(job_uuid))
+            await _enqueue_import(str(job_uuid), new_json_paths=new_json_paths)
         else:
             # No new metadata JSONs — distinguish "already imported" from "nothing to download"
             # Check stderr for warnings that explain the zero-download result
@@ -386,18 +497,20 @@ async def run_download_job(job_id: str):
                 j3 = await repo3.get(job_uuid)
                 if j3:
                     await repo3.update_status(j3, new_status, new_error)
+                    if new_status == "complete" and j3.subscription_source_id:
+                        await mark_source_sync_success(db3, j3.subscription_source_id)
                     await db3.commit()
 
     elif result is not None and result.returncode != 0:
         # Non-zero exit — maybe partial files were downloaded
-        metadata_count, _ = _count_download_artifacts(job.source)
+        metadata_count, _, new_json_paths = _count_new_artifacts(job.source, json_before)
         if metadata_count > 0:
             logger.info("Partial recovery: found %d metadata JSONs after failure for job %s", metadata_count, job_id)
             await _enqueue_import(str(job_uuid), f"partial import after download failure (found {metadata_count} metadata files)")
 
     else:
         # Timeout — attempt partial import recovery
-        metadata_count, _ = _count_download_artifacts(job.source)
+        metadata_count, _, new_json_paths = _count_new_artifacts(job.source, json_before)
         if metadata_count > 0:
             logger.info("Partial recovery: found %d metadata JSONs after timeout for job %s", metadata_count, job_id)
             await _enqueue_import(str(job_uuid), f"partial import after timeout (found {metadata_count} metadata files)")

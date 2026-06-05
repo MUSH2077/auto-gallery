@@ -102,17 +102,19 @@ From risk analysis (see `docs/risks.md`):
 - `confidence: Float` (0.0–1.0). Suggested links from Danbooru/URL parsing are scored. Manual bindings default to 1.0. Admin reviews low-confidence links.
 
 **`download_job`**:
-- `status: String` must follow the state machine: `pending | downloading | downloaded | importing | complete | failed | stale`
+- `status: String` must follow the state machine: `pending | downloading | downloaded | complete | failed | stale | paused`
 - `error_log: Text` captures gallery-dl stderr on failure
 - `retry_count: Integer` defaults to 0, max 3
+- See `.claude/skills/gallerydl-integration.md` for the canonical state machine with transitions
 
 **`subscription_source`**:
 - `last_successful_auth: DateTime` for cookie expiration visibility
 - `auth_healthy: Boolean` defaults to True, set False on auth-related failures
 
 **`import_job`**:
-- `status: String`: `pending | running | complete | failed`
+- `status: String`: `pending | running | complete | failed` (separate lifecycle from download_job)
 - `error_log: Text` captures per-asset import failures
+- Auto-retry: first failure re-enqueues as pending with 60s backoff; second failure is permanent
 - Must be idempotent — re-running must not create duplicates
 
 ### Meilisearch sync

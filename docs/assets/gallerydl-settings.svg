@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">gallery-dl settings screenshot placeholder</title>
+  <desc id="desc">Placeholder for gallery-dl settings and naming reference.</desc>
+  <rect width="1200" height="720" fill="#f6f8fa"/>
+  <rect x="72" y="64" width="1056" height="72" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <rect x="72" y="168" width="1056" height="428" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <rect x="112" y="228" width="460" height="44" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+  <rect x="612" y="228" width="460" height="44" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+  <rect x="112" y="320" width="960" height="196" rx="6" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="112" y="110" fill="#24292f" font-family="Arial, sans-serif" font-size="28" font-weight="700">gallery-dl settings</text>
+  <text x="112" y="660" fill="#57606a" font-family="Arial, sans-serif" font-size="24">gallery-dl settings screenshot placeholder</text>
+</svg>

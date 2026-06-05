@@ -15,35 +15,15 @@ from app.database import async_session
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.models.download_job import DownloadJob
+from app.repositories.download_job import DownloadJobRepository
+from app.services.locks import redis_lock
+from app.services.settings import get_download_defaults, get_scheduler_config
+from app.services.subscription_enqueue import enqueue_subscription_source_sync
 
 logger = logging.getLogger(__name__)
 
 FALLBACK_INTERVAL_HOURS = 6
 FALLBACK_SCAN_MINUTES = 60
-
-
-async def _get_scheduler_config(db) -> dict:
-    """Read scheduler configuration from system_settings table."""
-    from app.models.system_setting import SystemSetting
-    result = await db.execute(
-        select(SystemSetting).where(SystemSetting.key == "subscription_defaults")
-    )
-    row = result.scalar_one_or_none()
-    if row and row.value:
-        return row.value
-    return {}
-
-
-async def _read_download_defaults(db) -> dict:
-    """Read download defaults from system_settings for stale detection timeout."""
-    from app.models.system_setting import SystemSetting
-    result = await db.execute(
-        select(SystemSetting).where(SystemSetting.key == "download_defaults")
-    )
-    row = result.scalar_one_or_none()
-    if row and row.value:
-        return row.value
-    return {}
 
 
 def _should_sync_now(sub, system_config: dict, last_synced_at, now: datetime, tz) -> bool:
@@ -83,8 +63,8 @@ def _should_sync_now(sub, system_config: dict, last_synced_at, now: datetime, tz
                 parts = t.split(":")
                 h = int(parts[0])
                 m = int(parts[1]) if len(parts) > 1 else 0
-                s = int(parts[2]) if len(parts) > 2 else 0
-                scheduled.append((h, m, s))
+                sec = int(parts[2]) if len(parts) > 2 else 0
+                scheduled.append((h, m, sec))
             except ValueError:
                 continue
 
@@ -99,8 +79,8 @@ def _should_sync_now(sub, system_config: dict, last_synced_at, now: datetime, tz
 
         for day_offset in (0, -1):
             day = now.date() + timedelta(days=day_offset)
-            for h, m in scheduled:
-                st = datetime(day.year, day.month, day.day, h, m, s, tzinfo=tz)
+            for h, m, s_val in scheduled:
+                st = datetime(day.year, day.month, day.day, h, m, s_val, tzinfo=tz)
                 diff_minutes = abs((now - st).total_seconds()) / 60.0
                 if diff_minutes <= window_minutes and last_synced_at < st:
                     return True
@@ -109,8 +89,8 @@ def _should_sync_now(sub, system_config: dict, last_synced_at, now: datetime, tz
             for days_back in range(1, 31):
                 day = now.date() - timedelta(days=days_back)
                 best_time = None
-                for h, m in scheduled:
-                    st = datetime(day.year, day.month, day.day, h, m, s, tzinfo=tz)
+                for h, m, s_val in scheduled:
+                    st = datetime(day.year, day.month, day.day, h, m, s_val, tzinfo=tz)
                     if st <= now and (best_time is None or st > best_time):
                         best_time = st
                 if best_time and last_synced_at < best_time:
@@ -128,11 +108,20 @@ def _should_sync_now(sub, system_config: dict, last_synced_at, now: datetime, tz
 
 
 async def sync_subscriptions():
+    with redis_lock("lock:subscription-sync-scan", ttl_seconds=300) as acquired:
+        if not acquired:
+            logger.info("Subscription auto-sync scan already running; skipping")
+            return
+        await _sync_subscriptions_locked()
+
+
+async def _sync_subscriptions_locked():
     logger.info("Starting subscription auto-sync scan")
     jobs_created = 0
+    skipped_count = 0
 
     async with async_session() as db:
-        config = await _get_scheduler_config(db)
+        config = await get_scheduler_config(db)
 
         # Use configured timezone for schedule evaluation
         tz_name = config.get("timezone", "UTC")
@@ -165,9 +154,6 @@ async def sync_subscriptions():
             )
             sub_sources = sources.scalars().all()
 
-            interval_hours = sub.sync_interval_hours or default_interval
-            interval_cutoff = now - timedelta(hours=interval_hours)
-
             for ss in sub_sources:
                 # Skip if auth is known to be unhealthy
                 if ss.auth_healthy is False:
@@ -177,66 +163,21 @@ async def sync_subscriptions():
                 if not _should_sync_now(sub, config, ss.last_synced_at, now, tz):
                     continue
 
-                # Check if there's a recent job for this subscription source
-                recent = await db.execute(
-                    select(DownloadJob).where(
-                        and_(
-                            DownloadJob.subscription_source_id == ss.id,
-                            DownloadJob.status.in_(["pending", "downloading", "downloaded", "complete", "importing"]),
-                            DownloadJob.created_at >= interval_cutoff,
-                        )
-                    ).limit(1)
-                )
-                if recent.scalar_one_or_none():
-                    continue  # Already synced recently
-
-                # Validate source URL
-                if not ss.source_url:
-                    continue
-
-                from app.providers import registry
-                provider = registry.get(ss.source)
-                if not provider or not provider.capabilities.can_download:
-                    continue
-                if not provider.validate_url(ss.source_url):
-                    continue
-
-                # Create download job
-                job = DownloadJob(
-                    subscription_id=sub.id,
-                    subscription_source_id=ss.id,
-                    source=ss.source,
-                    source_url=ss.source_url,
-                    status="pending",
-                )
-                db.add(job)
-                await db.flush()
-
-                # Enqueue
-                try:
-                    import redis as redis_lib
-                    from rq import Queue
-                    r = redis_lib.from_url(settings.redis_url)
-                    Queue(name="scheduled", connection=r).enqueue(
-                        "app.jobs.download.run_download_job", str(job.id), job_timeout=7200)
-                except Exception as e:
-                    logger.error("Failed to enqueue download job %s: %s", job.id, e)
-
-                jobs_created += 1
-                ss.last_synced_at = now
-                sub.last_synced_at = now
-                logger.info("Auto-sync created download job %s for source=%s url=%s",
-                            job.id, ss.source, ss.source_url)
-
-        if jobs_created:
-            await db.commit()
+                result = await enqueue_subscription_source_sync(db, ss.id, trigger="scheduler")
+                if result["status"] == "enqueued":
+                    jobs_created += 1
+                    logger.info("Auto-sync created download job %s for source=%s url=%s",
+                                result["job_id"], ss.source, result.get("source_url"))
+                else:
+                    skipped_count += 1
+                    logger.debug("Auto-sync skipped source %s: %s", ss.id, result.get("skip_reason") or result)
 
     # Stale job detection: mark download jobs stuck "downloading" for too long
     try:
         async with async_session() as stale_db:
-            dl_defaults = await _read_download_defaults(stale_db)
+            dl_defaults = await get_download_defaults(stale_db)
             dl_timeout = int(dl_defaults.get("timeout_seconds", 600))
-            stale_cutoff = now - timedelta(seconds=dl_timeout * 2)
+            stale_cutoff = datetime.now(timezone.utc) - timedelta(seconds=dl_timeout * 2)
             stale_result = await stale_db.execute(
                 select(DownloadJob).where(
                     DownloadJob.status == "downloading",
@@ -244,12 +185,13 @@ async def sync_subscriptions():
                 )
             )
             stale_jobs = stale_result.scalars().all()
+            stale_repo = DownloadJobRepository(stale_db)
             for sj in stale_jobs:
-                sj.status = "stale"
                 if sj.error_log:
-                    sj.error_log += "\n[auto] Marked stale: stuck downloading for > 2x timeout"
+                    error_log = sj.error_log + "\n[auto] Marked stale: stuck downloading for > 2x timeout"
                 else:
-                    sj.error_log = "[auto] Marked stale: stuck downloading for > 2x timeout"
+                    error_log = "[auto] Marked stale: stuck downloading for > 2x timeout"
+                await stale_repo.update_status(sj, "stale", error_log)
                 logger.warning("Marked download job %s as stale (stuck downloading)", sj.id)
             if stale_jobs:
                 await stale_db.commit()
@@ -271,15 +213,15 @@ async def sync_subscriptions():
         logger.debug("Archive maintenance skipped", exc_info=True)
 
     mode = config.get("schedule_mode", "interval")
-    logger.info("Auto-sync scan complete: %d jobs created (mode=%s, scan_every=%dm, default_interval=%dh)",
-                jobs_created, mode, scan_minutes, default_interval)
+    logger.info("Auto-sync scan complete: %d jobs created, %d skipped (mode=%s, scan_every=%dm, default_interval=%dh)",
+                jobs_created, skipped_count, mode, scan_minutes, default_interval)
 
     # Re-schedule for next scan
     try:
         import redis as redis_lib
         from rq import Queue
         r = redis_lib.from_url(settings.redis_url)
-        Queue(connection=r).enqueue_in(
+        Queue(name="scheduled", connection=r).enqueue_in(
             timedelta(minutes=max(scan_minutes, 5)),
             "app.jobs.subscription_sync.sync_subscriptions",
         )

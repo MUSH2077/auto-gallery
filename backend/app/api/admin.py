@@ -189,7 +189,7 @@ async def system_info():
 
 
 @router.get("/storage-breakdown")
-async def storage_breakdown():
+async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     """Return per-source and per-creator storage breakdown."""
     dl_root = Path(settings.download_root)
 
@@ -225,10 +225,87 @@ async def storage_breakdown():
     except Exception:
         pass
 
+    # ── Resolve creator display names from the database ──
+    # The filesystem uses naming-template-derived directory names which may
+    # not match any DB field. We cross-reference via work_sources:
+    #   work_dir name (source_work_id) → work_sources.source_creator_id
+    #   → source_creators.creator_id → creators.display_name
+    creator_display: dict[tuple[str, str], str] = {}
+    creator_id_map: dict[tuple[str, str], str] = {}  # (source, dir_name) → display_name
+    try:
+        from app.models.work_source import WorkSource
+        from app.models.source_creator import SourceCreator
+        from app.models.creator import Creator
+
+        if dl_root.exists():
+            # Collect one sample work_id per creator directory for lookup
+            lookup_pairs: list[tuple[str, str, str]] = []  # (source, creator_dir, work_id)
+            for source_dir in dl_root.iterdir():
+                if not source_dir.is_dir():
+                    continue
+                src = source_dir.name
+                for creator_dir in source_dir.iterdir():
+                    if not creator_dir.is_dir():
+                        continue
+                    for work_dir in creator_dir.iterdir():
+                        if work_dir.is_dir():
+                            lookup_pairs.append((src, creator_dir.name, work_dir.name))
+                            break  # first work is enough for lookup
+
+            if lookup_pairs:
+                work_ids = [p[2] for p in lookup_pairs]
+                # Batch query work_sources
+                ws_result = await db.execute(
+                    select(
+                        WorkSource.source,
+                        WorkSource.source_work_id,
+                        WorkSource.source_creator_id,
+                    ).where(WorkSource.source_work_id.in_(work_ids))
+                )
+                # work_id → source_creator_id
+                work_to_sc: dict[str, str] = {}
+                for row in ws_result:
+                    ws_src, ws_wid, ws_scid = row[0], row[1], row[2]
+                    if ws_scid:
+                        work_to_sc[ws_wid] = ws_scid
+
+                # source_creator_id → creator display_name
+                sc_ids = set(work_to_sc.values())
+                if sc_ids:
+                    sc_result = await db.execute(
+                        select(
+                            SourceCreator.source_creator_id,
+                            Creator.display_name,
+                            Creator.name,
+                            Creator.id,
+                        )
+                        .join(Creator, Creator.id == SourceCreator.creator_id)
+                        .where(SourceCreator.source_creator_id.in_(list(sc_ids)))
+                    )
+                    sc_to_display: dict[str, str] = {}
+                    sc_to_creator_id: dict[str, str] = {}
+                    for row in sc_result:
+                        scid, cdisplay, cname, cid = row[0], row[1], row[2], str(row[3]) if row[3] else None
+                        sc_to_display[scid] = cdisplay or cname or scid
+                        if cid:
+                            sc_to_creator_id[scid] = cid
+
+                    for src, dir_name, work_id in lookup_pairs:
+                        scid = work_to_sc.get(work_id)
+                        if scid and scid in sc_to_display:
+                            creator_display[(src, dir_name)] = sc_to_display[scid]
+                            cid = sc_to_creator_id.get(scid)
+                            if cid:
+                                creator_id_map[(src, dir_name)] = cid
+                        else:
+                            creator_display[(src, dir_name)] = dir_name
+    except Exception:
+        pass
+
     # Per-creator top breakdown (by storage)
     creators = []
     try:
-        creator_sizes: list[tuple[str, str, str, int]] = []  # (name, source, display, size, work_count)
+        creator_sizes: list[tuple[str, str, str, int, int]] = []  # (name, display, source, size, work_count)
         for source_dir in dl_root.iterdir():
             if not source_dir.is_dir():
                 continue
@@ -249,16 +326,22 @@ async def storage_breakdown():
                                 csize += f.stat().st_size
                             except Exception:
                                 pass
-                creator_sizes.append((cname, src, cname, csize, wc))
+                display = creator_display.get((src, cname), cname)
+                creator_sizes.append((cname, display, src, csize, wc))
         # Sort by size descending, top 20
         creator_sizes.sort(key=lambda x: x[3], reverse=True)
-        for cname, src, display, sz, wc in creator_sizes[:20]:
-            creators.append({
+        for cname, display, src, sz, wc in creator_sizes[:20]:
+            entry = {
                 "name": cname,
+                "display_name": display,
                 "source": src,
                 "size_mb": round(sz / (1024 ** 2), 1),
                 "work_count": wc,
-            })
+            }
+            cid = creator_id_map.get((src, cname))
+            if cid:
+                entry["creator_id"] = cid
+            creators.append(entry)
     except Exception:
         pass
 
@@ -494,12 +577,12 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
 
     targets = [
         {"name": "Pixiv", "url": "https://www.pixiv.net"},
-        {"name": "Pixiv API", "url": "https://app-api.pixiv.net"},
         {"name": "Danbooru", "url": "https://danbooru.donmai.us"},
         {"name": "Danbooru API", "url": "https://danbooru.donmai.us/artists.json?limit=1"},
         {"name": "Iwara", "url": "https://www.iwara.tv"},
-        {"name": "Iwara API", "url": "https://api.iwara.tv"},
         {"name": "Twitter/X", "url": "https://x.com"},
+        {"name": "Pinterest", "url": "https://www.pinterest.com"},
+        {"name": "LOFTER", "url": "https://www.lofter.com"},
         {"name": "GitHub", "url": "https://github.com"},
         {"name": "Google", "url": "https://www.google.com"},
     ]
@@ -976,6 +1059,8 @@ def _convert_to_netscape_cookies(raw: str, source: str) -> str:
         "iwara": ".iwara.tv",
         "pinterest": ".pinterest.com",
         "lofter": ".lofter.com",
+        "weibo": ".weibo.com",
+        "bilibili": ".bilibili.com",
     }
     domain = domain_map.get(source, f".{source}.com")
     far_future = "9999999999"
@@ -1062,10 +1147,23 @@ async def test_source_connection(data: dict):
     test_url = TEST_URLS[source]
     import json as _json, os, re as _re, subprocess, tempfile, shutil
 
-    config, _ = _load_config()
     tmpdir = tempfile.mkdtemp(prefix="gallerydl-test-")
     tmp_config = os.path.join(tmpdir, "test-config.json")
     try:
+        from app.providers import registry as _registry
+        from app.services.settings import (
+            build_effective_gallerydl_config,
+            source_key_for_extractor,
+        )
+
+        provider_source = source_key_for_extractor(source)
+        provider_config = {}
+        try:
+            provider = _registry.get(provider_source)
+            provider_config = provider.build_gallerydl_config(None, None)
+        except KeyError:
+            provider_config = {}
+        config = build_effective_gallerydl_config(provider_source, provider_config)
         with open(tmp_config, "w") as f:
             _json.dump(config, f)
 
@@ -1077,8 +1175,18 @@ async def test_source_connection(data: dict):
             test_url,
         ]
 
-        logger.info("Testing %s connectivity: %s", source, " ".join(cmd))
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        env = os.environ.copy()
+        proxy_enabled = False
+        try:
+            from app.services.proxy import _load_proxy_config, get_proxy_env
+            proxy_config = await _load_proxy_config()
+            proxy_enabled = bool(proxy_config.get("enabled", False))
+            env.update(get_proxy_env(proxy_config))
+        except Exception:
+            logger.warning("Failed to apply proxy env for gallery-dl test", exc_info=True)
+
+        logger.info("Testing %s connectivity: %s (proxy=%s)", source, " ".join(cmd), proxy_enabled)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
         stderr = result.stderr or ""
         stdout = result.stdout or ""
         combined = stdout + stderr
@@ -1123,6 +1231,69 @@ async def test_source_connection(data: dict):
         }
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@router.get("/gallerydl-config/effective")
+async def get_effective_gallerydl_config(
+    source: str,
+    subscription_source_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Preview the effective per-job gallery-dl config used by workers."""
+    from uuid import UUID
+
+    from sqlalchemy import select as _select
+
+    from app.models.naming_template import NamingTemplate
+    from app.models.subscription_source import SubscriptionSource
+    from app.providers import registry as _registry
+    from app.services.job_manifest import redacted_manifest_config
+    from app.services.settings import (
+        build_effective_gallerydl_config,
+        extractor_key_for_source,
+        source_key_for_extractor,
+    )
+
+    provider_source = source_key_for_extractor(source)
+    source_url = None
+    if subscription_source_id:
+        ss = await db.get(SubscriptionSource, UUID(subscription_source_id))
+        if not ss:
+            raise HTTPException(status_code=404, detail="Subscription source not found")
+        provider_source = ss.source
+        source_url = ss.source_url
+
+    try:
+        provider = _registry.get(provider_source)
+    except KeyError:
+        raise HTTPException(status_code=400, detail={
+            "code": "unknown_provider",
+            "message": f"Unknown source provider: {provider_source}",
+            "retryable": False,
+        })
+
+    naming_result = await db.execute(
+        _select(NamingTemplate)
+        .where(NamingTemplate.source == provider_source, NamingTemplate.is_default == True)
+        .limit(1)
+    )
+    naming_template = naming_result.scalar_one_or_none()
+    provider_config = provider.build_gallerydl_config(None, None)
+    effective = build_effective_gallerydl_config(
+        provider_source,
+        provider_config,
+        naming_template.template if naming_template else None,
+    )
+
+    url_valid = bool(source_url and provider.validate_url(provider.normalize_url(source_url) or source_url)) if source_url else None
+    return {
+        "source": provider_source,
+        "extractor": extractor_key_for_source(provider_source),
+        "source_url": source_url,
+        "url_valid": url_valid,
+        "naming_template": naming_template.template if naming_template else None,
+        "config": redacted_manifest_config(effective),
+    }
 
 
 @router.get("/gallerydl-config")
@@ -1378,6 +1549,9 @@ async def get_auth_status(db: AsyncSession = Depends(get_db)):
             "source_url": ss.source_url,
             "source_creator_id": ss.source_creator_id,
             "auth_healthy": ss.auth_healthy,
+            "auth_status": ss.auth_status,
+            "auth_error_reason": ss.auth_error_reason,
+            "last_auth_checked_at": ss.last_auth_checked_at.isoformat() if ss.last_auth_checked_at else None,
             "last_successful_auth": ss.last_successful_auth.isoformat() if ss.last_successful_auth else None,
             "is_enabled": ss.is_enabled,
             "subscription": {
@@ -1405,6 +1579,16 @@ async def get_auth_status(db: AsyncSession = Depends(get_db)):
 
 BACKUP_DIR = Path(settings.download_root) / ".backups"
 
+ALL_BACKUP_CONTENTS = ["database", "gallerydl-config", "app-config", "download-archives", "library-metadata"]
+
+BACKUP_CONTENT_LABELS = {
+    "database": "PostgreSQL database dump",
+    "gallerydl-config": "gallery-dl config + cookies",
+    "app-config": "Application runtime config",
+    "download-archives": "Download archive files (per-source SQLite)",
+    "library-metadata": "Library metadata.json files",
+}
+
 
 def _parse_db_url(url: str) -> dict:
     """Parse DATABASE_URL into pg_dump-compatible components."""
@@ -1419,62 +1603,127 @@ def _parse_db_url(url: str) -> dict:
     }
 
 
-@router.post("/backup")
-async def create_backup():
-    """Create a full system backup (DB dump + configs + download archives).
+def _estimate_component_sizes() -> dict[str, int]:
+    """Estimate the size of each backup component (bytes)."""
+    sizes: dict[str, int] = {}
+    # Database: rough estimate from pg_dump (we can't know exactly without running it)
+    sizes["database"] = 0  # Will be measured during actual backup
 
-    Returns the backup filename and size. Download via GET /admin/backup/download.
+    # gallery-dl config
+    config_src = Path(os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"))
+    if config_src.exists():
+        sizes["gallerydl-config"] = sum(f.stat().st_size for f in config_src.rglob("*") if f.is_file())
+    else:
+        sizes["gallerydl-config"] = 0
+
+    # App config
+    app_src = Path(os.environ.get("APP_CONFIG_ROOT", "/app-config"))
+    if app_src.exists():
+        sizes["app-config"] = sum(f.stat().st_size for f in app_src.rglob("*") if f.is_file())
+    else:
+        sizes["app-config"] = 0
+
+    # Download archives
+    dl_root = Path(settings.download_root)
+    sizes["download-archives"] = sum(
+        af.stat().st_size for af in dl_root.glob("archive-*.sqlite3") if af.is_file())
+
+    # Library metadata
+    lib_root = Path(settings.library_root)
+    if lib_root.exists():
+        sizes["library-metadata"] = sum(
+            f.stat().st_size for f in lib_root.rglob("metadata.json") if f.is_file())
+    else:
+        sizes["library-metadata"] = 0
+
+    return sizes
+
+
+@router.get("/backup/estimate")
+async def estimate_backup_sizes():
+    """Return estimated sizes for each backup component."""
+    return {"components": {k: round(v / 1024, 1) for k, v in _estimate_component_sizes().items()}}
+
+
+@router.post("/backup")
+async def create_backup(data: dict | None = None):
+    """Create a system backup with optional content selection.
+
+    Body (optional): {contents: ["database", "gallerydl-config", ...]}
+    Defaults to all components if not specified.
     """
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     filename = f"auto-gallery-backup_{ts}.tar.gz"
     filepath = BACKUP_DIR / filename
 
-    db = _parse_db_url(settings.database_url)
+    selected = (data or {}).get("contents", list(ALL_BACKUP_CONTENTS))
+    selected = [c for c in selected if c in ALL_BACKUP_CONTENTS]
+    if not selected:
+        selected = list(ALL_BACKUP_CONTENTS)
+
+    db_info = _parse_db_url(settings.database_url)
     tmpdir = tempfile.mkdtemp(prefix="ag-backup-")
+    sizes: dict[str, int] = {}
 
     try:
         # 1. PostgreSQL dump
-        dump_path = os.path.join(tmpdir, "database.sql")
-        env = os.environ.copy()
-        env["PGPASSWORD"] = db["password"]
-        result = subprocess.run(
-            ["pg_dump", "-h", db["host"], "-p", db["port"], "-U", db["user"],
-             "-d", db["dbname"], "--no-owner", "--no-acl", "-f", dump_path],
-            capture_output=True, text=True, env=env, timeout=120,
-        )
-        if result.returncode != 0:
-            logger.error("pg_dump failed: %s", result.stderr)
-            raise RuntimeError(f"Database dump failed: {result.stderr[:500]}")
+        if "database" in selected:
+            dump_path = os.path.join(tmpdir, "database.sql")
+            env = os.environ.copy()
+            env["PGPASSWORD"] = db_info["password"]
+            result = subprocess.run(
+                ["pg_dump", "-h", db_info["host"], "-p", db_info["port"], "-U", db_info["user"],
+                 "-d", db_info["dbname"], "--no-owner", "--no-acl", "-f", dump_path],
+                capture_output=True, text=True, env=env, timeout=120)
+            if result.returncode != 0:
+                raise RuntimeError(f"Database dump failed: {result.stderr[:500]}")
+            sizes["database"] = os.path.getsize(dump_path)
 
-        # 2. Config files
-        config_src = Path(os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"))
-        config_dst = os.path.join(tmpdir, "gallerydl-config")
-        if config_src.exists():
-            shutil.copytree(str(config_src), config_dst, symlinks=False, ignore_dangling_symlinks=True,
-                            ignore=shutil.ignore_patterns("*.pyc", "__pycache__", ".git"))
+        # 2. gallery-dl config
+        if "gallerydl-config" in selected:
+            config_src = Path(os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"))
+            config_dst = os.path.join(tmpdir, "gallerydl-config")
+            if config_src.exists():
+                shutil.copytree(str(config_src), config_dst, symlinks=False, ignore_dangling_symlinks=True,
+                                ignore=shutil.ignore_patterns("*.pyc", "__pycache__", ".git"))
 
-        app_config_src = Path(os.environ.get("APP_CONFIG_ROOT", "/app-config"))
-        app_config_dst = os.path.join(tmpdir, "app-config")
-        if app_config_src.exists():
-            shutil.copytree(str(app_config_src), app_config_dst, symlinks=False, ignore_dangling_symlinks=True,
-                            ignore=shutil.ignore_patterns("*.pyc", "__pycache__", ".git"))
+        # 3. App config
+        if "app-config" in selected:
+            app_config_src = Path(os.environ.get("APP_CONFIG_ROOT", "/app-config"))
+            app_config_dst = os.path.join(tmpdir, "app-config")
+            if app_config_src.exists():
+                shutil.copytree(str(app_config_src), app_config_dst, symlinks=False, ignore_dangling_symlinks=True,
+                                ignore=shutil.ignore_patterns("*.pyc", "__pycache__", ".git"))
 
-        # 3. Download archives
-        dl_root = Path(settings.download_root)
-        archives_dst = os.path.join(tmpdir, "download-archives")
-        os.makedirs(archives_dst, exist_ok=True)
-        for af in dl_root.glob("archive-*.sqlite3"):
-            shutil.copy2(str(af), os.path.join(archives_dst, af.name))
+        # 4. Download archives
+        if "download-archives" in selected:
+            dl_root = Path(settings.download_root)
+            archives_dst = os.path.join(tmpdir, "download-archives")
+            os.makedirs(archives_dst, exist_ok=True)
+            for af in dl_root.glob("archive-*.sqlite3"):
+                shutil.copy2(str(af), os.path.join(archives_dst, af.name))
+                sizes[f"archive:{af.stem}"] = af.stat().st_size
 
-        # 4. Backup manifest
+        # 5. Library metadata
+        if "library-metadata" in selected:
+            lib_root = Path(settings.library_root)
+            lib_dst = os.path.join(tmpdir, "library-metadata")
+            if lib_root.exists():
+                for mf in lib_root.rglob("metadata.json"):
+                    rel = mf.relative_to(lib_root)
+                    dest = Path(lib_dst) / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(str(mf), str(dest))
+
+        # Manifest
         manifest = {
             "created_at": ts,
-            "version": "0.1.0",
-            "contents": ["database", "gallerydl-config", "app-config", "download-archives"],
+            "version": "0.2.0",
+            "contents": selected,
+            "component_sizes": {k: v for k, v in sizes.items()},
         }
         with open(os.path.join(tmpdir, "manifest.json"), "w") as f:
-            import json
             json.dump(manifest, f, indent=2)
 
         # Create tar.gz
@@ -1483,23 +1732,138 @@ async def create_backup():
                 tar.add(os.path.join(tmpdir, item), arcname=item)
 
         file_size = os.path.getsize(filepath)
-        logger.info("Backup created: %s (%.1f MB)", filename, file_size / 1024 / 1024)
+        logger.info("Backup created: %s (%.1f MB) contents=%s", filename, file_size / 1024 / 1024, selected)
 
-        # Clean up old backups (keep last 5)
+        # Keep last 10 backups
         existing = sorted(BACKUP_DIR.glob("auto-gallery-backup_*.tar.gz"))
-        for old in existing[:-5]:
+        for old in existing[:-10]:
             old.unlink()
-            logger.info("Removed old backup: %s", old.name)
 
         return {
             "status": "ok",
             "filename": filename,
             "size_bytes": file_size,
             "size_mb": round(file_size / 1024 / 1024, 1),
+            "contents": selected,
+            "component_sizes": {k: round(v / 1024, 1) for k, v in sizes.items()},
         }
 
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@router.post("/backup/restore")
+async def restore_backup(file: UploadFile = File(...)):
+    """Restore from a backup tar.gz file."""
+    if not file.filename or not file.filename.endswith(".tar.gz"):
+        raise HTTPException(status_code=400, detail="Only .tar.gz backup files are accepted")
+
+    tmpdir = tempfile.mkdtemp(prefix="ag-restore-")
+    restored: list[str] = []
+    errors: list[str] = []
+
+    try:
+        tmp_file = os.path.join(tmpdir, "backup.tar.gz")
+        with open(tmp_file, "wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                f.write(chunk)
+
+        manifest = {}
+        with tarfile.open(tmp_file, "r:gz") as tar:
+            try:
+                mf = tar.extractfile("manifest.json")
+                if mf:
+                    manifest = json.loads(mf.read())
+            except Exception:
+                pass
+            # Safe extraction: reject paths with .. or absolute paths
+            for member in tar.getmembers():
+                if member.name.startswith('/') or '..' in member.name:
+                    raise HTTPException(status_code=400, detail=f"Invalid archive member: {member.name}")
+            tar.extractall(tmpdir)
+
+        # Restore database
+        dump_path = os.path.join(tmpdir, "database.sql")
+        if os.path.exists(dump_path):
+            db = _parse_db_url(settings.database_url)
+            env = os.environ.copy()
+            env["PGPASSWORD"] = db["password"]
+            result = subprocess.run(
+                ["psql", "-h", db["host"], "-p", db["port"], "-U", db["user"],
+                 "-d", db["dbname"], "-f", dump_path],
+                capture_output=True, text=True, env=env, timeout=120)
+            if result.returncode != 0:
+                errors.append(f"Database restore failed: {result.stderr[:500]}")
+            else:
+                restored.append("database")
+
+        # Restore gallery-dl config
+        gdl_src = os.path.join(tmpdir, "gallerydl-config")
+        if os.path.exists(gdl_src):
+            gdl_dst = Path(os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"))
+            try:
+                if gdl_dst.exists():
+                    shutil.rmtree(str(gdl_dst))
+                shutil.copytree(gdl_src, str(gdl_dst))
+                restored.append("gallerydl-config")
+            except Exception as e:
+                errors.append(f"gallerydl-config restore failed: {e}")
+
+        # Restore app config
+        app_src = os.path.join(tmpdir, "app-config")
+        if os.path.exists(app_src):
+            app_dst = Path(os.environ.get("APP_CONFIG_ROOT", "/app-config"))
+            try:
+                if app_dst.exists():
+                    shutil.rmtree(str(app_dst))
+                shutil.copytree(app_src, str(app_dst))
+                restored.append("app-config")
+            except Exception as e:
+                errors.append(f"app-config restore failed: {e}")
+
+        # Restore download archives
+        archives_src = os.path.join(tmpdir, "download-archives")
+        if os.path.exists(archives_src):
+            dl_root = Path(settings.download_root)
+            try:
+                for af in Path(archives_src).glob("archive-*.sqlite3"):
+                    shutil.copy2(str(af), str(dl_root / af.name))
+                restored.append("download-archives")
+            except Exception as e:
+                errors.append(f"download-archives restore failed: {e}")
+
+        # Restore library metadata
+        lib_src = os.path.join(tmpdir, "library-metadata")
+        if os.path.exists(lib_src):
+            lib_root = Path(settings.library_root)
+            try:
+                for mf in Path(lib_src).rglob("metadata.json"):
+                    rel = mf.relative_to(lib_src)
+                    dest = lib_root / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(str(mf), str(dest))
+                restored.append("library-metadata")
+            except Exception as e:
+                errors.append(f"library-metadata restore failed: {e}")
+
+        logger.info("Restored backup %s: restored=%s errors=%s", file.filename, restored, errors)
+        return {
+            "status": "ok" if not errors else "partial",
+            "restored": restored,
+            "errors": errors,
+            "manifest": manifest,
+        }
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _validate_backup_filename(filename: str) -> Path:
+    """Resolve and validate a backup filename stays within BACKUP_DIR."""
+    target = (BACKUP_DIR / filename).resolve()
+    if not str(target).startswith(str(BACKUP_DIR.resolve())):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    return target
 
 
 @router.get("/backup/download")
@@ -1509,22 +1873,23 @@ async def download_backup(filename: str | None = None):
     existing = sorted(BACKUP_DIR.glob("auto-gallery-backup_*.tar.gz"))
     if not existing:
         return {"status": "error", "message": "No backups available"}
-
-    target = None
-    if filename:
-        target = BACKUP_DIR / filename
-    else:
-        target = existing[-1]
-
+    target = _validate_backup_filename(filename) if filename else existing[-1]
     if not target.exists():
         return {"status": "error", "message": f"Backup not found: {filename}"}
-
     return FileResponse(
-        str(target),
-        media_type="application/gzip",
-        filename=target.name,
-        headers={"Content-Disposition": f'attachment; filename="{target.name}"'},
-    )
+        str(target), media_type="application/gzip", filename=target.name,
+        headers={"Content-Disposition": f'attachment; filename="{target.name}"'})
+
+
+@router.delete("/backup/{filename}")
+async def delete_backup(filename: str):
+    """Delete a specific backup file."""
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    target = _validate_backup_filename(filename)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"Backup not found: {filename}")
+    target.unlink()
+    return {"status": "ok", "message": f"Deleted {filename}"}
 
 
 @router.get("/backup/list")

@@ -1,9 +1,10 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { api, queryKeys, Tag } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useToast } from "@/components/Toast";
 import { PageHeader, EmptyState, ErrorState, Modal, ConfirmDialog } from "@/components";
 
 const CATEGORIES = ["general", "artist", "series", "character", "meta"];
@@ -61,6 +62,7 @@ function bubbleStyleDark(tag: Tag, minCount: number, maxCount: number) {
 
 export default function TagsPage() {
   const t = useT();
+  const toast = useToast();
   const router = useRouter();
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
@@ -112,12 +114,12 @@ export default function TagsPage() {
     <main className="max-w-5xl mx-auto p-6">
       <PageHeader title={t("tags.title")} description={tags.data?.length ? t("common.page").replace("{page}", String(page + 1)) : t("tags.desc")}>
         <button onClick={() => { setFormName(""); setFormCat("general"); setShowCreate(true); }}
-          className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600">{t("tags.new")}</button>
+          className="btn-primary">{t("tags.new")}</button>
       </PageHeader>
 
       <div className="mb-6">
         <input value={search} onChange={(e) => setSearch(e.target.value)}
-          placeholder={t("tags.search")} className="w-full max-w-xs border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white dark:border-slate-600" />
+          placeholder={t("tags.search")} className="input w-full max-w-xs" />
       </div>
 
       {tags.isLoading && (
@@ -126,7 +128,7 @@ export default function TagsPage() {
             const w = 60 + Math.random() * 120;
             const h = 24 + Math.random() * 24;
             return <div key={i} style={{ width: `${w}px`, height: `${h}px` }}
-              className="bg-gray-100 dark:bg-slate-700 rounded-full animate-pulse" />;
+              className="rounded-full bg-[#eaeef2] animate-pulse dark:bg-[#21262d]" />;
           })}
         </div>
       )}
@@ -134,7 +136,7 @@ export default function TagsPage() {
       {tags.data && !tags.data.length && <EmptyState title={t("tags.no_tags")} description={t("tags.no_tags_desc")} />}
 
       {tags.data && tags.data.length > 0 && (
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6">
+        <div className="card p-6">
           <div className="flex flex-wrap gap-2 items-center justify-center">
             {filtered.map((tag) => {
               const light = bubbleStyle(tag, minCount, maxCount);
@@ -167,8 +169,8 @@ export default function TagsPage() {
               );
             })}
           </div>
-          {search && !filtered.length && <p className="text-sm text-gray-400 dark:text-gray-500 mt-4 text-center">{t("tags.no_match").replace("{query}", search)}</p>}
-          <p className="text-xs text-gray-400 dark:text-gray-500 mt-5 text-center">
+          {search && !filtered.length && <p className="mt-4 text-center text-sm text-[#57606a] dark:text-[#8b949e]">{t("tags.no_match").replace("{query}", search)}</p>}
+          <p className="mt-5 text-center text-xs text-[#57606a] dark:text-[#8b949e]">
             {search
               ? t("tags.matching").replace("{count}", String(filtered.length))
               : t("tags.total").replace("{count}", String(filtered.length))}
@@ -180,15 +182,15 @@ export default function TagsPage() {
         <div className="space-y-4">
           <div><label className="block text-sm font-medium mb-1">{t("tags.name_label")}</label>
             <input value={formName} onChange={(e) => setFormName(e.target.value)}
-              className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white" placeholder={t("tags.name_placeholder")} /></div>
+              className="input w-full" placeholder={t("tags.name_placeholder")} /></div>
           <div><label className="block text-sm font-medium mb-1">{t("tags.category_label")}</label>
-            <select value={formCat} onChange={(e) => setFormCat(e.target.value)} className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white">
+            <select value={formCat} onChange={(e) => setFormCat(e.target.value)} className="select w-full">
               {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
             </select></div>
           <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => setShowCreate(false)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:text-gray-300">{t("tags.cancel")}</button>
+            <button onClick={() => setShowCreate(false)} className="btn-ghost">{t("tags.cancel")}</button>
             <button onClick={() => create.mutate()} disabled={!formName.trim() || create.isPending}
-              className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
+              className="btn-primary">
               {create.isPending ? t("tags.creating") : t("tags.create")}
             </button>
           </div>
@@ -200,15 +202,15 @@ export default function TagsPage() {
         <div className="space-y-4">
           <div><label className="block text-sm font-medium mb-1">{t("tags.name_label")}</label>
             <input value={formName} onChange={(e) => setFormName(e.target.value)}
-              className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white" /></div>
+              className="input w-full" /></div>
           <div><label className="block text-sm font-medium mb-1">{t("tags.category_label")}</label>
-            <select value={formCat} onChange={(e) => setFormCat(e.target.value)} className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white">
+            <select value={formCat} onChange={(e) => setFormCat(e.target.value)} className="select w-full">
               {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
             </select></div>
           <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => setEditId(null)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:text-gray-300">{t("tags.cancel")}</button>
+            <button onClick={() => setEditId(null)} className="btn-ghost">{t("tags.cancel")}</button>
             <button onClick={() => update.mutate()} disabled={!formName.trim() || update.isPending}
-              className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
+              className="btn-primary">
               {update.isPending ? t("tags.saving") : t("tags.save")}
             </button>
           </div>
@@ -222,10 +224,10 @@ export default function TagsPage() {
       {tags.data && tags.data.length > 0 && (
         <div className="flex gap-2 justify-center mt-4">
           <button disabled={page === 0} onClick={() => setPage(page - 1)}
-            className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.prev")}</button>
-          <span className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400">{t("common.page").replace("{page}", String(page + 1))}</span>
+            className="btn-ghost px-3 py-1 text-sm disabled:opacity-30">{t("common.prev")}</button>
+          <span className="px-3 py-1 text-sm text-[#57606a] dark:text-[#8b949e]">{t("common.page").replace("{page}", String(page + 1))}</span>
           <button onClick={() => setPage(page + 1)} disabled={!tags.data || tags.data.length < limit}
-            className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.next")}</button>
+            className="btn-ghost px-3 py-1 text-sm disabled:opacity-30">{t("common.next")}</button>
         </div>
       )}
     </main>

@@ -9,6 +9,13 @@ import { PageHeader, EmptyState, ErrorState, ConfirmDialog, Modal, SourceBadge }
 
 type FilterMode = "all" | "active" | "inactive" | "sync_on" | "sync_off" | "never_synced";
 
+function jobClass(status?: string) {
+  if (!status) return "bg-[#eaeef2] text-[#57606a] dark:bg-[#30363d] dark:text-[#8b949e]";
+  if (["pending", "downloading", "downloaded", "importing"].includes(status)) return "bg-[#ddf4ff] text-[#0969da] dark:bg-[#1f6feb26] dark:text-[#58a6ff]";
+  if (["failed", "stale"].includes(status)) return "bg-[#ffebe9] text-[#cf222e] dark:bg-[#f8514926] dark:text-[#f85149]";
+  return "bg-[#dafbe1] text-[#1a7f37] dark:bg-[#2ea04326] dark:text-[#3fb950]";
+}
+
 function CreateForm({ isPending, error, onSubmit, onClose }: {
   isPending: boolean; error: Error | null;
   onSubmit: (data: { creator_id: string; name?: string }) => void;
@@ -22,20 +29,20 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
     <div className="space-y-4">
       <div>
         <label className="block text-sm font-medium mb-1">{t("subscriptions.creator_label")}</label>
-        <select value={creatorId} onChange={(e) => setCreatorId(e.target.value)} className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white">
+        <select value={creatorId} onChange={(e) => setCreatorId(e.target.value)} className="select w-full">
           <option value="">{t("subscriptions.select_creator")}</option>
           {creators.data?.map((c) => <option key={c.id} value={c.id}>{c.display_name || c.name}</option>)}
         </select>
       </div>
-      <div><label className="block text-sm font-medium mb-1">{t("subscriptions.label_field")}</label><input value={name} onChange={(e) => setName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm dark:bg-slate-700 dark:text-white" placeholder={t("subscriptions.label_placeholder")} /></div>
+      <div><label className="block text-sm font-medium mb-1">{t("subscriptions.label_field")}</label><input value={name} onChange={(e) => setName(e.target.value)} className="input w-full" placeholder={t("subscriptions.label_placeholder")} /></div>
       <div className="flex justify-end gap-3 pt-2">
-        <button onClick={onClose} className="px-4 py-2 text-sm border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:text-gray-300">{t("subscriptions.cancel")}</button>
+        <button onClick={onClose} className="btn-ghost">{t("subscriptions.cancel")}</button>
         <button onClick={() => onSubmit({ creator_id: creatorId, name: name || undefined })} disabled={!creatorId || isPending}
-          className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-700 text-white rounded hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50">
+          className="btn-primary">
           {isPending ? t("subscriptions.creating") : t("subscriptions.subscribe")}
         </button>
       </div>
-      {error && <p className="text-red-600 text-sm">{error.message}</p>}
+      {error && <p className="text-sm text-[#cf222e] dark:text-[#f85149]">{error.message}</p>}
     </div>
   );
 }
@@ -107,6 +114,11 @@ function SubscriptionsContent() {
     queryKey: [...queryKeys.subscriptions.all, page, filters],
     queryFn: () => api.listSubscriptions(page * limit, limit, filters),
   });
+  const systemSettings = useQuery({
+    queryKey: queryKeys.admin.settings,
+    queryFn: api.getAdminSettings,
+  });
+  const sysDefaults = systemSettings.data?.subscription_defaults;
 
   const create = useMutation({
     mutationFn: (data: { creator_id: string; name?: string }) => api.createSubscription(data),
@@ -126,12 +138,12 @@ function SubscriptionsContent() {
     onSuccess: (data) => {
       subs.refetch();
       if (data.status === "error" || data.status === "partial_error") {
-        toast.info((data as any).message || "Sync partially failed");
+        toast.warning({ message: (data as any).message || "Sync partially failed" });
       } else if (data.job_ids.length === 0) {
-        toast.info(t("subscriptions.sync_no_jobs"));
+        toast.warning({ message: t("subscriptions.sync_no_jobs") });
       }
     },
-    onError: (e: Error) => toast.info(e.message),
+    onError: (e: Error) => toast.error({ message: e.message }),
   });
 
   const batchDel = useMutation({
@@ -141,7 +153,7 @@ function SubscriptionsContent() {
 
   const batchSync = useMutation({
     mutationFn: (params: { ids: string[]; enable: boolean }) => api.batchToggleSyncSubscriptions(params.ids, params.enable),
-    onSuccess: () => { setSelected(new Set()); subs.refetch(); },
+    onSuccess: () => { setSelected(new Set()); subs.refetch(); toast.success({ message: t("notification.updated") }); },
   });
 
   const toggleSelect = (id: string) => {
@@ -157,16 +169,16 @@ function SubscriptionsContent() {
   return (
     <main className="max-w-6xl mx-auto p-6">
       <PageHeader title={t("subscriptions.title")} description={t("subscriptions.count", "0 subscriptions").replace("{count}", String(subsCount.data?.count ?? 0))}>
-        <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm hover:bg-slate-800 dark:hover:bg-slate-600">{t("subscriptions.new")}</button>
+        <button onClick={() => setShowCreate(true)} className="btn-primary">{t("subscriptions.new")}</button>
       </PageHeader>
 
       {/* Toolbar */}
-      <div className="flex items-center gap-3 mb-4 flex-wrap">
-        <input value={inputVal} onChange={(e) => { setInputVal(e.target.value); }} placeholder={t("subscriptions.search")} className="border rounded px-3 py-2 text-sm w-48 dark:bg-slate-700 dark:text-white dark:border-slate-600" />
-        <div className="flex gap-1 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
+      <div className="toolbar mb-4">
+        <input value={inputVal} onChange={(e) => { setInputVal(e.target.value); }} placeholder={t("subscriptions.search")} className="input w-56 py-1.5" />
+        <div className="segmented-control">
           {FILTERS.map((f) => (
             <button key={f.key} onClick={() => updateParams({ filter: f.key === "all" ? null : f.key })}
-              className={`px-3 py-1 text-xs rounded transition-colors ${filter === f.key ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
+              className={`segment ${filter === f.key ? "segment-active" : ""}`}>
               {f.label}
             </button>
           ))}
@@ -175,10 +187,10 @@ function SubscriptionsContent() {
         {selected.size > 0 && (
           <div className="flex gap-2">
             <button onClick={() => batchSync.mutate({ ids: [...selected], enable: true })} disabled={batchSync.isPending}
-              className="px-3 py-1.5 text-xs bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50">{t("subscriptions.enable_sync")}</button>
+              className="btn-primary disabled:opacity-50">{t("subscriptions.enable_sync")}</button>
             <button onClick={() => batchSync.mutate({ ids: [...selected], enable: false })} disabled={batchSync.isPending}
-              className="px-3 py-1.5 text-xs bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50">{t("subscriptions.disable_sync")}</button>
-            <button onClick={() => setConfirmBatchDel(true)} className="px-3 py-1.5 text-xs bg-red-600 text-white rounded hover:bg-red-700">
+              className="btn-ghost disabled:opacity-50">{t("subscriptions.disable_sync")}</button>
+            <button onClick={() => setConfirmBatchDel(true)} className="btn-danger">
               {t("subscriptions.delete_selected").replace("{count}", String(selected.size))}
             </button>
           </div>
@@ -187,43 +199,56 @@ function SubscriptionsContent() {
 
       {/* Select all */}
       {subs.data && subs.data.length > 0 && (
-        <label className="flex items-center gap-2 mb-2 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+        <label className="mb-2 flex cursor-pointer items-center gap-2 text-xs text-[#57606a] dark:text-[#8b949e]">
           <input type="checkbox" checked={selected.size === subs.data.length && subs.data.length > 0} onChange={selectAll} className="rounded" />
           {t("subscriptions.select_all")}
         </label>
       )}
 
       {/* Content */}
-      {subs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
+      {subs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-[#eaeef2] dark:bg-[#21262d] animate-pulse" />)}</div>}
       {subs.error && <ErrorState message={(subs.error as Error).message} />}
-      {subs.data && !subs.data.length && <EmptyState title={t("subscriptions.no_subs")} description={t("subscriptions.no_subs_desc")} action={<button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-slate-900 dark:bg-slate-700 text-white rounded text-sm">{t("subscriptions.create_sub")}</button>} />}
+      {subs.data && !subs.data.length && <EmptyState title={t("subscriptions.no_subs")} description={t("subscriptions.no_subs_desc")} action={<button onClick={() => setShowCreate(true)} className="btn-primary">{t("subscriptions.create_sub")}</button>} />}
 
       {subs.data && subs.data.length > 0 && (
-        <div className="space-y-1">
+        <div className="overflow-hidden rounded-md border border-[#d8dee4] bg-white dark:border-[#30363d] dark:bg-[#161b22]">
           {subs.data.map((s: Subscription) => (
-            <div key={s.id} className={`bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 flex items-center gap-3 cursor-pointer hover:shadow-md transition-shadow ${selected.has(s.id) ? "ring-2 ring-blue-500" : ""}`} onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>
+            <div key={s.id} className={`flex cursor-pointer items-center gap-3 border-b border-[#d8dee4] p-4 last:border-b-0 hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d] ${selected.has(s.id) ? "bg-[#ddf4ff] dark:bg-[#1f6feb26]" : ""}`} onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>
               <input type="checkbox" checked={selected.has(s.id)} onChange={() => toggleSelect(s.id)} className="rounded shrink-0" onClick={(e) => e.stopPropagation()} />
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-sm truncate">{s.name || s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8)}</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="truncate text-sm font-semibold text-[#0969da] dark:text-[#58a6ff]">{s.name || s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8)}</span>
                   {s.is_active ? <span className="w-1.5 h-1.5 bg-green-500 rounded-full shrink-0" /> : <span className="w-1.5 h-1.5 bg-gray-300 rounded-full shrink-0" />}
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${jobClass(s.latest_job_status)}`}>{s.latest_job_status || "no jobs"}</span>
                 </div>
-                <div className="text-xs text-gray-400 dark:text-gray-500">
+                <div className="text-xs text-[#57606a] dark:text-[#8b949e]">
                   {t("subscriptions.creator_prefix")}{" "}
                   <span className="text-blue-600 hover:underline" onClick={(e) => { e.stopPropagation(); router.push(`/admin/creators/${s.creator_id}`); }}>
                     {s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8)}
                   </span>
                 </div>
+                <div className="mt-2 flex flex-wrap gap-3 text-xs text-[#57606a] dark:text-[#8b949e]">
+                  <span>{s.source_count ?? 0} repositories</span>
+                  <span>{s.enabled_source_count ?? 0} enabled</span>
+                  <span>{s.last_synced_at ? `last sync ${new Date(s.last_synced_at).toLocaleDateString()}` : t("subscriptions.never")}</span>
+                </div>
               </div>
               <div className="flex items-center gap-3 shrink-0 text-xs" onClick={(e) => e.stopPropagation()}>
                 {s.sync_enabled ? <span className="text-green-600 dark:text-green-400">{t("subscriptions.auto_sync")}</span> : <span className="text-gray-400">{t("subscriptions.manual")}</span>}
-                <span className="text-gray-400 dark:text-gray-500">{s.sync_interval_hours}h</span>
-                <span className="text-gray-400 dark:text-gray-500 hidden sm:inline">{s.last_synced_at ? `${t("subscriptions.last_sync")} ${new Date(s.last_synced_at).toLocaleDateString()}` : t("subscriptions.never")}</span>
+                <span className="text-[#57606a] dark:text-[#8b949e]">{
+  s.schedule_mode === "fixed_time" ? (s.scheduled_times || t("scheduler.fixed_time")) :
+  s.schedule_mode === "manual" ? t("subscriptions.manual") :
+  s.schedule_mode === "interval" ? `${s.sync_interval_hours}h` :
+  // Inherit from system
+  sysDefaults?.schedule_mode === "fixed_time" ? t("scheduler.fixed_time") :
+  sysDefaults?.schedule_mode === "interval" ? `${s.sync_interval_hours || sysDefaults?.default_sync_interval_hours}h` :
+  `${s.sync_interval_hours}h`
+}</span>
                 <button onClick={(e) => { e.stopPropagation(); syncNow.mutate(s.id); }} disabled={syncNow.isPending}
-                  className="text-blue-600 hover:underline disabled:opacity-50">
+                  className="text-[#0969da] hover:underline disabled:opacity-50 dark:text-[#58a6ff]">
                   {syncNow.isPending ? t("subscriptions.syncing") : t("subscriptions.sync")}
                 </button>
-                <button onClick={(e) => { e.stopPropagation(); setDeleteId(s.id); }} className="text-red-500 hover:text-red-700 dark:text-red-400">{t("subscriptions.del")}</button>
+                <button onClick={(e) => { e.stopPropagation(); setDeleteId(s.id); }} className="text-[#cf222e] hover:underline dark:text-[#f85149]">{t("subscriptions.del")}</button>
               </div>
             </div>
           ))}
@@ -233,9 +258,9 @@ function SubscriptionsContent() {
       {/* Pagination */}
       {subs.data && subs.data.length > 0 && (
         <div className="flex gap-2 justify-center mt-4">
-          <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.prev")}</button>
-          <span className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400">{t("common.page").replace("{page}", String(page + 1))}</span>
-          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!subs.data || subs.data.length < limit} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.next")}</button>
+          <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)} className="btn-ghost disabled:opacity-30">{t("common.prev")}</button>
+          <span className="px-3 py-1 text-sm text-[#57606a] dark:text-[#8b949e]">{t("common.page").replace("{page}", String(page + 1))}</span>
+          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!subs.data || subs.data.length < limit} className="btn-ghost disabled:opacity-30">{t("common.next")}</button>
         </div>
       )}
 

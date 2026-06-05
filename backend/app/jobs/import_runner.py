@@ -15,6 +15,10 @@ from app.models.subscription import Subscription
 from app.models.import_job import ImportJob
 from app.models.download_job import DownloadJob
 from app.providers import registry
+from app.repositories.download_job import DownloadJobRepository
+from app.services.job_manifest import append_manifest_event, update_manifest
+from app.services.job_state import transition_import_job
+from app.services.subscription_enqueue import mark_source_sync_success
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +101,7 @@ async def run_import_job(import_job_id: str):
         import_job = r.scalar_one_or_none()
         if not import_job:
             return
-        import_job.status = "running"
+        transition_import_job(import_job, "running")
         await db.commit()
 
     try:
@@ -109,37 +113,53 @@ async def run_import_job(import_job_id: str):
             return
         provider = registry.get(dj.source)
 
-        # Scan the permanent downloads directory (no job_id subdir)
-        # gallery-dl config "directory": ["pixiv", "{user[account]}", "{id}"]
-        # creates: /downloads/pixiv/{user[account]}/{work_id}/{work_id}_p0.jpg
-        # with JSON: /downloads/pixiv/{user[account]}/{work_id}/{work_id}_p0.jpg.json
+        # Get new JSON file paths from Redis (stored by download runner via snapshot diff).
+        # This avoids re-scanning the filesystem which is unreliable due to:
+        # - Naming template output directories not matching download_dir hint
+        # - Concurrent imports processing the same JSONs
+        # - Race conditions between snapshot and re-scan
+        import redis as _redis
+        _r = _redis.from_url(settings.redis_url)
+        _files_key = f"import:{import_job_id}:files"
+        _files_raw = _r.get(_files_key)
+        _new_json_paths: list[str] | None = None
+        if _files_raw:
+            try:
+                _new_json_paths = json.loads(_files_raw)
+                _r.delete(_files_key)  # Clean up after reading
+            except Exception:
+                logger.warning("Failed to parse import file list for %s", import_job_id, exc_info=True)
+
         source_root = Path(settings.download_root) / provider.source_name
-        if not source_root.exists():
-            async with async_session() as db:
-                ij = await db.get(ImportJob, job_uuid)
-                if ij:
-                    ij.status = "failed"
-                    ij.error_log = f"Source directory not found: {source_root}"
-                    await db.commit()
-            return
 
-        # Narrow scan to the specific creator sub-directory when available
-        # (avoids scanning the entire source library on every import)
-        if dj.download_dir:
-            candidate_root = source_root / dj.download_dir
-            scan_root = candidate_root if candidate_root.exists() else source_root
+        if _new_json_paths:
+            # Use the exact file list from the download runner's snapshot diff
+            all_json_files = sorted(Path(p) for p in _new_json_paths if Path(p).exists())
+            logger.info("Import %s: processing %d files from download snapshot (%d already gone)",
+                       import_job_id, len(all_json_files), len(_new_json_paths) - len(all_json_files))
         else:
-            scan_root = source_root
+            # Fallback: scan filesystem (legacy path for jobs created before this fix)
+            if not source_root.exists():
+                async with async_session() as db:
+                    ij = await db.get(ImportJob, job_uuid)
+                    if ij:
+                        transition_import_job(ij, "failed", f"Source directory not found: {source_root}")
+                        await db.commit()
+                return
 
-        # Find per-file metadata JSONs from --write-metadata
-        all_json_files = sorted(scan_root.rglob("*.json"))
+            if dj.download_dir:
+                candidate_root = source_root / dj.download_dir
+                scan_root = candidate_root if candidate_root.exists() else source_root
+            else:
+                scan_root = source_root
+
+            all_json_files = sorted(scan_root.rglob("*.json"))
 
         if not all_json_files:
             async with async_session() as db:
                 ij = await db.get(ImportJob, job_uuid)
                 if ij:
-                    ij.status = "failed"
-                    ij.error_log = "No metadata JSON files found"
+                    transition_import_job(ij, "failed", "No metadata JSON files found")
                     await db.commit()
             return
 
@@ -160,8 +180,7 @@ async def run_import_job(import_job_id: str):
             async with async_session() as db:
                 ij = await db.get(ImportJob, job_uuid)
                 if ij:
-                    ij.status = "failed"
-                    ij.error_log = "Could not extract work IDs from any JSON"
+                    transition_import_job(ij, "failed", "Could not extract work IDs from any JSON")
                     await db.commit()
             return
 
@@ -449,11 +468,16 @@ async def run_import_job(import_job_id: str):
         async with async_session() as db:
             ij = await db.get(ImportJob, job_uuid)
             if ij:
-                ij.status = "complete"
+                transition_import_job(ij, "complete")
                 # Also mark the parent download job as complete
-                dj = await db.get(DownloadJob, ij.download_job_id)
+                dj_repo = DownloadJobRepository(db)
+                dj = await dj_repo.get(ij.download_job_id)
                 if dj:
-                    dj.status = "complete"
+                    await dj_repo.update_status(dj, "complete")
+                    update_manifest(dj, import_stats=stats)
+                    append_manifest_event(dj, "import_complete", **stats)
+                    if dj.subscription_source_id:
+                        await mark_source_sync_success(db, dj.subscription_source_id)
                 await db.commit()
 
         logger.info("Import complete: %d works, %d assets, %d multi-page (batched)",
@@ -468,8 +492,7 @@ async def run_import_job(import_job_id: str):
                 # Check if this is a first failure — if so, retry once
                 already_retried = ij.error_log and "RETRY_ATTEMPT" in (ij.error_log or "")
                 if not already_retried:
-                    ij.status = "pending"
-                    ij.error_log = f"RETRY_ATTEMPT\n{error_text}"
+                    transition_import_job(ij, "pending", f"RETRY_ATTEMPT\n{error_text}")
                     await db.commit()
                     # Re-enqueue with backoff
                     try:
@@ -479,13 +502,13 @@ async def run_import_job(import_job_id: str):
                         r = redis_lib.from_url(settings.redis_url)
                         Queue(connection=r).enqueue_in(
                             timedelta(seconds=60),
-                            "app.jobs.import_runner.run_import_job", import_job_id)
+                            "app.jobs.import_runner.run_import_job", import_job_id,
+                            job_timeout=7200)
                         logger.info("Re-enqueued import job %s for retry", import_job_id)
                     except Exception:
                         logger.warning("Failed to enqueue import retry for %s", import_job_id, exc_info=True)
                 else:
-                    ij.status = "failed"
-                    ij.error_log = error_text
+                    transition_import_job(ij, "failed", error_text)
                     await db.commit()
 
 async def cleanup_metadata_jsons(download_root: str = None):

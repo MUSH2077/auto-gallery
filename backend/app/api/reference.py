@@ -16,6 +16,7 @@ from app.database import get_db
 from app.services import danbooru as danbooru_svc
 from app.models.creator_link import CreatorLink
 from app.models.source_creator import SourceCreator
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,41 @@ def _is_source_auto_enabled(source: str) -> bool:
 
 
 router = APIRouter(dependencies=[RequireAdmin])
+
+
+@router.get("/danbooru/artist/{artist_id}")
+async def get_danbooru_artist(artist_id: int):
+    """Get Danbooru artist detail by ID (for alias chips on Creator Detail page)."""
+    artist = await asyncio.to_thread(danbooru_svc.get_artist, artist_id)
+    if not artist:
+        raise HTTPException(status_code=404, detail="Artist not found on Danbooru")
+    pixiv_display_name = None
+    from app.database import async_session
+    from app.models.source_creator import SourceCreator
+    from sqlalchemy import select as sa_select
+    pixiv_ids = []
+    for u in artist.get("urls", []):
+        raw = u.get("normalized_url") or u.get("url", "")
+        m = re.search(r'pixiv\.net/(?:en/)?users/(\d+)', raw)
+        if m: pixiv_ids.append(m.group(1))
+    if pixiv_ids:
+        async with async_session() as db:
+            result = await db.execute(
+                sa_select(SourceCreator).where(
+                    SourceCreator.source == "pixiv",
+                    SourceCreator.source_creator_id.in_(pixiv_ids),
+                ).limit(1))
+            sc = result.scalar_one_or_none()
+            if sc and sc.display_name:
+                pixiv_display_name = sc.display_name
+    return {
+        "artist": {
+            "id": artist["id"],
+            "name": artist["name"],
+            "other_names": artist.get("other_names", []),
+            "pixiv_display_name": pixiv_display_name,
+        }
+    }
 
 
 @router.get("/providers")
@@ -404,19 +440,20 @@ async def batch_import_danbooru_artists(data: dict):
     r = redis_lib.from_url(settings.redis_url)
     q = Queue(connection=r)
 
-    # Clear any previous batch results so old data doesn't leak into new poll
-    r.delete("batch_import:progress", "batch_import:result")
+    # Generate key before enqueue so it can be passed to the RQ function AND
+    # returned as job_id. This ensures Redis keys match the polling ID.
+    job_key = str(uuid.uuid4())
 
-    job = q.enqueue("app.jobs.batch_import.run_batch_import", pixiv_ids,
+    job = q.enqueue("app.jobs.batch_import.run_batch_import", pixiv_ids, job_key,
                     job_timeout=3600,  # 1 hour max
                     result_ttl=3600)
 
-    logger.info("Enqueued batch import job %s with %d pixiv_ids (%d duplicates removed, %d already exist)",
-                job.id, len(pixiv_ids), deduped, len(existing_ids))
+    logger.info("Enqueued batch import job_key=%s (rq_job=%s) with %d pixiv_ids (%d duplicates removed, %d already exist)",
+                job_key, job.id, len(pixiv_ids), deduped, len(existing_ids))
     return {
         "status": "ok",
         "message": f"Batch import enqueued ({len(pixiv_ids)} IDs" + (f", {deduped} duplicates removed)" if deduped > 0 else ")"),
-        "job_id": job.id,
+        "job_id": job_key,
         "total": len(pixiv_ids),
         "duplicates_removed": deduped,
         "already_exists": [{"pixiv_id": pid, "creator_name": existing_map[pid]["name"], "creator_id": existing_map[pid]["creator_id"]} for pid in existing_ids],
@@ -435,9 +472,13 @@ async def get_batch_import_status(job_id: str | None = None):
     r = redis_lib.from_url(settings.redis_url)
     q = Queue(connection=r)
 
-    # Check for in-progress data
-    progress_raw = r.get("batch_import:progress")
-    result_raw = r.get("batch_import:result")
+    # Check for in-progress data (scoped by job_id for concurrent imports)
+    if job_id:
+        progress_raw = r.get(f"batch_import:{job_id}:progress")
+        result_raw = r.get(f"batch_import:{job_id}:result")
+    else:
+        progress_raw = r.get("batch_import:progress")
+        result_raw = r.get("batch_import:result")
 
     progress = None
     if progress_raw:
@@ -472,17 +513,14 @@ async def get_batch_import_status(job_id: str | None = None):
 
 
 @router.post("/danbooru/url-batch-import")
-async def url_batch_import_danbooru(data: dict, db: AsyncSession = Depends(get_db)):
-    """Import multiple creator URLs via Danbooru lookup.
+async def url_batch_import_danbooru(data: dict):
+    """Enqueue a batch import job for URLs via Danbooru lookup.
 
-    Accepts: {urls: ["https://pixiv.net/users/123", "https://twitter.com/...", ...]}
-    For each URL, looks up the matching Danbooru artist and runs import-all logic.
-    Returns per-URL results immediately (synchronous, not queued).
+    Accepts: {urls: ["https://pixiv.net/users/123", ...]}
+    Returns immediately with a job_id. Poll GET /danbooru/artist/batch-import/status
+    for progress and results.
     """
-    from app.models.creator import Creator
-    from app.models.subscription import Subscription
-    from app.models.subscription_source import SubscriptionSource
-    from app.services.creator_dedup import find_existing_creator
+    import uuid as uuid_mod
 
     urls = data.get("urls", [])
     if not urls or not isinstance(urls, list):
@@ -493,115 +531,21 @@ async def url_batch_import_danbooru(data: dict, db: AsyncSession = Depends(get_d
     if len(urls) > 100:
         raise HTTPException(status_code=400, detail="Too many URLs (max 100 per request)")
 
-    results = []
-    for url in urls:
-        try:
-            artist, links = await asyncio.to_thread(
-                danbooru_svc.search_and_extract,
-                source_url=url,
-                pixiv_id=None,
-                artist_name=None,
-            )
-            if not artist:
-                results.append({"url": url, "status": "not_found", "message": "No matching Danbooru artist found"})
-                continue
+    r = redis_lib.from_url(settings.redis_url)
+    q = Queue(connection=r)
 
-            canonical_name = artist.get("name", "Unknown")
-            existing = await find_existing_creator(db, danbooru_artist_id=artist.get("id"))
-            if existing:
-                creator = existing
-                creator_id = creator.id
-                created_new = False
-            else:
-                creator = Creator(name=canonical_name, display_name=canonical_name)
-                db.add(creator)
-                await db.flush()
-                creator_id = creator.id
-                created_new = True
+    # Generate key before enqueue so Redis keys match the polling ID
+    job_key = str(uuid_mod.uuid4())
 
-            if creator.danbooru_artist_id is None:
-                creator.danbooru_artist_id = artist.get("id")
+    job = q.enqueue("app.jobs.batch_import.run_url_batch_import", urls, job_key,
+                    job_timeout=3600,
+                    result_ttl=3600)
 
-            links_created = 0
-            for link_data in links:
-                existing_link = await db.execute(
-                    select(CreatorLink).where(
-                        CreatorLink.creator_id == creator_id,
-                        CreatorLink.url == link_data["url"],
-                    )
-                )
-                if existing_link.scalar_one_or_none():
-                    continue
-                db.add(CreatorLink(
-                    creator_id=creator_id,
-                    url=link_data["url"],
-                    link_type=link_data["link_type"],
-                    source=link_data["source"],
-                    confidence=link_data["confidence"],
-                    is_verified=link_data["is_verified"],
-                    notes=link_data.get("notes"),
-                ))
-                links_created += 1
-
-            sub_result = await db.execute(select(Subscription).where(Subscription.creator_id == creator_id))
-            subscription = sub_result.scalar_one_or_none()
-            if not subscription:
-                from app.services.subscription import get_subscription_defaults
-                defaults = await get_subscription_defaults(db)
-                subscription = Subscription(creator_id=creator_id,
-                    sync_interval_hours=defaults["sync_interval_hours"],
-                    sync_enabled=defaults["sync_enabled"],
-                    is_active=defaults["is_active"])
-                db.add(subscription)
-                await db.flush()
-
-            sources_created = 0
-            for u in artist.get("urls", []):
-                raw_url = u.get("normalized_url") or u.get("url", "")
-                if not raw_url or not u.get("is_active", True):
-                    continue
-                if not danbooru_svc.is_downloadable_url(raw_url):
-                    continue
-                existing_ss = await db.execute(
-                    select(SubscriptionSource).where(
-                        SubscriptionSource.subscription_id == subscription.id,
-                        SubscriptionSource.source_url == raw_url,
-                    )
-                )
-                if existing_ss.scalar_one_or_none():
-                    continue
-                db.add(SubscriptionSource(
-                    subscription_id=subscription.id,
-                    source=danbooru_svc._classify_url(raw_url),
-                    source_url=raw_url,
-                    is_enabled=_is_source_auto_enabled(danbooru_svc._classify_url(raw_url)),
-                ))
-                sources_created += 1
-
-            await db.flush()
-            results.append({
-                "url": url,
-                "status": "imported",
-                "artist_name": artist["name"],
-                "creator_id": str(creator_id),
-                "created_new": created_new,
-                "links_imported": links_created,
-                "sources_created": sources_created,
-            })
-        except Exception as e:
-            logger.error("URL batch import error for %s: %s", url, e)
-            results.append({"url": url, "status": "error", "message": str(e)})
-
-    await db.commit()
-
-    imported = sum(1 for r in results if r["status"] == "imported")
-    not_found = sum(1 for r in results if r["status"] == "not_found")
-    errors = sum(1 for r in results if r["status"] == "error")
+    logger.info("Enqueued URL batch import job_key=%s (rq_job=%s) with %d URLs",
+                job_key, job.id, len(urls))
     return {
         "status": "ok",
+        "message": f"URL batch import enqueued ({len(urls)} URLs)",
+        "job_id": job_key,
         "total": len(urls),
-        "imported": imported,
-        "not_found": not_found,
-        "errors": errors,
-        "results": results,
     }

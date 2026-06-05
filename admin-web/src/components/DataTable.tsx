@@ -9,17 +9,17 @@ export default function DataTable<T>({ columns, data, keyField }: { columns: Col
   const t = useT();
   if (!data.length) return <EmptyState title={t("common.no_data")} />;
   return (
-    <div className="overflow-x-auto">
+    <div className="table-shell">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b bg-gray-50">
-            {columns.map((c) => <th key={c.key} className={`text-left px-4 py-3 font-medium text-gray-600 ${c.className || ""}`}>{c.header}</th>)}
+          <tr className="table-head">
+            {columns.map((c) => <th key={c.key} className={`text-left px-4 py-2.5 font-medium ${c.className || ""}`}>{c.header}</th>)}
           </tr>
         </thead>
         <tbody>
           {data.map((row) => (
-            <tr key={String(row[keyField])} className="border-b hover:bg-gray-50">
-              {columns.map((c) => <td key={c.key} className={`px-4 py-3 ${c.className || ""}`}>{c.render(row)}</td>)}
+            <tr key={String(row[keyField])} className="table-row">
+              {columns.map((c) => <td key={c.key} className={`px-4 py-2.5 ${c.className || ""}`}>{c.render(row)}</td>)}
             </tr>
           ))}
         </tbody>

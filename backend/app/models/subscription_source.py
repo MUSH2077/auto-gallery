@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import datetime
 from uuid import UUID
@@ -20,5 +20,9 @@ class SubscriptionSource(TimestampMixin, Base):
     last_successful_auth: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     auth_healthy: Mapped[bool] = mapped_column(Boolean, default=True)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    auth_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    auth_error_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_auth_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     subscription = relationship("Subscription", back_populates="subscription_sources")

@@ -12,8 +12,8 @@ docker compose build backend admin-web
 # Run database migrations
 docker compose exec backend alembic upgrade head
 
-# Deploy (recreate changed containers)
-docker compose up -d --force-recreate backend worker admin-web
+# Deploy all services (backend code changes affect all three)
+docker compose up -d --force-recreate backend worker scheduler admin-web
 
 # View logs
 docker compose logs --tail 50 -f backend
@@ -65,12 +65,23 @@ English / 中文:
 - [risks.md](../docs/risks.md) / [risks.zh.md](../docs/risks.zh.md) — risk register with mitigations and decisions
 
 Constraint and skill files in `.claude/`:
+
+Skills (in `.claude/skills/`):
+- [gallerydl-integration.md](../.claude/skills/gallerydl-integration.md) — gallery-dl execution, config, state machines, auth tracking
+- [backend-architecture.md](../.claude/skills/backend-architecture.md) — layered architecture, models, API conventions
+- [provider-design.md](../.claude/skills/provider-design.md) — provider interface, registry, adding new providers
+- [nas-deployment.md](../.claude/skills/nas-deployment.md) — NAS host setup, .env, volumes
+
+Constraints (in `.claude/constraints/`):
 - [tech-stack.md](../.claude/constraints/tech-stack.md) — full technology stack with versions and exclusions
 - [source-abstraction.md](../.claude/constraints/source-abstraction.md) — generic model naming, provider interface
 - [danbooru-reference.md](../.claude/constraints/danbooru-reference.md) — Danbooru as reference only
 - [deduplication.md](../.claude/constraints/deduplication.md) — dedup policy, opt-in only
 - [docker.md](../.claude/constraints/docker.md) — services, container paths, volume mapping
 - [security.md](../.claude/constraints/security.md) — subprocess, URL validation, auth (admin + JWT), CORS, /media
+- [filesystem-paths.md](../.claude/constraints/filesystem-paths.md) — naming templates, directory structure, path assumptions
+- [creator-display-name.md](../.claude/constraints/creator-display-name.md) — canonical display_name, name resolution hierarchy, UI consistency
+- [source-colors.md](../.claude/constraints/source-colors.md) — canonical source colors, single palette, anti-duplication
 - [client-api.md](../.claude/constraints/client-api.md) — user model, client-facing APIs, albums, mobile response design
 - [remote-access.md](../.claude/constraints/remote-access.md) — LAN/VPN/reverse-proxy, HTTPS, network architecture
 
@@ -82,7 +93,7 @@ The following were decided during risk analysis (see [docs/risks.md](../docs/ris
 
 - **RQ for job queue** (not Celery). Simpler, uses Redis already in stack. `download_job`/`import_job` tables are source of truth; queue backend is replaceable.
 - **`creator_link.confidence` field** (0.0–1.0 float). Suggested links from Danbooru or URL extraction are scored. Admin reviews low-confidence suggestions.
-- **Job state machine**: `pending → downloading → downloaded → importing → complete | failed | stale | paused`. Paused jobs skip execution. Stale detection marks stuck downloading jobs after 2x timeout. Partial import recovery on timeout/failure.
+- **Job state machine**: Two separate lifecycles — `download_job` and `import_job`. Download: `pending → downloading → downloaded → complete | failed | stale | paused`. Import: `pending → running → complete | failed`. Paused jobs skip execution. Stale detection marks stuck downloading jobs after 2x timeout. Partial import recovery on timeout/failure. See [gallerydl-integration.md](../.claude/skills/gallerydl-integration.md) for the full state machine.
 - **`subscription_source.last_successful_auth`** timestamp for cookie expiration visibility.
 - **Meilisearch sync**: admin-triggered full re-indexing for v1. Application-level dual-writes deferred.
 - **pyvips preferred over Pillow** for image processing (faster, lower memory).
@@ -355,18 +366,22 @@ Danbooru reference provider responsibilities:
 
 ## NAS Storage Structure
 
+The directory layout under `downloads/` and `library/` is determined by per-source naming templates configured at `/admin/settings/gallerydl`. The diagram below shows the **default** structure — the actual layout depends on user configuration. See [filesystem-paths.md](../.claude/constraints/filesystem-paths.md) for the constraint.
+
+### Default layout (using default naming templates)
+
 ```
 /volume1/auto-gallery/
 ├── downloads/                          # DOWNLOAD_ROOT — original image files
-│   └── {source}/                       # e.g. pixiv, iwara, x
-│       └── {creator_name}/             # e.g. ASK, 1980643
+│   └── {source}/                       # e.g. pixiv, iwara, x (top-level = provider.source_name)
+│       └── {template_output}/          # Determined by naming template directory pattern
 │           └── {source_work_id}/        # e.g. 38362603 (Pixiv artwork ID)
 │               ├── 38362603_p0.jpg     # Page 0
 │               └── 38362603_p1.jpg     # Page 1 (if multi-page)
 │
 ├── library/                            # LIBRARY_ROOT — per-work metadata + thumbnail
 │   └── {source}/                       # e.g. pixiv, iwara, x
-│       └── {creator_name}/             # e.g. ASK, 1980643
+│       └── {creator_dir}/              # From provider.get_creator_directory_name()
 │           └── {source_work_id}/        # Same ID as downloads — links the two
 │               ├── metadata.json       # Work metadata export
 │               └── thumbnail.webp      # 400px WebP thumbnail (pyvips)
@@ -391,15 +406,15 @@ Danbooru reference provider responsibilities:
 
 ### Storage rules
 
-- **downloads/**: Original image files organized by `{source}/{creator_name}/{source_work_id}/`. Files are moved here from the flat gallery-dl output during import. No JSON metadata files kept — they are deleted after processing.
-- **library/**: Per-work metadata + thumbnail only. Same `{source}/{creator_name}/{source_work_id}/` structure as downloads, linked by source_work_id. No original images.
-- **gallery-dl output**: Flat directory under a temp job folder. During import, files are reorganized into the per-work download structure and JSON files are deleted.
+- **downloads/**: gallery-dl writes files directly to its final location under `{source}/` using the naming template's directory pattern. Files are NOT moved — gallery-dl places them in the correct per-work directory. No JSON metadata files kept — they are deleted after import processing.
+- **library/**: Per-work metadata + thumbnail only. Structure is `{source}/{creator_dir}/{source_work_id}/` where `creator_dir` comes from `provider.get_creator_directory_name()`. No original images.
+- **gallery-dl output**: gallery-dl writes directly to `DOWNLOAD_ROOT/{source}/` using the extractor's `directory` config from the naming template. Per-work JSON metadata files are written alongside images via `--write-metadata`, then deleted by the import runner after processing.
 - **Thumbnail**: 400px WebP, generated by pyvips from the first page image. Served from LIBRARY_ROOT via `/api/v1/media/thumb/{asset_id}`.
 - **Preview/Original**: Served directly from DOWNLOAD_ROOT via `/api/v1/media/preview/{asset_id}` and `/api/v1/media/original/{asset_id}`. No separate preview — uses the original.
 - **metadata.json**: Written per-work during import. Contains work_id, source, source_work_id, title, posted_at, creator, assets array.
 - **source_work_id**: The platform-specific work ID (e.g. Pixiv artwork ID "38362603"). Used as the directory name in both downloads/ and library/. Links the two storage trees.
-- **No job_id layer**: After import, downloads are organized directly under `{source}/{creator}/{source_work_id}/` — no intermediate job_id directory.
-- **No JSON in downloads**: gallery-dl metadata JSON files are deleted after import processing.
+- **No job_id layer**: After import, downloads are organized directly under `{source}/...` — no intermediate job_id directory.
+- **No JSON in downloads**: gallery-dl metadata JSON files are deleted after import processing. Use before/after snapshots to detect new files (see `_snapshot_metadata_jsons()`).
 
 ### Container path environment variables
 

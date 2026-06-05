@@ -22,20 +22,20 @@ function JobRow({ job }: { job: DownloadJob }) {
 
   return (
     <>
-      <tr className="border-b dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">
+      <tr className="table-row">
         <td className="px-4 py-3">
-          <div className="font-mono text-xs text-gray-400 dark:text-gray-500">{job.id.slice(0, 8)}</div>
+          <div className="font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{job.id.slice(0, 8)}</div>
         </td>
         <td className="px-4 py-3"><SourceBadge source={job.source} /></td>
         <td className="px-4 py-3"><StatusBadge status={job.status} /></td>
-        <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">{job.retry_count}/3</td>
-        <td className="px-4 py-3 text-xs text-gray-400 dark:text-gray-500">{new Date(job.created_at).toLocaleString()}</td>
+        <td className="px-4 py-3 text-xs text-[#57606a] dark:text-[#8b949e]">{job.retry_count}/3</td>
+        <td className="px-4 py-3 text-xs text-[#57606a] dark:text-[#8b949e]">{new Date(job.created_at).toLocaleString()}</td>
         <td className="px-4 py-3">
           <div className="flex gap-2">
             {job.error_log && <button onClick={() => setShowLog(!showLog)} className="text-xs text-blue-600 hover:underline">{t("downloads.log")}</button>}
             {(job.status === "failed" || job.status === "stale") && (
               <button onClick={() => setConfirmRetry(true)} disabled={retry.isPending}
-                className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 disabled:opacity-50">
+                className="rounded-md border border-[#0969da]/30 bg-[#ddf4ff] px-2 py-0.5 text-xs text-[#0969da] hover:bg-[#b6e3ff] disabled:opacity-50 dark:bg-[#1f6feb26] dark:text-[#58a6ff]">
                 {retry.isPending ? "..." : t("downloads.retry")}
               </button>
             )}
@@ -43,7 +43,7 @@ function JobRow({ job }: { job: DownloadJob }) {
         </td>
       </tr>
       {showLog && job.error_log && (
-        <tr><td colSpan={6} className="px-4 py-3 bg-gray-50 dark:bg-slate-800/50"><pre className="text-xs font-mono whitespace-pre-wrap max-h-48 overflow-auto bg-gray-100 dark:bg-slate-700 p-3 rounded">{job.error_log}</pre></td></tr>
+        <tr><td colSpan={6} className="bg-[#f6f8fa] px-4 py-3 dark:bg-[#21262d]"><pre className="max-h-48 overflow-auto rounded-md border border-[#d8dee4] bg-white p-3 font-mono text-xs whitespace-pre-wrap dark:border-[#30363d] dark:bg-[#0d1117]">{job.error_log}</pre></td></tr>
       )}
       {confirmRetry && <ConfirmDialog open title={t("downloads.retry_title")} message={t("downloads.retry_msg").replace("{id}", job.id.slice(0, 8))} onConfirm={() => retry.mutate()} onCancel={() => setConfirmRetry(false)} isPending={retry.isPending} error={(retry.error as Error)?.message} />}
     </>
@@ -74,27 +74,27 @@ function DownloadsContent() {
   return (
     <main className="max-w-7xl mx-auto p-6">
       <PageHeader title={t("downloads.title")} description={jobs.data?.length ? t("common.page").replace("{page}", String(page + 1)) : t("downloads.desc")}>
-        <Link href="/admin/jobs" className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">{t("downloads.view_jobs")}</Link>
+        <Link href="/admin/jobs" className="btn-ghost text-xs">{t("downloads.view_jobs")}</Link>
       </PageHeader>
 
-      <div className="flex gap-2 mb-4 flex-wrap">
+      <div className="toolbar mb-4">
         {STATUS_OPTIONS.map((s) => (
           <button key={s} onClick={() => updateParams({ status: s || null })}
-            className={`px-3 py-1 rounded text-xs font-medium border ${statusFilter === s ? "bg-slate-900 dark:bg-slate-600 text-white border-slate-900 dark:border-slate-500" : "bg-white dark:bg-slate-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-600"}`}>
+            className={`segment border ${statusFilter === s ? "segment-active border-[#d8dee4] dark:border-[#30363d]" : "border-transparent"}`}>
             {s || t("downloads.filter_all")}
           </button>
         ))}
-        <button onClick={() => jobs.refetch()} className="ml-auto px-3 py-1 text-xs border rounded hover:bg-gray-50 dark:hover:bg-slate-700 dark:bg-slate-800/50">{t("downloads.refresh")}</button>
+        <button onClick={() => jobs.refetch()} className="btn-ghost ml-auto text-xs">{t("downloads.refresh")}</button>
       </div>
 
-      {jobs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-10 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>}
+      {jobs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-10 rounded-md bg-[#eaeef2] dark:bg-[#21262d] animate-pulse" />)}</div>}
       {jobs.error && <ErrorState message={(jobs.error as Error).message} onRetry={() => jobs.refetch()} />}
       {jobs.data && !jobs.data.length && <EmptyState title={t("downloads.no_jobs")} description={t("downloads.no_jobs_desc")} />}
 
       {jobs.data && jobs.data.length > 0 && (
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow overflow-x-auto">
+        <div className="table-shell">
           <table className="w-full text-sm">
-            <thead><tr className="border-b dark:border-slate-700 bg-gray-50 dark:bg-slate-800/50"><th className="text-left px-4 py-3">{t("downloads.col_id")}</th><th className="text-left px-4 py-3">{t("downloads.col_source")}</th><th className="text-left px-4 py-3">{t("downloads.col_status")}</th><th className="text-left px-4 py-3">{t("downloads.col_retries")}</th><th className="text-left px-4 py-3">{t("downloads.col_created")}</th><th className="text-left px-4 py-3">{t("downloads.col_actions")}</th></tr></thead>
+            <thead><tr className="table-head"><th className="text-left px-4 py-2.5">{t("downloads.col_id")}</th><th className="text-left px-4 py-2.5">{t("downloads.col_source")}</th><th className="text-left px-4 py-2.5">{t("downloads.col_status")}</th><th className="text-left px-4 py-2.5">{t("downloads.col_retries")}</th><th className="text-left px-4 py-2.5">{t("downloads.col_created")}</th><th className="text-left px-4 py-2.5">{t("downloads.col_actions")}</th></tr></thead>
             <tbody>{jobs.data.map((job) => <JobRow key={job.id} job={job} />)}</tbody>
           </table>
         </div>
@@ -102,10 +102,10 @@ function DownloadsContent() {
       {jobs.data && jobs.data.length > 0 && (
         <div className="flex gap-2 justify-center mt-4">
           <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)}
-            className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.prev")}</button>
-          <span className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400">{t("common.page").replace("{page}", String(page + 1))}</span>
+            className="btn-ghost disabled:opacity-30">{t("common.prev")}</button>
+          <span className="px-3 py-1 text-sm text-[#57606a] dark:text-[#8b949e]">{t("common.page").replace("{page}", String(page + 1))}</span>
           <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!jobs.data || jobs.data.length < limit}
-            className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("common.next")}</button>
+            className="btn-ghost disabled:opacity-30">{t("common.next")}</button>
         </div>
       )}
     </main>

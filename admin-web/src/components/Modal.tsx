@@ -1,22 +1,46 @@
 "use client";
-import { ReactNode, useEffect } from "react";
+import { ReactNode, useEffect, useRef } from "react";
 
-export default function Modal({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
+export default function Modal({ open, onClose, title, children }: {
+  open: boolean; onClose: () => void; title: string; children: ReactNode;
+}) {
+  const modalRef = useRef<HTMLDivElement>(null);
+  const prevFocus = useRef<HTMLElement | null>(null);
+
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    if (open) document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
+    if (!open || !modalRef.current) return;
+    prevFocus.current = document.activeElement as HTMLElement;
+    const first = modalRef.current.querySelector<HTMLElement>(
+      'input, button, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    first?.focus();
+
+    const trap = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { onClose(); return; }
+      if (e.key !== "Tab" || !modalRef.current) return;
+      const els = modalRef.current.querySelectorAll<HTMLElement>(
+        'input:not([disabled]), button:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (!els.length) return;
+      if (e.shiftKey && document.activeElement === els[0]) { e.preventDefault(); els[els.length-1].focus(); }
+      else if (!e.shiftKey && document.activeElement === els[els.length-1]) { e.preventDefault(); els[0].focus(); }
+    };
+    document.addEventListener("keydown", trap);
+    return () => { document.removeEventListener("keydown", trap); prevFocus.current?.focus(); };
   }, [open, onClose]);
 
   if (!open) return null;
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 pt-20" onClick={onClose}>
-      <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-6 py-4 border-b dark:border-slate-700">
-          <h2 className="text-lg font-semibold dark:text-white">{title}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none">&times;</button>
+    <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 px-4 pt-16"
+      onClick={onClose} role="dialog" aria-modal="true" aria-label={title}>
+      <div ref={modalRef} className="w-full max-w-lg max-h-[82vh] overflow-y-auto rounded-md border border-[#d8dee4] bg-white shadow-xl dark:border-[#30363d] dark:bg-[#161b22]"
+        onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-[#d8dee4] px-4 py-3 dark:border-[#30363d]">
+          <h2 className="text-base font-semibold text-[#24292f] dark:text-[#e6edf3]">{title}</h2>
+          <button onClick={onClose} aria-label="Close dialog"
+            className="btn-icon border-0 text-lg leading-none">&times;</button>
         </div>
-        <div className="px-6 py-4">{children}</div>
+        <div className="px-4 py-4">{children}</div>
       </div>
     </div>
   );

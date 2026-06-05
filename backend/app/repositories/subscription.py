@@ -1,9 +1,9 @@
 from uuid import UUID
 
-from sqlalchemy import select, or_, and_
+from sqlalchemy import select, or_, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Subscription, SubscriptionSource, Creator
+from app.models import Subscription, SubscriptionSource, Creator, DownloadJob
 
 
 class SubscriptionRepository:
@@ -36,8 +36,30 @@ class SubscriptionRepository:
             else:
                 conditions.append(Subscription.last_synced_at.isnot(None))
 
+        source_count = (
+            select(func.count(SubscriptionSource.id))
+            .where(SubscriptionSource.subscription_id == Subscription.id)
+            .correlate(Subscription)
+            .scalar_subquery()
+        )
+        enabled_source_count = (
+            select(func.count(SubscriptionSource.id))
+            .where(SubscriptionSource.subscription_id == Subscription.id)
+            .where(SubscriptionSource.is_enabled == True)
+            .correlate(Subscription)
+            .scalar_subquery()
+        )
+        latest_job_status = (
+            select(DownloadJob.status)
+            .where(DownloadJob.subscription_id == Subscription.id)
+            .order_by(DownloadJob.created_at.desc())
+            .limit(1)
+            .correlate(Subscription)
+            .scalar_subquery()
+        )
+
         stmt = (
-            select(Subscription, Creator.name, Creator.display_name)
+            select(Subscription, Creator.name, Creator.display_name, source_count, enabled_source_count, latest_job_status)
             .join(Creator, Creator.id == Subscription.creator_id)
             .offset(offset).limit(limit)
             .order_by(Subscription.created_at.desc())
@@ -50,6 +72,9 @@ class SubscriptionRepository:
             sub = row[0]
             sub.creator_name = row[1] or sub.creator_id
             sub.creator_display_name = row[2]
+            sub.source_count = row[3] or 0
+            sub.enabled_source_count = row[4] or 0
+            sub.latest_job_status = row[5]
             subs.append(sub)
         return subs
 
