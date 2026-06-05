@@ -12,7 +12,12 @@ Use this checklist before tagging a public release.
 ## Documentation
 
 - Verify `README.md` and `README.zh.md` describe the current UI and providers.
-- Refresh screenshots in `docs/assets/` when the admin web changes visibly.
+- Confirm `docs/assets/` screenshots are sanitized demo or sanitized real
+  screenshots with no private creators, credentials, local paths, account
+  names, or downloaded media.
+- Confirm README screenshot alt text and captions describe the assets as
+  sanitized demo or sanitized real screenshots.
+- Confirm the Sources admin page descriptions match provider capabilities.
 - Confirm `.env.example` includes every required deployment variable.
 - Confirm legal and safety notes are visible in the README.
 

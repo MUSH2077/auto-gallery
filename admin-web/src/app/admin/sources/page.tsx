@@ -46,16 +46,16 @@ const DEFAULT_URLS: Record<string, string> = {
 
 const SOURCE_DESCRIPTIONS: Record<string, string> = {
   pixiv: "Pixiv artworks, user profiles, favorites, rankings, and search results. First fully-supported downloadable source. Requires cookies or OAuth refresh-token for authentication.",
-  iwara: "Iwara video and profile pages. Currently a placeholder — download support planned for a future phase.",
-  x: "X / Twitter media posts and user timelines. Currently a placeholder with no timeline. Re-evaluate after Pixiv pipeline stabilizes.",
+  iwara: "Iwara video and profile pages. gallery-dl supported with username/password or cookie authentication, configurable format preferences, and tag metadata.",
+  x: "X / Twitter media posts and user timelines. gallery-dl uses the twitter extractor with cookie authentication and the tweets strategy.",
   danbooru: "Danbooru post download via tag search (e.g. posts?tags=artist_name). Supports full download pipeline with rich tag metadata (artist, character, copyright, general, meta categories). Defaults to disabled when a creator is imported — must be manually enabled.",
   danbooru_reference: "Danbooru artist reference data for creator identity mapping. Used to discover external URLs (Pixiv, Twitter, etc.) from Danbooru artist records and suggest creator links. Not a download source — see 'danbooru' provider above for post downloads.",
-  local: "Import media from a local folder on the NAS. Does not use gallery-dl. Supports manual organization of existing media libraries.",
-  pinterest: "Pinterest pins, boards, and user all-pins. Downloads images from pin pages, user profiles, and board collections. No tag system.",
-  lofter: "LOFTER blog posts and images. Chinese blogging platform popular with artists. Downloads post images. No tag metadata from gallery-dl.",
-  manual: "Manual upload of individual files through the admin interface. Does not use gallery-dl. For one-off additions.",
-  weibo: "Weibo user timelines and media posts. Chinese microblogging platform. Downloads images from user pages.",
-  bilibili: "Bilibili user videos and covers. Chinese video platform. Downloads video thumbnails and metadata.",
+  local: "Local folder import is planned. It will not use gallery-dl and will target existing media libraries on the host.",
+  pinterest: "Pinterest pins, boards, and user all-pins. gallery-dl supported for public image collections. No tag metadata from gallery-dl.",
+  lofter: "LOFTER blog posts and images. gallery-dl supported for public blog images. Directory templates should include post IDs to avoid merging posts.",
+  manual: "Manual upload is planned for one-off additions through the admin interface. It will not use gallery-dl.",
+  weibo: "Weibo user timelines and media posts. gallery-dl supported for public media, with optional cookies for account-specific access.",
+  bilibili: "Bilibili user videos, covers, and dynamic media. gallery-dl supported for public content.",
   xiaohongshu: "Xiaohongshu (RED) user posts and media. Chinese lifestyle platform. Downloads post images.",
   youtube: "YouTube channel videos and thumbnails. Downloads video metadata and cover images.",
   deviantart: "DeviantArt user galleries and artwork. Downloads images with tag metadata.",
@@ -130,9 +130,9 @@ function ProviderCard({ s }: { s: ProviderInfo }) {
     const pattern = URL_PATTERNS[s.source_name];
     if (!pattern) { setValidResult({ ok: false, msg: t("sources.no_pattern") }); return; }
     if (pattern.test(url)) {
-      setValidResult({ ok: true, msg: t("sources.match_ok").replace("{source}", s.display_name) });
+      setValidResult({ ok: true, msg: t("sources.match_ok", { source: s.display_name }) });
     } else {
-      setValidResult({ ok: false, msg: t("sources.match_fail").replace("{source}", s.display_name) });
+      setValidResult({ ok: false, msg: t("sources.match_fail", { source: s.display_name }) });
     }
   };
 
@@ -185,7 +185,7 @@ export default function SourcesPage() {
 
   return (
     <main className="max-w-6xl mx-auto p-6">
-      <PageHeader title={t("sources.title")} description={t("sources.desc").replace("{total}", String(total)).replace("{downloadable}", String(downloadable)).replace("{reference}", String(reference))} />
+      <PageHeader title={t("sources.title")} description={t("sources.desc", { total, downloadable, reference })} />
 
       {sources.isLoading && <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="card p-4 animate-pulse"><div className="mb-2 h-4 w-1/2 rounded bg-[#eaeef2] dark:bg-[#21262d]" /><div className="mb-4 h-3 w-3/4 rounded bg-[#eaeef2] dark:bg-[#21262d]" /><div className="h-16 rounded bg-[#eaeef2] dark:bg-[#21262d]" /></div>)}</div>}
 

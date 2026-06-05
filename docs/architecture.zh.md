@@ -190,7 +190,7 @@ Worker 取走 import_job
 |---|---|---|
 | `DOWNLOAD_ROOT` | `/downloads` | 原图仓库：长期保存原始文件，按 source/creator/work 组织 |
 | `LIBRARY_ROOT` | `/library` | 索引层：每个作品的元数据 + 缩略图 |
-| `GALLERYDL_CONFIG_ROOT` | `/gallerydl-config` | gallery-dl 配置、cookie、临时任务配置 |
+| `GALLERYDL_CONFIG_ROOT` | `/gallerydl-config` | gallery-dl 配置、cookie、短生命周期任务配置 |
 | `APP_CONFIG_ROOT` | `/app-config` | 应用运行时配置 |
 
 NAS 主机路径仅在 `docker-compose.yaml` 中映射。
@@ -217,7 +217,7 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 │   ├── gallery-dl/                     # GALLERYDL_CONFIG_ROOT
 │   │   ├── config.json                 # gallery-dl 基础配置
 │   │   ├── cookies/                    # 各来源认证 cookie
-│   │   └── jobs/                       # 临时任务配置（自动清理）
+│   │   └── jobs/                       # worker 短生命周期任务配置（自动清理）
 │   └── app/                            # APP_CONFIG_ROOT — 运行时配置
 │
 ├── docker/                             # 持久化卷
@@ -235,7 +235,7 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 
 - **downloads/**：原图仓库。原始图片/视频文件按 `{source}/{creator_name}/{source_work_id}/` 组织并长期保存。导入时从 gallery-dl 的扁平输出移动至此。JSON 元数据文件处理后被删除。路径中不包含 job_id 层级。
 - **library/**：索引层。仅每个作品的元数据 + 缩略图。与 downloads 使用相同的 `{source}/{creator_name}/{source_work_id}/` 结构，通过 source_work_id 链接。不存放原始图片。
-- **gallery-dl 输出**：临时任务文件夹下的扁平目录。导入过程中文件被重组到按作品组织的下载结构中，JSON 文件被删除。
+- **gallery-dl 输出**：导入前的 worker 短生命周期输出。导入过程中文件被重组到长期保存的原图仓库中，JSON 文件被删除。
 - **缩略图**：400px WebP 格式，由 pyvips 从首页图片生成。从 LIBRARY_ROOT 通过 `/media/thumb/{asset_id}` 提供。
 - **预览/原图**：直接从 DOWNLOAD_ROOT 通过 `/media/preview/{asset_id}` 和 `/media/original/{asset_id}` 提供。
 - **metadata.json**：导入时为每个作品写入。包含 work_id、source、source_work_id、title、posted_at、creator、assets 数组。

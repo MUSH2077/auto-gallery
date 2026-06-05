@@ -1,11 +1,39 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
-  <title id="title">repositories screenshot placeholder</title>
-  <desc id="desc">Placeholder for subscription URL repositories.</desc>
+  <title id="title">auto-gallery repositories sanitized demo screenshot</title>
+  <desc id="desc">Fictional subscription URLs rendered as GitHub-like repositories.</desc>
   <rect width="1200" height="720" fill="#f6f8fa"/>
-  <rect x="80" y="64" width="1040" height="92" rx="8" fill="#ffffff" stroke="#d0d7de"/>
-  <rect x="80" y="188" width="1040" height="112" rx="8" fill="#ffffff" stroke="#d0d7de"/>
-  <rect x="80" y="324" width="1040" height="112" rx="8" fill="#ffffff" stroke="#d0d7de"/>
-  <rect x="80" y="460" width="1040" height="112" rx="8" fill="#ffffff" stroke="#d0d7de"/>
-  <text x="120" y="120" fill="#24292f" font-family="Arial, sans-serif" font-size="28" font-weight="700">Repositories / subscriptions</text>
-  <text x="120" y="636" fill="#57606a" font-family="Arial, sans-serif" font-size="24">Repositories screenshot placeholder</text>
+  <rect width="1200" height="56" fill="#24292f"/>
+  <text x="36" y="36" fill="#ffffff" font-family="Arial, sans-serif" font-size="18" font-weight="700">auto-gallery</text>
+  <rect x="56" y="88" width="1088" height="584" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="92" y="132" fill="#24292f" font-family="Arial, sans-serif" font-size="24" font-weight="700">Atlas Ink / Repositories</text>
+  <text x="92" y="158" fill="#57606a" font-family="Arial, sans-serif" font-size="13">Every valid gallery-dl subscription URL is a syncable repository.</text>
+  <g font-family="Arial, sans-serif">
+    <rect x="92" y="202" width="1016" height="122" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="122" y="238" fill="#0969da" font-size="18" font-weight="700">pixiv-demo-profile</text>
+    <rect x="292" y="220" width="62" height="24" rx="12" fill="#ddf4ff" stroke="#0969da"/>
+    <text x="310" y="237" fill="#0969da" font-size="12">Pixiv</text>
+    <text x="122" y="266" fill="#57606a" font-size="13">https://demo.invalid/pixiv/users/atlas-ink</text>
+    <circle cx="122" cy="296" r="6" fill="#1a7f37"/>
+    <text x="140" y="300" fill="#57606a" font-size="12">enabled · auth healthy · synced 14 minutes ago</text>
+    <rect x="968" y="230" width="82" height="32" rx="6" fill="#1f883d"/>
+    <text x="988" y="251" fill="#ffffff" font-size="13" font-weight="700">Sync</text>
+    <rect x="92" y="350" width="1016" height="122" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="122" y="386" fill="#0969da" font-size="18" font-weight="700">twitter-media-timeline</text>
+    <rect x="332" y="368" width="92" height="24" rx="12" fill="#f6f8fa" stroke="#d8dee4"/>
+    <text x="350" y="385" fill="#57606a" font-size="12">X/Twitter</text>
+    <text x="122" y="414" fill="#57606a" font-size="13">https://demo.invalid/x/atlas_ink</text>
+    <circle cx="122" cy="444" r="6" fill="#bf8700"/>
+    <text x="140" y="448" fill="#57606a" font-size="12">enabled · waiting for next fixed-time window</text>
+    <rect x="968" y="378" width="82" height="32" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="988" y="399" fill="#24292f" font-size="13" font-weight="700">Sync</text>
+    <rect x="92" y="498" width="1016" height="122" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="122" y="534" fill="#0969da" font-size="18" font-weight="700">iwara-video-feed</text>
+    <rect x="284" y="516" width="74" height="24" rx="12" fill="#fff8c5" stroke="#bf8700"/>
+    <text x="302" y="533" fill="#9a6700" font-size="12">Iwara</text>
+    <text x="122" y="562" fill="#57606a" font-size="13">https://demo.invalid/iwara/profile/atlas-ink</text>
+    <circle cx="122" cy="592" r="6" fill="#cf222e"/>
+    <text x="140" y="596" fill="#57606a" font-size="12">disabled · last job failed with sanitized error excerpt</text>
+    <rect x="968" y="526" width="82" height="32" rx="6" fill="#f6f8fa" stroke="#d8dee4"/>
+    <text x="984" y="547" fill="#57606a" font-size="13" font-weight="700">Disabled</text>
+  </g>
 </svg>

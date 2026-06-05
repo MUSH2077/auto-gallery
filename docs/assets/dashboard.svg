@@ -1,13 +1,64 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
-  <title id="title">auto-gallery dashboard screenshot placeholder</title>
-  <desc id="desc">Placeholder for the admin dashboard screenshot.</desc>
+  <title id="title">auto-gallery dashboard sanitized demo screenshot</title>
+  <desc id="desc">A fictional dashboard showing service health, storage, jobs, and quick links.</desc>
   <rect width="1200" height="720" fill="#f6f8fa"/>
-  <rect x="48" y="44" width="1104" height="632" rx="8" fill="#ffffff" stroke="#d0d7de"/>
-  <rect x="48" y="44" width="1104" height="64" rx="8" fill="#24292f"/>
-  <text x="88" y="84" fill="#ffffff" font-family="Arial, sans-serif" font-size="24" font-weight="700">auto-gallery</text>
-  <rect x="88" y="148" width="300" height="136" rx="6" fill="#ffffff" stroke="#d0d7de"/>
-  <rect x="420" y="148" width="300" height="136" rx="6" fill="#ffffff" stroke="#d0d7de"/>
-  <rect x="752" y="148" width="300" height="136" rx="6" fill="#ffffff" stroke="#d0d7de"/>
-  <rect x="88" y="328" width="964" height="260" rx="6" fill="#ffffff" stroke="#d0d7de"/>
-  <text x="88" y="636" fill="#57606a" font-family="Arial, sans-serif" font-size="24">Dashboard screenshot placeholder</text>
+  <rect x="0" y="0" width="1200" height="56" fill="#24292f"/>
+  <text x="36" y="36" fill="#ffffff" font-family="Arial, sans-serif" font-size="18" font-weight="700">auto-gallery</text>
+  <text x="190" y="35" fill="#c9d1d9" font-family="Arial, sans-serif" font-size="13">Dashboard</text>
+  <text x="286" y="35" fill="#8b949e" font-family="Arial, sans-serif" font-size="13">Creators</text>
+  <text x="374" y="35" fill="#8b949e" font-family="Arial, sans-serif" font-size="13">Repositories</text>
+  <text x="486" y="35" fill="#8b949e" font-family="Arial, sans-serif" font-size="13">Works</text>
+  <rect x="36" y="88" width="1128" height="584" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="72" y="132" fill="#24292f" font-family="Arial, sans-serif" font-size="24" font-weight="700">System Dashboard</text>
+  <text x="72" y="158" fill="#57606a" font-family="Arial, sans-serif" font-size="13">Service health, storage, and recent activity</text>
+  <g font-family="Arial, sans-serif">
+    <rect x="72" y="190" width="246" height="108" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="96" y="232" fill="#24292f" font-size="28" font-weight="700">0</text>
+    <text x="96" y="260" fill="#57606a" font-size="12">DOWNLOAD JOBS</text>
+    <text x="96" y="280" fill="#8c959f" font-size="12">failed</text>
+    <rect x="342" y="190" width="246" height="108" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="366" y="232" fill="#24292f" font-size="28" font-weight="700">12</text>
+    <text x="366" y="260" fill="#57606a" font-size="12">IMPORT JOBS</text>
+    <text x="366" y="280" fill="#8c959f" font-size="12">processed</text>
+    <rect x="612" y="190" width="246" height="108" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="636" y="232" fill="#24292f" font-size="28" font-weight="700">842 GB</text>
+    <text x="636" y="260" fill="#57606a" font-size="12">DISK FREE</text>
+    <text x="636" y="280" fill="#8c959f" font-size="12">available</text>
+    <rect x="882" y="190" width="246" height="108" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="906" y="232" fill="#24292f" font-size="28" font-weight="700">37%</text>
+    <text x="906" y="260" fill="#57606a" font-size="12">USAGE</text>
+    <text x="906" y="280" fill="#8c959f" font-size="12">128 GB original media</text>
+  </g>
+  <text x="72" y="348" fill="#24292f" font-family="Arial, sans-serif" font-size="17" font-weight="700">Services</text>
+  <g font-family="Arial, sans-serif" font-size="13">
+    <rect x="72" y="370" width="156" height="88" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <circle cx="150" cy="400" r="7" fill="#1a7f37"/>
+    <text x="128" y="432" fill="#57606a">backend</text>
+    <rect x="246" y="370" width="156" height="88" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <circle cx="324" cy="400" r="7" fill="#1a7f37"/>
+    <text x="306" y="432" fill="#57606a">redis</text>
+    <rect x="420" y="370" width="156" height="88" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <circle cx="498" cy="400" r="7" fill="#1a7f37"/>
+    <text x="462" y="432" fill="#57606a">search</text>
+  </g>
+  <text x="628" y="348" fill="#24292f" font-family="Arial, sans-serif" font-size="17" font-weight="700">Storage</text>
+  <g font-family="Arial, sans-serif">
+    <rect x="628" y="370" width="230" height="88" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="652" y="410" fill="#24292f" font-size="22" font-weight="700">128.4 GB</text>
+    <text x="652" y="436" fill="#57606a" font-size="12">Original Media - 18,420 files</text>
+    <rect x="882" y="370" width="246" height="88" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="906" y="410" fill="#24292f" font-size="22" font-weight="700">4.8 GB</text>
+    <text x="906" y="436" fill="#57606a" font-size="12">Library Index - 18,420 files</text>
+  </g>
+  <text x="72" y="520" fill="#24292f" font-family="Arial, sans-serif" font-size="17" font-weight="700">Quick actions</text>
+  <g font-family="Arial, sans-serif" font-size="13">
+    <rect x="72" y="544" width="240" height="64" rx="6" fill="#f6f8fa" stroke="#d8dee4"/>
+    <text x="96" y="582" fill="#0969da" font-weight="700">Creators</text>
+    <rect x="334" y="544" width="240" height="64" rx="6" fill="#f6f8fa" stroke="#d8dee4"/>
+    <text x="358" y="582" fill="#0969da" font-weight="700">Repositories</text>
+    <rect x="596" y="544" width="240" height="64" rx="6" fill="#f6f8fa" stroke="#d8dee4"/>
+    <text x="620" y="582" fill="#0969da" font-weight="700">Scheduler</text>
+    <rect x="858" y="544" width="240" height="64" rx="6" fill="#f6f8fa" stroke="#d8dee4"/>
+    <text x="882" y="582" fill="#0969da" font-weight="700">gallery-dl settings</text>
+  </g>
 </svg>

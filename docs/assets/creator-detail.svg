@@ -1,13 +1,66 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
-  <title id="title">creator detail screenshot placeholder</title>
-  <desc id="desc">Placeholder for the GitHub-like creator detail page.</desc>
+  <title id="title">auto-gallery creator detail sanitized demo screenshot</title>
+  <desc id="desc">A fictional GitHub-like creator profile with overview, works, and repositories.</desc>
   <rect width="1200" height="720" fill="#f6f8fa"/>
-  <rect x="56" y="56" width="260" height="560" rx="8" fill="#ffffff" stroke="#d0d7de"/>
-  <circle cx="186" cy="164" r="72" fill="#0969da"/>
-  <rect x="88" y="276" width="196" height="20" rx="4" fill="#24292f"/>
-  <rect x="88" y="316" width="156" height="14" rx="4" fill="#8c959f"/>
-  <rect x="356" y="56" width="788" height="72" rx="8" fill="#ffffff" stroke="#d0d7de"/>
-  <rect x="356" y="160" width="788" height="456" rx="8" fill="#ffffff" stroke="#d0d7de"/>
-  <text x="420" y="96" fill="#24292f" font-family="Arial, sans-serif" font-size="24" font-weight="700">Creator overview</text>
-  <text x="420" y="660" fill="#57606a" font-family="Arial, sans-serif" font-size="24">Creator detail screenshot placeholder</text>
+  <rect width="1200" height="56" fill="#24292f"/>
+  <text x="36" y="36" fill="#ffffff" font-family="Arial, sans-serif" font-size="18" font-weight="700">auto-gallery</text>
+  <rect x="36" y="88" width="1128" height="600" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <g font-family="Arial, sans-serif">
+    <circle cx="132" cy="154" r="48" fill="#ddf4ff" stroke="#0969da"/>
+    <text x="112" y="168" fill="#0969da" font-size="28" font-weight="700">AI</text>
+    <text x="204" y="134" fill="#24292f" font-size="26" font-weight="700">Atlas Ink</text>
+    <text x="204" y="160" fill="#57606a" font-size="14">@atlas-demo</text>
+    <rect x="204" y="178" width="72" height="24" rx="12" fill="#dafbe1" stroke="#1a7f37"/>
+    <text x="220" y="195" fill="#1a7f37" font-size="12" font-weight="700">Active</text>
+    <rect x="286" y="178" width="92" height="24" rx="12" fill="#f6f8fa" stroke="#d8dee4"/>
+    <text x="302" y="195" fill="#57606a" font-size="12">Danbooru #42</text>
+    <rect x="998" y="118" width="112" height="34" rx="6" fill="#1f883d"/>
+    <text x="1024" y="140" fill="#ffffff" font-size="13" font-weight="700">Sync now</text>
+  </g>
+  <line x1="72" y1="230" x2="1128" y2="230" stroke="#d8dee4"/>
+  <g font-family="Arial, sans-serif" font-size="14">
+    <text x="76" y="262" fill="#24292f" font-weight="700">Overview</text>
+    <text x="176" y="262" fill="#57606a">Repositories 3</text>
+    <text x="312" y="262" fill="#57606a">Works 248</text>
+    <text x="420" y="262" fill="#57606a">Links 5</text>
+    <line x1="72" y1="278" x2="148" y2="278" stroke="#fd8c73" stroke-width="3"/>
+  </g>
+  <g font-family="Arial, sans-serif">
+    <rect x="72" y="310" width="282" height="292" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="96" y="344" fill="#24292f" font-size="16" font-weight="700">Profile</text>
+    <text x="96" y="374" fill="#57606a" font-size="13">Fictional creator used for release screenshots.</text>
+    <text x="96" y="418" fill="#57606a" font-size="12">Sources</text>
+    <rect x="96" y="432" width="64" height="24" rx="12" fill="#ddf4ff" stroke="#0969da"/>
+    <text x="112" y="449" fill="#0969da" font-size="12">Pixiv</text>
+    <rect x="168" y="432" width="48" height="24" rx="12" fill="#f6f8fa" stroke="#d8dee4"/>
+    <text x="181" y="449" fill="#57606a" font-size="12">X</text>
+    <rect x="224" y="432" width="76" height="24" rx="12" fill="#fff8c5" stroke="#bf8700"/>
+    <text x="239" y="449" fill="#9a6700" font-size="12">Iwara</text>
+    <text x="96" y="496" fill="#57606a" font-size="12">Stats</text>
+    <text x="96" y="524" fill="#24292f" font-size="22" font-weight="700">248 works</text>
+    <text x="96" y="552" fill="#24292f" font-size="22" font-weight="700">3 repos</text>
+  </g>
+  <g font-family="Arial, sans-serif">
+    <rect x="386" y="310" width="742" height="148" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="410" y="344" fill="#24292f" font-size="16" font-weight="700">Activity</text>
+    <g fill="#40c463">
+      <rect x="410" y="374" width="12" height="12" rx="2"/>
+      <rect x="430" y="374" width="12" height="12" rx="2"/>
+      <rect x="450" y="374" width="12" height="12" rx="2" opacity=".35"/>
+      <rect x="470" y="374" width="12" height="12" rx="2"/>
+      <rect x="490" y="374" width="12" height="12" rx="2" opacity=".65"/>
+      <rect x="510" y="374" width="12" height="12" rx="2" opacity=".25"/>
+      <rect x="530" y="374" width="12" height="12" rx="2"/>
+    </g>
+    <text x="410" y="422" fill="#57606a" font-size="13">Latest sync completed 14 minutes ago</text>
+    <rect x="386" y="486" width="742" height="148" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="410" y="520" fill="#24292f" font-size="16" font-weight="700">Top tags</text>
+    <rect x="410" y="546" width="86" height="26" rx="13" fill="#f6f8fa" stroke="#d8dee4"/>
+    <text x="428" y="564" fill="#0969da" font-size="12">portrait</text>
+    <rect x="508" y="546" width="92" height="26" rx="13" fill="#f6f8fa" stroke="#d8dee4"/>
+    <text x="526" y="564" fill="#0969da" font-size="12">original</text>
+    <rect x="612" y="546" width="76" height="26" rx="13" fill="#f6f8fa" stroke="#d8dee4"/>
+    <text x="630" y="564" fill="#0969da" font-size="12">comic</text>
+    <text x="410" y="606" fill="#57606a" font-size="13">Tags are clickable and filter this creator's works.</text>
+  </g>
 </svg>

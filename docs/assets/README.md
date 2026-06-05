@@ -1,10 +1,11 @@
 # README Assets
 
-This directory contains README screenshots and placeholders.
+This directory contains sanitized demo screenshots for the README files.
 
-Replace the placeholder SVGs with real screenshots before the first public
-tagged release if possible. Keep screenshots sanitized: no private creators,
-cookies, paths, account names, or downloaded media that should not be public.
+The current SVGs are built from fictional demo data. They may be replaced with
+real screenshots for a release, but every asset in this directory must remain
+sanitized: no private creators, cookies, paths, account names, or downloaded
+media that should not be public.
 
 Expected assets:
 
