@@ -1,0 +1,31 @@
+name: Deployment help
+description: Ask for help with Docker Compose or NAS deployment.
+title: "[Deploy]: "
+labels: ["deployment"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste `.env`, passwords, cookies, database dumps, or private paths that you do not want public.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: NAS/Linux distro, Docker version, Compose version, browser.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What failed?
+    validations:
+      required: true
+  - type: textarea
+    id: compose
+    attributes:
+      label: Sanitized compose/env changes
+      description: Include only sanitized changes from defaults.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs

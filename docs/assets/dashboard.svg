@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">auto-gallery dashboard screenshot placeholder</title>
+  <desc id="desc">Placeholder for the admin dashboard screenshot.</desc>
+  <rect width="1200" height="720" fill="#f6f8fa"/>
+  <rect x="48" y="44" width="1104" height="632" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <rect x="48" y="44" width="1104" height="64" rx="8" fill="#24292f"/>
+  <text x="88" y="84" fill="#ffffff" font-family="Arial, sans-serif" font-size="24" font-weight="700">auto-gallery</text>
+  <rect x="88" y="148" width="300" height="136" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+  <rect x="420" y="148" width="300" height="136" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+  <rect x="752" y="148" width="300" height="136" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+  <rect x="88" y="328" width="964" height="260" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="88" y="636" fill="#57606a" font-family="Arial, sans-serif" font-size="24">Dashboard screenshot placeholder</text>
+</svg>
