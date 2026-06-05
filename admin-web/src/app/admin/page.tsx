@@ -6,18 +6,13 @@ import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys, WorkbenchSummary } from "@/lib/api";
 import { EmptyState, ErrorState, SourceBadge, StatusBadge } from "@/components";
 import { useT } from "@/lib/i18n";
+import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 
 function fmtBytes(bytes?: number | null): string {
   if (!bytes) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
-}
-
-function fmtDate(value?: string | null): string {
-  if (!value) return "—";
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
 }
 
 function StatusDot({ tone }: { tone: "ok" | "warning" | "danger" | "muted" | "info" }) {
@@ -73,32 +68,40 @@ function RecentRow({ children, href }: { children: ReactNode; href: string }) {
   );
 }
 
+function MiniBar({ value, max, tone }: { value: number; max: number; tone: "info" | "danger" | "warning" | "ok" }) {
+  const width = max <= 0 ? 0 : Math.min(100, Math.max(4, (value / max) * 100));
+  const color = tone === "danger" ? "bg-[#cf222e]" : tone === "warning" ? "bg-[#bf8700]" : tone === "ok" ? "bg-[#1a7f37]" : "bg-[#0969da]";
+  return <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[#eaeef2] dark:bg-[#30363d]"><div className={`h-full rounded-full ${color}`} style={{ width: `${width}%` }} /></div>;
+}
+
 function RecentActivity({ data }: { data: WorkbenchSummary }) {
+  const t = useT();
+  const fmt = useI18nFormat();
   return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
       <section className="card p-4">
-        <h2 className="mb-3 text-base font-semibold">Recent download jobs</h2>
+        <h2 className="mb-3 text-base font-semibold">{t("dashboard.recent_download_jobs")}</h2>
         {data.recent.download_jobs.length ? (
           <div className="space-y-1">
             {data.recent.download_jobs.map((job) => (
               <RecentRow key={job.id} href="/admin/jobs">
                 <SourceBadge source={job.source} />
                 <span className="min-w-0 flex-1 truncate font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{job.source_url}</span>
-                <span className="badge">{job.status}</span>
+                <span className="badge">{statusLabel(t, job.status)}</span>
               </RecentRow>
             ))}
           </div>
-        ) : <EmptyState title="No download jobs" description="New manual or scheduled syncs will appear here." />}
+        ) : <EmptyState title={t("dashboard.no_download_jobs")} description={t("dashboard.no_download_jobs_desc")} />}
       </section>
 
       <section className="card p-4">
-        <h2 className="mb-3 text-base font-semibold">Recent imports and works</h2>
+        <h2 className="mb-3 text-base font-semibold">{t("dashboard.recent_imports_works")}</h2>
         <div className="space-y-1">
           {data.recent.import_jobs.slice(0, 3).map((job) => (
             <RecentRow key={job.id} href="/admin/import-jobs">
               <span className="w-20 font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{job.id.slice(0, 8)}</span>
-              <span className="min-w-0 flex-1 truncate text-xs text-[#57606a] dark:text-[#8b949e]">Import for {job.download_job_id.slice(0, 8)}</span>
-              <span className="badge">{job.status}</span>
+              <span className="min-w-0 flex-1 truncate text-xs text-[#57606a] dark:text-[#8b949e]">{t("dashboard.import_for", { id: job.download_job_id.slice(0, 8) })}</span>
+              <span className="badge">{statusLabel(t, job.status)}</span>
             </RecentRow>
           ))}
           {data.recent.works.slice(0, 5).map((work) => (
@@ -106,14 +109,28 @@ function RecentActivity({ data }: { data: WorkbenchSummary }) {
               <div className="h-8 w-8 shrink-0 overflow-hidden rounded-md border border-[#d8dee4] bg-[#f6f8fa] dark:border-[#30363d] dark:bg-[#21262d]">
                 {work.thumbnail_asset_id && <img src={api.mediaUrl(work.thumbnail_asset_id, "thumb")} alt="" className="h-full w-full object-cover" loading="lazy" />}
               </div>
-              <span className="min-w-0 flex-1 truncate text-sm text-[#24292f] dark:text-[#e6edf3]">{work.title || "Untitled work"}</span>
-              <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{fmtDate(work.created_at)}</span>
+              <span className="min-w-0 flex-1 truncate text-sm text-[#24292f] dark:text-[#e6edf3]">{work.title || t("dashboard.untitled_work")}</span>
+              <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{fmt.dateTime(work.created_at)}</span>
             </RecentRow>
           ))}
           {!data.recent.import_jobs.length && !data.recent.works.length && (
-            <p className="px-2 py-4 text-sm text-[#57606a] dark:text-[#8b949e]">No recent imports or works yet.</p>
+            <p className="px-2 py-4 text-sm text-[#57606a] dark:text-[#8b949e]">{t("dashboard.no_recent_imports_works")}</p>
           )}
         </div>
+      </section>
+      <section className="card p-4 xl:col-span-2">
+        <h2 className="mb-3 text-base font-semibold">{t("dashboard.successful_syncs")}</h2>
+        {data.recent.successful_syncs.length ? (
+          <div className="grid gap-2 md:grid-cols-2">
+            {data.recent.successful_syncs.map((sync) => (
+              <RecentRow key={sync.source_id} href={`/admin/creators/${sync.creator_id}`}>
+                <SourceBadge source={sync.source} />
+                <span className="min-w-0 flex-1 truncate text-sm text-[#24292f] dark:text-[#e6edf3]">{sync.creator_name}</span>
+                <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{fmt.relative(sync.last_synced_at)}</span>
+              </RecentRow>
+            ))}
+          </div>
+        ) : <p className="px-2 py-4 text-sm text-[#57606a] dark:text-[#8b949e]">{t("dashboard.no_successful_syncs")}</p>}
       </section>
     </div>
   );
@@ -121,6 +138,7 @@ function RecentActivity({ data }: { data: WorkbenchSummary }) {
 
 export default function Dashboard() {
   const t = useT();
+  const fmt = useI18nFormat();
   const workbench = useQuery({
     queryKey: queryKeys.workbench,
     queryFn: api.workbench,
@@ -132,6 +150,7 @@ export default function Dashboard() {
   });
 
   const data = workbench.data;
+  const activeJobs = (data?.queue.active_download_count || 0) + (data?.queue.active_import_count || 0);
 
   if (workbench.error) {
     return <main className="mx-auto max-w-7xl p-6"><ErrorState message={(workbench.error as Error).message} onRetry={() => workbench.refetch()} /></main>;
@@ -144,10 +163,15 @@ export default function Dashboard() {
           <div>
             <h1 className="text-2xl font-semibold tracking-normal text-[#24292f] dark:text-[#e6edf3]">{t("dashboard.title")}</h1>
             <p className="mt-1.5 max-w-3xl text-sm leading-6 text-[#57606a] dark:text-[#8b949e]">
-              Live workbench for sync state, queues, storage risk, recent imports, and places that need attention.
+              {t("dashboard.workbench_desc")}
             </p>
           </div>
-          <div className="text-xs text-[#57606a] dark:text-[#8b949e]">Updated {fmtDate(data?.updated_at)}</div>
+          <div className="flex items-center gap-2 text-xs text-[#57606a] dark:text-[#8b949e]">
+            <span className={`h-2 w-2 rounded-full ${activeJobs > 0 ? "animate-pulse bg-[#0969da]" : "bg-[#1a7f37]"}`} />
+            <span>{activeJobs > 0 ? t("dashboard.live") : t("dashboard.idle")}</span>
+            <span>·</span>
+            <span>{t("dashboard.updated", { time: fmt.dateTime(data?.updated_at) })}</span>
+          </div>
         </div>
       </header>
 
@@ -159,54 +183,68 @@ export default function Dashboard() {
         <div className="space-y-6">
           <section className="grid grid-cols-2 gap-3 lg:grid-cols-6">
             <MetricCard
-              label="Auto sync"
-              value={data.scheduler.enabled ? "On" : "Off"}
-              sub={data.scheduler.next_scan_at ? `Next scan ${fmtDate(data.scheduler.next_scan_at)}` : "No scan scheduled"}
+              label={t("dashboard.auto_sync")}
+              value={data.scheduler.enabled ? t("common.on") : t("common.off")}
+              sub={data.scheduler.next_scan_at ? t("dashboard.next_scan", { time: fmt.dateTime(data.scheduler.next_scan_at) }) : t("dashboard.no_scan")}
               tone={data.scheduler.enabled ? "ok" : "danger"}
             />
             <MetricCard
-              label="Active jobs"
+              label={t("dashboard.active_jobs")}
               value={data.queue.active_download_count + data.queue.active_import_count}
-              sub={`${data.queue.active_download_count} download · ${data.queue.active_import_count} import`}
+              sub={t("dashboard.active_jobs_sub", { downloads: data.queue.active_download_count, imports: data.queue.active_import_count })}
               tone={data.queue.active_download_count + data.queue.active_import_count > 0 ? "info" : "muted"}
             />
             <MetricCard
-              label="Failed"
+              label={t("dashboard.failed")}
               value={data.queue.failed_download_count + data.queue.failed_import_count}
-              sub={`${data.queue.failed_download_count} download · ${data.queue.failed_import_count} import`}
+              sub={t("dashboard.failed_jobs_sub", { downloads: data.queue.failed_download_count, imports: data.queue.failed_import_count })}
               tone={data.queue.failed_download_count + data.queue.failed_import_count > 0 ? "danger" : "ok"}
             />
             <MetricCard
-              label="Stale"
+              label={t("dashboard.stale")}
               value={data.queue.stale_count}
-              sub="Jobs past timeout window"
+              sub={t("dashboard.stale_sub")}
               tone={data.queue.stale_count > 0 ? "warning" : "ok"}
             />
             <MetricCard
-              label="Disk"
-              value={data.storage.disk_free_percent == null ? "—" : `${data.storage.disk_free_percent}% free`}
-              sub={`${fmtBytes(data.storage.original_media_size_bytes)} original media`}
+              label={t("dashboard.disk")}
+              value={data.storage.disk_free_percent == null ? "—" : t("dashboard.disk_free_percent", { percent: data.storage.disk_free_percent })}
+              sub={t("dashboard.original_media_size", { size: fmtBytes(data.storage.original_media_size_bytes) })}
               tone={data.storage.risk_level === "critical" ? "danger" : data.storage.risk_level === "warning" ? "warning" : "ok"}
             />
             <MetricCard
-              label="Library"
+              label={t("dashboard.library")}
               value={fmtBytes(data.storage.library_size_bytes)}
-              sub={`${data.storage.library_file_count.toLocaleString()} index files`}
+              sub={t("dashboard.index_files", { count: fmt.number(data.storage.library_file_count) })}
               tone="muted"
             />
           </section>
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="card p-3 text-xs text-[#57606a] dark:text-[#8b949e]">
+              <div className="flex justify-between"><span>{t("dashboard.active_jobs")}</span><span className="font-mono">{activeJobs}</span></div>
+              <MiniBar value={activeJobs} max={Math.max(activeJobs, 5)} tone="info" />
+            </div>
+            <div className="card p-3 text-xs text-[#57606a] dark:text-[#8b949e]">
+              <div className="flex justify-between"><span>{t("dashboard.failed")}</span><span className="font-mono">{data.queue.failed_download_count + data.queue.failed_import_count}</span></div>
+              <MiniBar value={data.queue.failed_download_count + data.queue.failed_import_count} max={Math.max(data.queue.failed_download_count + data.queue.failed_import_count, 5)} tone="danger" />
+            </div>
+            <div className="card p-3 text-xs text-[#57606a] dark:text-[#8b949e]">
+              <div className="flex justify-between"><span>{t("dashboard.disk_free")}</span><span className="font-mono">{data.storage.disk_free_percent ?? "—"}%</span></div>
+              <MiniBar value={data.storage.disk_used_percent || 0} max={100} tone={data.storage.risk_level === "warning" ? "warning" : "ok"} />
+            </div>
+          </div>
 
           <section>
             <div className="mb-3 flex items-center justify-between gap-3">
-              <h2 className="section-title">Attention</h2>
-              <Link href="/admin/scheduler" className="text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">Open scheduler</Link>
+              <h2 className="section-title">{t("dashboard.attention")}</h2>
+              <Link href="/admin/scheduler" className="text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("dashboard.open_scheduler")}</Link>
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
-              <AttentionCard title="Auth issues" value={data.attention.auth_unhealthy_count} description="Sources with unhealthy authentication." href="/admin/settings/auth-status" tone={data.attention.auth_unhealthy_count ? "danger" : "ok"} />
-              <AttentionCard title="Failed downloads" value={data.attention.failed_download_count} description="Retry or inspect failing download jobs." href="/admin/jobs" tone={data.attention.failed_download_count ? "danger" : "ok"} />
-              <AttentionCard title="Failed imports" value={data.attention.failed_import_count} description="Import jobs that need retry or cleanup." href="/admin/import-jobs" tone={data.attention.failed_import_count ? "danger" : "ok"} />
-              <AttentionCard title="Stale jobs" value={data.attention.stale_job_count} description="Jobs that may have stopped making progress." href="/admin/jobs" tone={data.attention.stale_job_count ? "warning" : "ok"} />
-              <AttentionCard title="Storage risk" value={data.storage.risk_level} description={`${fmtBytes(data.storage.disk_free_bytes)} available in original media store.`} href="/admin/settings/data-mgmt" tone={data.attention.low_disk_warning ? "warning" : "ok"} />
+              <AttentionCard title={t("dashboard.auth_issues")} value={data.attention.auth_unhealthy_count} description={t("dashboard.auth_issues_desc")} href="/admin/settings/auth-status" tone={data.attention.auth_unhealthy_count ? "danger" : "ok"} />
+              <AttentionCard title={t("dashboard.failed_downloads")} value={data.attention.failed_download_count} description={t("dashboard.failed_downloads_desc")} href="/admin/jobs" tone={data.attention.failed_download_count ? "danger" : "ok"} />
+              <AttentionCard title={t("dashboard.failed_imports")} value={data.attention.failed_import_count} description={t("dashboard.failed_imports_desc")} href="/admin/import-jobs" tone={data.attention.failed_import_count ? "danger" : "ok"} />
+              <AttentionCard title={t("dashboard.stale_jobs")} value={data.attention.stale_job_count} description={t("dashboard.stale_jobs_desc")} href="/admin/jobs" tone={data.attention.stale_job_count ? "warning" : "ok"} />
+              <AttentionCard title={t("dashboard.storage_risk")} value={data.storage.risk_level} description={t("dashboard.storage_risk_desc", { size: fmtBytes(data.storage.disk_free_bytes) })} href="/admin/settings/data-mgmt" tone={data.attention.low_disk_warning ? "warning" : "ok"} />
             </div>
           </section>
 
@@ -214,7 +252,7 @@ export default function Dashboard() {
             <RecentActivity data={data} />
             <aside className="space-y-4">
               <section className="card p-4">
-                <h2 className="mb-3 text-base font-semibold">Services</h2>
+                <h2 className="mb-3 text-base font-semibold">{t("dashboard.services")}</h2>
                 <div className="grid grid-cols-2 gap-2">
                   {Object.entries(data.health).map(([name, status]) => (
                     <div key={name} className="flex items-center justify-between gap-2 rounded-md border border-[#d8dee4] px-3 py-2 dark:border-[#30363d]">
@@ -225,7 +263,7 @@ export default function Dashboard() {
                 </div>
               </section>
               <section className="card p-4">
-                <h2 className="mb-3 text-base font-semibold">Quick links</h2>
+                <h2 className="mb-3 text-base font-semibold">{t("dashboard.quick_links")}</h2>
                 <div className="grid grid-cols-2 gap-2">
                   {[
                     ["/admin/creators", t("dashboard.quick_creators")],

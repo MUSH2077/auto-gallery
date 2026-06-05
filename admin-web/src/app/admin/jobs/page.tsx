@@ -1,11 +1,11 @@
 "use client";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge } from "@/components";
+import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 
 
 const REFETCH_ACTIVE_MS = 3000;
@@ -35,7 +35,6 @@ function ProgressBar({ active }: { active: boolean }) {
 
 function ActiveIndicator({ status }: { status: string }) {
   const t = useT();
-  const toast = useToast();
   const isActive = status === "downloading" || status === "running" || status === "importing";
   const color = 
     status === "complete" || status === "downloaded" ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400" :
@@ -47,10 +46,10 @@ function ActiveIndicator({ status }: { status: string }) {
   if (isActive) {
     return <span className="flex items-center gap-1.5 shrink-0 w-28">
       <span className="relative flex h-2.5 w-2.5"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" /><span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500" /></span>
-      <span className="text-xs text-blue-600 dark:text-blue-400 font-medium">{status}</span>
+      <span className="text-xs text-blue-600 dark:text-blue-400 font-medium">{statusLabel(t, status)}</span>
     </span>;
   }
-  return <span className={`shrink-0 w-28 text-xs px-1.5 py-0.5 rounded text-center ${color}`}>{status}</span>;
+  return <span className={`shrink-0 w-28 text-xs px-1.5 py-0.5 rounded text-center ${color}`}>{statusLabel(t, status)}</span>;
 }
 
 function SummaryCard({ label, value, sub, tone = "neutral" }: { label: string; value: number | string; sub?: string; tone?: "neutral" | "active" | "danger" | "warning" }) {
@@ -68,6 +67,7 @@ function SummaryCard({ label, value, sub, tone = "neutral" }: { label: string; v
 }
 
 function JobLifecycle({ status }: { status: string }) {
+  const t = useT();
   const steps = ["created", "downloading", "downloaded", "importing", status === "failed" || status === "stale" ? status : "complete"];
   const activeIndex = status === "pending" ? 0
     : status === "downloading" ? 1
@@ -86,7 +86,7 @@ function JobLifecycle({ status }: { status: string }) {
         return (
           <div key={`${step}-${index}`} className="flex min-w-0 flex-1 items-center gap-1">
             <span
-              title={step}
+              title={t(`jobs.lifecycle_${step}`, step)}
               className={`h-2 w-2 shrink-0 rounded-full ${
                 danger ? "bg-[#cf222e]" : active ? "animate-pulse bg-[#0969da]" : done ? "bg-[#1a7f37]" : "bg-[#d8dee4] dark:bg-[#30363d]"
               }`}
@@ -111,8 +111,8 @@ function ErrorExcerpt({ value }: { value?: string | null }) {
 
 export default function JobsPage() {
   const t = useT();
+  const fmt = useI18nFormat();
   const toast = useToast();
-  const router = useRouter();
   const qc = useQueryClient();
 
   // Filters
@@ -214,7 +214,7 @@ export default function JobsPage() {
   const batchDL = useMutation({
     mutationFn: ({ ids, action }: { ids: string[]; action: string }) => api.batchDownloadJobs(ids, action),
     onSuccess: (data: any) => {
-      toast.info(t("jobs.batch_result").replace("{succeeded}", String(data.succeeded)).replace("{failed}", String(data.failed)));
+      toast.info(t("jobs.batch_result", { succeeded: data.succeeded, failed: data.failed }));
       setSelected(new Set()); setSelectAll(false);
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
     },
@@ -255,7 +255,7 @@ export default function JobsPage() {
 
   // Clear helpers
   const handleClear = (statuses: string[]) => {
-    if (confirm(`Delete all ${statuses.join(", ")} jobs?`)) clearDL.mutate(statuses);
+    if (confirm(t("jobs.delete_all_confirm", { statuses: statuses.map((s) => statusLabel(t, s)).join(", ") }))) clearDL.mutate(statuses);
   };
 
   return (
@@ -272,11 +272,11 @@ export default function JobsPage() {
 
       {workbench.data && (
         <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-5">
-          <SummaryCard label="Active" value={workbench.data.queue.active_download_count + workbench.data.queue.active_import_count} sub="downloads + imports" tone="active" />
-          <SummaryCard label="Queued" value={workbench.data.queue.default} sub="default queue" />
-          <SummaryCard label="Importing" value={workbench.data.queue.active_import_count} sub="pending/running imports" tone={workbench.data.queue.active_import_count ? "active" : "neutral"} />
-          <SummaryCard label="Failed" value={workbench.data.queue.failed_download_count + workbench.data.queue.failed_import_count} tone={workbench.data.queue.failed_download_count + workbench.data.queue.failed_import_count ? "danger" : "neutral"} />
-          <SummaryCard label="Stale" value={workbench.data.queue.stale_count} sub="past timeout" tone={workbench.data.queue.stale_count ? "warning" : "neutral"} />
+          <SummaryCard label={t("jobs.summary_active")} value={workbench.data.queue.active_download_count + workbench.data.queue.active_import_count} sub={t("jobs.summary_active_sub")} tone="active" />
+          <SummaryCard label={t("jobs.summary_queued")} value={workbench.data.queue.default} sub={t("jobs.summary_queued_sub")} />
+          <SummaryCard label={t("jobs.summary_importing")} value={workbench.data.queue.active_import_count} sub={t("jobs.summary_importing_sub")} tone={workbench.data.queue.active_import_count ? "active" : "neutral"} />
+          <SummaryCard label={t("jobs.summary_failed")} value={workbench.data.queue.failed_download_count + workbench.data.queue.failed_import_count} tone={workbench.data.queue.failed_download_count + workbench.data.queue.failed_import_count ? "danger" : "neutral"} />
+          <SummaryCard label={t("jobs.summary_stale")} value={workbench.data.queue.stale_count} sub={t("jobs.summary_stale_sub")} tone={workbench.data.queue.stale_count ? "warning" : "neutral"} />
         </div>
       )}
 
@@ -284,7 +284,7 @@ export default function JobsPage() {
       <div className="toolbar mb-4">
         <select value={dlStatus} onChange={(e) => setDlStatus(e.target.value)} className="select px-2 py-1.5 text-xs">
           <option value="">{t("jobs.filter_all_status")}</option>
-          {STATUS_OPTIONS.filter(Boolean).map(s => <option key={s} value={s}>{s}</option>)}
+          {STATUS_OPTIONS.filter(Boolean).map(s => <option key={s} value={s}>{statusLabel(t, s)}</option>)}
         </select>
         <select value={dlSource} onChange={(e) => setDlSource(e.target.value)} className="select px-2 py-1.5 text-xs">
           <option value="">{t("jobs.filter_all_source")}</option>
@@ -332,7 +332,7 @@ export default function JobsPage() {
                     ) : (
                       <span className="text-xs text-gray-400 shrink-0 w-20 text-right">
                         {j.retry_count > 0 && <span className="mr-1">↻{j.retry_count}</span>}
-                        {new Date(j.created_at).toLocaleTimeString()}
+                        {fmt.time(j.created_at)}
                       </span>
                     )}
                     <div className="flex gap-1 shrink-0">
@@ -372,10 +372,10 @@ export default function JobsPage() {
           {t("jobs.import")}
           <select value={imFilter} onChange={(e) => setImFilter(e.target.value)} className="select px-2 py-1 text-xs font-normal">
             <option value="">{t("jobs.filter_all_status")}</option>
-            <option value="pending">pending</option>
-            <option value="running">running</option>
-            <option value="complete">complete</option>
-            <option value="failed">failed</option>
+            <option value="pending">{statusLabel(t, "pending")}</option>
+            <option value="running">{statusLabel(t, "running")}</option>
+            <option value="complete">{statusLabel(t, "complete")}</option>
+            <option value="failed">{statusLabel(t, "failed")}</option>
           </select>
         </h3>
         {imports.isLoading && <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-12 rounded-md bg-[#eaeef2] dark:bg-[#21262d] animate-pulse" />)}</div>}
@@ -426,7 +426,7 @@ function ImportJobsList({ downloadJobId }: { downloadJobId: string }) {
       {imports.data?.map((imp: any) => (
         <div key={imp.id} className="flex items-center gap-2 text-xs bg-gray-50 dark:bg-slate-700/50 rounded px-2 py-1">
           <span className="font-mono text-gray-400">{imp.id.slice(0, 8)}</span>
-          <span className={`px-1 rounded ${imp.status === "complete" ? "bg-green-100 text-green-700" : imp.status === "failed" ? "bg-red-100 text-red-600" : imp.status === "running" ? "bg-blue-100 text-blue-600" : "bg-gray-100 text-gray-500"}`}>{imp.status}</span>
+          <span className={`px-1 rounded ${imp.status === "complete" ? "bg-green-100 text-green-700" : imp.status === "failed" ? "bg-red-100 text-red-600" : imp.status === "running" ? "bg-blue-100 text-blue-600" : "bg-gray-100 text-gray-500"}`}>{statusLabel(t, imp.status)}</span>
           {imp.error_log && <span className="text-orange-500 truncate max-w-xs">{imp.error_log.slice(0, 100)}</span>}
         </div>
       ))}
