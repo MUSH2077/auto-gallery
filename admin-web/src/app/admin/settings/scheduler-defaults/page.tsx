@@ -73,6 +73,18 @@ export default function SchedulerDefaultsPage() {
           <h3 className="font-medium mb-4 dark:text-white">{t("subdefaults.sync_timing")}</h3>
           <div className="space-y-4">
             <div className="flex items-center justify-between">
+              <div><span className="font-medium">{t("subdefaults.scheduler_enabled")}</span>
+                <p className="text-xs text-gray-500 mt-1">{t("subdefaults.scheduler_enabled.desc")}</p></div>
+              <button
+                type="button"
+                onClick={() => setSub("scheduler_enabled", !(sub.scheduler_enabled ?? true))}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${(sub.scheduler_enabled ?? true) ? "bg-green-600" : "bg-gray-300 dark:bg-gray-600"}`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${(sub.scheduler_enabled ?? true) ? "translate-x-6" : "translate-x-1"}`} />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between">
               <div><span className="font-medium">{t("subdefaults.schedule_mode")}</span>
                 <p className="text-xs text-gray-500 mt-1">{t("subdefaults.schedule_mode.desc")}</p></div>
               <select value={sub.schedule_mode || "interval"} onChange={(e) => setSub("schedule_mode", e.target.value)}

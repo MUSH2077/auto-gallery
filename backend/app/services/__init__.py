@@ -1,11 +1,5 @@
-from app.services.creator import CreatorService
-from app.services.subscription import SubscriptionService
-from app.services.download import DownloadService
-from app.services.search import SearchService
+"""Service package.
 
-__all__ = [
-    "CreatorService",
-    "SubscriptionService",
-    "DownloadService",
-    "SearchService",
-]
+Keep this module lightweight. Import concrete services from their own modules
+to avoid circular imports during RQ job loading.
+"""

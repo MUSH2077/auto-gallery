@@ -101,6 +101,20 @@ export default function SubscriptionDefaultsPage() {
 
             <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
               <div>
+                <span className="font-medium">{t("subdefaults.scheduler_enabled")}</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("subdefaults.scheduler_enabled.desc")}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLocal({ ...current, scheduler_enabled: !(current.scheduler_enabled ?? true) })}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${(current.scheduler_enabled ?? true) ? "bg-green-600" : "bg-gray-300 dark:bg-gray-600"}`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${(current.scheduler_enabled ?? true) ? "translate-x-6" : "translate-x-1"}`} />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+              <div>
                 <span className="font-medium">{t("subdefaults.schedule_mode")}</span>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("subdefaults.schedule_mode.desc")}</p>
               </div>

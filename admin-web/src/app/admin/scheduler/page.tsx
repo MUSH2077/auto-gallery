@@ -57,16 +57,46 @@ export default function SchedulerPage() {
 
       {/* Queue stats */}
       {queue.data && (
-        <div className="grid grid-cols-3 gap-3 mb-8">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
           {[{ label: "Pending", value: queue.data.default_queue, color: "text-yellow-600" },
             { label: "Scheduled", value: queue.data.scheduled_queue, color: "text-purple-600" },
             { label: "Failed", value: queue.data.failed_jobs, color: "text-red-600" },
+            {
+              label: queue.data.scheduler_enabled === false ? t("scheduler.auto_disabled") : t("scheduler.auto_enabled"),
+              value: queue.data.scheduler_enabled === false ? "Off" : "On",
+              color: queue.data.scheduler_enabled === false ? "text-red-600" : "text-green-600",
+            },
             ].map((s) => (
             <div key={s.label} className="card p-4 text-center">
               <div className={`text-2xl font-bold ${s.color}`}>{s.value}</div>
               <div className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{s.label}</div>
             </div>
           ))}
+        </div>
+      )}
+
+      {queue.data && (
+        <div className="card mb-8 p-4 text-sm">
+          <div className="grid gap-3 md:grid-cols-4">
+            <div>
+              <div className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("subdefaults.schedule_mode")}</div>
+              <div className="mt-1 font-medium dark:text-white">{queue.data.scheduler_mode || settings.data?.subscription_defaults?.schedule_mode || "interval"}</div>
+            </div>
+            <div>
+              <div className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("scheduler.timezone")}</div>
+              <div className="mt-1 font-medium dark:text-white">{queue.data.scheduler_timezone || settings.data?.subscription_defaults?.timezone || "UTC"}</div>
+            </div>
+            <div>
+              <div className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("subdefaults.scheduled_times")}</div>
+              <div className="mt-1 font-mono text-xs dark:text-white">{queue.data.scheduled_times || "—"}</div>
+            </div>
+            <div>
+              <div className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("scheduler.next_scan")}</div>
+              <div className="mt-1 font-medium dark:text-white">
+                {queue.data.next_sync_scan_at ? new Date(queue.data.next_sync_scan_at).toLocaleString() : "—"}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
