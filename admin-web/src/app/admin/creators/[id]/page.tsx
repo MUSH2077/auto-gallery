@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, WorkListItem } from "@/lib/api";
+import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
 import { Modal, RepositoryCard, SourceBadge, StatusBadge, WorkGrid } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
@@ -216,6 +216,15 @@ export default function CreatorDetailPage() {
       return running > 0 ? 4000 : 12000;
     },
   });
+  const schedulerDecisions = useQuery({
+    queryKey: [...queryKeys.schedulerDecisions, id],
+    queryFn: api.schedulerDecisions,
+    refetchInterval: (query) => {
+      const hasRunning = (overview.data?.summary.running_job_count || 0) > 0;
+      const hasDue = query.state.data?.items.some((item) => item.creator_id === id && item.due);
+      return hasRunning || hasDue ? 5000 : 15000;
+    },
+  });
 
   const openEdit = () => {
     if (!creator.data) return;
@@ -246,6 +255,7 @@ export default function CreatorDetailPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["creator-subscription-overview", id] });
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+      qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
       toast.success("Sync queued");
     },
     onError: (e: Error) => toast.error(e.message),
@@ -253,7 +263,10 @@ export default function CreatorDetailPage() {
 
   const toggleRepo = useMutation({
     mutationFn: (repo: CreatorRepository) => api.updateSubscriptionSource(repo.subscription_id, repo.id, { is_enabled: !repo.is_enabled }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["creator-subscription-overview", id] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["creator-subscription-overview", id] });
+      qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
+    },
     onError: (e: Error) => toast.error(e.message),
   });
 
@@ -261,6 +274,24 @@ export default function CreatorDetailPage() {
   const st = stats.data;
   const repos = overview.data?.repositories || [];
   const legalRepos = repos.filter((r) => r.is_repository);
+  const decisionBySource = useMemo(() => {
+    const map = new Map<string, SchedulerDecisionItem>();
+    for (const item of schedulerDecisions.data?.items || []) {
+      if (item.creator_id === id) map.set(item.source_id, item);
+    }
+    return map;
+  }, [schedulerDecisions.data?.items, id]);
+  const repoSummary = useMemo(() => {
+    const enabled = legalRepos.filter((r) => r.is_enabled).length;
+    const running = runningRepoCount(repos);
+    const failed = repos.filter((r) => r.latest_job && ["failed", "stale"].includes(r.latest_job.status)).length;
+    const authIssues = repos.filter((r) => !r.auth_healthy).length;
+    const lastSuccess = legalRepos
+      .map((r) => r.last_synced_at)
+      .filter(Boolean)
+      .sort((a, b) => new Date(String(b)).getTime() - new Date(String(a)).getTime())[0] as string | undefined;
+    return { enabled, running, failed, authIssues, lastSuccess };
+  }, [legalRepos, repos]);
   const subscriptionHref = overview.data?.subscriptions[0]?.id
     ? `/admin/subscriptions/${overview.data.subscriptions[0].id}`
     : `/admin/subscriptions?q=${encodeURIComponent(c?.display_name || c?.name || "")}`;
@@ -450,11 +481,28 @@ export default function CreatorDetailPage() {
                 </div>
                 <Link href={subscriptionHref} className="btn-primary">Manage subscription</Link>
               </div>
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+                {[
+                  ["Enabled repos", repoSummary.enabled, `${legalRepos.length} legal`],
+                  ["Running jobs", repoSummary.running, "active queue"],
+                  ["Failed jobs", repoSummary.failed, "needs review"],
+                  ["Auth issues", repoSummary.authIssues, "source auth"],
+                  ["Last success", repoSummary.lastSuccess ? formatDate(repoSummary.lastSuccess) : "Never", "source sync"],
+                ].map(([label, value, sub]) => (
+                  <div key={label} className="card p-3">
+                    <div className="truncate text-sm font-semibold text-[#24292f] dark:text-[#e6edf3]">{value}</div>
+                    <div className="mt-1 text-[11px] font-medium uppercase text-[#57606a] dark:text-[#8b949e]">{label}</div>
+                    <div className="mt-0.5 text-xs text-[#8c959f] dark:text-[#6e7681]">{sub}</div>
+                  </div>
+                ))}
+              </div>
               {repos.length ? repos.map((repo) => (
-                <RepositoryCard key={repo.id} repo={repo} onSync={(r) => syncRepo.mutate(r as CreatorRepository)} onToggle={(r) => toggleRepo.mutate(r as CreatorRepository)}
+                <RepositoryCard key={repo.id} repo={repo} decision={decisionBySource.get(repo.id)} onSync={(r) => syncRepo.mutate(r as CreatorRepository)} onToggle={(r) => toggleRepo.mutate(r as CreatorRepository)}
                   syncPending={syncRepo.isPending} togglePending={toggleRepo.isPending} />
               )) : (
-                <div className="card p-8 text-center text-sm text-[#57606a] dark:text-[#8b949e]">No subscription URLs yet.</div>
+                <div className="card p-8 text-center text-sm text-[#57606a] dark:text-[#8b949e]">
+                  No subscription URLs yet. Add a supported gallery-dl source URL from the subscription settings to create this creator's first repository.
+                </div>
               )}
             </div>
           )}

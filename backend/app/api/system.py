@@ -1,15 +1,39 @@
 import asyncio
 import logging
 import os
+import shutil
+import urllib.request
 import time
+from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from app.auth import RequireAdmin
+from sqlalchemy import and_, select, func
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.database import get_db
+from app.jobs.subscription_sync import schedule_decision_snapshot
+from app.models.creator import Creator
+from app.models.download_job import DownloadJob
+from app.models.import_job import ImportJob
+from app.models.subscription import Subscription
+from app.models.subscription_source import SubscriptionSource
+from app.models.work import Work
+from app.providers import registry
+from app.services.settings import get_download_defaults, get_scheduler_config
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # Python < 3.9
 
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[RequireAdmin])
+
+DOWNLOAD_RUNNING_STATUSES = {"pending", "downloading", "downloaded", "importing"}
+IMPORT_RUNNING_STATUSES = {"pending", "running"}
+FAILED_STATUSES = {"failed", "stale"}
 
 # ── Storage stats TTL cache ────────────────────────────────────────────────────
 _storage_cache: dict | None = None
@@ -41,6 +65,121 @@ def _count_files(path: str) -> int:
     except (OSError, PermissionError) as e:
         logger.debug("Cannot count files in %s: %s", path, e)
     return count
+
+
+def _iso(value) -> str | None:
+    return value.isoformat() if value else None
+
+
+def _excerpt(value: str | None, limit: int = 240) -> str | None:
+    if not value:
+        return None
+    clean = value.strip()
+    return clean[:limit] if clean else None
+
+
+def _storage_risk(storage: dict) -> str:
+    disk = storage.get("disk") or {}
+    total = disk.get("total_bytes") or 0
+    free = disk.get("free_bytes") or 0
+    if total <= 0:
+        return "unknown"
+    free_percent = (free / total) * 100
+    if free_percent < 5:
+        return "critical"
+    if free_percent < 15:
+        return "warning"
+    return "ok"
+
+
+async def _queue_stats_payload() -> dict:
+    try:
+        import redis as redis_lib
+        from rq import Queue
+        from rq.registry import FailedJobRegistry, ScheduledJobRegistry, StartedJobRegistry
+
+        r = redis_lib.from_url(settings.redis_url)
+        default_q = Queue(connection=r)
+        scheduled_q = Queue(name="scheduled", connection=r)
+        failed_reg = FailedJobRegistry(queue=default_q)
+        sched_failed_reg = FailedJobRegistry(queue=scheduled_q)
+        started_reg = StartedJobRegistry(queue=default_q)
+        scheduled_registry = ScheduledJobRegistry(queue=scheduled_q)
+        sync_jobs = []
+        for job_id in scheduled_registry.get_job_ids():
+            job = scheduled_q.fetch_job(job_id)
+            if job and "sync_subscriptions" in (job.func_name or ""):
+                sync_jobs.append((job, scheduled_registry.get_scheduled_time(job)))
+        next_sync_scan_at = None
+        if sync_jobs:
+            _job, next_sync_scan_at = min(sync_jobs, key=lambda item: item[1])
+            next_sync_scan_at = _iso(next_sync_scan_at)
+        return {
+            "default_queue": len(default_q),
+            "scheduled_queue": len(scheduled_q),
+            "failed_jobs": failed_reg.count + sched_failed_reg.count,
+            "started_jobs": started_reg.count,
+            "next_sync_scan_at": next_sync_scan_at,
+        }
+    except Exception:
+        logger.warning("Failed to fetch Redis queue stats", exc_info=True)
+        return {
+            "default_queue": -1,
+            "scheduled_queue": -1,
+            "failed_jobs": -1,
+            "started_jobs": -1,
+            "next_sync_scan_at": None,
+        }
+
+
+async def _quick_service_health(db: AsyncSession) -> dict:
+    services = {"backend": "up", "postgres": "unknown", "redis": "unknown", "meilisearch": "unknown", "gallery-dl": "unknown"}
+    try:
+        await db.execute(select(func.now()))
+        services["postgres"] = "up"
+    except Exception:
+        services["postgres"] = "down"
+    try:
+        import redis as redis_lib
+        r = redis_lib.from_url(settings.redis_url)
+        services["redis"] = "up" if r.ping() else "down"
+    except Exception:
+        services["redis"] = "down"
+    try:
+        def _check_meili() -> str:
+            with urllib.request.urlopen(f"{settings.meili_url.rstrip('/')}/health", timeout=2) as response:
+                return "up" if 200 <= response.status < 300 else "down"
+        services["meilisearch"] = await asyncio.to_thread(_check_meili)
+    except Exception:
+        services["meilisearch"] = "down"
+    services["gallery-dl"] = "up" if shutil.which("gallery-dl") else "missing"
+    return services
+
+
+async def _count_statuses(db: AsyncSession, model, statuses: set[str]) -> int:
+    result = await db.execute(select(func.count(model.id)).where(model.status.in_(statuses)))
+    return int(result.scalar() or 0)
+
+
+def _provider_state(source: str, source_url: str | None) -> dict:
+    try:
+        provider = registry.get(source)
+    except KeyError:
+        return {
+            "provider_display_name": source,
+            "can_download": False,
+            "url_valid": False,
+            "skip_reason": "unknown_provider",
+        }
+    normalized_url = provider.normalize_url(source_url) if source_url else None
+    candidate_url = normalized_url or source_url
+    url_valid = bool(candidate_url and provider.validate_url(candidate_url))
+    return {
+        "provider_display_name": provider.display_name,
+        "can_download": bool(provider.capabilities.can_download),
+        "url_valid": url_valid,
+        "skip_reason": None,
+    }
 
 
 @router.get("/system/storage")
@@ -84,46 +223,254 @@ async def storage_stats():
 @router.get("/system/queue-stats")
 async def queue_stats():
     try:
-        import redis as redis_lib
-        from rq import Queue
-        from rq.registry import FailedJobRegistry, ScheduledJobRegistry
-        from app.config import settings as app_settings
         from app.database import async_session
-        from app.services.settings import get_scheduler_config
 
-        r = redis_lib.from_url(app_settings.redis_url)
-        default_q = Queue(connection=r)
-        scheduled_q = Queue(name="scheduled", connection=r)
-        failed_reg = FailedJobRegistry(queue=default_q)
-        sched_failed_reg = FailedJobRegistry(queue=scheduled_q)
-        scheduled_registry = ScheduledJobRegistry(queue=scheduled_q)
-        sync_jobs = []
-        for job_id in scheduled_registry.get_job_ids():
-            job = scheduled_q.fetch_job(job_id)
-            if job and "sync_subscriptions" in (job.func_name or ""):
-                sync_jobs.append((job, scheduled_registry.get_scheduled_time(job)))
-        next_sync_scan_at = None
-        if sync_jobs:
-            _job, next_sync_scan_at = min(sync_jobs, key=lambda item: item[1])
-            if next_sync_scan_at:
-                next_sync_scan_at = next_sync_scan_at.isoformat()
+        queue_payload = await _queue_stats_payload()
         async with async_session() as db:
             scheduler_config = await get_scheduler_config(db)
 
         return {
-            "default_queue": len(default_q),
-            "scheduled_queue": len(scheduled_q),
-            "failed_jobs": failed_reg.count + sched_failed_reg.count,
+            "default_queue": queue_payload["default_queue"],
+            "scheduled_queue": queue_payload["scheduled_queue"],
+            "failed_jobs": queue_payload["failed_jobs"],
             "scheduler_enabled": bool(scheduler_config.get("scheduler_enabled", True)),
             "scheduler_mode": scheduler_config.get("schedule_mode", "interval"),
             "scheduler_timezone": scheduler_config.get("timezone", "UTC"),
             "scheduled_times": scheduler_config.get("scheduled_times", ""),
             "scheduler_scan_interval_minutes": int(scheduler_config.get("scheduler_scan_interval_minutes", 60)),
-            "next_sync_scan_at": next_sync_scan_at,
+            "next_sync_scan_at": queue_payload["next_sync_scan_at"],
         }
     except Exception:
         logger.warning("Failed to fetch queue stats", exc_info=True)
         return {"default_queue": -1, "scheduled_queue": -1, "failed_jobs": -1, "scheduler_enabled": True}
+
+
+@router.get("/system/workbench")
+async def workbench_summary(db: AsyncSession = Depends(get_db)):
+    """Read-only dashboard aggregation for the live admin workbench."""
+    now = datetime.now(timezone.utc)
+    storage = await storage_stats()
+    storage_risk = _storage_risk(storage)
+    queue_payload = await _queue_stats_payload()
+    scheduler_config = await get_scheduler_config(db)
+    download_defaults = await get_download_defaults(db)
+    stale_cutoff = now - timedelta(seconds=int(download_defaults.get("timeout_seconds", 600)) * 2)
+
+    active_download_count = await _count_statuses(db, DownloadJob, DOWNLOAD_RUNNING_STATUSES)
+    failed_download_count = await _count_statuses(db, DownloadJob, FAILED_STATUSES)
+    stale_download_rows = await db.execute(
+        select(func.count(DownloadJob.id)).where(
+            and_(DownloadJob.status == "downloading", DownloadJob.created_at < stale_cutoff)
+        )
+    )
+    stale_download_count = int(stale_download_rows.scalar() or 0)
+
+    active_import_count = await _count_statuses(db, ImportJob, IMPORT_RUNNING_STATUSES)
+    failed_import_count = await _count_statuses(db, ImportJob, FAILED_STATUSES)
+    stale_import_rows = await db.execute(
+        select(func.count(ImportJob.id)).where(
+            and_(ImportJob.status == "running", ImportJob.created_at < stale_cutoff)
+        )
+    )
+    stale_import_count = int(stale_import_rows.scalar() or 0)
+
+    auth_unhealthy_rows = await db.execute(
+        select(func.count(SubscriptionSource.id)).where(SubscriptionSource.auth_healthy == False)
+    )
+    auth_unhealthy_count = int(auth_unhealthy_rows.scalar() or 0)
+
+    latest_downloads = list((await db.execute(
+        select(DownloadJob).order_by(DownloadJob.created_at.desc()).limit(5)
+    )).scalars().all())
+    latest_imports = list((await db.execute(
+        select(ImportJob).order_by(ImportJob.created_at.desc()).limit(5)
+    )).scalars().all())
+    latest_works = list((await db.execute(
+        select(Work).order_by(Work.created_at.desc()).limit(5)
+    )).scalars().all())
+    successful_sync_rows = list((await db.execute(
+        select(SubscriptionSource, Subscription, Creator)
+        .join(Subscription, SubscriptionSource.subscription_id == Subscription.id)
+        .join(Creator, Subscription.creator_id == Creator.id)
+        .where(SubscriptionSource.last_synced_at.is_not(None))
+        .order_by(SubscriptionSource.last_synced_at.desc())
+        .limit(5)
+    )).all())
+
+    return {
+        "updated_at": now.isoformat(),
+        "queue": {
+            "default": queue_payload["default_queue"],
+            "scheduled": queue_payload["scheduled_queue"],
+            "failed": queue_payload["failed_jobs"],
+            "started": queue_payload["started_jobs"],
+            "active_download_count": active_download_count,
+            "active_import_count": active_import_count,
+            "failed_download_count": failed_download_count,
+            "failed_import_count": failed_import_count,
+            "stale_download_count": stale_download_count,
+            "stale_import_count": stale_import_count,
+            "stale_count": stale_download_count + stale_import_count,
+        },
+        "scheduler": {
+            "enabled": bool(scheduler_config.get("scheduler_enabled", True)),
+            "mode": scheduler_config.get("schedule_mode", "interval"),
+            "timezone": scheduler_config.get("timezone", "UTC"),
+            "scheduled_times": scheduler_config.get("scheduled_times", ""),
+            "scan_interval_minutes": int(scheduler_config.get("scheduler_scan_interval_minutes", 60)),
+            "next_scan_at": queue_payload["next_sync_scan_at"],
+        },
+        "storage": {
+            "original_media_size_bytes": storage["downloads"]["size_bytes"],
+            "original_media_file_count": storage["downloads"]["file_count"],
+            "library_size_bytes": storage["library"]["size_bytes"],
+            "library_file_count": storage["library"]["file_count"],
+            "disk_total_bytes": storage["disk"]["total_bytes"],
+            "disk_free_bytes": storage["disk"]["free_bytes"],
+            "disk_used_bytes": storage["disk"]["used_bytes"],
+            "disk_used_percent": round((storage["disk"]["used_bytes"] / storage["disk"]["total_bytes"]) * 100, 1) if storage["disk"]["total_bytes"] else None,
+            "disk_free_percent": round((storage["disk"]["free_bytes"] / storage["disk"]["total_bytes"]) * 100, 1) if storage["disk"]["total_bytes"] else None,
+            "risk_level": storage_risk,
+        },
+        "health": await _quick_service_health(db),
+        "attention": {
+            "auth_unhealthy_count": auth_unhealthy_count,
+            "failed_download_count": failed_download_count,
+            "failed_import_count": failed_import_count,
+            "stale_job_count": stale_download_count + stale_import_count,
+            "low_disk_warning": storage_risk in {"warning", "critical"},
+            "scheduler_disabled_warning": not bool(scheduler_config.get("scheduler_enabled", True)),
+        },
+        "recent": {
+            "download_jobs": [{
+                "id": str(j.id),
+                "subscription_id": str(j.subscription_id),
+                "subscription_source_id": str(j.subscription_source_id) if j.subscription_source_id else None,
+                "source": j.source,
+                "source_url": j.source_url,
+                "status": j.status,
+                "created_at": _iso(j.created_at),
+                "updated_at": _iso(j.updated_at),
+                "error_log_excerpt": _excerpt(j.error_log),
+            } for j in latest_downloads],
+            "import_jobs": [{
+                "id": str(j.id),
+                "download_job_id": str(j.download_job_id),
+                "status": j.status,
+                "created_at": _iso(j.created_at),
+                "updated_at": _iso(j.updated_at),
+                "error_log_excerpt": _excerpt(j.error_log),
+            } for j in latest_imports],
+            "works": [{
+                "id": str(w.id),
+                "title": w.title,
+                "thumbnail_asset_id": w.thumbnail_asset_id,
+                "created_at": _iso(w.created_at),
+            } for w in latest_works],
+            "successful_syncs": [{
+                "source_id": str(ss.id),
+                "subscription_id": str(sub.id),
+                "creator_id": str(creator.id),
+                "creator_name": creator.display_name or creator.name,
+                "source": ss.source,
+                "source_url": ss.source_url,
+                "last_synced_at": _iso(ss.last_synced_at),
+            } for ss, sub, creator in successful_sync_rows],
+        },
+    }
+
+
+@router.get("/system/scheduler-decisions")
+async def scheduler_decisions(db: AsyncSession = Depends(get_db)):
+    """Explain current scheduler decisions at subscription-source granularity.
+
+    This endpoint is deliberately read-only: it does not enqueue jobs or mutate
+    last_attempted_at/last_synced_at.
+    """
+    config = await get_scheduler_config(db)
+    tz_name = config.get("timezone", "UTC")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = timezone.utc
+    now = datetime.now(tz)
+    scheduler_enabled = bool(config.get("scheduler_enabled", True))
+
+    rows = list((await db.execute(
+        select(SubscriptionSource, Subscription, Creator)
+        .join(Subscription, SubscriptionSource.subscription_id == Subscription.id)
+        .join(Creator, Subscription.creator_id == Creator.id)
+        .order_by(Creator.display_name, Creator.name, SubscriptionSource.source, SubscriptionSource.created_at.desc())
+    )).all())
+
+    items = []
+    for ss, sub, creator in rows:
+        provider_state = _provider_state(ss.source, ss.source_url)
+        can_download = bool(provider_state["can_download"])
+        url_valid = bool(provider_state["url_valid"])
+        auth_healthy = ss.auth_healthy is not False
+        decision = schedule_decision_snapshot(sub, config, ss.last_synced_at, ss.last_attempted_at, now, tz)
+        due = bool(decision.get("due"))
+        reason = str(decision.get("reason"))
+
+        if not scheduler_enabled:
+            due = False
+            reason = "scheduler_disabled"
+        elif not sub.is_active:
+            due = False
+            reason = "subscription_inactive"
+        elif not sub.sync_enabled:
+            due = False
+            reason = "subscription_sync_disabled"
+        elif not ss.is_enabled:
+            due = False
+            reason = "source_disabled"
+        elif not auth_healthy:
+            due = False
+            reason = "auth_unhealthy"
+        elif not can_download:
+            due = False
+            reason = provider_state["skip_reason"] or "provider_not_downloadable"
+        elif not url_valid:
+            due = False
+            reason = "url_invalid"
+
+        items.append({
+            "subscription_id": str(sub.id),
+            "subscription_name": sub.name,
+            "subscription_active": sub.is_active,
+            "subscription_sync_enabled": sub.sync_enabled,
+            "creator_id": str(creator.id),
+            "creator_name": creator.display_name or creator.name,
+            "source_id": str(ss.id),
+            "source": ss.source,
+            "source_display_name": provider_state["provider_display_name"],
+            "source_url": ss.source_url,
+            "source_creator_id": ss.source_creator_id,
+            "source_enabled": ss.is_enabled,
+            "effective_mode": decision.get("mode") or sub.schedule_mode or config.get("schedule_mode", "interval"),
+            "timezone": tz_name,
+            "scheduled_times": sub.scheduled_times or config.get("scheduled_times", ""),
+            "sync_interval_hours": sub.sync_interval_hours,
+            "last_synced_at": _iso(ss.last_synced_at),
+            "last_attempted_at": _iso(ss.last_attempted_at),
+            "due": due,
+            "decision": "due_now" if due else reason,
+            "reason": reason,
+            "next_due_at": decision.get("next_due_at"),
+            "window_start": decision.get("window_start"),
+            "window_end": decision.get("window_end"),
+            "auth_healthy": auth_healthy,
+            "url_valid": url_valid,
+            "can_download": can_download,
+        })
+
+    return {
+        "updated_at": now.isoformat(),
+        "scheduler_enabled": scheduler_enabled,
+        "timezone": tz_name,
+        "items": items,
+    }
 
 
 @router.get("/system/logs")

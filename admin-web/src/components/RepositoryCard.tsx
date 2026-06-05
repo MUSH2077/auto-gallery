@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { CreatorRepository, RepositoryLatestJob } from "@/lib/api";
+import { CreatorRepository, RepositoryLatestJob, SchedulerDecisionItem } from "@/lib/api";
 import SourceBadge from "./SourceBadge";
 
 type RepoLike = Pick<CreatorRepository,
@@ -40,6 +40,49 @@ function relativeTime(value?: string | null): string {
   return new Date(value).toLocaleDateString();
 }
 
+function absoluteTime(value?: string | null): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
+}
+
+function decisionLabel(reason?: string | null, due?: boolean): string {
+  if (due) return "Due now";
+  const labels: Record<string, string> = {
+    interval_not_due: "Waiting interval",
+    outside_fixed_time_window: "Before fixed-time window",
+    already_attempted_in_window: "Attempted in window",
+    already_synced_in_window: "Synced in window",
+    manual_mode: "Manual",
+    auth_unhealthy: "Auth issue",
+    scheduler_disabled: "Scheduler disabled",
+    source_disabled: "Disabled",
+    subscription_sync_disabled: "Sync disabled",
+    url_invalid: "Invalid URL",
+    provider_not_downloadable: "Not downloadable",
+  };
+  return labels[reason || ""] || (reason ? reason.replaceAll("_", " ") : "No decision");
+}
+
+function DecisionPill({ decision }: { decision?: SchedulerDecisionItem }) {
+  if (!decision) return null;
+  const warning = ["auth_unhealthy", "url_invalid", "scheduler_disabled"].includes(decision.reason);
+  const waiting = ["already_attempted_in_window", "manual_mode", "source_disabled"].includes(decision.reason);
+  const cls = decision.due
+    ? "border-[#0969da]/30 bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff]/30 dark:bg-[#1f6feb26] dark:text-[#58a6ff]"
+    : warning
+      ? "border-[#cf222e]/30 bg-[#ffebe9] text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]"
+      : waiting
+        ? "border-[#bf8700]/30 bg-[#fff8c5] text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]"
+        : "border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]";
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${decision.due ? "animate-pulse bg-current" : "bg-current"}`} />
+      {decisionLabel(decision.reason, decision.due)}
+    </span>
+  );
+}
+
 function JobPill({ job }: { job?: RepositoryLatestJob | null }) {
   if (!job) return <span className="text-xs text-[#57606a] dark:text-[#8b949e]">No jobs yet</span>;
   const running = ["pending", "downloading", "downloaded", "importing"].includes(job.status);
@@ -50,7 +93,7 @@ function JobPill({ job }: { job?: RepositoryLatestJob | null }) {
       ? "border-[#cf222e]/30 bg-[#ffebe9] text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]"
       : "border-[#1a7f37]/30 bg-[#dafbe1] text-[#1a7f37] dark:border-[#3fb950]/30 dark:bg-[#2ea04326] dark:text-[#3fb950]";
   return (
-    <Link href={`/admin/downloads?job=${job.id}`} className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>
+    <Link href={`/admin/jobs`} className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>
       <span className={`h-1.5 w-1.5 rounded-full ${running ? "animate-pulse bg-current" : "bg-current"}`} />
       {job.status}
     </Link>
@@ -64,6 +107,7 @@ export default function RepositoryCard({
   onDelete,
   syncPending,
   togglePending,
+  decision,
 }: {
   repo: RepoLike;
   onSync?: (repo: RepoLike) => void;
@@ -71,6 +115,7 @@ export default function RepositoryCard({
   onDelete?: (repo: RepoLike) => void;
   syncPending?: boolean;
   togglePending?: boolean;
+  decision?: SchedulerDecisionItem;
 }) {
   const running = !!repo.latest_job && ["pending", "downloading", "downloaded", "importing"].includes(repo.latest_job.status);
   const legal = repo.is_repository;
@@ -110,7 +155,15 @@ export default function RepositoryCard({
             <span>Last sync {relativeTime(repo.last_synced_at)}</span>
             <span>Last try {relativeTime(repo.last_attempted_at)}</span>
             <JobPill job={repo.latest_job} />
+            <DecisionPill decision={decision} />
           </div>
+          {decision && (
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#57606a] dark:text-[#8b949e]">
+              <span>Mode {decision.effective_mode}</span>
+              <span>Next {absoluteTime(decision.next_due_at)}</span>
+              {decision.window_start && <span>Window {absoluteTime(decision.window_start)} - {absoluteTime(decision.window_end)}</span>}
+            </div>
+          )}
           {disabledReason && <p className="mt-2 text-xs text-[#9a6700] dark:text-[#d29922]">{disabledReason}</p>}
           {repo.latest_job?.error_log_excerpt && (
             <p className="mt-2 line-clamp-2 rounded-md bg-[#ffebe9] px-2 py-1 text-xs text-[#cf222e] dark:bg-[#f8514926] dark:text-[#f85149]">

@@ -93,6 +93,56 @@ def test_interval_respects_last_synced_cutoff():
     assert _should_sync_now(sub, {}, now - timedelta(hours=2), now, tz) is False
 
 
+def test_schedule_decision_snapshot_exposes_next_due_for_interval_and_fixed_time():
+    from app.jobs.subscription_sync import schedule_decision_snapshot
+
+    tz = ZoneInfo("Asia/Shanghai")
+    now = datetime(2026, 6, 5, 11, 30, tzinfo=tz)
+
+    interval = schedule_decision_snapshot(
+        _sub(mode="interval", interval=6),
+        {},
+        now - timedelta(hours=2),
+        None,
+        now,
+        tz,
+    )
+    assert interval["due"] is False
+    assert interval["next_due_at"] == datetime(2026, 6, 5, 15, 30, tzinfo=tz).isoformat()
+
+    fixed = schedule_decision_snapshot(
+        _sub(mode="fixed_time", times="12:40,18:00"),
+        {"scheduler_scan_interval_minutes": 60},
+        None,
+        None,
+        now,
+        tz,
+    )
+    assert fixed["due"] is False
+    assert fixed["reason"] == "outside_fixed_time_window"
+    assert fixed["next_due_at"] == datetime(2026, 6, 5, 12, 40, tzinfo=tz).isoformat()
+    assert fixed["window_start"] == datetime(2026, 6, 5, 12, 40, tzinfo=tz).isoformat()
+
+
+def test_schedule_decision_snapshot_manual_has_no_next_due():
+    from app.jobs.subscription_sync import schedule_decision_snapshot
+
+    tz = ZoneInfo("UTC")
+    now = datetime(2026, 6, 5, 8, 0, tzinfo=tz)
+    decision = schedule_decision_snapshot(_sub(mode="manual"), {}, None, None, now, tz)
+    assert decision["due"] is False
+    assert decision["reason"] == "manual_mode"
+    assert decision["next_due_at"] is None
+
+
+def test_system_router_exposes_workbench_and_scheduler_decisions_routes():
+    from app.api.system import router
+
+    paths = {route.path for route in router.routes}
+    assert "/system/workbench" in paths
+    assert "/system/scheduler-decisions" in paths
+
+
 def test_rq_can_import_scheduler_job_path():
     from rq.utils import import_attribute
 

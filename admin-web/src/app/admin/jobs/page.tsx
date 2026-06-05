@@ -53,6 +53,62 @@ function ActiveIndicator({ status }: { status: string }) {
   return <span className={`shrink-0 w-28 text-xs px-1.5 py-0.5 rounded text-center ${color}`}>{status}</span>;
 }
 
+function SummaryCard({ label, value, sub, tone = "neutral" }: { label: string; value: number | string; sub?: string; tone?: "neutral" | "active" | "danger" | "warning" }) {
+  const color = tone === "danger" ? "text-[#cf222e] dark:text-[#f85149]"
+    : tone === "warning" ? "text-[#9a6700] dark:text-[#d29922]"
+      : tone === "active" ? "text-[#0969da] dark:text-[#58a6ff]"
+        : "text-[#24292f] dark:text-[#e6edf3]";
+  return (
+    <div className="card p-4">
+      <div className={`tabular text-2xl font-semibold ${color}`}>{value}</div>
+      <div className="mt-1 text-xs font-medium uppercase text-[#57606a] dark:text-[#8b949e]">{label}</div>
+      {sub && <div className="mt-1 text-xs text-[#8c959f] dark:text-[#6e7681]">{sub}</div>}
+    </div>
+  );
+}
+
+function JobLifecycle({ status }: { status: string }) {
+  const steps = ["created", "downloading", "downloaded", "importing", status === "failed" || status === "stale" ? status : "complete"];
+  const activeIndex = status === "pending" ? 0
+    : status === "downloading" ? 1
+      : status === "downloaded" ? 2
+        : status === "importing" ? 3
+          : status === "complete" ? 4
+            : status === "failed" || status === "stale" ? 4
+              : 0;
+  const failed = status === "failed" || status === "stale";
+  return (
+    <div className="hidden min-w-[240px] items-center gap-1 lg:flex">
+      {steps.map((step, index) => {
+        const done = index < activeIndex || (index === activeIndex && status === "complete");
+        const active = index === activeIndex && status !== "complete";
+        const danger = failed && index === activeIndex;
+        return (
+          <div key={`${step}-${index}`} className="flex min-w-0 flex-1 items-center gap-1">
+            <span
+              title={step}
+              className={`h-2 w-2 shrink-0 rounded-full ${
+                danger ? "bg-[#cf222e]" : active ? "animate-pulse bg-[#0969da]" : done ? "bg-[#1a7f37]" : "bg-[#d8dee4] dark:bg-[#30363d]"
+              }`}
+            />
+            {index < steps.length - 1 && <span className={`h-px flex-1 ${done ? "bg-[#1a7f37]" : "bg-[#d8dee4] dark:bg-[#30363d]"}`} />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ErrorExcerpt({ value }: { value?: string | null }) {
+  if (!value) return null;
+  const firstLine = value.split("\n").find(Boolean) || value;
+  return (
+    <div className="mt-1 line-clamp-1 rounded-md border border-[#cf222e]/20 bg-[#ffebe9] px-2 py-1 text-xs text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">
+      {firstLine.slice(0, 180)}
+    </div>
+  );
+}
+
 export default function JobsPage() {
   const t = useT();
   const toast = useToast();
@@ -86,6 +142,15 @@ export default function JobsPage() {
     queryKey: [...queryKeys.downloadJobs.all, dlParams],
     queryFn: () => api.listDownloadJobs(dlParams),
     refetchInterval: (dlStatus === "downloading" || !dlStatus) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
+  });
+
+  const workbench = useQuery({
+    queryKey: queryKeys.workbench,
+    queryFn: api.workbench,
+    refetchInterval: (query) => {
+      const active = (query.state.data?.queue.active_download_count || 0) + (query.state.data?.queue.active_import_count || 0);
+      return active > 0 ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS;
+    },
   });
 
   const imports = useQuery({
@@ -205,6 +270,16 @@ export default function JobsPage() {
         </div>
       </PageHeader>
 
+      {workbench.data && (
+        <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-5">
+          <SummaryCard label="Active" value={workbench.data.queue.active_download_count + workbench.data.queue.active_import_count} sub="downloads + imports" tone="active" />
+          <SummaryCard label="Queued" value={workbench.data.queue.default} sub="default queue" />
+          <SummaryCard label="Importing" value={workbench.data.queue.active_import_count} sub="pending/running imports" tone={workbench.data.queue.active_import_count ? "active" : "neutral"} />
+          <SummaryCard label="Failed" value={workbench.data.queue.failed_download_count + workbench.data.queue.failed_import_count} tone={workbench.data.queue.failed_download_count + workbench.data.queue.failed_import_count ? "danger" : "neutral"} />
+          <SummaryCard label="Stale" value={workbench.data.queue.stale_count} sub="past timeout" tone={workbench.data.queue.stale_count ? "warning" : "neutral"} />
+        </div>
+      )}
+
       {/* Filters */}
       <div className="toolbar mb-4">
         <select value={dlStatus} onChange={(e) => setDlStatus(e.target.value)} className="select px-2 py-1.5 text-xs">
@@ -251,6 +326,7 @@ export default function JobsPage() {
                     {j.source && <SourceBadge source={j.source} />}
                     <span className="min-w-0 flex-1 truncate text-xs text-[#57606a] dark:text-[#8b949e]" title={j.source_url}>{j.source_url}</span>
                     <ProgressBar active={active} />
+                    <JobLifecycle status={j.status} />
                     {active ? (
                       <Elapsed since={j.created_at} active={true} />
                     ) : (
@@ -276,8 +352,9 @@ export default function JobsPage() {
                       <button onClick={() => { setDeleteId(j.id); setDeleteType("dl"); }} className="text-xs text-red-500 hover:underline">{t("jobs.del")}</button>
                     </div>
                   </div>
+                  {j.error_log && expandedLog !== j.id && <ErrorExcerpt value={j.error_log} />}
                   {expandedLog === j.id && j.error_log && (
-                    <pre className="text-xs font-mono whitespace-pre-wrap bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900 rounded p-3 mt-1 max-h-48 overflow-auto">{j.error_log}</pre>
+                    <pre className="mt-1 max-h-48 overflow-auto rounded-md border border-[#cf222e]/20 bg-[#ffebe9] p-3 font-mono text-xs whitespace-pre-wrap text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">{j.error_log}</pre>
                   )}
                   {expandedImports === j.id && (
                     <ImportJobsList downloadJobId={j.id} />
