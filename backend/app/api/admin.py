@@ -1149,15 +1149,28 @@ def _load_config() -> tuple[dict, str]:
             config = json.load(f)
     return config, config_path
 
-def _read_source_config(extractor_config: dict, schema_map: dict) -> dict:
+def _read_source_config(extractor_config: dict, schema_map: dict, config: dict | None = None) -> dict:
     """Read gallery-dl extractor config back into our API schema shape."""
     result = {}
     for api_key, dl_key in schema_map.items():
         val = extractor_config.get(dl_key)
         if api_key == "directory" and isinstance(val, list):
             val = "/".join(val)
-        if api_key == "ugoira" and isinstance(val, bool):
-            val = "zip"
+        if api_key == "ugoira":
+            # The extractor config stores "original" when format conversion is active.
+            # Resolve the actual output format from the ugoira postprocessor.
+            if val == "original" or isinstance(val, bool):
+                if config:
+                    for pp in config.get("postprocessors", []):
+                        if isinstance(pp, dict) and pp.get("name") == "ugoira":
+                            ext = pp.get("extension")
+                            if ext in ("gif", "webm", "mp4"):
+                                val = ext
+                                break
+                    else:
+                        val = "zip" if not val or val == "zip" else "zip"
+                else:
+                    val = "zip"
         if val is not None:
             result[api_key] = val
     return result
@@ -1185,6 +1198,12 @@ def _rebuild_managed_postprocessors(config: dict, pixiv_ugoira: str | None) -> l
     The metadata postprocessor is required by the import pipeline. The ugoira
     postprocessor is controlled by the current Pixiv config and must survive
     saves from other provider tabs.
+
+    When ugoira format conversion is enabled (gif/webm/mp4), this mirrors the
+    behavior of gallery-dl's --ugoira CLI flag:
+    1. Sets extractor.pixiv.ugoira to "original" so the extractor downloads
+       individual frames instead of a ZIP archive
+    2. Adds a ugoira postprocessor to assemble frames into the chosen format
     """
     postprocessors = config.setdefault("postprocessors", [])
     postprocessors[:] = [
@@ -1193,10 +1212,13 @@ def _rebuild_managed_postprocessors(config: dict, pixiv_ugoira: str | None) -> l
     ]
 
     if pixiv_ugoira in ("gif", "webm", "mp4"):
+        # Mirror --ugoira CLI: set extractor to "original" for frame download
+        config.setdefault("extractor", {}).setdefault("pixiv", {})["ugoira"] = "original"
         postprocessors.append({
             "name": "ugoira",
             "extension": pixiv_ugoira,
             "keep-files": False,
+            "whitelist": ["pixiv", "danbooru"],
         })
 
     postprocessors.append({
@@ -1399,7 +1421,7 @@ async def get_gallerydl_config(source: str | None = None):
 
     def get_source(source_name, schema_map):
         src = extractors.get(source_name, {})
-        return _read_source_config(src, schema_map)
+        return _read_source_config(src, schema_map, config)
 
     all_config = {
         "pixiv": get_source("pixiv", PIXIV_CONFIG_MAP),
