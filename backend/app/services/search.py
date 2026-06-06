@@ -135,6 +135,7 @@ class SearchService:
             logger.warning("Batch index failed: %s", e)
 
     async def reindex(self) -> dict:
+        BATCH_SIZE = 500
         stats = {"works": 0, "creators": 0, "tags": 0}
         try:
             client = _client()
@@ -142,9 +143,7 @@ class SearchService:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-        # ── Bulk pre-fetch: avoid N+1 ──────────────────────────────────────────
-
-        # work_id → [tag_names]  (single JOIN query)
+        # ── Bulk pre-fetch ───────────────────────────────────────────────
         tags_rows = await self.db.execute(
             select(WorkTag.work_id, Tag.normalized_name).join(Tag, Tag.id == WorkTag.tag_id)
         )
@@ -152,7 +151,6 @@ class SearchService:
         for wid, tname in tags_rows.all():
             work_tags.setdefault(str(wid), []).append(tname)
 
-        # work_id → (source, creator_display_name)  (single outer-join query)
         sc_rows = await self.db.execute(
             select(WorkSource.work_id, WorkSource.source, SourceCreator.display_name).outerjoin(
                 SourceCreator,
@@ -169,56 +167,85 @@ class SearchService:
                 if cname:
                     work_creator[key] = cname
 
-        # ── Index works ────────────────────────────────────────────────────────
-        works = await self.db.execute(
-            select(Work).order_by(Work.created_at.desc()).limit(10000)
-        )
-        work_docs = []
-        for w in works.scalars().all():
-            wid = str(w.id)
-            work_docs.append({
-                "id": wid,
-                "title": w.title or "",
-                "description": (w.description or "")[:500],
-                "creator_name": work_creator.get(wid) or "",
-                "is_nsfw": w.is_nsfw,
-                "is_ai_generated": w.is_ai_generated,
-                "source": work_source.get(wid) or "unknown",
-                "tags": work_tags.get(wid) or [],
-                "thumbnail_asset_id": w.thumbnail_asset_id,
-                "asset_count": getattr(w, "asset_count", 1),
-                "posted_at": w.posted_at,
-                "created_at": w.created_at.isoformat() if w.created_at else None,
-            })
-            stats["works"] += 1
-        if work_docs:
+        # Clear existing indexes before reindex
+        try:
+            client.index(WORKS_INDEX).delete_all_documents()
+            client.index(CREATORS_INDEX).delete_all_documents()
+            client.index(TAGS_INDEX).delete_all_documents()
+        except Exception:
+            pass
+
+        # ── Index works (paginated) ──────────────────────────────────────
+        work_offset = 0
+        while True:
+            rows = await self.db.execute(
+                select(Work).order_by(Work.created_at.desc())
+                .offset(work_offset).limit(BATCH_SIZE)
+            )
+            batch = rows.scalars().all()
+            if not batch:
+                break
+            work_docs = []
+            for w in batch:
+                wid = str(w.id)
+                work_docs.append({
+                    "id": wid, "title": w.title or "",
+                    "description": (w.description or "")[:500],
+                    "creator_name": work_creator.get(wid) or "",
+                    "is_nsfw": w.is_nsfw, "is_ai_generated": w.is_ai_generated,
+                    "source": work_source.get(wid) or "unknown",
+                    "tags": work_tags.get(wid) or [],
+                    "thumbnail_asset_id": w.thumbnail_asset_id,
+                    "asset_count": getattr(w, "asset_count", 1),
+                    "posted_at": w.posted_at,
+                    "created_at": w.created_at.isoformat() if w.created_at else None,
+                })
+                stats["works"] += 1
             client.index(WORKS_INDEX).add_documents(work_docs)
+            logger.info("Indexed %d works (offset=%d)", len(work_docs), work_offset)
+            work_offset += BATCH_SIZE
 
-        # Index creators
-        creators = await self.db.execute(select(Creator).limit(10000))
-        creator_docs = []
-        for c in creators.scalars().all():
-            creator_docs.append({
-                "id": str(c.id), "name": c.name,
-                "display_name": c.display_name or c.name,
-                "description": (c.description or "")[:500],
-                "is_active": c.is_active, "created_at": c.created_at.isoformat(),
-            })
-            stats["creators"] += 1
-        if creator_docs:
+        # ── Index creators (paginated) ───────────────────────────────────
+        creator_offset = 0
+        while True:
+            rows = await self.db.execute(
+                select(Creator).order_by(Creator.created_at.desc())
+                .offset(creator_offset).limit(BATCH_SIZE)
+            )
+            batch = rows.scalars().all()
+            if not batch:
+                break
+            creator_docs = []
+            for c in batch:
+                creator_docs.append({
+                    "id": str(c.id), "name": c.name,
+                    "display_name": c.display_name or c.name,
+                    "description": (c.description or "")[:500],
+                    "is_active": c.is_active, "created_at": c.created_at.isoformat(),
+                })
+                stats["creators"] += 1
             client.index(CREATORS_INDEX).add_documents(creator_docs)
+            creator_offset += BATCH_SIZE
 
-        # Index tags
-        tags = await self.db.execute(select(Tag).limit(10000))
-        tag_docs = []
-        for t in tags.scalars().all():
-            tag_docs.append({
-                "id": str(t.id), "normalized_name": t.normalized_name,
-                "category": t.category or "general", "created_at": t.created_at.isoformat(),
-            })
-            stats["tags"] += 1
-        if tag_docs:
+        # ── Index tags (paginated) ───────────────────────────────────────
+        tag_offset = 0
+        while True:
+            rows = await self.db.execute(
+                select(Tag).order_by(Tag.created_at.desc())
+                .offset(tag_offset).limit(BATCH_SIZE)
+            )
+            batch = rows.scalars().all()
+            if not batch:
+                break
+            tag_docs = []
+            for t in batch:
+                tag_docs.append({
+                    "id": str(t.id), "normalized_name": t.normalized_name,
+                    "category": t.category or "general", "created_at": t.created_at.isoformat(),
+                })
+                stats["tags"] += 1
             client.index(TAGS_INDEX).add_documents(tag_docs)
+            tag_offset += BATCH_SIZE
 
         logger.info("Reindexed: %d works, %d creators, %d tags",
                      stats["works"], stats["creators"], stats["tags"])
