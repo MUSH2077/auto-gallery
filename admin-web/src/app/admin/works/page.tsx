@@ -260,11 +260,11 @@ function WorksContent() {
         </select>
 
         {/* Creator filter */}
-        {(creators.data?.length || 0) > 0 && (
+        {(creators.data?.items.length || 0) > 0 && (
           <select value={creatorFilter} onChange={(e) => updateParams({ creator: e.target.value || null })} aria-label="Filter by creator"
             className="select px-2 py-1.5 text-xs">
             <option value="">{t("works.filter_all_creators")}</option>
-            {creators.data?.map((c) => (
+            {creators.data?.items.map((c) => (
               <option key={c.id} value={c.id}>{c.display_name || c.name}</option>
             ))}
           </select>

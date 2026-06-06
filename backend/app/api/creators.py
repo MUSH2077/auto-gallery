@@ -6,7 +6,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.creator import CreatorCreate, CreatorRead, CreatorUpdate
+from app.schemas.creator import CreatorCreate, CreatorListResponse, CreatorRead, CreatorUpdate
 from app.schemas.source_creator import SourceCreatorCreate, SourceCreatorRead
 from app.schemas.creator_link import CreatorLinkCreate, CreatorLinkRead, CreatorLinkUpdate
 from app.models.creator import Creator
@@ -23,7 +23,7 @@ async def count_creators(db: AsyncSession = Depends(get_db)):
     return {"count": result.scalar() or 0}
 
 
-@router.get("", response_model=list[CreatorRead])
+@router.get("", response_model=CreatorListResponse)
 async def list_creators(
     offset: int = 0, limit: int = 50,
     search: str | None = None,

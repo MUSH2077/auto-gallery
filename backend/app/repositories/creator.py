@@ -15,7 +15,8 @@ class CreatorRepository:
                        is_active: bool | None = None,
                        has_danbooru: bool | None = None,
                        has_subscription: bool | None = None,
-                       is_favorite: bool | None = None) -> list[Creator]:
+                       is_favorite: bool | None = None) -> tuple[list[Creator], int]:
+        # ── Filter conditions ──────────────────────────────────────────
         conditions = []
 
         if search:
@@ -39,44 +40,60 @@ class CreatorRepository:
         if is_favorite is not None:
             conditions.append(Creator.is_favorite == is_favorite)
 
-        subscription_count = (
-            select(func.count(Subscription.id))
-            .where(Subscription.creator_id == Creator.id)
-            .correlate(Creator)
-            .scalar_subquery()
-        )
-        source_count = (
-            select(func.count(SourceCreator.id))
-            .where(SourceCreator.creator_id == Creator.id)
-            .correlate(Creator)
-            .scalar_subquery()
-        )
-        repository_count = (
-            select(func.count(SubscriptionSource.id))
-            .select_from(Subscription)
-            .join(SubscriptionSource, SubscriptionSource.subscription_id == Subscription.id)
-            .where(Subscription.creator_id == Creator.id)
-            .where(SubscriptionSource.source_url.isnot(None))
-            .correlate(Creator)
-            .scalar_subquery()
-        )
-        last_synced_at = (
-            select(func.max(SubscriptionSource.last_synced_at))
-            .select_from(Subscription)
-            .join(SubscriptionSource, SubscriptionSource.subscription_id == Subscription.id)
-            .where(Subscription.creator_id == Creator.id)
-            .correlate(Creator)
-            .scalar_subquery()
+        # ── Pre-aggregated subqueries (derived tables, not per-row) ────
+        # Subscription aggregates: count, repository count, last synced
+        sub_agg = (
+            select(
+                Subscription.creator_id,
+                func.count(func.distinct(Subscription.id)).label("sub_count"),
+                func.count(func.distinct(SubscriptionSource.id))
+                    .filter(SubscriptionSource.source_url.isnot(None))
+                    .label("repo_count"),
+                func.max(SubscriptionSource.last_synced_at).label("last_sync"),
+            )
+            .outerjoin(SubscriptionSource,
+                       SubscriptionSource.subscription_id == Subscription.id)
+            .group_by(Subscription.creator_id)
+            .subquery()
         )
 
+        # Source creator count
+        sc_agg = (
+            select(
+                SourceCreator.creator_id,
+                func.count(SourceCreator.id).label("src_count"),
+            )
+            .where(SourceCreator.creator_id.isnot(None))
+            .group_by(SourceCreator.creator_id)
+            .subquery()
+        )
+
+        # ── Main query with JOINs ───────────────────────────────────────
         stmt = (
-            select(Creator, subscription_count, source_count, repository_count, last_synced_at)
-            .offset(offset)
-            .limit(limit)
+            select(
+                Creator,
+                func.coalesce(sub_agg.c.sub_count, 0).label("subscription_count"),
+                func.coalesce(sc_agg.c.src_count, 0).label("source_count"),
+                func.coalesce(sub_agg.c.repo_count, 0).label("repository_count"),
+                sub_agg.c.last_sync.label("last_synced_at"),
+            )
+            .outerjoin(sub_agg, sub_agg.c.creator_id == Creator.id)
+            .outerjoin(sc_agg, sc_agg.c.creator_id == Creator.id)
             .order_by(Creator.name)
         )
+
         if conditions:
             stmt = stmt.where(and_(*conditions))
+
+        # ── Count query (same filters) ──────────────────────────────────
+        count_stmt = select(func.count(Creator.id))
+        if conditions:
+            count_stmt = count_stmt.where(and_(*conditions))
+        total = (await self.session.execute(count_stmt)).scalar_one()
+
+        # ── Paginate ────────────────────────────────────────────────────
+        stmt = stmt.offset(offset).limit(limit)
+
         result = await self.session.execute(stmt)
         creators = []
         for row in result:
@@ -86,7 +103,8 @@ class CreatorRepository:
             creator.repository_count = row[3] or 0
             creator.last_synced_at = row[4]
             creators.append(creator)
-        return creators
+
+        return creators, total
 
     async def get(self, creator_id: UUID) -> Creator | None:
         return await self.session.get(Creator, creator_id)
@@ -142,7 +160,6 @@ class CreatorRepository:
         return list(result.scalars().all())
 
     async def list_source_creators(self, creator_id: UUID) -> list[SourceCreator]:
-        from sqlalchemy import select
         result = await self.session.execute(
             select(SourceCreator).where(SourceCreator.creator_id == creator_id)
         )

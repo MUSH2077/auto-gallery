@@ -18,11 +18,12 @@ class CreatorService:
                             has_danbooru: bool | None = None,
                             has_subscription: bool | None = None,
                             is_favorite: bool | None = None):
-        return await self.repo.list_all(offset, limit,
+        creators, total = await self.repo.list_all(offset, limit,
                                         search=search, is_active=is_active,
                                         has_danbooru=has_danbooru,
                                         has_subscription=has_subscription,
                                         is_favorite=is_favorite)
+        return {"items": creators, "total": total}
 
     async def toggle_favorite(self, creator_id: UUID):
         creator = await self.get_creator(creator_id)
