@@ -1156,21 +1156,8 @@ def _read_source_config(extractor_config: dict, schema_map: dict, config: dict |
         val = extractor_config.get(dl_key)
         if api_key == "directory" and isinstance(val, list):
             val = "/".join(val)
-        if api_key == "ugoira":
-            # The extractor config stores "original" when format conversion is active.
-            # Resolve the actual output format from the ugoira postprocessor.
-            if val == "original" or isinstance(val, bool):
-                if config:
-                    for pp in config.get("postprocessors", []):
-                        if isinstance(pp, dict) and pp.get("name") == "ugoira":
-                            ext = pp.get("extension")
-                            if ext in ("gif", "webm", "mp4"):
-                                val = ext
-                                break
-                    else:
-                        val = "zip" if not val or val == "zip" else "zip"
-                else:
-                    val = "zip"
+        if api_key == "ugoira" and isinstance(val, bool):
+            val = "zip"
         if val is not None:
             result[api_key] = val
     return result
@@ -1212,13 +1199,10 @@ def _rebuild_managed_postprocessors(config: dict, pixiv_ugoira: str | None) -> l
     ]
 
     if pixiv_ugoira in ("gif", "webm", "mp4"):
-        # Mirror --ugoira CLI: set extractor to "original" for frame download
-        config.setdefault("extractor", {}).setdefault("pixiv", {})["ugoira"] = "original"
         postprocessors.append({
             "name": "ugoira",
             "extension": pixiv_ugoira,
             "keep-files": False,
-            "whitelist": ["pixiv", "danbooru"],
         })
 
     postprocessors.append({
