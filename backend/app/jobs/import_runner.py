@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from collections import defaultdict
@@ -343,21 +344,24 @@ async def run_import_job(import_job_id: str):
                     db.add(asset)
                     await db.flush()
 
-                    # Generate per-page thumbnail: {stem}.thumbnail.webp (e.g. 8232932_p0.thumbnail.webp)
+                    # Generate per-page thumbnail in thread pool (CPU-bound pyvips)
                     if _can_generate_thumbnail(fp.suffix):
                         from app.services.thumbnail import generate_thumbnail
-                        tp = generate_thumbnail(str(fp), lib_dir, name=f"{fp.stem}.thumbnail")
+                        tp = await asyncio.to_thread(
+                            generate_thumbnail, str(fp), lib_dir, f"{fp.stem}.thumbnail")
                         if tp:
                             asset.thumb_sm_path = str(
                                 Path(tp).relative_to(settings.library_root))
 
-                    # Compute pHash for image files (skip animated/video types)
+                    # Compute pHash in thread pool (CPU-bound PIL)
                     if _can_compute_phash(fp.suffix):
                         try:
-                            import imagehash
-                            from PIL import Image as _PILImage
-                            with _PILImage.open(str(fp)) as _pil_img:
-                                asset.phash = str(imagehash.phash(_pil_img))
+                            def _compute_phash(filepath: str) -> str:
+                                import imagehash
+                                from PIL import Image as _PILImage
+                                with _PILImage.open(filepath) as _pil_img:
+                                    return str(imagehash.phash(_pil_img))
+                            asset.phash = await asyncio.to_thread(_compute_phash, str(fp))
                         except Exception as _phash_err:
                             logger.warning("pHash failed for %s: %s", fp, _phash_err)
 
