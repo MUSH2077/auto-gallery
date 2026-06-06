@@ -82,6 +82,7 @@ Constraints (in `.claude/constraints/`):
 - [filesystem-paths.md](../.claude/constraints/filesystem-paths.md) — naming templates, directory structure, path assumptions
 - [creator-display-name.md](../.claude/constraints/creator-display-name.md) — canonical display_name, name resolution hierarchy, UI consistency
 - [source-colors.md](../.claude/constraints/source-colors.md) — canonical source colors, single palette, anti-duplication
+- [metadata-detection.md](../.claude/constraints/metadata-detection.md) — always verify field values against gallery-dl source before implementing detection
 - [client-api.md](../.claude/constraints/client-api.md) — user model, client-facing APIs, albums, mobile response design
 - [remote-access.md](../.claude/constraints/remote-access.md) — LAN/VPN/reverse-proxy, HTTPS, network architecture
 
