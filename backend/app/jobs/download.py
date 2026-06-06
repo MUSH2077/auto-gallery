@@ -301,7 +301,7 @@ async def run_download_job(job_id: str):
         config_path = os.path.join(
             os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"), "config.json")
 
-        cmd = ["gallery-dl", "--write-metadata"]
+        cmd = ["gallery-dl"]
         if os.path.exists(config_path):
             cmd.extend(["--config", config_path])
         if job_config_path:
