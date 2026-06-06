@@ -13,6 +13,7 @@ from app.schemas.subscription import SubscriptionCreate, SubscriptionRead, Subsc
 from app.schemas.subscription_source import SubscriptionSourceCreate, SubscriptionSourceRead, SubscriptionSourceUpdate
 from app.services.subscription_enqueue import enqueue_subscription_source_sync
 from app.services.subscription import SubscriptionService
+from app.services.cache import cache_get, cache_set, cache_key, cache_delete_pattern
 
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[RequireAdmin])
@@ -35,11 +36,19 @@ async def list_subscriptions(
     never_synced: bool | None = None,
     db: AsyncSession = Depends(get_db),
 ):
+    ck = cache_key("subscriptions:list", offset=offset, limit=limit,
+                   search=search, is_active=is_active,
+                   sync_enabled=sync_enabled, never_synced=never_synced)
+    cached = cache_get(ck)
+    if cached is not None:
+        return cached
     svc = SubscriptionService(db)
-    return await svc.list_subscriptions(offset, limit,
+    data = await svc.list_subscriptions(offset, limit,
                                         search=search, is_active=is_active,
                                         sync_enabled=sync_enabled,
                                         never_synced=never_synced)
+    cache_set(ck, data, 300)
+    return data
 
 
 # ── Batch Operations ──
@@ -125,7 +134,10 @@ async def get_subscription(subscription_id: UUID, db: AsyncSession = Depends(get
 @router.post("", response_model=SubscriptionRead, status_code=201)
 async def create_subscription(data: SubscriptionCreate, db: AsyncSession = Depends(get_db)):
     svc = SubscriptionService(db)
-    return await svc.create_subscription(data.model_dump())
+    result = await svc.create_subscription(data.model_dump())
+    cache_delete_pattern("subscriptions:*")
+    cache_delete_pattern("creators:*")
+    return result
 
 
 @router.patch("/{subscription_id}", response_model=SubscriptionRead)

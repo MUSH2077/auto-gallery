@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.schemas.work import WorkRead, WorkList, WorkListResponse
 from app.repositories.work import WorkRepository
+from app.services.cache import cache_get, cache_set, cache_key, cache_delete_pattern
 from app.models.asset import Asset
 from app.models.asset_source import AssetSource
 from app.models.work import Work
@@ -34,6 +35,14 @@ async def list_works(
     sort_order: str = "desc",
     db: AsyncSession = Depends(get_db),
 ):
+    ck = cache_key("works:list", offset=offset, limit=limit,
+                   search=search, source=source, creator_id=creator_id, tag=tag,
+                   is_nsfw=is_nsfw, is_favorite=is_favorite,
+                   is_ai_generated=is_ai_generated,
+                   sort_by=sort_by, sort_order=sort_order)
+    cached = cache_get(ck)
+    if cached is not None:
+        return cached
     repo = WorkRepository(db)
     works, total = await repo.list_all(
         offset=offset, limit=limit,
@@ -42,7 +51,9 @@ async def list_works(
         is_ai_generated=is_ai_generated,
         sort_by=sort_by, sort_order=sort_order,
     )
-    return WorkListResponse(total=total, items=works)
+    data = {"total": total, "items": works}
+    cache_set(ck, data, 300)
+    return data
 
 
 @router.get("/{work_id}", response_model=WorkRead)
@@ -106,6 +117,7 @@ async def delete_work(work_id: UUID, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Work not found")
     await db.delete(work)
     await db.commit()
+    cache_delete_pattern("works:*")
     # Remove from Meilisearch index (best-effort)
     try:
         from app.services.search import SearchService
