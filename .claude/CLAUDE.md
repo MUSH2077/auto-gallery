@@ -83,6 +83,10 @@ Constraints (in `.claude/constraints/`):
 - [creator-display-name.md](../.claude/constraints/creator-display-name.md) — canonical display_name, name resolution hierarchy, UI consistency
 - [source-colors.md](../.claude/constraints/source-colors.md) — canonical source colors, single palette, anti-duplication
 - [metadata-detection.md](../.claude/constraints/metadata-detection.md) — always verify field values against gallery-dl source before implementing detection
+- [verification.md](../.claude/constraints/verification.md) — pre-commit end-to-end verification, test before ship
+- [deployment.md](../.claude/constraints/deployment.md) — container restart discipline, queue routing, live verification
+- [frontend-discipline.md](../.claude/constraints/frontend-discipline.md) — shared modules, i18n, component rules, API type sync
+- [commit-checklist.md](../.claude/constraints/commit-checklist.md) — pre-commit self-check by change type
 - [client-api.md](../.claude/constraints/client-api.md) — user model, client-facing APIs, albums, mobile response design
 - [remote-access.md](../.claude/constraints/remote-access.md) — LAN/VPN/reverse-proxy, HTTPS, network architecture
 

@@ -193,3 +193,112 @@ On worker startup, before processing any new jobs:
    - Enqueue an import job
 
 This ensures no downloaded files are silently lost on worker restart.
+
+## Debugging download/import failures
+
+### 1. Check which queue the job went to
+
+```bash
+# Auto-sync jobs go to "scheduled" queue
+docker compose logs scheduler | grep "run_download_job"
+
+# Manual retry jobs go to "default" queue  
+docker compose logs worker | grep "run_download_job"
+```
+
+### 2. Inspect the job in the database
+
+```bash
+docker compose exec backend python3 -c "
+import asyncio
+from app.database import async_session
+from app.models.download_job import DownloadJob
+from app.models.import_job import ImportJob
+from sqlalchemy import select
+
+async def check():
+    async with async_session() as db:
+        r = await db.execute(select(DownloadJob).where(DownloadJob.id == 'UUID'))
+        dj = r.scalar_one_or_none()
+        if dj:
+            print(f'status={dj.status} error={dj.error_log[:500]}')
+        
+        r2 = await db.execute(select(ImportJob).where(ImportJob.download_job_id == dj.id))
+        for ij in r2.scalars():
+            print(f'import: status={ij.status} error={ij.error_log[:500] if ij.error_log else None}')
+asyncio.run(check())
+"
+```
+
+### 3. Verify the gallery-dl config is correct
+
+```bash
+# Check what gallery-dl actually sees
+docker compose exec worker python3 -c "
+import json
+with open('/gallerydl-config/config.json') as f:
+    c = json.load(f)
+print('Pixiv extractor:', json.dumps(c.get('extractor',{}).get('pixiv',{}), indent=2))
+print('Postprocessors:', json.dumps(c.get('postprocessors',[]), indent=2))
+"
+```
+
+### 4. Test gallery-dl directly with the production config
+
+```bash
+docker compose exec worker gallery-dl --config /gallerydl-config/config.json \
+  --destination /tmp/test --range 1-1 "<url>" -v 2>&1 | grep -i "error\|ugoira\|postprocessor\|active"
+```
+
+### 5. Inspect downloaded metadata
+
+```bash
+docker compose exec worker python3 -c "
+import json, glob
+for f in glob.glob('/tmp/test/pixiv/**/*.json', recursive=True):
+    with open(f) as jf:
+        meta = json.load(jf)
+    print(f'{f}: rating={meta.get(\"rating\")} x_restrict={meta.get(\"x_restrict\")} type={meta.get(\"type\")}')
+"
+```
+
+### 6. Common failure patterns
+
+| Symptom | Likely cause | Check |
+|---------|-------------|-------|
+| Download "complete" in 5s, no files | snapshot falsely detected JSONs, or all in archive | Check `error_log`, check download archive |
+| Import "no metadata JSON files" | scan_root mismatch (naming template vs download_dir) | Check filesystem for actual JSON locations |
+| Ugoira saved as ZIP not GIF | `--write-metadata` conflict OR missing postprocessor | Check config postprocessors, remove `--write-metadata` |
+| NSFW not detected | Using wrong metadata field | Read `metadata-detection.md` constraint |
+| Worker not processing new code | Container not recreated after image rebuild | Check container creation timestamp |
+
+### 7. Manually trigger a download for testing
+
+```bash
+docker compose exec backend python3 -c "
+import asyncio, redis as redis_lib
+from app.database import async_session
+from app.models.subscription_source import SubscriptionSource
+from app.models.download_job import DownloadJob
+from app.config import settings
+from rq import Queue
+from sqlalchemy import select
+
+async def trigger():
+    async with async_session() as db:
+        r = await db.execute(select(SubscriptionSource).where(
+            SubscriptionSource.source == 'pixiv', SubscriptionSource.is_enabled == True).limit(1))
+        ss = r.scalar_one_or_none()
+        if ss:
+            job = DownloadJob(subscription_id=ss.subscription_id, subscription_source_id=ss.id,
+                             source=ss.source, source_url=ss.source_url, status='pending')
+            db.add(job)
+            await db.flush()
+            red = redis_lib.from_url(settings.redis_url)
+            Queue(name='scheduled', connection=red).enqueue(
+                'app.jobs.download.run_download_job', str(job.id), job_timeout=7200)
+            await db.commit()
+            print(f'Enqueued job {job.id} for {ss.source_url}')
+asyncio.run(trigger())
+"
+```

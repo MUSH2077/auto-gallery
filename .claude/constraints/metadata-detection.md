@@ -94,3 +94,69 @@ rating = raw.get("rating", "")
 3. Test both positive and negative cases
 4. Document field semantics in code comments with source references
 5. Add the verified fields to the reference table above
+
+---
+
+## Extended scope: Any external tool behavior
+
+This constraint applies to ALL situations where code depends on the behavior of an external tool or API, not just metadata fields.
+
+### gallery-dl behavior
+
+| Decision point | Verify by | Do NOT guess |
+|---------------|-----------|--------------|
+| Exit code meaning | Read gallery-dl source for the extractor | Assume exit 0 = files downloaded |
+| Output file format | Read extractor source + postprocessor source | Assume ugoira setting produces GIF |
+| CLI flag ↔ config equivalence | Read `option.py` to see exact config paths | Assume `--flag X` = `{"X": "value"}` in config |
+| Config merge behavior | Test with multiple `--config` files | Assume deep merge |
+| Download archive behavior | Test: re-run on same URL | Assume it skips duplicates |
+
+### ffmpeg behavior
+
+| Decision point | Verify by | Do NOT guess |
+|---------------|-----------|--------------|
+| Available codecs | `ffmpeg -codecs` in container | Assume libx264 available |
+| Output format support | Test conversion with actual file | Assume GIF output works |
+| Frame count in output | `ffprobe -show_streams` on output file | Count bytes manually |
+
+### Pixiv API behavior
+
+| Decision point | Verify by | Do NOT guess |
+|---------------|-----------|--------------|
+| Auth requirements | Read gallery-dl pixiv.py `_init_oauth` / `_login_impl` | Assume refresh_token is enough |
+| R-18 access | Check if account has R-18 enabled in Pixiv settings | Assume all content is visible |
+| Rate limiting | Check gallery-dl's `sleep-request` handling | Assume unlimited requests |
+
+### PostgreSQL behavior
+
+| Decision point | Verify by | Do NOT guess |
+|---------------|-----------|--------------|
+| `to_char()` on VARCHAR | Test query first | Assume it works on non-timestamp columns |
+| `ILIKE` on UUID | Use `::text` cast | Assume ILIKE works on UUID type |
+| JSONB operators | Check PostgreSQL version docs | Assume `->>'key'` always returns string |
+
+## Workflow for any new detection/classification
+
+```
+1. Locate the authoritative source
+   ├── gallery-dl extractor? → Read extractor .py in container
+   ├── gallery-dl postprocessor? → Read postprocessor .py in container
+   ├── gallery-dl CLI option? → Read option.py in container
+   ├── ffmpeg codec/format? → Run ffmpeg -codecs / -formats in container
+   └── Platform API? → Find official API docs
+
+2. Write a test that exercises the real tool
+   └── docker compose exec worker <test_command>
+
+3. Inspect the actual output
+   └── Check files, JSON fields, exit codes
+
+4. Implement detection logic based on verified values
+   └── Include source references in comments
+
+5. Test BOTH positive and negative cases
+   └── e.g., safe work AND R-18 work for NSFW detection
+
+6. Commit with evidence in the commit message
+   └── "From gallery-dl pixiv.py line 62: ratings = {0: General, 1: R-18, 2: R-18G}"
+```
