@@ -76,6 +76,11 @@ export interface Creator {
   updated_at: string;
 }
 
+export interface CreatorListResponse {
+  items: Creator[];
+  total: number;
+}
+
 export interface CreatorLink {
   id: string;
   creator_id: string;
@@ -627,7 +632,7 @@ export const api = {
     if (filters?.has_danbooru !== undefined) params.set("has_danbooru", String(filters.has_danbooru));
     if (filters?.has_subscription !== undefined) params.set("has_subscription", String(filters.has_subscription));
     if (filters?.is_favorite !== undefined) params.set("is_favorite", String(filters.is_favorite));
-    return request<Creator[]>(`/api/v1/creators?${params.toString()}`);
+    return request<CreatorListResponse>(`/api/v1/creators?${params.toString()}`);
   },
 
   getCreator: (id: string) => request<Creator>(`/api/v1/creators/${id}`),

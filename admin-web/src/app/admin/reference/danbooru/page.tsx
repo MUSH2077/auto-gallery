@@ -154,7 +154,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
                     <select value={selectedCreator} onChange={(e) => setSelectedCreator(e.target.value)}
                       className="select px-2 py-1 text-xs">
                       <option value="">{t("danbooru.select_creator")}</option>
-                      {creators.data?.map((c) => <option key={c.id} value={c.id}>{c.display_name || c.name}</option>)}
+                      {creators.data?.items.map((c) => <option key={c.id} value={c.id}>{c.display_name || c.name}</option>)}
                     </select>
                     <button
                       onClick={() => {
@@ -220,7 +220,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
               <select value={selectedCreator} onChange={(e) => setSelectedCreator(e.target.value)}
                 className="select w-full">
                 <option value="">{t("danbooru.select_creator")}</option>
-                {creators.data?.map((c) => <option key={c.id} value={c.id}>{c.display_name || c.name}</option>)}
+                {creators.data?.items.map((c) => <option key={c.id} value={c.id}>{c.display_name || c.name}</option>)}
               </select>
             </div>
             <button onClick={() => onImport(selectedCreator)} disabled={!selectedCreator || importPending}
