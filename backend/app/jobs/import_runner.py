@@ -49,15 +49,25 @@ def _detect_ai_generated(raw: dict, source: str) -> bool:
 
 
 def _detect_nsfw(raw: dict, source: str) -> bool:
-    """Detect if a work is NSFW/R-18 from its raw metadata."""
+    """Detect if a work is NSFW/R-18 from its raw metadata.
+
+    Pixiv field reference (from gallery-dl source, pixiv.py):
+      x_restrict: 0=General, 1=R-18, 2=R-18G
+      rating: gallery-dl computed from x_restrict ("General"/"R-18"/"R-18G")
+      sanity_level: 0-11, 6+ restricted, 7+ explicit (NOT reliable alone)
+    """
     if source == "pixiv":
-        # x_restrict: 0=all-ages, 1=R-18, 2=R-18G
-        restrict = raw.get("restrict")
-        if restrict is not None and restrict >= 1:
+        # Primary: gallery-dl's computed rating (most reliable)
+        rating = raw.get("rating", "")
+        if rating in ("R-18", "R-18G"):
             return True
-        # sanity_level: 0-11, 7+ = explicit
-        sanity = raw.get("sanity_level")
-        if sanity is not None and sanity >= 7:
+        # Fallback: raw Pixiv API x_restrict field
+        xr = raw.get("x_restrict")
+        if xr is not None and isinstance(xr, (int, float)) and xr >= 1:
+            return True
+        # Backward compat: some JSON formats may have 'restrict' as x_restrict
+        restrict = raw.get("restrict")
+        if restrict is not None and isinstance(restrict, (int, float)) and restrict >= 1:
             return True
     elif source == "danbooru":
         # rating: s=safe, q=questionable, e=explicit
