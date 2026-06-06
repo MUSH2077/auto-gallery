@@ -194,6 +194,8 @@ async def system_info():
 @router.get("/storage-breakdown")
 async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     """Return per-source and per-creator storage breakdown."""
+    from sqlalchemy import text
+
     dl_root = Path(settings.download_root)
     lib_root = Path(settings.library_root)
 
@@ -387,9 +389,18 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
+    db_stats = {}
+    try:
+        for table in ("works", "assets", "creators", "subscriptions", "tags"):
+            result = await db.execute(text(f"SELECT COUNT(*) FROM {table}"))
+            db_stats[table] = int(result.scalar() or 0)
+    except Exception:
+        db_stats = {}
+
     return {
         "sources": sources,
         "creators": creators,
+        "db_stats": db_stats,
         "layers": {
             "original_media_store": {
                 "path": str(dl_root),
@@ -413,19 +424,6 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
             },
         },
     }
-
-
-@router.get("/db-stats")
-async def db_table_stats(db: AsyncSession = Depends(get_db)):
-    """Return lightweight table row counts for the data management dashboard."""
-    from sqlalchemy import text
-    tables = ["works", "assets", "creators", "subscriptions", "tags",
-               "download_jobs", "import_jobs", "source_creators", "work_sources"]
-    stats = {}
-    for table in tables:
-        r = await db.execute(text(f"SELECT COUNT(*) FROM {table}"))
-        stats[table] = r.scalar() or 0
-    return stats
 
 
 @router.get("/integrity-check")
