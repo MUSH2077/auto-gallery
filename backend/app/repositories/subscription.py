@@ -70,7 +70,7 @@ class SubscriptionRepository:
         subs = []
         for row in result:
             sub = row[0]
-            sub.creator_name = row[1] or sub.creator_id
+            sub.creator_name = row[2] or row[1] or sub.creator_id
             sub.creator_display_name = row[2]
             sub.source_count = row[3] or 0
             sub.enabled_source_count = row[4] or 0
