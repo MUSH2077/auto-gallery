@@ -415,6 +415,19 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     }
 
 
+@router.get("/db-stats")
+async def db_table_stats(db: AsyncSession = Depends(get_db)):
+    """Return lightweight table row counts for the data management dashboard."""
+    from sqlalchemy import text
+    tables = ["works", "assets", "creators", "subscriptions", "tags",
+               "download_jobs", "import_jobs", "source_creators", "work_sources"]
+    stats = {}
+    for table in tables:
+        r = await db.execute(text(f"SELECT COUNT(*) FROM {table}"))
+        stats[table] = r.scalar() or 0
+    return stats
+
+
 @router.get("/integrity-check")
 async def integrity_check(db: AsyncSession = Depends(get_db)):
     """Scan for data integrity issues: orphaned files, missing thumbnails, orphaned records."""

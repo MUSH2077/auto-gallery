@@ -48,6 +48,7 @@ export default function DataManagementPage() {
   const storageBreakdown = useQuery({ queryKey: ["storage-breakdown"], queryFn: () => api.getStorageBreakdown() });
   const creatorCount = useQuery({ queryKey: ["creators-count"], queryFn: () => api.countCreators() });
   const subCount = useQuery({ queryKey: ["subs-count"], queryFn: () => api.countSubscriptions() });
+  const dbTableStats = useQuery({ queryKey: ["db-stats"], queryFn: () => api.getDbStats() });
   const integrity = useQuery({ queryKey: ["integrity-check"], queryFn: () => api.getIntegrityCheck(), enabled: false });
   const backups = useQuery({ queryKey: ["backups"], queryFn: () => api.listBackups() });
 
@@ -128,7 +129,7 @@ export default function DataManagementPage() {
   const info = systemInfo.data;
   const breakdown = storageBreakdown.data;
   const issues = integrity.data?.issues || [];
-  const dbStats = integrity.data?.db_stats;
+  const dbStats = dbTableStats.data;
   const lastBackup = backups.data?.backups?.[0];
   const totalSourceSize = breakdown?.sources
     ? Object.values(breakdown.sources).reduce((sum, s) => sum + s.size_mb, 0)

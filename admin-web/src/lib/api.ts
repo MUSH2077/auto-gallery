@@ -877,6 +877,9 @@ export const api = {
     creators: { name: string; display_name: string; source: string; size_mb: number; work_count: number; creator_id?: string }[];
     layers?: Record<string, { path: string; size_mb: number; description: string }>;
   }>("/api/v1/admin/storage-breakdown"),
+  getDbStats: () =>
+    request<Record<string, number>>("/api/v1/admin/db-stats"),
+
   getIntegrityCheck: () => request<{
     issues: { type: string; severity: string; count: number; description: string; items: any[] }[];
     db_stats: Record<string, number>;
