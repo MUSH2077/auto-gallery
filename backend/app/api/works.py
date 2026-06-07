@@ -51,7 +51,8 @@ async def list_works(
         is_ai_generated=is_ai_generated,
         sort_by=sort_by, sort_order=sort_order,
     )
-    data = {"total": total, "items": works}
+    items = [WorkList.model_validate(w, from_attributes=True) for w in works]
+    data = {"total": total, "items": items}
     cache_set(ck, data, 300)
     return data
 

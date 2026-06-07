@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.creator import CreatorRepository
 from app.models import Creator, CreatorLink, SourceCreator, Subscription, SubscriptionSource, DownloadJob, ImportJob
+from app.schemas.creator import CreatorRead
 
 
 class CreatorService:
@@ -23,7 +24,8 @@ class CreatorService:
                                         has_danbooru=has_danbooru,
                                         has_subscription=has_subscription,
                                         is_favorite=is_favorite)
-        return {"items": creators, "total": total}
+        items = [CreatorRead.model_validate(c, from_attributes=True) for c in creators]
+        return {"items": items, "total": total}
 
     async def toggle_favorite(self, creator_id: UUID):
         creator = await self.get_creator(creator_id)
