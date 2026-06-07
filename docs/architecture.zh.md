@@ -156,7 +156,7 @@ Worker 取走 import_job
 
 - **登录**：POST `/api/v1/auth/login` 使用用户名/密码返回 access token。
 - **Token 格式**：使用服务器密钥签名的 JWT access token。
-- **认证方式**：端点接受 `Authorization: Bearer <jwt>` 或 `X-Admin-Key` 头部（管理路由的旧版代理注入）。
+- **认证方式**：管理端点要求 `Authorization: Bearer <jwt>`。
 - **Token 过期**：通过 `ACCESS_TOKEN_EXPIRE_MINUTES` 配置（默认 30 分钟）。
 - 所有管理 API 路由需要通过 `RequireAdmin` 依赖进行认证。
 

@@ -58,6 +58,7 @@ services:
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
       SECRET_KEY: ${SECRET_KEY}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
       DOWNLOAD_ROOT: /downloads
       LIBRARY_ROOT: /library
       GALLERYDL_CONFIG_ROOT: /gallerydl-config
@@ -194,7 +195,6 @@ services:
       - "${ADMIN_WEB_PORT:-13000}:3000"
     environment:
       HOSTNAME: "0.0.0.0"
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8000}
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/ 2>&1 || exit 0"]

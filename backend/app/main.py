@@ -99,6 +99,7 @@ from fastapi.responses import JSONResponse
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     safe_body = "<redacted>"
+    raw = b""
     try:
         raw = await request.body()
         import json as _json
