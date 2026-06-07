@@ -9,6 +9,7 @@ class Settings(BaseSettings):
 
     secret_key: str = "changeme"
     admin_password: str = "changeme"
+    access_token_expire_minutes: int = 30
 
     download_root: str = "/downloads"
     library_root: str = "/library"

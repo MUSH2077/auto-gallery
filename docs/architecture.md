@@ -156,7 +156,7 @@ Admin Web and backend API use JWT-based authentication:
 
 - **Login**: POST `/api/v1/auth/login` with username/password returns an access token.
 - **Token format**: JWT access tokens signed with the server's secret key.
-- **Auth methods**: Endpoints accept either `Authorization: Bearer <jwt>` or `X-Admin-Key` header (legacy proxy injection for admin-only routes).
+- **Auth methods**: Admin endpoints require `Authorization: Bearer <jwt>`.
 - **Token expiry**: Configurable via `ACCESS_TOKEN_EXPIRE_MINUTES` (default 30 minutes).
 - All admin API routes require authentication via the `RequireAdmin` dependency.
 
