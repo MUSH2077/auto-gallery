@@ -18,6 +18,17 @@ def _client() -> _redis.Redis:
     return _redis.from_url(settings.redis_url)
 
 
+def _to_json(value: Any) -> Any:
+    """Recursively convert Pydantic models to JSON-serializable dicts."""
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return {k: _to_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_json(v) for v in value]
+    return value
+
+
 def cache_key(prefix: str, **params) -> str:
     """Build a deterministic cache key from a prefix and query parameters."""
     raw = json.dumps(dict(sorted(params.items())), sort_keys=True, default=str)
@@ -38,10 +49,15 @@ def cache_get(key: str) -> Any | None:
 
 
 def cache_set(key: str, value: Any, ttl_seconds: int = DEFAULT_TTL) -> None:
-    """Set a cache value with TTL. Best-effort."""
+    """Set a cache value with TTL. Best-effort.
+
+    Pydantic models are recursively converted to JSON-safe dicts before
+    serialization so they survive the redis round-trip intact.
+    """
     try:
         r = _client()
-        r.setex(key, ttl_seconds, json.dumps(value, default=str))
+        safe = _to_json(value)
+        r.setex(key, ttl_seconds, json.dumps(safe, default=str))
     except Exception:
         logger.debug("Cache write failed for key %s", key, exc_info=True)
 
