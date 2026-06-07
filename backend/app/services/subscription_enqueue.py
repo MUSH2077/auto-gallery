@@ -170,12 +170,12 @@ async def enqueue_subscription_source_sync(
             from rq import Queue
 
             r = redis_lib.from_url(settings.redis_url)
-            Queue(connection=r).enqueue(
+            Queue(name="downloads", connection=r).enqueue(
                 "app.jobs.download.run_download_job",
                 str(job.id),
                 job_timeout=RQ_JOB_TIMEOUT,
             )
-            append_manifest_event(job, "enqueued", queue="default")
+            append_manifest_event(job, "enqueued", queue="downloads")
         except Exception as exc:
             logger.error("Failed to enqueue download job %s: %s", job.id, exc)
             transition_download_job(job, "failed", f"Enqueue failed: {exc}")

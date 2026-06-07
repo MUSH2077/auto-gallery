@@ -527,7 +527,7 @@ async def run_import_job(import_job_id: str):
                         from rq import Queue
                         from datetime import timedelta
                         r = redis_lib.from_url(settings.redis_url)
-                        Queue(connection=r).enqueue_in(
+                        Queue(name="imports", connection=r).enqueue_in(
                             timedelta(seconds=60),
                             "app.jobs.import_runner.run_import_job", import_job_id,
                             job_timeout=7200)
