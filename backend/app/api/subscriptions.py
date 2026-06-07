@@ -43,12 +43,13 @@ async def list_subscriptions(
     if cached is not None:
         return cached
     svc = SubscriptionService(db)
-    data = await svc.list_subscriptions(offset, limit,
+    subs = await svc.list_subscriptions(offset, limit,
                                         search=search, is_active=is_active,
                                         sync_enabled=sync_enabled,
                                         never_synced=never_synced)
-    cache_set(ck, data, 300)
-    return data
+    items = [SubscriptionRead.model_validate(s, from_attributes=True) for s in subs]
+    cache_set(ck, items, 300)
+    return items
 
 
 # ── Batch Operations ──
