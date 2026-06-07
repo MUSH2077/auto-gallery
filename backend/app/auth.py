@@ -2,9 +2,9 @@ import bcrypt as _bcrypt
 from datetime import datetime, timedelta, timezone
 import os
 import secrets
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
@@ -27,33 +27,48 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
-def create_access_token(username: str) -> str:
+def create_access_token(username: str, must_change_password: bool = False) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
     return jwt.encode(
-        {"sub": username, "exp": expire},
+        {"sub": username, "exp": expire, "pwd_chg_required": must_change_password},
         settings.secret_key,
         algorithm=ALGORITHM,
     )
 
 
-def decode_access_token(token: str) -> Optional[str]:
-    """Return username from token, or None if invalid/expired."""
+def decode_access_token_payload(token: str) -> Optional[dict[str, Any]]:
+    """Return token payload, or None if invalid/expired."""
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
-        return payload.get("sub")
+        return payload
     except JWTError:
         return None
+
+
+def decode_access_token(token: str) -> Optional[str]:
+    """Return username from token, or None if invalid/expired."""
+    payload = decode_access_token_payload(token)
+    if not payload:
+        return None
+    return payload.get("sub")
 
 
 # ── Main auth dependency ──────────────────────────────────────────────────────
 
 async def get_admin_key(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ):
     """Require Bearer JWT token for admin APIs."""
     if credentials and credentials.credentials:
-        username = decode_access_token(credentials.credentials)
+        payload = decode_access_token_payload(credentials.credentials)
+        if not payload:
+            raise HTTPException(status_code=401, detail="Invalid or missing credentials")
+
+        username = payload.get("sub")
         if username:
+            if payload.get("pwd_chg_required") and request.url.path != "/api/v1/auth/change-password":
+                raise HTTPException(status_code=403, detail="Password change required")
             return username
 
     raise HTTPException(status_code=401, detail="Invalid or missing credentials")
@@ -93,6 +108,7 @@ async def ensure_admin_user() -> None:
                 password_hash=hash_password(bootstrap_password),
                 display_name="Administrator",
                 is_active=True,
+                must_change_password=True,
             )
             session.add(admin)
             await session.commit()

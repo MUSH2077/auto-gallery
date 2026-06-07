@@ -8,6 +8,7 @@ export interface AuthUser {
   id: number;
   username: string;
   display_name: string | null;
+  must_change_password: boolean;
 }
 
 interface AuthContextValue {
@@ -16,6 +17,7 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (username: string, password: string) => Promise<void>;
+  updateAccessToken: (token: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -75,6 +77,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(me);
   }, []);
 
+  const updateAccessToken = useCallback(async (nextToken: string) => {
+    const meRes = await fetch("/api/v1/auth/me", {
+      headers: { Authorization: `Bearer ${nextToken}` },
+    });
+    if (!meRes.ok) {
+      throw new Error("Failed to refresh session");
+    }
+    const me: AuthUser = await meRes.json();
+    localStorage.setItem(TOKEN_KEY, nextToken);
+    setToken(nextToken);
+    setUser(me);
+  }, []);
+
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     setToken(null);
@@ -89,6 +104,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isAuthenticated: !!user,
         isLoading,
         login,
+        updateAccessToken,
         logout,
       }}
     >
