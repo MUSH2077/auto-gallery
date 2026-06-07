@@ -7,14 +7,17 @@ import { ThemeToggle, LangToggle } from "@/lib/theme";
 
 export default function LoginPage() {
   const t = useT();
-  const { login, isAuthenticated } = useAuth();
+  const { login, isAuthenticated, user } = useAuth();
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  if (isAuthenticated) { router.replace("/admin"); return null; }
+  if (isAuthenticated) {
+    router.replace(user?.must_change_password ? "/admin/settings/profile" : "/admin");
+    return null;
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();

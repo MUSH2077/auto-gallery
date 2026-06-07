@@ -129,15 +129,25 @@ function AdminNav() {
 }
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated && pathname !== "/admin/login") {
       router.replace("/admin/login");
+      return;
     }
-  }, [isAuthenticated, isLoading, pathname, router]);
+    if (
+      !isLoading
+      && isAuthenticated
+      && user?.must_change_password
+      && pathname !== "/admin/settings/profile"
+      && pathname !== "/admin/login"
+    ) {
+      router.replace("/admin/settings/profile");
+    }
+  }, [isAuthenticated, isLoading, pathname, router, user?.must_change_password]);
 
   if (isLoading) {
     return (

@@ -30,6 +30,7 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    must_change_password: bool = False
 
 
 class UserResponse(BaseModel):
@@ -37,6 +38,7 @@ class UserResponse(BaseModel):
     username: str
     display_name: str | None
     is_active: bool
+    must_change_password: bool
 
 
 class ChangePasswordRequest(BaseModel):
@@ -74,8 +76,9 @@ async def login(body: LoginRequest, session: AsyncSession = Depends(get_db)):
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
 
-    token = create_access_token(user.username)
-    return TokenResponse(access_token=token)
+    must_change_password = bool(user.must_change_password)
+    token = create_access_token(user.username, must_change_password=must_change_password)
+    return TokenResponse(access_token=token, must_change_password=must_change_password)
 
 
 @router.get("/me", response_model=UserResponse)
@@ -85,6 +88,7 @@ async def me(current_user: User = Depends(get_current_user)):
         username=current_user.username,
         display_name=current_user.display_name,
         is_active=current_user.is_active,
+        must_change_password=bool(current_user.must_change_password),
     )
 
 
@@ -103,6 +107,8 @@ async def change_password(
     result = await session.execute(select(User).where(User.id == current_user.id))
     user = result.scalars().first()
     user.password_hash = hash_password(body.new_password)
+    user.must_change_password = False
     user.updated_at = datetime.now(timezone.utc)
     await session.commit()
-    return {"ok": True}
+    token = create_access_token(user.username, must_change_password=False)
+    return {"ok": True, "access_token": token, "token_type": "bearer", "must_change_password": False}

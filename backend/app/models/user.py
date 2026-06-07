@@ -11,5 +11,6 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     display_name = Column(String(128), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
+    must_change_password = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     created_at = Column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=text("now()"), nullable=False, onupdate=text("now()"))

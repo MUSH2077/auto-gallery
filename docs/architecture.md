@@ -158,6 +158,7 @@ Admin Web and backend API use JWT-based authentication:
 - **Token format**: JWT access tokens signed with the server's secret key.
 - **Auth methods**: Admin endpoints require `Authorization: Bearer <jwt>`.
 - **Token expiry**: Configurable via `ACCESS_TOKEN_EXPIRE_MINUTES` (default 30 minutes).
+- **First-login rotation**: Bootstrap admin accounts are marked `must_change_password=true` and can only continue after changing password.
 - All admin API routes require authentication via the `RequireAdmin` dependency.
 
 ## Backup System
