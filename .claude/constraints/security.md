@@ -86,9 +86,13 @@ admin-web runs on a different port from backend. CORS must be explicitly configu
 ## /media file serving
 
 - All media access through `/media/...` endpoints only
+- `/media/thumb/{asset_id}` — no authentication (required for `<img>` tags on admin-web)
+- `/media/preview/{asset_id}` — requires admin authentication
+- `/media/original/{asset_id}` — requires admin authentication
 - Support HTTP Range requests (required for video seeking)
 - Return `Content-Type`, `Content-Length`, `Accept-Ranges: bytes`
 - Do not expose real filesystem paths in headers or responses
+- Path containment: resolved file paths must stay within DOWNLOAD_ROOT or LIBRARY_ROOT (validated via `Path.relative_to`)
 - Consider rate limiting on `/media/` in production (prevent NAS I/O saturation)
 - Streaming response for large files — never buffer full file in memory
 
