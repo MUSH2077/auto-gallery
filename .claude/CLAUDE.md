@@ -12,8 +12,8 @@ docker compose build backend admin-web
 # Run database migrations
 docker compose exec backend alembic upgrade head
 
-# Deploy all services (backend code changes affect all three)
-docker compose up -d --force-recreate backend worker scheduler admin-web
+# Deploy all services (backend image changes affect backend + workers + scheduler)
+docker compose up -d --force-recreate backend worker-download worker-import scheduler admin-web
 
 # View logs
 docker compose logs --tail 50 -f backend
@@ -36,14 +36,18 @@ Pixiv is only one source provider.
 
 Danbooru is not treated as the complete union of all works. In the current phase, Danbooru is used primarily as a reference provider for creator identity mapping through artist tags and related URLs.
 
-Future supported sources may include:
-- Pixiv
-- Iwara
-- X/Twitter
-- Danbooru posts
-- local folder import
-- manual upload
-- other gallery-dl compatible sites
+Currently supported sources:
+- Pixiv (download)
+- X/Twitter (download)
+- Iwara (download)
+- Danbooru posts (download)
+- Weibo (download)
+- Bilibili (download)
+- Pinterest (download)
+- LOFTER (download)
+- local folder import (planned)
+- manual upload (planned)
+- other gallery-dl compatible sites (future)
 
 ## Current Priority
 
@@ -102,7 +106,7 @@ The following were decided during risk analysis (see [docs/risks.md](../docs/ris
 - **`subscription_source.last_successful_auth`** timestamp for cookie expiration visibility.
 - **Meilisearch sync**: admin-triggered full re-indexing for v1. Application-level dual-writes deferred.
 - **pyvips preferred over Pillow** for image processing (faster, lower memory).
-- **X/Twitter provider is explicitly "no timeline"**. Placeholder with `can_download = False`. Re-evaluate after Pixiv pipeline is stable.
+- **X/Twitter provider**: Fully working downloadable provider via gallery-dl Twitter extractor. Uses cookie-based auth with `strategy: "tweets"` (UserTweets GraphQL endpoint). SearchTimeline fallback patched out in Dockerfile.
 
 ## Core Stack
 
@@ -139,7 +143,8 @@ Required services:
 - redis
 - meilisearch
 - backend
-- worker
+- worker-download (RQ worker — gallery-dl subprocess)
+- worker-import (RQ worker — metadata import, batch import)
 - scheduler
 - admin-web
 
@@ -178,8 +183,8 @@ Use generic domain concepts:
 - download_job
 - import_job
 - naming_template
-- album (added Phase 6+, user-scoped work collections)
-- album_work
+- album (planned Phase 6+ — user-scoped work collections, NOT YET IMPLEMENTED)
+- album_work (planned Phase 6+ — NOT YET IMPLEMENTED)
 - reference_provider
 - source_provider
 
@@ -261,7 +266,7 @@ For each enabled subscription source:
 - write logs
 - import downloaded metadata and media
 
-All registered downloadable providers (Pixiv, Danbooru, Iwara, Weibo, Bilibili, Pinterest, LOFTER) support gallery-dl download. X/Twitter is a placeholder with `can_download=False` (re-evaluate after Pixiv pipeline is stable).
+All 8 registered downloadable providers (Pixiv, X, Iwara, Danbooru, Weibo, Bilibili, Pinterest, LOFTER) support gallery-dl download.
 Import defaults: only Pixiv auto-enables subscription sources. Other sources default to disabled.
 Per-source `auto_enable_on_import` configurable in gallery-dl settings page.
 
@@ -484,7 +489,7 @@ The directory layout under `downloads/` and `library/` is determined by per-sour
 - Client must never receive real NAS filesystem paths.
 - Media must be served through backend /media endpoints.
 - Do not expose the system directly to the public internet in the first version.
-- Multiple downloadable providers supported (Pixiv, Danbooru, Iwara, X, Pinterest, LOFTER).
+- 8 downloadable providers supported (Pixiv, X, Iwara, Danbooru, Weibo, Bilibili, Pinterest, LOFTER).
 
 ## Database Requirements
 
