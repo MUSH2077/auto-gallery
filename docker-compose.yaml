@@ -97,6 +97,7 @@ services:
       MEILI_URL: http://meilisearch:7700
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
       SECRET_KEY: ${SECRET_KEY}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       DOWNLOAD_ROOT: /downloads
       LIBRARY_ROOT: /library
       GALLERYDL_CONFIG_ROOT: /gallerydl-config
@@ -131,6 +132,7 @@ services:
       MEILI_URL: http://meilisearch:7700
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
       SECRET_KEY: ${SECRET_KEY}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       DOWNLOAD_ROOT: /downloads
       LIBRARY_ROOT: /library
       GALLERYDL_CONFIG_ROOT: /gallerydl-config
@@ -165,6 +167,7 @@ services:
       MEILI_URL: http://meilisearch:7700
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
       SECRET_KEY: ${SECRET_KEY}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       DOWNLOAD_ROOT: /downloads
       LIBRARY_ROOT: /library
       GALLERYDL_CONFIG_ROOT: /gallerydl-config
