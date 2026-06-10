@@ -68,7 +68,7 @@ class ProviderCapabilities:
     is_reference_only: bool
 ```
 
-所有 7 个可下载 provider（Pixiv、Iwara、Danbooru、微博、Bilibili、Pinterest、Lofter）均已完整实现 `build_gallerydl_config()`。X/Twitter 为占位符（`can_download=False`），待 Pixiv 管线稳定后重新评估。
+所有 8 个可下载 provider（Pixiv、X、Iwara、Danbooru、微博、Bilibili、Pinterest、Lofter）均已完整实现 `build_gallerydl_config()`。
 
 `auto_enable_on_import` 标志按来源在 gallery-dl 设置页面中配置。每个来源都有开关，控制新导入的订阅来源是否默认启用。仅 Pixiv 默认自动启用；其余来源均默认禁用。
 
@@ -94,13 +94,13 @@ downloadable = registry.list_downloadable()
 - 通过 cookie 认证使用 gallery-dl 的 Pixiv 提取器
 
 ### X / Twitter (`x.py`)
-- **状态**：占位符 — 显式禁用（待 Pixiv 管线稳定后重新评估）
+- **状态**：可下载
 - `source_name`：`"x"`
-- `capabilities.can_download`：False
-- `capabilities.supports_gallerydl`：False
+- `capabilities.can_download`：True
+- `capabilities.supports_gallerydl`：True
 - `capabilities.supports_tags`：True
 - URL 模式：`x.com/<user>`、`x.com/<user>/status/<id>`、`twitter.com/<user>`
-- Gallery-dl Twitter 提取器代码存在，但下载管线不会调用
+- 使用 gallery-dl 的 Twitter 提取器，cookie 认证（`strategy: "tweets"`）
 - SearchTimeline 回退端点已在 Dockerfile 中修补移除（Twitter 已弃用该端点）
 
 ### Iwara (`iwara.py`)

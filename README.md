@@ -55,7 +55,7 @@ do not include private creators, credentials, local paths, or downloaded media.
 | Source | Download | Auth | Status |
 |---|---|---|---|
 | Pixiv | gallery-dl | Refresh token or cookies | Supported |
-| X/Twitter | — | — | Placeholder (disabled) |
+| X/Twitter | gallery-dl `twitter` extractor | Cookies | Supported |
 | Iwara | gallery-dl | Username/password or cookies | Supported |
 | Danbooru | gallery-dl | API key, username/password, or cookies | Supported |
 | Weibo | gallery-dl | Optional cookies | Supported |
