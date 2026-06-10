@@ -17,11 +17,17 @@ _RESOLVED_LIBRARY_ROOT = Path(settings.library_root).resolve()
 def _safe_path(root: Path, relative: str) -> Path:
     """Resolve root/relative and verify it stays within root.
 
+    Uses ``Path.relative_to`` for proper path-component containment rather
+    than string prefix matching, which is vulnerable to sibling-directory
+    attacks (e.g. ``/downloads_evil`` passing a check against ``/downloads``).
+
     Raises HTTPException(404) if the resolved path escapes root,
     preventing path traversal attacks through manipulated file_path values.
     """
     full = (root / relative).resolve()
-    if not str(full).startswith(str(root)):
+    try:
+        full.relative_to(root)
+    except ValueError:
         raise HTTPException(status_code=404, detail="File not found")
     return full
 
