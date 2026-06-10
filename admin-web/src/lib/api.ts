@@ -39,6 +39,12 @@ export interface HealthResponse {
   status: string;
   version: string;
   services: Record<string, string>;
+  business?: {
+    queues?: Record<string, number>;
+    jobs?: Record<string, number>;
+    scheduler?: Record<string, string | null>;
+    gallerydl?: Record<string, unknown>;
+  };
 }
 
 export interface ProviderInfo {
@@ -62,8 +68,17 @@ export interface Creator {
   is_active: boolean;
   danbooru_artist_id?: number;
   is_favorite: boolean;
+  subscription_count?: number;
+  source_count?: number;
+  repository_count?: number;
+  last_synced_at?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface CreatorListResponse {
+  items: Creator[];
+  total: number;
 }
 
 export interface CreatorLink {
@@ -103,6 +118,9 @@ export interface Subscription {
   schedule_mode?: string | null;
   scheduled_times?: string | null;
   last_synced_at?: string;
+  source_count?: number;
+  enabled_source_count?: number;
+  latest_job_status?: string;
   created_at: string;
   updated_at: string;
 }
@@ -116,19 +134,204 @@ export interface SubscriptionSource {
   is_enabled: boolean;
   last_successful_auth?: string;
   auth_healthy: boolean;
+  last_synced_at?: string;
+  last_attempted_at?: string;
+  auth_status?: string | null;
+  auth_error_reason?: string | null;
+  last_auth_checked_at?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface RepositoryLatestJob {
+  id: string;
+  status: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  error_log_excerpt?: string | null;
+}
+
+export interface CreatorRepository {
+  id: string;
+  subscription_id: string;
+  source: string;
+  source_display_name?: string;
+  source_creator_id?: string;
+  source_url?: string;
+  is_enabled: boolean;
+  auth_healthy: boolean;
+  last_successful_auth?: string | null;
+  last_synced_at?: string | null;
+  last_attempted_at?: string | null;
+  auth_status?: string | null;
+  auth_error_reason?: string | null;
+  last_auth_checked_at?: string | null;
+  can_download: boolean;
+  supports_gallerydl: boolean;
+  url_valid: boolean;
+  is_repository: boolean;
+  latest_job?: RepositoryLatestJob | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface CreatorSubscriptionOverview {
+  creator_id: string;
+  subscriptions: {
+    id: string;
+    name?: string | null;
+    is_active: boolean;
+    sync_enabled: boolean;
+    sync_interval_hours: number;
+    schedule_mode?: string | null;
+    scheduled_times?: string | null;
+    last_synced_at?: string | null;
+    created_at?: string | null;
+    updated_at?: string | null;
+  }[];
+  repositories: CreatorRepository[];
+  summary: {
+    subscription_count: number;
+    repository_count: number;
+    enabled_repository_count: number;
+    running_job_count: number;
+  };
+}
+
+export interface WorkbenchSummary {
+  updated_at: string;
+  queue: {
+    default: number;
+    scheduled: number;
+    failed: number;
+    started?: number;
+    active_download_count: number;
+    active_import_count: number;
+    failed_download_count: number;
+    failed_import_count: number;
+    stale_download_count: number;
+    stale_import_count: number;
+    stale_count: number;
+  };
+  scheduler: {
+    enabled: boolean;
+    mode: string;
+    timezone: string;
+    scheduled_times?: string | null;
+    scan_interval_minutes: number;
+    next_scan_at?: string | null;
+  };
+  storage: {
+    original_media_size_bytes: number;
+    original_media_file_count: number;
+    library_size_bytes: number;
+    library_file_count: number;
+    disk_total_bytes: number;
+    disk_free_bytes: number;
+    disk_used_bytes: number;
+    disk_used_percent?: number | null;
+    disk_free_percent?: number | null;
+    risk_level: "ok" | "warning" | "critical" | "unknown" | string;
+  };
+  health: Record<string, string>;
+  attention: {
+    auth_unhealthy_count: number;
+    failed_download_count: number;
+    failed_import_count: number;
+    stale_job_count: number;
+    low_disk_warning: boolean;
+    scheduler_disabled_warning: boolean;
+  };
+  recent: {
+    download_jobs: {
+      id: string;
+      subscription_id: string;
+      subscription_source_id?: string | null;
+      source: string;
+      source_url: string;
+      status: string;
+      created_at?: string | null;
+      updated_at?: string | null;
+      error_log_excerpt?: string | null;
+    }[];
+    import_jobs: {
+      id: string;
+      download_job_id: string;
+      status: string;
+      created_at?: string | null;
+      updated_at?: string | null;
+      error_log_excerpt?: string | null;
+    }[];
+    works: {
+      id: string;
+      title?: string | null;
+      thumbnail_asset_id?: string | null;
+      created_at?: string | null;
+    }[];
+    successful_syncs: {
+      source_id: string;
+      subscription_id: string;
+      creator_id: string;
+      creator_name: string;
+      source: string;
+      source_url?: string | null;
+      last_synced_at?: string | null;
+    }[];
+  };
+}
+
+export interface SchedulerDecisionItem {
+  subscription_id: string;
+  subscription_name?: string | null;
+  subscription_active: boolean;
+  subscription_sync_enabled: boolean;
+  creator_id: string;
+  creator_name: string;
+  source_id: string;
+  source: string;
+  source_display_name?: string | null;
+  source_url?: string | null;
+  source_creator_id?: string | null;
+  source_enabled: boolean;
+  effective_mode: string;
+  timezone: string;
+  scheduled_times?: string | null;
+  sync_interval_hours: number;
+  last_synced_at?: string | null;
+  last_attempted_at?: string | null;
+  due: boolean;
+  decision: string;
+  reason: string;
+  next_due_at?: string | null;
+  window_start?: string | null;
+  window_end?: string | null;
+  auth_healthy: boolean;
+  url_valid: boolean;
+  can_download: boolean;
+}
+
+export interface SchedulerDecisionsResponse {
+  updated_at: string;
+  scheduler_enabled: boolean;
+  timezone: string;
+  items: SchedulerDecisionItem[];
 }
 
 export interface DownloadJob {
   id: string;
   subscription_id: string;
   subscription_source_id?: string;
+  creator_id?: string | null;
+  creator_name?: string | null;
+  subscription_name?: string | null;
   source: string;
   source_url: string;
   status: string;
   retry_count: number;
   error_log?: string;
+  gallerydl_config_path?: string | null;
+  download_dir?: string | null;
+  manifest?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 }
@@ -187,6 +390,7 @@ export interface DedupSettings {
 export interface SubscriptionDefaults {
   default_sync_interval_hours: number;
   scheduler_scan_interval_minutes: number;
+  scheduler_enabled: boolean;
   schedule_mode: "interval" | "fixed_time";
   scheduled_times: string;
   timezone: string;
@@ -347,6 +551,9 @@ export interface AuthStatusItem {
   source_url: string;
   source_creator_id?: string;
   auth_healthy: boolean | null;
+  auth_status?: string | null;
+  auth_error_reason?: string | null;
+  last_auth_checked_at?: string | null;
   last_successful_auth: string | null;
   is_enabled: boolean;
   subscription: {
@@ -378,6 +585,10 @@ export const api = {
   // System
   health: () => request<HealthResponse>("/api/v1/system/health"),
 
+  workbench: () => request<WorkbenchSummary>("/api/v1/system/workbench"),
+
+  schedulerDecisions: () => request<SchedulerDecisionsResponse>("/api/v1/system/scheduler-decisions"),
+
   systemLogs: (limit?: number, level?: string, nameFilter?: string) => {
     const params = new URLSearchParams();
     if (limit) params.set("limit", String(limit));
@@ -392,7 +603,17 @@ export const api = {
     disk: { total_bytes: number; free_bytes: number; used_bytes: number };
   }>("/api/v1/system/storage"),
 
-  queueStats: () => request<{ default_queue: number; scheduled_queue: number; failed_jobs: number }>("/api/v1/system/queue-stats"),
+  queueStats: () => request<{
+    default_queue: number;
+    scheduled_queue: number;
+    failed_jobs: number;
+    scheduler_enabled?: boolean;
+    scheduler_mode?: string;
+    scheduler_timezone?: string;
+    scheduled_times?: string;
+    scheduler_scan_interval_minutes?: number;
+    next_sync_scan_at?: string | null;
+  }>("/api/v1/system/queue-stats"),
 
   // Sources
   sources: () => request<{ sources: ProviderInfo[] }>("/api/v1/sources"),
@@ -411,7 +632,7 @@ export const api = {
     if (filters?.has_danbooru !== undefined) params.set("has_danbooru", String(filters.has_danbooru));
     if (filters?.has_subscription !== undefined) params.set("has_subscription", String(filters.has_subscription));
     if (filters?.is_favorite !== undefined) params.set("is_favorite", String(filters.is_favorite));
-    return request<Creator[]>(`/api/v1/creators?${params.toString()}`);
+    return request<CreatorListResponse>(`/api/v1/creators?${params.toString()}`);
   },
 
   getCreator: (id: string) => request<Creator>(`/api/v1/creators/${id}`),
@@ -421,6 +642,17 @@ export const api = {
       if (toDate) q.set("to_date", toDate);
       return request<{ creator_id: string; sources: string[]; days: { date: string; total: number; [source: string]: number | string }[]; total: number }>(`/api/v1/creators/${creatorId}/timeline?${q.toString()}`);
     },
+
+  getCreatorStats: (id: string) =>
+    request<{
+      creator_id: string; total_works: number; total_assets: number; total_tags: number;
+      source_breakdown: { source: string; count: number }[];
+      tag_distribution: { tag: string; count: number }[];
+      monthly_frequency: { month: string; count: number }[];
+    }>(`/api/v1/creators/${id}/stats`),
+
+  getCreatorSubscriptionOverview: (id: string) =>
+    request<CreatorSubscriptionOverview>(`/api/v1/creators/${id}/subscription-overview`),
 
   createCreator: (data: { name: string; display_name?: string; description?: string; thumbnail_url?: string }) =>
     request<Creator>("/api/v1/creators", { method: "POST", body: JSON.stringify(data) }),
@@ -556,11 +788,12 @@ export const api = {
     request<{ id: string; download_job_id: string; status: string; error_log?: string }[]>(`/api/v1/download-jobs/${jobId}/imports`),
 
   // Works
-  listWorks: (offset = 0, limit = 50, filters?: { search?: string; source?: string; creator_id?: string; is_nsfw?: boolean; is_favorite?: boolean; is_ai_generated?: boolean; sort_by?: string; sort_order?: string }) => {
+  listWorks: (offset = 0, limit = 50, filters?: { search?: string; source?: string; creator_id?: string; tag?: string; is_nsfw?: boolean; is_favorite?: boolean; is_ai_generated?: boolean; sort_by?: string; sort_order?: string }) => {
     const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
     if (filters?.search) params.set("search", filters.search);
     if (filters?.source) params.set("source", filters.source);
     if (filters?.creator_id) params.set("creator_id", filters.creator_id);
+    if (filters?.tag) params.set("tag", filters.tag);
     if (filters?.is_nsfw !== undefined) params.set("is_nsfw", String(filters.is_nsfw));
     if (filters?.is_favorite !== undefined) params.set("is_favorite", String(filters.is_favorite));
     if (filters?.is_ai_generated !== undefined) params.set("is_ai_generated", String(filters.is_ai_generated));
@@ -579,7 +812,7 @@ export const api = {
 
   getWorkSources: (id: string) => request<unknown[]>(`/api/v1/works/${id}/sources`),
 
-  getWorkAssets: (id: string) => request<{id:string;file_name:string;file_path:string;width?:number;height?:number;mime_type?:string;thumb_sm_path?:string;thumb_md_path?:string}[]>(`/api/v1/works/${id}/assets`),
+  getWorkAssets: (id: string) => request<{id:string;file_name:string;file_path:string;width?:number;height?:number;mime_type?:string;thumb_sm_path?:string;thumb_md_path?:string;created_at:string}[]>(`/api/v1/works/${id}/assets`),
 
   getWorkTags: (id: string) => request<{id:string;normalized_name:string;category?:string}[]>(`/api/v1/works/${id}/tags`),
 
@@ -646,7 +879,9 @@ export const api = {
   cleanupMetadataJSONs: () => request<{ status: string; removed: number }>("/api/v1/admin/cleanup-metadata-jsons", { method: "POST" }),
   getStorageBreakdown: () => request<{
     sources: Record<string, { size_mb: number; creator_count: number; work_count: number }>;
-    creators: { name: string; source: string; size_mb: number; work_count: number }[];
+    creators: { name: string; display_name: string; source: string; size_mb: number; work_count: number; creator_id?: string }[];
+    db_stats?: Record<string, number>;
+    layers?: Record<string, { path: string; size_mb: number; description: string }>;
   }>("/api/v1/admin/storage-breakdown"),
   getIntegrityCheck: () => request<{
     issues: { type: string; severity: string; count: number; description: string; items: any[] }[];
@@ -670,6 +905,10 @@ export const api = {
   listMergeCandidates: () => request<{ candidates: { title: string; source_count: number; sources: string[]; work_ids: string[] }[]; total: number }>("/api/v1/admin/merge-candidates"),
 
   // Danbooru Reference
+  getDanbooruArtist: (artistId: number) =>
+    request<{
+      artist: { id: number; name: string; other_names: string[]; pixiv_display_name?: string | null };
+    }>(`/api/v1/reference/danbooru/artist/${artistId}`),
   previewDanbooruArtist: (params: { url?: string; pixiv_id?: string; name?: string }) =>
     request<{
       status: string; found?: boolean; message?: string;
@@ -698,9 +937,7 @@ export const api = {
 
   urlBatchImportDanbooru: (urls: string[]) =>
     request<{
-      status: string; total: number; imported: number; not_found: number; errors: number;
-      results: { url: string; status: string; message?: string; artist_name?: string;
-                 creator_id?: string; created_new?: boolean; links_imported?: number; sources_created?: number }[];
+      status: string; message: string; job_id: string; batch_id: string; total: number;
     }>(
       "/api/v1/reference/danbooru/url-batch-import",
       { method: "POST", body: JSON.stringify({ urls }) }),
@@ -732,6 +969,11 @@ export const api = {
 
   // gallery-dl Config
   getGalleryDLConfig: (source?: string) => request<GalleryDLMultiConfig>(`/api/v1/admin/gallerydl-config${source ? `?source=${source}` : ""}`),
+  getEffectiveGalleryDLConfig: (source: string, subscriptionSourceId?: string) => {
+    const q = new URLSearchParams({ source });
+    if (subscriptionSourceId) q.set("subscription_source_id", subscriptionSourceId);
+    return request<{ source: string; extractor: string; source_url?: string | null; url_valid?: boolean | null; naming_template?: string | null; config: Record<string, unknown> }>(`/api/v1/admin/gallerydl-config/effective?${q.toString()}`);
+  },
 
   updateGalleryDLConfig: (data: { pixiv?: Partial<PixivSourceConfig>; twitter?: Partial<TwitterSourceConfig>; iwara?: Partial<IwaraSourceConfig>; danbooru?: Partial<DanbooruSourceConfig>; pinterest?: Partial<PinterestSourceConfig>; lofter?: Partial<LofterSourceConfig>; weibo?: Partial<WeiboSourceConfig>; bilibili?: Partial<BilibiliSourceConfig> }) =>
     request<{ status: string; message: string; path: string }>("/api/v1/admin/gallerydl-config", { method: "PUT", body: JSON.stringify(data) }),
@@ -752,13 +994,25 @@ export const api = {
     request<void>(`/api/v1/admin/naming-templates/${id}`, { method: "DELETE" }),
 
   // Backup & Restore
-  createBackup: () =>
-    request<{ status: string; filename: string; size_bytes: number; size_mb: number }>(
-      "/api/v1/admin/backup", { method: "POST" }),
+  createBackup: (contents?: string[]) =>
+    request<{ status: string; filename: string; size_bytes: number; size_mb: number; contents: string[]; component_sizes: Record<string, number> }>(
+      "/api/v1/admin/backup", { method: "POST", body: JSON.stringify({ contents: contents || ["database", "gallerydl-config", "app-config", "download-archives", "library-metadata"] }) }),
 
   listBackups: () =>
-    request<{ backups: { filename: string; size_mb: number; created_at: string }[] }>(
+    request<{ backups: { filename: string; size_mb: number; created_at: string; contents: string[]; component_sizes?: Record<string, number>; version?: string }[] }>(
       "/api/v1/admin/backup/list"),
+
+  estimateBackupSizes: () =>
+    request<{ components: Record<string, number> }>("/api/v1/admin/backup/estimate"),
+
+  restoreBackup: (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return fetch("/api/v1/admin/backup/restore", { method: "POST", body: formData }).then(r => r.json()) as Promise<{ status: string; restored: string[]; errors: string[]; manifest: any }>;
+  },
+
+  deleteBackup: (filename: string) =>
+    request<{ status: string; message: string }>(`/api/v1/admin/backup/${encodeURIComponent(filename)}`, { method: "DELETE" }),
 
   downloadBackup: (filename?: string) => {
     const params = filename ? `?filename=${encodeURIComponent(filename)}` : "";
@@ -770,6 +1024,8 @@ export const api = {
 
 export const queryKeys = {
   health: ["health"] as const,
+  workbench: ["system", "workbench"] as const,
+  schedulerDecisions: ["system", "scheduler-decisions"] as const,
   sources: ["sources"] as const,
   creators: {
     all: ["creators"] as const,
