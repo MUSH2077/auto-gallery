@@ -45,11 +45,47 @@ class Settings(BaseSettings):
             except OSError:
                 if not self.secret_key:
                     self.secret_key = secrets.token_hex(32)
-        # Validate critical settings
-        if not self.secret_key or self.secret_key in ("", "changeme"):
-            raise RuntimeError("SECRET_KEY is not set. Define it in .env or ensure /app-config is writable.")
-        if not self.admin_password or self.admin_password in ("", "changeme"):
-            raise RuntimeError("ADMIN_PASSWORD is not set. Define it in .env or /app-config.")
+        # Validate critical settings aren't at insecure defaults
+        errors: list[str] = []
+
+        if not self.secret_key or self.secret_key == "changeme":
+            errors.append("SECRET_KEY is not set or is still 'changeme'.")
+        if not self.admin_password or self.admin_password == "changeme":
+            errors.append("ADMIN_PASSWORD is not set or is still 'changeme'.")
+
+        # Check DB/Redis passwords — refuse to start with factory defaults.
+        # Parse the password component from each URL to avoid false positives
+        # when "changeme" appears as part of a longer legitimate password.
+        from urllib.parse import urlparse
+        for label, url in [("DATABASE_URL", self.database_url), ("REDIS_URL", self.redis_url)]:
+            try:
+                parsed = urlparse(url)
+                pwd = parsed.password or ""
+                if pwd == "changeme":
+                    errors.append(
+                        f"{label} password is still 'changeme'. "
+                        "Copy .env.example to .env and replace the placeholder."
+                    )
+            except Exception:
+                pass
+
+        if errors:
+            msg = (
+                "\n============================================================\n"
+                "  auto-gallery refused to start — insecure defaults detected\n"
+                "============================================================\n\n"
+                "  The following settings are still at their factory defaults:\n\n"
+            )
+            for e in errors:
+                msg += f"    • {e}\n"
+            msg += (
+                "\n  Create a .env file in the project root with real values:\n\n"
+                "    cp .env.example .env\n"
+                "    # then edit .env and replace all 'change-me-*' placeholders\n\n"
+                "  See docs/setup.md for detailed instructions.\n"
+                "============================================================\n"
+            )
+            raise RuntimeError(msg)
 
 
 settings = Settings()
