@@ -6,8 +6,8 @@ from app.services.settings import extractor_key_for_source
 
 DOWNLOADABLE_PROVIDER_URLS = {
     "pixiv": "https://www.pixiv.net/users/11",
-    # X/Twitter is a placeholder per CLAUDE.md — not downloadable yet
-"iwara": "https://www.iwara.tv/profile/example",
+    "x": "https://x.com/X",
+    "iwara": "https://www.iwara.tv/profile/example",
     "danbooru": "https://danbooru.donmai.us/posts?tags=rating:s",
     "pinterest": "https://www.pinterest.com/pinterest/pins/",
     "lofter": "https://example.lofter.com/",
