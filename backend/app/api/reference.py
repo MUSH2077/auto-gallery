@@ -470,7 +470,6 @@ async def get_batch_import_status(job_id: str | None = None):
     import redis as redis_lib
 
     r = redis_lib.from_url(settings.redis_url)
-    q = Queue(connection=r)
 
     # Check for in-progress data (scoped by job_id for concurrent imports)
     if job_id:
@@ -494,18 +493,26 @@ async def get_batch_import_status(job_id: str | None = None):
         except Exception:
             pass
 
-    # Check RQ job status if job_id provided
+    # Check RQ job status if job_id provided — try all active queues
     job_status = None
     if job_id:
         try:
-            job = q.fetch_job(job_id)
-            if job:
-                job_status = job.get_status()
+            from rq import Queue
+            for qname in ("imports", "default", "downloads", "scheduled"):
+                q = Queue(name=qname, connection=r)
+                job = q.fetch_job(job_id)
+                if job:
+                    job_status = job.get_status()
+                    break
         except Exception:
             pass
 
+    # If the job is still queued/started (RQ knows about it), it's running
+    if job_status and job_status in ("queued", "started", "scheduled"):
+        progress = progress or {}
+
     return {
-        "status": "completed" if result else ("running" if progress else "unknown"),
+        "status": "completed" if result else ("running" if progress or (job_status in ("queued", "started", "scheduled")) else "unknown"),
         "progress": progress,
         "result": result,
         "job_status": job_status,

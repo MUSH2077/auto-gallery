@@ -16,8 +16,8 @@ from app.database import async_session
 
 logger = logging.getLogger(__name__)
 
-PROGRESS_TTL = 300   # 5 minutes for in-progress data
-RESULT_TTL = 3600    # 1 hour for completed results
+PROGRESS_TTL = 3600   # 1 hour for in-progress data (matches RQ job_timeout)
+RESULT_TTL = 7200     # 2 hours for completed results
 
 
 def _redis_keys(job_id: str) -> tuple[str, str]:
