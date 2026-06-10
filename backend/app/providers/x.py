@@ -14,12 +14,9 @@ class XProvider(BaseProvider):
 
     @property
     def capabilities(self) -> ProviderCapabilities:
-        # Per CLAUDE.md: "X/Twitter provider is explicitly 'no timeline'.
-        # Placeholder with can_download = False. Re-evaluate after Pixiv
-        # pipeline is stable."
         return ProviderCapabilities(
-            can_download=False,
-            supports_gallerydl=False,
+            can_download=True,
+            supports_gallerydl=True,
             supports_tags=True,
         )
 
