@@ -192,13 +192,22 @@ async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
                     await db.flush()
 
                 sources_count = 0
+                seen_source_types: set[str] = set()
                 for u in dl_urls:
                     raw_url = u.get("normalized_url") or u.get("url", "")
                     src_type = danbooru_svc._classify_url(raw_url)
+                    # Dedup by source type within this batch (a single artist
+                    # may have multiple URLs of the same platform, e.g. two
+                    # weibo URLs, but the DB constraint is (subscription_id,
+                    # source) — only one per source type per subscription).
+                    if src_type in seen_source_types:
+                        continue
+                    seen_source_types.add(src_type)
+                    # Also check if this source type already exists in DB
                     existing_ss = await db.execute(
                         select(SubscriptionSource).where(
                             SubscriptionSource.subscription_id == subscription.id,
-                            SubscriptionSource.source_url == raw_url))
+                            SubscriptionSource.source == src_type))
                     if existing_ss.scalar_one_or_none():
                         continue
                     db.add(SubscriptionSource(
