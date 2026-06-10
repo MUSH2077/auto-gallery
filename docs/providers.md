@@ -68,7 +68,7 @@ class ProviderCapabilities:
     is_reference_only: bool
 ```
 
-All 8 downloadable providers (Pixiv, X, Iwara, Danbooru, Weibo, Bilibili, Pinterest, Lofter) have full `build_gallerydl_config()` implementations.
+All 7 downloadable providers (Pixiv, Iwara, Danbooru, Weibo, Bilibili, Pinterest, Lofter) have full `build_gallerydl_config()` implementations. X/Twitter is a placeholder (`can_download=False`) pending pipeline stability.
 
 The `auto_enable_on_import` flag is per-source configurable in the gallery-dl settings page. Each source has a toggle that controls whether a newly imported subscription source defaults to `is_enabled=True`. Only Pixiv defaults to auto-enabled; all other sources default to disabled.
 
@@ -94,15 +94,14 @@ downloadable = registry.list_downloadable()
 - Uses gallery-dl Pixiv extractor with cookie-based auth
 
 ### X / Twitter (`x.py`)
-- **Status**: Downloadable
+- **Status**: Placeholder — explicitly disabled (re-evaluate after Pixiv pipeline is stable)
 - `source_name`: `"x"`
-- `capabilities.can_download`: True
-- `capabilities.supports_gallerydl`: True
+- `capabilities.can_download`: False
+- `capabilities.supports_gallerydl`: False
+- `capabilities.supports_tags`: True
 - URL patterns: `x.com/<user>`, `x.com/<user>/status/<id>`, `twitter.com/<user>`
-- Uses gallery-dl Twitter extractor with cookie-based auth
-- Download strategy: `strategy: "tweets"` uses the UserTweets GraphQL endpoint
+- Gallery-dl Twitter extractor code exists but is not invoked by the download pipeline
 - The SearchTimeline fallback endpoint is patched out in the Dockerfile (Twitter has deprecated it)
-- Extractors: timeline, tweets, media, likes, search, list, bookmark, avatar, background
 
 ### Iwara (`iwara.py`)
 - **Status**: Downloadable (gallery-dl >= 1.32.0 required)

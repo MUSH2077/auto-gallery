@@ -261,7 +261,7 @@ For each enabled subscription source:
 - write logs
 - import downloaded metadata and media
 
-All registered providers (Pixiv, Danbooru, Iwara, X, Pinterest, LOFTER) support gallery-dl download.
+All registered downloadable providers (Pixiv, Danbooru, Iwara, Weibo, Bilibili, Pinterest, LOFTER) support gallery-dl download. X/Twitter is a placeholder with `can_download=False` (re-evaluate after Pixiv pipeline is stable).
 Import defaults: only Pixiv auto-enables subscription sources. Other sources default to disabled.
 Per-source `auto_enable_on_import` configurable in gallery-dl settings page.
 
@@ -347,6 +347,8 @@ Provider modules:
 - backend/app/providers/danbooru_reference.py (reference provider — artist identity)
 - backend/app/providers/pinterest.py
 - backend/app/providers/lofter.py
+- backend/app/providers/weibo.py
+- backend/app/providers/bilibili.py
 - backend/app/providers/local.py
 - backend/app/providers/manual.py
 
@@ -368,6 +370,51 @@ Danbooru reference provider responsibilities:
 - parse related URLs
 - create suggested creator_links
 - do not assume Danbooru is a complete source of works
+
+## Service Layer Architecture
+
+Business logic lives in `backend/app/services/`. Services orchestrate repositories, providers, and external systems.
+
+### Core domain services
+
+- `services/creator.py` — `CreatorService`: creator CRUD, source_creator management, Danbooru enrichment
+- `services/subscription.py` — `SubscriptionService`: subscription CRUD, source management
+- `services/download.py` — `DownloadService`: download job orchestration, enqueuing, retry
+- `services/search.py` — `SearchService`: Meilisearch indexing, search, full reindex
+
+### Infrastructure services
+
+- `services/cache.py` — Redis-based API response cache with TTL and pattern invalidation; TTL registry for consistent cache durations
+- `services/locks.py` — `redis_lock`: async distributed lock via Redis (safe for `async with`)
+- `services/redis_client.py` — `get_redis()`: shared Redis connection singleton
+- `services/settings.py` — System settings from DB, gallery-dl config from JSON, effective config merging
+- `services/log_buffer.py` — In-memory ring buffer for log API
+
+### Job support services
+
+- `services/job_state.py` — Download/import job state machine with validated transitions
+- `services/job_manifest.py` — Per-job manifest tracking (command, config, events)
+- `services/subscription_enqueue.py` — `enqueue_subscription_source_sync()`: create and enqueue download jobs with lock, dedup, and backoff
+- `services/thumbnail.py` — pyvips thumbnail generation (CPU-bound, runs in thread pool)
+
+### Reference & utility services
+
+- `services/danbooru.py` — Danbooru API client: artist search, URL extraction, creator link generation
+- `services/creator_dedup.py` — `find_merge_candidates()`, `merge_creators()`: duplicate detection and merge
+- `services/proxy.py` — Proxy config loading, urllib proxy application, subprocess env vars
+
+### Data access
+
+- `repositories/` — `CreatorRepository`, `WorkRepository`, `SubscriptionRepository`, `DownloadJobRepository`, `TagRepository`
+- Repositories handle pure data access. Business logic and external service calls belong in the service layer.
+
+### Background jobs
+
+- `jobs/download.py` — `run_download_job()`: gallery-dl subprocess, auth monitoring, retry with backoff
+- `jobs/import_runner.py` — `run_import_job()`: metadata parsing, DB record creation, thumbnails, pHash, sha256, Meilisearch indexing
+- `jobs/subscription_sync.py` — `sync_subscriptions()`: scheduled subscription sync loop
+- `jobs/batch_import.py` — Batch Danbooru artist import via Pixiv IDs or URLs
+- `jobs/backup.py` — Database dump, config archive, metadata backup
 
 ## NAS Storage Structure
 

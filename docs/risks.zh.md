@@ -174,11 +174,11 @@ Worker 可水平扩展：`docker compose up --scale worker=3`。只要每个任�
 
 以下条目为已通过实施处理的风险。
 
-### 风险 A：X/Twitter API 可行性（已解决）
+### 风险 A：X/Twitter API 可行性（显式禁用）
 
 **原始担忧**：X 已大幅限制 API 访问。gallery-dl 的 X 提取器可能永久失效或需要付费 API。
 
-**解决方案**：X/Twitter 现已为完全可用的下载 provider。gallery-dl 的 Twitter 提取器通过 cookie 认证可靠运行。`strategy: "tweets"` 设置使用 UserTweets GraphQL 端点（积极维护中）。已废弃的 SearchTimeline 回退通过 Dockerfile 补丁移除。`can_download=True`，`supports_gallerydl=True`，`supports_tags=True`。
+**当前状态**：X/Twitter 显式禁用（`can_download=False`，`supports_gallerydl=False`）。Provider 作为占位符存在，提供 URL 验证和标签解析，但下载管线不会为 X 来源创建任务。UserTweets GraphQL 端点和 SearchTimeline 回退均已知不可靠。待 Pixiv 管线稳定后重新评估。Dockerfile 仍保留 SearchTimeline 回退补丁，以便日后重新启用。
 
 ---
 
@@ -286,7 +286,7 @@ gallery-dl 的 SQLite 归档文件追踪已下载的 URL。调度器定期对 DO
 | `auth_healthy` 在 subscription_source | #C（原 #7） | subscription_source 模型 |
 | v1 管理员触发 Meilisearch 重建索引 | #5（原 #6） | CLAUDE.md -- 风险衍生决策 |
 | gallery-dl 输出格式冒烟测试 | #2（原 #1） | 测试套件 |
-| X provider 完全启用（原为占位） | #A（原 #3） | x.py provider -- can_download=True |
+| X provider 显式禁用（占位符） | #A（原 #3） | x.py provider -- can_download=False |
 | pyvips 优先于 Pillow | #11 | CLAUDE.md -- 风险衍生决策 |
 | JWT 认证 access+refresh token | #E（原 #14） | auth.py、auth_api.py、auth.tsx |
 | Iwara 完全启用（原为占位） | #D（原 #13） | iwara.py provider -- can_download=True |
