@@ -1,5 +1,5 @@
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 
@@ -63,7 +63,7 @@ async def thumb(asset_id: str):
 @router.get("/media/preview/{asset_id}")
 async def preview(
     asset_id: str,
-    _admin: str = Depends(RequireAdmin),
+    _admin: str = RequireAdmin,
 ):
     """Serve preview image — requires admin authentication."""
     return await _serve(asset_id, "original")
@@ -72,7 +72,7 @@ async def preview(
 @router.get("/media/original/{asset_id}")
 async def original(
     asset_id: str,
-    _admin: str = Depends(RequireAdmin),
+    _admin: str = RequireAdmin,
 ):
     """Serve original image — requires admin authentication."""
     return await _serve(asset_id, "original")

@@ -71,7 +71,8 @@ services:
       - ${HOST_LIBRARY:-./data/library}:/library
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
-      - ./backend/alembic/versions:/app/alembic/versions
+      # alembic/versions are baked into the image via COPY . .
+      # No bind mount needed — avoids WSL 2 filesystem access issues.
     depends_on:
       postgres:
         condition: service_healthy
