@@ -438,7 +438,7 @@ async def batch_import_danbooru_artists(data: dict):
         existing_ids = [pid for pid in pixiv_ids if pid in existing_map]
 
     r = redis_lib.from_url(settings.redis_url)
-    q = Queue(connection=r)
+    q = Queue(name="imports", connection=r)
 
     # Generate key before enqueue so it can be passed to the RQ function AND
     # returned as job_id. This ensures Redis keys match the polling ID.
