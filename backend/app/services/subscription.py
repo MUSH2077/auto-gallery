@@ -108,6 +108,10 @@ class SubscriptionService:
             data["source_url"] = normalized
         ss = await self.repo.update_source(ss, data)
         await self.db.commit()
+        # Refresh so the returned object is fully loaded for Pydantic serialization.
+        # commit() expires all loaded state; without this, lazy-loading fails with
+        # MissingGreenlet when FastAPI serializes the response.
+        await self.db.refresh(ss)
         return ss
 
     async def delete_source(self, ss_id: UUID):
