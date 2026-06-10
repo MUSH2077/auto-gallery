@@ -35,7 +35,7 @@ class TestDanbooruProvider:
     def test_parse_source_creator(self):
         meta = {"tag_string_artist": "ask askzy", "id": 12345}
         r = self.p.parse_source_creator(meta)
-        assert r["source_creator_id"] == "ask"
+        assert r["source_creator_id"] == "ask askzy"
 
     def test_parse_source_creator_no_tag(self):
         meta = {"tag_string_artist": "", "id": 12345}

@@ -47,8 +47,11 @@ class TestDetectNSFW:
     def test_pixiv_restrict_0_is_safe(self):
         assert _detect_nsfw({"restrict": 0}, "pixiv") is False
 
-    def test_pixiv_sanity_7_is_nsfw(self):
-        assert _detect_nsfw({"sanity_level": 7}, "pixiv") is True
+    def test_pixiv_sanity_7_is_not_nsfw_by_sanity_alone(self):
+        # sanity_level is intentionally excluded from detection per CLAUDE.md:
+        # "sanity_level: 0-11, 6+ restricted, 7+ explicit (NOT reliable alone)"
+        # Detection uses rating (from x_restrict) and x_restrict only.
+        assert _detect_nsfw({"sanity_level": 7}, "pixiv") is False
 
     def test_pixiv_sanity_4_is_safe(self):
         assert _detect_nsfw({"sanity_level": 4}, "pixiv") is False

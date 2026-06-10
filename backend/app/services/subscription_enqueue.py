@@ -118,7 +118,7 @@ async def enqueue_subscription_source_sync(
         ss.source_url = normalized_url
 
     lock_key = f"lock:subscription-source-sync:{ss.id}"
-    with redis_lock(lock_key, ttl_seconds=120) as acquired:
+    async with redis_lock(lock_key, ttl_seconds=120) as acquired:
         if not acquired:
             return skip_result(ss.id, "lock_busy")
 

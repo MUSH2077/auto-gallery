@@ -4,18 +4,29 @@ import json
 import logging
 from typing import Any
 
-import redis as _redis
-
-from app.config import settings
+from app.services.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
 
 CACHE_PREFIX = "cache:api:"
 DEFAULT_TTL = 300  # 5 minutes
 
+# ── Per-endpoint TTL registry (single source of truth) ──
+TTL = {
+    "creators:list": 300,
+    "creators:count": 300,
+    "creators:stats": 60,
+    "works:list": 300,
+    "subscriptions:list": 300,
+}
 
-def _client() -> _redis.Redis:
-    return _redis.from_url(settings.redis_url)
+# Track first cache failure to avoid log spam (resets on success)
+_cache_healthy: bool = True
+
+
+def _client():
+    """Return the shared Redis client (lazy singleton)."""
+    return get_redis()
 
 
 def _to_json(value: Any) -> Any:

@@ -134,25 +134,31 @@ async def batch_delete_works(data: dict, db: AsyncSession = Depends(get_db)):
     ids = data.get("ids", [])
     if not ids:
         raise HTTPException(status_code=400, detail="ids list is required")
-    deleted = 0
+    results = []
     for wid in ids:
         try:
             work = await db.get(Work, UUID(wid))
             if work:
                 await db.delete(work)
-                deleted += 1
-        except Exception:
-            pass
+                results.append({"id": wid, "status": "deleted"})
+            else:
+                results.append({"id": wid, "status": "not_found"})
+        except Exception as e:
+            results.append({"id": wid, "status": "error", "error": str(e)})
     await db.commit()
-    # Also remove from search index
+    # Remove from search index (best-effort per item)
     try:
         from app.services.search import SearchService
         svc = SearchService(db)
         for wid in ids:
-            await svc.delete_work(str(wid))
+            try:
+                await svc.delete_work(str(wid))
+            except Exception:
+                pass
     except Exception:
         pass
-    return {"status": "ok", "deleted": deleted}
+    deleted = sum(1 for r in results if r["status"] == "deleted")
+    return {"status": "ok", "deleted": deleted, "results": results}
 
 
 @router.post("/batch-tag")

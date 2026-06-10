@@ -353,6 +353,19 @@ async def run_import_job(import_job_id: str):
                             asset.thumb_sm_path = str(
                                 Path(tp).relative_to(settings.library_root))
 
+                    # Compute sha256 in thread pool (CPU-bound hashing)
+                    try:
+                        def _compute_sha256(filepath: str) -> str:
+                            import hashlib
+                            h = hashlib.sha256()
+                            with open(filepath, "rb") as _hf:
+                                for _chunk in iter(lambda: _hf.read(8192), b""):
+                                    h.update(_chunk)
+                            return h.hexdigest()
+                        asset.sha256 = await asyncio.to_thread(_compute_sha256, str(fp))
+                    except Exception as _sha256_err:
+                        logger.warning("sha256 failed for %s: %s", fp, _sha256_err)
+
                     # Compute pHash in thread pool (CPU-bound PIL)
                     if _can_compute_phash(fp.suffix):
                         try:

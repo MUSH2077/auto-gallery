@@ -115,8 +115,10 @@ class TestXProvider:
 
     def test_capabilities(self):
         c = self.p.capabilities
-        assert c.can_download is True
-        assert c.supports_gallerydl is True
+        # X/Twitter is a placeholder per CLAUDE.md — not downloadable yet
+        assert c.can_download is False
+        assert c.supports_gallerydl is False
+        assert c.supports_tags is True
 
     def test_validate_url(self):
         assert self.p.validate_url("https://x.com/artist_handle")
