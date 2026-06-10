@@ -1,6 +1,5 @@
 import logging
 import os
-import secrets
 from contextlib import asynccontextmanager
 
 import structlog
@@ -57,20 +56,9 @@ logger = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Auto-generate and persist SECRET_KEY if still default
-    if settings.secret_key == "changeme":
-        _key_file = os.path.join(settings.app_config_root, "secret_key")
-        if os.path.exists(_key_file):
-            with open(_key_file) as _f:
-                settings.secret_key = _f.read().strip()
-            logger.info("Loaded persisted SECRET_KEY from %s", _key_file)
-        else:
-            settings.secret_key = secrets.token_hex(32)
-            os.makedirs(settings.app_config_root, exist_ok=True)
-            with open(_key_file, "w") as _f:
-                _f.write(settings.secret_key)
-            logger.info("Generated new SECRET_KEY and persisted to %s", _key_file)
-
+    # SECRET_KEY and ADMIN_PASSWORD are now validated at config load time
+    # (see app/config.py Settings.__init__) so JWT signing is secure from
+    # the very first request.
     logger.info("backend starting", log_level=settings.log_level)
     from app.auth import ensure_admin_user
     try:
@@ -104,8 +92,12 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         raw = await request.body()
         import json as _json
         data = _json.loads(raw[:2000])
-        for key in ("password", "token", "secret", "api_key", "cookie_content", "refresh_token", "cookies", "cookies_path"):
-            if key in data:
+        # Redact any key whose name contains a sensitive substring
+        _sensitive_substrings = (
+            "password", "token", "secret", "key", "credential", "cookie",
+        )
+        for key in list(data.keys()):
+            if any(ss in key.lower() for ss in _sensitive_substrings):
                 data[key] = "***REDACTED***"
         safe_body = str(data)
     except Exception:
