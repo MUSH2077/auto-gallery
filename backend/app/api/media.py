@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 
-from app.auth import RequireAdmin
+from app.auth import RequireAdmin  # used by /media/original/
 from app.config import settings
 from app.database import async_session
 from app.models.asset import Asset
@@ -61,11 +61,8 @@ async def thumb(asset_id: str):
 
 
 @router.get("/media/preview/{asset_id}")
-async def preview(
-    asset_id: str,
-    _admin: str = RequireAdmin,
-):
-    """Serve preview image — requires admin authentication."""
+async def preview(asset_id: str):
+    """Serve preview image — no auth (embedded in <img> tags on admin-web)."""
     return await _serve(asset_id, "original")
 
 
