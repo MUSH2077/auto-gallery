@@ -1,0 +1,26 @@
+- generic [active] [ref=e1]:
+  - main [ref=e2]:
+    - generic [ref=e3]:
+      - button "EN" [ref=e4] [cursor=pointer]:
+        - img [ref=e5]
+        - generic [ref=e8]: EN
+      - button "跟随系统 — click for 浅色" [ref=e9] [cursor=pointer]:
+        - img [ref=e10]
+    - generic [ref=e12]:
+      - generic [ref=e13]:
+        - generic [ref=e14]: AG
+        - heading "auto-gallery" [level=1] [ref=e15]
+        - paragraph [ref=e16]: 管理后台
+      - generic [ref=e18]:
+        - generic [ref=e19]:
+          - generic [ref=e20]: 用户名
+          - textbox "用户名" [ref=e21]:
+            - /placeholder: admin
+        - generic [ref=e22]:
+          - generic [ref=e23]: 密码
+          - textbox "密码" [ref=e24]:
+            - /placeholder: ••••••••
+        - button "登录" [ref=e25] [cursor=pointer]
+      - paragraph [ref=e26]: v0.1.0 · secure admin access
+  - log
+  - alert [ref=e27]
