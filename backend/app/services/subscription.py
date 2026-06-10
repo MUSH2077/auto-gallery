@@ -122,8 +122,13 @@ class SubscriptionService:
         try:
             from app.services import danbooru as danbooru_svc
             from app.models import Creator
+            import asyncio
 
-            artist, links = danbooru_svc.search_and_extract(source_url=source_url)
+            # Danbooru HTTP is synchronous (urllib); run in thread to avoid
+            # blocking the FastAPI event loop during API calls.
+            artist, links = await asyncio.to_thread(
+                danbooru_svc.search_and_extract, source_url=source_url
+            )
             if not links:
                 return 0
 

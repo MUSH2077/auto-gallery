@@ -128,12 +128,16 @@ class CreatorService:
                                     artist_name: str | None = None) -> int:
         """Query Danbooru and create CreatorLink suggestions for this creator."""
         import logging
+        import asyncio
         logger = logging.getLogger(__name__)
 
         try:
             from app.services import danbooru as danbooru_svc
 
-            artist, links = danbooru_svc.search_and_extract(
+            # Danbooru HTTP is synchronous (urllib); run in thread to avoid
+            # blocking the FastAPI event loop during API calls.
+            artist, links = await asyncio.to_thread(
+                danbooru_svc.search_and_extract,
                 source_url=source_url, pixiv_id=pixiv_id, artist_name=artist_name,
             )
             if not links:

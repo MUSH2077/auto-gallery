@@ -6,6 +6,7 @@ delayed by the configured scan interval so a container restart never triggers
 business sync immediately.
 """
 import asyncio
+import time
 from datetime import timedelta
 
 import redis as redis_lib
@@ -24,12 +25,21 @@ def _job_is_sync(job) -> bool:
 
 
 async def _scan_interval_minutes() -> int:
-    try:
-        async with async_session() as db:
-            config = await get_scheduler_config(db)
-            return max(int(config.get("scheduler_scan_interval_minutes", DEFAULT_SCAN_MINUTES)), 5)
-    except Exception:
-        return DEFAULT_SCAN_MINUTES
+    """Read scheduler scan interval from DB with retry for slow-starting PostgreSQL."""
+    max_retries = 30
+    retry_delay = 2  # seconds
+    for attempt in range(max_retries):
+        try:
+            async with async_session() as db:
+                config = await get_scheduler_config(db)
+                return max(int(config.get("scheduler_scan_interval_minutes", DEFAULT_SCAN_MINUTES)), 5)
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"DB not ready (attempt {attempt + 1}/{max_retries}): {e}; retrying in {retry_delay}s")
+                time.sleep(retry_delay)
+            else:
+                print(f"DB unavailable after {max_retries} attempts, using default interval ({DEFAULT_SCAN_MINUTES} min)")
+    return DEFAULT_SCAN_MINUTES
 
 
 # Check if a sync_subscriptions job is already queued, scheduled, or started

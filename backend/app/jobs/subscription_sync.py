@@ -237,7 +237,7 @@ def sync_subscriptions():
 
 
 async def sync_subscriptions_async():
-    with redis_lock("lock:subscription-sync-scan", ttl_seconds=300) as acquired:
+    async with redis_lock("lock:subscription-sync-scan", ttl_seconds=300) as acquired:
         if not acquired:
             logger.info("Subscription auto-sync scan already running; skipping")
             return

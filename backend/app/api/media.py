@@ -9,6 +9,22 @@ from app.models.asset import Asset
 
 router = APIRouter()
 
+# Resolve roots once at module load for path containment checks
+_RESOLVED_DOWNLOAD_ROOT = Path(settings.download_root).resolve()
+_RESOLVED_LIBRARY_ROOT = Path(settings.library_root).resolve()
+
+
+def _safe_path(root: Path, relative: str) -> Path:
+    """Resolve root/relative and verify it stays within root.
+
+    Raises HTTPException(404) if the resolved path escapes root,
+    preventing path traversal attacks through manipulated file_path values.
+    """
+    full = (root / relative).resolve()
+    if not str(full).startswith(str(root)):
+        raise HTTPException(status_code=404, detail="File not found")
+    return full
+
 
 async def _serve(asset_id: str, size: str):
     async with async_session() as db:
@@ -18,15 +34,13 @@ async def _serve(asset_id: str, size: str):
             raise HTTPException(status_code=404, detail="Asset not found")
 
         if size == "thumb":
-            # Thumbnail lives in library/{source}/{creator}/{work_id}/thumbnail.webp
             if asset.thumb_sm_path:
-                full = Path(settings.library_root) / asset.thumb_sm_path
+                full = _safe_path(_RESOLVED_LIBRARY_ROOT, asset.thumb_sm_path)
                 if full.exists():
                     return FileResponse(full, media_type="image/webp")
             raise HTTPException(status_code=404, detail="Thumbnail not found")
         else:
-            # Original / preview: serve the downloaded file directly
-            full = Path(settings.download_root) / asset.file_path
+            full = _safe_path(_RESOLVED_DOWNLOAD_ROOT, asset.file_path)
             if not full.exists():
                 raise HTTPException(status_code=404, detail="File not found")
             mime = asset.mime_type or "image/jpeg"
