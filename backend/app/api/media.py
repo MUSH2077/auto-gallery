@@ -1,8 +1,9 @@
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 
+from app.auth import RequireAdmin
 from app.config import settings
 from app.database import async_session
 from app.models.asset import Asset
@@ -55,14 +56,23 @@ async def _serve(asset_id: str, size: str):
 
 @router.get("/media/thumb/{asset_id}")
 async def thumb(asset_id: str):
+    """Serve thumbnail — no auth needed (embedded in <img> tags on admin-web)."""
     return await _serve(asset_id, "thumb")
 
 
 @router.get("/media/preview/{asset_id}")
-async def preview(asset_id: str):
+async def preview(
+    asset_id: str,
+    _admin: str = Depends(RequireAdmin),
+):
+    """Serve preview image — requires admin authentication."""
     return await _serve(asset_id, "original")
 
 
 @router.get("/media/original/{asset_id}")
-async def original(asset_id: str):
+async def original(
+    asset_id: str,
+    _admin: str = Depends(RequireAdmin),
+):
+    """Serve original image — requires admin authentication."""
     return await _serve(asset_id, "original")
