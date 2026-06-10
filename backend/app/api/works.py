@@ -144,7 +144,9 @@ async def batch_delete_works(data: dict, db: AsyncSession = Depends(get_db)):
             else:
                 results.append({"id": wid, "status": "not_found"})
         except Exception as e:
-            results.append({"id": wid, "status": "error", "error": str(e)})
+            import logging
+            logging.getLogger(__name__).warning("batch_delete_works failed for %s: %s", wid, e, exc_info=True)
+            results.append({"id": wid, "status": "error", "error": "internal_error"})
     await db.commit()
     # Remove from search index (best-effort per item)
     try:
@@ -198,6 +200,7 @@ async def batch_tag_works(data: dict, db: AsyncSession = Depends(get_db)):
                 )
                 updated += 1
         except Exception:
-            pass
+            import logging
+            logging.getLogger(__name__).warning("batch_tag_works failed for %s", wid, exc_info=True)
     await db.commit()
     return {"status": "ok", "updated": updated}

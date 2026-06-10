@@ -75,7 +75,9 @@ async def batch_delete_creators(data: dict, db: AsyncSession = Depends(get_db)):
             await svc.delete_creator(UUID(cid))
             results.append({"id": cid, "status": "deleted"})
         except Exception as e:
-            results.append({"id": cid, "status": "error", "error": str(e)})
+            import logging
+            logging.getLogger(__name__).warning("batch_delete_creators failed for %s: %s", cid, e, exc_info=True)
+            results.append({"id": cid, "status": "error", "error": "internal_error"})
     cache_delete_pattern("creators:*")
     return {"status": "ok", "results": results}
 
