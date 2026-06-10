@@ -109,7 +109,7 @@ services:
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
       - ./backend/alembic/versions:/app/alembic/versions
     healthcheck:
-      test: ["CMD", "python3", "-c", "import redis, subprocess; r=redis.from_url('redis://:${REDIS_PASSWORD}@redis:6379/0'); assert r.ping(); subprocess.run(['gallery-dl', '--version'], capture_output=True, timeout=5).check_returncode()"]
+      test: ["CMD", "python3", "-c", "import os, redis, subprocess; r=redis.from_url(os.environ['REDIS_URL']); assert r.ping(); assert subprocess.run(['gallery-dl', '--version'], capture_output=True, timeout=5).returncode == 0"]
       interval: 30s
       timeout: 10s
       retries: 3
