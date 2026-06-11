@@ -15,6 +15,14 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Idempotent: skip if column already exists (container rebuild with existing DB)
+    conn = op.get_bind()
+    result = conn.execute(sa.text(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name='subscription_sources' AND column_name='last_synced_at'"
+    ))
+    if result.scalar():
+        return
     op.add_column('subscription_sources',
         sa.Column('last_synced_at', sa.DateTime(timezone=True), nullable=True))
 
