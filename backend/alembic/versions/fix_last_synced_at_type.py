@@ -15,6 +15,15 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Idempotent: skip if already DateTime (container rebuild with existing DB)
+    conn = op.get_bind()
+    result = conn.execute(sa.text(
+        "SELECT data_type FROM information_schema.columns "
+        "WHERE table_name='subscriptions' AND column_name='last_synced_at'"
+    ))
+    current_type = result.scalar()
+    if current_type and 'timestamp' in current_type:
+        return
     op.execute(
         "ALTER TABLE subscriptions ALTER COLUMN last_synced_at "
         "TYPE timestamp with time zone USING last_synced_at::timestamp with time zone"
