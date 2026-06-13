@@ -57,10 +57,30 @@ jobs:
             echo ".env must not be tracked"
             exit 1
           fi
+          if git ls-files --error-unmatch .playwright-mcp >/dev/null 2>&1; then
+            echo ".playwright-mcp must not be tracked"
+            exit 1
+          fi
+          if git ls-files --error-unmatch data >/dev/null 2>&1; then
+            echo "data must not be tracked"
+            exit 1
+          fi
+      - name: Run privacy scan
+        run: scripts/privacy-scan.sh
+      - name: Build release package dry run
+        run: |
+          archive="$(scripts/package-release.sh ci)"
+          tar -tzf "$archive" > /tmp/release-files.txt
+          if grep -E '^auto-gallery-[^/]+/(\.env|data|\.claude|\.playwright-mcp|downloads|library)(/|$)' /tmp/release-files.txt; then
+            echo "release package contains private/runtime paths"
+            exit 1
+          fi
       - name: Check key documentation links
         run: |
           test -f docs/setup.md
           test -f docs/setup.zh.md
+          test -f docs/distribution.md
+          test -f docs/distribution.zh.md
           test -f docs/architecture.md
           test -f docs/risks.md
           test -f docs/release-checklist.md

@@ -7,11 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.schemas.creator import CreatorCreate, CreatorListResponse, CreatorRead, CreatorUpdate
+from app.schemas.curation import CreatorCurationRequest, CurationCommitRead
 from app.schemas.source_creator import SourceCreatorCreate, SourceCreatorRead
 from app.schemas.creator_link import CreatorLinkCreate, CreatorLinkRead, CreatorLinkUpdate
 from app.models.creator import Creator
 from app.services.creator import CreatorService
 from app.services.cache import cache_get, cache_set, cache_key, cache_delete_pattern
+from app.services.curation import CurationService
 
 router = APIRouter(dependencies=[RequireAdmin])
 
@@ -118,7 +120,10 @@ async def merge_creators_endpoint(data: dict, db: AsyncSession = Depends(get_db)
 async def get_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)
     try:
-        return await svc.get_creator(creator_id)
+        creator = await svc.get_creator(creator_id)
+        curation = CurationService(db)
+        creator.curation_state = curation.creator_state_payload(await curation.creator_state(creator_id))
+        return creator
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -389,6 +394,20 @@ async def toggle_creator_favorite(creator_id: UUID, db: AsyncSession = Depends(g
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/{creator_id}/curation", response_model=CurationCommitRead)
+async def curate_creator(creator_id: UUID, data: CreatorCurationRequest, db: AsyncSession = Depends(get_db)):
+    svc = CurationService(db)
+    commit = await svc.curate_creator(
+        creator_id,
+        action=data.action,
+        reason=data.reason,
+        message=data.message,
+    )
+    cache_delete_pattern("creators:*")
+    cache_delete_pattern("works:*")
+    return await svc.commit_payload(commit.id)
 
 
 @router.get("/{creator_id}/sources", response_model=list[SourceCreatorRead])

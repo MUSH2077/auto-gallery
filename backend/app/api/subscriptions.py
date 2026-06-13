@@ -145,7 +145,7 @@ async def create_subscription(data: SubscriptionCreate, db: AsyncSession = Depen
 async def update_subscription(subscription_id: UUID, data: SubscriptionUpdate, db: AsyncSession = Depends(get_db)):
     svc = SubscriptionService(db)
     try:
-        return await svc.update_subscription(subscription_id, data.model_dump(exclude_none=True))
+        return await svc.update_subscription(subscription_id, data.model_dump(exclude_unset=True))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

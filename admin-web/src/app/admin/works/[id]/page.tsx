@@ -27,6 +27,9 @@ interface AssetData {
   height?: number;
   mime_type?: string;
   thumb_sm_path?: string;
+  thumb_url?: string;
+  preview_url?: string;
+  original_url?: string;
   created_at: string;
 }
 
@@ -63,7 +66,7 @@ function FullImageLightbox({ asset, onClose }: { asset: AssetData | null; onClos
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <a
-            href={api.mediaUrl(asset.id, "original")}
+            href={asset.original_url || ""}
             target="_blank"
             rel="noopener noreferrer"
             className="rounded-md border border-white/20 px-3 py-1.5 text-sm text-white hover:bg-white/10"
@@ -78,7 +81,7 @@ function FullImageLightbox({ asset, onClose }: { asset: AssetData | null; onClos
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-4" onClick={(e) => e.stopPropagation()}>
         <img
-          src={api.mediaUrl(asset.id, "original")}
+          src={asset.original_url || ""}
           alt={asset.file_name}
           className="mx-auto h-auto max-h-none max-w-full object-contain"
         />
@@ -104,7 +107,7 @@ function AssetThumb({ asset, active, index, onClick }: { asset: AssetData; activ
         </span>
       ) : (
         <img
-          src={api.mediaUrl(asset.id, mode)}
+          src={mode === "thumb" ? (asset.thumb_url || api.mediaUrl(asset.id, "thumb")) : asset.preview_url || ""}
           alt={`Page ${index + 1}`}
           className="h-full w-full object-cover"
           onError={() => setMode(mode === "thumb" ? "preview" : "error")}
@@ -138,7 +141,7 @@ function AllPages({ workId, sources }: { workId: string; sources: WorkSourceData
               <div className="mx-auto mb-2 flex h-16 w-16 items-center justify-center rounded-md border border-[#d8dee4] bg-white font-mono text-sm font-semibold text-[#57606a] dark:border-[#30363d] dark:bg-[#0d1117] dark:text-[#8b949e]">ZIP</div>
               <div className="text-sm font-medium text-[#24292f] dark:text-[#e6edf3]">{t("work_detail.archive_asset")}</div>
               <div className="mt-1 truncate text-xs text-[#57606a] dark:text-[#8b949e]">{current.file_name}</div>
-              <a href={api.mediaUrl(current.id, "original")} className="btn-ghost mt-3 inline-flex text-xs" target="_blank" rel="noopener noreferrer">
+              <a href={current.original_url || ""} className="btn-ghost mt-3 inline-flex text-xs" target="_blank" rel="noopener noreferrer">
                 {t("work_detail.download_original")}
               </a>
             </div>
@@ -149,7 +152,7 @@ function AllPages({ workId, sources }: { workId: string; sources: WorkSourceData
               className="group relative block w-full overflow-hidden rounded-md bg-[#f6f8fa] dark:bg-[#21262d]"
               title={t("work_detail.view_full", "View full image")}
             >
-              <img src={api.mediaUrl(current.id, "preview")} alt={current.file_name}
+              <img src={current.preview_url || ""} alt={current.file_name}
                 className="max-h-96 w-full object-contain transition-transform group-hover:scale-[1.01]" />
               <span className="absolute bottom-2 right-2 rounded-md bg-black/70 px-2 py-1 text-xs font-medium text-white opacity-0 transition-opacity group-hover:opacity-100">
                 {t("work_detail.view_full")}
@@ -183,6 +186,42 @@ function AllPages({ workId, sources }: { workId: string; sources: WorkSourceData
   );
 }
 
+function WorkHistory({ workId }: { workId: string }) {
+  const commits = useQuery({
+    queryKey: queryKeys.curation.subject("work", workId),
+    queryFn: () => api.listCurationCommits({ subject_type: "work", subject_id: workId, limit: 20 }),
+  });
+  if (commits.isLoading) return <div className="card p-4 animate-pulse"><div className="h-20 rounded bg-[#eaeef2] dark:bg-[#21262d]" /></div>;
+  if (!commits.data?.items.length) return <div className="card p-4"><EmptyState title="No history yet" description="Curation commits touching this work will appear here." /></div>;
+  return (
+    <div className="card p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="text-sm font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">History</h3>
+        <Link href={`/admin/curation?subject_type=work&subject_id=${workId}`} className="text-xs text-blue-600 hover:underline">Open curation</Link>
+      </div>
+      <div className="space-y-3">
+        {commits.data.items.map((commit) => (
+          <div key={commit.id} className="border-l-2 border-[#0969da] pl-3 text-sm dark:border-[#58a6ff]">
+            <div className="font-medium">{commit.message}</div>
+            <div className="mt-0.5 text-xs text-[#57606a] dark:text-[#8b949e]">
+              <span className="font-mono">{commit.id.slice(0, 8)}</span>
+              <span className="mx-1.5">·</span>
+              <span>{commit.trigger}</span>
+              <span className="mx-1.5">·</span>
+              <span>{new Date(commit.occurred_at).toLocaleString()}</span>
+            </div>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {commit.changes.filter((c) => c.subject_id === workId).map((change) => (
+                <span key={change.id} className="rounded-full border border-[#d8dee4] px-2 py-0.5 text-[11px] text-[#57606a] dark:border-[#30363d] dark:text-[#8b949e]">{change.action.replaceAll("_", " ")}</span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function WorkDetailPage() {
   const t = useT();
   const params = useParams();
@@ -199,6 +238,14 @@ export default function WorkDetailPage() {
   });
   const sources = useQuery({ queryKey: queryKeys.works.sources(id), queryFn: () => api.getWorkSources(id) });
   const workTags = useQuery({ queryKey: ["works", id, "tags"], queryFn: () => api.getWorkTags(id) });
+  const curateWork = useMutation({
+    mutationFn: (action: "trash" | "restore") => api.batchCurateWorks([id], action),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.works.detail(id) });
+      qc.invalidateQueries({ queryKey: queryKeys.curation.all });
+      qc.invalidateQueries({ queryKey: queryKeys.works.all });
+    },
+  });
 
   if (work.isLoading) return <main className="max-w-6xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded bg-[#eaeef2] dark:bg-[#21262d]" /><div className="h-64 rounded bg-[#eaeef2] dark:bg-[#21262d]" /></div></main>;
   if (work.error) return <main className="max-w-6xl mx-auto p-6"><ErrorState message={(work.error as Error).message} onRetry={() => work.refetch()} /></main>;
@@ -224,6 +271,7 @@ export default function WorkDetailPage() {
 
   const isAiGenerated = aiType !== undefined && aiType == 2;
   const hasStats = totalView !== undefined || totalBookmarks !== undefined;
+  const visibility = w.curation_state?.visibility || "visible";
 
   return (
     <main className="max-w-6xl mx-auto p-6">
@@ -242,9 +290,23 @@ export default function WorkDetailPage() {
                 {illustType && <span className="text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700">{illustType}</span>}
                 {w.is_nsfw && <span className="text-xs px-2 py-0.5 rounded bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400">{t("work_detail.nsfw")}</span>}
                 {isAiGenerated && <span className="text-xs px-2 py-0.5 rounded bg-yellow-100 text-yellow-700">{t("work_detail.ai_generated")}</span>}
+                {visibility !== "visible" && <span className="text-xs px-2 py-0.5 rounded bg-[#cf222e]/10 text-[#cf222e]">{visibility}</span>}
               </span>
             }
           />
+        </div>
+        <div className="mt-1 flex shrink-0 gap-2">
+          {visibility === "visible" ? (
+            <button onClick={() => curateWork.mutate("trash")} disabled={curateWork.isPending}
+              className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-xs font-medium hover:bg-[#f6f8fa] disabled:opacity-50 dark:border-[#30363d] dark:hover:bg-[#21262d]">
+              Move to Trash
+            </button>
+          ) : visibility === "trashed" ? (
+            <button onClick={() => curateWork.mutate("restore")} disabled={curateWork.isPending}
+              className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-xs font-medium hover:bg-[#f6f8fa] disabled:opacity-50 dark:border-[#30363d] dark:hover:bg-[#21262d]">
+              Restore
+            </button>
+          ) : null}
         </div>
         <button onClick={() => toggleFavorite.mutate(id)}
           className={`text-2xl shrink-0 mt-1 ${work.data?.is_favorite ? "text-yellow-500" : "text-gray-300 hover:text-yellow-400"}`}
@@ -364,6 +426,8 @@ export default function WorkDetailPage() {
               </div>
             ) : <EmptyState title={t("work_detail.no_source_records")} description={t("work_detail.no_source_records_desc", "Source metadata is created during import.")} />}
           </div>
+
+          <WorkHistory workId={id} />
         </div>
 
         {/* Right column — assets gallery */}

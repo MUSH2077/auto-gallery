@@ -90,7 +90,7 @@ services:
   worker-download:
     image: auto-gallery-backend:latest
     pull_policy: never
-    command: python worker_entrypoint.py downloads 3
+    command: python worker_entrypoint.py downloads 3 --with-scheduler
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -109,7 +109,6 @@ services:
       - ${HOST_LIBRARY:-./data/library}:/library
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
-      - ./backend/alembic/versions:/app/alembic/versions
     healthcheck:
       test: ["CMD", "python3", "-c", "import os, redis, subprocess; r=redis.from_url(os.environ['REDIS_URL']); assert r.ping(); assert subprocess.run(['gallery-dl', '--version'], capture_output=True, timeout=5).returncode == 0"]
       interval: 30s
@@ -125,7 +124,7 @@ services:
   worker-import:
     image: auto-gallery-backend:latest
     pull_policy: never
-    command: python worker_entrypoint.py imports 2
+    command: python worker_entrypoint.py imports 2 --with-scheduler
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -144,7 +143,6 @@ services:
       - ${HOST_LIBRARY:-./data/library}:/library
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
-      - ./backend/alembic/versions:/app/alembic/versions
     healthcheck:
       test: ["CMD", "python3", "-c", "import redis; r=redis.from_url('redis://:${REDIS_PASSWORD}@redis:6379/0'); assert r.ping()"]
       interval: 30s
@@ -201,7 +199,7 @@ services:
       HOSTNAME: "0.0.0.0"
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8000}
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/ 2>&1 || exit 0"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/"]
       interval: 15s
       timeout: 5s
       retries: 3

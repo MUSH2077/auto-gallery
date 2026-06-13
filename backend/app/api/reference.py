@@ -527,6 +527,7 @@ async def url_batch_import_danbooru(data: dict):
     Returns immediately with a job_id. Poll GET /danbooru/artist/batch-import/status
     for progress and results.
     """
+    import redis as redis_lib
     import uuid as uuid_mod
 
     urls = data.get("urls", [])
@@ -539,7 +540,7 @@ async def url_batch_import_danbooru(data: dict):
         raise HTTPException(status_code=400, detail="Too many URLs (max 100 per request)")
 
     r = redis_lib.from_url(settings.redis_url)
-    q = Queue(connection=r)
+    q = Queue(name="imports", connection=r)
 
     # Generate key before enqueue so Redis keys match the polling ID
     job_key = str(uuid_mod.uuid4())

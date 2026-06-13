@@ -13,7 +13,7 @@ interface ImportJob {
   id: string;
   download_job_id: string;
   status: string;
-  error_log?: string;
+  error_log?: string | null;
   created_at: string;
   updated_at?: string;
 }

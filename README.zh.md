@@ -117,6 +117,7 @@ Sources
 - [Provider 指南](docs/providers.zh.md)
 - [gallery-dl 配置](docs/gallerydl-config.zh.md)
 - [开发](docs/development.zh.md)
+- [分发与隐私](docs/distribution.zh.md)
 - [风险登记](docs/risks.zh.md)
 - [Release checklist](docs/release-checklist.md)
 - [安全策略](SECURITY.md)

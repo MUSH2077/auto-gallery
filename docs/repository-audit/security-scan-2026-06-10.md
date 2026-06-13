@@ -1,6 +1,6 @@
 # Security Scan Report — auto-gallery
 
-**Date**: 2025-06-10
+**Date**: 2026-06-10
 **Scope**: Full repository (backend, frontend, Docker, config, .claude/)
 **Method**: Manual code review of 15 security focus areas (npx scanner unavailable)
 

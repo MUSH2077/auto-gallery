@@ -1,6 +1,6 @@
 # Documentation Drift Report
 
-**Date**: 2025-06-10
+**Date**: 2026-06-10
 **Method**: Line-by-line comparison of 39 documentation files against current implementation
 **Commit baseline**: `61d8034`
 
@@ -47,7 +47,7 @@ Lines 71, 99, 102 in Chinese version contain the same stale information about X/
 
 **Stale claim**: The constraint doesn't mention media endpoint authentication at all.
 
-**Code reality**: Commit `61d8034` added `RequireAdmin` to `/media/preview/` and `/media/original/`. `/media/thumb/` is intentionally open. The security constraint should document this split.
+**Code reality**: `/media/thumb/` is intentionally open for image tags. `/media/preview/` requires a short-lived signed URL. `/media/original/` accepts either admin Bearer auth or a short-lived signed URL.
 
 ### 5. `.claude/CLAUDE.md` — service layer completely undocumented
 

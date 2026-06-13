@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import RequireAdmin
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, cast, String, or_
 
 from app.database import get_db
 from app.models.import_job import ImportJob
@@ -53,13 +53,38 @@ async def scan_imports(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("")
-async def list_import_jobs(status: str | None = None, offset: int = 0, limit: int = 50, db: AsyncSession = Depends(get_db)):
+async def list_import_jobs(
+    status: str | None = None,
+    download_job_id: UUID | None = None,
+    q: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+):
     stmt = select(ImportJob)
     if status:
         stmt = stmt.where(ImportJob.status == status)
+    if download_job_id:
+        stmt = stmt.where(ImportJob.download_job_id == download_job_id)
+    if q:
+        pattern = f"%{q.strip()}%"
+        stmt = stmt.where(or_(
+            cast(ImportJob.id, String).ilike(pattern),
+            cast(ImportJob.download_job_id, String).ilike(pattern),
+            ImportJob.error_log.ilike(pattern),
+        ))
     count_stmt = select(func.count(ImportJob.id))
     if status:
         count_stmt = count_stmt.where(ImportJob.status == status)
+    if download_job_id:
+        count_stmt = count_stmt.where(ImportJob.download_job_id == download_job_id)
+    if q:
+        pattern = f"%{q.strip()}%"
+        count_stmt = count_stmt.where(or_(
+            cast(ImportJob.id, String).ilike(pattern),
+            cast(ImportJob.download_job_id, String).ilike(pattern),
+            ImportJob.error_log.ilike(pattern),
+        ))
     total_result = await db.execute(count_stmt)
     total = total_result.scalar_one()
     stmt = stmt.order_by(ImportJob.created_at.desc()).offset(offset).limit(limit)
@@ -94,7 +119,7 @@ async def retry_import_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
         from rq import Queue
         from app.config import settings
         r = redis_lib.from_url(settings.redis_url)
-        Queue(connection=r).enqueue("app.jobs.import_runner.run_import_job", str(job_id), job_timeout=7200)
+        Queue(name="imports", connection=r).enqueue("app.jobs.import_runner.run_import_job", str(job_id), job_timeout=7200)
     except Exception:
         logger.warning("Failed to enqueue retry for import job %s", job_id, exc_info=True)
 

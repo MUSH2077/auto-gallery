@@ -1,0 +1,445 @@
+"use client";
+
+import Link from "next/link";
+import { useMemo, useState } from "react";
+import { useParams } from "next/navigation";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, queryKeys } from "@/lib/api";
+import type { CreatorRepository, RepositoryDetailResponse, RepositoryGraphNode, RepositoryRecentJob, RepositoryRecentWork, SchedulerDecisionItem } from "@/lib/api";
+import { EmptyState, ErrorState, SourceBadge } from "@/components";
+import { useToast } from "@/components/Toast";
+import { useT } from "@/lib/i18n";
+import { scheduleModeLabel, schedulerDecisionLabel, statusLabel, useI18nFormat } from "@/lib/i18n-format";
+
+type TabKey = "overview" | "jobs" | "works" | "activity" | "config";
+
+function hostFromUrl(url?: string | null): string {
+  if (!url) return "repo";
+  try {
+    return new URL(url).host.replace(/^www\./, "");
+  } catch {
+    return url.replace(/^https?:\/\//, "").split("/")[0] || url;
+  }
+}
+
+function repoName(repo: CreatorRepository): string {
+  const suffix = repo.source_creator_id || repo.source_url?.split("/").filter(Boolean).pop() || repo.id.slice(0, 8);
+  return `${repo.source}/${suffix || hostFromUrl(repo.source_url)}`.replace(/\s+/g, "-");
+}
+
+function statusClass(status?: string | null) {
+  const running = ["pending", "downloading", "downloaded", "importing"].includes(status || "");
+  const failed = ["failed", "stale"].includes(status || "");
+  if (running) return "border-[#0969da]/30 bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff]/30 dark:bg-[#1f6feb26] dark:text-[#58a6ff]";
+  if (failed) return "border-[#cf222e]/30 bg-[#ffebe9] text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]";
+  return "border-[#1a7f37]/30 bg-[#dafbe1] text-[#1a7f37] dark:border-[#3fb950]/30 dark:bg-[#2ea04326] dark:text-[#3fb950]";
+}
+
+function Pill({ children, tone = "neutral" }: { children: React.ReactNode; tone?: "neutral" | "good" | "warn" | "bad" }) {
+  const cls = tone === "good"
+    ? "border-[#1a7f37]/30 bg-[#dafbe1] text-[#1a7f37] dark:border-[#3fb950]/30 dark:bg-[#2ea04326] dark:text-[#3fb950]"
+    : tone === "warn"
+      ? "border-[#bf8700]/30 bg-[#fff8c5] text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]"
+      : tone === "bad"
+        ? "border-[#cf222e]/30 bg-[#ffebe9] text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]"
+        : "border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]";
+  return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>{children}</span>;
+}
+
+function StatCard({ label, value, hint }: { label: string; value: React.ReactNode; hint?: string }) {
+  return (
+    <div className="rounded-md border border-[#d8dee4] bg-white p-3 dark:border-[#30363d] dark:bg-[#161b22]">
+      <div className="truncate text-sm font-semibold text-[#24292f] dark:text-[#e6edf3]">{value}</div>
+      <div className="mt-1 text-[11px] font-medium uppercase text-[#57606a] dark:text-[#8b949e]">{label}</div>
+      {hint && <div className="mt-0.5 text-xs text-[#8c959f] dark:text-[#6e7681]">{hint}</div>}
+    </div>
+  );
+}
+
+function JobsList({ jobs }: { jobs: RepositoryRecentJob[] }) {
+  const t = useT();
+  const fmt = useI18nFormat();
+  if (!jobs.length) {
+    return <EmptyState title={t("repo_detail.no_jobs_title")} description={t("repo_detail.no_jobs_desc")} />;
+  }
+  return (
+    <div className="divide-y divide-[#d8dee4] rounded-md border border-[#d8dee4] bg-white dark:divide-[#30363d] dark:border-[#30363d] dark:bg-[#161b22]">
+      {jobs.map((job) => (
+        <Link key={job.id} href="/admin/jobs" className="block p-4 hover:bg-[#f6f8fa] dark:hover:bg-[#21262d]">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${statusClass(job.status)}`}>
+                  {statusLabel(t, job.status)}
+                </span>
+                <span className="font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{job.id.slice(0, 8)}</span>
+                {job.retry_count > 0 && <Pill tone="warn">{t("repo_detail.retry_count", { count: job.retry_count })}</Pill>}
+              </div>
+              {job.error_log_excerpt && <p className="mt-2 line-clamp-2 text-xs text-[#cf222e] dark:text-[#f85149]">{job.error_log_excerpt}</p>}
+            </div>
+            <div className="text-right text-xs text-[#57606a] dark:text-[#8b949e]">
+              <div>{fmt.relative(job.created_at)}</div>
+              <div>{fmt.dateTime(job.updated_at)}</div>
+            </div>
+          </div>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function WorksGrid({ works }: { works: RepositoryRecentWork[] }) {
+  const t = useT();
+  const fmt = useI18nFormat();
+  if (!works.length) {
+    return <EmptyState title={t("repo_detail.no_works_title")} description={t("repo_detail.no_works_desc")} />;
+  }
+  return (
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+      {works.map((work) => (
+        <Link key={work.id} href={`/admin/works/${work.id}`}
+          className="group overflow-hidden rounded-md border border-[#d8dee4] bg-white transition-colors hover:border-[#0969da]/50 dark:border-[#30363d] dark:bg-[#161b22] dark:hover:border-[#58a6ff]/50">
+          <div className="aspect-[4/3] bg-[#f6f8fa] dark:bg-[#21262d]">
+            {work.thumbnail_asset_id ? (
+              <img src={api.mediaUrl(work.thumbnail_asset_id, "thumb")} alt={work.title || ""} className="h-full w-full object-cover" loading="lazy" />
+            ) : (
+              <div className="flex h-full items-center justify-center text-xs text-[#57606a] dark:text-[#8b949e]">{t("works.na")}</div>
+            )}
+          </div>
+          <div className="p-3">
+            <div className="truncate text-sm font-medium group-hover:text-[#0969da] dark:group-hover:text-[#58a6ff]">{work.title || t("creator_detail.untitled")}</div>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[#57606a] dark:text-[#8b949e]">
+              <span>{work.posted_at ? fmt.date(work.posted_at) : t("works.no_date")}</span>
+              {work.asset_count > 1 && <span>{work.asset_count}p</span>}
+              {work.is_nsfw && <Pill tone="bad">NSFW</Pill>}
+              {work.is_ai_generated && <Pill tone="warn">AI</Pill>}
+            </div>
+          </div>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function graphTone(node: RepositoryGraphNode) {
+  if (node.is_baseline) return "border-[#8c959f] bg-[#f6f8fa] dark:bg-[#21262d]";
+  if (node.trigger.includes("purge") || node.trigger.includes("trash")) return "border-[#cf222e] bg-[#ffebe9] dark:bg-[#da363326]";
+  if (node.trigger.includes("restore") || node.trigger.includes("revert")) return "border-[#1a7f37] bg-[#dafbe1] dark:bg-[#23863626]";
+  return "border-[#0969da] bg-[#ddf4ff] dark:bg-[#1f6feb26]";
+}
+
+function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
+  const t = useT();
+  const [offset, setOffset] = useState(0);
+  const [trigger, setTrigger] = useState("");
+  const [includeBaseline, setIncludeBaseline] = useState(true);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const limit = 100;
+  const graph = useQuery({
+    queryKey: queryKeys.repositories.graph(repositoryId, offset, { trigger, includeBaseline }),
+    queryFn: () => api.getRepositoryCurationGraph(repositoryId, offset, limit, { trigger: trigger || undefined, include_baseline: includeBaseline }),
+  });
+  const graphFilters = [
+    ["", t("repo_detail.graph_filter_all")],
+    ["baseline_backfill", t("repo_detail.graph_filter_baseline")],
+    ["source_synced", t("repo_detail.graph_filter_sync")],
+    ["work_trash", t("repo_detail.graph_filter_trash")],
+    ["work_restore", t("repo_detail.graph_filter_restore")],
+    ["work_purge", t("repo_detail.graph_filter_purge")],
+    ["commit_revert", t("repo_detail.graph_filter_revert")],
+  ];
+  if (graph.isLoading) return <div className="h-24 animate-pulse rounded-md border border-[#d8dee4] bg-white dark:border-[#30363d] dark:bg-[#161b22]" />;
+  if (!graph.data?.nodes.length) {
+    return (
+      <EmptyState
+        title={t("repo_detail.graph_empty_title")}
+        description={t("repo_detail.graph_empty_desc")}
+        action={(
+          <Link href="/admin/curation" className="mt-3 inline-flex rounded-md border border-[#d8dee4] px-3 py-1.5 text-sm font-medium text-[#0969da] hover:bg-[#f6f8fa] dark:border-[#30363d] dark:text-[#58a6ff] dark:hover:bg-[#21262d]">
+            {t("repo_detail.open_curation")}
+          </Link>
+        )}
+      />
+    );
+  }
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="text-sm text-[#57606a] dark:text-[#8b949e]">
+          {t("repo_detail.graph_showing", { shown: graph.data.nodes.length, total: graph.data.total })}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => setIncludeBaseline((value) => !value)} className={`rounded-md border px-2.5 py-1.5 text-xs ${includeBaseline ? "border-[#d8dee4] dark:border-[#30363d]" : "border-[#0969da] bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#58a6ff]"}`}>
+            {includeBaseline ? t("repo_detail.hide_baseline") : t("repo_detail.show_baseline")}
+          </button>
+          <Link href={`/admin/curation?subject_type=repository&subject_id=${repositoryId}`} className="text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("repo_detail.open_full_history")}</Link>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {graphFilters.map(([key, label]) => (
+          <button key={key} onClick={() => { setTrigger(key); setOffset(0); }} className={`rounded-md border px-2.5 py-1.5 text-xs font-medium ${trigger === key ? "border-[#0969da] bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#58a6ff]" : "border-[#d8dee4] hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]"}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="rounded-md border border-[#d8dee4] bg-white p-4 dark:border-[#30363d] dark:bg-[#161b22]">
+        {graph.data.nodes.map((node, index) => (
+          <div key={node.id} className="relative grid grid-cols-[32px_minmax(0,1fr)] gap-3 pb-5 last:pb-0">
+            {index < graph.data.nodes.length - 1 && <div className="absolute left-[15px] top-8 h-[calc(100%-1.5rem)] w-px bg-[#d8dee4] dark:bg-[#30363d]" />}
+            <div className={`relative z-10 mt-1 h-8 w-8 rounded-full border-2 ${graphTone(node)}`} />
+            <div role="button" tabIndex={0} onClick={() => setExpanded(expanded === node.id ? null : node.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setExpanded(expanded === node.id ? null : node.id); }} className="min-w-0 rounded-md border border-[#d8dee4] p-3 text-left hover:border-[#0969da]/50 dark:border-[#30363d] dark:hover:border-[#58a6ff]/50">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold">{node.message}</div>
+                  <div className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">
+                    <span className="font-mono">{node.id.slice(0, 8)}</span>
+                    <span className="mx-1.5">·</span>
+                    <span>{node.trigger}</span>
+                    {node.is_baseline && <span className="ml-1.5 rounded-full border border-[#d8dee4] px-1.5 py-0.5 text-[10px] dark:border-[#30363d]">{t("repo_detail.graph_baseline")}</span>}
+                    <span className="mx-1.5">·</span>
+                    <span>{new Date(node.occurred_at).toLocaleString()}</span>
+                  </div>
+                </div>
+                {typeof node.stats?.work_count === "number" && <Pill>{t("repo_detail.graph_works_count", { count: node.stats.work_count })}</Pill>}
+              </div>
+              {node.changes_summary.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {node.changes_summary.map((item) => (
+                    <span key={item.action} className="rounded-full border border-[#d8dee4] px-2 py-0.5 text-xs text-[#57606a] dark:border-[#30363d] dark:text-[#8b949e]">
+                      {item.action.replaceAll("_", " ")} · {item.count}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {node.thumbnails.length > 0 && (
+                <div className="mt-3 flex gap-2 overflow-x-auto">
+                  {node.thumbnails.map((assetId) => (
+                    <div key={assetId} className="h-14 w-14 shrink-0 overflow-hidden rounded-md border border-[#d8dee4] bg-[#f6f8fa] dark:border-[#30363d] dark:bg-[#21262d]">
+                      <img src={api.mediaUrl(assetId, "thumb")} alt="" className="h-full w-full object-cover" loading="lazy" />
+                    </div>
+                  ))}
+                </div>
+              )}
+              {expanded === node.id && (
+                <div className="mt-3 border-t border-[#d8dee4] pt-3 text-xs text-[#57606a] dark:border-[#30363d] dark:text-[#8b949e]">
+                  <div className="mb-2 font-medium text-[#24292f] dark:text-[#e6edf3]">{t("repo_detail.graph_node_details")}</div>
+                  <div className="flex flex-wrap gap-2">
+                    <Link onClick={(e) => e.stopPropagation()} href={`/admin/curation?commit=${node.id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("repo_detail.open_commit")}</Link>
+                    <Link onClick={(e) => e.stopPropagation()} href={`/admin/jobs?tab=downloads&subscription_source_id=${repositoryId}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("repo_detail.open_jobs")}</Link>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      {offset + limit < graph.data.total && (
+        <button onClick={() => setOffset(offset + limit)} className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-sm hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
+          {t("repo_detail.load_older")}
+        </button>
+      )}
+      {offset > 0 && (
+        <button onClick={() => setOffset(Math.max(0, offset - limit))} className="ml-2 rounded-md border border-[#d8dee4] px-3 py-1.5 text-sm hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
+          {t("repo_detail.newer")}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ConfigRows({ detail, decision }: { detail: RepositoryDetailResponse; decision?: SchedulerDecisionItem }) {
+  const t = useT();
+  const fmt = useI18nFormat();
+  const { repository: repo, provider, subscription } = detail;
+  const rows = [
+    [t("repo_detail.source_url"), repo.source_url || "—"],
+    [t("repo_detail.normalized_url"), provider.normalized_url || "—"],
+    [t("repo_detail.source_creator_id"), repo.source_creator_id || "—"],
+    [t("repo_detail.subscription"), subscription.name || subscription.id],
+    [t("repo_detail.schedule_mode"), scheduleModeLabel(t, subscription.schedule_mode || "inherit")],
+    [t("repo_detail.scheduled_times"), subscription.scheduled_times || "—"],
+    [t("repo_detail.interval"), `${subscription.sync_interval_hours}h`],
+    [t("repo_detail.next_due"), fmt.dateTime(decision?.next_due_at)],
+  ];
+  return (
+    <div className="rounded-md border border-[#d8dee4] bg-white dark:border-[#30363d] dark:bg-[#161b22]">
+      {rows.map(([label, value]) => (
+        <div key={label} className="grid grid-cols-1 gap-1 border-b border-[#d8dee4] px-4 py-3 text-sm last:border-b-0 dark:border-[#30363d] md:grid-cols-[180px_1fr]">
+          <dt className="text-[#57606a] dark:text-[#8b949e]">{label}</dt>
+          <dd className="min-w-0 break-all font-mono text-xs text-[#24292f] dark:text-[#e6edf3]">{value}</dd>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function nextActionHint(detail: RepositoryDetailResponse, decision?: SchedulerDecisionItem): { tone: "neutral" | "good" | "warn" | "bad"; text: string } {
+  const repo = detail.repository;
+  if (!repo.is_enabled) return { tone: "warn", text: "repo_detail.hint_enable_repo" };
+  if (!repo.auth_healthy) return { tone: "bad", text: "repo_detail.hint_fix_auth" };
+  if (!repo.url_valid) return { tone: "bad", text: "repo_detail.hint_fix_url" };
+  if (repo.latest_job && ["failed", "stale"].includes(repo.latest_job.status)) return { tone: "bad", text: "repo_detail.hint_open_failed_jobs" };
+  if (repo.latest_job && ["pending", "downloading", "downloaded", "importing"].includes(repo.latest_job.status)) return { tone: "neutral", text: "repo_detail.hint_job_running" };
+  if (decision?.due) return { tone: "good", text: "repo_detail.hint_due_now" };
+  return { tone: "neutral", text: "repo_detail.hint_wait_window" };
+}
+
+export default function RepositoryDetailPage() {
+  const t = useT();
+  const fmt = useI18nFormat();
+  const toast = useToast();
+  const params = useParams();
+  const qc = useQueryClient();
+  const id = params.id as string;
+  const [tab, setTab] = useState<TabKey>("overview");
+
+  const detail = useQuery({ queryKey: queryKeys.repositories.detail(id), queryFn: () => api.getRepository(id), refetchInterval: 12000 });
+  const decisions = useQuery({ queryKey: [...queryKeys.schedulerDecisions, "repository", id], queryFn: api.schedulerDecisions, refetchInterval: 15000 });
+
+  const repo = detail.data?.repository;
+  const decision = useMemo(() => decisions.data?.items.find((item) => item.source_id === id), [decisions.data?.items, id]);
+
+  const sync = useMutation({
+    mutationFn: () => api.syncRepository(id),
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: queryKeys.repositories.detail(id) });
+      qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+      qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
+      toast.success(result.message || result.reason || t("repo_detail.sync_queued"));
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const toggle = useMutation({
+    mutationFn: () => {
+      if (!repo) throw new Error(t("repo_detail.not_found"));
+      return api.updateSubscriptionSource(repo.subscription_id, repo.id, { is_enabled: !repo.is_enabled });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.repositories.detail(id) });
+      qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  if (detail.isLoading) {
+    return <main className="mx-auto max-w-7xl p-6"><div className="space-y-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-28 animate-pulse rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />)}</div></main>;
+  }
+  if (detail.error) {
+    return <main className="mx-auto max-w-7xl p-6"><ErrorState message={(detail.error as Error).message} onRetry={() => detail.refetch()} /></main>;
+  }
+  if (!detail.data || !repo) return null;
+
+  const { creator, subscription, provider, recent_jobs, recent_works } = detail.data;
+  const running = !!repo.latest_job && ["pending", "downloading", "downloaded", "importing"].includes(repo.latest_job.status);
+  const canSync = repo.is_repository && repo.is_enabled && !running;
+  const hint = nextActionHint(detail.data, decision);
+  const tabs: { key: TabKey; label: string; count?: number }[] = [
+    { key: "overview", label: t("repo_detail.tab_overview") },
+    { key: "jobs", label: t("repo_detail.tab_jobs"), count: recent_jobs.length },
+    { key: "works", label: t("repo_detail.tab_works"), count: recent_works.length },
+    { key: "activity", label: t("repo_detail.tab_graph") },
+    { key: "config", label: t("repo_detail.tab_config") },
+  ];
+
+  return (
+    <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <Link href={`/admin/creators/${creator.id}`} className="inline-flex items-center gap-1 text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">&larr; {t("repo_detail.back_to_creator")}</Link>
+
+      <header className="mt-4 border-b border-[#d8dee4] pb-5 dark:border-[#30363d]">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <SourceBadge source={repo.source} />
+              <h1 className="min-w-0 truncate text-2xl font-semibold tracking-normal text-[#24292f] dark:text-[#e6edf3]">{repoName(repo)}</h1>
+              <Pill tone={repo.is_enabled ? "good" : "neutral"}>{repo.is_enabled ? t("repo.enabled") : t("repo.disabled")}</Pill>
+              <Pill tone={repo.auth_healthy ? "good" : "bad"}>{repo.auth_healthy ? t("repo.auth_healthy") : t("repo.auth_issue")}</Pill>
+              <Pill tone={repo.url_valid ? "good" : "warn"}>{repo.url_valid ? t("repo_detail.valid_url") : t("repo.invalid_url")}</Pill>
+            </div>
+            <p className="mt-2 max-w-4xl truncate font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{repo.source_url || t("repo.no_source_url")}</p>
+            <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-[#57606a] dark:text-[#8b949e]">
+              <Link href={`/admin/creators/${creator.id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{creator.display_name || creator.name}</Link>
+              <span>{provider.display_name}</span>
+              <span>{t("repo.last_sync", { time: fmt.relative(repo.last_synced_at, "repo.never_synced") })}</span>
+              {decision && <span>{schedulerDecisionLabel(t, decision.reason, decision.due)}</span>}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => sync.mutate()} disabled={!canSync || sync.isPending} className="btn-primary disabled:opacity-50">
+              {running || sync.isPending ? t("repo.syncing") : t("repo.sync_now")}
+            </button>
+            <button onClick={() => toggle.mutate()} disabled={toggle.isPending} className="btn-ghost disabled:opacity-50">
+              {repo.is_enabled ? t("repo.disable") : t("repo.enable")}
+            </button>
+            <Link href={`/admin/subscriptions/${subscription.id}`} className="btn-ghost">{t("repo_detail.open_subscription")}</Link>
+            {repo.source_url && <a href={repo.source_url} target="_blank" rel="noopener noreferrer" className="btn-ghost">{t("repo_detail.open_source")}</a>}
+          </div>
+        </div>
+      </header>
+
+      <nav className="mt-4 flex gap-1 overflow-x-auto border-b border-[#d8dee4] dark:border-[#30363d]" aria-label="Repository sections">
+        {tabs.map((item) => (
+          <button key={item.key} onClick={() => setTab(item.key)}
+            className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${tab === item.key ? "border-[#fd8c73] font-semibold text-[#24292f] dark:text-[#e6edf3]" : "border-transparent text-[#57606a] hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3]"}`}>
+            {item.label}{item.count !== undefined && <span className="ml-2 rounded-full bg-[#eaeef2] px-2 py-0.5 text-xs font-medium text-[#57606a] dark:bg-[#30363d] dark:text-[#8b949e]">{item.count}</span>}
+          </button>
+        ))}
+      </nav>
+
+      <section className="mt-5">
+        {tab === "overview" && (
+          <div className="space-y-5">
+            <div className={`rounded-md border p-4 text-sm ${hint.tone === "bad" ? "border-[#cf222e]/30 bg-[#ffebe9] text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]" : hint.tone === "warn" ? "border-[#bf8700]/30 bg-[#fff8c5] text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]" : "border-[#d8dee4] bg-white text-[#24292f] dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#e6edf3]"}`}>
+              <div className="font-semibold">{t("repo_detail.next_action")}</div>
+              <div className="mt-1">{t(hint.text)}</div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Link href={`/admin/jobs?tab=downloads&subscription_source_id=${id}`} className="btn-ghost text-xs">{t("repo_detail.open_jobs")}</Link>
+                <Link href="/admin/scheduler" className="btn-ghost text-xs">{t("repo_detail.open_scheduler")}</Link>
+                <button onClick={() => sync.mutate()} disabled={!canSync || sync.isPending} className="btn-primary text-xs disabled:opacity-50">{t("repo.sync_now")}</button>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <StatCard label={t("repo_detail.latest_job")} value={repo.latest_job ? statusLabel(t, repo.latest_job.status) : t("repo.no_jobs")} hint={repo.latest_job ? fmt.relative(repo.latest_job.created_at) : undefined} />
+              <StatCard label={t("repo_detail.last_attempt")} value={fmt.relative(repo.last_attempted_at)} hint={fmt.dateTime(repo.last_attempted_at)} />
+              <StatCard label={t("repo_detail.auth_status")} value={repo.auth_status || (repo.auth_healthy ? t("repo.auth_healthy") : t("repo.auth_issue"))} hint={fmt.dateTime(repo.last_auth_checked_at)} />
+              <StatCard label={t("repo_detail.schedule")} value={decision ? schedulerDecisionLabel(t, decision.reason, decision.due) : scheduleModeLabel(t, subscription.schedule_mode)} hint={decision?.next_due_at ? fmt.dateTime(decision.next_due_at) : undefined} />
+            </div>
+            {repo.latest_job?.error_log_excerpt && (
+              <div className="rounded-md border border-[#cf222e]/30 bg-[#ffebe9] p-4 text-sm text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">
+                {repo.latest_job.error_log_excerpt}
+              </div>
+            )}
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+              <section>
+                <div className="mb-3 flex items-center justify-between">
+                  <h2 className="text-base font-semibold">{t("repo_detail.recent_jobs")}</h2>
+                  <button onClick={() => setTab("jobs")} className="text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("common.view_all")}</button>
+                </div>
+                <JobsList jobs={recent_jobs.slice(0, 4)} />
+              </section>
+              <section>
+                <div className="mb-3 flex items-center justify-between">
+                  <h2 className="text-base font-semibold">{t("repo_detail.recent_works")}</h2>
+                  <button onClick={() => setTab("works")} className="text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("common.view_all")}</button>
+                </div>
+                <WorksGrid works={recent_works.slice(0, 4)} />
+              </section>
+            </div>
+          </div>
+        )}
+        {tab === "jobs" && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("repo_detail.jobs_filtered_desc")}</p>
+              <Link href={`/admin/jobs?tab=downloads&subscription_source_id=${id}`} className="btn-ghost text-sm">{t("repo_detail.open_in_jobs")}</Link>
+            </div>
+            <JobsList jobs={recent_jobs} />
+          </div>
+        )}
+        {tab === "works" && <WorksGrid works={recent_works} />}
+        {tab === "activity" && <RepositoryGraph repositoryId={id} />}
+        {tab === "config" && <ConfigRows detail={detail.data} decision={decision} />}
+      </section>
+    </main>
+  );
+}

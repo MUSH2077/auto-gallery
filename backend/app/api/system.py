@@ -34,6 +34,7 @@ router = APIRouter(dependencies=[RequireAdmin])
 DOWNLOAD_RUNNING_STATUSES = {"pending", "downloading", "downloaded", "importing"}
 IMPORT_RUNNING_STATUSES = {"pending", "running"}
 FAILED_STATUSES = {"failed", "stale"}
+QUEUE_NAMES = ("default", "downloads", "imports", "scheduled")
 
 # ── Storage stats TTL cache ────────────────────────────────────────────────────
 _storage_cache: dict | None = None
@@ -99,11 +100,20 @@ async def _queue_stats_payload() -> dict:
         from rq.registry import FailedJobRegistry, ScheduledJobRegistry, StartedJobRegistry
 
         r = redis_lib.from_url(settings.redis_url)
-        default_q = Queue(connection=r)
+        queues = {}
+        for qname in QUEUE_NAMES:
+            q = Queue(connection=r) if qname == "default" else Queue(name=qname, connection=r)
+            scheduled_registry = ScheduledJobRegistry(queue=q)
+            started_registry = StartedJobRegistry(queue=q)
+            failed_registry = FailedJobRegistry(queue=q)
+            queues[qname] = {
+                "queued": len(q),
+                "scheduled": scheduled_registry.count,
+                "started": started_registry.count,
+                "failed": failed_registry.count,
+            }
+
         scheduled_q = Queue(name="scheduled", connection=r)
-        failed_reg = FailedJobRegistry(queue=default_q)
-        sched_failed_reg = FailedJobRegistry(queue=scheduled_q)
-        started_reg = StartedJobRegistry(queue=default_q)
         scheduled_registry = ScheduledJobRegistry(queue=scheduled_q)
         sync_jobs = []
         for job_id in scheduled_registry.get_job_ids():
@@ -115,11 +125,12 @@ async def _queue_stats_payload() -> dict:
             _job, next_sync_scan_at = min(sync_jobs, key=lambda item: item[1])
             next_sync_scan_at = _iso(next_sync_scan_at)
         return {
-            "default_queue": len(default_q),
-            "scheduled_queue": len(scheduled_q),
-            "failed_jobs": failed_reg.count + sched_failed_reg.count,
-            "started_jobs": started_reg.count,
+            "default_queue": queues["default"]["queued"],
+            "scheduled_queue": queues["scheduled"]["queued"] + queues["scheduled"]["scheduled"],
+            "failed_jobs": sum(item["failed"] for item in queues.values()),
+            "started_jobs": sum(item["started"] for item in queues.values()),
             "next_sync_scan_at": next_sync_scan_at,
+            "queues": queues,
         }
     except Exception:
         logger.warning("Failed to fetch Redis queue stats", exc_info=True)
@@ -129,6 +140,7 @@ async def _queue_stats_payload() -> dict:
             "failed_jobs": -1,
             "started_jobs": -1,
             "next_sync_scan_at": None,
+            "queues": {},
         }
 
 
@@ -239,6 +251,7 @@ async def queue_stats():
             "scheduled_times": scheduler_config.get("scheduled_times", ""),
             "scheduler_scan_interval_minutes": int(scheduler_config.get("scheduler_scan_interval_minutes", 60)),
             "next_sync_scan_at": queue_payload["next_sync_scan_at"],
+            "queues": queue_payload["queues"],
         }
     except Exception:
         logger.warning("Failed to fetch queue stats", exc_info=True)
@@ -492,10 +505,10 @@ async def clear_failed_jobs():
 
     r = redis_lib.from_url(app_settings.redis_url)
     total = 0
-    for qname in ["default", "scheduled"]:
-        q = Queue(name=qname, connection=r)
+    for qname in QUEUE_NAMES:
+        q = Queue(connection=r) if qname == "default" else Queue(name=qname, connection=r)
         reg = FailedJobRegistry(queue=q)
         for job_id in reg.get_job_ids():
-            reg.remove(job_id)
+            reg.remove(job_id, delete_job=True)
             total += 1
     return {"status": "ok", "message": f"Removed {total} failed jobs from Redis"}

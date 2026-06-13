@@ -5,10 +5,10 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -91,6 +91,38 @@ async def _put_setting(db: AsyncSession, key: str, value: dict):
             clear_proxy_cache()
         except Exception:
             pass
+
+
+def _job_is_sync_scan(job) -> bool:
+    return "sync_subscriptions" in (getattr(job, "func_name", "") or str(job))
+
+
+def _reschedule_subscription_sync_scan(config: dict) -> dict:
+    """Replace pending subscription sync scan jobs with one using current config."""
+    import redis as redis_lib
+    from rq import Queue
+    from rq.registry import ScheduledJobRegistry
+    from app.jobs.subscription_sync import sync_subscriptions
+
+    interval = max(int(config.get("scheduler_scan_interval_minutes", 60)), 5)
+    r = redis_lib.from_url(settings.redis_url)
+    q = Queue(name="scheduled", connection=r)
+    scheduled_registry = ScheduledJobRegistry(queue=q)
+
+    removed = 0
+    for job_id in list(scheduled_registry.get_job_ids()):
+        job = q.fetch_job(job_id)
+        if job and _job_is_sync_scan(job):
+            scheduled_registry.remove(job_id, delete_job=True)
+            removed += 1
+
+    for job in list(q.get_jobs()):
+        if _job_is_sync_scan(job):
+            q.remove(job.id)
+            removed += 1
+
+    job = q.enqueue_in(timedelta(minutes=interval), sync_subscriptions)
+    return {"removed": removed, "job_id": job.id, "interval_minutes": interval}
 
 
 DEFAULT_DEDUP = {"source_level_enabled": False, "cross_source_enabled": False, "auto_merge": False, "phash_threshold": 8}
@@ -584,15 +616,21 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
 
 @router.put("/settings")
 async def update_settings(data: AdminSettingsUpdate, db: AsyncSession = Depends(get_db)):
+    sync_scan_reschedule = None
     if data.dedup is not None:
         await _put_setting(db, "dedup", data.dedup.model_dump())
     if data.subscription_defaults is not None:
-        await _put_setting(db, "subscription_defaults", data.subscription_defaults.model_dump())
+        subscription_defaults = data.subscription_defaults.model_dump()
+        await _put_setting(db, "subscription_defaults", subscription_defaults)
+        try:
+            sync_scan_reschedule = _reschedule_subscription_sync_scan(subscription_defaults)
+        except Exception:
+            logger.warning("Failed to reschedule subscription sync scan after settings update", exc_info=True)
     if data.download_defaults is not None:
         await _put_setting(db, "download_defaults", data.download_defaults.model_dump())
     if data.proxy is not None:
         await _put_setting(db, "proxy", data.proxy.model_dump())
-    return {"status": "ok", "message": "Settings saved to database"}
+    return {"status": "ok", "message": "Settings saved to database", "sync_scan_reschedule": sync_scan_reschedule}
 
 
 # ── Proxy Test ──
@@ -731,8 +769,15 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
 # ── Data Management ──
 
 ENTITIES = {
-    "works": ["work_source_tags", "work_tags", "asset_sources", "assets", "work_sources", "works"],
-    "creators": ["import_jobs", "download_jobs", "subscription_sources", "subscriptions", "source_creators", "creator_links", "creators"],
+    "works": [
+        "work_source_tags", "work_tags", "asset_sources",
+        "work_curation_states", "asset_storage_states",
+        "assets", "work_sources", "works",
+    ],
+    "creators": [
+        "import_jobs", "download_jobs", "subscription_sources", "subscriptions", "source_creators", "creator_links",
+        "creator_curation_states", "creators",
+    ],
     "downloads": ["import_jobs", "download_jobs"],
     "jobs": ["import_jobs", "download_jobs"],
     "tags": ["work_source_tags", "work_tags", "tags"],
@@ -748,7 +793,9 @@ async def clear_entity(entity: str, db: AsyncSession = Depends(get_db)):
 
     if entity == "all":
         order = [
-            "work_source_tags", "work_tags", "asset_sources", "assets", "work_sources", "works",
+            "work_source_tags", "work_tags", "asset_sources",
+            "curation_changes", "work_curation_states", "creator_curation_states", "asset_storage_states", "curation_commits",
+            "assets", "work_sources", "works",
             "import_jobs", "download_jobs",
             "subscription_sources", "subscriptions",
             "source_creators", "creator_links", "creators",
@@ -1688,8 +1735,8 @@ BACKUP_CONTENT_LABELS = {
 def _parse_db_url(url: str) -> dict:
     """Parse DATABASE_URL into pg_dump-compatible components.
 
-    NOTE: The returned dict includes ``password`` for use as PGPASSWORD
-    in subprocess calls.  Callers MUST NOT log or serialize this dict.
+    NOTE: The returned dict includes ``password`` for temporary .pgpass
+    files in subprocess calls. Callers MUST NOT log or serialize this dict.
     """
     from urllib.parse import urlparse
     parsed = urlparse(url)
@@ -1700,6 +1747,30 @@ def _parse_db_url(url: str) -> dict:
         "password": parsed.password or "",
         "dbname": parsed.path.lstrip("/") or "autogallery",
     }
+
+
+def _escape_pgpass_field(value: str) -> str:
+    """Escape a value for PostgreSQL .pgpass format."""
+    return value.replace("\\", "\\\\").replace(":", "\\:")
+
+
+def _pg_env_with_passfile(tmpdir: str, db_info: dict) -> dict:
+    """Return subprocess env using a temporary .pgpass file, not PGPASSWORD."""
+    pgpass_path = os.path.join(tmpdir, ".pgpass")
+    fields = [
+        db_info["host"],
+        db_info["port"],
+        db_info["dbname"],
+        db_info["user"],
+        db_info["password"],
+    ]
+    with open(pgpass_path, "w", encoding="utf-8") as f:
+        f.write(":".join(_escape_pgpass_field(str(field)) for field in fields) + "\n")
+    os.chmod(pgpass_path, 0o600)
+    env = os.environ.copy()
+    env.pop("PGPASSWORD", None)
+    env["PGPASSFILE"] = pgpass_path
+    return env
 
 
 def _estimate_component_sizes() -> dict[str, int]:
@@ -1769,8 +1840,7 @@ async def create_backup(data: dict | None = None):
         # 1. PostgreSQL dump
         if "database" in selected:
             dump_path = os.path.join(tmpdir, "database.sql")
-            env = os.environ.copy()
-            env["PGPASSWORD"] = db_info["password"]
+            env = _pg_env_with_passfile(tmpdir, db_info)
             result = subprocess.run(
                 ["pg_dump", "-h", db_info["host"], "-p", db_info["port"], "-U", db_info["user"],
                  "-d", db_info["dbname"], "--no-owner", "--no-acl", "-f", dump_path],
@@ -1851,14 +1921,22 @@ async def create_backup(data: dict | None = None):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-# restore_backup is defined below with _safe_extract_tar, PGPASSWORD handling,
+# restore_backup is defined below with _safe_extract_tar, .pgpass handling,
 # and confirm=DELETE-EVERYTHING guard.  See the second definition in this file.
 
 
 def _validate_backup_filename(filename: str) -> Path:
     """Resolve and validate a backup filename stays within BACKUP_DIR."""
+    if "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if Path(filename).name != filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if not (filename.startswith("auto-gallery-backup_") and filename.endswith(".tar.gz")):
+        raise HTTPException(status_code=400, detail="Invalid filename")
     target = (BACKUP_DIR / filename).resolve()
-    if not str(target).startswith(str(BACKUP_DIR.resolve())):
+    try:
+        target.relative_to(BACKUP_DIR.resolve())
+    except ValueError:
         raise HTTPException(status_code=400, detail="Invalid filename")
     return target
 
@@ -1917,9 +1995,12 @@ def _safe_extract_tar(tar_path: str, dest_dir: str) -> None:
                 continue
             if member.isdir():
                 os.makedirs(resolved, exist_ok=True)
-            elif member.isfile() or member.issym():
+            elif member.isfile():
                 os.makedirs(os.path.dirname(resolved), exist_ok=True)
-                with tar.extractfile(member) as src, open(resolved, "wb") as dst:
+                src = tar.extractfile(member)
+                if src is None:
+                    continue
+                with src, open(resolved, "wb") as dst:
                     dst.write(src.read())
 
 
@@ -1960,8 +2041,7 @@ async def restore_backup(file: UploadFile = File(...), confirm: str = ""):
         dump_path = os.path.join(extract_dir, "database.sql")
         if os.path.exists(dump_path):
             db = _parse_db_url(settings.database_url)
-            env = os.environ.copy()
-            env["PGPASSWORD"] = db["password"]
+            env = _pg_env_with_passfile(tmpdir, db)
             # Drop and recreate
             result = subprocess.run(
                 ["psql", "-h", db["host"], "-p", db["port"], "-U", db["user"], "-d", db["dbname"],
