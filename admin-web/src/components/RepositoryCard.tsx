@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { CreatorRepository, RepositoryLatestJob, SchedulerDecisionItem } from "@/lib/api";
+import { useRouter } from "next/navigation";
+import type { KeyboardEvent, MouseEvent } from "react";
+import type { CreatorRepository, RepositoryLatestJob, SchedulerDecisionItem } from "@/lib/api";
 import { scheduleModeLabel, schedulerDecisionLabel, statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { useT } from "@/lib/i18n";
 import SourceBadge from "./SourceBadge";
@@ -25,6 +27,10 @@ function repoName(repo: RepoLike): string {
   const host = hostFromUrl(repo.source_url);
   const suffix = repo.source_creator_id || repo.source_url?.split("/").filter(Boolean).pop() || repo.id.slice(0, 8);
   return `${repo.source}/${suffix}`.replace(/\s+/g, "-") || host;
+}
+
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && !!target.closest("a,button,input,select,textarea,[role='button']");
 }
 
 function DecisionPill({ decision }: { decision?: SchedulerDecisionItem }) {
@@ -103,22 +109,43 @@ export default function RepositoryCard({
 }) {
   const t = useT();
   const fmt = useI18nFormat();
+  const router = useRouter();
   const running = !!repo.latest_job && ["pending", "downloading", "downloaded", "importing"].includes(repo.latest_job.status);
   const legal = repo.is_repository;
   const disabledReason = !repo.can_download ? t("repo.provider_cannot_download") : !repo.url_valid ? t("repo.invalid_url") : null;
+  const detailHref = `/admin/repositories/${repo.id}`;
+
+  const openDetail = () => router.push(detailHref);
+  const handleCardClick = (event: MouseEvent<HTMLElement>) => {
+    if (isInteractiveTarget(event.target)) return;
+    openDetail();
+  };
+  const handleCardKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Enter" || isInteractiveTarget(event.target)) return;
+    openDetail();
+  };
 
   return (
-    <article className="rounded-md border border-[#d8dee4] bg-white p-4 transition-colors hover:border-[#0969da]/50 dark:border-[#30363d] dark:bg-[#161b22] dark:hover:border-[#58a6ff]/50">
+    <article
+      role="link"
+      tabIndex={0}
+      onClick={handleCardClick}
+      onKeyDown={handleCardKeyDown}
+      aria-label={t("repo.open_details")}
+      className="cursor-pointer rounded-md border border-[#d8dee4] bg-white p-4 transition-colors hover:border-[#0969da]/50 focus:outline-none focus:ring-2 focus:ring-[#0969da]/40 dark:border-[#30363d] dark:bg-[#161b22] dark:hover:border-[#58a6ff]/50 dark:focus:ring-[#58a6ff]/40"
+    >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <SourceBadge source={repo.source} />
             <h3 className="truncate text-base font-semibold text-[#0969da] dark:text-[#58a6ff]">
-              {repo.source_url ? (
-                <a href={repo.source_url} target="_blank" rel="noopener noreferrer" className="hover:underline">
-                  {repoName(repo)}
-                </a>
-              ) : repoName(repo)}
+              <button
+                type="button"
+                onClick={openDetail}
+                className="min-w-0 truncate text-left hover:underline focus:outline-none focus:underline"
+              >
+                {repoName(repo)}
+              </button>
             </h3>
             {!legal && (
               <span className="rounded-full border border-[#bf8700]/30 bg-[#fff8c5] px-2 py-0.5 text-xs text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]">
@@ -149,6 +176,14 @@ export default function RepositoryCard({
           )}
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
+          <Link href={detailHref} className="btn-ghost">
+            {t("repo.open_details")}
+          </Link>
+          {repo.source_url && (
+            <a href={repo.source_url} target="_blank" rel="noopener noreferrer" className="btn-ghost">
+              {t("repo_detail.open_source")}
+            </a>
+          )}
           {onToggle && (
             <button onClick={() => onToggle(repo)} disabled={togglePending}
               className="btn-ghost disabled:opacity-50">

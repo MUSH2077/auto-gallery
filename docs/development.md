@@ -122,6 +122,18 @@ docker compose run --rm backend pytest tests/test_providers.py
 docker compose run --rm backend pytest --cov=app
 ```
 
+For local virtualenv runs, install the same dependency set used by CI:
+
+```bash
+cd backend
+source venv/bin/activate
+pip install -r requirements.txt
+pytest
+```
+
+The test suite sets safe test defaults in `tests/conftest.py` before importing
+the app, so local runs do not need production secrets.
+
 ### Database migrations
 
 ```bash
@@ -248,8 +260,9 @@ Key format: `namespace.natural_name` (e.g., `jobs.download`, `creators.title`).
 # All services
 docker compose logs -f
 
-# Specific service
-docker compose logs -f worker
+# Specific services
+docker compose logs -f worker-download
+docker compose logs -f worker-import
 
 # Last 100 lines
 docker compose logs --tail=100 backend
@@ -267,22 +280,33 @@ docker compose exec postgres psql -U autogallery
 docker compose exec redis redis-cli -a $REDIS_PASSWORD
 > KEYS *
 > LLEN rq:queue:default
+> LLEN rq:queue:downloads
+> LLEN rq:queue:imports
+> LLEN rq:queue:scheduled
 ```
 
 ### Testing gallery-dl manually
 
 ```bash
-docker compose exec worker gallery-dl --version
-docker compose exec worker gallery-dl --config /gallerydl-config/config.json "https://www.pixiv.net/artworks/123456"
+docker compose exec worker-download gallery-dl --version
+docker compose exec worker-download gallery-dl --config /gallerydl-config/config.json "https://www.pixiv.net/artworks/123456"
 ```
 
 ### Rebuilding after dependency changes
 
 ```bash
 docker compose build backend
-docker compose up -d backend worker scheduler
+docker compose up -d backend worker-download worker-import scheduler
 
 # Or for admin-web
 docker compose build admin-web
 docker compose up -d admin-web
+```
+
+### Runtime verification
+
+```bash
+docker compose build backend admin-web
+docker compose up -d backend admin-web worker-download worker-import scheduler
+scripts/verify-runtime.sh
 ```

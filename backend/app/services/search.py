@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Work, Creator, Tag, WorkTag, WorkSource, SourceCreator
+from app.models import Work, Creator, Tag, WorkTag, WorkSource, SourceCreator, WorkCurationState
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +179,10 @@ class SearchService:
         work_offset = 0
         while True:
             rows = await self.db.execute(
-                select(Work).order_by(Work.created_at.desc())
+                select(Work)
+                .outerjoin(WorkCurationState, WorkCurationState.work_id == Work.id)
+                .where((WorkCurationState.visibility.is_(None)) | (WorkCurationState.visibility == "visible"))
+                .order_by(Work.created_at.desc())
                 .offset(work_offset).limit(BATCH_SIZE)
             )
             batch = rows.scalars().all()

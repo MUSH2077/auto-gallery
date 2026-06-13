@@ -1,9 +1,9 @@
 from uuid import UUID
 
-from sqlalchemy import select, func, and_, distinct
+from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Work, WorkSource, Asset, AssetSource, SourceCreator, Tag, WorkTag
+from app.models import Work, WorkSource, Asset, AssetSource, SourceCreator, Tag, WorkTag, WorkCurationState
 
 
 class WorkRepository:
@@ -18,6 +18,7 @@ class WorkRepository:
                        is_nsfw: bool | None = None,
                        is_favorite: bool | None = None,
                        is_ai_generated: bool | None = None,
+                       curation_visibility: str = "visible",
                        sort_by: str = "created_at",
                        sort_order: str = "desc") -> tuple[list[Work], int]:
         # ── Pre-aggregated derived tables (run once, not per-row) ──
@@ -71,6 +72,7 @@ class WorkRepository:
             .outerjoin(ws_agg, ws_agg.c.work_id == Work.id)
             .outerjoin(ac_agg, ac_agg.c.work_id == Work.id)
             .outerjoin(ug_agg, ug_agg.c.work_id == Work.id)
+            .outerjoin(WorkCurationState, WorkCurationState.work_id == Work.id)
         )
 
         # Build WHERE conditions
@@ -83,6 +85,11 @@ class WorkRepository:
             conditions.append(Work.is_favorite == is_favorite)
         if is_ai_generated is not None:
             conditions.append(Work.is_ai_generated == is_ai_generated)
+        if curation_visibility and curation_visibility != "all":
+            if curation_visibility == "visible":
+                conditions.append(or_(WorkCurationState.visibility.is_(None), WorkCurationState.visibility == "visible"))
+            else:
+                conditions.append(WorkCurationState.visibility == curation_visibility)
 
         # For source and creator filters, need EXISTS subquery
         if source:
@@ -112,7 +119,7 @@ class WorkRepository:
             stmt = stmt.where(and_(*conditions))
 
         # Count query (same filters, no limit/offset)
-        count_stmt = select(func.count(Work.id))
+        count_stmt = select(func.count(Work.id)).outerjoin(WorkCurationState, WorkCurationState.work_id == Work.id)
         if conditions:
             count_stmt = count_stmt.where(and_(*conditions))
         count_result = await self.session.execute(count_stmt)
@@ -135,6 +142,7 @@ class WorkRepository:
             w.creator_id = str(row[4]) if row[4] else None
             w.has_ugoira = bool(row[5])
             w.preview_asset_ids = []
+            w.curation_visibility = curation_visibility if curation_visibility != "all" else "visible"
             works.append(w)
             work_ids.append(w.id)
 

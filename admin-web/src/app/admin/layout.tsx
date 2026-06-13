@@ -76,6 +76,7 @@ function AdminNav() {
     ["/admin/jobs", t("nav.jobs")],
     ["/admin/notifications", t("notifications.title")],
     ["/admin/works", t("nav.works")],
+    ["/admin/curation", t("nav.curation", "Curation")],
     ["/admin/tags", t("nav.tags")],
     ["/admin/scheduler", t("nav.scheduler")],
     ["/admin/reference/danbooru", t("nav.danbooru")],

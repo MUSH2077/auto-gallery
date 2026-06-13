@@ -123,6 +123,17 @@ docker compose run --rm backend pytest tests/test_providers.py
 docker compose run --rm backend pytest --cov=app
 ```
 
+如果使用本地虚拟环境，安装和 CI 相同的依赖集：
+
+```bash
+cd backend
+source venv/bin/activate
+pip install -r requirements.txt
+pytest
+```
+
+测试套件会在 `tests/conftest.py` 中先设置安全的测试默认值，因此本地运行不需要生产密钥。
+
 ### 数据库迁移
 
 ```bash
@@ -250,7 +261,8 @@ Key 格式：`namespace.natural_name`（例如 `jobs.download`、`creators.title
 docker compose logs -f
 
 # 特定服务
-docker compose logs -f worker
+docker compose logs -f worker-download
+docker compose logs -f worker-import
 
 # 最近 100 行
 docker compose logs --tail=100 backend
@@ -268,22 +280,33 @@ docker compose exec postgres psql -U autogallery
 docker compose exec redis redis-cli -a $REDIS_PASSWORD
 > KEYS *
 > LLEN rq:queue:default
+> LLEN rq:queue:downloads
+> LLEN rq:queue:imports
+> LLEN rq:queue:scheduled
 ```
 
 ### 手动测试 gallery-dl
 
 ```bash
-docker compose exec worker gallery-dl --version
-docker compose exec worker gallery-dl --config /gallerydl-config/config.json "https://www.pixiv.net/artworks/123456"
+docker compose exec worker-download gallery-dl --version
+docker compose exec worker-download gallery-dl --config /gallerydl-config/config.json "https://www.pixiv.net/artworks/123456"
 ```
 
 ### 依赖变更后重建
 
 ```bash
 docker compose build backend
-docker compose up -d backend worker scheduler
+docker compose up -d backend worker-download worker-import scheduler
 
 # 或管理前端
 docker compose build admin-web
 docker compose up -d admin-web
+```
+
+### 运行时验收
+
+```bash
+docker compose build backend admin-web
+docker compose up -d backend admin-web worker-download worker-import scheduler
+scripts/verify-runtime.sh
 ```

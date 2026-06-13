@@ -1,6 +1,6 @@
 # Architecture Audit: auto-gallery
 
-**Date**: 2025-06-10
+**Date**: 2026-06-10
 **Scope**: Read-only, full-repository architecture evaluation
 **Method**: Static analysis of all backend (86 Python files) and frontend (60 TypeScript files) source
 

@@ -1,12 +1,7 @@
-import { chromium } from 'playwright-core';
-const BASE = 'http://localhost:13000';
-const wait = ms => new Promise(r => setTimeout(r, ms));
+import { BASE, launchBrowser, wait } from './helpers.mjs';
 
 (async () => {
-  const browser = await chromium.launch({
-    executablePath: '<local-home>/.local/bin/chromium-wrapper',
-    headless: true, args: ['--no-sandbox'],
-  });
+  const browser = await launchBrowser();
   const page = await browser.newPage();
   
   // Collect console

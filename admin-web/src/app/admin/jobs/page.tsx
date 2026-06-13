@@ -1,10 +1,11 @@
 "use client";
 import Link from "next/link";
-import { useState, useEffect, useMemo } from "react";
+import { Suspense, useState, useEffect, useMemo, type ReactNode } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys } from "@/lib/api";
+import { api, DownloadJob, ImportJob, queryKeys } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge } from "@/components";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 
@@ -14,6 +15,7 @@ const REFETCH_IDLE_MS = 10000;
 const PAGE_LIMIT = 200;
 
 const STATUS_OPTIONS = ["", "pending", "downloading", "paused", "downloaded", "importing", "complete", "failed", "stale"];
+const IMPORT_STATUS_OPTIONS = ["", "pending", "running", "complete", "failed", "stale"];
 const SOURCE_OPTIONS = ["", "pixiv", "x", "iwara", "danbooru", "pinterest", "lofter", "weibo", "bilibili"];
 
 function Elapsed({ since, active }: { since: string; active: boolean }) {
@@ -110,18 +112,178 @@ function ErrorExcerpt({ value }: { value?: string | null }) {
   );
 }
 
-export default function JobsPage() {
+function shortId(id?: string | null) {
+  return id ? id.slice(0, 8) : "-";
+}
+
+function JsonBlock({ value }: { value: unknown }) {
+  if (!value) return null;
+  return (
+    <pre className="max-h-64 overflow-auto rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-3 font-mono text-xs whitespace-pre-wrap dark:border-[#30363d] dark:bg-[#0d1117]">
+      {JSON.stringify(value, null, 2)}
+    </pre>
+  );
+}
+
+function DetailRow({ label, value }: { label: string; value?: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[120px_minmax(0,1fr)] gap-3 border-b border-[#d8dee4] py-2 text-sm last:border-b-0 dark:border-[#30363d]">
+      <dt className="text-xs font-medium uppercase text-[#57606a] dark:text-[#8b949e]">{label}</dt>
+      <dd className="min-w-0 break-all">{value || "—"}</dd>
+    </div>
+  );
+}
+
+function JobDetailDrawer({
+  kind,
+  id,
+  onClose,
+  onRetryDownload,
+  onPauseDownload,
+  onResumeDownload,
+  onDeleteDownload,
+  onRetryImport,
+  onDeleteImport,
+}: {
+  kind: "download" | "import";
+  id: string | null;
+  onClose: () => void;
+  onRetryDownload: (id: string) => void;
+  onPauseDownload: (id: string) => void;
+  onResumeDownload: (id: string) => void;
+  onDeleteDownload: (id: string) => void;
+  onRetryImport: (id: string) => void;
+  onDeleteImport: (id: string) => void;
+}) {
+  const t = useT();
+  const fmt = useI18nFormat();
+  const download = useQuery({
+    queryKey: queryKeys.downloadJobs.detail(id || ""),
+    queryFn: () => api.getDownloadJob(id || ""),
+    enabled: !!id && kind === "download",
+  });
+  const imports = useQuery({
+    queryKey: queryKeys.downloadJobs.imports(id || ""),
+    queryFn: () => api.getDownloadJobImports(id || ""),
+    enabled: !!id && kind === "download",
+  });
+  const importJob = useQuery({
+    queryKey: [...queryKeys.importJobs.all, "detail", id],
+    queryFn: () => api.getImportJob(id || ""),
+    enabled: !!id && kind === "import",
+  });
+
+  if (!id) return null;
+  const dl = download.data as DownloadJob | undefined;
+  const im = importJob.data as ImportJob | undefined;
+  const loading = kind === "download" ? download.isLoading : importJob.isLoading;
+  const error = kind === "download" ? download.error : importJob.error;
+
+  return (
+    <aside className="fixed inset-y-0 right-0 z-40 flex w-full max-w-xl flex-col border-l border-[#d8dee4] bg-white shadow-xl dark:border-[#30363d] dark:bg-[#161b22]" aria-label={t("jobs.detail_title")}>
+      <div className="flex items-center justify-between border-b border-[#d8dee4] px-4 py-3 dark:border-[#30363d]">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold">{kind === "download" ? t("jobs.download_detail") : t("jobs.import_detail")}</div>
+          <div className="font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{shortId(id)}</div>
+        </div>
+        <button onClick={onClose} className="btn-icon border-0 text-lg leading-none" aria-label={t("common.close")}>×</button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        {loading && <div className="h-24 animate-pulse rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />}
+        {error && <ErrorState message={(error as Error).message} onRetry={() => (kind === "download" ? download.refetch() : importJob.refetch())} />}
+
+        {kind === "download" && dl && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => onRetryDownload(dl.id)} className="btn-primary text-xs">{t("jobs.retry")}</button>
+              {["pending", "downloading"].includes(dl.status) && <button onClick={() => onPauseDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.pause")}</button>}
+              {dl.status === "paused" && <button onClick={() => onResumeDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.resume")}</button>}
+              <button onClick={() => onDeleteDownload(dl.id)} className="btn-danger text-xs">{t("jobs.del")}</button>
+            </div>
+            <dl className="rounded-md border border-[#d8dee4] px-3 dark:border-[#30363d]">
+              <DetailRow label={t("jobs.status")} value={statusLabel(t, dl.status)} />
+              <DetailRow label={t("jobs.source")} value={<span className="inline-flex items-center gap-2"><SourceBadge source={dl.source} />{dl.source}</span>} />
+              <DetailRow label={t("jobs.source_url")} value={dl.source_url} />
+              <DetailRow label={t("jobs.creator")} value={dl.creator_id ? <Link href={`/admin/creators/${dl.creator_id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{dl.creator_name || shortId(dl.creator_id)}</Link> : dl.creator_name} />
+              <DetailRow label={t("jobs.subscription")} value={dl.subscription_id ? <Link href={`/admin/subscriptions/${dl.subscription_id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{dl.subscription_name || shortId(dl.subscription_id)}</Link> : undefined} />
+              <DetailRow label={t("jobs.repository")} value={dl.subscription_source_id ? <Link href={`/admin/repositories/${dl.subscription_source_id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{shortId(dl.subscription_source_id)}</Link> : undefined} />
+              <DetailRow label={t("jobs.created")} value={fmt.dateTime(dl.created_at)} />
+              <DetailRow label={t("jobs.updated")} value={fmt.dateTime(dl.updated_at)} />
+            </dl>
+            {dl.error_log && (
+              <section>
+                <h3 className="mb-2 text-sm font-semibold">{t("jobs.error_log")}</h3>
+                <pre className="max-h-64 overflow-auto rounded-md border border-[#cf222e]/20 bg-[#ffebe9] p-3 font-mono text-xs whitespace-pre-wrap text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">{dl.error_log}</pre>
+              </section>
+            )}
+            {dl.manifest && (
+              <section>
+                <h3 className="mb-2 text-sm font-semibold">{t("jobs.manifest")}</h3>
+                <JsonBlock value={dl.manifest} />
+              </section>
+            )}
+            <section>
+              <h3 className="mb-2 text-sm font-semibold">{t("jobs.related_imports")}</h3>
+              {imports.isLoading && <div className="h-12 animate-pulse rounded bg-[#eaeef2] dark:bg-[#21262d]" />}
+              {imports.data?.length ? (
+                <div className="space-y-1">
+                  {imports.data.map((job: ImportJob) => (
+                    <Link key={job.id} href={`/admin/jobs?tab=imports&download_job_id=${dl.id}&import_job=${job.id}`} className="flex items-center justify-between rounded-md border border-[#d8dee4] px-3 py-2 text-sm hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
+                      <span className="font-mono text-xs">{shortId(job.id)}</span>
+                      <span>{statusLabel(t, job.status)}</span>
+                    </Link>
+                  ))}
+                </div>
+              ) : <p className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("jobs.no_imports_yet")}</p>}
+            </section>
+          </div>
+        )}
+
+        {kind === "import" && im && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap gap-2">
+              {["failed", "stale"].includes(im.status) && <button onClick={() => onRetryImport(im.id)} className="btn-primary text-xs">{t("jobs.retry")}</button>}
+              <button onClick={() => onDeleteImport(im.id)} className="btn-danger text-xs">{t("jobs.del")}</button>
+              <Link href={`/admin/jobs?tab=downloads&job=${im.download_job_id}`} className="btn-ghost text-xs">{t("jobs.open_download")}</Link>
+            </div>
+            <dl className="rounded-md border border-[#d8dee4] px-3 dark:border-[#30363d]">
+              <DetailRow label={t("jobs.status")} value={statusLabel(t, im.status)} />
+              <DetailRow label={t("jobs.download_job")} value={<Link href={`/admin/jobs?tab=downloads&job=${im.download_job_id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{shortId(im.download_job_id)}</Link>} />
+              <DetailRow label={t("jobs.created")} value={fmt.dateTime(im.created_at)} />
+              <DetailRow label={t("jobs.updated")} value={fmt.dateTime(im.updated_at)} />
+            </dl>
+            {im.error_log && (
+              <section>
+                <h3 className="mb-2 text-sm font-semibold">{t("jobs.error_log")}</h3>
+                <pre className="max-h-80 overflow-auto rounded-md border border-[#cf222e]/20 bg-[#ffebe9] p-3 font-mono text-xs whitespace-pre-wrap text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">{im.error_log}</pre>
+              </section>
+            )}
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function JobsContent() {
   const t = useT();
   const fmt = useI18nFormat();
   const toast = useToast();
   const qc = useQueryClient();
+  const router = useRouter();
+  const pathname = usePathname();
+  const sp = useSearchParams();
 
-  // Filters
-  const [dlStatus, setDlStatus] = useState("");
-  const [dlSource, setDlSource] = useState("");
-  const [dlSort, setDlSort] = useState("created_at");
-  const [dlOrder, setDlOrder] = useState("desc");
-  const [imFilter, setImFilter] = useState("");
+  const activeTab = (sp.get("tab") === "imports" ? "imports" : "downloads") as "downloads" | "imports";
+  const status = sp.get("status") || "";
+  const dlSource = sp.get("source") || "";
+  const subscriptionSourceId = sp.get("subscription_source_id") || "";
+  const downloadJobId = sp.get("download_job_id") || "";
+  const search = sp.get("q") || "";
+  const dlSort = sp.get("sort") || "created_at";
+  const dlOrder = sp.get("order") || "desc";
+  const selectedDownloadJobId = sp.get("job");
+  const selectedImportJobId = sp.get("import_job");
 
   const [retryId, setRetryId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -131,18 +293,33 @@ export default function JobsPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectAll, setSelectAll] = useState(false);
 
+  const updateParams = (updates: Record<string, string | null>, replace = true) => {
+    const next = new URLSearchParams(sp.toString());
+    Object.entries(updates).forEach(([key, value]) => {
+      if (!value) next.delete(key); else next.set(key, value);
+    });
+    const href = next.toString() ? `${pathname}?${next.toString()}` : pathname;
+    if (replace) router.replace(href, { scroll: false }); else router.push(href, { scroll: false });
+  };
+
+  const openDownloadDetail = (id: string) => updateParams({ tab: "downloads", job: id, import_job: null }, false);
+  const openImportDetail = (id: string) => updateParams({ tab: "imports", import_job: id, job: null }, false);
+  const closeDetail = () => updateParams({ job: null, import_job: null });
+
   const dlParams = useMemo(() => ({
-    status: dlStatus || undefined,
+    status: activeTab === "downloads" ? status || undefined : undefined,
     source: dlSource || undefined,
+    subscription_source_id: subscriptionSourceId || undefined,
+    q: search || undefined,
     sort_by: dlSort,
     sort_order: dlOrder,
     offset: 0, limit: PAGE_LIMIT,
-  }), [dlStatus, dlSource, dlSort, dlOrder]);
+  }), [activeTab, status, dlSource, subscriptionSourceId, search, dlSort, dlOrder]);
 
   const downloads = useQuery({
     queryKey: [...queryKeys.downloadJobs.all, dlParams],
     queryFn: () => api.listDownloadJobs(dlParams),
-    refetchInterval: (dlStatus === "downloading" || !dlStatus) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
+    refetchInterval: (status === "downloading" || !status) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
   });
 
   const workbench = useQuery({
@@ -155,15 +332,45 @@ export default function JobsPage() {
   });
 
   const imports = useQuery({
-    queryKey: [...queryKeys.importJobs.all, imFilter],
-    queryFn: () => api.listImportJobs(imFilter || undefined, 0, PAGE_LIMIT),
-    refetchInterval: (imFilter === "running" || !imFilter) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
+    queryKey: [...queryKeys.importJobs.all, activeTab, status, downloadJobId, search],
+    queryFn: () => api.listImportJobs({
+      status: activeTab === "imports" ? status || undefined : undefined,
+      download_job_id: downloadJobId || undefined,
+      q: search || undefined,
+      offset: 0,
+      limit: PAGE_LIMIT,
+    }),
+    refetchInterval: (status === "running" || !status) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
+  });
+
+  const activeFilterCount = [
+    status,
+    dlSource,
+    subscriptionSourceId,
+    downloadJobId,
+    search,
+    dlSort !== "created_at" || dlOrder !== "desc",
+  ].filter(Boolean).length;
+  const lastUpdated = Math.max(downloads.dataUpdatedAt || 0, imports.dataUpdatedAt || 0, workbench.dataUpdatedAt || 0);
+  const refreshAll = () => {
+    qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+    qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
+    qc.invalidateQueries({ queryKey: queryKeys.workbench });
+  };
+  const clearFilters = () => updateParams({
+    status: null,
+    source: null,
+    subscription_source_id: null,
+    download_job_id: null,
+    q: null,
+    sort: null,
+    order: null,
   });
 
   // --- Mutations ---
   const retryDL = useMutation({
     mutationFn: (id: string) => api.retryDownloadJob(id),
-    onSuccess: () => { setRetryId(null); qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); },
+    onSuccess: () => { setRetryId(null); qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.detail(selectedDownloadJobId || "") }); },
   });
   const retryIM = useMutation({
     mutationFn: (id: string) => api.retryImportJob(id),
@@ -177,7 +384,7 @@ export default function JobsPage() {
         return old.map((j: any) => j.id === id ? { ...j, status: "paused" } : j);
       });
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }),
+    onSettled: () => { qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.detail(selectedDownloadJobId || "") }); },
   });
   const resumeDL = useMutation({
     mutationFn: (id: string) => api.resumeDownloadJob(id),
@@ -187,15 +394,15 @@ export default function JobsPage() {
         return old.map((j: any) => j.id === id ? { ...j, status: "pending" } : j);
       });
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }),
+    onSettled: () => { qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.detail(selectedDownloadJobId || "") }); },
   });
   const deleteDL = useMutation({
     mutationFn: (id: string) => api.deleteDownloadJob(id),
-    onSuccess: () => { setDeleteId(null); qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); },
+    onSuccess: () => { setDeleteId(null); closeDetail(); qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); },
   });
   const deleteIM = useMutation({
     mutationFn: (id: string) => api.deleteImportJob(id),
-    onSuccess: () => { setDeleteId(null); qc.invalidateQueries({ queryKey: queryKeys.importJobs.all }); },
+    onSuccess: () => { setDeleteId(null); closeDetail(); qc.invalidateQueries({ queryKey: queryKeys.importJobs.all }); },
   });
 
   const clearDL = useMutation({
@@ -261,9 +468,9 @@ export default function JobsPage() {
 
   return (
     <main className="max-w-7xl mx-auto p-6">
-      <PageHeader title={t("jobs.download")} description={downloads.data ? `${downloads.data?.length} ${t("common.items")}` : ""}>
-        <div className="flex gap-2">
-          <button onClick={handleSelectAll} className="btn-ghost text-xs">{selectAll ? t("common.deselect_all") : t("common.select_all")}</button>
+      <PageHeader title={t("jobs.title")} description={t("jobs.desc")}>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={refreshAll} className="btn-ghost text-xs">{t("jobs.refresh")}</button>
           <button onClick={() => handleClear(["failed", "stale"])} className="btn-danger text-xs">{t("jobs.clear_failed")}</button>
           <button onClick={() => handleClear(["complete"])} className="btn-ghost text-xs">{t("jobs.clear_complete")}</button>
           <button onClick={() => killStuck.mutate()} disabled={killStuck.isPending} className="btn-ghost text-xs">{t("jobs.kill_stuck")}</button>
@@ -281,22 +488,39 @@ export default function JobsPage() {
         </div>
       )}
 
+      <div className="mb-4 flex flex-col gap-3 rounded-md border border-[#d8dee4] bg-white p-3 dark:border-[#30363d] dark:bg-[#161b22]">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex gap-1 rounded-md bg-[#f6f8fa] p-1 dark:bg-[#21262d]">
+            <button onClick={() => updateParams({ tab: "downloads", status: null, import_job: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "downloads" ? "bg-white shadow-sm dark:bg-[#30363d]" : "text-[#57606a] dark:text-[#8b949e]"}`}>{t("jobs.download")}</button>
+            <button onClick={() => updateParams({ tab: "imports", status: null, job: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "imports" ? "bg-white shadow-sm dark:bg-[#30363d]" : "text-[#57606a] dark:text-[#8b949e]"}`}>{t("jobs.import")}</button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-[#57606a] dark:text-[#8b949e]">
+            {activeFilterCount > 0 && <span className="rounded-full bg-[#ddf4ff] px-2 py-0.5 font-medium text-[#0969da] dark:bg-[#1f6feb26] dark:text-[#58a6ff]">{t("jobs.active_filters", { count: activeFilterCount })}</span>}
+            <span>{t("jobs.last_refreshed", { time: lastUpdated ? fmt.time(new Date(lastUpdated).toISOString()) : "—" })}</span>
+            {activeFilterCount > 0 && <button onClick={clearFilters} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("jobs.clear_filters")}</button>}
+          </div>
+        </div>
+
       {/* Filters */}
-      <div className="toolbar mb-4">
-        <select value={dlStatus} onChange={(e) => setDlStatus(e.target.value)} className="select px-2 py-1.5 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <input value={search} onChange={(e) => updateParams({ q: e.target.value || null })} className="input min-w-[220px] px-3 py-1.5 text-xs" placeholder={t("jobs.search_placeholder")} aria-label={t("jobs.search_placeholder")} />
+        <select value={status} onChange={(e) => updateParams({ status: e.target.value || null })} className="select px-2 py-1.5 text-xs">
           <option value="">{t("jobs.filter_all_status")}</option>
-          {STATUS_OPTIONS.filter(Boolean).map(s => <option key={s} value={s}>{statusLabel(t, s)}</option>)}
+          {(activeTab === "imports" ? IMPORT_STATUS_OPTIONS : STATUS_OPTIONS).filter(Boolean).map(s => <option key={s} value={s}>{statusLabel(t, s)}</option>)}
         </select>
-        <select value={dlSource} onChange={(e) => setDlSource(e.target.value)} className="select px-2 py-1.5 text-xs">
+        {activeTab === "downloads" && <select value={dlSource} onChange={(e) => updateParams({ source: e.target.value || null })} className="select px-2 py-1.5 text-xs">
           <option value="">{t("jobs.filter_all_source")}</option>
           {SOURCE_OPTIONS.filter(Boolean).map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <select value={`${dlSort}-${dlOrder}`} onChange={(e) => { const [k, o] = e.target.value.split("-"); setDlSort(k); setDlOrder(o); }} className="select px-2 py-1.5 text-xs">
+        </select>}
+        {subscriptionSourceId && <span className="rounded-md border border-[#d8dee4] px-2 py-1 text-xs font-mono dark:border-[#30363d]">{t("jobs.repository")} {shortId(subscriptionSourceId)}</span>}
+        {downloadJobId && <span className="rounded-md border border-[#d8dee4] px-2 py-1 text-xs font-mono dark:border-[#30363d]">{t("jobs.download_job")} {shortId(downloadJobId)}</span>}
+        {activeTab === "downloads" && <select value={`${dlSort}-${dlOrder}`} onChange={(e) => { const [k, o] = e.target.value.split("-"); updateParams({ sort: k === "created_at" && o === "desc" ? null : k, order: o === "desc" ? null : o }); }} className="select px-2 py-1.5 text-xs">
           <option value="created_at-desc">{t("jobs.sort_newest")}</option>
           <option value="created_at-asc">{t("jobs.sort_oldest")}</option>
           <option value="status-asc">{t("jobs.sort_status")}</option>
           <option value="source-asc">{t("jobs.sort_source")}</option>
-        </select>
+        </select>}
+        {activeTab === "downloads" && <button onClick={handleSelectAll} className="btn-ghost text-xs">{selectAll ? t("common.deselect_all") : t("common.select_all")}</button>}
 
         {selected.size > 0 && (
           <div className="ml-auto flex items-center gap-1 rounded-md border border-[#bf8700]/30 bg-[#fff8c5] px-3 py-1.5 dark:bg-[#bb800926]">
@@ -307,27 +531,30 @@ export default function JobsPage() {
             <button onClick={() => handleBatch("delete")} className="px-2 py-0.5 text-xs bg-red-500 text-white rounded hover:bg-red-600">{t("jobs.batch_delete")}</button>
           </div>
         )}
+        </div>
       </div>
 
       {/* Download Jobs list */}
-      <section className="mb-8">
+      {activeTab === "downloads" && <section className="mb-8">
         {downloads.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-14 rounded-md bg-[#eaeef2] dark:bg-[#21262d] animate-pulse" />)}</div>}
         {downloads.error && <ErrorState message={(downloads.error as Error).message} onRetry={() => downloads.refetch()} />}
         {downloads.data && !downloads.data?.length && <EmptyState title={t("jobs.no_dl")} description={t("jobs.no_dl_desc")} />}
         {downloads.data && downloads.data?.length > 0 && (
-          <div className="space-y-1">
+          <div className="overflow-x-auto pb-2">
+          <div className="min-w-[980px] space-y-1">
             {downloads.data.map((j: any) => {
               const active = j.status === "downloading" || j.status === "pending";
               return (
                 <div key={j.id}>
-                  <div className={`card flex items-center gap-3 p-3 text-sm ${active ? "border-l-2 border-l-[#0969da]" : j.status === "failed" ? "border-l-2 border-l-[#cf222e]" : j.status === "paused" ? "border-l-2 border-l-[#bf8700]" : j.status === "stale" ? "border-l-2 border-l-[#d29922]" : ""}`}>
-                    <input type="checkbox" checked={selected.has(j.id)} onChange={() => toggleSelect(j.id)} className="w-4 h-4 rounded border-gray-300 shrink-0" />
+                  <div onClick={() => openDownloadDetail(j.id)} className={`card flex cursor-pointer items-center gap-3 p-3 text-sm hover:border-[#0969da]/50 ${active ? "border-l-2 border-l-[#0969da]" : j.status === "failed" ? "border-l-2 border-l-[#cf222e]" : j.status === "paused" ? "border-l-2 border-l-[#bf8700]" : j.status === "stale" ? "border-l-2 border-l-[#d29922]" : ""}`}>
+                    <input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="w-4 h-4 rounded border-gray-300 shrink-0" />
                     <ActiveIndicator status={j.status} />
                     <span className="w-16 shrink-0 font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{j.id.slice(0, 8)}</span>
                     {j.source && <SourceBadge source={j.source} />}
                     <div className="min-w-[9rem] max-w-[12rem] shrink-0 leading-tight">
                       <Link
                         href={`/admin/subscriptions/${j.subscription_id}`}
+                        onClick={(e) => e.stopPropagation()}
                         className="block truncate text-xs font-medium text-[#0969da] hover:underline dark:text-[#58a6ff]"
                         title={j.creator_name || j.subscription_name || j.subscription_id}
                       >
@@ -335,6 +562,7 @@ export default function JobsPage() {
                       </Link>
                       <Link
                         href={`/admin/subscriptions/${j.subscription_id}`}
+                        onClick={(e) => e.stopPropagation()}
                         className="block truncate text-[11px] text-[#57606a] hover:underline dark:text-[#8b949e]"
                         title={j.subscription_name || j.subscription_id}
                       >
@@ -352,7 +580,7 @@ export default function JobsPage() {
                         {fmt.time(j.created_at)}
                       </span>
                     )}
-                    <div className="flex gap-1 shrink-0">
+                    <div className="flex gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                       {j.error_log && (
                         <button onClick={() => setExpandedLog(expandedLog === j.id ? null : j.id)} className="text-xs text-orange-500 hover:underline">{expandedLog === j.id ? "▲" : t("downloads.log")}</button>
                       )}
@@ -380,43 +608,55 @@ export default function JobsPage() {
               );
             })}
           </div>
+          </div>
         )}
-      </section>
+      </section>}
 
       {/* Import Jobs */}
-      <section className="mb-8">
+      {activeTab === "imports" && <section className="mb-8">
         <h3 className="text-base font-semibold mb-2 flex items-center gap-3">
           {t("jobs.import")}
-          <select value={imFilter} onChange={(e) => setImFilter(e.target.value)} className="select px-2 py-1 text-xs font-normal">
-            <option value="">{t("jobs.filter_all_status")}</option>
-            <option value="pending">{statusLabel(t, "pending")}</option>
-            <option value="running">{statusLabel(t, "running")}</option>
-            <option value="complete">{statusLabel(t, "complete")}</option>
-            <option value="failed">{statusLabel(t, "failed")}</option>
-          </select>
+          <span className="text-xs font-normal text-[#57606a] dark:text-[#8b949e]">{imports.data?.total ?? 0} {t("common.items")}</span>
         </h3>
         {imports.isLoading && <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-12 rounded-md bg-[#eaeef2] dark:bg-[#21262d] animate-pulse" />)}</div>}
         {imports.data?.items && !imports.data?.items.length && <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("jobs.no_im")}</p>}
         {imports.data?.items && imports.data?.items.length > 0 && (
-          <div className="space-y-1">
+          <div className="overflow-x-auto pb-2">
+          <div className="min-w-[720px] space-y-1">
             {imports.data?.items?.map((j: any) => {
               const active = j.status === "running";
               return (
-                <div key={j.id} className={`card flex items-center gap-3 p-3 text-sm ${active ? "border-l-2 border-l-[#0969da]" : j.status === "failed" ? "border-l-2 border-l-[#cf222e]" : ""}`}>
+                <div key={j.id} onClick={() => openImportDetail(j.id)} className={`card flex cursor-pointer items-center gap-3 p-3 text-sm hover:border-[#0969da]/50 ${active ? "border-l-2 border-l-[#0969da]" : j.status === "failed" ? "border-l-2 border-l-[#cf222e]" : ""}`}>
                   <ActiveIndicator status={j.status} />
                   <span className="font-mono text-xs text-gray-400 dark:text-gray-500 w-16 shrink-0">{j.id.slice(0, 8)}</span>
                   <span className="font-mono text-xs text-gray-400 truncate flex-1">{j.download_job_id?.slice(0, 8) || "-"}</span>
+                  <Link href={`/admin/jobs?tab=downloads&job=${j.download_job_id}`} onClick={(e) => e.stopPropagation()} className="text-xs text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("jobs.open_download")}</Link>
+                  <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                   {j.error_log && (
                     <button onClick={() => setExpandedLog(expandedLog === j.id ? null : j.id)} className="text-xs text-orange-500 hover:underline">{expandedLog === j.id ? "▲" : t("downloads.log")}</button>
                   )}
                   {j.status === "failed" && <button onClick={() => { setRetryId(j.id); retryIM.mutate(j.id); }} disabled={retryIM.isPending} className="text-xs text-blue-600 hover:underline">{t("jobs.retry")}</button>}
                   <button onClick={() => { setDeleteId(j.id); setDeleteType("im"); }} className="text-xs text-red-500 hover:underline">{t("jobs.del")}</button>
+                  </div>
                 </div>
               );
             })}
           </div>
+          </div>
         )}
-      </section>
+      </section>}
+
+      <JobDetailDrawer
+        kind={selectedImportJobId ? "import" : "download"}
+        id={selectedImportJobId || selectedDownloadJobId}
+        onClose={closeDetail}
+        onRetryDownload={(id) => retryDL.mutate(id)}
+        onPauseDownload={(id) => pauseDL.mutate(id)}
+        onResumeDownload={(id) => resumeDL.mutate(id)}
+        onDeleteDownload={(id) => { setDeleteId(id); setDeleteType("dl"); }}
+        onRetryImport={(id) => retryIM.mutate(id)}
+        onDeleteImport={(id) => { setDeleteId(id); setDeleteType("im"); }}
+      />
 
       {(deleteId && deleteType === "dl") && (
         <ConfirmDialog open title={t("jobs.delete_dl_title")} message={t("jobs.delete_dl_msg")} onConfirm={() => deleteDL.mutate(deleteId!)} onCancel={() => setDeleteId(null)} isPending={deleteDL.isPending} error={(deleteDL.error as Error)?.message} />
@@ -431,7 +671,6 @@ export default function JobsPage() {
 // Import jobs for a specific download job
 function ImportJobsList({ downloadJobId }: { downloadJobId: string }) {
   const t = useT();
-  const toast = useToast();
   const imports = useQuery({
     queryKey: ["import-jobs", downloadJobId],
     queryFn: () => api.getDownloadJobImports(downloadJobId),
@@ -448,5 +687,13 @@ function ImportJobsList({ downloadJobId }: { downloadJobId: string }) {
         </div>
       ))}
     </div>
+  );
+}
+
+export default function JobsPage() {
+  return (
+    <Suspense>
+      <JobsContent />
+    </Suspense>
   );
 }

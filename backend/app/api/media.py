@@ -1,12 +1,14 @@
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 
-from app.auth import RequireAdmin  # used by /media/original/
+from app.auth import bearer_scheme, get_admin_key
 from app.config import settings
 from app.database import async_session
 from app.models.asset import Asset
+from app.models.curation import AssetStorageState
+from app.services.media_signing import verify_media_token
 
 router = APIRouter()
 
@@ -39,6 +41,10 @@ async def _serve(asset_id: str, size: str):
         asset = result.scalar_one_or_none()
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
+        storage_result = await db.execute(select(AssetStorageState).where(AssetStorageState.asset_id == asset.id))
+        storage_state = storage_result.scalar_one_or_none()
+        if storage_state and storage_state.storage_state == "purged":
+            raise HTTPException(status_code=404, detail="File not found")
 
         if size == "thumb":
             if asset.thumb_sm_path:
@@ -61,15 +67,22 @@ async def thumb(asset_id: str):
 
 
 @router.get("/media/preview/{asset_id}")
-async def preview(asset_id: str):
-    """Serve preview image — no auth (embedded in <img> tags on admin-web)."""
+async def preview(asset_id: str, expires: str | None = None, token: str | None = None):
+    """Serve preview image with a short-lived signed URL."""
+    if not verify_media_token(asset_id, "preview", expires, token):
+        raise HTTPException(status_code=401, detail="Invalid or expired media token")
     return await _serve(asset_id, "original")
 
 
 @router.get("/media/original/{asset_id}")
 async def original(
     asset_id: str,
-    _admin: str = RequireAdmin,
+    request: Request,
+    expires: str | None = None,
+    token: str | None = None,
+    credentials=Depends(bearer_scheme),
 ):
-    """Serve original image — requires admin authentication."""
+    """Serve original image via admin auth or short-lived signed URL."""
+    if not verify_media_token(asset_id, "original", expires, token):
+        await get_admin_key(request, credentials)
     return await _serve(asset_id, "original")

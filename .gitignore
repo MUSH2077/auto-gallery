@@ -93,6 +93,7 @@ logs/
 tmp/
 temp/
 .cache/
+.playwright-mcp/
 
 # --- gallery-dl ---
 # Ignore runtime configs with auth tokens

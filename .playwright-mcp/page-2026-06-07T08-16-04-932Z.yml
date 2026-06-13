@@ -1,3 +1,0 @@
-- generic [active] [ref=e1]:
-  - log
-  - alert [ref=e2]

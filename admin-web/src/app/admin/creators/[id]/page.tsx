@@ -224,6 +224,10 @@ export default function CreatorDetailPage() {
       return hasRunning || hasDue ? 5000 : 15000;
     },
   });
+  const curationHistory = useQuery({
+    queryKey: queryKeys.curation.subject("creator", id),
+    queryFn: () => api.listCurationCommits({ subject_type: "creator", subject_id: id, limit: 6 }),
+  });
 
   const openEdit = () => {
     if (!creator.data) return;
@@ -242,6 +246,17 @@ export default function CreatorDetailPage() {
   const toggleFavorite = useMutation({
     mutationFn: () => api.toggleCreatorFavorite(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.creators.detail(id) }),
+  });
+
+  const curateCreator = useMutation({
+    mutationFn: (action: "archive" | "restore") => api.curateCreator(id, action),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.creators.detail(id) });
+      qc.invalidateQueries({ queryKey: queryKeys.works.all });
+      qc.invalidateQueries({ queryKey: queryKeys.curation.all });
+      toast.success(t("common.saved"));
+    },
+    onError: (e: Error) => toast.error(e.message),
   });
 
   const syncRepo = useMutation({
@@ -299,6 +314,7 @@ export default function CreatorDetailPage() {
     setWorksTag(tag);
     setActiveTab("works");
   };
+  const creatorVisibility = c?.curation_state?.visibility || "visible";
 
   const tabs = useMemo(() => [
     { key: "overview" as const, label: t("creator_detail.tabs_overview"), count: undefined },
@@ -326,6 +342,7 @@ export default function CreatorDetailPage() {
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="truncate text-2xl font-semibold tracking-normal text-[#24292f] dark:text-[#e6edf3]">{c.display_name || c.name}</h1>
               {c.is_favorite && <span className="rounded-full border border-[#bf8700]/30 bg-[#fff8c5] px-2 py-0.5 text-xs text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]">{t("creator_detail.favorite")}</span>}
+              {creatorVisibility !== "visible" && <span className="rounded-full border border-[#cf222e]/25 bg-[#ffebe9] px-2 py-0.5 text-xs text-[#cf222e] dark:bg-[#da363326]">{creatorVisibility}</span>}
             </div>
             {c.display_name && c.display_name !== c.name && <p className="mt-0.5 font-mono text-sm text-[#57606a] dark:text-[#8b949e]">{c.name}</p>}
             <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-[#57606a] dark:text-[#8b949e]">
@@ -345,6 +362,11 @@ export default function CreatorDetailPage() {
           <button onClick={() => toggleFavorite.mutate()} className="btn-ghost">
             {c.is_favorite ? t("creator_detail.unstar") : t("creator_detail.star")}
           </button>
+          {creatorVisibility === "visible" ? (
+            <button onClick={() => curateCreator.mutate("archive")} disabled={curateCreator.isPending} className="btn-ghost">Archive</button>
+          ) : (
+            <button onClick={() => curateCreator.mutate("restore")} disabled={curateCreator.isPending} className="btn-ghost">Restore</button>
+          )}
           <Link href={subscriptionHref} className="btn-ghost">
             {t("creator_detail.subscription")}
           </Link>
@@ -367,6 +389,23 @@ export default function CreatorDetailPage() {
               <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.stat_sources")}</dt><dd className="font-semibold">{st?.source_breakdown?.length ?? "-"}</dd></div>
               <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.created")}</dt><dd>{fmt.date(c.created_at)}</dd></div>
             </dl>
+          </section>
+
+          <section className="card p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">Curation</h2>
+              <Link href={`/admin/curation?subject_type=creator&subject_id=${id}`} className="text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">Open</Link>
+            </div>
+            {curationHistory.data?.items.length ? (
+              <div className="space-y-3">
+                {curationHistory.data.items.map((commit) => (
+                  <div key={commit.id} className="border-l-2 border-[#0969da] pl-3 text-xs dark:border-[#58a6ff]">
+                    <div className="font-medium text-[#24292f] dark:text-[#e6edf3]">{commit.message}</div>
+                    <div className="mt-0.5 text-[#57606a] dark:text-[#8b949e]">{commit.trigger} · {new Date(commit.occurred_at).toLocaleDateString()}</div>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="text-sm text-[#57606a] dark:text-[#8b949e]">No curation commits yet.</p>}
           </section>
 
           <section className="card p-4">
