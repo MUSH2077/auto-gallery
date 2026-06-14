@@ -16,6 +16,13 @@ from app.models.import_job import ImportJob
 from app.models.naming_template import NamingTemplate
 from app.models.system_setting import SystemSetting
 from app.models.user import User
+from app.models.curation import (
+    AssetStorageState,
+    CreatorCurationState,
+    CurationChange,
+    CurationCommit,
+    WorkCurationState,
+)
 
 __all__ = [
     "Base",
@@ -37,4 +44,9 @@ __all__ = [
     "NamingTemplate",
     "SystemSetting",
     "User",
+    "AssetStorageState",
+    "CreatorCurationState",
+    "CurationChange",
+    "CurationCommit",
+    "WorkCurationState",
 ]

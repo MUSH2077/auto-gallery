@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import select, delete as sql_delete, func
+from sqlalchemy import select, delete as sql_delete, func, or_, cast, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DownloadJob, ImportJob
@@ -14,6 +14,8 @@ class DownloadJobRepository:
 
     async def list_all(self, status: str | None = None, source: str | None = None,
                        subscription_id: str | None = None,
+                       subscription_source_id: str | None = None,
+                       q: str | None = None,
                        sort_by: str = "created_at", sort_order: str = "desc",
                        offset: int = 0, limit: int = 50) -> list[DownloadJob]:
         order_col = getattr(DownloadJob, sort_by, DownloadJob.created_at)
@@ -28,6 +30,14 @@ class DownloadJobRepository:
             stmt = stmt.where(DownloadJob.source == source)
         if subscription_id:
             stmt = stmt.where(DownloadJob.subscription_id == subscription_id)
+        if subscription_source_id:
+            stmt = stmt.where(DownloadJob.subscription_source_id == subscription_source_id)
+        if q:
+            pattern = f"%{q.strip()}%"
+            stmt = stmt.where(or_(
+                cast(DownloadJob.id, String).ilike(pattern),
+                DownloadJob.source_url.ilike(pattern),
+            ))
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 

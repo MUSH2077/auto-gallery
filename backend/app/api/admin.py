@@ -5,10 +5,10 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -91,6 +91,38 @@ async def _put_setting(db: AsyncSession, key: str, value: dict):
             clear_proxy_cache()
         except Exception:
             pass
+
+
+def _job_is_sync_scan(job) -> bool:
+    return "sync_subscriptions" in (getattr(job, "func_name", "") or str(job))
+
+
+def _reschedule_subscription_sync_scan(config: dict) -> dict:
+    """Replace pending subscription sync scan jobs with one using current config."""
+    import redis as redis_lib
+    from rq import Queue
+    from rq.registry import ScheduledJobRegistry
+    from app.jobs.subscription_sync import sync_subscriptions
+
+    interval = max(int(config.get("scheduler_scan_interval_minutes", 60)), 5)
+    r = redis_lib.from_url(settings.redis_url)
+    q = Queue(name="scheduled", connection=r)
+    scheduled_registry = ScheduledJobRegistry(queue=q)
+
+    removed = 0
+    for job_id in list(scheduled_registry.get_job_ids()):
+        job = q.fetch_job(job_id)
+        if job and _job_is_sync_scan(job):
+            scheduled_registry.remove(job_id, delete_job=True)
+            removed += 1
+
+    for job in list(q.get_jobs()):
+        if _job_is_sync_scan(job):
+            q.remove(job.id)
+            removed += 1
+
+    job = q.enqueue_in(timedelta(minutes=interval), sync_subscriptions)
+    return {"removed": removed, "job_id": job.id, "interval_minutes": interval}
 
 
 DEFAULT_DEDUP = {"source_level_enabled": False, "cross_source_enabled": False, "auto_merge": False, "phash_threshold": 8}
@@ -584,15 +616,21 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
 
 @router.put("/settings")
 async def update_settings(data: AdminSettingsUpdate, db: AsyncSession = Depends(get_db)):
+    sync_scan_reschedule = None
     if data.dedup is not None:
         await _put_setting(db, "dedup", data.dedup.model_dump())
     if data.subscription_defaults is not None:
-        await _put_setting(db, "subscription_defaults", data.subscription_defaults.model_dump())
+        subscription_defaults = data.subscription_defaults.model_dump()
+        await _put_setting(db, "subscription_defaults", subscription_defaults)
+        try:
+            sync_scan_reschedule = _reschedule_subscription_sync_scan(subscription_defaults)
+        except Exception:
+            logger.warning("Failed to reschedule subscription sync scan after settings update", exc_info=True)
     if data.download_defaults is not None:
         await _put_setting(db, "download_defaults", data.download_defaults.model_dump())
     if data.proxy is not None:
         await _put_setting(db, "proxy", data.proxy.model_dump())
-    return {"status": "ok", "message": "Settings saved to database"}
+    return {"status": "ok", "message": "Settings saved to database", "sync_scan_reschedule": sync_scan_reschedule}
 
 
 # ── Proxy Test ──
@@ -731,8 +769,15 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
 # ── Data Management ──
 
 ENTITIES = {
-    "works": ["work_source_tags", "work_tags", "asset_sources", "assets", "work_sources", "works"],
-    "creators": ["import_jobs", "download_jobs", "subscription_sources", "subscriptions", "source_creators", "creator_links", "creators"],
+    "works": [
+        "work_source_tags", "work_tags", "asset_sources",
+        "work_curation_states", "asset_storage_states",
+        "assets", "work_sources", "works",
+    ],
+    "creators": [
+        "import_jobs", "download_jobs", "subscription_sources", "subscriptions", "source_creators", "creator_links",
+        "creator_curation_states", "creators",
+    ],
     "downloads": ["import_jobs", "download_jobs"],
     "jobs": ["import_jobs", "download_jobs"],
     "tags": ["work_source_tags", "work_tags", "tags"],
@@ -748,7 +793,9 @@ async def clear_entity(entity: str, db: AsyncSession = Depends(get_db)):
 
     if entity == "all":
         order = [
-            "work_source_tags", "work_tags", "asset_sources", "assets", "work_sources", "works",
+            "work_source_tags", "work_tags", "asset_sources",
+            "curation_changes", "work_curation_states", "creator_curation_states", "asset_storage_states", "curation_commits",
+            "assets", "work_sources", "works",
             "import_jobs", "download_jobs",
             "subscription_sources", "subscriptions",
             "source_creators", "creator_links", "creators",
@@ -1686,8 +1733,12 @@ BACKUP_CONTENT_LABELS = {
 
 
 def _parse_db_url(url: str) -> dict:
-    """Parse DATABASE_URL into pg_dump-compatible components."""
-    from urllib.parse import urlparse, parse_qs
+    """Parse DATABASE_URL into pg_dump-compatible components.
+
+    NOTE: The returned dict includes ``password`` for temporary .pgpass
+    files in subprocess calls. Callers MUST NOT log or serialize this dict.
+    """
+    from urllib.parse import urlparse
     parsed = urlparse(url)
     return {
         "host": parsed.hostname or "postgres",
@@ -1696,6 +1747,30 @@ def _parse_db_url(url: str) -> dict:
         "password": parsed.password or "",
         "dbname": parsed.path.lstrip("/") or "autogallery",
     }
+
+
+def _escape_pgpass_field(value: str) -> str:
+    """Escape a value for PostgreSQL .pgpass format."""
+    return value.replace("\\", "\\\\").replace(":", "\\:")
+
+
+def _pg_env_with_passfile(tmpdir: str, db_info: dict) -> dict:
+    """Return subprocess env using a temporary .pgpass file, not PGPASSWORD."""
+    pgpass_path = os.path.join(tmpdir, ".pgpass")
+    fields = [
+        db_info["host"],
+        db_info["port"],
+        db_info["dbname"],
+        db_info["user"],
+        db_info["password"],
+    ]
+    with open(pgpass_path, "w", encoding="utf-8") as f:
+        f.write(":".join(_escape_pgpass_field(str(field)) for field in fields) + "\n")
+    os.chmod(pgpass_path, 0o600)
+    env = os.environ.copy()
+    env.pop("PGPASSWORD", None)
+    env["PGPASSFILE"] = pgpass_path
+    return env
 
 
 def _estimate_component_sizes() -> dict[str, int]:
@@ -1765,8 +1840,7 @@ async def create_backup(data: dict | None = None):
         # 1. PostgreSQL dump
         if "database" in selected:
             dump_path = os.path.join(tmpdir, "database.sql")
-            env = os.environ.copy()
-            env["PGPASSWORD"] = db_info["password"]
+            env = _pg_env_with_passfile(tmpdir, db_info)
             result = subprocess.run(
                 ["pg_dump", "-h", db_info["host"], "-p", db_info["port"], "-U", db_info["user"],
                  "-d", db_info["dbname"], "--no-owner", "--no-acl", "-f", dump_path],
@@ -1847,116 +1921,22 @@ async def create_backup(data: dict | None = None):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-@router.post("/backup/restore")
-async def restore_backup(file: UploadFile = File(...)):
-    """Restore from a backup tar.gz file."""
-    if not file.filename or not file.filename.endswith(".tar.gz"):
-        raise HTTPException(status_code=400, detail="Only .tar.gz backup files are accepted")
-
-    tmpdir = tempfile.mkdtemp(prefix="ag-restore-")
-    restored: list[str] = []
-    errors: list[str] = []
-
-    try:
-        tmp_file = os.path.join(tmpdir, "backup.tar.gz")
-        with open(tmp_file, "wb") as f:
-            while chunk := await file.read(1024 * 1024):
-                f.write(chunk)
-
-        manifest = {}
-        with tarfile.open(tmp_file, "r:gz") as tar:
-            try:
-                mf = tar.extractfile("manifest.json")
-                if mf:
-                    manifest = json.loads(mf.read())
-            except Exception:
-                pass
-            # Safe extraction: reject paths with .. or absolute paths
-            for member in tar.getmembers():
-                if member.name.startswith('/') or '..' in member.name:
-                    raise HTTPException(status_code=400, detail=f"Invalid archive member: {member.name}")
-            tar.extractall(tmpdir)
-
-        # Restore database
-        dump_path = os.path.join(tmpdir, "database.sql")
-        if os.path.exists(dump_path):
-            db = _parse_db_url(settings.database_url)
-            env = os.environ.copy()
-            env["PGPASSWORD"] = db["password"]
-            result = subprocess.run(
-                ["psql", "-h", db["host"], "-p", db["port"], "-U", db["user"],
-                 "-d", db["dbname"], "-f", dump_path],
-                capture_output=True, text=True, env=env, timeout=120)
-            if result.returncode != 0:
-                errors.append(f"Database restore failed: {result.stderr[:500]}")
-            else:
-                restored.append("database")
-
-        # Restore gallery-dl config
-        gdl_src = os.path.join(tmpdir, "gallerydl-config")
-        if os.path.exists(gdl_src):
-            gdl_dst = Path(os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"))
-            try:
-                if gdl_dst.exists():
-                    shutil.rmtree(str(gdl_dst))
-                shutil.copytree(gdl_src, str(gdl_dst))
-                restored.append("gallerydl-config")
-            except Exception as e:
-                errors.append(f"gallerydl-config restore failed: {e}")
-
-        # Restore app config
-        app_src = os.path.join(tmpdir, "app-config")
-        if os.path.exists(app_src):
-            app_dst = Path(os.environ.get("APP_CONFIG_ROOT", "/app-config"))
-            try:
-                if app_dst.exists():
-                    shutil.rmtree(str(app_dst))
-                shutil.copytree(app_src, str(app_dst))
-                restored.append("app-config")
-            except Exception as e:
-                errors.append(f"app-config restore failed: {e}")
-
-        # Restore download archives
-        archives_src = os.path.join(tmpdir, "download-archives")
-        if os.path.exists(archives_src):
-            dl_root = Path(settings.download_root)
-            try:
-                for af in Path(archives_src).glob("archive-*.sqlite3"):
-                    shutil.copy2(str(af), str(dl_root / af.name))
-                restored.append("download-archives")
-            except Exception as e:
-                errors.append(f"download-archives restore failed: {e}")
-
-        # Restore library metadata
-        lib_src = os.path.join(tmpdir, "library-metadata")
-        if os.path.exists(lib_src):
-            lib_root = Path(settings.library_root)
-            try:
-                for mf in Path(lib_src).rglob("metadata.json"):
-                    rel = mf.relative_to(lib_src)
-                    dest = lib_root / rel
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(str(mf), str(dest))
-                restored.append("library-metadata")
-            except Exception as e:
-                errors.append(f"library-metadata restore failed: {e}")
-
-        logger.info("Restored backup %s: restored=%s errors=%s", file.filename, restored, errors)
-        return {
-            "status": "ok" if not errors else "partial",
-            "restored": restored,
-            "errors": errors,
-            "manifest": manifest,
-        }
-
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+# restore_backup is defined below with _safe_extract_tar, .pgpass handling,
+# and confirm=DELETE-EVERYTHING guard.  See the second definition in this file.
 
 
 def _validate_backup_filename(filename: str) -> Path:
     """Resolve and validate a backup filename stays within BACKUP_DIR."""
+    if "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if Path(filename).name != filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if not (filename.startswith("auto-gallery-backup_") and filename.endswith(".tar.gz")):
+        raise HTTPException(status_code=400, detail="Invalid filename")
     target = (BACKUP_DIR / filename).resolve()
-    if not str(target).startswith(str(BACKUP_DIR.resolve())):
+    try:
+        target.relative_to(BACKUP_DIR.resolve())
+    except ValueError:
         raise HTTPException(status_code=400, detail="Invalid filename")
     return target
 
@@ -2003,25 +1983,52 @@ async def list_backups():
     return {"backups": result}
 
 
+def _safe_extract_tar(tar_path: str, dest_dir: str) -> None:
+    """Extract a tar.gz file, validating all member paths stay within dest_dir."""
+    with tarfile.open(tar_path, "r:gz") as tar:
+        for member in tar.getmembers():
+            member_path = os.path.join(dest_dir, member.name)
+            resolved = os.path.realpath(member_path)
+            resolved_dest = os.path.realpath(dest_dir)
+            if os.path.commonpath([resolved, resolved_dest]) != resolved_dest:
+                logger.warning("Rejected tar member outside dest: %s -> %s", member.name, resolved)
+                continue
+            if member.isdir():
+                os.makedirs(resolved, exist_ok=True)
+            elif member.isfile():
+                os.makedirs(os.path.dirname(resolved), exist_ok=True)
+                src = tar.extractfile(member)
+                if src is None:
+                    continue
+                with src, open(resolved, "wb") as dst:
+                    dst.write(src.read())
+
+
 @router.post("/backup/restore")
-async def restore_backup(file: UploadFile = File(...)):
-    """Restore system from a backup file. THIS IS DESTRUCTIVE — replaces current data."""
+async def restore_backup(file: UploadFile = File(...), confirm: str = ""):
+    """Restore system from a backup file. THIS IS DESTRUCTIVE — replaces current data.
+
+    Requires ``?confirm=DELETE-EVERYTHING`` to prevent accidental invocation.
+    """
+    if confirm != "DELETE-EVERYTHING":
+        return {"status": "error", "message": "Add ?confirm=DELETE-EVERYTHING to proceed with restore"}
     if not file.filename or not file.filename.endswith(".tar.gz"):
         return {"status": "error", "message": "Invalid file: must be a .tar.gz backup"}
 
+    logger.warning("Backup restore initiated (confirm=%s, file=%s)", confirm, file.filename)
+
     tmpdir = tempfile.mkdtemp(prefix="ag-restore-")
     try:
-        # Save uploaded file
-        upload_path = os.path.join(tmpdir, file.filename)
+        # Save uploaded file with a fixed name (ignore user-supplied filename for safety)
+        upload_path = os.path.join(tmpdir, "upload.tar.gz")
         with open(upload_path, "wb") as f:
             content = await file.read()
             f.write(content)
 
-        # Extract
+        # Extract with path validation
         extract_dir = os.path.join(tmpdir, "extracted")
         os.makedirs(extract_dir, exist_ok=True)
-        with tarfile.open(upload_path, "r:gz") as tar:
-            tar.extractall(extract_dir)
+        _safe_extract_tar(upload_path, extract_dir)
 
         # Verify manifest
         manifest_path = os.path.join(extract_dir, "manifest.json")
@@ -2034,8 +2041,7 @@ async def restore_backup(file: UploadFile = File(...)):
         dump_path = os.path.join(extract_dir, "database.sql")
         if os.path.exists(dump_path):
             db = _parse_db_url(settings.database_url)
-            env = os.environ.copy()
-            env["PGPASSWORD"] = db["password"]
+            env = _pg_env_with_passfile(tmpdir, db)
             # Drop and recreate
             result = subprocess.run(
                 ["psql", "-h", db["host"], "-p", db["port"], "-U", db["user"], "-d", db["dbname"],

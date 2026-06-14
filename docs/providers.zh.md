@@ -98,11 +98,10 @@ downloadable = registry.list_downloadable()
 - `source_name`：`"x"`
 - `capabilities.can_download`：True
 - `capabilities.supports_gallerydl`：True
+- `capabilities.supports_tags`：True
 - URL 模式：`x.com/<user>`、`x.com/<user>/status/<id>`、`twitter.com/<user>`
-- 使用 gallery-dl 的 Twitter 提取器，cookie 认证
-- 下载策略：`strategy: "tweets"` 使用 UserTweets GraphQL 端点
+- 使用 gallery-dl 的 Twitter 提取器，cookie 认证（`strategy: "tweets"`）
 - SearchTimeline 回退端点已在 Dockerfile 中修补移除（Twitter 已弃用该端点）
-- 提取器：timeline、tweets、media、likes、search、list、bookmark、avatar、background
 
 ### Iwara (`iwara.py`)
 - **状态**：可下载（需要 gallery-dl >= 1.32.0）

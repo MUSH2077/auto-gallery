@@ -31,7 +31,7 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
         <label className="block text-sm font-medium mb-1">{t("subscriptions.creator_label")}</label>
         <select value={creatorId} onChange={(e) => setCreatorId(e.target.value)} className="select w-full">
           <option value="">{t("subscriptions.select_creator")}</option>
-          {creators.data?.map((c) => <option key={c.id} value={c.id}>{c.display_name || c.name}</option>)}
+          {creators.data?.items.map((c) => <option key={c.id} value={c.id}>{c.display_name || c.name}</option>)}
         </select>
       </div>
       <div><label className="block text-sm font-medium mb-1">{t("subscriptions.label_field")}</label><input value={name} onChange={(e) => setName(e.target.value)} className="input w-full" placeholder={t("subscriptions.label_placeholder")} /></div>

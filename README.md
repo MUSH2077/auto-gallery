@@ -133,6 +133,7 @@ Read more in [docs/architecture.md](docs/architecture.md).
 - [Provider guide](docs/providers.md)
 - [gallery-dl configuration](docs/gallerydl-config.md)
 - [Development](docs/development.md)
+- [Distribution and privacy](docs/distribution.md)
 - [Risk register](docs/risks.md)
 - [Release checklist](docs/release-checklist.md)
 - [Security policy](SECURITY.md)

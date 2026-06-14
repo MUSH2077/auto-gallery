@@ -171,8 +171,8 @@ function CreatorsContent() {
     setSelected(next);
   };
   const selectAll = () => {
-    if (selected.size === (creators.data?.length || 0)) setSelected(new Set());
-    else setSelected(new Set((creators.data || []).map((c) => c.id)));
+    if (selected.size === (creators.data?.items.length || 0)) setSelected(new Set());
+    else setSelected(new Set((creators.data?.items || []).map((c) => c.id)));
   };
 
   const toggleFavorite = useMutation({
@@ -223,9 +223,9 @@ function CreatorsContent() {
       )}
 
       {/* Select all */}
-      {creators.data && creators.data.length > 0 && (
+      {creators.data && creators.data.items.length > 0 && (
         <label className="mb-2 flex cursor-pointer items-center gap-2 text-xs text-[#57606a] dark:text-[#8b949e]">
-          <input type="checkbox" checked={selected.size === creators.data.length && creators.data.length > 0} onChange={selectAll} className="rounded" />
+          <input type="checkbox" checked={selected.size === creators.data.items.length && creators.data.items.length > 0} onChange={selectAll} className="rounded" />
           {t("creators.select_all")}
         </label>
       )}
@@ -233,7 +233,7 @@ function CreatorsContent() {
       {/* Content */}
       {creators.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-[#eaeef2] dark:bg-[#21262d] animate-pulse" />)}</div>}
       {creators.error && <ErrorState message={(creators.error as Error).message} onRetry={() => creators.refetch()} />}
-      {creators.data && !creators.data.length && (
+      {creators.data && !creators.data.items.length && (
         <EmptyState
           title={search || filter !== "all" ? t("works.no_works_filter") : t("creators.no_creators")}
           description={search || filter !== "all" ? undefined : t("creators.no_creators_desc")}
@@ -241,9 +241,9 @@ function CreatorsContent() {
         />
       )}
 
-      {creators.data && creators.data.length > 0 && (
+      {creators.data && creators.data.items.length > 0 && (
         <div className="overflow-hidden rounded-md border border-[#d8dee4] bg-white dark:border-[#30363d] dark:bg-[#161b22]">
-          {creators.data.map((c) => (
+          {creators.data.items.map((c) => (
             <div key={c.id} className={`flex cursor-pointer items-center gap-3 border-b border-[#d8dee4] p-4 last:border-b-0 hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d] ${selected.has(c.id) ? "bg-[#ddf4ff] dark:bg-[#1f6feb26]" : ""}`} onClick={() => router.push(`/admin/creators/${c.id}`)}>
               <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggleSelect(c.id)} className="rounded shrink-0" onClick={(e) => e.stopPropagation()} />
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#d8dee4] bg-[#0969da] text-sm font-semibold text-white dark:border-[#30363d]">
@@ -278,11 +278,11 @@ function CreatorsContent() {
       )}
 
       {/* Pagination */}
-      {(creators.data?.length || 0) > 0 && (
+      {(creators.data?.items.length || 0) > 0 && (
         <div className="flex gap-2 justify-center mt-4">
           <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)} className="btn-ghost disabled:opacity-30">{t("common.prev")}</button>
           <span className="px-3 py-1 text-sm text-[#57606a] dark:text-[#8b949e]">{t("common.page").replace("{page}", String(page + 1))}</span>
-          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!creators.data || creators.data.length < limit} className="btn-ghost disabled:opacity-30">{t("common.next")}</button>
+          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!creators.data?.items || creators.data.items.length < limit} className="btn-ghost disabled:opacity-30">{t("common.next")}</button>
         </div>
       )}
 

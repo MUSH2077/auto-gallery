@@ -58,6 +58,7 @@ services:
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
       SECRET_KEY: ${SECRET_KEY}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
       DOWNLOAD_ROOT: /downloads
       LIBRARY_ROOT: /library
       GALLERYDL_CONFIG_ROOT: /gallerydl-config
@@ -70,7 +71,8 @@ services:
       - ${HOST_LIBRARY:-./data/library}:/library
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
-      - ./backend/alembic/versions:/app/alembic/versions
+      # alembic/versions are baked into the image via COPY . .
+      # No bind mount needed — avoids WSL 2 filesystem access issues.
     depends_on:
       postgres:
         condition: service_healthy
@@ -85,16 +87,17 @@ services:
       retries: 3
     restart: unless-stopped
 
-  worker:
+  worker-download:
     image: auto-gallery-backend:latest
     pull_policy: never
-    command: rq worker --url redis://:${REDIS_PASSWORD}@redis:6379/0
+    command: python worker_entrypoint.py downloads 3 --with-scheduler
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       MEILI_URL: http://meilisearch:7700
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
       SECRET_KEY: ${SECRET_KEY}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       DOWNLOAD_ROOT: /downloads
       LIBRARY_ROOT: /library
       GALLERYDL_CONFIG_ROOT: /gallerydl-config
@@ -106,9 +109,42 @@ services:
       - ${HOST_LIBRARY:-./data/library}:/library
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
-      - ./backend/alembic/versions:/app/alembic/versions
     healthcheck:
-      test: ["CMD", "python3", "-c", "import redis, subprocess; r=redis.from_url('redis://:${REDIS_PASSWORD}@redis:6379/0'); assert r.ping(); subprocess.run(['gallery-dl', '--version'], capture_output=True, timeout=5).check_returncode()"]
+      test: ["CMD", "python3", "-c", "import os, redis, subprocess; r=redis.from_url(os.environ['REDIS_URL']); assert r.ping(); assert subprocess.run(['gallery-dl', '--version'], capture_output=True, timeout=5).returncode == 0"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker-import:
+    image: auto-gallery-backend:latest
+    pull_policy: never
+    command: python worker_entrypoint.py imports 2 --with-scheduler
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      MEILI_URL: http://meilisearch:7700
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      SECRET_KEY: ${SECRET_KEY}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      DOWNLOAD_ROOT: /downloads
+      LIBRARY_ROOT: /library
+      GALLERYDL_CONFIG_ROOT: /gallerydl-config
+      APP_CONFIG_ROOT: /app-config
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TIMEZONE: ${TIMEZONE:-UTC}
+    volumes:
+      - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
+      - ${HOST_LIBRARY:-./data/library}:/library
+      - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
+      - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import redis; r=redis.from_url('redis://:${REDIS_PASSWORD}@redis:6379/0'); assert r.ping()"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -129,6 +165,7 @@ services:
       MEILI_URL: http://meilisearch:7700
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
       SECRET_KEY: ${SECRET_KEY}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       DOWNLOAD_ROOT: /downloads
       LIBRARY_ROOT: /library
       GALLERYDL_CONFIG_ROOT: /gallerydl-config
@@ -160,10 +197,9 @@ services:
       - "${ADMIN_WEB_PORT:-13000}:3000"
     environment:
       HOSTNAME: "0.0.0.0"
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8000}
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/ 2>&1 || exit 0"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/"]
       interval: 15s
       timeout: 5s
       retries: 3

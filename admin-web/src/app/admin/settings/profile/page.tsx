@@ -7,7 +7,7 @@ import PageHeader from "@/components/PageHeader";
 
 export default function ProfilePage() {
   const t = useT();
-  const { user } = useAuth();
+  const { user, updateAccessToken } = useAuth();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -31,7 +31,8 @@ export default function ProfilePage() {
 
     setLoading(true);
     try {
-      await authChangePassword(currentPassword, newPassword);
+      const refreshed = await authChangePassword(currentPassword, newPassword);
+      await updateAccessToken(refreshed.access_token);
       setSuccess(true);
       setCurrentPassword("");
       setNewPassword("");
@@ -63,6 +64,12 @@ export default function ProfilePage() {
 
       {/* Change Password */}
       <div className="card p-5">
+        {user?.must_change_password && (
+          <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+            <div className="font-medium">{t("auth.force_change_title")}</div>
+            <div>{t("auth.force_change_message")}</div>
+          </div>
+        )}
         <h2 className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-4">{t("auth.change_password")}</h2>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>

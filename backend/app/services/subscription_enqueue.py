@@ -118,7 +118,7 @@ async def enqueue_subscription_source_sync(
         ss.source_url = normalized_url
 
     lock_key = f"lock:subscription-source-sync:{ss.id}"
-    with redis_lock(lock_key, ttl_seconds=120) as acquired:
+    async with redis_lock(lock_key, ttl_seconds=120) as acquired:
         if not acquired:
             return skip_result(ss.id, "lock_busy")
 
@@ -170,12 +170,12 @@ async def enqueue_subscription_source_sync(
             from rq import Queue
 
             r = redis_lib.from_url(settings.redis_url)
-            Queue(connection=r).enqueue(
+            Queue(name="downloads", connection=r).enqueue(
                 "app.jobs.download.run_download_job",
                 str(job.id),
                 job_timeout=RQ_JOB_TIMEOUT,
             )
-            append_manifest_event(job, "enqueued", queue="default")
+            append_manifest_event(job, "enqueued", queue="downloads")
         except Exception as exc:
             logger.error("Failed to enqueue download job %s: %s", job.id, exc)
             transition_download_job(job, "failed", f"Enqueue failed: {exc}")

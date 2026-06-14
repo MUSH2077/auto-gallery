@@ -34,3 +34,25 @@ def test_download_job_context_enrichment_adds_creator_and_subscription_fields():
     assert job.subscription_name == "Daily Pixiv"
     assert job.creator_id == creator_id
     assert job.creator_name == "Atlas Ink"
+
+
+def test_download_job_text_filter_matches_enriched_creator_and_subscription_names():
+    subscription_id = uuid4()
+    creator_id = uuid4()
+    matching = SimpleNamespace(id=uuid4(), subscription_id=subscription_id, source_url="https://example.test/a")
+    other = SimpleNamespace(id=uuid4(), subscription_id=uuid4(), source_url="https://example.test/b")
+
+    class Repo:
+        async def list_all(self, **kwargs):
+            assert kwargs["subscription_source_id"] == "repo-1"
+            assert kwargs["q"] == "atlas"
+            return [matching, other]
+
+    service = DownloadService(_FakeSession([
+        (subscription_id, "Daily Pixiv", creator_id, "Atlas Ink", "atlas_ink"),
+    ]))
+    service.repo = Repo()
+
+    jobs = asyncio.run(service.list_jobs(subscription_source_id="repo-1", q="atlas"))
+
+    assert jobs == [matching]

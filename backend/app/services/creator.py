@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.creator import CreatorRepository
 from app.models import Creator, CreatorLink, SourceCreator, Subscription, SubscriptionSource, DownloadJob, ImportJob
+from app.schemas.creator import CreatorRead
 
 
 class CreatorService:
@@ -18,11 +19,13 @@ class CreatorService:
                             has_danbooru: bool | None = None,
                             has_subscription: bool | None = None,
                             is_favorite: bool | None = None):
-        return await self.repo.list_all(offset, limit,
+        creators, total = await self.repo.list_all(offset, limit,
                                         search=search, is_active=is_active,
                                         has_danbooru=has_danbooru,
                                         has_subscription=has_subscription,
                                         is_favorite=is_favorite)
+        items = [CreatorRead.model_validate(c, from_attributes=True) for c in creators]
+        return {"items": items, "total": total}
 
     async def toggle_favorite(self, creator_id: UUID):
         creator = await self.get_creator(creator_id)
@@ -125,12 +128,16 @@ class CreatorService:
                                     artist_name: str | None = None) -> int:
         """Query Danbooru and create CreatorLink suggestions for this creator."""
         import logging
+        import asyncio
         logger = logging.getLogger(__name__)
 
         try:
             from app.services import danbooru as danbooru_svc
 
-            artist, links = danbooru_svc.search_and_extract(
+            # Danbooru HTTP is synchronous (urllib); run in thread to avoid
+            # blocking the FastAPI event loop during API calls.
+            artist, links = await asyncio.to_thread(
+                danbooru_svc.search_and_extract,
                 source_url=source_url, pixiv_id=pixiv_id, artist_name=artist_name,
             )
             if not links:

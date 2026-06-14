@@ -174,11 +174,11 @@ Worker can be scaled: `docker compose up --scale worker=3`. Scaling works as lon
 
 Items below were risks that have been addressed by implementation.
 
-### Risk A: X/Twitter API viability (RESOLVED)
+### Risk A: X/Twitter API viability (EXPLICITLY DISABLED)
 
 **Original concern**: X had aggressively restricted API access. gallery-dl's X extractor may break permanently or require paid API access.
 
-**Resolution**: X/Twitter is now a fully working downloadable provider. gallery-dl's Twitter extractor works reliably with cookie-based authentication. The `strategy: "tweets"` setting uses the UserTweets GraphQL endpoint which is actively maintained. The deprecated SearchTimeline fallback was removed via a Dockerfile patch. `can_download=True`, `supports_gallerydl=True`, `supports_tags=True`.
+**Status**: X/Twitter is explicitly disabled (`can_download=False`, `supports_gallerydl=False`). The provider exists as a placeholder with URL validation and tag parsing, but the download pipeline will not create jobs for X sources. The UserTweets GraphQL endpoint and SearchTimeline fallback are both known-unreliable. Re-evaluate after the Pixiv pipeline is stable. The Dockerfile still patches the SearchTimeline fallback for when the provider is re-enabled.
 
 ---
 
@@ -291,7 +291,7 @@ As the number of providers grows (currently 8: Pixiv, X, Iwara, Danbooru, Pinter
 | `auth_healthy` on subscription_source | #C (was #7) | subscription_source model |
 | Admin-triggered Meilisearch re-indexing for v1 | #5 (was #6) | CLAUDE.md -- Risk-Derived Decisions |
 | Integration smoke test for gallery-dl output format | #2 (was #1) | Test suite |
-| X provider fully enabled (was placeholder) | #A (was #3) | x.py provider -- can_download=True |
+| X provider explicitly disabled (placeholder) | #A (was #3) | x.py provider -- can_download=False |
 | pyvips preferred over Pillow | #11 | CLAUDE.md -- Risk-Derived Decisions |
 | JWT auth with access+refresh token | #E (was #14) | auth.py, auth_api.py, auth.tsx |
 | Iwara fully enabled (was placeholder) | #D (was #13) | iwara.py provider -- can_download=True |

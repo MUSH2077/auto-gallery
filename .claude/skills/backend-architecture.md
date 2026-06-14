@@ -44,10 +44,36 @@ backend/
       # Pydantic response/request schemas
     repositories/
       __init__.py
-      # One repository per aggregate root
+      creator.py          # CreatorRepository — creator CRUD, search
+      work.py             # WorkRepository — work CRUD, timeline
+      subscription.py     # SubscriptionRepository — subscription CRUD
+      download_job.py     # DownloadJobRepository — job CRUD, status
+      tag.py              # TagRepository — tag CRUD, search
     services/
       __init__.py
-      # Business logic layer
+      creator.py          # CreatorService — creator CRUD, Danbooru enrichment
+      subscription.py     # SubscriptionService — subscription CRUD, source management
+      download.py         # DownloadService — job orchestration, enqueue
+      search.py           # SearchService — Meilisearch indexing, search, reindex
+      cache.py            # Redis API response cache with TTL registry
+      locks.py            # redis_lock — async distributed lock
+      redis_client.py     # get_redis() — shared connection singleton
+      settings.py         # System settings from DB, gallery-dl config merging
+      job_state.py        # Download/import job state machines
+      job_manifest.py     # Per-job manifest tracking
+      subscription_enqueue.py  # enqueue_subscription_source_sync()
+      danbooru.py         # Danbooru API client for reference data
+      creator_dedup.py    # find_merge_candidates(), merge_creators()
+      thumbnail.py        # pyvips thumbnail generation
+      proxy.py            # Proxy config for gallery-dl subprocess
+      log_buffer.py       # In-memory ring buffer for log API
+    jobs/
+      __init__.py
+      download.py         # run_download_job() — gallery-dl subprocess
+      import_runner.py    # run_import_job() — metadata → DB, thumbnails, search
+      subscription_sync.py # sync_subscriptions() — scheduled loop
+      batch_import.py     # Batch Danbooru artist import
+      backup.py           # Database dump + config archive
     api/
       __init__.py
       router.py          # main api router

@@ -15,11 +15,15 @@ router = APIRouter(dependencies=[RequireAdmin])
 @router.get("", response_model=list[DownloadJobRead])
 async def list_jobs(status: str | None = None, source: str | None = None,
                     subscription_id: str | None = None,
+                    subscription_source_id: str | None = None,
+                    q: str | None = None,
                     sort_by: str = "created_at", sort_order: str = "desc",
                     offset: int = 0, limit: int = 50, db: AsyncSession = Depends(get_db)):
     svc = DownloadService(db)
     return await svc.list_jobs(status=status, source=source,
                                subscription_id=subscription_id,
+                               subscription_source_id=subscription_source_id,
+                               q=q,
                                sort_by=sort_by, sort_order=sort_order,
                                offset=offset, limit=limit)
 

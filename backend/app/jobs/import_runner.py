@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from collections import defaultdict
@@ -19,6 +20,7 @@ from app.repositories.download_job import DownloadJobRepository
 from app.services.job_manifest import append_manifest_event, update_manifest
 from app.services.job_state import transition_import_job
 from app.services.subscription_enqueue import mark_source_sync_success
+from app.services.curation import CurationService
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +110,17 @@ def _mime_type(suffix: str) -> str:
     return "application/octet-stream"
 
 
+def _consume_import_file_list(redis_client, import_job_id: str) -> list[str] | None:
+    """Read and delete the exact JSON file list captured by the download job."""
+    files_key = f"import:{import_job_id}:files"
+    files_raw = redis_client.get(files_key)
+    if not files_raw:
+        return None
+    new_json_paths = json.loads(files_raw)
+    redis_client.delete(files_key)
+    return new_json_paths
+
+
 def _can_generate_thumbnail(suffix: str) -> bool:
     return suffix.lower() in IMAGE_EXTENSIONS
 
@@ -140,17 +153,12 @@ async def run_import_job(import_job_id: str):
         # - Naming template output directories not matching download_dir hint
         # - Concurrent imports processing the same JSONs
         # - Race conditions between snapshot and re-scan
-        import redis as _redis
-        _r = _redis.from_url(settings.redis_url)
-        _files_key = f"import:{import_job_id}:files"
-        _files_raw = _r.get(_files_key)
+        from app.services.redis_client import get_redis
         _new_json_paths: list[str] | None = None
-        if _files_raw:
-            try:
-                _new_json_paths = json.loads(_files_raw)
-                _r.delete(_files_key)  # Clean up after reading
-            except Exception:
-                logger.warning("Failed to parse import file list for %s", import_job_id, exc_info=True)
+        try:
+            _new_json_paths = _consume_import_file_list(get_redis(), import_job_id)
+        except Exception:
+            logger.warning("Failed to parse import file list for %s", import_job_id, exc_info=True)
 
         source_root = Path(settings.download_root) / provider.source_name
 
@@ -277,6 +285,7 @@ async def run_import_job(import_job_id: str):
                     SourceCreator.source == sc_data["source"],
                     SourceCreator.source_creator_id == sc_data["source_creator_id"]))
                 sc_obj = existing_sc.scalar_one_or_none()
+                linked_creator_id = sc_obj.creator_id if sc_obj else None
                 if not sc_obj:
                     # Find creator via download_job -> subscription
                     creator_id = None
@@ -284,6 +293,7 @@ async def run_import_job(import_job_id: str):
                         sub = await db.get(Subscription, dj.subscription_id)
                         if sub:
                             creator_id = sub.creator_id
+                    linked_creator_id = creator_id
                     db.add(SourceCreator(
                         source=sc_data["source"],
                         source_creator_id=sc_data["source_creator_id"],
@@ -297,6 +307,7 @@ async def run_import_job(import_job_id: str):
                     sub = await db.get(Subscription, dj.subscription_id)
                     if sub:
                         sc_obj.creator_id = sub.creator_id
+                        linked_creator_id = sub.creator_id
 
                 # Work
                 is_ai = _detect_ai_generated(first_raw, provider.source_name)
@@ -343,21 +354,37 @@ async def run_import_job(import_job_id: str):
                     db.add(asset)
                     await db.flush()
 
-                    # Generate per-page thumbnail: {stem}.thumbnail.webp (e.g. 8232932_p0.thumbnail.webp)
+                    # Generate per-page thumbnail in thread pool (CPU-bound pyvips)
                     if _can_generate_thumbnail(fp.suffix):
                         from app.services.thumbnail import generate_thumbnail
-                        tp = generate_thumbnail(str(fp), lib_dir, name=f"{fp.stem}.thumbnail")
+                        tp = await asyncio.to_thread(
+                            generate_thumbnail, str(fp), lib_dir, f"{fp.stem}.thumbnail")
                         if tp:
                             asset.thumb_sm_path = str(
                                 Path(tp).relative_to(settings.library_root))
 
-                    # Compute pHash for image files (skip animated/video types)
+                    # Compute sha256 in thread pool (CPU-bound hashing)
+                    try:
+                        def _compute_sha256(filepath: str) -> str:
+                            import hashlib
+                            h = hashlib.sha256()
+                            with open(filepath, "rb") as _hf:
+                                for _chunk in iter(lambda: _hf.read(8192), b""):
+                                    h.update(_chunk)
+                            return h.hexdigest()
+                        asset.sha256 = await asyncio.to_thread(_compute_sha256, str(fp))
+                    except Exception as _sha256_err:
+                        logger.warning("sha256 failed for %s: %s", fp, _sha256_err)
+
+                    # Compute pHash in thread pool (CPU-bound PIL)
                     if _can_compute_phash(fp.suffix):
                         try:
-                            import imagehash
-                            from PIL import Image as _PILImage
-                            with _PILImage.open(str(fp)) as _pil_img:
-                                asset.phash = str(imagehash.phash(_pil_img))
+                            def _compute_phash(filepath: str) -> str:
+                                import imagehash
+                                from PIL import Image as _PILImage
+                                with _PILImage.open(filepath) as _pil_img:
+                                    return str(imagehash.phash(_pil_img))
+                            asset.phash = await asyncio.to_thread(_compute_phash, str(fp))
                         except Exception as _phash_err:
                             logger.warning("pHash failed for %s: %s", fp, _phash_err)
 
@@ -420,25 +447,35 @@ async def run_import_job(import_job_id: str):
                 except Exception:
                     logger.warning("Failed to write metadata.json for %s/%s", provider.source_name, src_work_id, exc_info=True)
 
+                curation = CurationService(db)
+                _, curation_visibility = await curation.record_imported_work(
+                    work,
+                    creator_id=linked_creator_id,
+                    repository_id=dj.subscription_source_id,
+                    source=provider.source_name,
+                    source_work_id=src_work_id,
+                )
+
                 # Collect Meilisearch document for this work
                 tag_names = [t.normalized_name for t in (await db.execute(
                     select(Tag.normalized_name).join(WorkTag).where(WorkTag.work_id == work.id)
                 )).all()]
                 asset_count = len(asset_files)
-                meili_docs.append({
-                    "id": str(work.id),
-                    "title": work.title or "",
-                    "description": (work.description or "")[:500],
-                    "creator_name": display_name or "",
-                    "is_nsfw": work.is_nsfw,
-                    "is_ai_generated": work.is_ai_generated,
-                    "source": provider.source_name,
-                    "tags": [str(tn) for tn in tag_names],
-                    "thumbnail_asset_id": str(work.thumbnail_asset_id) if work.thumbnail_asset_id else None,
-                    "asset_count": asset_count,
-                    "posted_at": work.posted_at if work.posted_at else None,
-                    "created_at": work.created_at.isoformat() if work.created_at else None,
-                })
+                if curation_visibility == "visible":
+                    meili_docs.append({
+                        "id": str(work.id),
+                        "title": work.title or "",
+                        "description": (work.description or "")[:500],
+                        "creator_name": display_name or "",
+                        "is_nsfw": work.is_nsfw,
+                        "is_ai_generated": work.is_ai_generated,
+                        "source": provider.source_name,
+                        "tags": [str(tn) for tn in tag_names],
+                        "thumbnail_asset_id": str(work.thumbnail_asset_id) if work.thumbnail_asset_id else None,
+                        "asset_count": asset_count,
+                        "posted_at": work.posted_at if work.posted_at else None,
+                        "created_at": work.created_at.isoformat() if work.created_at else None,
+                    })
 
                 # Commit work and batch Meilisearch periodically
                 await db.commit()
@@ -523,7 +560,7 @@ async def run_import_job(import_job_id: str):
                         from rq import Queue
                         from datetime import timedelta
                         r = redis_lib.from_url(settings.redis_url)
-                        Queue(connection=r).enqueue_in(
+                        Queue(name="imports", connection=r).enqueue_in(
                             timedelta(seconds=60),
                             "app.jobs.import_runner.run_import_job", import_job_id,
                             job_timeout=7200)

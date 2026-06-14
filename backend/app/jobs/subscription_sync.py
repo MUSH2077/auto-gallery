@@ -237,7 +237,7 @@ def sync_subscriptions():
 
 
 async def sync_subscriptions_async():
-    with redis_lock("lock:subscription-sync-scan", ttl_seconds=300) as acquired:
+    async with redis_lock("lock:subscription-sync-scan", ttl_seconds=300) as acquired:
         if not acquired:
             logger.info("Subscription auto-sync scan already running; skipping")
             return
@@ -264,11 +264,11 @@ async def _sync_subscriptions_locked():
         scan_minutes = int(config.get("scheduler_scan_interval_minutes", FALLBACK_SCAN_MINUTES))
         scheduler_enabled = bool(config.get("scheduler_enabled", True))
 
-        # Find all active, sync-enabled subscriptions
+        # Find active, sync-enabled subscriptions (batched: max 100 per scan)
         subs = await db.execute(
             select(Subscription).where(
                 and_(Subscription.is_active == True, Subscription.sync_enabled == True)
-            )
+            ).order_by(Subscription.last_synced_at.asc().nullsfirst()).limit(100)
         )
         subscriptions = subs.scalars().all()
 

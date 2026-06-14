@@ -6,24 +6,37 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.creator import CreatorCreate, CreatorRead, CreatorUpdate
+from app.schemas.creator import CreatorCreate, CreatorListResponse, CreatorRead, CreatorUpdate
+from app.schemas.curation import CreatorCurationRequest, CurationCommitRead
 from app.schemas.source_creator import SourceCreatorCreate, SourceCreatorRead
 from app.schemas.creator_link import CreatorLinkCreate, CreatorLinkRead, CreatorLinkUpdate
 from app.models.creator import Creator
 from app.services.creator import CreatorService
+from app.services.cache import cache_get, cache_set, cache_key, cache_delete_pattern
+from app.services.curation import CurationService
 
 router = APIRouter(dependencies=[RequireAdmin])
+
+# TTLs
+CREATOR_LIST_TTL = 300  # 5 min — list queries
+CREATOR_STATS_TTL = 60  # 1 min — stats change more frequently
 
 
 
 @router.get("/count")
 async def count_creators(db: AsyncSession = Depends(get_db)):
     """Return total number of creators."""
+    ck = cache_key("creators:count")
+    cached = cache_get(ck)
+    if cached is not None:
+        return cached
     result = await db.execute(select(func.count()).select_from(Creator))
-    return {"count": result.scalar() or 0}
+    data = {"count": result.scalar() or 0}
+    cache_set(ck, data, CREATOR_LIST_TTL)
+    return data
 
 
-@router.get("", response_model=list[CreatorRead])
+@router.get("", response_model=CreatorListResponse)
 async def list_creators(
     offset: int = 0, limit: int = 50,
     search: str | None = None,
@@ -33,12 +46,22 @@ async def list_creators(
     is_favorite: bool | None = None,
     db: AsyncSession = Depends(get_db),
 ):
+    ck = cache_key("creators:list", offset=offset, limit=limit,
+                   search=search, is_active=is_active,
+                   has_danbooru=has_danbooru,
+                   has_subscription=has_subscription,
+                   is_favorite=is_favorite)
+    cached = cache_get(ck)
+    if cached is not None:
+        return cached
     svc = CreatorService(db)
-    return await svc.list_creators(offset, limit,
+    data = await svc.list_creators(offset, limit,
                                    search=search, is_active=is_active,
                                    has_danbooru=has_danbooru,
                                    has_subscription=has_subscription,
                                    is_favorite=is_favorite)
+    cache_set(ck, data, CREATOR_LIST_TTL)
+    return data
 
 
 # ── Batch Operations ──
@@ -54,7 +77,10 @@ async def batch_delete_creators(data: dict, db: AsyncSession = Depends(get_db)):
             await svc.delete_creator(UUID(cid))
             results.append({"id": cid, "status": "deleted"})
         except Exception as e:
-            results.append({"id": cid, "status": "error", "error": str(e)})
+            import logging
+            logging.getLogger(__name__).warning("batch_delete_creators failed for %s: %s", cid, e, exc_info=True)
+            results.append({"id": cid, "status": "error", "error": "internal_error"})
+    cache_delete_pattern("creators:*")
     return {"status": "ok", "results": results}
 
 
@@ -86,6 +112,7 @@ async def merge_creators_endpoint(data: dict, db: AsyncSession = Depends(get_db)
             results.append({"source_id": source_id_str, "status": "merged", **stats})
         except ValueError as e:
             results.append({"source_id": source_id_str, "status": "error", "error": str(e)})
+    cache_delete_pattern("creators:*")
     return {"status": "ok", "results": results}
 
 
@@ -93,7 +120,10 @@ async def merge_creators_endpoint(data: dict, db: AsyncSession = Depends(get_db)
 async def get_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)
     try:
-        return await svc.get_creator(creator_id)
+        creator = await svc.get_creator(creator_id)
+        curation = CurationService(db)
+        creator.curation_state = curation.creator_state_payload(await curation.creator_state(creator_id))
+        return creator
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -101,14 +131,18 @@ async def get_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
 @router.post("", response_model=CreatorRead, status_code=201)
 async def create_creator(data: CreatorCreate, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)
-    return await svc.create_creator(data.model_dump())
+    result = await svc.create_creator(data.model_dump())
+    cache_delete_pattern("creators:*")
+    return result
 
 
 @router.patch("/{creator_id}", response_model=CreatorRead)
 async def update_creator(creator_id: UUID, data: CreatorUpdate, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)
     try:
-        return await svc.update_creator(creator_id, data.model_dump(exclude_none=True))
+        result = await svc.update_creator(creator_id, data.model_dump(exclude_none=True))
+        cache_delete_pattern("creators:*")
+        return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -134,6 +168,10 @@ async def get_creator_timeline(creator_id: UUID,
 @router.get("/{creator_id}/stats")
 async def get_creator_stats(creator_id: UUID, db: AsyncSession = Depends(get_db)):
     """Return creator statistics: tag distribution, source breakdown, monthly posting frequency."""
+    ck = cache_key("creators:stats", creator_id=str(creator_id))
+    cached = cache_get(ck)
+    if cached is not None:
+        return cached
     from app.models.work_source import WorkSource
     from app.models.work_tag import WorkTag
     from app.models.tag import Tag
@@ -198,7 +236,7 @@ async def get_creator_stats(creator_id: UUID, db: AsyncSession = Depends(get_db)
     )
     total_assets = asset_result.scalar() or 0
 
-    return {
+    data = {
         "creator_id": str(creator_id),
         "total_works": total_works,
         "total_assets": total_assets,
@@ -207,6 +245,8 @@ async def get_creator_stats(creator_id: UUID, db: AsyncSession = Depends(get_db)
         "tag_distribution": tag_distribution,
         "monthly_frequency": monthly,
     }
+    cache_set(ck, data, CREATOR_STATS_TTL)
+    return data
 
 
 @router.get("/{creator_id}/subscription-overview")
@@ -340,6 +380,7 @@ async def delete_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)
     try:
         await svc.delete_creator(creator_id)
+        cache_delete_pattern("creators:*")
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -348,9 +389,25 @@ async def delete_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
 async def toggle_creator_favorite(creator_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)
     try:
-        return await svc.toggle_favorite(creator_id)
+        result = await svc.toggle_favorite(creator_id)
+        cache_delete_pattern("creators:*")
+        return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/{creator_id}/curation", response_model=CurationCommitRead)
+async def curate_creator(creator_id: UUID, data: CreatorCurationRequest, db: AsyncSession = Depends(get_db)):
+    svc = CurationService(db)
+    commit = await svc.curate_creator(
+        creator_id,
+        action=data.action,
+        reason=data.reason,
+        message=data.message,
+    )
+    cache_delete_pattern("creators:*")
+    cache_delete_pattern("works:*")
+    return await svc.commit_payload(commit.id)
 
 
 @router.get("/{creator_id}/sources", response_model=list[SourceCreatorRead])
