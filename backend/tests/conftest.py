@@ -48,7 +48,10 @@ async def test_database(test_database_url, test_db_base_url):
     parsed = urlparse(test_database_url)
     db_name = parsed.path.lstrip("/")
 
-    conn = await asyncpg.connect(test_db_base_url)
+    try:
+        conn = await asyncpg.connect(test_db_base_url, timeout=3)
+    except Exception as exc:
+        pytest.skip(f"PostgreSQL not available; skipping integration tests ({exc})")
     try:
         await conn.execute(f"DROP DATABASE IF EXISTS {db_name}")
         await conn.execute(f"CREATE DATABASE {db_name}")
