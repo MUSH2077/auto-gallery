@@ -156,8 +156,9 @@ Worker 取走 import_job
 
 - **登录**：POST `/api/v1/auth/login` 使用用户名/密码返回 access token。
 - **Token 格式**：使用服务器密钥签名的 JWT access token。
-- **认证方式**：端点接受 `Authorization: Bearer <jwt>` 或 `X-Admin-Key` 头部（管理路由的旧版代理注入）。
+- **认证方式**：管理端点要求 `Authorization: Bearer <jwt>`。
 - **Token 过期**：通过 `ACCESS_TOKEN_EXPIRE_MINUTES` 配置（默认 30 分钟）。
+- **首次登录轮换**：引导创建的管理员账户会标记 `must_change_password=true`，完成改密后才能继续访问管理接口。
 - 所有管理 API 路由需要通过 `RequireAdmin` 依赖进行认证。
 
 ## 备份系统
@@ -236,8 +237,8 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 - **downloads/**：原图仓库。原始图片/视频文件按 `{source}/{creator_name}/{source_work_id}/` 组织并长期保存。导入时从 gallery-dl 的扁平输出移动至此。JSON 元数据文件处理后被删除。路径中不包含 job_id 层级。
 - **library/**：索引层。仅每个作品的元数据 + 缩略图。与 downloads 使用相同的 `{source}/{creator_name}/{source_work_id}/` 结构，通过 source_work_id 链接。不存放原始图片。
 - **gallery-dl 输出**：导入前的 worker 短生命周期输出。导入过程中文件被重组到长期保存的原图仓库中，JSON 文件被删除。
-- **缩略图**：400px WebP 格式，由 pyvips 从首页图片生成。从 LIBRARY_ROOT 通过 `/media/thumb/{asset_id}` 提供。
-- **预览/原图**：直接从 DOWNLOAD_ROOT 通过 `/media/preview/{asset_id}` 和 `/media/original/{asset_id}` 提供。
+- **缩略图**：400px WebP 格式，由 pyvips 从首页图片生成。从 LIBRARY_ROOT 通过无鉴权的 `/media/thumb/{asset_id}` 提供，用于网格/列表中的图片标签。
+- **预览/原图**：直接从 DOWNLOAD_ROOT 通过 `/media/preview/{asset_id}` 和 `/media/original/{asset_id}` 提供。预览需要短期签名 URL；原图接受管理员 Bearer 鉴权或短期签名 URL。
 - **metadata.json**：导入时为每个作品写入。包含 work_id、source、source_work_id、title、posted_at、creator、assets 数组。
 - **source_work_id**：平台特定的作品 ID（如 Pixiv 作品 ID "38362603"）。在 downloads/ 和 library/ 中都用作目录名。链接两个存储树。
 
@@ -433,5 +434,5 @@ Danbooru 参考 provider 操作，用于创作者身份映射。
 
 端点：
 - `GET /thumb/{asset_id}` — 来自 LIBRARY_ROOT 的 400px WebP 缩略图
-- `GET /preview/{asset_id}` — 来自 DOWNLOAD_ROOT 的原始文件（预览用）
+- `GET /preview/{asset_id}` — 来自 DOWNLOAD_ROOT 的原始文件，需要短期签名 URL
 - `GET /original/{asset_id}` — 来自 DOWNLOAD_ROOT 的原始文件（下载用）

@@ -98,11 +98,10 @@ downloadable = registry.list_downloadable()
 - `source_name`: `"x"`
 - `capabilities.can_download`: True
 - `capabilities.supports_gallerydl`: True
+- `capabilities.supports_tags`: True
 - URL patterns: `x.com/<user>`, `x.com/<user>/status/<id>`, `twitter.com/<user>`
-- Uses gallery-dl Twitter extractor with cookie-based auth
-- Download strategy: `strategy: "tweets"` uses the UserTweets GraphQL endpoint
+- Uses gallery-dl Twitter extractor with cookie-based auth (`strategy: "tweets"`)
 - The SearchTimeline fallback endpoint is patched out in the Dockerfile (Twitter has deprecated it)
-- Extractors: timeline, tweets, media, likes, search, list, bookmark, avatar, background
 
 ### Iwara (`iwara.py`)
 - **Status**: Downloadable (gallery-dl >= 1.32.0 required)

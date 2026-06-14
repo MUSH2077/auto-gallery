@@ -3,6 +3,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from app.schemas.curation import CurationStateRead
+
 
 class CreatorCreate(BaseModel):
     name: str
@@ -38,7 +40,13 @@ class CreatorRead(BaseModel):
     source_count: int | None = None
     repository_count: int | None = None
     last_synced_at: datetime | None = None
+    curation_state: CurationStateRead | None = None
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class CreatorListResponse(BaseModel):
+    items: list[CreatorRead]
+    total: int

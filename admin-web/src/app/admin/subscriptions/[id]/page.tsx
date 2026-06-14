@@ -105,7 +105,7 @@ export default function SubscriptionDetailPage() {
   });
 
   const getCreatorName = (creatorId: string) => {
-    const c = creators.data?.find((c) => c.id === creatorId);
+    const c = creators.data?.items.find((c) => c.id === creatorId);
     return c ? (c.display_name || c.name) : creatorId.slice(0, 8);
   };
 

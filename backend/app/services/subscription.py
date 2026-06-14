@@ -108,6 +108,10 @@ class SubscriptionService:
             data["source_url"] = normalized
         ss = await self.repo.update_source(ss, data)
         await self.db.commit()
+        # Refresh so the returned object is fully loaded for Pydantic serialization.
+        # commit() expires all loaded state; without this, lazy-loading fails with
+        # MissingGreenlet when FastAPI serializes the response.
+        await self.db.refresh(ss)
         return ss
 
     async def delete_source(self, ss_id: UUID):
@@ -122,8 +126,13 @@ class SubscriptionService:
         try:
             from app.services import danbooru as danbooru_svc
             from app.models import Creator
+            import asyncio
 
-            artist, links = danbooru_svc.search_and_extract(source_url=source_url)
+            # Danbooru HTTP is synchronous (urllib); run in thread to avoid
+            # blocking the FastAPI event loop during API calls.
+            artist, links = await asyncio.to_thread(
+                danbooru_svc.search_and_extract, source_url=source_url
+            )
             if not links:
                 return 0
 

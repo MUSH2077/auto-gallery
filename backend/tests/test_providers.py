@@ -117,6 +117,7 @@ class TestXProvider:
         c = self.p.capabilities
         assert c.can_download is True
         assert c.supports_gallerydl is True
+        assert c.supports_tags is True
 
     def test_validate_url(self):
         assert self.p.validate_url("https://x.com/artist_handle")

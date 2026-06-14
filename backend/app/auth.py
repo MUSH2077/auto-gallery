@@ -1,8 +1,10 @@
 import bcrypt as _bcrypt
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+import os
+import secrets
+from typing import Any, Optional
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
@@ -10,7 +12,6 @@ from app.config import settings
 
 # ── Password hashing ──────────────────────────────────────────────────────────
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -26,40 +27,49 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
-def create_access_token(username: str) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+def create_access_token(username: str, must_change_password: bool = False) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
     return jwt.encode(
-        {"sub": username, "exp": expire},
+        {"sub": username, "exp": expire, "pwd_chg_required": must_change_password},
         settings.secret_key,
         algorithm=ALGORITHM,
     )
 
 
-def decode_access_token(token: str) -> Optional[str]:
-    """Return username from token, or None if invalid/expired."""
+def decode_access_token_payload(token: str) -> Optional[dict[str, Any]]:
+    """Return token payload, or None if invalid/expired."""
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
-        return payload.get("sub")
+        return payload
     except JWTError:
         return None
+
+
+def decode_access_token(token: str) -> Optional[str]:
+    """Return username from token, or None if invalid/expired."""
+    payload = decode_access_token_payload(token)
+    if not payload:
+        return None
+    return payload.get("sub")
 
 
 # ── Main auth dependency ──────────────────────────────────────────────────────
 
 async def get_admin_key(
-    x_admin_key: str = Header(default="", alias="X-Admin-Key"),
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ):
-    """Accept either Bearer JWT token or X-Admin-Key (legacy proxy injection)."""
-    # 1. JWT Bearer token (from browser login)
+    """Require Bearer JWT token for admin APIs."""
     if credentials and credentials.credentials:
-        username = decode_access_token(credentials.credentials)
-        if username:
-            return username
+        payload = decode_access_token_payload(credentials.credentials)
+        if not payload:
+            raise HTTPException(status_code=401, detail="Invalid or missing credentials")
 
-    # 2. X-Admin-Key (injected by Next.js proxy for backward compat)
-    if x_admin_key and x_admin_key == settings.admin_password:
-        return "admin"
+        username = payload.get("sub")
+        if username:
+            if payload.get("pwd_chg_required") and request.url.path != "/api/v1/auth/change-password":
+                raise HTTPException(status_code=403, detail="Password change required")
+            return username
 
     raise HTTPException(status_code=401, detail="Invalid or missing credentials")
 
@@ -71,7 +81,7 @@ RequireAdmin = Depends(get_admin_key)
 # ── Admin user bootstrap ──────────────────────────────────────────────────────
 
 async def ensure_admin_user() -> None:
-    """Create default admin/admin user if no users exist in the database."""
+    """Create bootstrap admin user if no users exist in the database."""
     from sqlalchemy import select
     from app.database import async_session
     from app.models.user import User
@@ -79,11 +89,26 @@ async def ensure_admin_user() -> None:
     async with async_session() as session:
         result = await session.execute(select(User).limit(1))
         if result.scalars().first() is None:
+            bootstrap_password = (settings.admin_password or "").strip()
+            if not bootstrap_password or bootstrap_password == "changeme":
+                bootstrap_password = secrets.token_urlsafe(18)
+                pw_dir = settings.app_config_root
+                os.makedirs(pw_dir, exist_ok=True)
+                pw_file = os.path.join(pw_dir, "bootstrap_admin_password")
+                with open(pw_file, "w", encoding="utf-8") as f:
+                    f.write(bootstrap_password)
+                # Use stdlib logger to avoid importing app.main logger here.
+                import logging
+                logging.getLogger(__name__).warning(
+                    "ADMIN_PASSWORD is unset/weak; generated bootstrap admin password at %s",
+                    pw_file,
+                )
             admin = User(
                 username="admin",
-                password_hash=hash_password("admin"),
+                password_hash=hash_password(bootstrap_password),
                 display_name="Administrator",
                 is_active=True,
+                must_change_password=True,
             )
             session.add(admin)
             await session.commit()

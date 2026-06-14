@@ -1,6 +1,14 @@
 """Test fixtures for auto-gallery backend."""
 
+import os
+
 import pytest
+
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://autogallery:test-db@postgres:5432/autogallery")
+os.environ.setdefault("REDIS_URL", "redis://:test-redis@redis:6379/0")
+os.environ.setdefault("SECRET_KEY", "test-secret-key")
+os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
+os.environ.setdefault("APP_CONFIG_ROOT", "/tmp/auto-gallery-test-config")
 
 
 @pytest.fixture

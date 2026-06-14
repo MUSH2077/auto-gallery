@@ -39,6 +39,10 @@ class BaseProvider(ABC):
     @abstractmethod
     def parse_work_source(self, raw_metadata: dict) -> dict: ...
 
+    # NOTE: parse_assets() is defined on all providers but is not currently
+    # called by the import runner (which discovers assets from the filesystem).
+    # It remains available for future use when asset metadata parsing is
+    # re-integrated into the import pipeline.
     @abstractmethod
     def parse_assets(self, raw_metadata: dict, files: list[str]) -> list[dict]: ...
 

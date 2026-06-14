@@ -1,11 +1,7 @@
-import { chromium } from 'playwright-core';
-const BASE = 'http://localhost:13000';
+import { BASE, launchBrowser } from './helpers.mjs';
 
 (async () => {
-  const browser = await chromium.launch({
-    executablePath: '<local-home>/.local/bin/chromium-wrapper',
-    headless: true, args: ['--no-sandbox'],
-  });
+  const browser = await launchBrowser();
   const page = await browser.newPage();
   
   await page.goto(BASE + '/admin/login', { waitUntil: 'networkidle' });

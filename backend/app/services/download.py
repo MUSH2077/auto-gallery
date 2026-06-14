@@ -63,13 +63,27 @@ class DownloadService:
 
     async def list_jobs(self, status: str | None = None, source: str | None = None,
                         subscription_id: str | None = None,
+                        subscription_source_id: str | None = None,
+                        q: str | None = None,
                         sort_by: str = "created_at", sort_order: str = "desc",
                         offset: int = 0, limit: int = 50):
         jobs = await self.repo.list_all(status=status, source=source,
                                         subscription_id=subscription_id,
+                                        subscription_source_id=subscription_source_id,
+                                        q=q,
                                         sort_by=sort_by, sort_order=sort_order,
                                         offset=offset, limit=limit)
-        return await self._enrich_job_context(jobs)
+        jobs = await self._enrich_job_context(jobs)
+        if q:
+            needle = q.strip().lower()
+            jobs = [
+                job for job in jobs
+                if needle in str(job.id).lower()
+                or needle in (job.source_url or "").lower()
+                or needle in (getattr(job, "creator_name", None) or "").lower()
+                or needle in (getattr(job, "subscription_name", None) or "").lower()
+            ]
+        return jobs
 
     async def get_job(self, job_id: UUID):
         job = await self.repo.get(job_id)
@@ -125,9 +139,9 @@ class DownloadService:
             import redis as redis_lib
             from rq import Queue
             r = redis_lib.from_url(settings.redis_url)
-            q = Queue(connection=r)
+            q = Queue(name="downloads", connection=r)
             q.enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
-            append_manifest_event(job, "enqueued", queue="default")
+            append_manifest_event(job, "enqueued", queue="downloads")
             await self.db.commit()
         except Exception:
             logger.warning("Failed to enqueue download job %s", job.id, exc_info=True)
@@ -144,7 +158,7 @@ class DownloadService:
             import redis as redis_lib
             from rq import Queue
             r = redis_lib.from_url(settings.redis_url)
-            Queue(connection=r).enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
+            Queue(name="downloads", connection=r).enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
         except Exception:
             logger.warning("Failed to enqueue retry for download job %s", job.id, exc_info=True)
         return {"job_id": str(job.id), "status": job.status}
@@ -173,7 +187,7 @@ class DownloadService:
             import redis as redis_lib
             from rq import Queue
             r = redis_lib.from_url(settings.redis_url)
-            Queue(connection=r).enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
+            Queue(name="downloads", connection=r).enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
         except Exception:
             logger.warning("Failed to enqueue resume for download job %s", job.id, exc_info=True)
         return {"job_id": str(job.id), "status": job.status}

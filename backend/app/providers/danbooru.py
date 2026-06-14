@@ -59,9 +59,11 @@ class DanbooruProvider(BaseProvider):
         return cfg
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:
-        # Danbooru posts have tag_string_artist for the artist name(s)
+        # Danbooru posts have tag_string_artist for the artist name(s).
+        # Use the full tag string as the source_creator_id to avoid
+        # splitting multi-word artist names (e.g., "John Smith").
         tag_artist = raw_metadata.get("tag_string_artist", "")
-        artist_name = tag_artist.split()[0] if tag_artist else "unknown"
+        artist_name = tag_artist if tag_artist else "unknown"
         return {
             "source": self.source_name,
             "source_creator_id": artist_name,
