@@ -50,7 +50,7 @@ async def test_database(test_database_url, test_db_base_url):
 
     try:
         conn = await asyncpg.connect(test_db_base_url, timeout=3)
-    except Exception as exc:
+    except (OSError, asyncpg.PostgresConnectionError) as exc:
         pytest.skip(f"PostgreSQL not available; skipping integration tests ({exc})")
     try:
         await conn.execute(f"DROP DATABASE IF EXISTS {db_name}")
