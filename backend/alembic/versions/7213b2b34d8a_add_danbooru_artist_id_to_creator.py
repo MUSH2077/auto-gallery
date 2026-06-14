@@ -19,8 +19,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column('creators', sa.Column('danbooru_artist_id', sa.Integer(), nullable=True))
+    op.execute(
+        "ALTER TABLE creators ADD COLUMN IF NOT EXISTS danbooru_artist_id INTEGER"
+    )
 
 
 def downgrade() -> None:
-    op.drop_column('creators', 'danbooru_artist_id')
+    op.execute("ALTER TABLE creators DROP COLUMN IF EXISTS danbooru_artist_id")

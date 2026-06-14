@@ -19,10 +19,16 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column('creators', sa.Column('is_favorite', sa.Boolean(), nullable=False, server_default=sa.text('false')))
-    op.add_column('works', sa.Column('is_favorite', sa.Boolean(), nullable=False, server_default=sa.text('false')))
+    op.execute(
+        "ALTER TABLE creators ADD COLUMN IF NOT EXISTS is_favorite "
+        "BOOLEAN NOT NULL DEFAULT false"
+    )
+    op.execute(
+        "ALTER TABLE works ADD COLUMN IF NOT EXISTS is_favorite "
+        "BOOLEAN NOT NULL DEFAULT false"
+    )
 
 
 def downgrade() -> None:
-    op.drop_column('works', 'is_favorite')
-    op.drop_column('creators', 'is_favorite')
+    op.execute("ALTER TABLE works DROP COLUMN IF EXISTS is_favorite")
+    op.execute("ALTER TABLE creators DROP COLUMN IF EXISTS is_favorite")

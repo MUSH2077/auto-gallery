@@ -24,8 +24,8 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
     try {
-      await login(username, password);
-      router.replace("/admin");
+      const authUser = await login(username, password);
+      router.replace(authUser.must_change_password ? "/admin/settings/profile" : "/admin");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : t("auth.invalid_credentials"));
     } finally {

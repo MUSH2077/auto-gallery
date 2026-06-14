@@ -17,30 +17,26 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_index(
-        "ix_curation_changes_subject_commit",
-        "curation_changes",
-        ["subject_type", "subject_id", "commit_id"],
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_curation_changes_subject_commit "
+        "ON curation_changes (subject_type, subject_id, commit_id)"
     )
-    op.create_index(
-        "ix_curation_changes_commit_created",
-        "curation_changes",
-        ["commit_id", "created_at"],
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_curation_changes_commit_created "
+        "ON curation_changes (commit_id, created_at)"
     )
-    op.create_index(
-        "ix_curation_commits_status_occurred",
-        "curation_commits",
-        ["status", "occurred_at"],
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_curation_commits_status_occurred "
+        "ON curation_commits (status, occurred_at)"
     )
-    op.create_index(
-        "ix_curation_commits_trigger_occurred",
-        "curation_commits",
-        ["trigger", "occurred_at"],
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_curation_commits_trigger_occurred "
+        "ON curation_commits (trigger, occurred_at)"
     )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_curation_commits_trigger_occurred", table_name="curation_commits")
-    op.drop_index("ix_curation_commits_status_occurred", table_name="curation_commits")
-    op.drop_index("ix_curation_changes_commit_created", table_name="curation_changes")
-    op.drop_index("ix_curation_changes_subject_commit", table_name="curation_changes")
+    op.execute("DROP INDEX IF EXISTS ix_curation_commits_trigger_occurred")
+    op.execute("DROP INDEX IF EXISTS ix_curation_commits_status_occurred")
+    op.execute("DROP INDEX IF EXISTS ix_curation_changes_commit_created")
+    op.execute("DROP INDEX IF EXISTS ix_curation_changes_subject_commit")

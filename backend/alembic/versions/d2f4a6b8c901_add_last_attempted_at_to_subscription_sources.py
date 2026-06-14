@@ -16,11 +16,13 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "subscription_sources",
-        sa.Column("last_attempted_at", sa.DateTime(timezone=True), nullable=True),
+    op.execute(
+        "ALTER TABLE subscription_sources ADD COLUMN IF NOT EXISTS "
+        "last_attempted_at TIMESTAMPTZ"
     )
 
 
 def downgrade() -> None:
-    op.drop_column("subscription_sources", "last_attempted_at")
+    op.execute(
+        "ALTER TABLE subscription_sources DROP COLUMN IF EXISTS last_attempted_at"
+    )
