@@ -81,8 +81,13 @@ RequireAdmin = Depends(get_admin_key)
 # ── Admin user bootstrap ──────────────────────────────────────────────────────
 
 async def ensure_admin_user() -> None:
-    """Create bootstrap admin user if no users exist in the database."""
-    from sqlalchemy import select
+    """Create bootstrap admin user if no users exist.
+
+    If an admin already exists but still has must_change_password=False
+    (created before the password-rotation feature was deployed), set
+    it to True so the admin is prompted to change the default password.
+    """
+    from sqlalchemy import select, update
     from app.database import async_session
     from app.models.user import User
 
@@ -97,7 +102,6 @@ async def ensure_admin_user() -> None:
                 pw_file = os.path.join(pw_dir, "bootstrap_admin_password")
                 with open(pw_file, "w", encoding="utf-8") as f:
                     f.write(bootstrap_password)
-                # Use stdlib logger to avoid importing app.main logger here.
                 import logging
                 logging.getLogger(__name__).warning(
                     "ADMIN_PASSWORD is unset/weak; generated bootstrap admin password at %s",
@@ -111,4 +115,12 @@ async def ensure_admin_user() -> None:
                 must_change_password=True,
             )
             session.add(admin)
+            await session.commit()
+        else:
+            await session.execute(
+                update(User)
+                .where(User.username == "admin")
+                .where(User.must_change_password == False)  # noqa: E712
+                .values(must_change_password=True)
+            )
             await session.commit()

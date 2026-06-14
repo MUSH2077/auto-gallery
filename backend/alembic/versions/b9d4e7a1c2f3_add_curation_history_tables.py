@@ -18,8 +18,16 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _table_exists(name):
+    """Return True if table already exists."""
+    conn = op.get_bind()
+    insp = sa.inspect(conn)
+    return name in insp.get_table_names()
+
+
 def upgrade() -> None:
-    op.create_table(
+    if not _table_exists("curation_commits"):
+        op.create_table(
         "curation_commits",
         sa.Column("parent_commit_id", sa.Uuid(), nullable=True),
         sa.Column("actor_type", sa.String(length=50), nullable=False),
@@ -42,7 +50,8 @@ def upgrade() -> None:
     op.create_index("ix_curation_commits_trigger", "curation_commits", ["trigger"])
     op.create_index("ix_curation_commits_status", "curation_commits", ["status"])
 
-    op.create_table(
+    if not _table_exists("curation_changes"):
+        op.create_table(
         "curation_changes",
         sa.Column("commit_id", sa.Uuid(), nullable=False),
         sa.Column("subject_type", sa.String(length=50), nullable=False),
@@ -62,7 +71,8 @@ def upgrade() -> None:
     op.create_index("ix_curation_changes_subject", "curation_changes", ["subject_type", "subject_id"])
     op.create_index("ix_curation_changes_action", "curation_changes", ["action"])
 
-    op.create_table(
+    if not _table_exists("work_curation_states"):
+        op.create_table(
         "work_curation_states",
         sa.Column("work_id", sa.Uuid(), nullable=False),
         sa.Column("visibility", sa.String(length=50), nullable=False),
@@ -84,7 +94,8 @@ def upgrade() -> None:
     )
     op.create_index("ix_work_curation_states_visibility", "work_curation_states", ["visibility"])
 
-    op.create_table(
+    if not _table_exists("creator_curation_states"):
+        op.create_table(
         "creator_curation_states",
         sa.Column("creator_id", sa.Uuid(), nullable=False),
         sa.Column("visibility", sa.String(length=50), nullable=False),
@@ -103,7 +114,8 @@ def upgrade() -> None:
     )
     op.create_index("ix_creator_curation_states_visibility", "creator_curation_states", ["visibility"])
 
-    op.create_table(
+    if not _table_exists("asset_storage_states"):
+        op.create_table(
         "asset_storage_states",
         sa.Column("asset_id", sa.Uuid(), nullable=False),
         sa.Column("storage_state", sa.String(length=50), nullable=False),
@@ -123,17 +135,17 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_asset_storage_states_storage_state", table_name="asset_storage_states")
-    op.drop_table("asset_storage_states")
-    op.drop_index("ix_creator_curation_states_visibility", table_name="creator_curation_states")
-    op.drop_table("creator_curation_states")
-    op.drop_index("ix_work_curation_states_visibility", table_name="work_curation_states")
-    op.drop_table("work_curation_states")
-    op.drop_index("ix_curation_changes_action", table_name="curation_changes")
-    op.drop_index("ix_curation_changes_subject", table_name="curation_changes")
-    op.drop_index("ix_curation_changes_commit_id", table_name="curation_changes")
-    op.drop_table("curation_changes")
-    op.drop_index("ix_curation_commits_status", table_name="curation_commits")
-    op.drop_index("ix_curation_commits_trigger", table_name="curation_commits")
-    op.drop_index("ix_curation_commits_occurred_at", table_name="curation_commits")
-    op.drop_table("curation_commits")
+    op.execute("DROP INDEX IF EXISTS ix_asset_storage_states_storage_state")
+    op.execute("DROP TABLE IF EXISTS asset_storage_states")
+    op.execute("DROP INDEX IF EXISTS ix_creator_curation_states_visibility")
+    op.execute("DROP TABLE IF EXISTS creator_curation_states")
+    op.execute("DROP INDEX IF EXISTS ix_work_curation_states_visibility")
+    op.execute("DROP TABLE IF EXISTS work_curation_states")
+    op.execute("DROP INDEX IF EXISTS ix_curation_changes_action")
+    op.execute("DROP INDEX IF EXISTS ix_curation_changes_subject")
+    op.execute("DROP INDEX IF EXISTS ix_curation_changes_commit_id")
+    op.execute("DROP TABLE IF EXISTS curation_changes")
+    op.execute("DROP INDEX IF EXISTS ix_curation_commits_status")
+    op.execute("DROP INDEX IF EXISTS ix_curation_commits_trigger")
+    op.execute("DROP INDEX IF EXISTS ix_curation_commits_occurred_at")
+    op.execute("DROP TABLE IF EXISTS curation_commits")

@@ -19,8 +19,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column('subscriptions', sa.Column('sync_interval_hours', sa.Integer(), nullable=False, server_default=sa.text('6')))
+    op.execute(
+        "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS sync_interval_hours "
+        "INTEGER NOT NULL DEFAULT 6"
+    )
 
 
 def downgrade() -> None:
-    op.drop_column('subscriptions', 'sync_interval_hours')
+    op.execute("ALTER TABLE subscriptions DROP COLUMN IF EXISTS sync_interval_hours")

@@ -18,10 +18,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column("curation_commits", sa.Column("dedupe_key", sa.String(length=500), nullable=True))
-    op.create_index("ix_curation_commits_dedupe_key", "curation_commits", ["dedupe_key"], unique=True)
+    op.execute("ALTER TABLE curation_commits ADD COLUMN IF NOT EXISTS dedupe_key VARCHAR(500)")
+    op.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_curation_commits_dedupe_key ON curation_commits (dedupe_key)")
 
 
 def downgrade() -> None:
-    op.drop_index("ix_curation_commits_dedupe_key", table_name="curation_commits")
-    op.drop_column("curation_commits", "dedupe_key")
+    op.execute("DROP INDEX IF EXISTS ix_curation_commits_dedupe_key")
+    op.execute("ALTER TABLE curation_commits DROP COLUMN IF EXISTS dedupe_key")

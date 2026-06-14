@@ -18,13 +18,16 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        'system_settings',
-        sa.Column('key', sa.String(100), primary_key=True),
-        sa.Column('value', postgresql.JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
-        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now()),
-    )
+    conn = op.get_bind()
+    insp = sa.inspect(conn)
+    if "system_settings" not in insp.get_table_names():
+        op.create_table(
+            "system_settings",
+            sa.Column("key", sa.String(100), primary_key=True),
+            sa.Column("value", postgresql.JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
+            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now()),
+        )
 
 
 def downgrade() -> None:
-    op.drop_table('system_settings')
+    op.execute("DROP TABLE IF EXISTS system_settings")

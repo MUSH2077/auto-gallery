@@ -19,20 +19,23 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        'users',
-        sa.Column('id', sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column('username', sa.String(64), nullable=False),
-        sa.Column('password_hash', sa.String(255), nullable=False),
-        sa.Column('display_name', sa.String(128), nullable=True),
-        sa.Column('is_active', sa.Boolean(), nullable=False, server_default='true'),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.UniqueConstraint('username', name='uq_users_username'),
-    )
-    op.create_index('ix_users_username', 'users', ['username'])
+    conn = op.get_bind()
+    insp = sa.inspect(conn)
+    if "users" not in insp.get_table_names():
+        op.create_table(
+            "users",
+            sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
+            sa.Column("username", sa.String(64), nullable=False),
+            sa.Column("password_hash", sa.String(255), nullable=False),
+            sa.Column("display_name", sa.String(128), nullable=True),
+            sa.Column("is_active", sa.Boolean(), nullable=False, server_default="true"),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.UniqueConstraint("username", name="uq_users_username"),
+        )
+        op.create_index("ix_users_username", "users", ["username"])
 
 
 def downgrade() -> None:
-    op.drop_index('ix_users_username', table_name='users')
-    op.drop_table('users')
+    op.execute("DROP INDEX IF EXISTS ix_users_username")
+    op.execute("DROP TABLE IF EXISTS users")

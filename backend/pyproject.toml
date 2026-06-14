@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that require a real PostgreSQL database (run inside Docker)",
+]
+asyncio_mode = "auto"

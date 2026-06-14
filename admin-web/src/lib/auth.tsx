@@ -4,6 +4,16 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 
 const TOKEN_KEY = "ag_token";
 
+function setTokenCookie(token: string) {
+  if (typeof document === "undefined") return;
+  document.cookie = `${TOKEN_KEY}=${token}; path=/; SameSite=Lax; max-age=${7 * 24 * 60 * 60}`;
+}
+
+function clearTokenCookie() {
+  if (typeof document === "undefined") return;
+  document.cookie = `${TOKEN_KEY}=; path=/; max-age=0`;
+}
+
 export interface AuthUser {
   id: number;
   username: string;
@@ -16,7 +26,7 @@ interface AuthContextValue {
   token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<AuthUser>;
   updateAccessToken: (token: string) => Promise<void>;
   logout: () => void;
 }
@@ -49,11 +59,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       })
       .catch(() => {
         localStorage.removeItem(TOKEN_KEY);
+        clearTokenCookie();
       })
       .finally(() => setIsLoading(false));
   }, []);
 
-  const login = useCallback(async (username: string, password: string) => {
+  const login = useCallback(async (username: string, password: string): Promise<AuthUser> => {
     const res = await fetch("/api/v1/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -73,8 +84,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const me: AuthUser = await meRes.json();
 
     localStorage.setItem(TOKEN_KEY, accessToken);
+    setTokenCookie(accessToken);
     setToken(accessToken);
     setUser(me);
+    return me;
   }, []);
 
   const updateAccessToken = useCallback(async (nextToken: string) => {
@@ -86,12 +99,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     const me: AuthUser = await meRes.json();
     localStorage.setItem(TOKEN_KEY, nextToken);
+    setTokenCookie(nextToken);
     setToken(nextToken);
     setUser(me);
   }, []);
 
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
+    clearTokenCookie();
     setToken(null);
     setUser(null);
   }, []);

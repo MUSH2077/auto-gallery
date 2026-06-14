@@ -17,8 +17,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column('works', sa.Column('is_ai_generated', sa.Boolean(), nullable=False, server_default=sa.text('false')))
+    op.execute(
+        "ALTER TABLE works ADD COLUMN IF NOT EXISTS is_ai_generated "
+        "BOOLEAN NOT NULL DEFAULT false"
+    )
 
 
 def downgrade() -> None:
-    op.drop_column('works', 'is_ai_generated')
+    op.execute("ALTER TABLE works DROP COLUMN IF EXISTS is_ai_generated")
