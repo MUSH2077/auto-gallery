@@ -392,6 +392,71 @@ async def import_all_danbooru(data: dict, db: AsyncSession = Depends(get_db)):
     }
 
 
+async def _precheck_pixiv_ids(pixiv_ids: list[str]) -> dict:
+    """Deduplicate Pixiv IDs and check which already exist in the local DB.
+
+    Returns metadata dict — does NOT enqueue anything.
+    """
+    total = len(pixiv_ids)
+    seen: set[str] = set()
+    unique: list[str] = []
+    duplicate_ids: list[str] = []
+    for pid in pixiv_ids:
+        if pid not in seen:
+            seen.add(pid)
+            unique.append(pid)
+        else:
+            duplicate_ids.append(pid)
+
+    from app.database import async_session
+    from app.models.source_creator import SourceCreator
+    from app.models.creator import Creator
+    from sqlalchemy import select as sa_select
+    async with async_session() as db:
+        result = await db.execute(
+            sa_select(SourceCreator.source_creator_id, Creator.name, Creator.id)
+            .join(Creator, Creator.id == SourceCreator.creator_id)
+            .where(
+                SourceCreator.source == "pixiv",
+                SourceCreator.source_creator_id.in_(unique),
+            )
+        )
+        existing_map = {row[0]: {"name": row[1], "creator_id": str(row[2])} for row in result}
+        existing_ids = [pid for pid in unique if pid in existing_map]
+
+    return {
+        "total": total,
+        "unique_count": len(unique),
+        "duplicates_removed": len(duplicate_ids),
+        "duplicate_ids": duplicate_ids,
+        "already_exists": [
+            {"pixiv_id": pid, "creator_name": existing_map[pid]["name"],
+             "creator_id": existing_map[pid]["creator_id"]}
+            for pid in existing_ids
+        ],
+        "new_count": len(unique) - len(existing_ids),
+        "unique_ids": unique,
+        "existing_ids": existing_ids,
+    }
+
+
+@router.post("/danbooru/artist/batch-import/preview")
+async def preview_batch_import(data: dict):
+    """Pre-check Pixiv IDs without enqueuing.
+
+    Accepts: {pixiv_ids: ["1980643", ...]}
+    Returns dedup + local-existence info. No Danbooru API calls.
+    """
+    pixiv_ids = data.get("pixiv_ids", [])
+    if not pixiv_ids or not isinstance(pixiv_ids, list):
+        raise HTTPException(status_code=400, detail="pixiv_ids list is required")
+    pixiv_ids = [str(pid).strip() for pid in pixiv_ids if str(pid).strip()]
+    if not pixiv_ids:
+        raise HTTPException(status_code=400, detail="No valid pixiv_ids provided")
+    precheck = await _precheck_pixiv_ids(pixiv_ids)
+    return {k: v for k, v in precheck.items() if k not in ("unique_ids", "existing_ids")}
+
+
 @router.post("/danbooru/artist/batch-import")
 async def batch_import_danbooru_artists(data: dict):
     """Enqueue a batch import job for Pixiv user IDs via Danbooru.
@@ -409,33 +474,10 @@ async def batch_import_danbooru_artists(data: dict):
     if not pixiv_ids:
         raise HTTPException(status_code=400, detail="No valid pixiv_ids provided")
 
-    # Deduplicate while preserving order
-    seen: set[str] = set()
-    unique: list[str] = []
-    for pid in pixiv_ids:
-        if pid not in seen:
-            seen.add(pid)
-            unique.append(pid)
-    deduped = len(pixiv_ids) - len(unique)
-    pixiv_ids = unique
-
-    # Pre-check: which IDs already have creators in the database?
-    existing_ids: list[str] = []
-    from app.database import async_session
-    from app.models.source_creator import SourceCreator
-    from app.models.creator import Creator
-    from sqlalchemy import select as sa_select
-    async with async_session() as precheck_db:
-        result = await precheck_db.execute(
-            sa_select(SourceCreator.source_creator_id, Creator.name, Creator.id)
-            .join(Creator, Creator.id == SourceCreator.creator_id)
-            .where(
-                SourceCreator.source == "pixiv",
-                SourceCreator.source_creator_id.in_(pixiv_ids),
-            )
-        )
-        existing_map = {row[0]: {"name": row[1], "creator_id": str(row[2])} for row in result}
-        existing_ids = [pid for pid in pixiv_ids if pid in existing_map]
+    precheck = await _precheck_pixiv_ids(pixiv_ids)
+    pixiv_ids = precheck["unique_ids"]
+    deduped = precheck["duplicates_removed"]
+    existing_ids = precheck["existing_ids"]
 
     r = redis_lib.from_url(settings.redis_url)
     q = Queue(name="imports", connection=r)
@@ -516,6 +558,38 @@ async def get_batch_import_status(job_id: str | None = None):
         "progress": progress,
         "result": result,
         "job_status": job_status,
+    }
+
+
+@router.post("/danbooru/url-batch-import/preview")
+async def preview_url_batch_import(data: dict):
+    """Pre-check URLs without enqueuing.
+
+    Accepts: {urls: ["https://pixiv.net/users/123", ...]}
+    Returns dedup info only. No Danbooru API calls.
+    """
+    urls = data.get("urls", [])
+    if not urls or not isinstance(urls, list):
+        raise HTTPException(status_code=400, detail="urls list is required")
+    urls = [str(u).strip() for u in urls if str(u).strip()]
+    if not urls:
+        raise HTTPException(status_code=400, detail="No valid URLs provided")
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    duplicate_urls: list[str] = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            unique.append(u)
+        else:
+            duplicate_urls.append(u)
+
+    return {
+        "total": len(urls),
+        "unique_count": len(unique),
+        "duplicates_removed": len(duplicate_urls),
+        "duplicate_urls": duplicate_urls,
     }
 
 

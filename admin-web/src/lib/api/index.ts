@@ -375,6 +375,15 @@ export const api = {
   importAllDanbooru: (params: { creator_id?: string; creator_name?: string; url?: string; pixiv_id?: string; name?: string }) =>
     request<{ status: string; found?: boolean; creator_id?: string; artist_name?: string; links_imported: number; sources_created: number; subscription_id?: string }>("/api/v1/reference/danbooru/artist/import-all", { method: "POST", body: JSON.stringify(params) }),
 
+  previewBatchImport: (pixivIds: string[]) =>
+    request<{
+      total: number; unique_count: number; duplicates_removed: number;
+      duplicate_ids: string[]; new_count: number;
+      already_exists: { pixiv_id: string; creator_name: string; creator_id: string }[];
+    }>(
+      "/api/v1/reference/danbooru/artist/batch-import/preview",
+      { method: "POST", body: JSON.stringify({ pixiv_ids: pixivIds }) }),
+
   batchImportDanbooru: (pixivIds: string[]) =>
     request<{
       status: string; message: string; job_id: string; total: number;
@@ -383,6 +392,14 @@ export const api = {
     }>(
       "/api/v1/reference/danbooru/artist/batch-import",
       { method: "POST", body: JSON.stringify({ pixiv_ids: pixivIds }) }),
+
+  previewUrlBatchImport: (urls: string[]) =>
+    request<{
+      total: number; unique_count: number; duplicates_removed: number;
+      duplicate_urls: string[];
+    }>(
+      "/api/v1/reference/danbooru/url-batch-import/preview",
+      { method: "POST", body: JSON.stringify({ urls }) }),
 
   urlBatchImportDanbooru: (urls: string[]) =>
     request<{

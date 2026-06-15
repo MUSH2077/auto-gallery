@@ -1,11 +1,23 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useT } from "@/lib/i18n";
 import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => { navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}
+      className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-slate-600 hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors inline-flex items-center gap-1"
+    >
+      {copied ? "✓ Copied" : "📋 Copy"}
+    </button>
+  );
+}
 
 interface ArtistUrls { url: string; normalized_url: string; is_active: boolean }
 interface ArtistResult {
@@ -343,6 +355,24 @@ export default function DanbooruReferencePage() {
     },
   });
 
+  // ── Preview mutations (auto‑triggered on textarea blur) ──────────
+  const [pixivPreview, setPixivPreview] = useState<{
+    total: number; unique_count: number; duplicates_removed: number;
+    duplicate_ids: string[]; new_count: number;
+    already_exists: { pixiv_id: string; creator_name: string; creator_id: string }[];
+  } | null>(null);
+  const pixivPreviewMut = useMutation({
+    mutationFn: (ids: string[]) => api.previewBatchImport(ids),
+    onSuccess: setPixivPreview,
+  });
+  const pixivDebounce = useRef<ReturnType<typeof setTimeout>>();
+  const handlePixivBlur = useCallback(() => {
+    const ids = batchInput.split(/[\n,]+/).map((s) => s.trim()).filter((s) => /^\d+$/.test(s));
+    if (ids.length === 0) { setPixivPreview(null); return; }
+    clearTimeout(pixivDebounce.current);
+    pixivDebounce.current = setTimeout(() => pixivPreviewMut.mutate(ids), 500);
+  }, [batchInput, pixivPreviewMut]);
+
   const [urlBatchInput, setUrlBatchInput] = useState("");
   const [showUrlBatch, setShowUrlBatch] = useState(false);
   const urlBatchImport = useMutation({
@@ -351,6 +381,22 @@ export default function DanbooruReferencePage() {
       notify.startBatchJob(data.job_id, "url", data.total);
     },
   });
+
+  const [urlPreview, setUrlPreview] = useState<{
+    total: number; unique_count: number; duplicates_removed: number;
+    duplicate_urls: string[];
+  } | null>(null);
+  const urlPreviewMut = useMutation({
+    mutationFn: (urls: string[]) => api.previewUrlBatchImport(urls),
+    onSuccess: setUrlPreview,
+  });
+  const urlDebounce = useRef<ReturnType<typeof setTimeout>>();
+  const handleUrlBlur = useCallback(() => {
+    const urls = urlBatchInput.split(/\n/).map((s) => s.trim()).filter((s) => s.startsWith("http"));
+    if (urls.length === 0) { setUrlPreview(null); return; }
+    clearTimeout(urlDebounce.current);
+    urlDebounce.current = setTimeout(() => urlPreviewMut.mutate(urls), 500);
+  }, [urlBatchInput, urlPreviewMut]);
 
   const handleUrlBatchSubmit = () => {
     const urls = urlBatchInput
@@ -420,11 +466,27 @@ export default function DanbooruReferencePage() {
             </p>
             <textarea
               value={urlBatchInput}
-              onChange={(e) => setUrlBatchInput(e.target.value)}
+              onChange={(e) => { setUrlBatchInput(e.target.value); setUrlPreview(null); }}
+              onBlur={handleUrlBlur}
               placeholder={"https://www.pixiv.net/users/123456\nhttps://twitter.com/artist_name\nhttps://www.iwara.tv/profile/..."}
               rows={5}
               className="textarea w-full resize-y font-mono"
             />
+
+            {urlPreview && (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-150 dark:border-indigo-900 rounded p-2">
+                <span className="text-gray-600 dark:text-gray-400">{urlPreview.total} input</span>
+                <span className="text-gray-400">→</span>
+                <span className="font-medium">{urlPreview.unique_count} unique</span>
+                {urlPreview.duplicates_removed > 0 && (
+                  <span className="text-yellow-600">({urlPreview.duplicates_removed} dupe)</span>
+                )}
+                <span className="ml-auto font-semibold text-indigo-700 dark:text-indigo-300">
+                  {urlPreview.unique_count} ready to import
+                </span>
+              </div>
+            )}
+
             <div className="flex items-center gap-3">
               <button
                 onClick={handleUrlBatchSubmit}
@@ -471,11 +533,47 @@ export default function DanbooruReferencePage() {
             </p>
             <textarea
               value={batchInput}
-              onChange={(e) => setBatchInput(e.target.value)}
+              onChange={(e) => { setBatchInput(e.target.value); setPixivPreview(null); }}
+              onBlur={handlePixivBlur}
               placeholder={t("danbooru.batch_placeholder")}
               rows={5}
               className="textarea w-full resize-y font-mono"
             />
+
+            {/* Preview summary */}
+            {pixivPreview && (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs bg-blue-50 dark:bg-blue-900/20 border border-blue-150 dark:border-blue-900 rounded p-2">
+                <span className="text-gray-600 dark:text-gray-400">{pixivPreview.total} input</span>
+                <span className="text-gray-400">→</span>
+                <span className="font-medium">{pixivPreview.unique_count} unique</span>
+                {pixivPreview.duplicates_removed > 0 && (
+                  <span className="text-yellow-600">({pixivPreview.duplicates_removed} dupe)</span>
+                )}
+                {pixivPreview.already_exists.length > 0 && (
+                  <span className="text-amber-600">({pixivPreview.already_exists.length} already exist)</span>
+                )}
+                <span className="ml-auto font-semibold text-blue-700 dark:text-blue-300">
+                  {pixivPreview.new_count} ready to import
+                </span>
+              </div>
+            )}
+
+            {/* Already-exists detail */}
+            {pixivPreview?.already_exists && pixivPreview.already_exists.length > 0 && (
+              <details className="text-xs">
+                <summary className="cursor-pointer text-amber-600 hover:text-amber-700">
+                  {pixivPreview.already_exists.length} ID(s) already have local creators
+                </summary>
+                <div className="mt-1 space-y-0.5 pl-4 max-h-24 overflow-y-auto">
+                  {pixivPreview.already_exists.map((e) => (
+                    <div key={e.pixiv_id} className="text-amber-700 dark:text-amber-400">
+                      <span className="font-mono">Pixiv {e.pixiv_id}</span> → {e.creator_name}
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+
             <div className="flex items-center gap-3">
               <button
                 onClick={handleBatchSubmit}
@@ -487,20 +585,6 @@ export default function DanbooruReferencePage() {
               <span className="text-xs text-gray-400">
                 {batchInput.trim() ? `${batchInput.split(/[\n,]+/).filter((s: string) => /^\d+$/.test(s.trim())).length} ${t("danbooru.valid_ids")}` : ""}
               </span>
-              {enqueueBatch.data?.duplicates_removed ? (
-                <span className="text-xs text-yellow-600">({enqueueBatch.data.duplicates_removed} duplicates removed)</span>
-              ) : null}
-              {enqueueBatch.data?.already_exists && enqueueBatch.data.already_exists.length > 0 && (
-                <div className="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded text-xs">
-                  <span className="text-yellow-700 dark:text-yellow-400 font-medium">{enqueueBatch.data.already_exists.length} ID(s) already have creators: </span>
-                  {enqueueBatch.data.already_exists.map((e, i) => (
-                    <span key={e.pixiv_id} className="text-yellow-600">
-                      {i > 0 && ", "}
-                      <span className="font-mono">Pixiv {e.pixiv_id}</span> → {e.creator_name}
-                    </span>
-                  ))}
-                </div>
-              )}
               {displayBatchResult && (
                 <button onClick={() => { notify.clearBatchJob(); }} className="text-xs text-blue-600 hover:underline">{t("common.close")}</button>
               )}
@@ -524,83 +608,82 @@ export default function DanbooruReferencePage() {
 
             {/* Results */}
             {displayBatchResult && (
-              <div className="mt-4 space-y-4">
-                {/* Summary */}
-                <div className="grid grid-cols-4 gap-3">
-                  <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded p-3 text-center">
-                    <div className="text-xl font-bold text-green-700 dark:text-green-400">{displayBatchResult.imported_count}</div>
-                    <div className="text-xs text-green-600">{t("danbooru.batch_result_imported")}</div>
-                  </div>
-                  <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded p-3 text-center">
-                    <div className="text-xl font-bold text-yellow-700 dark:text-yellow-400">{displayBatchResult.low_confidence_count}</div>
-                    <div className="text-xs text-yellow-600">{t("danbooru.batch_result_low_confidence")}</div>
-                  </div>
-                  <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded p-3 text-center">
-                    <div className="text-xl font-bold text-red-700 dark:text-red-400">{displayBatchResult.not_found_count}</div>
-                    <div className="text-xs text-red-600">{t("danbooru.batch_result_not_found")}</div>
-                  </div>
-                  <div className="bg-gray-50 dark:bg-slate-800/50 border border-gray-200 dark:border-slate-700 rounded p-3 text-center">
-                    <div className="text-xl font-bold text-gray-600 dark:text-gray-400">{displayBatchResult.error_count}</div>
-                    <div className="text-xs text-gray-500">{t("danbooru.batch_result_errors")}</div>
-                  </div>
+              <div className="mt-4 space-y-3">
+                {/* Summary bar */}
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs bg-gray-50 dark:bg-slate-800/60 border rounded p-2">
+                  <span className="font-medium">{displayBatchResult.total} total</span>
+                  <span className="text-gray-400">|</span>
+                  {displayBatchResult.imported_count > 0 && (
+                    <span className="text-green-600">🟢 {displayBatchResult.imported_count} imported</span>
+                  )}
+                  {displayBatchResult.low_confidence_count > 0 && (
+                    <span className="text-yellow-600">🟡 {displayBatchResult.low_confidence_count} low confidence</span>
+                  )}
+                  {displayBatchResult.not_found_count > 0 && (
+                    <span className="text-red-600">🔴 {displayBatchResult.not_found_count} not found</span>
+                  )}
+                  {displayBatchResult.error_count > 0 && (
+                    <span className="text-red-700">💥 {displayBatchResult.error_count} errors</span>
+                  )}
                 </div>
 
-                {/* Imported list */}
-                {displayBatchResult.imported.length > 0 && (
-                  <div>
-                    <h4 className="text-sm font-medium text-green-700 dark:text-green-400 mb-2">{t("danbooru.batch_result_imported")} ({displayBatchResult.imported.length})</h4>
-                    <div className="space-y-1 max-h-48 overflow-y-auto">
-                      {displayBatchResult.imported.map((r: any, i: number) => (
-                        <div key={i} className="bg-green-50 dark:bg-green-900/20 border border-green-100 dark:border-green-900 rounded p-2 text-xs flex items-center justify-between">
-                          <div>
-                            <span className="font-mono text-green-800 dark:text-green-300">Pixiv {r.pixiv_id}</span>
-                            <span className="text-green-600 mx-2">→</span>
-                            <span className="font-medium">{r.artist_name}</span>
-                            <span className="text-gray-500 dark:text-gray-400 ml-2">Danbooru #{r.artist_id}</span>
-                          </div>
-                          <div className="text-green-600 shrink-0">
-                            {r.links_imported} links · {r.sources_created} sources
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                {/* Per‑result rows */}
+                {[...displayBatchResult.imported, ...displayBatchResult.low_confidence].map((r: any, i: number) => {
+                  const isLowConf = displayBatchResult.low_confidence.includes(r);
+                  return (
+                    <details key={i} className="bg-gray-50 dark:bg-slate-800/40 border rounded p-2 text-xs">
+                      <summary className="cursor-pointer flex items-center gap-2">
+                        <span>{isLowConf ? "🟡" : "🟢"}</span>
+                        <span className="font-mono">Pixiv {r.pixiv_id}</span>
+                        <span className="text-gray-400">→</span>
+                        <span className="font-medium">{r.artist_name}</span>
+                        <span className="text-gray-400">Danbooru #{r.artist_id}</span>
+                        {!isLowConf && (
+                          <span className="ml-auto text-green-600">{r.links_imported} links · {r.sources_created} sources</span>
+                        )}
+                      </summary>
+                      <div className="mt-1 pl-6 text-gray-500 space-y-0.5">
+                        {r.downloadable_urls && r.downloadable_urls.length > 0 && (
+                          <div>Sources: {r.downloadable_urls.join(", ")}</div>
+                        )}
+                        {isLowConf && r.message && <div className="text-yellow-600">{r.message}</div>}
+                      </div>
+                    </details>
+                  );
+                })}
 
-                {/* Low confidence list */}
-                {displayBatchResult.low_confidence.length > 0 && (
-                  <div>
-                    <h4 className="text-sm font-medium text-yellow-700 dark:text-yellow-400 mb-2">{t("danbooru.batch_result_low_confidence")} — Manual Review ({displayBatchResult.low_confidence.length})</h4>
-                    <p className="text-xs text-yellow-600 mb-2">Found Danbooru artist but no downloadable source URLs. Use individual search below to review and manually subscribe.</p>
-                    <div className="space-y-1 max-h-48 overflow-y-auto">
-                      {displayBatchResult.low_confidence.map((r: any, i: number) => (
-                        <div key={i} className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-100 dark:border-yellow-900 rounded p-2 text-xs flex items-center justify-between">
-                          <div>
-                            <span className="font-mono">Pixiv {r.pixiv_id}</span>
-                            <span className="mx-2">→</span>
-                            <span className="font-medium">{r.artist_name}</span>
-                            <span className="text-gray-500 dark:text-gray-400 ml-2">Danbooru #{r.artist_id}</span>
-                          </div>
-                          <div className="text-yellow-600 shrink-0">{r.url_count} URLs · {r.message}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Not found list */}
+                {/* Not found — list with copy */}
                 {displayBatchResult.not_found.length > 0 && (
-                  <div>
-                    <h4 className="text-sm font-medium text-red-700 dark:text-red-400 mb-2">{t("danbooru.batch_result_not_found")} ({displayBatchResult.not_found.length})</h4>
-                    <p className="text-xs text-red-600 mb-2">No matching Danbooru artist. May need manual creator creation and source linking.</p>
-                    <div className="flex flex-wrap gap-2">
+                  <details className="bg-red-50 dark:bg-red-900/15 border border-red-200 dark:border-red-800 rounded p-2 text-xs">
+                    <summary className="cursor-pointer font-medium text-red-700 dark:text-red-400 flex items-center gap-2">
+                      🔴 Not found ({displayBatchResult.not_found.length})
+                    </summary>
+                    <div className="mt-2 space-y-1 pl-4 max-h-36 overflow-y-auto font-mono text-red-600">
                       {displayBatchResult.not_found.map((r: any, i: number) => (
-                        <span key={i} className="bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900 rounded px-2 py-1 text-xs font-mono text-red-700 dark:text-red-400">
-                          Pixiv {r.pixiv_id}
-                        </span>
+                        <div key={i}>Pixiv {r.pixiv_id}{r.message ? ` — ${r.message}` : ""}</div>
                       ))}
                     </div>
-                  </div>
+                    <div className="mt-2">
+                      <CopyButton text={displayBatchResult.not_found.map((r: any) => r.pixiv_id).join("\n")} />
+                    </div>
+                  </details>
+                )}
+
+                {/* Errors — list with copy */}
+                {displayBatchResult.errors && displayBatchResult.errors.length > 0 && (
+                  <details className="bg-red-50 dark:bg-red-900/15 border border-red-200 dark:border-red-800 rounded p-2 text-xs">
+                    <summary className="cursor-pointer font-medium text-red-700 dark:text-red-400 flex items-center gap-2">
+                      💥 Errors ({displayBatchResult.errors.length})
+                    </summary>
+                    <div className="mt-2 space-y-1 pl-4 max-h-36 overflow-y-auto font-mono text-red-600">
+                      {displayBatchResult.errors.map((r: any, i: number) => (
+                        <div key={i}>Pixiv {r.pixiv_id}{r.error ? ` — ${r.error}` : ""}</div>
+                      ))}
+                    </div>
+                    <div className="mt-2">
+                      <CopyButton text={displayBatchResult.errors.map((r: any) => r.pixiv_id).join("\n")} />
+                    </div>
+                  </details>
                 )}
               </div>
             )}
