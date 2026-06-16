@@ -11,7 +11,9 @@ from app.auth import (
     create_access_token,
     decode_access_token,
     decode_access_token_payload,
+    ensure_admin_user,
     get_admin_key,
+    verify_password,
 )
 from app.config import settings
 
@@ -102,3 +104,50 @@ async def test_admin_dependency_accepts_normal_token() -> None:
     username = await get_admin_key(_make_request("/api/v1/works"), credentials)
 
     assert username == "admin"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_admin_uses_configured_default_password(monkeypatch) -> None:
+    import app.database
+
+    class _Scalars:
+        def first(self):
+            return None
+
+    class _Result:
+        def scalars(self):
+            return _Scalars()
+
+    class _Session:
+        def __init__(self):
+            self.added = []
+            self.commits = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def execute(self, statement):
+            return _Result()
+
+        def add(self, obj):
+            self.added.append(obj)
+
+        async def commit(self):
+            self.commits += 1
+
+    session = _Session()
+
+    monkeypatch.setattr(settings, "admin_password", "change-me-admin")
+    monkeypatch.setattr(app.database, "async_session", lambda: session)
+
+    await ensure_admin_user()
+
+    assert len(session.added) == 1
+    admin = session.added[0]
+    assert admin.username == "admin"
+    assert verify_password("change-me-admin", admin.password_hash)
+    assert admin.must_change_password is True
+    assert session.commits == 1
