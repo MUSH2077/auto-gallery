@@ -1,7 +1,5 @@
 import bcrypt as _bcrypt
 from datetime import datetime, timedelta, timezone
-import os
-import secrets
 from typing import Any, Optional
 
 from fastapi import Depends, HTTPException, Request
@@ -95,18 +93,8 @@ async def ensure_admin_user() -> None:
         result = await session.execute(select(User).limit(1))
         if result.scalars().first() is None:
             bootstrap_password = (settings.admin_password or "").strip()
-            if not bootstrap_password or bootstrap_password == "changeme":
-                bootstrap_password = secrets.token_urlsafe(18)
-                pw_dir = settings.app_config_root
-                os.makedirs(pw_dir, exist_ok=True)
-                pw_file = os.path.join(pw_dir, "bootstrap_admin_password")
-                with open(pw_file, "w", encoding="utf-8") as f:
-                    f.write(bootstrap_password)
-                import logging
-                logging.getLogger(__name__).warning(
-                    "ADMIN_PASSWORD is unset/weak; generated bootstrap admin password at %s",
-                    pw_file,
-                )
+            if not bootstrap_password:
+                raise RuntimeError("ADMIN_PASSWORD must be set before bootstrapping the admin user.")
             admin = User(
                 username="admin",
                 password_hash=hash_password(bootstrap_password),

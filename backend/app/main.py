@@ -59,9 +59,9 @@ logger = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # SECRET_KEY and ADMIN_PASSWORD are now validated at config load time
-    # (see app/config.py Settings.__init__) so JWT signing is secure from
-    # the very first request.
+    # Critical service secrets are validated at config load time; the admin
+    # bootstrap password may use the documented first-login default and is
+    # always forced through password rotation.
     logger.info("backend starting", log_level=settings.log_level)
     from app.auth import ensure_admin_user
     try:

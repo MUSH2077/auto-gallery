@@ -36,13 +36,17 @@ cp .env.example .env
 Edit `.env` and set:
 
 ```bash
-# Generate strong passwords for each service
+# Generate strong passwords for each service; do not keep change-me-* placeholders
 POSTGRES_PASSWORD=<generate>
 REDIS_PASSWORD=<generate>
 MEILI_MASTER_KEY=<generate>
 SECRET_KEY=<generate>
-ADMIN_PASSWORD=<generate>
+
+# You may keep change-me-admin for first login, or set a custom initial password
+ADMIN_PASSWORD=change-me-admin
 ```
+
+First login is `admin / change-me-admin`. The web UI forces a password change immediately after login. If you set a custom `ADMIN_PASSWORD` before deployment, use that custom value for first login.
 
 Set your timezone:
 

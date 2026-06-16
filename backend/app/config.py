@@ -1,8 +1,8 @@
-import os
-import secrets
 from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings
+
+DEFAULT_ADMIN_PASSWORD = "change-me-admin"
 
 
 def _is_placeholder(value: str | None) -> bool:
@@ -10,6 +10,13 @@ def _is_placeholder(value: str | None) -> bool:
         return False
     normalized = value.strip().lower()
     return normalized == "changeme" or normalized.startswith("change-me")
+
+
+def _is_allowed_bootstrap_admin_password(value: str | None) -> bool:
+    if not value:
+        return False
+    normalized = value.strip().lower()
+    return normalized == DEFAULT_ADMIN_PASSWORD
 
 
 class Settings(BaseSettings):
@@ -36,30 +43,21 @@ class Settings(BaseSettings):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # Generate a persistent SECRET_KEY on first run so JWT signing is
-        # secure from the very first request, before the lifespan runs.
-        if not self.secret_key or self.secret_key.strip().lower() == "changeme":
-            key_dir = self.app_config_root
-            key_file = os.path.join(key_dir, "secret_key")
-            try:
-                if os.path.exists(key_file):
-                    with open(key_file) as f:
-                        self.secret_key = f.read().strip()
-                else:
-                    os.makedirs(key_dir, exist_ok=True)
-                    self.secret_key = secrets.token_hex(32)
-                    with open(key_file, "w") as f:
-                        f.write(self.secret_key)
-            except OSError:
-                if not self.secret_key:
-                    self.secret_key = secrets.token_hex(32)
         # Validate critical settings aren't at insecure defaults
         errors: list[str] = []
 
         if not self.secret_key or _is_placeholder(self.secret_key):
             errors.append("SECRET_KEY is not set or is still a factory placeholder.")
-        if not self.admin_password or _is_placeholder(self.admin_password):
-            errors.append("ADMIN_PASSWORD is not set or is still a factory placeholder.")
+        if not self.admin_password or self.admin_password.strip().lower() == "changeme":
+            errors.append(
+                f"ADMIN_PASSWORD is not set. Use {DEFAULT_ADMIN_PASSWORD!r} for first login "
+                "or set a custom initial password."
+            )
+        elif _is_placeholder(self.admin_password) and not _is_allowed_bootstrap_admin_password(self.admin_password):
+            errors.append(
+                f"ADMIN_PASSWORD may only use the documented bootstrap default "
+                f"{DEFAULT_ADMIN_PASSWORD!r}; replace other placeholder values."
+            )
         if _is_placeholder(self.meili_master_key):
             errors.append("MEILI_MASTER_KEY is still a factory placeholder.")
 
@@ -90,7 +88,9 @@ class Settings(BaseSettings):
             msg += (
                 "\n  Create a .env file in the project root with real values:\n\n"
                 "    cp .env.example .env\n"
-                "    # then edit .env and replace all 'change-me-*' placeholders\n\n"
+                "    # then edit .env and replace service secrets such as SECRET_KEY,\n"
+                "    # POSTGRES_PASSWORD, REDIS_PASSWORD, and MEILI_MASTER_KEY.\n"
+                f"    # ADMIN_PASSWORD={DEFAULT_ADMIN_PASSWORD} is allowed only for first login.\n\n"
                 "  See docs/setup.md for detailed instructions.\n"
                 "============================================================\n"
             )

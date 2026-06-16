@@ -76,7 +76,8 @@ git clone <repo-url> auto-gallery
 cd auto-gallery
 
 cp .env.example .env
-# Edit .env: set strong passwords, ports, timezone, and host paths.
+# Edit .env: replace service secrets and set ports, timezone, and host paths.
+# ADMIN_PASSWORD may stay change-me-admin for first login; the UI forces a change.
 
 docker compose up -d
 docker compose exec backend alembic upgrade head
@@ -95,7 +96,9 @@ For a full deployment guide, see [docs/setup.md](docs/setup.md).
 ## First Deployment Checklist
 
 - Copy `.env.example` to `.env`.
-- Replace every `change-me-*` password and `SECRET_KEY`.
+- Replace `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `MEILI_MASTER_KEY`, and `SECRET_KEY`.
+- First login is `admin / change-me-admin`; you may also set a custom
+  `ADMIN_PASSWORD` before deployment. The UI forces a password change after login.
 - Choose host paths for downloads, library, app config, gallery-dl config, and
   service data.
 - Set `TIMEZONE` for scheduler behavior.

@@ -36,13 +36,17 @@ cp .env.example .env
 编辑 `.env`，设置：
 
 ```bash
-# 为每个服务生成强密码
+# 为每个服务生成强密码；这些值不能保留 change-me-* 占位符
 POSTGRES_PASSWORD=<生成>
 REDIS_PASSWORD=<生成>
 MEILI_MASTER_KEY=<生成>
 SECRET_KEY=<生成>
-ADMIN_PASSWORD=<生成>
+
+# 可保留 change-me-admin 作为首次登录密码，也可改成自定义初始密码
+ADMIN_PASSWORD=change-me-admin
 ```
+
+首次登录管理后台使用 `admin / change-me-admin`。登录后系统会强制你修改密码；如果部署前已把 `ADMIN_PASSWORD` 改成自定义值，则使用该自定义值首次登录。
 
 设置时区：
 
