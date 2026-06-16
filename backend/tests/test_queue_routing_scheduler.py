@@ -276,5 +276,7 @@ def test_delayed_retries_use_named_runtime_queues():
     download_src = (root / "app" / "jobs" / "download.py").read_text()
     import_src = (root / "app" / "jobs" / "import_runner.py").read_text()
 
-    assert 'Queue(name="downloads", connection=r).enqueue_in(' in download_src
-    assert 'Queue(name="imports", connection=r).enqueue_in(' in import_src
+    assert ('Queue(name="downloads", connection=get_redis()).enqueue_in(' in download_src
+            or 'Queue(name="downloads", connection=r).enqueue_in(' in download_src)
+    assert ('Queue(name="imports", connection=get_redis()).enqueue_in(' in import_src
+            or 'Queue(name="imports", connection=r).enqueue_in(' in import_src)
