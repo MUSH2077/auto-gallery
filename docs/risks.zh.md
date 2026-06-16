@@ -261,7 +261,7 @@ Worker 可水平扩展：`docker compose up --scale worker=3`。只要每个任�
 通过 `docker compose run --rm backend alembic upgrade head` 在启动前运行迁移。添加启动检查：若有待执行迁移则拒绝启动。
 
 ### L2. 文件命名 / 重新组织
-gallery-dl 在下载时命名文件。导入任务可重新组织。Asset 路径在导入后存储于数据库，非导入前。若命名模板在下载和导入之间变更，无路径损坏风险。
+gallery-dl 在下载时命名文件。导入任务可重新组织。Asset 路径在导入后存储于数据库，非导入前。gallery-dl 文件组织配置变更会影响后续下载，但不会重写已导入的 asset 路径。
 
 ### L3. Danbooru 阶段排序
 创作者身份（Phase 4）无需 Danbooru（Phase 5）即可工作。Danbooru 丰富身份信息，并非使其可用。排序正确。

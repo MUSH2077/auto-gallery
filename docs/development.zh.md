@@ -51,7 +51,7 @@ auto-gallery/
           reference/     # Danbooru 参考映射
           sources/       # 数据源能力矩阵
           system/        # 系统健康仪表盘
-          settings/      # gallery-dl、去重、代理、认证状态、日志、备份、命名模板
+          settings/      # gallery-dl、去重、代理、认证状态、日志、备份
           data-mgmt/     # 存储统计、完整性检查、危险区域
           merge-candidates/
           dedup/
@@ -214,13 +214,12 @@ docker compose run --rm backend alembic downgrade -1
 | 搜索 | Meilisearch 全文搜索（作品、创作者、标签） |
 | Danbooru 参考 | 画师搜索、URL 批量导入、Pixiv ID 搜索 |
 | 数据源 | 数据源能力矩阵、URL 验证 |
-| 设置 > gallery-dl | 按来源提取器配置（认证、内容过滤、速率限制） |
+| 设置 > gallery-dl | 按来源提取器配置（认证、内容过滤、文件组织、速率限制） |
 | 设置 > 去重 | 源级、跨源、感知哈希去重开关 |
 | 设置 > 代理 | HTTP/HTTPS 代理配置（gallery-dl 和 API 调用） |
 | 设置 > 认证状态 | 各订阅来源 Cookie/Token 健康监控 |
 | 设置 > 日志 | 内存环形缓冲区实时日志查看器 |
 | 设置 > 备份与恢复 | 系统完整备份创建和恢复 |
-| 设置 > 命名模板 | 按来源配置文件组织模式 |
 | 设置 > 下载默认值 | 超时、重试、退避、最大帖子数 |
 | 设置 > 订阅默认值 | 同步间隔、调度模式、时区 |
 | 数据管理 | 存储统计、完整性检查、清理工具、危险区域 |

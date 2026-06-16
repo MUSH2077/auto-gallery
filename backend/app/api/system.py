@@ -377,7 +377,7 @@ async def workbench_summary(db: AsyncSession = Depends(get_db)):
             "works": [{
                 "id": str(w.id),
                 "title": w.title,
-                "thumbnail_asset_id": w.thumbnail_asset_id,
+                "thumbnail_asset_id": str(w.thumbnail_asset_id) if w.thumbnail_asset_id else None,
                 "created_at": _iso(w.created_at),
             } for w in latest_works],
             "successful_syncs": [{

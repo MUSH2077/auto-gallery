@@ -37,7 +37,7 @@ class PixivProvider(BaseProvider):
             re.match(r"https?://(?:www\.)?pixiv\.net/(?:en/)?(artworks|users)/\d+", url)
         )
 
-    def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
+    def build_gallerydl_config(self, subscription_source) -> dict:
         cfg = {
             "extractor": {
                 "pixiv": {}
@@ -49,8 +49,6 @@ class PixivProvider(BaseProvider):
         cookies_path = "/gallerydl-config/cookies/pixiv.txt"
         if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 0:
             cfg["extractor"]["pixiv"]["cookies"] = cookies_path
-        if naming_template:
-            cfg["extractor"]["pixiv"]["directory"] = naming_template.template
         return cfg
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:

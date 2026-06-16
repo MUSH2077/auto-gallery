@@ -50,7 +50,7 @@ auto-gallery/
           reference/     # Danbooru reference mapping
           sources/       # provider capability matrix
           system/        # system health dashboard
-          settings/      # gallery-dl, dedup, proxy, auth-status, logs, backup, naming-templates
+          settings/      # gallery-dl, dedup, proxy, auth-status, logs, backup
           data-mgmt/     # storage stats, integrity checks, danger zone
           merge-candidates/
           dedup/
@@ -215,13 +215,12 @@ The admin web is fully built with the following pages:
 | Search | Meilisearch full-text search across works, creators, tags |
 | Danbooru Reference | Artist search, URL batch import, Pixiv ID search |
 | Sources | Provider capability matrix, URL validation |
-| Settings > gallery-dl | Per-source extractor config (auth, content, rate limits) |
+| Settings > gallery-dl | Per-source extractor config (auth, content, file organization, rate limits) |
 | Settings > Dedup | Source-level, cross-source, and perceptual hash dedup toggles |
 | Settings > Proxy | HTTP/HTTPS proxy config for gallery-dl and API calls |
 | Settings > Auth Status | Cookie/token health monitoring per subscription source |
 | Settings > Logs | Live log viewer from in-memory ring buffer |
 | Settings > Backup & Restore | Full system backup creation and restore |
-| Settings > Naming Templates | File organization patterns per source |
 | Settings > Download Defaults | Timeout, retries, backoff, max posts |
 | Settings > Subscription Defaults | Sync interval, schedule mode, timezone |
 | Data Management | Storage stats, integrity checks, cleanup, danger zone |

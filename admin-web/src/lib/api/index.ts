@@ -459,7 +459,7 @@ export const api = {
   getEffectiveGalleryDLConfig: (source: string, subscriptionSourceId?: string) => {
     const q = new URLSearchParams({ source });
     if (subscriptionSourceId) q.set("subscription_source_id", subscriptionSourceId);
-    return request<{ source: string; extractor: string; source_url?: string | null; url_valid?: boolean | null; naming_template?: string | null; config: Record<string, unknown> }>(`/api/v1/admin/gallerydl-config/effective?${q.toString()}`);
+    return request<{ source: string; extractor: string; source_url?: string | null; url_valid?: boolean | null; config: Record<string, unknown> }>(`/api/v1/admin/gallerydl-config/effective?${q.toString()}`);
   },
 
   updateGalleryDLConfig: (data: { pixiv?: Partial<T.PixivSourceConfig>; twitter?: Partial<T.TwitterSourceConfig>; iwara?: Partial<T.IwaraSourceConfig>; danbooru?: Partial<T.DanbooruSourceConfig>; pinterest?: Partial<T.PinterestSourceConfig>; lofter?: Partial<T.LofterSourceConfig>; weibo?: Partial<T.WeiboSourceConfig>; bilibili?: Partial<T.BilibiliSourceConfig> }) =>
@@ -467,18 +467,6 @@ export const api = {
 
   testGalleryDLConnection: (source: string) =>
     request<{ source: string; success: boolean; message: string; details: string }>("/api/v1/admin/gallerydl-config/test-connection", { method: "POST", body: JSON.stringify({ source }) }),
-
-  // Naming Templates
-  listNamingTemplates: () => request<{ id: string; name: string; source?: string; template: string; is_default: boolean }[]>("/api/v1/admin/naming-templates"),
-
-  createNamingTemplate: (data: { name: string; source?: string; template: string; is_default?: boolean }) =>
-    request<Record<string, unknown>>("/api/v1/admin/naming-templates", { method: "POST", body: JSON.stringify(data) }),
-
-  updateNamingTemplate: (id: string, data: Record<string, unknown>) =>
-    request<Record<string, unknown>>(`/api/v1/admin/naming-templates/${id}`, { method: "PUT", body: JSON.stringify(data) }),
-
-  deleteNamingTemplate: (id: string) =>
-    request<void>(`/api/v1/admin/naming-templates/${id}`, { method: "DELETE" }),
 
   // Backup & Restore
   createBackup: (contents?: string[]) =>
@@ -557,7 +545,6 @@ export const queryKeys = {
   },
   admin: {
     settings: ["admin", "settings"] as const,
-    namingTemplates: ["admin", "naming-templates"] as const,
   },
   reference: {
     danbooru: ["reference", "danbooru"] as const,

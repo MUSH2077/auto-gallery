@@ -11,7 +11,6 @@ from app.api.admin import router as admin_router
 from app.api.sources import router as sources_router
 from app.api.reference import router as reference_router
 from app.api.import_jobs import router as import_jobs_router
-from app.api.naming_templates import router as naming_templates_router
 from app.api.auth_api import router as auth_router
 from app.api.repositories import router as repositories_router
 from app.api.curation import router as curation_router
@@ -31,4 +30,3 @@ api_router.include_router(works_router, prefix="/works", tags=["works"])
 api_router.include_router(tags_router, prefix="/tags", tags=["tags"])
 api_router.include_router(search_router, prefix="/search", tags=["search"])
 api_router.include_router(admin_router, prefix="/admin", tags=["admin"])
-api_router.include_router(naming_templates_router, prefix="/admin/naming-templates", tags=["naming-templates"])

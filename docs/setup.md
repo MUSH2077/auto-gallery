@@ -140,12 +140,9 @@ Each source provider (Pixiv, X/Twitter, Iwara, Danbooru, Pinterest, LOFTER, Weib
 
 Changes are saved to `config.json` automatically. The admin web UI is the recommended way to configure gallery-dl extractors; manual editing of `config.json` is also supported as a fallback.
 
-### Naming Templates
+### File Organization
 
-Naming templates control how files are organized in `DOWNLOAD_ROOT` and `LIBRARY_ROOT`. They use gallery-dl's template syntax (e.g., `pixiv/{user[account]}/{id}`). Templates can be managed via:
-
-- **Admin web**: **Settings > Naming Templates** -- create, edit, and set default templates per source
-- **Database**: stored in the `naming_template` table
+File organization is configured in **Settings > gallery-dl Config > File Organization** and saved to `GALLERYDL_CONFIG_ROOT/config.json`. Use gallery-dl's template syntax, for example `pixiv/{user[account]}/{id}`.
 
 ## Backup and Restore
 
@@ -153,7 +150,7 @@ The system includes a backup and restore feature accessible via **Settings > Bac
 
 - PostgreSQL database (creators, subscriptions, works, tags, settings, job history)
 - gallery-dl configuration (extractor settings, cookies, auth tokens)
-- Application configuration (naming templates, etc.)
+- Application configuration
 - Download archives (archive-*.sqlite3, for preventing duplicate downloads)
 
 Backups can be created manually and downloaded for off-site storage. Automatic backups run every 24 hours. The restore function uploads a backup file and replaces the current system state.

@@ -33,7 +33,7 @@ class XProvider(BaseProvider):
     def validate_url(self, url: str) -> bool:
         return bool(re.match(r"https?://(?:twitter\.com|x\.com)/\w+(?:/status/\d+)?/?(?:\?.*)?$", url))
 
-    def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
+    def build_gallerydl_config(self, subscription_source) -> dict:
         cfg = {
             "extractor": {
                 "twitter": {}
@@ -42,8 +42,6 @@ class XProvider(BaseProvider):
         cookies_path = "/gallerydl-config/cookies/twitter.txt"
         if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 0:
             cfg["extractor"]["twitter"]["cookies"] = cookies_path
-        if naming_template:
-            cfg["extractor"]["twitter"]["directory"] = naming_template.template
         return cfg
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:

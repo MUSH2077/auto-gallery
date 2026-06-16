@@ -37,15 +37,13 @@ class LofterProvider(BaseProvider):
             url,
         ))
 
-    def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
+    def build_gallerydl_config(self, subscription_source) -> dict:
         cfg = {
             "extractor": {
                 "lofter": {
                 }
             }
         }
-        if naming_template:
-            cfg["extractor"]["lofter"]["directory"] = naming_template.template
         return cfg
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:
@@ -91,4 +89,3 @@ class LofterProvider(BaseProvider):
         if m and m.group(1) not in ("www",):
             return m.group(1)
         return None
-

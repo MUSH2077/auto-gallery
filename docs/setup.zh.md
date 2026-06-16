@@ -140,12 +140,9 @@ curl http://localhost:8818/api/v1/system/health
 
 修改会自动保存到 `config.json`。建议通过管理后台配置 gallery-dl 提取器；手动编辑 `config.json` 亦可作为备选方式。
 
-### 命名模板
+### 文件组织
 
-命名模板控制文件在 `DOWNLOAD_ROOT` 和 `LIBRARY_ROOT` 中的组织方式。使用 gallery-dl 的模板语法（例如 `pixiv/{user[account]}/{id}`）。可通过以下方式管理：
-
-- **管理后台**：**设置 > 命名模板** -- 按来源创建、编辑和设置默认模板
-- **数据库**：存储在 `naming_template` 表中
+文件组织在 **设置 > gallery-dl 配置 > 文件组织** 中配置，并保存到 `GALLERYDL_CONFIG_ROOT/config.json`。可使用 gallery-dl 的模板语法，例如 `pixiv/{user[account]}/{id}`。
 
 ## 备份与恢复
 
@@ -153,7 +150,7 @@ curl http://localhost:8818/api/v1/system/health
 
 - PostgreSQL 数据库（创作者、订阅、作品、标签、设置、任务历史）
 - gallery-dl 配置（提取器设置、Cookie、认证令牌）
-- 应用配置（命名模板等）
+- 应用配置
 - 下载归档（archive-*.sqlite3，用于防止重复下载）
 
 可手动创建备份并下载至本地保存。系统每 24 小时自动创建一次备份。恢复功能可上传备份文件并替换当前系统状态。

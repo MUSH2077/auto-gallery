@@ -39,8 +39,14 @@ def _now() -> datetime:
 def _json_value(value):
     if isinstance(value, datetime):
         return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
     if isinstance(value, UUID):
         return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_value(item) for item in value]
     return value
 
 
@@ -145,6 +151,9 @@ class CurationService:
         after_state: dict | None,
         impact: dict | None = None,
     ) -> CurationChange:
+        before_state = _json_value(before_state) if before_state is not None else None
+        after_state = _json_value(after_state) if after_state is not None else None
+        impact = _json_value(impact) if impact is not None else {}
         diff = self._diff(before_state or {}, after_state or {})
         change = CurationChange(
             commit_id=commit.id,
@@ -154,7 +163,7 @@ class CurationService:
             before_state=before_state,
             after_state=after_state,
             diff=diff,
-            impact=impact or {},
+            impact=impact,
         )
         self.db.add(change)
         await self.db.flush()
@@ -217,11 +226,11 @@ class CurationService:
             "id": str(work.id),
             "title": work.title,
             "description": work.description,
-            "posted_at": work.posted_at,
+            "posted_at": _json_value(work.posted_at),
             "is_nsfw": work.is_nsfw,
             "is_ai_generated": work.is_ai_generated,
             "is_favorite": work.is_favorite,
-            "thumbnail_asset_id": work.thumbnail_asset_id,
+            "thumbnail_asset_id": str(work.thumbnail_asset_id) if work.thumbnail_asset_id else None,
             "visibility": state.visibility if state else VISIBLE,
             "reason": state.reason if state else None,
         }
@@ -692,7 +701,14 @@ class CurationService:
             "work_count": len(works),
             "asset_count": len(assets),
             "bytes_reclaimable": sum(a.file_size or 0 for a in assets),
-            "works": [{"id": str(w.id), "title": w.title, "thumbnail_asset_id": w.thumbnail_asset_id} for w in works],
+            "works": [
+                {
+                    "id": str(w.id),
+                    "title": w.title,
+                    "thumbnail_asset_id": str(w.thumbnail_asset_id) if w.thumbnail_asset_id else None,
+                }
+                for w in works
+            ],
             "assets": [{"id": str(a.id), "file_name": a.file_name, "file_size": a.file_size or 0} for a in assets],
         }
 

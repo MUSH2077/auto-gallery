@@ -13,7 +13,6 @@ from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
-from app.models.naming_template import NamingTemplate
 from app.models.system_setting import SystemSetting
 from app.models.user import User
 from app.models.curation import (
@@ -41,7 +40,6 @@ __all__ = [
     "SubscriptionSource",
     "DownloadJob",
     "ImportJob",
-    "NamingTemplate",
     "SystemSetting",
     "User",
     "AssetStorageState",

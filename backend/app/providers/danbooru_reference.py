@@ -30,7 +30,7 @@ class DanbooruReferenceProvider(BaseProvider):
     def validate_url(self, url: str) -> bool:
         return bool(re.match(r"https?://danbooru\.donmai\.us/(artists/\d+|posts\?tags=.+)", url))
 
-    def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
+    def build_gallerydl_config(self, subscription_source) -> dict:
         raise NotImplementedError("Danbooru reference does not support downloading")
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:

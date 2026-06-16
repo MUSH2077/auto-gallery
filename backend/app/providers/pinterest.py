@@ -40,15 +40,13 @@ class PinterestProvider(BaseProvider):
             url,
         ))
 
-    def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
+    def build_gallerydl_config(self, subscription_source) -> dict:
         cfg = {
             "extractor": {
                 "pinterest": {
                 }
             }
         }
-        if naming_template:
-            cfg["extractor"]["pinterest"]["directory"] = naming_template.template
         return cfg
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:
@@ -90,4 +88,3 @@ class PinterestProvider(BaseProvider):
 
     def parse_source_tags(self, raw_metadata: dict) -> list[dict]:
         return []
-

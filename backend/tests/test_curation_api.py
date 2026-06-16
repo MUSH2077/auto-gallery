@@ -1,4 +1,6 @@
 import asyncio
+import json
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -186,6 +188,60 @@ def test_revert_rejects_baseline_commit():
         assert "Baseline" in exc.detail
     else:
         raise AssertionError("baseline commit was revertible")
+
+
+def test_curation_json_value_serializes_nested_datetime_and_uuid():
+    from app.services.curation import _json_value
+
+    obj_id = uuid4()
+    payload = {
+        "id": obj_id,
+        "posted_at": datetime(2022, 8, 12, 15, 57, 49, tzinfo=timezone.utc),
+        "days": {date(2022, 8, 12)},
+    }
+
+    serialized = _json_value(payload)
+
+    assert serialized["id"] == str(obj_id)
+    assert serialized["posted_at"] == "2022-08-12T15:57:49+00:00"
+    assert serialized["days"] == ["2022-08-12"]
+    json.dumps(serialized)
+
+
+def test_add_change_serializes_jsonb_payloads_before_diffing():
+    from app.services.curation import CurationService
+
+    commit_id = uuid4()
+    work_id = uuid4()
+    added = {}
+
+    class FakeDB:
+        def add(self, obj):
+            added["change"] = obj
+
+        async def flush(self):
+            pass
+
+    change = asyncio.run(CurationService(FakeDB())._add_change(
+        SimpleNamespace(id=commit_id),
+        subject_type="work",
+        subject_id=str(work_id),
+        action="work_added",
+        before_state=None,
+        after_state={
+            "id": work_id,
+            "posted_at": datetime(2022, 8, 12, 15, 57, 49, tzinfo=timezone.utc),
+        },
+        impact={"seen_at": datetime(2022, 8, 12, tzinfo=timezone.utc)},
+    ))
+
+    assert change is added["change"]
+    assert change.after_state["id"] == str(work_id)
+    assert change.after_state["posted_at"] == "2022-08-12T15:57:49+00:00"
+    assert change.impact["seen_at"] == "2022-08-12T00:00:00+00:00"
+    json.dumps(change.after_state)
+    json.dumps(change.diff)
+    json.dumps(change.impact)
 
 
 def test_repository_graph_endpoint_uses_curation_service(monkeypatch):

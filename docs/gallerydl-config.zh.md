@@ -26,7 +26,7 @@ auto-gallery 通过管理后台 **设置 -> gallery-dl 配置** 管理各站点�
 
 ## 任务级配置生成
 
-下载任务创建时，provider 的 `build_gallerydl_config()` 会生成一个任务级配置字典。此任务级配置仅在订阅分配了**命名模板**时才包含 `directory` 字段。无命名模板时，任务级配置省略 directory，由基础 `config.json` 的默认值控制输出路径。这防止了任务级配置覆盖管理员配置的基础目录模式。
+下载任务创建时，provider 的 `build_gallerydl_config()` 只提供安全的 provider 默认值，例如 cookie 路径。管理后台保存的 gallery-dl `config.json` 随后合并并保持为文件组织的唯一来源。请在 **设置 -> gallery-dl 配置 -> 文件组织** 中配置 `directory` 和 `filename`。
 
 ---
 
@@ -639,12 +639,6 @@ Danbooru 在 auto-gallery 中扮演两个角色：
 | `directory` | `directory`（字符串 -> 分割为数组） |
 | `sleep_request` | `sleep-request` |
 
-## 命名模板集成
+## 文件组织
 
-此处定义的各站点 gallery-dl 配置提供基本目录模式。命名模板（**设置 -> Naming Templates**）可以按创作者覆盖：
-
-1. 创建命名模板，指定 `source`、`template` 模式和可选的 `is_default`
-2. 下载任务运行时，provider 的 `build_gallerydl_config()` 检查匹配的命名模板
-3. 如果找到且 `is_default=True`，模板模式会覆盖基础的 `directory` 配置
-
-这使得无需更改全局设置即可为每个创作者自定义文件组织方式。
+文件组织只通过各来源的 gallery-dl 配置管理。请在 **设置 -> gallery-dl 配置 -> 文件组织** 中设置每个来源的 `directory` 和 `filename` 模式。旧的命名模板功能已删除；如果仍需要旧模板值，请在升级前手动复制到对应来源的 `directory` 字段。
