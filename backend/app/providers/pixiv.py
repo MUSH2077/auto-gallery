@@ -1,3 +1,4 @@
+import os
 import re
 
 from app.providers.base import BaseProvider, ProviderCapabilities
@@ -39,11 +40,15 @@ class PixivProvider(BaseProvider):
     def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
         cfg = {
             "extractor": {
-                "pixiv": {
-                    "cookies": "/gallerydl-config/cookies/pixiv.txt",
-                }
+                "pixiv": {}
             }
         }
+        # Only set cookies path if the file has actual content (>0 bytes).
+        # An empty/touched file causes gallery-dl to try cookie auth with no
+        # valid cookies, which fails even for public content.
+        cookies_path = "/gallerydl-config/cookies/pixiv.txt"
+        if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 0:
+            cfg["extractor"]["pixiv"]["cookies"] = cookies_path
         if naming_template:
             cfg["extractor"]["pixiv"]["directory"] = naming_template.template
         return cfg

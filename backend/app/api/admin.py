@@ -1360,19 +1360,23 @@ async def test_source_connection(data: dict):
             return {
                 "source": source, "success": True,
                 "message": f"Connection test passed for {source}. Credentials are valid.",
-                "details": stderr[:500] or "(no output)",
+                "details": stderr[:1000] or "(no output)",
             }
         elif auth_issue:
             return {
                 "source": source, "success": False,
                 "message": auth_issue,
-                "details": stderr[:500] or stdout[:500] or "(no output)",
+                "details": (stderr or stdout or "")[:2000],
             }
         else:
+            # Show last portion of stderr (gallery-dl puts the actual error at the end)
+            detail = (stderr or stdout or "").strip()
+            if len(detail) > 2000:
+                detail = "...(truncated)\n" + detail[-2000:]
             return {
                 "source": source, "success": False,
                 "message": f"gallery-dl exited with code {result.returncode}",
-                "details": stderr[:500] or "(no output)",
+                "details": detail or "(no output — check gallery-dl version and network connectivity)",
             }
 
     except subprocess.TimeoutExpired:

@@ -70,8 +70,13 @@ class SubscriptionRepository:
         subs = []
         for row in result:
             sub = row[0]
-            sub.creator_name = row[2] or row[1] or sub.creator_id
-            sub.creator_display_name = row[2]
+            # Prefer display_name, fall back to name.  Never expose raw UUID
+            # as a human-readable name — if both are missing the Creator record
+            # is malformed, but we still show a sane label.
+            _creator_name = (row[2] or "").strip()
+            _creator_base = (row[1] or "").strip()
+            sub.creator_display_name = _creator_name or None
+            sub.creator_name = _creator_name or _creator_base or f"Creator {sub.creator_id}"
             sub.source_count = row[3] or 0
             sub.enabled_source_count = row[4] or 0
             sub.latest_job_status = row[5]
@@ -79,7 +84,22 @@ class SubscriptionRepository:
         return subs
 
     async def get(self, sub_id: UUID) -> Subscription | None:
-        return await self.session.get(Subscription, sub_id)
+        """Get a single subscription with creator name fields populated."""
+        stmt = (
+            select(Subscription, Creator.name, Creator.display_name)
+            .join(Creator, Creator.id == Subscription.creator_id)
+            .where(Subscription.id == sub_id)
+        )
+        result = await self.session.execute(stmt)
+        row = result.first()
+        if not row:
+            return None
+        sub = row[0]
+        _creator_name = (row[2] or "").strip()
+        _creator_base = (row[1] or "").strip()
+        sub.creator_display_name = _creator_name or None
+        sub.creator_name = _creator_name or _creator_base or f"Creator {sub.creator_id}"
+        return sub
 
     async def create(self, data: dict) -> Subscription:
         sub = Subscription(**data)
