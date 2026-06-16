@@ -303,21 +303,23 @@ export default function DanbooruReferencePage() {
   });
 
   const importAllMutation = useMutation({
-    mutationFn: (creatorName: string) => api.importAllDanbooru({
+    mutationFn: (creatorName: string) => api.importAllDanbooruAsync({
       creator_name: creatorName || undefined,
       ...searchParams,
     }),
     onSuccess: (data) => {
-      if (!data.found) { toast.warning({ message: "No matching Danbooru artist found." }); return; }
-      qc.invalidateQueries({ queryKey: queryKeys.creators.all });
-      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
-      toast.success({ message: `Done! Creator: ${data.creator_id?.slice(0, 8)}... | Links: ${data.links_imported} | Sources: ${data.sources_created}` });
+      notify.startOperationJob(data.job_id, "danbooru-import-all", "Danbooru import", {
+        name: searchParams?.name,
+        pixiv_id: searchParams?.pixiv_id,
+      });
+      toast.success({ message: "Danbooru import queued. You can leave this page; progress will continue in notifications." });
     },
   });
 
   // Batch job state is managed globally by NotificationCenter (layout level).
   // Polling runs in the context and survives all page navigation.
   const { batchJob } = notify;
+  const importAllOperation = notify.operationJob?.kind === "danbooru-import-all" ? notify.operationJob : null;
 
   // Fallback: on mount, directly check if there's a stored batch job and fetch result.
   // This handles edge cases where context state isn't restored after navigation.
@@ -742,7 +744,7 @@ export default function DanbooruReferencePage() {
           onImport={(creatorId) => importMutation.mutate(creatorId)}
           importPending={importMutation.isPending}
           onImportAll={(creatorName) => importAllMutation.mutate(creatorName)}
-          importAllPending={importAllMutation.isPending}
+          importAllPending={importAllMutation.isPending || importAllOperation?.status === "running"}
           importAllError={(importAllMutation.error as Error)?.message || null}
           selectedCreator={selectedCreator} setSelectedCreator={setSelectedCreator}
           importName={importName} setImportName={setImportName} />

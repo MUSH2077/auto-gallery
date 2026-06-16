@@ -9,6 +9,7 @@ import tempfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from uuid import UUID
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
@@ -23,8 +24,13 @@ logger = logging.getLogger(__name__)
 from app.auth import RequireAdmin
 from app.database import async_session, get_db
 from app.models.system_setting import SystemSetting
+from app.services import admin_data
+from app.services.admin_data import ENTITIES, clear_entity_data
+from app.services.operations import get_operation_status, set_operation_status
+from app.services.redis_client import get_redis
 
 router = APIRouter(dependencies=[RequireAdmin])
+_clear_files = admin_data._clear_files
 
 # ── Settings schemas ──
 
@@ -770,107 +776,63 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
 
 # ── Data Management ──
 
-ENTITIES = {
-    "works": [
-        "work_source_tags", "work_tags", "asset_sources",
-        "work_curation_states", "asset_storage_states",
-        "assets", "work_sources", "works",
-    ],
-    "creators": [
-        "import_jobs", "download_jobs", "subscription_sources", "subscriptions", "source_creators", "creator_links",
-        "creator_curation_states", "creators",
-    ],
-    "downloads": ["import_jobs", "download_jobs"],
-    "jobs": ["import_jobs", "download_jobs"],
-    "tags": ["work_source_tags", "work_tags", "tags"],
-    "settings": [],  # Special: reset to defaults
-}
-
-
 @router.post("/clear/{entity}")
 async def clear_entity(entity: str, db: AsyncSession = Depends(get_db)):
     """Clear a specific entity or 'all' for complete cleanup."""
-    from sqlalchemy import text
-    import shutil, os
-
-    if entity == "all":
-        order = [
-            "work_source_tags", "work_tags", "asset_sources",
-            "curation_changes", "work_curation_states", "creator_curation_states", "asset_storage_states", "curation_commits",
-            "assets", "work_sources", "works",
-            "import_jobs", "download_jobs",
-            "subscription_sources", "subscriptions",
-            "source_creators", "creator_links", "creators",
-            "tags",
-        ]
-        results = {}
-        for table in order:
-            r = await db.execute(text(f"DELETE FROM {table}"))
-            results[table] = r.rowcount
-        await db.commit()
-        _clear_files([str(settings.download_root), str(settings.library_root)])
-        results["files"] = "downloads + library cleared"
-        # Also clear Meilisearch indexes
-        try:
-            from app.services.search import SearchService
-            svc = SearchService(db)
-            await svc.delete_all_works()
-            logger.info("Cleared Meilisearch indexes after 'all' clear")
-        except Exception:
-            logger.warning("Failed to clear Meilisearch", exc_info=True)
-        return {"status": "ok", "message": "All data cleared", "deleted": results}
-
-    tables = ENTITIES.get(entity)
-    if tables is None:
-        raise HTTPException(status_code=400, detail=f"Unknown entity: {entity}. Valid: all, works, creators, downloads")
-
-    results = {}
-    for table in tables:
-        r = await db.execute(text(f"DELETE FROM {table}"))
-        results[table] = r.rowcount
-    await db.commit()
-
-    # Clear files + Meilisearch for works-related entities
-    if entity == "works":
-        _clear_files([str(settings.download_root), str(settings.library_root)])
-        results["files"] = "downloads + library cleared"
-        try:
-            from app.services.search import SearchService
-            svc = SearchService(db)
-            await svc.delete_all_works()
-            logger.info("Cleared Meilisearch index after 'works' clear")
-        except Exception:
-            logger.warning("Failed to clear Meilisearch", exc_info=True)
-
-    return {"status": "ok", "message": f"Cleared {entity}", "deleted": results}
+    try:
+        admin_data._clear_files = _clear_files
+        return await clear_entity_data(entity, db)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{exc}. Valid: all, {', '.join(ENTITIES.keys())}",
+        ) from exc
 
 
-def _clear_files(paths: list[str]):
-    """Remove all files in given directories (preserving the root dirs)."""
-    import logging
-    import shutil, os
-    _log = logging.getLogger(__name__)
-    for p in paths:
-        try:
-            for item in os.listdir(p):
-                item_path = os.path.join(p, item)
-                if os.path.isdir(item_path):
-                    shutil.rmtree(item_path, ignore_errors=True)
-                else:
-                    os.unlink(item_path)
-        except Exception:
-            _log.warning("Failed to clear files in %s", p, exc_info=True)
+@router.post("/operations/clear")
+async def start_clear_operation(data: dict):
+    """Enqueue a data-management clear operation and return immediately."""
+    from rq import Queue
+
+    entity = str(data.get("entity") or "").strip()
+    if entity != "all" and entity not in ENTITIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown entity: {entity}. Valid: all, {', '.join(ENTITIES.keys())}",
+        )
+
+    job_id = str(uuid.uuid4())
+    set_operation_status(
+        job_id,
+        "queued",
+        "admin-clear",
+        progress={"phase": "queued", "label": f"Queued clear for {entity}"},
+        meta={"entity": entity},
+    )
+    queue = Queue(name="imports", connection=get_redis())
+    rq_job = queue.enqueue(
+        "app.jobs.admin_operations.run_clear_operation",
+        entity,
+        job_id,
+        job_timeout=7200,
+        result_ttl=7200,
+    )
+    logger.info("Enqueued admin clear operation job_id=%s rq_job=%s entity=%s", job_id, rq_job.id, entity)
+    return {"job_id": job_id, "status": "queued"}
+
+
+@router.get("/operations/{job_id}")
+async def get_admin_operation(job_id: str):
+    status = get_operation_status(job_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Operation not found")
+    return status
 
 
 @router.post("/reset-settings")
 async def reset_settings(db: AsyncSession = Depends(get_db)):
     """Reset all system settings to defaults."""
-    from app.models.system_setting import SystemSetting
-    result = await db.execute(select(SystemSetting))
-    for row in result.scalars().all():
-        await db.delete(row)
-    await db.commit()
-    return {"status": "ok", "message": "All settings reset to defaults"}
+    return await clear_entity_data("settings", db)
 
 
 # ── Scheduler ──

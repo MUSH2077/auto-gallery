@@ -153,10 +153,11 @@ def test_repository_sync_now_delegates_to_existing_enqueue(monkeypatch):
     ss, sub, creator = _source_context(source_id, sub_id, creator_id)
     db = _FakeDB([_Result(first=(ss, sub, creator))])
 
-    async def fake_enqueue(received_db, received_source_id, trigger):
+    async def fake_enqueue(received_db, received_source_id, trigger, force=False):
         assert received_db is db
         assert received_source_id == source_id
         assert trigger == "manual_repository"
+        assert force is True
         return {"status": "skipped", "reason": "source_disabled"}
 
     monkeypatch.setattr(repositories, "enqueue_subscription_source_sync", fake_enqueue)

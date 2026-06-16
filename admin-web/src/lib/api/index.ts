@@ -340,6 +340,24 @@ export const api = {
   clearEntity: (entity: string) =>
     request<{ status: string; message: string; deleted?: Record<string, number> }>(`/api/v1/admin/clear/${entity}`, { method: "POST" }),
 
+  startClearOperation: (entity: string) =>
+    request<{ job_id: string; status: "queued" }>("/api/v1/admin/operations/clear", {
+      method: "POST",
+      body: JSON.stringify({ entity }),
+    }),
+
+  getAdminOperationStatus: (jobId: string) =>
+    request<{
+      job_id: string;
+      status: "queued" | "running" | "complete" | "failed";
+      operation_type: "admin-clear" | "danbooru-import-all" | string;
+      progress?: { phase?: string; label?: string; current?: number; total?: number };
+      result?: any;
+      error?: string;
+      meta?: Record<string, any>;
+      updated_at?: number;
+    }>(`/api/v1/admin/operations/${jobId}`),
+
   resetSettings: () =>
     request<{ status: string; message: string }>("/api/v1/admin/reset-settings", { method: "POST" }),
 
@@ -374,6 +392,9 @@ export const api = {
 
   importAllDanbooru: (params: { creator_id?: string; creator_name?: string; url?: string; pixiv_id?: string; name?: string }) =>
     request<{ status: string; found?: boolean; creator_id?: string; artist_name?: string; links_imported: number; sources_created: number; subscription_id?: string }>("/api/v1/reference/danbooru/artist/import-all", { method: "POST", body: JSON.stringify(params) }),
+
+  importAllDanbooruAsync: (params: { creator_id?: string; creator_name?: string; url?: string; pixiv_id?: string; name?: string }) =>
+    request<{ job_id: string; status: "queued" }>("/api/v1/reference/danbooru/artist/import-all/async", { method: "POST", body: JSON.stringify(params) }),
 
   previewBatchImport: (pixivIds: string[]) =>
     request<{
@@ -495,11 +516,15 @@ export const queryKeys = {
   sources: ["sources"] as const,
   creators: {
     all: ["creators"] as const,
+    count: ["creators", "count"] as const,
+    list: (page = 0, limit = 50, filters?: unknown) => ["creators", "list", page, limit, filters || {}] as const,
     detail: (id: string) => ["creators", id] as const,
     links: (id: string) => ["creators", id, "links"] as const,
   },
   subscriptions: {
     all: ["subscriptions"] as const,
+    count: ["subscriptions", "count"] as const,
+    list: (page = 0, limit = 50, filters?: unknown) => ["subscriptions", "list", page, limit, filters || {}] as const,
     detail: (id: string) => ["subscriptions", id] as const,
     sources: (id: string) => ["subscriptions", id, "sources"] as const,
   },

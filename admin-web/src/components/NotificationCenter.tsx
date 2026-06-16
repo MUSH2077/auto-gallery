@@ -1,9 +1,9 @@
 "use client";
 import { createContext, useContext, useState, useCallback, useRef, useEffect, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
-import { api } from "@/lib/api";
+import { api, queryKeys } from "@/lib/api";
 
 type ActivityStatus = "running" | "completed" | "error" | "pending";
 
@@ -29,7 +29,20 @@ export interface BatchJobState {
   status: "pending" | "running" | "completed" | "error";
 }
 
+export interface OperationJobState {
+  jobId: string;
+  kind: "admin-clear" | "danbooru-import-all";
+  title: string;
+  startedAt: number;
+  status: "running" | "completed" | "error";
+  progress: { phase?: string; label?: string; current?: number; total?: number } | null;
+  result: any | null;
+  error?: string;
+  meta?: Record<string, any>;
+}
+
 const STORAGE_KEY = "danbooru_batch_job";
+const OPERATION_STORAGE_KEY = "admin_operation_job";
 
 interface NotificationCtx {
   items: ActivityItem[];
@@ -41,6 +54,14 @@ interface NotificationCtx {
   batchJob: BatchJobState | null;
   startBatchJob: (jobId: string, importType: "pixiv" | "url", total: number) => void;
   clearBatchJob: () => void;
+  operationJob: OperationJobState | null;
+  startOperationJob: (
+    jobId: string,
+    kind: OperationJobState["kind"],
+    title: string,
+    meta?: Record<string, any>,
+  ) => void;
+  clearOperationJob: () => void;
 }
 
 const NotificationContext = createContext<NotificationCtx>({
@@ -52,17 +73,109 @@ const NotificationContext = createContext<NotificationCtx>({
   batchJob: null,
   startBatchJob: () => {},
   clearBatchJob: () => {},
+  operationJob: null,
+  startOperationJob: () => {},
+  clearOperationJob: () => {},
 });
 
 let _activityId = 0;
 const MAX_ITEMS = 50;
 const COMPLETED_TTL = 30_000;
 
+function operationResultMessage(operation: OperationJobState): string {
+  if (operation.kind === "danbooru-import-all" && operation.status === "completed") {
+    if (operation.result?.found === false) return operation.result.message || "No matching Danbooru artist found";
+    return "Creators and subscriptions refreshed";
+  }
+  return operation.result?.message || "Complete";
+}
+
+function refetchCreatorSubscriptionQueries(qc: QueryClient) {
+  qc.invalidateQueries({ queryKey: queryKeys.creators.all });
+  qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+  qc.invalidateQueries({ queryKey: queryKeys.creators.count });
+  qc.invalidateQueries({ queryKey: queryKeys.subscriptions.count });
+  void Promise.all([
+    qc.refetchQueries({ queryKey: queryKeys.creators.all, type: "all" }),
+    qc.refetchQueries({ queryKey: queryKeys.subscriptions.all, type: "all" }),
+  ]);
+}
+
+function refreshOperationQueries(
+  qc: QueryClient,
+  kind: OperationJobState["kind"],
+  meta?: Record<string, any>,
+  result?: any,
+) {
+  if (kind === "danbooru-import-all") {
+    refetchCreatorSubscriptionQueries(qc);
+    qc.invalidateQueries({ queryKey: queryKeys.workbench });
+    qc.invalidateQueries({ queryKey: ["creator-subscription-overview"] });
+    const refetches = [
+      qc.refetchQueries({ queryKey: queryKeys.workbench, type: "all" }),
+      qc.refetchQueries({ queryKey: ["creator-subscription-overview"], type: "all" }),
+    ];
+    const creatorId = result?.creator_id;
+    if (creatorId) {
+      refetches.push(qc.refetchQueries({ queryKey: queryKeys.creators.detail(creatorId), type: "all" }));
+      refetches.push(qc.refetchQueries({ queryKey: queryKeys.creators.links(creatorId), type: "all" }));
+      refetches.push(qc.refetchQueries({ queryKey: ["creator-subscription-overview", creatorId], type: "all" }));
+    }
+    const subscriptionId = result?.subscription_id;
+    if (subscriptionId) {
+      refetches.push(qc.refetchQueries({ queryKey: queryKeys.subscriptions.detail(subscriptionId), type: "all" }));
+      refetches.push(qc.refetchQueries({ queryKey: queryKeys.subscriptions.sources(subscriptionId), type: "all" }));
+    }
+    void Promise.all(refetches);
+    return;
+  }
+
+  const entity = meta?.entity as string | undefined;
+  if (entity === "creators" || entity === "all") {
+    qc.setQueryData(queryKeys.creators.count, { count: 0 });
+    qc.setQueryData(queryKeys.subscriptions.count, { count: 0 });
+    qc.setQueriesData({ queryKey: ["creators", "list"] }, { items: [], total: 0 });
+    qc.setQueriesData({ queryKey: ["subscriptions", "list"] }, []);
+    qc.invalidateQueries({ queryKey: queryKeys.creators.all });
+    qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+    qc.invalidateQueries({ queryKey: queryKeys.workbench });
+    qc.invalidateQueries({ queryKey: ["repositories"] });
+    qc.invalidateQueries({ queryKey: ["creator-subscription-overview"] });
+  }
+  if (entity === "works" || entity === "all" || entity === "downloads") {
+    qc.invalidateQueries({ queryKey: queryKeys.works.all });
+    qc.invalidateQueries({ queryKey: queryKeys.workbench });
+    qc.invalidateQueries({ queryKey: ["storage-breakdown"] });
+    qc.invalidateQueries({ queryKey: ["system-info"] });
+    qc.invalidateQueries({ queryKey: queryKeys.curation.all });
+    qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+    qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
+  }
+  if (entity === "tags" || entity === "all") {
+    qc.invalidateQueries({ queryKey: queryKeys.tags.all });
+    qc.invalidateQueries({ queryKey: queryKeys.works.all });
+    qc.invalidateQueries({ queryKey: queryKeys.workbench });
+  }
+  if (entity === "jobs" || entity === "downloads" || entity === "all") {
+    qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+    qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+    qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
+    qc.invalidateQueries({ queryKey: ["queue-stats"] });
+    qc.invalidateQueries({ queryKey: queryKeys.workbench });
+  }
+  if (entity === "settings") {
+    qc.invalidateQueries({ queryKey: queryKeys.admin.settings });
+    qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
+    qc.invalidateQueries({ queryKey: ["gallerydl-config"] });
+  }
+}
+
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const t = useT();
   const qc = useQueryClient();
   const [items, setItems] = useState<ActivityItem[]>([]);
   const [batchJob, setBatchJob] = useState<BatchJobState | null>(null);
+  const [operationJob, setOperationJob] = useState<OperationJobState | null>(null);
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   // ─── Activity log ───
@@ -130,6 +243,32 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
   }, []);
 
+  const startOperationJob = useCallback((
+    jobId: string,
+    kind: OperationJobState["kind"],
+    title: string,
+    meta?: Record<string, any>,
+  ) => {
+    const state: OperationJobState = {
+      jobId, kind, title,
+      startedAt: Date.now(),
+      progress: null, result: null,
+      status: "running",
+      meta,
+    };
+    setOperationJob(state);
+    try {
+      sessionStorage.setItem(OPERATION_STORAGE_KEY, JSON.stringify({
+        jobId, kind, title, meta, startedAt: state.startedAt,
+      }));
+    } catch {}
+  }, []);
+
+  const clearOperationJob = useCallback(() => {
+    setOperationJob(null);
+    try { sessionStorage.removeItem(OPERATION_STORAGE_KEY); } catch {}
+  }, []);
+
   const clearRecent = useCallback(() => {
     timersRef.current.forEach((t) => clearTimeout(t));
     timersRef.current.clear();
@@ -138,7 +277,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     if (batchJob && batchJob.status !== "running") {
       clearBatchJob();
     }
-  }, [batchJob, clearBatchJob]);
+    if (operationJob && operationJob.status !== "running") {
+      clearOperationJob();
+    }
+  }, [batchJob, clearBatchJob, operationJob, clearOperationJob]);
 
   // Mount recovery: restore batch job from sessionStorage (only if recent)
   useEffect(() => {
@@ -175,6 +317,29 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     } catch {}
   }, []); // eslint-disable-line
 
+  useEffect(() => {
+    try {
+      const stored = sessionStorage.getItem(OPERATION_STORAGE_KEY);
+      if (!stored) return;
+      const parsed = JSON.parse(stored);
+      const age = Date.now() - parsed.startedAt;
+      if (age >= 2 * 60 * 60 * 1000) {
+        sessionStorage.removeItem(OPERATION_STORAGE_KEY);
+        return;
+      }
+      setOperationJob({
+        jobId: parsed.jobId,
+        kind: parsed.kind,
+        title: parsed.title,
+        meta: parsed.meta,
+        startedAt: parsed.startedAt,
+        progress: null,
+        result: null,
+        status: "running",
+      });
+    } catch {}
+  }, []);
+
   // ─── Global polling (layout level — never unmounts on page navigation) ───
   const batchStatusQuery = useQuery({
     queryKey: ["batch-import-status-global", batchJob?.jobId],
@@ -185,6 +350,19 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       if (!batchJob) return false;
       return query.state.data?.status === "completed" ? false : 2000;
     },
+  });
+
+  const operationStatusQuery = useQuery({
+    queryKey: ["admin-operation-status-global", operationJob?.jobId],
+    queryFn: () => api.getAdminOperationStatus(operationJob?.jobId || ""),
+    enabled: !!operationJob?.jobId && operationJob.status === "running",
+    staleTime: 0,
+    refetchInterval: (query) => {
+      if (!operationJob) return false;
+      const status = query.state.data?.status;
+      return status === "complete" || status === "failed" ? false : 2000;
+    },
+    retry: 2,
   });
 
   // Sync polling results to batch job state
@@ -198,8 +376,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
     if (data.result) {
       setBatchJob((prev) => prev ? { jobId: prev.jobId, importType: prev.importType, total: prev.total, startedAt: prev.startedAt, result: data.result, status: "completed" as const, progress: null } : prev);
-      qc.invalidateQueries({ queryKey: ["creators"] });
-      qc.invalidateQueries({ queryKey: ["subscriptions"] });
+      refetchCreatorSubscriptionQueries(qc);
+      qc.invalidateQueries({ queryKey: queryKeys.workbench });
+      qc.invalidateQueries({ queryKey: ["creator-subscription-overview"] });
     }
 
     // Handle expired/stuck jobs: no progress AND no result means Redis keys are gone
@@ -212,10 +391,39 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     }
   }, [batchStatusQuery.data, batchJob?.jobId]); // eslint-disable-line
 
+  useEffect(() => {
+    if (!operationJob || !operationStatusQuery.data) return;
+    const data = operationStatusQuery.data;
+
+    if (data.status === "queued" || data.status === "running") {
+      setOperationJob((prev) => prev && prev.jobId === operationJob.jobId
+        ? { ...prev, progress: data.progress || prev.progress, status: "running" }
+        : prev);
+      return;
+    }
+
+    if (data.status === "complete") {
+      setOperationJob((prev) => prev && prev.jobId === operationJob.jobId
+        ? { ...prev, progress: data.progress || prev.progress, result: data.result || null, status: "completed" }
+        : prev);
+      refreshOperationQueries(qc, operationJob.kind, operationJob.meta, data.result);
+      try { sessionStorage.removeItem(OPERATION_STORAGE_KEY); } catch {}
+      return;
+    }
+
+    if (data.status === "failed") {
+      setOperationJob((prev) => prev && prev.jobId === operationJob.jobId
+        ? { ...prev, progress: data.progress || prev.progress, error: data.error || "Operation failed", status: "error" }
+        : prev);
+      try { sessionStorage.removeItem(OPERATION_STORAGE_KEY); } catch {}
+    }
+  }, [operationStatusQuery.data, operationJob?.jobId]); // eslint-disable-line
+
   return (
     <NotificationContext.Provider value={{
       items, addActivity, updateActivity, removeActivity, clearRecent,
       batchJob, startBatchJob, clearBatchJob,
+      operationJob, startOperationJob, clearOperationJob,
     }}>
       {children}
     </NotificationContext.Provider>
@@ -230,7 +438,11 @@ export function useNotifications(): NotificationCtx {
 export function NotificationBell() {
   const t = useT();
   const router = useRouter();
-  const { items, removeActivity, clearRecent, clearBatchJob, batchJob } = useNotifications();
+  const {
+    items, removeActivity, clearRecent,
+    clearBatchJob, batchJob,
+    clearOperationJob, operationJob,
+  } = useNotifications();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -243,8 +455,9 @@ export function NotificationBell() {
   }, []);
 
   const activeCount = (batchJob?.status === "running" ? 1 : 0)
+    + (operationJob?.status === "running" ? 1 : 0)
     + items.filter((a) => a.status === "running").length;
-  const hasRecent = items.length > 0 || !!batchJob;
+  const hasRecent = items.length > 0 || !!batchJob || !!operationJob;
 
   const statusIcon = (status: ActivityStatus) => {
     if (status === "running") {
@@ -302,7 +515,7 @@ export function NotificationBell() {
                 className="text-xs text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-colors">
                 {t("notifications.title")} →
               </button>
-              {(items.length > 0 || batchJob) && (
+              {(items.length > 0 || batchJob || operationJob) && (
                 <button onClick={() => { clearRecent(); }}
                   className="text-xs text-[#57606a] transition-colors hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3]">
                   {t("notification.clear_all")}
@@ -350,6 +563,51 @@ export function NotificationBell() {
                       {batchJob.status !== "running" && (
                         <button
                           onClick={(e) => { e.stopPropagation(); clearBatchJob(); }}
+                          className="mt-0.5 shrink-0 text-[#8b949e] hover:text-[#57606a] dark:hover:text-[#e6edf3]"
+                          aria-label="Dismiss"
+                        >
+                          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                            <path d="M18 6L6 18M6 6l12 12" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {operationJob && (
+                  <div className="cursor-pointer border-b border-[#d8dee4] px-4 py-2.5 transition-colors hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]"
+                    onClick={() => {
+                      setOpen(false);
+                      router.push(operationJob.kind === "danbooru-import-all" ? "/admin/reference/danbooru" : "/admin/data-mgmt");
+                    }}>
+                    <div className="flex items-start gap-2.5">
+                      <div className="mt-0.5">{statusIcon(operationJob.status)}</div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{operationJob.title}</p>
+                        {operationJob.status === "error" && (
+                          <p className="text-xs text-red-400 mt-0.5 truncate">{operationJob.error || "Operation failed"}</p>
+                        )}
+                        {operationJob.progress?.label && operationJob.status === "running" && (
+                          <p className="mt-0.5 text-xs text-[#57606a] dark:text-[#8b949e] truncate">
+                            {operationJob.progress.label}
+                          </p>
+                        )}
+                        {operationJob.progress?.total && operationJob.progress.current !== undefined && (
+                          <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
+                            <div className="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
+                              style={{ width: `${(operationJob.progress.current / operationJob.progress.total) * 100}%` }} />
+                          </div>
+                        )}
+                        {operationJob.result && (
+                          <p className="mt-0.5 text-xs text-[#57606a] dark:text-[#8b949e] truncate">
+                            {operationResultMessage(operationJob)}
+                          </p>
+                        )}
+                        <span className="text-[10px] text-[#57606a] dark:text-[#8b949e]">{timeAgo(operationJob.startedAt)}</span>
+                      </div>
+                      {operationJob.status !== "running" && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); clearOperationJob(); }}
                           className="mt-0.5 shrink-0 text-[#8b949e] hover:text-[#57606a] dark:hover:text-[#e6edf3]"
                           aria-label="Dismiss"
                         >

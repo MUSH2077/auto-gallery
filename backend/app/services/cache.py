@@ -10,14 +10,16 @@ logger = logging.getLogger(__name__)
 
 CACHE_PREFIX = "cache:api:"
 DEFAULT_TTL = 300  # 5 minutes
+INTERACTIVE_LIST_TTL = 30
+STATS_TTL = 60
 
 # ── Per-endpoint TTL registry (single source of truth) ──
 TTL = {
-    "creators:list": 300,
-    "creators:count": 300,
-    "creators:stats": 60,
+    "creators:list": INTERACTIVE_LIST_TTL,
+    "creators:count": INTERACTIVE_LIST_TTL,
+    "creators:stats": STATS_TTL,
     "works:list": 300,
-    "subscriptions:list": 300,
+    "subscriptions:list": INTERACTIVE_LIST_TTL,
 }
 
 # Track first cache failure to avoid log spam (resets on success)
@@ -73,7 +75,7 @@ def cache_set(key: str, value: Any, ttl_seconds: int = DEFAULT_TTL) -> None:
         logger.debug("Cache write failed for key %s", key, exc_info=True)
 
 
-def cache_delete_pattern(pattern: str) -> None:
+def cache_delete_pattern(pattern: str) -> int:
     """Delete all keys matching a glob pattern. Best-effort."""
     try:
         r = _client()
@@ -81,8 +83,35 @@ def cache_delete_pattern(pattern: str) -> None:
         if keys:
             r.delete(*keys)
             logger.debug("Cache invalidated %d keys matching %s", len(keys), pattern)
+            return len(keys)
+        logger.debug("Cache invalidated 0 keys matching %s", pattern)
+        return 0
     except Exception:
         logger.debug("Cache invalidation failed for pattern %s", pattern, exc_info=True)
+        return 0
+
+
+def invalidate_api_caches(*domains: str) -> dict[str, int]:
+    """Invalidate one or more API cache domains such as creators/subscriptions."""
+    deleted: dict[str, int] = {}
+    for domain in dict.fromkeys(domains):
+        if domain:
+            deleted[domain] = cache_delete_pattern(f"{domain}:*")
+    if deleted:
+        total = sum(deleted.values())
+        if total:
+            logger.info("API cache invalidated domains=%s deleted=%d", sorted(deleted), total)
+        else:
+            logger.debug("API cache invalidated domains=%s deleted=0", sorted(deleted))
+    return deleted
+
+
+def invalidate_creator_subscription_caches(*, include_works: bool = False) -> dict[str, int]:
+    """Invalidate caches backing creator/subscription aggregate list views."""
+    domains = ["creators", "subscriptions"]
+    if include_works:
+        domains.append("works")
+    return invalidate_api_caches(*domains)
 
 
 def cache_delete(*keys: str) -> None:

@@ -1,8 +1,8 @@
 import asyncio
 import json
 import logging
+import uuid
 import re
-import urllib.parse
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,40 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.services import danbooru as danbooru_svc
+from app.services.danbooru_import import import_all_danbooru_artist
+from app.services.operations import set_operation_status
+from app.services.redis_client import get_redis
 from app.models.creator_link import CreatorLink
 from app.models.source_creator import SourceCreator
-import uuid
 
 logger = logging.getLogger(__name__)
-
-def _get_auto_enable_sources() -> set[str]:
-    """Read auto-enable-on-import from gallery-dl config.json per extractor."""
-    import json, os
-    try:
-        config_path = os.path.join(
-            os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"), "config.json")
-        if os.path.exists(config_path):
-            with open(config_path) as f:
-                cfg = json.load(f)
-            extractors = cfg.get("extractor", {})
-            result = set()
-            for src_name, src_cfg in extractors.items():
-                if src_cfg.get("auto-enable-on-import") is True:
-                    # Map gallery-dl extractor names to provider source names
-                    if src_name == "twitter":
-                        result.add("x")
-                    else:
-                        result.add(src_name)
-            if result:
-                return result
-    except Exception:
-        pass
-    return {"pixiv"}
-
-
-def _is_source_auto_enabled(source: str) -> bool:
-    return source in _get_auto_enable_sources()
-
 
 router = APIRouter(dependencies=[RequireAdmin])
 
@@ -217,179 +190,36 @@ async def import_all_danbooru(data: dict, db: AsyncSession = Depends(get_db)):
     Accepts: {creator_id?: UUID, name?: str, url?: str, pixiv_id?: str}
     If no creator_id, creates a new Creator. Always creates Subscription + Sources.
     """
-    from app.models.creator import Creator
-    from app.models.subscription import Subscription
-    from app.models.subscription_source import SubscriptionSource
+    return await import_all_danbooru_artist(data, db)
 
+
+@router.post("/danbooru/artist/import-all/async")
+async def import_all_danbooru_async(data: dict):
+    """Enqueue one-click Danbooru import and return a pollable operation id."""
     source_url = data.get("url") or data.get("source_url")
     pixiv_id = data.get("pixiv_id")
     artist_name = data.get("name") or data.get("tag")
-    creator_name = data.get("creator_name", "").strip()
-
     if not source_url and not pixiv_id and not artist_name:
         raise HTTPException(status_code=400, detail="At least one of url, pixiv_id, or name is required")
 
-    artist, links = await asyncio.to_thread(
-        danbooru_svc.search_and_extract,
-        source_url=source_url, pixiv_id=pixiv_id, artist_name=artist_name,
+    job_id = str(uuid.uuid4())
+    set_operation_status(
+        job_id,
+        "queued",
+        "danbooru-import-all",
+        progress={"phase": "queued", "label": "Queued Danbooru import"},
+        meta={"name": artist_name, "pixiv_id": pixiv_id},
     )
-    if not artist:
-        return {"status": "ok", "found": False, "message": "No matching Danbooru artist found"}
-
-    # Step 1: Get or create Creator (with dedup check)
-    from app.services.creator_dedup import find_existing_creator
-
-    creator_id_str = data.get("creator_id")
-    if creator_id_str:
-        creator_id = UUID(creator_id_str)
-        creator = await db.get(Creator, creator_id)
-        if not creator:
-            raise HTTPException(status_code=404, detail="Creator not found")
-    else:
-        # canonical_name: Danbooru tag name (slug-like, lowercase) — used for dedup/identity
-        # chosen_display: user-provided pretty name or fallback
-        canonical_name = artist.get("name", "Unknown")
-        chosen_display = creator_name or canonical_name
-
-        # Extract Pixiv user ID from artist URLs for secondary dedup check
-        _pixiv_user_id: str | None = None
-        _pixiv_profile_url: str | None = None
-        for _u in artist.get("urls", []):
-            _raw_url = _u.get("normalized_url") or _u.get("url", "")
-            _m = re.search(r'pixiv\.net/(?:en/)?users/(\d+)', _raw_url)
-            if _m:
-                _pixiv_user_id = _m.group(1)
-                _pixiv_profile_url = f"https://www.pixiv.net/users/{_pixiv_user_id}"
-                break
-
-        # Three-level dedup: danbooru_artist_id → Pixiv source_creator_id → Pixiv profile URL
-        existing = await find_existing_creator(
-            db,
-            danbooru_artist_id=artist.get("id"),
-            source="pixiv" if _pixiv_user_id else None,
-            source_creator_id=_pixiv_user_id,
-            source_url=_pixiv_profile_url,
-        )
-        if existing:
-            creator = existing
-            creator_id = creator.id
-            creator_id_str = str(creator_id)
-            # Only update display_name if user explicitly chose one
-            if creator_name:
-                creator.display_name = creator_name
-        else:
-            creator = Creator(name=canonical_name, display_name=chosen_display)
-            db.add(creator)
-            await db.flush()
-            creator_id = creator.id
-            creator_id_str = str(creator_id)
-
-    # Step 2: Enrich Creator with Danbooru data
-    if creator.danbooru_artist_id is None:
-        creator.danbooru_artist_id = artist.get("id")
-    if not creator.description:
-        parts = []
-        other_names = artist.get("other_names", [])
-        if other_names:
-            parts.append(f"Danbooru aliases: {', '.join(other_names)}")
-        notes = artist.get("notes")
-        if notes:
-            parts.append(notes)
-        if parts:
-            creator.description = "\n".join(parts)
-
-    # Step 3: Import all creator links
-    links_created = 0
-    for link_data in links:
-        existing = await db.execute(
-            select(CreatorLink).where(
-                CreatorLink.creator_id == creator_id,
-                CreatorLink.url == link_data["url"],
-            )
-        )
-        if existing.scalar_one_or_none():
-            continue
-        db.add(CreatorLink(
-            creator_id=creator_id,
-            url=link_data["url"],
-            link_type=link_data["link_type"],
-            source=link_data["source"],
-            confidence=link_data["confidence"],
-            is_verified=link_data["is_verified"],
-            notes=link_data.get("notes"),
-        ))
-        links_created += 1
-
-    # Step 4: Get or create Subscription
-    sub_result = await db.execute(
-        select(Subscription).where(Subscription.creator_id == creator_id)
+    queue = Queue(name="imports", connection=get_redis())
+    rq_job = queue.enqueue(
+        "app.jobs.danbooru_import.run_import_all_danbooru",
+        data,
+        job_id,
+        job_timeout=3600,
+        result_ttl=7200,
     )
-    subscription = sub_result.scalar_one_or_none()
-    if not subscription:
-        from app.services.subscription import get_subscription_defaults
-        defaults = await get_subscription_defaults(db)
-        subscription = Subscription(creator_id=creator_id, name=creator_name or None,
-            sync_interval_hours=defaults["sync_interval_hours"],
-            sync_enabled=defaults["sync_enabled"],
-            is_active=defaults["is_active"])
-        db.add(subscription)
-        await db.flush()
-
-    # Step 5: Create SubscriptionSources for downloadable URLs
-    sources_created = 0
-    for u in artist.get("urls", []):
-        raw_url = u.get("normalized_url") or u.get("url", "")
-        if not raw_url or not u.get("is_active", True):
-            continue
-        if not danbooru_svc.is_downloadable_url(raw_url):
-            continue
-        # Check if source already exists
-        existing_ss = await db.execute(
-            select(SubscriptionSource).where(
-                SubscriptionSource.subscription_id == subscription.id,
-                SubscriptionSource.source_url == raw_url,
-            )
-        )
-        if existing_ss.scalar_one_or_none():
-            continue
-        db.add(SubscriptionSource(
-            subscription_id=subscription.id,
-            source=danbooru_svc._classify_url(raw_url),
-            source_url=raw_url,
-            is_enabled=_is_source_auto_enabled(danbooru_svc._classify_url(raw_url)),
-        ))
-        sources_created += 1
-
-    # Step 6: Create Danbooru subscription source (default disabled)
-    danbooru_posts_url = (
-        f"https://danbooru.donmai.us/posts?tags={urllib.parse.quote(artist['name'])}"
-    )
-    existing_ds = await db.execute(
-        select(SubscriptionSource).where(
-            SubscriptionSource.subscription_id == subscription.id,
-            SubscriptionSource.source == "danbooru",
-        )
-    )
-    if not existing_ds.scalar_one_or_none():
-        db.add(SubscriptionSource(
-            subscription_id=subscription.id,
-            source="danbooru",
-            source_url=danbooru_posts_url,
-            is_enabled=False,
-        ))
-        sources_created += 1
-
-    await db.commit()
-
-    return {
-        "status": "ok",
-        "found": True,
-        "creator_id": creator_id_str,
-        "artist_name": artist["name"],
-        "links_imported": links_created,
-        "sources_created": sources_created,
-        "subscription_id": str(subscription.id),
-    }
+    logger.info("Enqueued Danbooru import-all operation job_id=%s rq_job=%s", job_id, rq_job.id)
+    return {"job_id": job_id, "status": "queued"}
 
 
 async def _precheck_pixiv_ids(pixiv_ids: list[str]) -> dict:

@@ -13,7 +13,14 @@ from app.schemas.subscription import SubscriptionCreate, SubscriptionRead, Subsc
 from app.schemas.subscription_source import SubscriptionSourceCreate, SubscriptionSourceRead, SubscriptionSourceUpdate
 from app.services.subscription_enqueue import enqueue_subscription_source_sync
 from app.services.subscription import SubscriptionService
-from app.services.cache import cache_get, cache_set, cache_key, cache_delete_pattern
+from app.services.cache import (
+    cache_get,
+    cache_set,
+    cache_key,
+    TTL,
+    invalidate_api_caches,
+    invalidate_creator_subscription_caches,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[RequireAdmin])
@@ -48,7 +55,7 @@ async def list_subscriptions(
                                         sync_enabled=sync_enabled,
                                         never_synced=never_synced)
     items = [SubscriptionRead.model_validate(s, from_attributes=True) for s in subs]
-    cache_set(ck, items, 300)
+    cache_set(ck, items, TTL["subscriptions:list"])
     return items
 
 
@@ -65,6 +72,7 @@ async def batch_delete_subscriptions(data: dict, db: AsyncSession = Depends(get_
             results.append({"id": sid, "status": "deleted"})
         except Exception as e:
             results.append({"id": sid, "status": "error", "error": str(e)})
+    invalidate_creator_subscription_caches()
     return {"status": "ok", "results": results}
 
 
@@ -81,6 +89,7 @@ async def batch_toggle_sync(data: dict, db: AsyncSession = Depends(get_db)):
             results.append({"id": sid, "status": "updated", "sync_enabled": enabled})
         except Exception as e:
             results.append({"id": sid, "status": "error", "error": str(e)})
+    invalidate_api_caches("subscriptions", "creators")
     return {"status": "ok", "results": results}
 
 
@@ -119,7 +128,9 @@ async def trigger_subscription_sync(subscription_id: UUID, db: AsyncSession = De
     if errors and not job_ids:
         return {"status": "error", "message": "All enqueue attempts failed", "job_ids": [], "skipped": skipped, "errors": errors}
     if errors:
+        invalidate_api_caches("subscriptions", "creators")
         return {"status": "partial_error", "message": f"Enqueued {len(job_ids)} jobs, {len(errors)} failed", "job_ids": job_ids, "skipped": skipped, "errors": errors}
+    invalidate_api_caches("subscriptions", "creators")
     return {"status": "ok", "message": f"Enqueued {len(job_ids)} download jobs", "job_ids": job_ids, "skipped": skipped}
 
 
@@ -136,8 +147,7 @@ async def get_subscription(subscription_id: UUID, db: AsyncSession = Depends(get
 async def create_subscription(data: SubscriptionCreate, db: AsyncSession = Depends(get_db)):
     svc = SubscriptionService(db)
     result = await svc.create_subscription(data.model_dump())
-    cache_delete_pattern("subscriptions:*")
-    cache_delete_pattern("creators:*")
+    invalidate_creator_subscription_caches()
     return result
 
 
@@ -145,7 +155,9 @@ async def create_subscription(data: SubscriptionCreate, db: AsyncSession = Depen
 async def update_subscription(subscription_id: UUID, data: SubscriptionUpdate, db: AsyncSession = Depends(get_db)):
     svc = SubscriptionService(db)
     try:
-        return await svc.update_subscription(subscription_id, data.model_dump(exclude_unset=True))
+        result = await svc.update_subscription(subscription_id, data.model_dump(exclude_unset=True))
+        invalidate_creator_subscription_caches()
+        return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -155,6 +167,7 @@ async def delete_subscription(subscription_id: UUID, db: AsyncSession = Depends(
     svc = SubscriptionService(db)
     try:
         await svc.delete_subscription(subscription_id)
+        invalidate_creator_subscription_caches()
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -173,7 +186,9 @@ async def add_subscription_source(
     d = data.model_dump()
     d["subscription_id"] = subscription_id
     try:
-        return await svc.add_source(d)
+        result = await svc.add_source(d)
+        invalidate_creator_subscription_caches(include_works=True)
+        return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -184,7 +199,9 @@ async def update_subscription_source(
 ):
     svc = SubscriptionService(db)
     try:
-        return await svc.update_source(ss_id, data.model_dump(exclude_none=True))
+        result = await svc.update_source(ss_id, data.model_dump(exclude_none=True))
+        invalidate_creator_subscription_caches(include_works=True)
+        return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -194,5 +211,6 @@ async def delete_subscription_source(subscription_id: UUID, ss_id: UUID, db: Asy
     svc = SubscriptionService(db)
     try:
         await svc.delete_source(ss_id)
+        invalidate_creator_subscription_caches(include_works=True)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
