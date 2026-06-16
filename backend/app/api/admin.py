@@ -8,6 +8,7 @@ import tarfile
 import tempfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
@@ -1719,6 +1720,55 @@ async def get_auth_status(db: AsyncSession = Depends(get_db)):
     return {
         "sources": sources,
         "summary": {"total": len(sources), "healthy": healthy, "unhealthy": unhealthy, "unknown": unknown},
+    }
+
+
+@router.post("/auth-status/{source_id}/reset")
+async def reset_auth_health(source_id: UUID, db: AsyncSession = Depends(get_db)):
+    """Reset auth health for a subscription source — allows sync to resume.
+
+    Use this after fixing credentials (e.g. updating refresh token, cookies,
+    or password). The next download attempt will re-evaluate auth health.
+    """
+    from app.models import SubscriptionSource
+
+    ss = await db.get(SubscriptionSource, source_id)
+    if not ss:
+        raise HTTPException(status_code=404, detail="Subscription source not found")
+
+    ss.auth_healthy = True
+    ss.auth_status = None
+    ss.auth_error_reason = None
+    ss.last_auth_checked_at = None
+    await db.commit()
+
+    return {
+        "status": "ok",
+        "message": f"Auth health reset for source {source_id}. Next sync will re-evaluate.",
+        "source": ss.source,
+        "source_url": ss.source_url,
+    }
+
+
+@router.post("/auth-status/reset-all")
+async def reset_all_auth_health(db: AsyncSession = Depends(get_db)):
+    """Reset auth health for ALL unhealthy subscription sources."""
+    from app.models import SubscriptionSource
+    from sqlalchemy import update
+
+    result = await db.execute(
+        update(SubscriptionSource)
+        .where(SubscriptionSource.auth_healthy == False)  # noqa: E712
+        .values(auth_healthy=True, auth_status=None, auth_error_reason=None, last_auth_checked_at=None)
+        .returning(SubscriptionSource.id)
+    )
+    await db.commit()
+    reset_ids = [str(r[0]) for r in result.all()]
+
+    return {
+        "status": "ok",
+        "message": f"Reset auth health for {len(reset_ids)} source(s).",
+        "reset_source_ids": reset_ids,
     }
 
 
