@@ -108,7 +108,7 @@ async def trigger_subscription_sync(subscription_id: UUID, db: AsyncSession = De
     errors = []
 
     for ss in sub_sources:
-        result = await enqueue_subscription_source_sync(db, ss.id, trigger="manual_subscription")
+        result = await enqueue_subscription_source_sync(db, ss.id, trigger="manual_subscription", force=True)
         if result["status"] == "enqueued":
             job_ids.append(result["job_id"])
         elif result["status"] == "error":
