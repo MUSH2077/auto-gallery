@@ -1,7 +1,15 @@
 import os
 import secrets
+from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings
+
+
+def _is_placeholder(value: str | None) -> bool:
+    if not value:
+        return False
+    normalized = value.strip().lower()
+    return normalized == "changeme" or normalized.startswith("change-me")
 
 
 class Settings(BaseSettings):
@@ -30,7 +38,7 @@ class Settings(BaseSettings):
         super().__init__(**kwargs)
         # Generate a persistent SECRET_KEY on first run so JWT signing is
         # secure from the very first request, before the lifespan runs.
-        if not self.secret_key or self.secret_key == "changeme":
+        if not self.secret_key or self.secret_key.strip().lower() == "changeme":
             key_dir = self.app_config_root
             key_file = os.path.join(key_dir, "secret_key")
             try:
@@ -48,22 +56,23 @@ class Settings(BaseSettings):
         # Validate critical settings aren't at insecure defaults
         errors: list[str] = []
 
-        if not self.secret_key or self.secret_key == "changeme":
-            errors.append("SECRET_KEY is not set or is still 'changeme'.")
-        if not self.admin_password or self.admin_password == "changeme":
-            errors.append("ADMIN_PASSWORD is not set or is still 'changeme'.")
+        if not self.secret_key or _is_placeholder(self.secret_key):
+            errors.append("SECRET_KEY is not set or is still a factory placeholder.")
+        if not self.admin_password or _is_placeholder(self.admin_password):
+            errors.append("ADMIN_PASSWORD is not set or is still a factory placeholder.")
+        if _is_placeholder(self.meili_master_key):
+            errors.append("MEILI_MASTER_KEY is still a factory placeholder.")
 
         # Check DB/Redis passwords — refuse to start with factory defaults.
         # Parse the password component from each URL to avoid false positives
         # when "changeme" appears as part of a longer legitimate password.
-        from urllib.parse import urlparse
         for label, url in [("DATABASE_URL", self.database_url), ("REDIS_URL", self.redis_url)]:
             try:
                 parsed = urlparse(url)
                 pwd = parsed.password or ""
-                if pwd == "changeme":
+                if _is_placeholder(pwd):
                     errors.append(
-                        f"{label} password is still 'changeme'. "
+                        f"{label} password is still a factory placeholder. "
                         "Copy .env.example to .env and replace the placeholder."
                     )
             except Exception:

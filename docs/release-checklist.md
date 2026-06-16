@@ -24,20 +24,29 @@ Use this checklist before tagging a public release.
 ## Local Checks
 
 ```bash
-cd backend && pytest
-cd ../admin-web && npm ci && npm run build
+cd backend
+python -m pytest
+ruff check app tests
+
+cd ../admin-web
+npm ci
+npm run typecheck
+npm run build
+
 cd ..
+docker compose --env-file .env.ci config --quiet
 docker compose build backend admin-web
-docker compose up -d backend worker scheduler admin-web
-docker compose ps backend worker scheduler admin-web
+docker compose up -d
+scripts/verify-runtime.sh
 curl -I http://localhost:13000/admin
 ```
 
 Expected result:
 
-- `backend`, `worker`, `scheduler`, and `admin-web` are healthy.
+- All Compose services are healthy.
 - `http://localhost:13000/admin` returns `200`.
 - No `.env`, cookies, private media, database dumps, or local runtime data are tracked.
+- Release package dry run only includes tracked files and excludes runtime/cache paths.
 
 ## Publishing
 

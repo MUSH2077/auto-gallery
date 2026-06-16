@@ -1,10 +1,10 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
-COPY package.json ./
+COPY package.json package-lock.json ./
 ARG NPM_REGISTRY
 RUN if [ -n "$NPM_REGISTRY" ]; then \
       npm config set registry "$NPM_REGISTRY"; \
-    fi && npm install
+    fi && npm ci
 
 FROM node:20-alpine AS builder
 WORKDIR /app

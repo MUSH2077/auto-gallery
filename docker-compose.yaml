@@ -12,19 +12,23 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 15s
     restart: unless-stopped
     mem_limit: 384M
 
   redis:
     image: redis:7-alpine
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD} --maxmemory 64mb --maxmemory-policy allkeys-lru
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
     volumes:
       - ${HOST_REDIS:-./data/docker/redis}:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$${REDIS_PASSWORD}\" redis-cli ping"]
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 10s
     restart: unless-stopped
     mem_limit: 128M
 
@@ -41,6 +45,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 20s
     restart: unless-stopped
 
   backend:
@@ -83,10 +88,11 @@ services:
       meilisearch:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/api/v1/system/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/api/v1/system/ready"]
       interval: 15s
       timeout: 5s
       retries: 3
+      start_period: 30s
     restart: unless-stopped
     mem_limit: 512M
 
@@ -113,10 +119,11 @@ services:
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
     healthcheck:
-      test: ["CMD", "python3", "-c", "import os, redis, subprocess; r=redis.from_url(os.environ['REDIS_URL']); assert r.ping(); assert subprocess.run(['gallery-dl', '--version'], capture_output=True, timeout=5).returncode == 0"]
+      test: ["CMD", "python3", "-c", "import os, shutil, redis; assert redis.from_url(os.environ['REDIS_URL']).ping(); assert shutil.which('gallery-dl')"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
     depends_on:
       postgres:
         condition: service_healthy
@@ -148,10 +155,11 @@ services:
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
     healthcheck:
-      test: ["CMD", "python3", "-c", "import redis; r=redis.from_url('redis://:${REDIS_PASSWORD}@redis:6379/0'); assert r.ping()"]
+      test: ["CMD", "python3", "-c", "import os, redis; assert redis.from_url(os.environ['REDIS_URL']).ping()"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
     depends_on:
       postgres:
         condition: service_healthy
@@ -183,11 +191,14 @@ services:
       - ${HOST_LIBRARY:-./data/library}:/library
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
     healthcheck:
-      test: ["CMD", "python3", "-c", "import redis; r=redis.from_url('redis://:${REDIS_PASSWORD}@redis:6379/0'); assert r.ping()"]
+      test: ["CMD", "python3", "-c", "import os, redis; assert redis.from_url(os.environ['REDIS_URL']).ping()"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
@@ -210,7 +221,9 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+      start_period: 20s
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
     mem_limit: 256M

@@ -113,13 +113,13 @@ uvicorn app.main:app --reload --port 8000
 
 ```bash
 # All tests
-docker compose run --rm backend pytest
+docker compose run --rm -e PYTHONDONTWRITEBYTECODE=1 backend python -m pytest
 
 # Single test file
-docker compose run --rm backend pytest tests/test_providers.py
+docker compose run --rm -e PYTHONDONTWRITEBYTECODE=1 backend python -m pytest tests/test_providers.py
 
 # With coverage
-docker compose run --rm backend pytest --cov=app
+docker compose run --rm -e PYTHONDONTWRITEBYTECODE=1 backend python -m pytest --cov=app
 ```
 
 For local virtualenv runs, install the same dependency set used by CI:
@@ -128,11 +128,33 @@ For local virtualenv runs, install the same dependency set used by CI:
 cd backend
 source venv/bin/activate
 pip install -r requirements.txt
-pytest
+python -m pytest
+ruff check app tests
 ```
 
 The test suite sets safe test defaults in `tests/conftest.py` before importing
 the app, so local runs do not need production secrets.
+
+If a previous root/container run left host-owned bytecode caches behind, remove
+them before running tests as your normal user:
+
+```bash
+sudo find backend -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} +
+```
+
+### Python dependency lock
+
+Backend runtime and CI install `requirements.txt`, which is generated from
+`requirements.in` with `pip-tools`.
+
+```bash
+cd backend
+python -m pip install pip-tools
+pip-compile --resolver=backtracking --allow-unsafe --output-file requirements.txt requirements.in
+```
+
+Keep provider-sensitive packages such as `gallery-dl` pinned and run the Docker
+Compose smoke test before merging dependency updates.
 
 ### Database migrations
 
@@ -219,6 +241,7 @@ The dev server proxies API requests to the backend (configured via `BACKEND_INTE
 ### Building for production
 
 ```bash
+npm run typecheck
 npm run build
 ```
 
@@ -226,6 +249,7 @@ npm run build
 
 ```bash
 # Check for TypeScript/build errors
+npm run typecheck
 npm run build
 
 # The build output will show any type errors or compilation issues
@@ -309,4 +333,15 @@ docker compose up -d admin-web
 docker compose build backend admin-web
 docker compose up -d backend admin-web worker-download worker-import scheduler
 scripts/verify-runtime.sh
+```
+
+For CI-style runtime verification with the checked-in safe environment:
+
+```bash
+docker compose --env-file .env.ci config --quiet
+docker compose --env-file .env.ci build backend admin-web
+docker compose --env-file .env.ci up -d
+COMPOSE_ENV_FILE=.env.ci scripts/verify-runtime.sh
+docker compose --env-file .env.ci down -v
+rm -rf data
 ```

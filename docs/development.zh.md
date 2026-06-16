@@ -114,13 +114,13 @@ uvicorn app.main:app --reload --port 8000
 
 ```bash
 # 全部测试
-docker compose run --rm backend pytest
+docker compose run --rm -e PYTHONDONTWRITEBYTECODE=1 backend python -m pytest
 
 # 单个测试文件
-docker compose run --rm backend pytest tests/test_providers.py
+docker compose run --rm -e PYTHONDONTWRITEBYTECODE=1 backend python -m pytest tests/test_providers.py
 
 # 含覆盖率
-docker compose run --rm backend pytest --cov=app
+docker compose run --rm -e PYTHONDONTWRITEBYTECODE=1 backend python -m pytest --cov=app
 ```
 
 如果使用本地虚拟环境，安装和 CI 相同的依赖集：
@@ -129,10 +129,31 @@ docker compose run --rm backend pytest --cov=app
 cd backend
 source venv/bin/activate
 pip install -r requirements.txt
-pytest
+python -m pytest
+ruff check app tests
 ```
 
 测试套件会在 `tests/conftest.py` 中先设置安全的测试默认值，因此本地运行不需要生产密钥。
+
+如果之前用 root 或容器在宿主机源码树里留下了不可写的字节码缓存，可以先清理：
+
+```bash
+sudo find backend -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} +
+```
+
+### Python 依赖锁
+
+后端运行时和 CI 都安装 `requirements.txt`；它由 `requirements.in` 通过
+`pip-tools` 生成。
+
+```bash
+cd backend
+python -m pip install pip-tools
+pip-compile --resolver=backtracking --allow-unsafe --output-file requirements.txt requirements.in
+```
+
+像 `gallery-dl` 这类 provider 敏感依赖必须固定版本；升级后先跑 Docker
+Compose smoke test 再合并。
 
 ### 数据库迁移
 
@@ -219,6 +240,7 @@ npm run dev
 ### 生产构建
 
 ```bash
+npm run typecheck
 npm run build
 ```
 
@@ -226,6 +248,7 @@ npm run build
 
 ```bash
 # 检查 TypeScript/构建错误
+npm run typecheck
 npm run build
 
 # 构建输出会显示所有类型错误和编译问题
@@ -309,4 +332,15 @@ docker compose up -d admin-web
 docker compose build backend admin-web
 docker compose up -d backend admin-web worker-download worker-import scheduler
 scripts/verify-runtime.sh
+```
+
+使用仓库内安全 CI 环境做运行时验证：
+
+```bash
+docker compose --env-file .env.ci config --quiet
+docker compose --env-file .env.ci build backend admin-web
+docker compose --env-file .env.ci up -d
+COMPOSE_ENV_FILE=.env.ci scripts/verify-runtime.sh
+docker compose --env-file .env.ci down -v
+rm -rf data
 ```
