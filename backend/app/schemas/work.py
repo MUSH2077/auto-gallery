@@ -9,7 +9,7 @@ from app.schemas.curation import CurationStateRead
 class WorkList(BaseModel):
     id: UUID
     title: str | None = None
-    posted_at: str | None = None
+    posted_at: datetime | None = None
     thumbnail_asset_id: str | None = None
     asset_count: int = 1
     is_nsfw: bool
@@ -35,7 +35,7 @@ class WorkRead(BaseModel):
     id: UUID
     title: str | None = None
     description: str | None = None
-    posted_at: str | None = None
+    posted_at: datetime | None = None
     thumbnail_asset_id: str | None = None
     asset_count: int = 1
     is_nsfw: bool

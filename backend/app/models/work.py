@@ -1,4 +1,6 @@
-from sqlalchemy import Boolean, String, Text
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
@@ -9,7 +11,7 @@ class Work(TimestampMixin, Base):
 
     title: Mapped[str | None] = mapped_column(String(1000))
     description: Mapped[str | None] = mapped_column(Text)
-    posted_at: Mapped[str | None] = mapped_column(String(100))
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_nsfw: Mapped[bool] = mapped_column(Boolean, default=False)
     is_ai_generated: Mapped[bool] = mapped_column(Boolean, default=False)
     thumbnail_asset_id: Mapped[str | None] = mapped_column(String(36))
