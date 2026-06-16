@@ -343,5 +343,8 @@ docker compose --env-file .env.ci build backend admin-web
 docker compose --env-file .env.ci up -d
 COMPOSE_ENV_FILE=.env.ci scripts/verify-runtime.sh
 docker compose --env-file .env.ci down -v
-rm -rf data
 ```
+
+`.env.ci` uses Docker named volumes instead of repository-local `data/ci`
+bind mounts, so `down -v` removes container-written runtime data without
+leaving root-owned files in the working tree.

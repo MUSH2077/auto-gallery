@@ -342,5 +342,7 @@ docker compose --env-file .env.ci build backend admin-web
 docker compose --env-file .env.ci up -d
 COMPOSE_ENV_FILE=.env.ci scripts/verify-runtime.sh
 docker compose --env-file .env.ci down -v
-rm -rf data
 ```
+
+`.env.ci` 使用 Docker named volumes，而不是仓库内 `data/ci` bind mount；
+因此 `down -v` 会清掉容器写入的运行数据，不会在工作区留下 root-owned 文件。

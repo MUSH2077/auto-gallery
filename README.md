@@ -75,8 +75,8 @@ See [docs/providers.md](docs/providers.md) and
 git clone <repo-url> auto-gallery
 cd auto-gallery
 
-cp .env.example .env
-# Edit .env: replace service secrets and set ports, timezone, and host paths.
+scripts/generate-env.sh
+# Review .env: set ports, timezone, and host paths.
 # ADMIN_PASSWORD may stay change-me-admin for first login; the UI forces a change.
 
 docker compose up -d
@@ -95,8 +95,8 @@ For a full deployment guide, see [docs/setup.md](docs/setup.md).
 
 ## First Deployment Checklist
 
-- Copy `.env.example` to `.env`.
-- Replace `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `MEILI_MASTER_KEY`, and `SECRET_KEY`.
+- Run `scripts/generate-env.sh`, or copy `.env.example` to `.env` and replace
+  `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `MEILI_MASTER_KEY`, and `SECRET_KEY`.
 - First login is `admin / change-me-admin`; you may also set a custom
   `ADMIN_PASSWORD` before deployment. The UI forces a password change after login.
 - Choose host paths for downloads, library, app config, gallery-dl config, and
