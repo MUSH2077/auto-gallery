@@ -440,7 +440,7 @@ async def run_import_job(import_job_id: str):
                             logger.warning("pHash failed for %s: %s", fp, _phash_err)
 
                     if idx == 0:
-                        work.thumbnail_asset_id = str(asset.id)
+                        work.thumbnail_asset_id = asset.id
 
                     db.add(AssetSource(
                         asset_id=asset.id, work_source_id=ws.id,

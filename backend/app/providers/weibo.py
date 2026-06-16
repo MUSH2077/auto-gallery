@@ -114,7 +114,7 @@ class WeiboProvider(BaseProvider):
 
         return False
 
-    def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
+    def build_gallerydl_config(self, subscription_source) -> dict:
         config: dict = {
             "extractor": {
                 "weibo": {
@@ -126,8 +126,6 @@ class WeiboProvider(BaseProvider):
         cookies_path = "/gallerydl-config/cookies/weibo.txt"
         if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 0:
             config["extractor"]["weibo"]["cookies"] = cookies_path
-        if naming_template:
-            config["extractor"]["weibo"]["directory"] = naming_template.template
         return config
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:

@@ -139,13 +139,6 @@ class TestLofterProvider:
         assert r["source_work_id"] == "312dae80_1ccaa179b"
 
     def test_build_gallerydl_config_includes_id(self):
-        # Without naming template, directory is NOT in per-job config (base config handles it)
-        cfg = self.p.build_gallerydl_config(None, None)
+        # Directory is controlled by the admin gallery-dl config, not provider defaults.
+        cfg = self.p.build_gallerydl_config(None)
         assert "directory" not in cfg["extractor"]["lofter"]
-
-    def test_build_gallerydl_config_with_template(self):
-        from unittest.mock import Mock
-        tpl = Mock()
-        tpl.template = "lofter/{blog_name}/{id}"
-        cfg = self.p.build_gallerydl_config(None, tpl)
-        assert cfg["extractor"]["lofter"]["directory"] == "lofter/{blog_name}/{id}"

@@ -100,24 +100,16 @@ def _deep_merge_missing(base: Any, fallback: Any) -> Any:
     return merged
 
 
-def _normalize_directory(value: Any) -> Any:
-    if isinstance(value, str) and "/" in value:
-        return [part for part in value.split("/") if part]
-    return value
-
-
 def merge_gallerydl_effective_config(
     source: str,
     provider_config: dict | None,
     user_config: dict | None,
-    naming_template: str | None = None,
 ) -> dict:
     """Build a per-job config where user settings win over provider defaults.
 
     Provider config supplies safe fallback values such as default cookie paths.
     The saved gallery-dl config is treated as user intent and is never overwritten
-    by provider defaults. A selected naming template is also user-managed and wins
-    for the source directory.
+    by provider defaults.
     """
     extractor_key = extractor_key_for_source(source)
     provider_extractors = (provider_config or {}).get("extractor", {})
@@ -127,8 +119,6 @@ def merge_gallerydl_effective_config(
     user_source_cfg = user_extractors.get(extractor_key, {})
 
     source_cfg = _deep_merge_missing(user_source_cfg, provider_source_cfg)
-    if naming_template:
-        source_cfg["directory"] = _normalize_directory(naming_template)
 
     effective: dict[str, Any] = {"extractor": {extractor_key: source_cfg}}
     for key in ("postprocessors", "output", "downloader"):
@@ -140,7 +130,6 @@ def merge_gallerydl_effective_config(
 def build_effective_gallerydl_config(
     source: str,
     provider_config: dict | None,
-    naming_template: str | None = None,
     user_config: dict | None = None,
 ) -> dict:
     if user_config is None:
@@ -149,5 +138,4 @@ def build_effective_gallerydl_config(
         source=source,
         provider_config=provider_config,
         user_config=user_config,
-        naming_template=naming_template,
     )

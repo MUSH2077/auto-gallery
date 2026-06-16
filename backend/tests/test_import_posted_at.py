@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
+from uuid import UUID, uuid4
 
 from app.jobs.import_runner import _parse_posted_at, _posted_at_json
+from app.models.work import Work
 
 
 def test_parse_posted_at_common_string() -> None:
@@ -50,3 +52,12 @@ def test_posted_at_json_uses_isoformat() -> None:
 
     assert _posted_at_json(value) == "2022-08-12T15:57:49+00:00"
     assert _posted_at_json(None) is None
+
+
+def test_work_thumbnail_asset_id_uses_uuid_type() -> None:
+    assert Work.__table__.c.thumbnail_asset_id.type.python_type is UUID
+
+    asset_id = uuid4()
+    work = Work(thumbnail_asset_id=asset_id)
+
+    assert work.thumbnail_asset_id == asset_id

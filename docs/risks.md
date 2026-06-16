@@ -263,7 +263,7 @@ Run via `docker compose run --rm backend alembic upgrade head` before starting t
 
 ### L2. File naming / reorganization
 
-gallery-dl names files during download. Import job can reorganize. Asset paths are stored in DB after import, not before. No risk of broken paths if naming_template changes between download and import.
+gallery-dl names files during download. Import job can reorganize. Asset paths are stored in DB after import, not before. Changes to gallery-dl file organization affect future downloads without rewriting imported asset paths.
 
 ### L3. Danbooru phase ordering
 

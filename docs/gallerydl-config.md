@@ -26,7 +26,7 @@ Only Pixiv defaults to `auto_enable_on_import=true`. All other sources default t
 
 ## Per-Job Config Generation
 
-When a download job is created, the provider's `build_gallerydl_config()` generates a per-job config dict. This per-job config only includes the `directory` field when a **naming template** is assigned to the subscription. When no naming template exists, the per-job config omits the directory, allowing the base `config.json` defaults to control the output path. This prevents per-job configs from overriding the admin-configured base directory patterns.
+When a download job is created, the provider's `build_gallerydl_config()` supplies safe provider defaults such as cookie paths. The saved admin gallery-dl `config.json` is then merged on top and remains the single source of truth for file organization. Configure `directory` and `filename` under **Settings -> gallery-dl Config -> File Organization**.
 
 ---
 
@@ -639,12 +639,6 @@ The admin API uses camelCase field names. The table below maps API field names t
 | `directory` | `directory` (string -> split to array) |
 | `sleep_request` | `sleep-request` |
 
-## Naming Template Integration
+## File Organization
 
-Per-source gallery-dl configs defined here provide base directory patterns. Naming Templates (**Settings -> Naming Templates**) can override these per-creator:
-
-1. Create a Naming Template with a specific `source`, `template` pattern, and optional `is_default`
-2. When a download job runs, the provider's `build_gallerydl_config()` checks for a matching naming template
-3. If found and `is_default=True`, the template's pattern overrides the base `directory` config
-
-This allows per-creator file organization without changing global settings.
+File organization is configured only through per-source gallery-dl config. Use **Settings -> gallery-dl Config -> File Organization** to set the `directory` and `filename` patterns for each source. Older Naming Templates have been removed; copy any old template value into the source `directory` field before upgrading if you still need it.

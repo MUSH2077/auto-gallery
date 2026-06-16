@@ -50,7 +50,7 @@ class BilibiliProvider(BaseProvider):
         ]
         return any(re.match(p, url) for p in patterns)
 
-    def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
+    def build_gallerydl_config(self, subscription_source) -> dict:
         config: dict = {
             "extractor": {
                 "bilibili": {
@@ -59,8 +59,6 @@ class BilibiliProvider(BaseProvider):
                 }
             }
         }
-        if naming_template:
-            config["extractor"]["bilibili"]["directory"] = naming_template.template
         return config
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:

@@ -24,7 +24,7 @@ class ManualProvider(BaseProvider):
     def validate_url(self, url: str) -> bool:
         return True
 
-    def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
+    def build_gallerydl_config(self, subscription_source) -> dict:
         raise NotImplementedError("Manual upload does not use gallery-dl")
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:

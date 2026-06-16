@@ -10,7 +10,7 @@ class WorkList(BaseModel):
     id: UUID
     title: str | None = None
     posted_at: datetime | None = None
-    thumbnail_asset_id: str | None = None
+    thumbnail_asset_id: UUID | None = None
     asset_count: int = 1
     is_nsfw: bool
     is_ai_generated: bool = False
@@ -36,7 +36,7 @@ class WorkRead(BaseModel):
     title: str | None = None
     description: str | None = None
     posted_at: datetime | None = None
-    thumbnail_asset_id: str | None = None
+    thumbnail_asset_id: UUID | None = None
     asset_count: int = 1
     is_nsfw: bool
     is_ai_generated: bool = False

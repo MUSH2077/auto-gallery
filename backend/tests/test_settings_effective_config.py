@@ -42,14 +42,13 @@ def test_effective_gallerydl_config_keeps_user_values_and_fills_defaults():
     assert effective["postprocessors"] == [{"name": "metadata"}]
 
 
-def test_naming_template_overrides_gallerydl_directory():
+def test_gallerydl_directory_is_authoritative():
     effective = build_effective_gallerydl_config(
         "pixiv",
         {"extractor": {"pixiv": {"cookies": "/default.txt"}}},
-        "pixiv/{user[id]}/{id}",
         user_config={"extractor": {"pixiv": {"directory": ["old"]}}},
     )
-    assert effective["extractor"]["pixiv"]["directory"] == ["pixiv", "{user[id]}", "{id}"]
+    assert effective["extractor"]["pixiv"]["directory"] == ["old"]
     assert effective["extractor"]["pixiv"]["cookies"] == "/default.txt"
 
 

@@ -51,7 +51,6 @@ work ──< work_tag
 work_source ──< work_source_tag
 asset ──< asset_source
 tag
-naming_template
 
 (user-scoped)
 user ──< subscription ──< subscription_source
@@ -417,17 +416,6 @@ Endpoints:
 - `GET /me` — current authenticated user info
 - `POST /change-password` — change password for current user
 
-### `/api/v1/admin/naming-templates`
-Naming template management for download directory structure.
-
-Endpoints include:
-- `GET /` — list naming templates
-- `POST /` — create naming template
-- `GET /{id}` — template detail
-- `PUT /{id}` — update template
-- `DELETE /{id}` — delete template
-- `POST /preview` — preview directory structure from a template
-- `POST /{id}/set-default` — set as default template
 
 ### `/media` (unversioned)
 Controlled media file serving. Not prefixed with `/api/v1`.

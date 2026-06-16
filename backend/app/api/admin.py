@@ -310,7 +310,7 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
         pass
 
     # ── Resolve creator display names from the database ──
-    # The filesystem uses naming-template-derived directory names which may
+    # The filesystem uses gallery-dl-derived directory names which may
     # not match any DB field. We cross-reference via work_sources:
     #   work_dir name (source_work_id) → work_sources.source_creator_id
     #   → source_creators.creator_id → creators.display_name
@@ -1283,7 +1283,7 @@ async def test_source_connection(data: dict):
         provider_config = {}
         try:
             provider = _registry.get(provider_source)
-            provider_config = provider.build_gallerydl_config(None, None)
+            provider_config = provider.build_gallerydl_config(None)
         except KeyError:
             provider_config = {}
         config = build_effective_gallerydl_config(provider_source, provider_config)
@@ -1369,9 +1369,6 @@ async def get_effective_gallerydl_config(
     """Preview the effective per-job gallery-dl config used by workers."""
     from uuid import UUID
 
-    from sqlalchemy import select as _select
-
-    from app.models.naming_template import NamingTemplate
     from app.models.subscription_source import SubscriptionSource
     from app.providers import registry as _registry
     from app.services.job_manifest import redacted_manifest_config
@@ -1399,18 +1396,8 @@ async def get_effective_gallerydl_config(
             "retryable": False,
         })
 
-    naming_result = await db.execute(
-        _select(NamingTemplate)
-        .where(NamingTemplate.source == provider_source, NamingTemplate.is_default == True)
-        .limit(1)
-    )
-    naming_template = naming_result.scalar_one_or_none()
-    provider_config = provider.build_gallerydl_config(None, None)
-    effective = build_effective_gallerydl_config(
-        provider_source,
-        provider_config,
-        naming_template.template if naming_template else None,
-    )
+    provider_config = provider.build_gallerydl_config(None)
+    effective = build_effective_gallerydl_config(provider_source, provider_config)
 
     url_valid = bool(source_url and provider.validate_url(provider.normalize_url(source_url) or source_url)) if source_url else None
     return {
@@ -1418,7 +1405,6 @@ async def get_effective_gallerydl_config(
         "extractor": extractor_key_for_source(provider_source),
         "source_url": source_url,
         "url_valid": url_valid,
-        "naming_template": naming_template.template if naming_template else None,
         "config": redacted_manifest_config(effective),
     }
 

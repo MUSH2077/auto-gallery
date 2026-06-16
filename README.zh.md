@@ -91,7 +91,7 @@ http://<host>:13000
 - 运行 Alembic 迁移。
 - 访问 `/api/v1/system/health` 检查后端健康。
 - 登录管理后台。
-- 在 Settings 配置 gallery-dl 凭据和命名模板。
+- 在 Settings 配置 gallery-dl 凭据和文件组织。
 - 创建创作者和订阅 URL，先做小规模同步验证。
 - 大规模导入前确认备份和恢复预期。
 

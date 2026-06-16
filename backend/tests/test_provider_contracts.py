@@ -23,7 +23,7 @@ def test_downloadable_provider_url_and_config_contract(source, url):
     assert provider.capabilities.supports_gallerydl is True
     normalized = provider.normalize_url(url) or url
     assert provider.validate_url(normalized), source
-    cfg = provider.build_gallerydl_config(None, None)
+    cfg = provider.build_gallerydl_config(None)
     extractor = extractor_key_for_source(source)
     assert extractor in cfg.get("extractor", {})
 

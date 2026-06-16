@@ -51,7 +51,6 @@ work ──< work_tag
 work_source ──< work_source_tag
 asset ──< asset_source
 tag
-naming_template
 
 （用户隔离）
 user ──< subscription ──< subscription_source
@@ -417,17 +416,6 @@ Danbooru 参考 provider 操作，用于创作者身份映射。
 - `GET /me` — 当前认证用户信息
 - `POST /change-password` — 更改当前用户密码
 
-### `/api/v1/admin/naming-templates`
-下载目录结构的命名模板管理。
-
-端点包括：
-- `GET /` — 列出命名模板
-- `POST /` — 创建命名模板
-- `GET /{id}` — 模板详情
-- `PUT /{id}` — 更新模板
-- `DELETE /{id}` — 删除模板
-- `POST /preview` — 预览模板生成的目录结构
-- `POST /{id}/set-default` — 设为默认模板
 
 ### `/media`（无版本号）
 受控媒体文件服务。不以 `/api/v1` 为前缀。

@@ -31,7 +31,7 @@ class IwaraProvider(BaseProvider):
     def validate_url(self, url: str) -> bool:
         return bool(re.match(r"https?://(?:www\.)?iwara\.tv/(video|profile|users)/[\w-]+", url))
 
-    def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
+    def build_gallerydl_config(self, subscription_source) -> dict:
         cfg = {
             "extractor": {
                 "iwara": {}
@@ -40,8 +40,6 @@ class IwaraProvider(BaseProvider):
         cookies_path = "/gallerydl-config/cookies/iwara.txt"
         if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 0:
             cfg["extractor"]["iwara"]["cookies"] = cookies_path
-        if naming_template:
-            cfg["extractor"]["iwara"]["directory"] = naming_template.template
         return cfg
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:

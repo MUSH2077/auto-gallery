@@ -78,7 +78,7 @@ def _snapshot_metadata_jsons(source: str) -> set[str]:
     """Return a set of absolute paths to all metadata JSON files for a source.
 
     Used to detect which files were created by THIS gallery-dl invocation
-    via before/after diff — works regardless of naming template configuration.
+    via before/after diff; this works regardless of configured directory layout.
     """
     source_root = Path(settings.download_root) / source
     if not source_root.exists():
@@ -210,30 +210,12 @@ async def run_download_job(job_id: str):
     job_config_path = None
     source_url = job.source_url
 
-    # Write per-job gallery-dl config with provider directory/filename settings
+    # Write per-job gallery-dl config with provider defaults plus admin gallery-dl settings.
     try:
         from app.providers import registry as _reg
-        from app.models.naming_template import NamingTemplate as _NamingTemplate
         _prov = _reg.get(job.source)
-        # Load the active naming template for this source (if any)
-        _naming_tpl = None
-        try:
-            async with async_session() as _nt_db:
-                _nt_result = await _nt_db.execute(
-                    select(_NamingTemplate).where(
-                        _NamingTemplate.source == job.source,
-                        _NamingTemplate.is_default == True,
-                    ).limit(1)
-                )
-                _naming_tpl = _nt_result.scalar_one_or_none()
-        except Exception:
-            logger.debug("Failed to load naming template for source %s", job.source, exc_info=True)
-        _provider_cfg = _prov.build_gallerydl_config(None, None)
-        _cfg = build_effective_gallerydl_config(
-            job.source,
-            _provider_cfg,
-            _naming_tpl.template if _naming_tpl else None,
-        )
+        _provider_cfg = _prov.build_gallerydl_config(None)
+        _cfg = build_effective_gallerydl_config(job.source, _provider_cfg)
         if _cfg:
             job_config_path = os.path.join(
                 os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"),
@@ -292,7 +274,7 @@ async def run_download_job(job_id: str):
                 source_url = url_parse.urlunparse(parsed._replace(query=new_query))
 
     # Snapshot metadata JSONs before running gallery-dl to detect new files.
-    # This works regardless of the naming template configuration.
+    # This works regardless of the configured directory layout.
     json_before: set[str] = _snapshot_metadata_jsons(job.source)
 
     result = None

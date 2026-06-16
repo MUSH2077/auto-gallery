@@ -106,7 +106,7 @@ For a full deployment guide, see [docs/setup.md](docs/setup.md).
 - Run Alembic migrations.
 - Confirm backend health at `/api/v1/system/health`.
 - Log in to the admin web.
-- Configure gallery-dl credentials and naming patterns in Settings.
+- Configure gallery-dl credentials and file organization in Settings.
 - Create creators and subscription URLs, then run a small sync first.
 - Confirm backups and restore expectations before large imports.
 
