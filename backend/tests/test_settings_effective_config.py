@@ -1,10 +1,15 @@
+import asyncio
+import json
+
 from app.services.settings import (
+    apply_gallerydl_defaults,
     build_effective_gallerydl_config,
+    ensure_gallerydl_config,
     extractor_key_for_source,
     merge_gallerydl_effective_config,
     source_key_for_extractor,
 )
-from app.api.admin import _rebuild_managed_postprocessors
+from app.api.admin import GalleryDLMultiConfig, PixivSourceConfig, _rebuild_managed_postprocessors, update_gallerydl_config
 
 
 def test_x_source_maps_to_twitter_extractor():
@@ -40,6 +45,71 @@ def test_effective_gallerydl_config_keeps_user_values_and_fills_defaults():
     assert twitter["directory"] == ["x", "{user[name]}"]
     assert twitter["filename"] == "{id}.{extension}"
     assert effective["postprocessors"] == [{"name": "metadata"}]
+
+
+def test_gallerydl_defaults_fill_missing_file_organization_without_overwriting():
+    config = {
+        "extractor": {
+            "pixiv": {
+                "directory": ["custom", "{id}"],
+                "filename": "{id}.{extension}",
+                "refresh-token": "keep-token",
+            },
+            "lofter": {"auto-enable-on-import": True},
+        },
+        "postprocessors": [{"name": "custom"}],
+    }
+
+    merged, changed = apply_gallerydl_defaults(config)
+
+    assert changed is True
+    assert merged["extractor"]["pixiv"]["directory"] == ["custom", "{id}"]
+    assert merged["extractor"]["pixiv"]["filename"] == "{id}.{extension}"
+    assert merged["extractor"]["pixiv"]["refresh-token"] == "keep-token"
+    assert merged["extractor"]["lofter"]["directory"] == ["lofter", "{blog_name}", "{id}"]
+    assert merged["extractor"]["lofter"]["filename"] == "{id}_{num}.{extension}"
+    assert {"name": "custom"} in merged["postprocessors"]
+    assert any(pp.get("name") == "metadata" for pp in merged["postprocessors"])
+
+
+def test_ensure_gallerydl_config_creates_complete_default_file(tmp_path):
+    config_path = tmp_path / "config.json"
+
+    config = ensure_gallerydl_config(config_path)
+
+    assert config_path.exists()
+    assert config["extractor"]["lofter"]["directory"] == ["lofter", "{blog_name}", "{id}"]
+    assert config["extractor"]["danbooru"]["filename"] == "{id}_{num}.{extension}"
+    assert any(pp.get("name") == "metadata" for pp in config["postprocessors"])
+    assert json.loads(config_path.read_text()) == config
+
+
+def test_effective_gallerydl_config_uses_defaults_when_config_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("GALLERYDL_CONFIG_ROOT", str(tmp_path))
+
+    effective = build_effective_gallerydl_config(
+        "lofter",
+        {"extractor": {"lofter": {}}},
+    )
+
+    assert effective["extractor"]["lofter"]["directory"] == ["lofter", "{blog_name}", "{id}"]
+    assert effective["extractor"]["lofter"]["filename"] == "{id}_{num}.{extension}"
+
+
+def test_update_gallerydl_config_preserves_defaults_and_custom_values(tmp_path, monkeypatch):
+    monkeypatch.setenv("GALLERYDL_CONFIG_ROOT", str(tmp_path))
+    ensure_gallerydl_config(tmp_path / "config.json")
+
+    result = asyncio.run(update_gallerydl_config(GalleryDLMultiConfig(
+        pixiv=PixivSourceConfig(directory="custom/{id}", filename="{id}.{extension}"),
+    )))
+
+    saved = json.loads((tmp_path / "config.json").read_text())
+    assert result["status"] == "ok"
+    assert saved["extractor"]["pixiv"]["directory"] == ["custom", "{id}"]
+    assert saved["extractor"]["pixiv"]["filename"] == "{id}.{extension}"
+    assert saved["extractor"]["lofter"]["directory"] == ["lofter", "{blog_name}", "{id}"]
+    assert any(pp.get("name") == "metadata" for pp in saved["postprocessors"])
 
 
 def test_gallerydl_directory_is_authoritative():

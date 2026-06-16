@@ -138,11 +138,11 @@ Each source provider (Pixiv, X/Twitter, Iwara, Danbooru, Pinterest, LOFTER, Weib
 - Video quality preferences
 - Auto-enable on import (per source)
 
-Changes are saved to `config.json` automatically. The admin web UI is the recommended way to configure gallery-dl extractors; manual editing of `config.json` is also supported as a fallback.
+Changes are saved to `config.json` automatically. On first startup, auto-gallery creates this file and fills missing file organization defaults without overwriting existing custom patterns. The admin web UI is the recommended way to configure gallery-dl extractors; manual editing of `config.json` is also supported as a fallback.
 
 ### File Organization
 
-File organization is configured in **Settings > gallery-dl Config > File Organization** and saved to `GALLERYDL_CONFIG_ROOT/config.json`. Use gallery-dl's template syntax, for example `pixiv/{user[account]}/{id}`.
+File organization is configured in **Settings > gallery-dl Config > File Organization** and saved to `GALLERYDL_CONFIG_ROOT/config.json`. Use gallery-dl's template syntax, for example `pixiv/{user[account]}/{id}`. If files are organized unexpectedly on NAS, check the matching `extractor.<source>.directory` and `extractor.<source>.filename` values in `data/config/gallery-dl/config.json`.
 
 ## Backup and Restore
 

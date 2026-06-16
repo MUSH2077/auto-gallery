@@ -1163,13 +1163,10 @@ def _convert_to_netscape_cookies(raw: str, source: str) -> str:
 
 
 def _load_config() -> tuple[dict, str]:
-    import json, os
-    config_path = os.path.join(os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"), "config.json")
-    config = {}
-    if os.path.exists(config_path):
-        with open(config_path) as f:
-            config = json.load(f)
-    return config, config_path
+    from app.services.settings import ensure_gallerydl_config, gallerydl_config_path
+
+    config_path = gallerydl_config_path()
+    return ensure_gallerydl_config(config_path), str(config_path)
 
 def _read_source_config(extractor_config: dict, schema_map: dict, config: dict | None = None) -> dict:
     """Read gallery-dl extractor config back into our API schema shape."""
@@ -1451,7 +1448,9 @@ async def get_gallerydl_config(source: str | None = None):
 @router.put("/gallerydl-config")
 async def update_gallerydl_config(data: GalleryDLMultiConfig):
     """Update gallery-dl extractor configs. Only provided source blocks are updated."""
-    import json, os
+    import os
+    from app.services.settings import write_gallerydl_config
+
     config, config_path = _load_config()
 
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
@@ -1529,8 +1528,7 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
     pixiv_ugoira = extractors.get("pixiv", {}).get("ugoira")
     _rebuild_managed_postprocessors(config, pixiv_ugoira)
 
-    with open(config_path, "w") as f:
-        json.dump(config, f, indent=2)
+    write_gallerydl_config(config, Path(config_path))
     return {"status": "ok", "message": "gallery-dl config updated", "path": config_path}
 
 

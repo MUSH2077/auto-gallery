@@ -2,6 +2,7 @@ import copy
 import json
 import logging
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,90 @@ DEFAULT_SCAN_MINUTES = 60
 DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 600
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_BACKOFF_BASE_SECONDS = 60
+
+GALLERYDL_METADATA_POSTPROCESSOR = {
+    "name": "metadata",
+    "event": "after",
+    "filename": "{filename}.json",
+}
+
+DEFAULT_GALLERYDL_CONFIG = {
+    "extractor": {
+        "pixiv": {
+            "auto-enable-on-import": True,
+            "include": "artworks",
+            "tags": "japanese",
+            "ugoira": "zip",
+            "metadata": False,
+            "metadata-bookmark": False,
+            "captions": False,
+            "comments": False,
+            "sanity": False,
+            "directory": ["pixiv", "{user[account]}", "{id}"],
+            "filename": "{id}_p{num}.{extension}",
+        },
+        "twitter": {
+            "auto-enable-on-import": False,
+            "strategy": "tweets",
+            "include": "timeline",
+            "retweets": False,
+            "replies": False,
+            "cards": True,
+            "videos": True,
+            "text-tweets": False,
+            "quoted": False,
+            "pinned": False,
+            "previews": False,
+            "articles": False,
+            "directory": ["twitter", "{user[name]}"],
+            "filename": "{tweet_id}_{num}.{extension}",
+        },
+        "iwara": {
+            "auto-enable-on-import": False,
+            "directory": ["iwara", "{user[name]}"],
+            "filename": "{date} {id} {title[:200]} {filename}.{extension}",
+        },
+        "danbooru": {
+            "auto-enable-on-import": False,
+            "external": False,
+            "metadata": False,
+            "directory": ["danbooru", "{artist[name]}"],
+            "filename": "{id}_{num}.{extension}",
+        },
+        "pinterest": {
+            "auto-enable-on-import": False,
+            "stories": True,
+            "videos": True,
+            "sections": True,
+            "directory": ["pinterest", "{category}", "{user}", "{board[name]}"],
+            "filename": "{id}_{num}.{extension}",
+        },
+        "lofter": {
+            "auto-enable-on-import": False,
+            "directory": ["lofter", "{blog_name}", "{id}"],
+            "filename": "{id}_{num}.{extension}",
+        },
+        "weibo": {
+            "auto-enable-on-import": False,
+            "videos": True,
+            "retweets": False,
+            "gifs": True,
+            "livephoto": False,
+            "movies": False,
+            "text": False,
+            "directory": ["weibo", "{user[screen_name]}"],
+            "filename": "{id}_{num}.{extension}",
+        },
+        "bilibili": {
+            "auto-enable-on-import": False,
+            "livephoto": True,
+            "sleep-request": "3.0-6.0",
+            "directory": ["bilibili", "{user[name]}", "{id}"],
+            "filename": "{id}_{num}.{extension}",
+        },
+    },
+    "postprocessors": [GALLERYDL_METADATA_POSTPROCESSOR],
+}
 
 EXTRACTOR_SOURCE_ALIASES = {
     "twitter": "x",
@@ -73,8 +158,12 @@ def gallerydl_config_path() -> Path:
     return Path(root) / "config.json"
 
 
-def load_gallerydl_config() -> dict:
-    path = gallerydl_config_path()
+def default_gallerydl_config() -> dict:
+    return copy.deepcopy(DEFAULT_GALLERYDL_CONFIG)
+
+
+def _read_gallerydl_config(path: Path | None = None) -> dict:
+    path = path or gallerydl_config_path()
     if not path.exists():
         return {}
     try:
@@ -84,6 +173,69 @@ def load_gallerydl_config() -> dict:
     except Exception:
         logger.warning("Failed to load gallery-dl config from %s", path, exc_info=True)
         return {}
+
+
+def _ensure_metadata_postprocessor(config: dict) -> None:
+    postprocessors = config.get("postprocessors")
+    if not isinstance(postprocessors, list):
+        config["postprocessors"] = [copy.deepcopy(GALLERYDL_METADATA_POSTPROCESSOR)]
+        return
+    if not any(isinstance(pp, dict) and pp.get("name") == "metadata" for pp in postprocessors):
+        postprocessors.append(copy.deepcopy(GALLERYDL_METADATA_POSTPROCESSOR))
+
+
+def apply_gallerydl_defaults(config: dict | None) -> tuple[dict, bool]:
+    """Fill missing gallery-dl defaults without overwriting user settings."""
+    original = copy.deepcopy(config) if isinstance(config, dict) else {}
+    merged = _deep_merge_missing(original, DEFAULT_GALLERYDL_CONFIG)
+    _ensure_metadata_postprocessor(merged)
+    return merged, merged != original
+
+
+def write_gallerydl_config(config: dict, path: Path | None = None) -> None:
+    path = path or gallerydl_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        existing_stat = path.stat()
+        mode = existing_stat.st_mode & 0o777
+        uid = existing_stat.st_uid
+        gid = existing_stat.st_gid
+    except FileNotFoundError:
+        parent_stat = path.parent.stat()
+        mode = 0o600
+        uid = parent_stat.st_uid
+        gid = parent_stat.st_gid
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as tmp:
+        json.dump(config, tmp, indent=2, ensure_ascii=False)
+        tmp.write("\n")
+        tmp_path = Path(tmp.name)
+    try:
+        os.chmod(tmp_path, mode)
+        os.chown(tmp_path, uid, gid)
+    except PermissionError:
+        logger.debug("Could not preserve ownership for gallery-dl config %s", path, exc_info=True)
+    os.replace(tmp_path, path)
+
+
+def ensure_gallerydl_config(path: Path | None = None) -> dict:
+    path = path or gallerydl_config_path()
+    config = _read_gallerydl_config(path)
+    config, changed = apply_gallerydl_defaults(config)
+    if changed or not path.exists():
+        write_gallerydl_config(config, path)
+        logger.info("Ensured gallery-dl config defaults at %s", path)
+    return config
+
+
+def load_gallerydl_config() -> dict:
+    return ensure_gallerydl_config()
 
 
 def _deep_merge_missing(base: Any, fallback: Any) -> Any:

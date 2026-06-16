@@ -138,11 +138,11 @@ curl http://localhost:8818/api/v1/system/health
 - 视频画质偏好
 - 导入时默认启用（按来源）
 
-修改会自动保存到 `config.json`。建议通过管理后台配置 gallery-dl 提取器；手动编辑 `config.json` 亦可作为备选方式。
+修改会自动保存到 `config.json`。首次启动时，auto-gallery 会自动创建此文件，并补齐缺失的文件组织默认值，不覆盖已有自定义规则。建议通过管理后台配置 gallery-dl 提取器；手动编辑 `config.json` 亦可作为备选方式。
 
 ### 文件组织
 
-文件组织在 **设置 > gallery-dl 配置 > 文件组织** 中配置，并保存到 `GALLERYDL_CONFIG_ROOT/config.json`。可使用 gallery-dl 的模板语法，例如 `pixiv/{user[account]}/{id}`。
+文件组织在 **设置 > gallery-dl 配置 > 文件组织** 中配置，并保存到 `GALLERYDL_CONFIG_ROOT/config.json`。可使用 gallery-dl 的模板语法，例如 `pixiv/{user[account]}/{id}`。如果 NAS 上的文件组织不符合预期，请检查 `data/config/gallery-dl/config.json` 中对应 `extractor.<source>.directory` 和 `extractor.<source>.filename`。
 
 ## 备份与恢复
 

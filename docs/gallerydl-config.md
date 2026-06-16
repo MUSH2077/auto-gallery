@@ -6,6 +6,8 @@ auto-gallery manages per-source gallery-dl extractor settings through the admin 
 
 This document describes every available configuration option for each supported source.
 
+If `config.json` is missing, auto-gallery creates it on startup. Existing files are backfilled with missing default `directory`, `filename`, and metadata postprocessor settings without overwriting custom values.
+
 ---
 
 ## Connectivity Test
@@ -26,7 +28,7 @@ Only Pixiv defaults to `auto_enable_on_import=true`. All other sources default t
 
 ## Per-Job Config Generation
 
-When a download job is created, the provider's `build_gallerydl_config()` supplies safe provider defaults such as cookie paths. The saved admin gallery-dl `config.json` is then merged on top and remains the single source of truth for file organization. Configure `directory` and `filename` under **Settings -> gallery-dl Config -> File Organization**.
+When a download job is created, the provider's `build_gallerydl_config()` supplies safe provider defaults. The saved admin gallery-dl `config.json` is then merged on top and remains the single source of truth for file organization. Configure `directory` and `filename` under **Settings -> gallery-dl Config -> File Organization**.
 
 ---
 
@@ -641,4 +643,4 @@ The admin API uses camelCase field names. The table below maps API field names t
 
 ## File Organization
 
-File organization is configured only through per-source gallery-dl config. Use **Settings -> gallery-dl Config -> File Organization** to set the `directory` and `filename` patterns for each source. Older Naming Templates have been removed; copy any old template value into the source `directory` field before upgrading if you still need it.
+File organization is configured only through per-source gallery-dl config. Use **Settings -> gallery-dl Config -> File Organization** to set the `directory` and `filename` patterns for each source. Defaults are generated automatically on first startup and missing values are backfilled later without replacing custom patterns.

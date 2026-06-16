@@ -72,6 +72,10 @@ docker compose exec backend alembic upgrade head
 curl http://localhost:8818/api/v1/system/health
 ```
 
+首次启动时，backend 会自动创建 `data/config/gallery-dl/config.json`
+并写入安全的默认文件组织规则。之后可在 **设置 -> gallery-dl 配置 -> 文件组织**
+中修改。
+
 打开管理后台：
 
 ```text
