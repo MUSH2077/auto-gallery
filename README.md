@@ -85,6 +85,10 @@ docker compose exec backend alembic upgrade head
 curl http://localhost:8818/api/v1/system/health
 ```
 
+On first startup, the backend creates `data/config/gallery-dl/config.json`
+with safe default file organization patterns. Edit them later in
+**Settings -> gallery-dl Config -> File Organization**.
+
 Open the admin web at:
 
 ```text

@@ -6,6 +6,8 @@ auto-gallery 通过管理后台 **设置 -> gallery-dl 配置** 管理各站点�
 
 本文档描述每个已支持站点的所有可用配置选项。
 
+如果 `config.json` 不存在，auto-gallery 会在启动时自动创建。已有文件会补齐缺失的默认 `directory`、`filename` 和 metadata postprocessor，不覆盖自定义值。
+
 ---
 
 ## 连通性测试
@@ -26,7 +28,7 @@ auto-gallery 通过管理后台 **设置 -> gallery-dl 配置** 管理各站点�
 
 ## 任务级配置生成
 
-下载任务创建时，provider 的 `build_gallerydl_config()` 只提供安全的 provider 默认值，例如 cookie 路径。管理后台保存的 gallery-dl `config.json` 随后合并并保持为文件组织的唯一来源。请在 **设置 -> gallery-dl 配置 -> 文件组织** 中配置 `directory` 和 `filename`。
+下载任务创建时，provider 的 `build_gallerydl_config()` 只提供安全的 provider 默认值。管理后台保存的 gallery-dl `config.json` 随后合并并保持为文件组织的唯一来源。请在 **设置 -> gallery-dl 配置 -> 文件组织** 中配置 `directory` 和 `filename`。
 
 ---
 
@@ -641,4 +643,4 @@ Danbooru 在 auto-gallery 中扮演两个角色：
 
 ## 文件组织
 
-文件组织只通过各来源的 gallery-dl 配置管理。请在 **设置 -> gallery-dl 配置 -> 文件组织** 中设置每个来源的 `directory` 和 `filename` 模式。旧的命名模板功能已删除；如果仍需要旧模板值，请在升级前手动复制到对应来源的 `directory` 字段。
+文件组织只通过各来源的 gallery-dl 配置管理。请在 **设置 -> gallery-dl 配置 -> 文件组织** 中设置每个来源的 `directory` 和 `filename` 模式。首次启动会自动生成默认值，之后也会只补齐缺失项，不替换已有自定义模式。

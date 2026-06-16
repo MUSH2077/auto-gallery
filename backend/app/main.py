@@ -64,6 +64,11 @@ async def lifespan(app: FastAPI):
     # always forced through password rotation.
     logger.info("backend starting", log_level=settings.log_level)
     from app.auth import ensure_admin_user
+    from app.services.settings import ensure_gallerydl_config
+    try:
+        ensure_gallerydl_config()
+    except Exception as e:
+        logger.warning("ensure_gallerydl_config failed", error=str(e))
     try:
         await ensure_admin_user()
     except Exception as e:
