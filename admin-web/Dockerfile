@@ -1,4 +1,4 @@
-FROM node:20-alpine AS deps
+FROM node:26-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 ARG NPM_REGISTRY
@@ -6,13 +6,13 @@ RUN if [ -n "$NPM_REGISTRY" ]; then \
       npm config set registry "$NPM_REGISTRY"; \
     fi && npm ci
 
-FROM node:20-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-FROM node:20-alpine AS runner
+FROM node:26-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=builder /app/public ./public
