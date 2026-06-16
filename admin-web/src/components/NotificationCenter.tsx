@@ -147,15 +147,28 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       if (stored) {
         const parsed = JSON.parse(stored);
         const age = Date.now() - parsed.startedAt;
-        // Only recover jobs started in the last 5 minutes (progress TTL is 300s).
-        // Older jobs have expired Redis keys and would get stuck as "running".
         if (age < 5 * 60 * 1000) {
           setBatchJob({
             jobId: parsed.jobId, importType: parsed.importType, total: parsed.total,
             startedAt: parsed.startedAt, progress: null, result: null, status: "running",
           });
+          // Fetch current status immediately so completed jobs show results,
+          // and expired/stale jobs are cleaned up instead of leaving UI stuck.
+          api.getBatchImportStatus(parsed.jobId).then((d: any) => {
+            if (d?.result) {
+              setBatchJob((prev) => {
+                if (!prev || prev.jobId !== parsed.jobId) return prev;
+                return { jobId: prev.jobId, importType: prev.importType, total: prev.total, startedAt: prev.startedAt, result: d.result, status: "completed" as const, progress: null };
+              });
+            } else if (!d?.progress) {
+              setBatchJob(null);
+              try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
+            }
+          }).catch(() => {
+            setBatchJob(null);
+            try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
+          });
         } else {
-          // Job is too old — clean up
           try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
         }
       }
@@ -180,11 +193,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     const data = batchStatusQuery.data;
 
     if (data.progress) {
-      setBatchJob((prev) => prev ? { ...prev, progress: data.progress } : prev);
+      setBatchJob((prev) => prev ? { jobId: prev.jobId, importType: prev.importType, total: prev.total, startedAt: prev.startedAt, progress: data.progress, result: null, status: "running" as const } : prev);
     }
 
     if (data.result) {
-      setBatchJob((prev) => prev ? { ...prev, result: data.result, status: "completed", progress: null } : prev);
+      setBatchJob((prev) => prev ? { jobId: prev.jobId, importType: prev.importType, total: prev.total, startedAt: prev.startedAt, result: data.result, status: "completed" as const, progress: null } : prev);
       qc.invalidateQueries({ queryKey: ["creators"] });
       qc.invalidateQueries({ queryKey: ["subscriptions"] });
     }
@@ -193,7 +206,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     if (!data.progress && !data.result) {
       const elapsed = Date.now() - batchJob.startedAt;
       if (elapsed > 10 * 60 * 1000) {
-        setBatchJob((prev) => prev ? { ...prev, status: "error", progress: null } : prev);
+        setBatchJob((prev) => prev ? { jobId: prev.jobId, importType: prev.importType, total: prev.total, startedAt: prev.startedAt, result: null, status: "error" as const, progress: null } : prev);
         try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
       }
     }

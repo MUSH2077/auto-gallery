@@ -18,6 +18,7 @@ from app.models.subscription_source import SubscriptionSource
 from app.models.download_job import DownloadJob
 from app.repositories.download_job import DownloadJobRepository
 from app.services.locks import redis_lock
+from app.services.redis_client import get_redis
 from app.services.settings import get_download_defaults, get_scheduler_config
 from app.services.subscription_enqueue import enqueue_subscription_source_sync
 
@@ -360,10 +361,8 @@ async def _sync_subscriptions_locked():
 
     # Re-schedule for next scan
     try:
-        import redis as redis_lib
         from rq import Queue
-        r = redis_lib.from_url(settings.redis_url)
-        Queue(name="scheduled", connection=r).enqueue_in(
+        Queue(name="scheduled", connection=get_redis()).enqueue_in(
             timedelta(minutes=max(scan_minutes, 5)),
             sync_subscriptions,
         )

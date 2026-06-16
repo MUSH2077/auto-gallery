@@ -136,8 +136,8 @@ async def _enqueue_import(download_job_id: str, import_error: str | None = None,
     import runner can process exactly those files without re-scanning.
     """
     try:
-        import redis as redis_lib
         from rq import Queue
+        from app.services.redis_client import get_redis
 
         async with async_session() as db:
             repo = DownloadJobRepository(db)
@@ -155,10 +155,10 @@ async def _enqueue_import(download_job_id: str, import_error: str | None = None,
             import_job_id = str(import_job.id)
 
         # Store new JSON file paths in Redis for the import runner
+        _r = get_redis()
         if new_json_paths:
             try:
-                r = redis_lib.from_url(settings.redis_url)
-                r.setex(
+                _r.setex(
                     f"import:{import_job_id}:files",
                     7200,  # 2h TTL
                     json.dumps(list(new_json_paths)),
@@ -166,8 +166,7 @@ async def _enqueue_import(download_job_id: str, import_error: str | None = None,
             except Exception:
                 logger.warning("Failed to store import file list for %s", import_job_id, exc_info=True)
 
-        r = redis_lib.from_url(settings.redis_url)
-        Queue(name="imports", connection=r).enqueue(
+        Queue(name="imports", connection=_r).enqueue(
             "app.jobs.import_runner.run_import_job", import_job_id,
             job_timeout=RQ_JOB_TIMEOUT)
         logger.info("Enqueued import job %s (recovery) for download %s", import_job_id, download_job_id)
@@ -522,10 +521,9 @@ async def run_download_job(job_id: str):
         needs_retry = (result is None) or (result.returncode != 0)
         if needs_retry:
             try:
-                import redis as redis_lib
                 from rq import Queue
-                r = redis_lib.from_url(settings.redis_url)
-                Queue(name="downloads", connection=r).enqueue_in(
+                from app.services.redis_client import get_redis
+                Queue(name="downloads", connection=get_redis()).enqueue_in(
                     timedelta(seconds=backoff_base * (2 ** (j.retry_count - 1))),
                     "app.jobs.download.run_download_job", job_id,
                     job_timeout=RQ_JOB_TIMEOUT)

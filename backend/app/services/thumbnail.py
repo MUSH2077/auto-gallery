@@ -15,9 +15,13 @@ def generate_thumbnail(source_path: str, library_dir: Path, name: str = "thumbna
 
     Returns the full path to the generated thumbnail, or None on failure.
     """
+    image = None
+    thumb = None
     try:
         import pyvips
-        image = pyvips.Image.new_from_file(source_path)
+        # access="sequential" streams the file instead of mmap-ing — much lower
+        # RSS on 7.5 GB NAS for large images (e.g. 4K wallpapers, long strips).
+        image = pyvips.Image.new_from_file(source_path, access="sequential")
         w, h = image.width, image.height
         target_w = 400
         thumb_path = library_dir / f"{name}.webp"
@@ -31,3 +35,7 @@ def generate_thumbnail(source_path: str, library_dir: Path, name: str = "thumbna
     except Exception:
         logger.warning("Failed to generate thumbnail for %s", source_path, exc_info=True)
         return None
+    finally:
+        # Explicit deref so libvips GC runs immediately rather than waiting
+        # for the Python GC cycle — critical under memory pressure.
+        del thumb, image

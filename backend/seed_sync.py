@@ -9,15 +9,15 @@ import asyncio
 import time
 from datetime import timedelta
 
-import redis as redis_lib
 from rq import Queue
 from rq.registry import ScheduledJobRegistry, StartedJobRegistry
 from app.config import settings
 from app.database import async_session
+from app.services.redis_client import get_redis
 from app.services.settings import DEFAULT_SCAN_MINUTES, get_scheduler_config
 from app.jobs.subscription_sync import sync_subscriptions
 
-r = redis_lib.from_url(settings.redis_url)
+r = get_redis()
 q = Queue(name="scheduled", connection=r)
 
 def _job_is_sync(job) -> bool:

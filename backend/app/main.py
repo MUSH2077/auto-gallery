@@ -122,10 +122,8 @@ async def health():
         services["postgres"] = "down"
 
     try:
-        import redis as redis_lib
-        r = redis_lib.from_url(settings.redis_url)
-        r.ping()
-        r.close()
+        from app.services.redis_client import get_redis
+        get_redis().ping()
         services["redis"] = "up"
     except Exception:
         services["redis"] = "down"
@@ -167,11 +165,11 @@ async def health():
         "gallerydl": {},
     }
     try:
-        import redis as redis_lib
+        from app.services.redis_client import get_redis
         from rq import Queue
         from rq.registry import ScheduledJobRegistry
 
-        r = redis_lib.from_url(settings.redis_url)
+        r = get_redis()
         default_q = Queue(connection=r)
         scheduled_q = Queue(name="scheduled", connection=r)
         scheduled_reg = ScheduledJobRegistry(queue=scheduled_q)
@@ -187,7 +185,6 @@ async def health():
         business["scheduler"] = {
             "sync_scheduled": str(any(j and "sync_subscriptions" in (j.func_name or "") for j in sync_jobs)).lower(),
         }
-        r.close()
     except Exception:
         logger.debug("Business queue health skipped", exc_info=True)
 

@@ -30,6 +30,12 @@ COPY . .
 
 RUN mkdir -p /downloads /library /gallerydl-config /app-config
 
+# Memory-conserving Python flags for NAS (7.5 GB RAM):
+# - PYTHONMALLOC=malloc: use system malloc (lower RSS than pymalloc for multi-process)
+# - PYTHONHASHSEED=0: disable hash randomization (saves a few KB per process)
+ENV PYTHONMALLOC=malloc \
+    PYTHONUNBUFFERED=1
+
 EXPOSE 8000
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
