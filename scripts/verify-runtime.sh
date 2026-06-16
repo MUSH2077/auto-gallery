@@ -12,15 +12,21 @@ services=(
   scheduler
 )
 
-if [[ -f .env ]]; then
+env_file="${COMPOSE_ENV_FILE:-.env}"
+
+if [[ -f "$env_file" ]]; then
   set -a
   # shellcheck disable=SC1091
-  source .env
+  source "$env_file"
   set +a
 fi
 
 compose() {
-  docker compose "$@"
+  if [[ -f "$env_file" ]]; then
+    docker compose --env-file "$env_file" "$@"
+  else
+    docker compose "$@"
+  fi
 }
 
 require_service_ok() {
@@ -43,6 +49,9 @@ for service in "${services[@]}"; do
   require_service_ok "$service"
 done
 
+compose exec -T backend curl -sf http://localhost:8000/api/v1/system/ready >/dev/null
+echo "ok: backend readiness endpoint"
+
 compose exec -T backend curl -sf http://localhost:8000/api/v1/system/health >/dev/null
 echo "ok: backend health endpoint"
 
@@ -57,7 +66,7 @@ if [[ -z "$head_revision" || "$current_revision" != "$head_revision" ]]; then
 fi
 echo "ok: alembic current $current_revision"
 
-compose exec -T redis redis-cli -a "${REDIS_PASSWORD:?REDIS_PASSWORD is required}" ping >/dev/null
+compose exec -T -e REDISCLI_AUTH="${REDIS_PASSWORD:?REDIS_PASSWORD is required}" redis redis-cli ping >/dev/null
 echo "ok: redis ping"
 
 compose exec -T backend python3 - <<'PY'

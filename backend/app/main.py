@@ -2,9 +2,12 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
+import httpx
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.api import api_router
@@ -80,10 +83,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from fastapi.exceptions import RequestValidationError
-from fastapi import Request
-from fastapi.responses import JSONResponse
-
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     safe_body = "<redacted>"
@@ -110,8 +109,7 @@ app.include_router(api_router)
 app.include_router(media_router)
 
 
-@app.get("/api/v1/system/health")
-async def health():
+async def _service_readiness() -> dict[str, str]:
     services = {"postgres": "unknown", "redis": "unknown", "meilisearch": "unknown"}
 
     try:
@@ -129,16 +127,32 @@ async def health():
         services["redis"] = "down"
 
     try:
-        import httpx
         async with httpx.AsyncClient() as client:
             resp = await client.get(
-                f"{settings.meili_url}/health",
+                f"{settings.meili_url.rstrip('/')}/health",
                 headers={"Authorization": f"Bearer {settings.meili_master_key}"},
-                timeout=5,
+                timeout=2,
             )
-            services["meilisearch"] = "up" if resp.status_code == 200 else "down"
+        services["meilisearch"] = "up" if resp.status_code == 200 else "down"
     except Exception:
         services["meilisearch"] = "down"
+
+    return services
+
+
+@app.get("/api/v1/system/ready")
+async def ready():
+    services = await _service_readiness()
+    all_up = all(v == "up" for v in services.values())
+    return JSONResponse(
+        status_code=200 if all_up else 503,
+        content={"status": "ok" if all_up else "degraded", "services": services},
+    )
+
+
+@app.get("/api/v1/system/health")
+async def health():
+    services = await _service_readiness()
 
     # Disk space check
     disk = "unknown"

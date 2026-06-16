@@ -6,6 +6,7 @@
     "dev": "next dev --port 3000",
     "build": "next build",
     "generate:api-types": "openapi-typescript http://localhost:8818/openapi.json -o src/lib/api/types.generated.ts",
+    "typecheck": "tsc --noEmit",
     "start": "next start --port 3000"
   },
   "dependencies": {

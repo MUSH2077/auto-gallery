@@ -5,9 +5,12 @@ on:
     branches: ["main", "master"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   backend:
-    name: Backend tests
+    name: Backend checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,12 +24,15 @@ jobs:
       - name: Install Python dependencies
         working-directory: backend
         run: pip install -r requirements.txt
+      - name: Lint backend
+        working-directory: backend
+        run: ruff check app tests
       - name: Run tests
         working-directory: backend
-        run: pytest
+        run: python -m pytest
 
   admin-web:
-    name: Admin build
+    name: Admin checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,9 +44,25 @@ jobs:
       - name: Install dependencies
         working-directory: admin-web
         run: npm ci
+      - name: Typecheck admin web
+        working-directory: admin-web
+        run: npm run typecheck
       - name: Build admin web
         working-directory: admin-web
         run: npm run build
+
+  dependency-review:
+    name: Dependency review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
 
   repository-checks:
     name: Repository checks
@@ -53,6 +75,11 @@ jobs:
           grep -q "AGPL-3.0-only" README.md
           grep -q "AGPL-3.0-only" README.zh.md
           grep -q '^.env$' .gitignore
+          test -f .env.ci
+          if test -f package-lock.json && ! test -f package.json; then
+            echo "root package-lock.json must not exist without root package.json"
+            exit 1
+          fi
           if git ls-files --error-unmatch .env >/dev/null 2>&1; then
             echo ".env must not be tracked"
             exit 1
@@ -67,6 +94,8 @@ jobs:
           fi
       - name: Run privacy scan
         run: scripts/privacy-scan.sh
+      - name: Validate Docker Compose config
+        run: docker compose --env-file .env.ci config --quiet
       - name: Build release package dry run
         run: |
           archive="$(scripts/package-release.sh ci)"
@@ -84,3 +113,36 @@ jobs:
           test -f docs/architecture.md
           test -f docs/risks.md
           test -f docs/release-checklist.md
+
+  docker-smoke:
+    name: Docker Compose smoke
+    runs-on: ubuntu-latest
+    needs: [backend, admin-web, repository-checks]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build images
+        run: docker compose --env-file .env.ci build backend admin-web
+      - name: Start stack
+        run: docker compose --env-file .env.ci up -d
+      - name: Wait for healthy services
+        run: |
+          for attempt in $(seq 1 60); do
+            unhealthy="$(docker compose --env-file .env.ci ps --format '{{.Service}} {{.State}} {{.Health}}' | awk '$2 != "running" || ($3 != "" && $3 != "healthy") {print}')"
+            if [ -z "$unhealthy" ]; then
+              docker compose --env-file .env.ci ps
+              exit 0
+            fi
+            echo "Waiting for services to become healthy (attempt $attempt/60):"
+            echo "$unhealthy"
+            sleep 5
+          done
+          docker compose --env-file .env.ci ps
+          docker compose --env-file .env.ci logs --tail=200
+          exit 1
+      - name: Verify runtime
+        run: COMPOSE_ENV_FILE=.env.ci scripts/verify-runtime.sh
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose --env-file .env.ci down -v
+          rm -rf data

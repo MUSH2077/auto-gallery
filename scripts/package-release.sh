@@ -16,7 +16,7 @@ mkdir -p "$tmp/${name}"
 file_list="$tmp/files.txt"
 while IFS= read -r -d '' file; do
   [[ -e "$file" ]] && printf '%s\0' "$file"
-done < <(git ls-files --cached --others --exclude-standard -z) > "$file_list"
+done < <(git ls-files --cached -z) > "$file_list"
 tar --null -cf - --files-from "$file_list" | tar -x -C "$tmp/${name}"
 
 rm -rf \

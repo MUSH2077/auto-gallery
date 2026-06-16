@@ -34,6 +34,7 @@ RUN mkdir -p /downloads /library /gallerydl-config /app-config
 # - PYTHONMALLOC=malloc: use system malloc (lower RSS than pymalloc for multi-process)
 # - PYTHONHASHSEED=0: disable hash randomization (saves a few KB per process)
 ENV PYTHONMALLOC=malloc \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 EXPOSE 8000
