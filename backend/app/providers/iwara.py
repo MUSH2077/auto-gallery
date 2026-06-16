@@ -1,3 +1,4 @@
+import os
 import re
 
 from app.providers.base import BaseProvider, ProviderCapabilities
@@ -33,11 +34,12 @@ class IwaraProvider(BaseProvider):
     def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
         cfg = {
             "extractor": {
-                "iwara": {
-                    "cookies": "/gallerydl-config/cookies/iwara.txt",
-                }
+                "iwara": {}
             }
         }
+        cookies_path = "/gallerydl-config/cookies/iwara.txt"
+        if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 0:
+            cfg["extractor"]["iwara"]["cookies"] = cookies_path
         if naming_template:
             cfg["extractor"]["iwara"]["directory"] = naming_template.template
         return cfg

@@ -1,3 +1,4 @@
+import os
 import re
 
 from app.providers.base import BaseProvider, ProviderCapabilities
@@ -35,11 +36,12 @@ class XProvider(BaseProvider):
     def build_gallerydl_config(self, subscription_source, naming_template) -> dict:
         cfg = {
             "extractor": {
-                "twitter": {
-                    "cookies": "/gallerydl-config/cookies/twitter.txt",
-                }
+                "twitter": {}
             }
         }
+        cookies_path = "/gallerydl-config/cookies/twitter.txt"
+        if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 0:
+            cfg["extractor"]["twitter"]["cookies"] = cookies_path
         if naming_template:
             cfg["extractor"]["twitter"]["directory"] = naming_template.template
         return cfg

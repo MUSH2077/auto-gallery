@@ -1,3 +1,4 @@
+import os
 import re
 
 from app.providers.base import BaseProvider, ProviderCapabilities
@@ -123,7 +124,8 @@ class WeiboProvider(BaseProvider):
             }
         }
         cookies_path = "/gallerydl-config/cookies/weibo.txt"
-        config["extractor"]["weibo"]["cookies"] = cookies_path
+        if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 0:
+            config["extractor"]["weibo"]["cookies"] = cookies_path
         if naming_template:
             config["extractor"]["weibo"]["directory"] = naming_template.template
         return config
