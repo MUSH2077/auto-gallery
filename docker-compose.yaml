@@ -42,7 +42,6 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
-    mem_limit: 384M
 
   backend:
     build:
