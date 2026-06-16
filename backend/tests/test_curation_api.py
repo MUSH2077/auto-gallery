@@ -109,7 +109,7 @@ def test_creator_curation_endpoint_uses_curation_service(monkeypatch):
             return {"id": str(obj_id), "changes": []}
 
     monkeypatch.setattr(creators, "CurationService", FakeCurationService)
-    monkeypatch.setattr(creators, "cache_delete_pattern", lambda _pattern: None)
+    monkeypatch.setattr(creators, "invalidate_api_caches", lambda *_domains: None)
 
     result = asyncio.run(creators.curate_creator(
         creator_id,

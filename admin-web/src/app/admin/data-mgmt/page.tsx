@@ -1,8 +1,9 @@
 "use client";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, queryKeys } from "@/lib/api";
 import { PageHeader, ConfirmDialog } from "@/components";
+import { useNotifications } from "@/components/NotificationCenter";
 import { useT } from "@/lib/i18n";
 import { useRouter } from "next/navigation";
 import { getSourceColor } from "@/lib/sourceColors";
@@ -38,16 +39,27 @@ export default function DataManagementPage() {
   const t = useT();
   const router = useRouter();
   const qc = useQueryClient();
+  const notify = useNotifications();
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [confirmAction, setConfirmAction] = useState<string | null>(null);
+  const [activeAction, setActiveAction] = useState<string | null>(null);
   const [integrityItems, setIntegrityItems] = useState<{ type: string; description: string; count: number; items: any[] } | null>(null);
   const [dangerConfirm, setDangerConfirm] = useState("");
 
   // ── Data queries ──
-  const systemInfo = useQuery({ queryKey: ["system-info"], queryFn: () => api.getSystemInfo(), refetchInterval: 60000 });
-  const storageBreakdown = useQuery({ queryKey: ["storage-breakdown"], queryFn: () => api.getStorageBreakdown() });
-  const creatorCount = useQuery({ queryKey: ["creators-count"], queryFn: () => api.countCreators() });
-  const subCount = useQuery({ queryKey: ["subs-count"], queryFn: () => api.countSubscriptions() });
+  const systemInfo = useQuery({
+    queryKey: ["system-info"],
+    queryFn: () => api.getSystemInfo(),
+    refetchInterval: 60000,
+    placeholderData: (previousData) => previousData,
+  });
+  const storageBreakdown = useQuery({
+    queryKey: ["storage-breakdown"],
+    queryFn: () => api.getStorageBreakdown(),
+    placeholderData: (previousData) => previousData,
+  });
+  const creatorCount = useQuery({ queryKey: queryKeys.creators.count, queryFn: () => api.countCreators() });
+  const subCount = useQuery({ queryKey: queryKeys.subscriptions.count, queryFn: () => api.countSubscriptions() });
   const integrity = useQuery({ queryKey: ["integrity-check"], queryFn: () => api.getIntegrityCheck(), enabled: false });
   const backups = useQuery({ queryKey: ["backups"], queryFn: () => api.listBackups() });
 
@@ -66,52 +78,6 @@ export default function DataManagementPage() {
 
   const runIntegrity = () => integrity.refetch();
 
-  // Danger zone mutations
-  const dangerMutations: Record<string, ReturnType<typeof useMutation>> = {
-    works: useMutation({
-      mutationFn: () => api.clearEntity("works"),
-      onSuccess: (d: any) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-      onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
-    }),
-    creators: useMutation({
-      mutationFn: () => api.clearEntity("creators"),
-      onSuccess: (d: any) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-      onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
-    }),
-    subs: useMutation({
-      mutationFn: async () => {
-        const r = await api.clearEntity("downloads");
-        return r;
-      },
-      onSuccess: (d: any) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-      onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
-    }),
-    tags: useMutation({
-      mutationFn: () => api.clearEntity("tags"),
-      onSuccess: (d: any) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-      onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
-    }),
-    jobs: useMutation({
-      mutationFn: () => api.clearEntity("jobs"),
-      onSuccess: (d: any) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-      onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
-    }),
-    all: useMutation({
-      mutationFn: async () => {
-        await api.clearEntity("all");
-        await api.clearFailedJobs();
-        return { message: "All data cleared" };
-      },
-      onSuccess: (d) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-      onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
-    }),
-    settings: useMutation({
-      mutationFn: () => api.resetSettings(),
-      onSuccess: (d: any) => { setResult({ ok: true, msg: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
-      onError: (e) => { setResult({ ok: false, msg: (e as Error).message }); setConfirmAction(null); },
-    }),
-  };
-
   const dangerActions = [
     { key: "works", title: t("datamgmt.danger_clear_works"), desc: t("datamgmt.danger_clear_works_desc"), color: "red" },
     { key: "creators", title: t("datamgmt.danger_clear_creators"), desc: t("datamgmt.danger_clear_creators_desc"), color: "red" },
@@ -122,7 +88,35 @@ export default function DataManagementPage() {
     { key: "settings", title: t("datamgmt.danger_reset_settings"), desc: t("datamgmt.danger_reset_settings_desc"), color: "blue" },
   ];
 
+  const clearEntityForAction = (key: string) => key === "subs" ? "downloads" : key;
+
+  const clearOperationMutation = useMutation({
+    mutationFn: ({ entity }: { key: string; entity: string; title: string }) => api.startClearOperation(entity),
+    onMutate: (vars) => {
+      setActiveAction(vars.key);
+    },
+    onSuccess: (data, vars) => {
+      setResult({ ok: true, msg: `${vars.title} queued` });
+      notify.startOperationJob(data.job_id, "admin-clear", vars.title, { entity: vars.entity });
+      if (vars.entity === "creators" || vars.entity === "all") {
+        qc.setQueryData(queryKeys.creators.count, { count: 0 });
+        qc.setQueryData(queryKeys.subscriptions.count, { count: 0 });
+        qc.setQueriesData({ queryKey: ["creators", "list"] }, { items: [], total: 0 });
+        qc.setQueriesData({ queryKey: ["subscriptions", "list"] }, []);
+      }
+      setConfirmAction(null);
+    },
+    onError: (e) => {
+      setResult({ ok: false, msg: (e as Error).message });
+      setConfirmAction(null);
+    },
+    onSettled: () => {
+      setActiveAction(null);
+    },
+  });
+
   const dangerUnlocked = dangerConfirm === t("datamgmt.danger_confirm_text");
+  const clearOperation = notify.operationJob?.kind === "admin-clear" ? notify.operationJob : null;
 
   // Computed
   const info = systemInfo.data;
@@ -143,6 +137,24 @@ export default function DataManagementPage() {
         <div className={`mb-4 p-3 rounded-lg text-sm flex items-center justify-between ${result.ok ? "bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400" : "bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400"}`}>
           <span>{result.msg}</span>
           <button onClick={() => setResult(null)} className="ml-3 text-xs underline">{t("datamgmt.dismiss")}</button>
+        </div>
+      )}
+
+      {clearOperation && (
+        <div className={`mb-4 rounded-md border p-3 text-sm ${
+          clearOperation.status === "error"
+            ? "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400"
+            : clearOperation.status === "completed"
+              ? "border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-900/30 dark:text-green-400"
+              : "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
+        }`}>
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-medium">{clearOperation.title}</span>
+            <span className="text-xs uppercase">{clearOperation.status}</span>
+          </div>
+          <div className="mt-1 text-xs opacity-80">
+            {clearOperation.error || clearOperation.result?.message || clearOperation.progress?.label || "Queued in the background"}
+          </div>
         </div>
       )}
 
@@ -472,7 +484,9 @@ export default function DataManagementPage() {
 
         <div className="space-y-2">
           {dangerActions.map((a) => {
-            const m = dangerMutations[a.key];
+            const actionEntity = clearEntityForAction(a.key);
+            const isCurrentOperation = clearOperation?.status === "running" && clearOperation.meta?.entity === actionEntity;
+            const isPending = (clearOperationMutation.isPending && activeAction === a.key) || isCurrentOperation;
             return (
               <div key={a.key} className={`flex items-center justify-between p-3 rounded-lg border-l-4 ${
                 a.color === "red" ? "border-l-red-500 bg-gray-50 dark:bg-slate-700/30" :
@@ -485,14 +499,14 @@ export default function DataManagementPage() {
                 </div>
                 <button
                   onClick={() => setConfirmAction(a.key)}
-                  disabled={!dangerUnlocked || m.isPending}
+                  disabled={!dangerUnlocked || isPending}
                   className={`shrink-0 ml-3 px-4 py-1.5 text-xs text-white rounded disabled:opacity-30 transition-opacity ${
                     a.color === "red" ? "bg-red-600 hover:bg-red-700" :
                     a.color === "orange" ? "bg-orange-600 hover:bg-orange-700" :
                     "bg-blue-600 hover:bg-blue-700"
                   }`}
                 >
-                  {m.isPending ? "..." : a.title}
+                  {isPending ? "..." : a.title}
                 </button>
               </div>
             );
@@ -507,11 +521,17 @@ export default function DataManagementPage() {
           title={t("datamgmt.confirm_title").replace("{action}", dangerActions.find((a) => a.key === confirmAction)?.title || confirmAction)}
           message={t("datamgmt.confirm_msg").replace("{action}", confirmAction)}
           onConfirm={() => {
-            const m = dangerMutations[confirmAction];
-            if (m) (m as any).mutate();
+            const action = dangerActions.find((a) => a.key === confirmAction);
+            if (action) {
+              clearOperationMutation.mutate({
+                key: action.key,
+                entity: clearEntityForAction(action.key),
+                title: action.title,
+              });
+            }
           }}
           onCancel={() => setConfirmAction(null)}
-          isPending={dangerMutations[confirmAction]?.isPending || false}
+          isPending={clearOperationMutation.isPending && activeAction === confirmAction}
         />
       )}
     </main>

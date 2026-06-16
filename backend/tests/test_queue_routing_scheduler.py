@@ -27,6 +27,17 @@ class _FakeRedis:
         return object()
 
 
+class _FakeRedisClient:
+    def __init__(self):
+        self.values = {}
+
+    def setex(self, key, _ttl, value):
+        self.values[key] = value
+
+    def get(self, key):
+        return self.values.get(key)
+
+
 def _patch_queue(monkeypatch):
     _FakeQueue.calls = []
     monkeypatch.setattr("redis.from_url", _FakeRedis.from_url)
@@ -126,6 +137,40 @@ def test_danbooru_url_batch_import_uses_imports_queue(monkeypatch):
     assert enqueue_calls[-1][1] == "imports"
 
 
+def test_admin_clear_operation_uses_imports_queue(monkeypatch):
+    from app.api import admin
+
+    fake_redis = _FakeRedisClient()
+    _patch_queue(monkeypatch)
+    monkeypatch.setattr(admin, "Queue", _FakeQueue, raising=False)
+    monkeypatch.setattr(admin, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr("app.services.operations.get_redis", lambda: fake_redis)
+
+    payload = asyncio.run(admin.start_clear_operation({"entity": "works"}))
+
+    assert payload["status"] == "queued"
+    enqueue_calls = [call for call in _FakeQueue.calls if call[0] == "enqueue"]
+    assert enqueue_calls[-1][1] == "imports"
+    assert enqueue_calls[-1][2][0] == "app.jobs.admin_operations.run_clear_operation"
+
+
+def test_danbooru_import_all_async_uses_imports_queue(monkeypatch):
+    from app.api import reference
+
+    fake_redis = _FakeRedisClient()
+    _patch_queue(monkeypatch)
+    monkeypatch.setattr(reference, "Queue", _FakeQueue)
+    monkeypatch.setattr(reference, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr("app.services.operations.get_redis", lambda: fake_redis)
+
+    payload = asyncio.run(reference.import_all_danbooru_async({"pixiv_id": "1980643"}))
+
+    assert payload["status"] == "queued"
+    enqueue_calls = [call for call in _FakeQueue.calls if call[0] == "enqueue"]
+    assert enqueue_calls[-1][1] == "imports"
+    assert enqueue_calls[-1][2][0] == "app.jobs.danbooru_import.run_import_all_danbooru"
+
+
 def test_subscription_patch_can_clear_schedule_fields(monkeypatch):
     from app.api import subscriptions
     from app.schemas.subscription import SubscriptionUpdate
@@ -142,6 +187,7 @@ def test_subscription_patch_can_clear_schedule_fields(monkeypatch):
             return SimpleNamespace(id=subscription_id)
 
     monkeypatch.setattr(subscriptions, "SubscriptionService", FakeService)
+    monkeypatch.setattr(subscriptions, "invalidate_creator_subscription_caches", lambda **_kwargs: None)
     sub_id = uuid4()
 
     asyncio.run(subscriptions.update_subscription(
@@ -151,6 +197,35 @@ def test_subscription_patch_can_clear_schedule_fields(monkeypatch):
     ))
 
     assert captured["data"] == {"schedule_mode": None, "scheduled_times": None}
+
+
+def test_subscription_update_invalidates_creator_subscription_caches(monkeypatch):
+    from app.api import subscriptions
+    from app.schemas.subscription import SubscriptionUpdate
+
+    calls = []
+
+    class FakeService:
+        def __init__(self, _db):
+            pass
+
+        async def update_subscription(self, subscription_id, data):
+            return SimpleNamespace(id=subscription_id, **data)
+
+    monkeypatch.setattr(subscriptions, "SubscriptionService", FakeService)
+    monkeypatch.setattr(
+        subscriptions,
+        "invalidate_creator_subscription_caches",
+        lambda include_works=False: calls.append(include_works),
+    )
+
+    asyncio.run(subscriptions.update_subscription(
+        uuid4(),
+        SubscriptionUpdate(sync_enabled=False),
+        db=object(),
+    ))
+
+    assert calls == [False]
 
 
 def test_settings_reschedule_replaces_pending_sync_scan(monkeypatch):

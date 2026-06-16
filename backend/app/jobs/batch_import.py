@@ -12,6 +12,7 @@ import urllib.parse
 from app.config import settings
 from app.services.redis_client import get_redis
 from app.database import async_session
+from app.services.cache import invalidate_creator_subscription_caches
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +266,8 @@ async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
         "not_found": not_found,
         "errors": errors,
     }
+    if imported:
+        invalidate_creator_subscription_caches()
 
     try:
         r.setex(result_key, RESULT_TTL, json.dumps(result, default=str))
@@ -446,6 +449,8 @@ async def _url_batch_import(urls: list[str], job_id: str) -> dict:
         "not_found": not_found,
         "errors": errors,
     }
+    if imported:
+        invalidate_creator_subscription_caches()
 
     try:
         r.setex(result_key, RESULT_TTL, json.dumps(result, default=str))

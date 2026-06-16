@@ -1,8 +1,9 @@
 "use client";
 import { useState, useMemo, useEffect, Suspense } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, ConfirmDialog, Modal } from "@/components";
+import { useNotifications } from "@/components/NotificationCenter";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
@@ -94,6 +95,8 @@ function CreatorsContent() {
   const t = useT();
   const toast = useToast();
   const router = useRouter();
+  const qc = useQueryClient();
+  const notify = useNotifications();
   const sp = useSearchParams();
   const pathname = usePathname();
 
@@ -143,27 +146,54 @@ function CreatorsContent() {
 
   const filters = useMemo(() => buildFilters(filter, search), [filter, search]);
 
-  const creatorCount = useQuery({ queryKey: ["creators-count"], queryFn: () => api.countCreators() });
+  const creatorCount = useQuery({ queryKey: queryKeys.creators.count, queryFn: () => api.countCreators() });
   const creators = useQuery({
-    queryKey: [...queryKeys.creators.all, page, limit, filters],
+    queryKey: queryKeys.creators.list(page, limit, filters),
     queryFn: () => api.listCreators(page * limit, limit, filters as any),
+    placeholderData: (previousData) => previousData,
   });
+
+  useEffect(() => {
+    if (notify.operationJob?.kind !== "danbooru-import-all" || notify.operationJob.status !== "completed") return;
+    creators.refetch();
+    creatorCount.refetch();
+  }, [notify.operationJob?.jobId, notify.operationJob?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (notify.batchJob?.status !== "completed") return;
+    creators.refetch();
+    creatorCount.refetch();
+  }, [notify.batchJob?.jobId, notify.batchJob?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const refreshCreatorViews = () => {
+    qc.invalidateQueries({ queryKey: queryKeys.creators.all });
+    qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+  };
 
   const create = useMutation({
     mutationFn: (data: { name: string; display_name?: string; description?: string }) => api.createCreator(data),
-    onSuccess: () => { setShowCreate(false); creators.refetch(); toast.success({ message: t("notification.created") }); },
+    onSuccess: () => { setShowCreate(false); refreshCreatorViews(); toast.success({ message: t("notification.created") }); },
     onError: (e: Error) => toast.error({ message: e.message }),
   });
 
   const del = useMutation({
     mutationFn: (id: string) => api.deleteCreator(id),
-    onSuccess: () => { setDeleteId(null); creators.refetch(); toast.success({ message: t("notification.deleted") }); },
+    onSuccess: () => { setDeleteId(null); refreshCreatorViews(); toast.success({ message: t("notification.deleted") }); },
   });
 
   const batchDel = useMutation({
     mutationFn: (ids: string[]) => api.batchDeleteCreators(ids),
-    onSuccess: () => { setSelected(new Set()); setConfirmBatchDel(false); creators.refetch(); toast.success({ message: t("notification.deleted") }); },
+    onSuccess: () => { setSelected(new Set()); setConfirmBatchDel(false); refreshCreatorViews(); toast.success({ message: t("notification.deleted") }); },
   });
+
+  useEffect(() => {
+    if (!creators.data?.items) return;
+    const visibleIds = new Set(creators.data.items.map((creator) => creator.id));
+    setSelected((prev) => {
+      const next = new Set([...prev].filter((id) => visibleIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [creators.data]);
 
   const toggleSelect = (id: string) => {
     const next = new Set(selected);
@@ -177,7 +207,7 @@ function CreatorsContent() {
 
   const toggleFavorite = useMutation({
     mutationFn: (id: string) => api.toggleCreatorFavorite(id),
-    onSuccess: () => creators.refetch(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.creators.all }),
   });
 
   const handleFilterChange = (mode: FilterMode) => {

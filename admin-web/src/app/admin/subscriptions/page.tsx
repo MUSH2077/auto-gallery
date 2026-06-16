@@ -3,9 +3,10 @@ import { useState, useEffect, Suspense } from "react";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, Subscription } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, ConfirmDialog, Modal, SourceBadge } from "@/components";
+import { useNotifications } from "@/components/NotificationCenter";
 
 type FilterMode = "all" | "active" | "inactive" | "sync_on" | "sync_off" | "never_synced";
 
@@ -64,6 +65,8 @@ function SubscriptionsContent() {
   const router = useRouter();
   const t = useT();
   const toast = useToast();
+  const qc = useQueryClient();
+  const notify = useNotifications();
   const sp = useSearchParams();
   const pathname = usePathname();
 
@@ -109,25 +112,43 @@ function SubscriptionsContent() {
 
   const filters = buildFilters(filter, search);
 
-  const subsCount = useQuery({ queryKey: ["subs-count"], queryFn: () => api.countSubscriptions() });
+  const subsCount = useQuery({ queryKey: queryKeys.subscriptions.count, queryFn: () => api.countSubscriptions() });
   const subs = useQuery({
-    queryKey: [...queryKeys.subscriptions.all, page, filters],
+    queryKey: queryKeys.subscriptions.list(page, limit, filters),
     queryFn: () => api.listSubscriptions(page * limit, limit, filters),
+    placeholderData: (previousData) => previousData,
   });
+
+  useEffect(() => {
+    if (notify.operationJob?.kind !== "danbooru-import-all" || notify.operationJob.status !== "completed") return;
+    subs.refetch();
+    subsCount.refetch();
+  }, [notify.operationJob?.jobId, notify.operationJob?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (notify.batchJob?.status !== "completed") return;
+    subs.refetch();
+    subsCount.refetch();
+  }, [notify.batchJob?.jobId, notify.batchJob?.status]); // eslint-disable-line react-hooks/exhaustive-deps
   const systemSettings = useQuery({
     queryKey: queryKeys.admin.settings,
     queryFn: api.getAdminSettings,
   });
   const sysDefaults = systemSettings.data?.subscription_defaults;
 
+  const refreshSubscriptionViews = () => {
+    qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+    qc.invalidateQueries({ queryKey: queryKeys.creators.all });
+  };
+
   const create = useMutation({
     mutationFn: (data: { creator_id: string; name?: string }) => api.createSubscription(data),
-    onSuccess: () => { setShowCreate(false); subs.refetch(); },
+    onSuccess: () => { setShowCreate(false); refreshSubscriptionViews(); },
   });
 
   const del = useMutation({
     mutationFn: (id: string) => api.deleteSubscription(id),
-    onSuccess: () => { setDeleteId(null); subs.refetch(); },
+    onSuccess: () => { setDeleteId(null); refreshSubscriptionViews(); },
   });
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -137,6 +158,7 @@ function SubscriptionsContent() {
     mutationFn: (id: string) => api.syncNowSubscription(id),
     onSuccess: (data) => {
       subs.refetch();
+      refreshSubscriptionViews();
       if (data.status === "error" || data.status === "partial_error") {
         toast.warning({ message: (data as any).message || "Sync partially failed" });
       } else if (data.job_ids.length === 0) {
@@ -148,13 +170,22 @@ function SubscriptionsContent() {
 
   const batchDel = useMutation({
     mutationFn: (ids: string[]) => api.batchDeleteSubscriptions(ids),
-    onSuccess: () => { setSelected(new Set()); setConfirmBatchDel(false); subs.refetch(); },
+    onSuccess: () => { setSelected(new Set()); setConfirmBatchDel(false); refreshSubscriptionViews(); },
   });
 
   const batchSync = useMutation({
     mutationFn: (params: { ids: string[]; enable: boolean }) => api.batchToggleSyncSubscriptions(params.ids, params.enable),
-    onSuccess: () => { setSelected(new Set()); subs.refetch(); toast.success({ message: t("notification.updated") }); },
+    onSuccess: () => { setSelected(new Set()); refreshSubscriptionViews(); toast.success({ message: t("notification.updated") }); },
   });
+
+  useEffect(() => {
+    if (!subs.data) return;
+    const visibleIds = new Set(subs.data.map((sub) => sub.id));
+    setSelected((prev) => {
+      const next = new Set([...prev].filter((id) => visibleIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [subs.data]);
 
   const toggleSelect = (id: string) => {
     const next = new Set(selected);
