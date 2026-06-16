@@ -2,6 +2,7 @@
 import logging, os, subprocess, tempfile
 from datetime import datetime, timezone, timedelta
 from app.config import settings
+from app.services.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +40,8 @@ def run_auto_backup(interval: int = 24):
 
     # Re-schedule
     try:
-        import redis as redis_lib
         from rq import Queue
-        r = redis_lib.from_url(settings.redis_url)
-        Queue(name="scheduled", connection=r).enqueue_in(
+        Queue(name="scheduled", connection=get_redis()).enqueue_in(
             timedelta(hours=interval), "app.jobs.backup.run_auto_backup",
             interval=interval, job_timeout=3600)
     except Exception as e:

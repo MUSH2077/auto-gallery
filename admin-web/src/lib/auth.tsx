@@ -107,6 +107,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     clearTokenCookie();
+    // Clean up batch import state so re-login doesn't recover stale jobs
+    try { sessionStorage.removeItem("danbooru_batch_job"); } catch {}
     setToken(null);
     setUser(null);
   }, []);

@@ -5,7 +5,7 @@ import traceback
 from collections import deque
 from datetime import datetime, timezone
 
-MAX_ENTRIES = 2000
+MAX_ENTRIES = 500   # down from 2000 to reduce RSS on 7.5 GB NAS
 
 _buffer: deque[dict] = deque(maxlen=MAX_ENTRIES)
 

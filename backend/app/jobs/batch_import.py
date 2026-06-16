@@ -9,9 +9,8 @@ import json
 import logging
 import os
 import urllib.parse
-import redis as redis_lib
-
 from app.config import settings
+from app.services.redis_client import get_redis
 from app.database import async_session
 
 logger = logging.getLogger(__name__)
@@ -74,7 +73,7 @@ async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
     errors = []
 
     total = len(pixiv_ids)
-    r = redis_lib.from_url(settings.redis_url)
+    r = get_redis()
     progress_key, result_key = _redis_keys(job_id)
 
     async with async_session() as db:
@@ -293,7 +292,7 @@ async def _url_batch_import(urls: list[str], job_id: str) -> dict:
     errors = []
 
     total = len(urls)
-    r = redis_lib.from_url(settings.redis_url)
+    r = get_redis()
     progress_key, result_key = _redis_keys(job_id)
 
     async with async_session() as db:

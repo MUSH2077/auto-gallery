@@ -13,6 +13,7 @@ from app.providers import registry
 from app.services.job_manifest import append_manifest_event, update_manifest
 from app.services.job_state import DOWNLOAD_RUNNING_STATUSES, transition_download_job
 from app.services.locks import redis_lock
+from app.services.redis_client import get_redis
 from app.services.settings import get_download_defaults
 
 logger = logging.getLogger(__name__)
@@ -166,11 +167,9 @@ async def enqueue_subscription_source_sync(
         await db.flush()
 
         try:
-            import redis as redis_lib
             from rq import Queue
 
-            r = redis_lib.from_url(settings.redis_url)
-            Queue(name="downloads", connection=r).enqueue(
+            Queue(name="downloads", connection=get_redis()).enqueue(
                 "app.jobs.download.run_download_job",
                 str(job.id),
                 job_timeout=RQ_JOB_TIMEOUT,

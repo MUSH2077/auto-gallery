@@ -11,6 +11,7 @@ from app.repositories.download_job import DownloadJobRepository
 from app.repositories.subscription import SubscriptionRepository
 from app.providers import registry
 from app.services.job_manifest import append_manifest_event, update_manifest
+from app.services.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
 
@@ -136,10 +137,8 @@ class DownloadService:
         await self.db.commit()
 
         try:
-            import redis as redis_lib
             from rq import Queue
-            r = redis_lib.from_url(settings.redis_url)
-            q = Queue(name="downloads", connection=r)
+            q = Queue(name="downloads", connection=get_redis())
             q.enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
             append_manifest_event(job, "enqueued", queue="downloads")
             await self.db.commit()
@@ -155,10 +154,8 @@ class DownloadService:
         job = await self.repo.update_status(job, "pending")
         job.error_log = None
         try:
-            import redis as redis_lib
             from rq import Queue
-            r = redis_lib.from_url(settings.redis_url)
-            Queue(name="downloads", connection=r).enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
+            Queue(name="downloads", connection=get_redis()).enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
         except Exception:
             logger.warning("Failed to enqueue retry for download job %s", job.id, exc_info=True)
         return {"job_id": str(job.id), "status": job.status}
@@ -184,10 +181,8 @@ class DownloadService:
         job = await self.repo.update_status(job, "pending")
         job.error_log = None
         try:
-            import redis as redis_lib
             from rq import Queue
-            r = redis_lib.from_url(settings.redis_url)
-            Queue(name="downloads", connection=r).enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
+            Queue(name="downloads", connection=get_redis()).enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
         except Exception:
             logger.warning("Failed to enqueue resume for download job %s", job.id, exc_info=True)
         return {"job_id": str(job.id), "status": job.status}

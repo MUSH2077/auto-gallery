@@ -87,12 +87,15 @@ def _detect_nsfw(raw: dict, source: str) -> bool:
 
 
 def _get_image_dims(filepath: Path) -> tuple[int, int] | None:
+    img = None
     try:
         import pyvips
-        img = pyvips.Image.new_from_file(str(filepath))
+        img = pyvips.Image.new_from_file(str(filepath), access="sequential")
         return (img.width, img.height)
     except Exception:
         return None
+    finally:
+        del img
 
 
 def _mime_type(suffix: str) -> str:
@@ -556,11 +559,10 @@ async def run_import_job(import_job_id: str):
                     await db.commit()
                     # Re-enqueue with backoff
                     try:
-                        import redis as redis_lib
                         from rq import Queue
                         from datetime import timedelta
-                        r = redis_lib.from_url(settings.redis_url)
-                        Queue(name="imports", connection=r).enqueue_in(
+                        from app.services.redis_client import get_redis
+                        Queue(name="imports", connection=get_redis()).enqueue_in(
                             timedelta(seconds=60),
                             "app.jobs.import_runner.run_import_job", import_job_id,
                             job_timeout=7200)

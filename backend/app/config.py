@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     secret_key: str = ""
     admin_password: str = ""
-    access_token_expire_minutes: int = 30
+    access_token_expire_minutes: int = 480  # 8 hours (NAS LAN environment)
 
     download_root: str = "/downloads"
     library_root: str = "/library"
