@@ -498,7 +498,7 @@ async def batch_import_danbooru_artists(data: dict):
         "job_id": job_key,
         "total": len(pixiv_ids),
         "duplicates_removed": deduped,
-        "already_exists": [{"pixiv_id": pid, "creator_name": existing_map[pid]["name"], "creator_id": existing_map[pid]["creator_id"]} for pid in existing_ids],
+        "already_exists": precheck["already_exists"],
     }
 
 
