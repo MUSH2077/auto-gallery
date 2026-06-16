@@ -227,3 +227,12 @@ services:
         condition: service_healthy
     restart: unless-stopped
     mem_limit: 256M
+
+volumes:
+  auto_gallery_ci_downloads:
+  auto_gallery_ci_library:
+  auto_gallery_ci_config_app:
+  auto_gallery_ci_config_gallerydl:
+  auto_gallery_ci_postgres:
+  auto_gallery_ci_redis:
+  auto_gallery_ci_meilisearch:

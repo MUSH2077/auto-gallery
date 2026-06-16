@@ -62,8 +62,8 @@ Provider 兼容性依赖 gallery-dl 和目标站点行为。详见
 git clone <repo-url> auto-gallery
 cd auto-gallery
 
-cp .env.example .env
-# 编辑 .env：替换服务密钥、设置端口、时区和宿主机路径。
+scripts/generate-env.sh
+# 检查 .env：设置端口、时区和宿主机路径。
 # ADMIN_PASSWORD 可保留 change-me-admin 用于首次登录，登录后会强制修改。
 
 docker compose up -d
@@ -82,8 +82,8 @@ http://<host>:13000
 
 ## 首次部署 Checklist
 
-- 复制 `.env.example` 为 `.env`。
-- 替换 `POSTGRES_PASSWORD`、`REDIS_PASSWORD`、`MEILI_MASTER_KEY` 和 `SECRET_KEY`。
+- 运行 `scripts/generate-env.sh`，或复制 `.env.example` 为 `.env` 后手动替换
+  `POSTGRES_PASSWORD`、`REDIS_PASSWORD`、`MEILI_MASTER_KEY` 和 `SECRET_KEY`。
 - 首次登录账号为 `admin / change-me-admin`；也可以部署前把 `ADMIN_PASSWORD` 改成自定义初始密码。登录后系统会强制修改密码。
 - 设置 downloads、library、app config、gallery-dl config 和服务数据的宿主机路径。
 - 设置 `TIMEZONE`，确保调度器按预期运行。

@@ -30,10 +30,12 @@ cd /volume1/auto-gallery
 ### 2. 配置
 
 ```bash
-cp .env.example .env
+scripts/generate-env.sh
 ```
 
-编辑 `.env`，设置：
+脚本会生成带随机服务密钥的 `.env`。如果 `.env` 已存在，默认不会覆盖；需要重建时可运行 `scripts/generate-env.sh --force`。
+
+如果你希望手动配置密钥，也可以复制 `.env.example` 为 `.env`，并替换：
 
 ```bash
 # 为每个服务生成强密码；这些值不能保留 change-me-* 占位符
@@ -47,6 +49,8 @@ ADMIN_PASSWORD=change-me-admin
 ```
 
 首次登录管理后台使用 `admin / change-me-admin`。登录后系统会强制你修改密码；如果部署前已把 `ADMIN_PASSWORD` 改成自定义值，则使用该自定义值首次登录。
+
+如果 backend 日志出现 `auto-gallery refused to start — insecure defaults detected`，请确认 Docker Compose 读取的是正确的 `.env`、上面的服务密钥已经不再是 `change-me-*`，并且更新代码后已重新 build backend 镜像。
 
 设置时区：
 

@@ -30,10 +30,12 @@ cd /volume1/auto-gallery
 ### 2. Configuration
 
 ```bash
-cp .env.example .env
+scripts/generate-env.sh
 ```
 
-Edit `.env` and set:
+This creates `.env` with fresh service secrets. Existing `.env` files are not overwritten unless you run `scripts/generate-env.sh --force`.
+
+If you prefer to configure secrets manually, copy `.env.example` to `.env` and replace:
 
 ```bash
 # Generate strong passwords for each service; do not keep change-me-* placeholders
@@ -47,6 +49,8 @@ ADMIN_PASSWORD=change-me-admin
 ```
 
 First login is `admin / change-me-admin`. The web UI forces a password change immediately after login. If you set a custom `ADMIN_PASSWORD` before deployment, use that custom value for first login.
+
+If the backend logs `auto-gallery refused to start — insecure defaults detected`, confirm that Docker Compose is reading the intended `.env`, the service secrets above are no longer `change-me-*`, and the backend image has been rebuilt after updating the code.
 
 Set your timezone:
 
