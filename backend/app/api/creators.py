@@ -209,12 +209,13 @@ async def get_creator_stats(creator_id: UUID, db: AsyncSession = Depends(get_db)
     # Monthly posting frequency
     month_rows = await db.execute(
         select(
-            func.substring(WorkSource.posted_at, 1, 7).label("month"),
+            func.to_char(func.date_trunc("month", WorkSource.posted_at), "YYYY-MM").label("month"),
             func.count(WorkSource.id).label("cnt"))
         .join(SourceCreator, and_(
             SourceCreator.source == WorkSource.source,
             SourceCreator.source_creator_id == WorkSource.source_creator_id))
         .where(SourceCreator.creator_id == creator_id)
+        .where(WorkSource.posted_at.isnot(None))
         .group_by("month")
         .order_by("month")
     )

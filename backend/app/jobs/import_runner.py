@@ -2,7 +2,9 @@ import asyncio
 import json
 import logging
 from collections import defaultdict
+from datetime import datetime, time, timezone
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -27,6 +29,51 @@ logger = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 ARCHIVE_EXTENSIONS = {".zip"}
 ASSET_EXTENSIONS = IMAGE_EXTENSIONS | ARCHIVE_EXTENSIONS
+
+
+def _parse_posted_at(value: Any) -> datetime | None:
+    """Normalize provider date values to timezone-aware datetimes."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, (int, float)):
+        timestamp = float(value)
+        if timestamp > 10_000_000_000:
+            timestamp /= 1000
+        try:
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.isdigit():
+            return _parse_posted_at(int(text))
+        normalized = text.replace("Z", "+00:00")
+        for candidate in (
+            normalized,
+            normalized.replace(" ", "T", 1),
+        ):
+            try:
+                parsed = datetime.fromisoformat(candidate)
+                return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                parsed_date = datetime.strptime(text, fmt)
+                if fmt == "%Y-%m-%d":
+                    parsed_date = datetime.combine(parsed_date.date(), time.min)
+                return parsed_date.replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+    return None
+
+
+def _posted_at_json(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
 
 
 def _detect_ai_generated(raw: dict, source: str) -> bool:
@@ -233,6 +280,7 @@ async def run_import_job(import_job_id: str):
             try:
                 ws_data = provider.parse_work_source(first_raw)
                 sc_data = provider.parse_source_creator(first_raw)
+                posted_at = _parse_posted_at(ws_data.get("posted_at"))
             except Exception:
                 logger.warning("Failed to parse provider data for %s/%s", provider.source_name, src_work_id, exc_info=True)
                 continue
@@ -317,7 +365,7 @@ async def run_import_job(import_job_id: str):
                 is_nsfw = _detect_nsfw(first_raw, provider.source_name)
                 work = Work(title=ws_data.get("title"),
                             description=ws_data.get("description"),
-                            posted_at=ws_data.get("posted_at"),
+                            posted_at=posted_at,
                             is_ai_generated=is_ai,
                             is_nsfw=is_nsfw)
                 db.add(work)
@@ -330,7 +378,7 @@ async def run_import_job(import_job_id: str):
                                 source_creator_id=ws_data.get("source_creator_id"),
                                 title=ws_data.get("title"),
                                 description=ws_data.get("description"),
-                                posted_at=ws_data.get("posted_at"),
+                                posted_at=posted_at,
                                 raw_metadata=ws_data.get("raw_metadata"))
                 db.add(ws)
                 await db.flush()
@@ -443,7 +491,7 @@ async def run_import_job(import_job_id: str):
                             "source": provider.source_name,
                             "source_work_id": src_work_id,
                             "title": ws_data.get("title"),
-                            "posted_at": ws_data.get("posted_at"),
+                            "posted_at": _posted_at_json(posted_at),
                             "creator": display_name,
                             "assets": assets_meta,
                         }, mf, indent=2, ensure_ascii=False, default=str)
@@ -476,7 +524,7 @@ async def run_import_job(import_job_id: str):
                         "tags": [str(tn) for tn in tag_names],
                         "thumbnail_asset_id": str(work.thumbnail_asset_id) if work.thumbnail_asset_id else None,
                         "asset_count": asset_count,
-                        "posted_at": work.posted_at if work.posted_at else None,
+                        "posted_at": _posted_at_json(work.posted_at),
                         "created_at": work.created_at.isoformat() if work.created_at else None,
                     })
 
