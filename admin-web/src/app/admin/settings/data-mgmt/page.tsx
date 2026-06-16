@@ -14,6 +14,15 @@ export default function DataManagementPage() {
   const [confirmAction, setConfirmAction] = useState<string | null>(null);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
+  // After clearing/deleting data, completely remove cached queries so
+  // navigating to another page never shows stale (already-deleted) data.
+  // invalidateQueries alone keeps cached content (stale-while-revalidate),
+  // causing "creators visible after clear but click=404" bugs.
+  function clearCacheThenRefetch() {
+    qc.removeQueries();           // wipe ALL cached query data
+    qc.invalidateQueries();       // tell active components to refetch
+  }
+
   const clearAll = useMutation({
     mutationFn: async () => {
       await api.clearEntity("all");
@@ -22,7 +31,7 @@ export default function DataManagementPage() {
     },
     onSuccess: (d) => {
       toast.success({ message: d.message });
-      qc.invalidateQueries();
+      clearCacheThenRefetch();
       setConfirmAction(null);
     },
     onError: (e) => {
@@ -33,13 +42,13 @@ export default function DataManagementPage() {
 
   const clearWorks = useMutation({
     mutationFn: () => api.clearEntity("works"),
-    onSuccess: (d) => { toast.success({ message: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+    onSuccess: (d) => { toast.success({ message: d.message }); clearCacheThenRefetch(); setConfirmAction(null); },
     onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
   });
 
   const clearCreators = useMutation({
     mutationFn: () => api.clearEntity("creators"),
-    onSuccess: (d) => { toast.success({ message: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+    onSuccess: (d) => { toast.success({ message: d.message }); clearCacheThenRefetch(); setConfirmAction(null); },
     onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
   });
 
@@ -49,7 +58,7 @@ export default function DataManagementPage() {
       await api.clearFailedJobs();
       return { message: "Download history and Redis failed jobs cleared" };
     },
-    onSuccess: (d) => { toast.success({ message: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+    onSuccess: (d) => { toast.success({ message: d.message }); clearCacheThenRefetch(); setConfirmAction(null); },
     onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
   });
 
@@ -59,19 +68,19 @@ export default function DataManagementPage() {
       await api.clearFailedJobs();
       return { message: "All download and import jobs cleared" };
     },
-    onSuccess: (d) => { toast.success({ message: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+    onSuccess: (d) => { toast.success({ message: d.message }); clearCacheThenRefetch(); setConfirmAction(null); },
     onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
   });
 
   const clearTags = useMutation({
     mutationFn: () => api.clearEntity("tags"),
-    onSuccess: (d) => { toast.success({ message: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+    onSuccess: (d) => { toast.success({ message: d.message }); clearCacheThenRefetch(); setConfirmAction(null); },
     onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
   });
 
   const resetSettings = useMutation({
     mutationFn: () => api.resetSettings(),
-    onSuccess: (d) => { toast.success({ message: d.message }); qc.invalidateQueries(); setConfirmAction(null); },
+    onSuccess: (d) => { toast.success({ message: d.message }); clearCacheThenRefetch(); setConfirmAction(null); },
     onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
   });
 
