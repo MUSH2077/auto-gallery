@@ -4,7 +4,7 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
 import { api, queryKeys, WorkListItem } from "@/lib/api";
-import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
+import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge } from "@/components";
 
 function Img({ assetId, alt, className }: { assetId: string | undefined; alt: string; className?: string }) {
   const t = useT();
@@ -126,6 +126,7 @@ function WorksContent() {
   const sp = useSearchParams();
   const pathname = usePathname();
   const [selectedWorkIds, setSelectedWorkIds] = useState<Set<string>>(new Set());
+  const [confirmAction, setConfirmAction] = useState<{type: string; id?: string; ids?: string[]} | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   const SORT_OPTIONS: { key: SortKey; label: string }[] = [
@@ -564,9 +565,9 @@ function WorksContent() {
 
       {confirmAction && (
         <ConfirmDialog
-          title={confirmAction.type === "trash" ? t("works.batch_trash") : t("works.purge")}
+          title={confirmAction.type === "trash" ? t("works.trash") : t("works.purge")}
           message={confirmAction.type === "trash"
-            ? t("works.batch_trash_confirm", { count: confirmAction.ids?.length ?? 0 })
+            ? t("works.purge_confirm", { count: confirmAction.ids?.length ?? 0 })
             : t("works.purge_confirm")}
           onConfirm={() => {
             if (confirmAction.type === "trash" && confirmAction.ids) {
