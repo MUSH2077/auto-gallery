@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
-import { PageHeader, EmptyState, SourceBadge } from "@/components";
+import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
 
 function SearchContent() {
   const t = useT();
