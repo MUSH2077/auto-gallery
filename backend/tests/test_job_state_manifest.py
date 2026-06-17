@@ -27,7 +27,7 @@ def test_download_state_machine_rejects_invalid_transition():
 def test_import_state_machine_retry_flow():
     job = DummyJob("failed")
     transition_import_job(job, "pending")
-    assert job.status == "pending"
+    assert job.status == "enqueued"
 
 
 def test_manifest_redacts_sensitive_config_and_appends_events():

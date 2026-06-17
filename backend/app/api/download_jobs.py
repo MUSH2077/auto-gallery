@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from app.auth import RequireAdmin
+from app.auth import RequireAdmin, get_admin_key
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -152,7 +152,7 @@ async def cancel_job(
     job_id: UUID,
     data: dict | None = None,
     db: AsyncSession = Depends(get_db),
-    operator: str = Depends(RequireAdmin),
+    operator: str = Depends(get_admin_key),
 ):
     """Cancel a download job. Sends SIGTERM to the process group. Terminal."""
     engine = TaskEngine(db)
@@ -170,7 +170,7 @@ async def set_priority(
     job_id: UUID,
     data: dict,
     db: AsyncSession = Depends(get_db),
-    operator: str = Depends(RequireAdmin),
+    operator: str = Depends(get_admin_key),
 ):
     """Set the priority of a download job."""
     priority = data.get("priority", 10)
@@ -187,7 +187,7 @@ async def set_priority(
 async def batch_by_filter(
     data: dict,
     db: AsyncSession = Depends(get_db),
-    operator: str = Depends(RequireAdmin),
+    operator: str = Depends(get_admin_key),
 ):
     """Batch action on download jobs matching filter criteria.
 

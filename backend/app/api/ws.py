@@ -19,12 +19,14 @@ from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.auth import decode_access_token_payload, RequireAdmin
+from app.auth import decode_access_token_payload
 from app.services.ws_manager import manager
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(dependencies=[RequireAdmin])
+# No router-level RequireAdmin — WebSocket upgrades cannot send custom headers.
+# Admin auth is validated inline in the handler via JWT cookie payload.
+router = APIRouter()
 
 
 @router.websocket("/ws")
