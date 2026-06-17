@@ -15,3 +15,5 @@ export { NotificationProvider, NotificationBell, useNotifications } from "./Noti
 export { RealProgressBar } from "./RealProgressBar";
 export { PipelineVisualizer } from "./PipelineVisualizer";
 export { BatchByFilter } from "./BatchByFilter";
+
+export { default as PageLayout } from "./PageLayout";
