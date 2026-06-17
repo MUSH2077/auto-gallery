@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, Suspense } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, queryKeys } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { PageHeader, EmptyState, SourceBadge } from "@/components";
