@@ -176,7 +176,7 @@ export default function Dashboard() {
       </header>
 
       {!data && workbench.isLoading && (
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="card h-28 animate-pulse" />)}</div>
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">{Array.from({ length: 8 }).map((_, i) => <div key={`skel-${i}`} className="card h-28 animate-pulse" />)}</div>
       )}
 
       {data && (
