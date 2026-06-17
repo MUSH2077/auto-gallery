@@ -26,6 +26,10 @@ export function useJobWebSocket(options?: UseWsOptions) {
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
 
   const connect = useCallback(() => {
+    // Check if token exists before attempting connection
+    if (typeof window !== "undefined" && !localStorage.getItem("ag_token")) {
+      return;
+    }
     if (typeof window === "undefined") return;
     // Auth is via JWT cookie (ag_token) — browser sends it automatically
     // on the WebSocket upgrade request. No token in URL needed.
@@ -38,12 +42,24 @@ export function useJobWebSocket(options?: UseWsOptions) {
 
       ws.onopen = () => setConnected(true);
 
-      ws.onclose = () => {
+      let shouldReconnect = true;
+
+      ws.onclose = (event) => {
         setConnected(false);
-        reconnectTimer.current = setTimeout(connect, 3000);
+        // Don't retry on auth failures (4001 = invalid token, 4003 = not admin)
+        if (event.code === 4001 || event.code === 4003) {
+          shouldReconnect = false;
+          return;
+        }
+        if (shouldReconnect) {
+          reconnectTimer.current = setTimeout(connect, 5000);
+        }
       };
 
-      ws.onerror = () => ws.close();
+      ws.onerror = () => {
+        shouldReconnect = false;
+        ws.close();
+      };
 
       ws.onmessage = (event) => {
         try {
