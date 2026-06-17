@@ -301,7 +301,7 @@ function WorksContent() {
   const moveSelectedToTrash = () => {
     const ids = [...selectedWorkIds];
     if (!ids.length) return;
-    if (window.confirm(t("works.batch_trash_confirm", { count: ids.length }))) batchTrash.mutate(ids);
+    setConfirmAction({ type: "trash", ids });
   };
 
   return (
@@ -496,7 +496,7 @@ function WorksContent() {
               onToggleFavorite={(id) => toggleFavorite.mutate(id)}
               onRestore={(id) => restoreWork.mutate(id)}
               onPurge={(id) => {
-                if (window.confirm(t("works.purge_confirm"))) purgeWork.mutate(id);
+                setConfirmAction({ type: "purge", id });
               }}
             />
           ))}
@@ -543,7 +543,7 @@ function WorksContent() {
               {curationVisibility === "trashed" && (
                 <div className="flex shrink-0 gap-2">
                   <button onClick={(e) => { e.stopPropagation(); restoreWork.mutate(w.id); }} className="rounded border border-[#d8dee4] px-2 py-1 text-xs hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">{t("works.restore")}</button>
-                  <button onClick={(e) => { e.stopPropagation(); if (window.confirm(t("works.purge_confirm"))) purgeWork.mutate(w.id); }} className="rounded bg-[#cf222e] px-2 py-1 text-xs text-white hover:bg-[#a40e26]">{t("works.purge")}</button>
+                  <button onClick={(e) => { e.stopPropagation(); setConfirmAction({ type: "purge", id: w.id }); }} className="rounded bg-[#cf222e] px-2 py-1 text-xs text-white hover:bg-[#a40e26]">{t("works.purge")}</button>
                 </div>
               )}
             </div>
@@ -561,6 +561,24 @@ function WorksContent() {
       )}
     </main>
   );
+
+      {confirmAction && (
+        <ConfirmDialog
+          title={confirmAction.type === "trash" ? t("works.batch_trash") : t("works.purge")}
+          message={confirmAction.type === "trash"
+            ? t("works.batch_trash_confirm", { count: confirmAction.ids?.length ?? 0 })
+            : t("works.purge_confirm")}
+          onConfirm={() => {
+            if (confirmAction.type === "trash" && confirmAction.ids) {
+              batchTrash.mutate(confirmAction.ids);
+            } else if (confirmAction.id) {
+              purgeWork.mutate(confirmAction.id);
+            }
+            setConfirmAction(null);
+          }}
+          onCancel={() => setConfirmAction(null)}
+        />
+      )}
 }
 
 export default function WorksPage() {
