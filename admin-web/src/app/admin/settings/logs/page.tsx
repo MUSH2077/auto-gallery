@@ -47,7 +47,7 @@ export default function SystemLogsPage() {
           placeholder={t("logs.filter_name")}
           className="border rounded px-3 py-2 text-sm w-48 dark:bg-slate-700 dark:text-white dark:border-slate-600" />
         <label className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400 cursor-pointer">
-          <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} className="rounded" />
+          <input type="checkbox" aria-label="Select item" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} className="rounded" />
           {t("logs.auto_refresh")}
         </label>
         <div className="flex-1" />

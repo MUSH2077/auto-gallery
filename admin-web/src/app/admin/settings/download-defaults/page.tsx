@@ -115,8 +115,7 @@ export default function DownloadDefaultsPage() {
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.skip_ai.desc")}</p>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
+                <input type="checkbox" aria-label="Select item"
                   checked={current.skip_ai_generated}
                   onChange={(e) => { if (current) setLocal({ ...current, skip_ai_generated: e.target.checked }); }}
                   className="sr-only peer"
