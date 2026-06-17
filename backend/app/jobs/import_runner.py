@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 from collections import defaultdict
 from datetime import datetime, time, timezone
 from pathlib import Path
@@ -11,6 +12,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.database import async_session
+from app.jobs.worker_control import ControlListener, HeartbeatPublisher
 from app.models import (
     Work, WorkSource, Asset, AssetSource, Tag, WorkTag, WorkSourceTag, SourceCreator,
 )
@@ -21,6 +23,8 @@ from app.providers import registry
 from app.repositories.download_job import DownloadJobRepository
 from app.services.job_manifest import append_manifest_event, update_manifest
 from app.services.job_state import transition_import_job
+from app.services.redis_client import get_redis
+from app.services.redis_pubsub import TaskEventPublisher
 from app.services.subscription_enqueue import mark_source_sync_success
 from app.services.curation import CurationService
 
@@ -189,6 +193,12 @@ async def run_import_job(import_job_id: str):
         transition_import_job(import_job, "running")
         await db.commit()
 
+    # ── Start control listener + heartbeat ──
+    listener = ControlListener(import_job_id)
+    listener.start()
+    heartbeat = HeartbeatPublisher(import_job_id, "import", pid=os.getpid())
+    heartbeat.start()
+
     try:
         async with async_session() as db:
             r2 = await db.execute(select(DownloadJob).where(
@@ -272,6 +282,12 @@ async def run_import_job(import_job_id: str):
         meili_docs = []
 
         for src_work_id, items in groups.items():
+            # ── Safe interrupt point: check for pause/cancel signals ──
+            if listener.should_stop():
+                logger.info("Import %s: control signal received (%s), stopping at work %s",
+                            import_job_id, listener.command, src_work_id)
+                break
+
             if not items:
                 continue
 
