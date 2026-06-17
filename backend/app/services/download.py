@@ -104,7 +104,7 @@ class DownloadService:
             from app.services.subscription_enqueue import enqueue_subscription_source_sync
             result = await enqueue_subscription_source_sync(self.db, ss_uuid, trigger="manual_source")
             if result["status"] == "enqueued":
-                return {"job_id": result["job_id"], "status": "pending", "source_url": result["source_url"]}
+                return {"job_id": result["job_id"], "status": "enqueued", "source_url": result["source_url"]}
             if result.get("job_id") and result.get("skip_reason") == "already_running":
                 running = await self.repo.get(UUID(result["job_id"]))
                 return {
@@ -130,7 +130,7 @@ class DownloadService:
             "subscription_source_id": subscription_source_id,
             "source": source,
             "source_url": normalized_url,
-            "status": "pending",
+            "status": "enqueued",
         })
         update_manifest(job, trigger="manual_url", source=source, source_url=normalized_url)
         append_manifest_event(job, "created", trigger="manual_url")
@@ -148,17 +148,9 @@ class DownloadService:
         return {"job_id": str(job.id), "status": job.status, "source_url": normalized_url}
 
     async def retry_job(self, job_id: UUID):
-        job = await self.get_job(job_id)
-        if job.status not in ("failed", "stale", "downloading", "complete"):
-            raise ValueError(f"Cannot retry job with status '{job.status}'")
-        job = await self.repo.update_status(job, "pending")
-        job.error_log = None
-        try:
-            from rq import Queue
-            Queue(name="downloads", connection=get_redis()).enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
-        except Exception:
-            logger.warning("Failed to enqueue retry for download job %s", job.id, exc_info=True)
-        return {"job_id": str(job.id), "status": job.status}
+        from app.services.task_engine import TaskEngine
+        engine = TaskEngine(self.db)
+        return await engine.retry_download(job_id)
 
     async def delete_job(self, job_id: UUID):
         job = await self.get_job(job_id)
@@ -168,44 +160,19 @@ class DownloadService:
         await self.db.commit()
 
     async def pause_job(self, job_id: UUID):
-        job = await self.get_job(job_id)
-        if job.status not in ("pending", "downloading"):
-            raise ValueError(f"Cannot pause job with status '{job.status}'")
-        job = await self.repo.update_status(job, "paused")
-        return {"job_id": str(job.id), "status": job.status}
+        from app.services.task_engine import TaskEngine
+        engine = TaskEngine(self.db)
+        return await engine.pause_download(job_id)
 
     async def resume_job(self, job_id: UUID):
-        job = await self.get_job(job_id)
-        if job.status not in ("paused",):
-            raise ValueError(f"Cannot resume job with status '{job.status}'")
-        job = await self.repo.update_status(job, "pending")
-        job.error_log = None
-        try:
-            from rq import Queue
-            Queue(name="downloads", connection=get_redis()).enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
-        except Exception:
-            logger.warning("Failed to enqueue resume for download job %s", job.id, exc_info=True)
-        return {"job_id": str(job.id), "status": job.status}
+        from app.services.task_engine import TaskEngine
+        engine = TaskEngine(self.db)
+        return await engine.resume_download(job_id)
 
     async def batch_action(self, ids: list[UUID], action: str) -> dict:
-        results = {"succeeded": 0, "failed": 0, "errors": []}
-        for jid in ids:
-            try:
-                if action == "retry":
-                    await self.retry_job(jid)
-                elif action == "delete":
-                    await self.delete_job(jid)
-                elif action == "pause":
-                    await self.pause_job(jid)
-                elif action == "resume":
-                    await self.resume_job(jid)
-                else:
-                    raise ValueError(f"Unknown action: {action}")
-                results["succeeded"] += 1
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"id": str(jid), "error": str(e)})
-        return results
+        from app.services.task_engine import TaskEngine
+        engine = TaskEngine(self.db)
+        return await engine.batch_by_filter("download", {"ids": [str(i) for i in ids]}, action)
 
     async def clear_completed(self, statuses: list[str]) -> int:
         """Delete all jobs matching given statuses (e.g. complete, failed, stale)."""
@@ -214,10 +181,10 @@ class DownloadService:
         return count
 
     async def kill_stuck_jobs(self) -> int:
-        """Mark all downloading jobs as stale."""
-        count = await self.repo.kill_stuck()
-        await self.db.commit()
-        return count
+        """Detect stale tasks via heartbeat timeout."""
+        from app.services.task_engine import TaskEngine
+        engine = TaskEngine(self.db)
+        return await engine.detect_stale_tasks()
 
     async def list_imports(self, job_id: UUID):
         return await self.repo.list_imports(job_id)

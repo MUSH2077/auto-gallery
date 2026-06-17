@@ -288,7 +288,7 @@ async def get_creator_subscription_overview(creator_id: UUID, db: AsyncSession =
     sub_sources = list(source_rows.scalars().all())
 
     repositories = []
-    running_statuses = {"pending", "downloading", "downloaded", "importing"}
+    running_statuses = {"enqueued", "downloading", "downloaded", "importing"}
     running_job_count = 0
 
     for ss in sub_sources:
