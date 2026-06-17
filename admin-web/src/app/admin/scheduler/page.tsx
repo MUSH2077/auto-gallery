@@ -17,13 +17,13 @@ function decisionTone(item: SchedulerDecisionItem): string {
   if (["already_attempted_in_window", "source_disabled", "subscription_sync_disabled"].includes(item.reason)) {
     return "border-[#bf8700]/30 bg-[#fff8c5] text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]";
   }
-  return "border-ag-border bg-[#f6f8fa] text-[#57606a] dark:border-ag-border dark:bg-[#21262d] dark:text-[#8b949e]";
+  return "border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]";
 }
 
 function SummaryTile({ label, value, sub, danger }: { label: string; value: string | number; sub?: string; danger?: boolean }) {
   return (
     <div className="card p-4">
-      <div className={`tabular text-2xl font-semibold ${danger ? "text-[#cf222e] dark:text-[#f85149]" : "text-[#24292f] dark:text-ag-text"}`}>{value}</div>
+      <div className={`tabular text-2xl font-semibold ${danger ? "text-[#cf222e] dark:text-[#f85149]" : "text-[#24292f] dark:text-[#e6edf3]"}`}>{value}</div>
       <div className="mt-1 text-xs font-medium uppercase text-[#57606a] dark:text-[#8b949e]">{label}</div>
       {sub && <div className="mt-1 text-xs text-[#8c959f] dark:text-[#6e7681]">{sub}</div>}
     </div>
@@ -43,8 +43,8 @@ function queueLabel(t: ReturnType<typeof useT>, key: string): string {
 function QueueRow({ name, stats }: { name: string; stats: QueueBreakdown }) {
   const t = useT();
   return (
-    <div className="grid grid-cols-[1.1fr_repeat(4,minmax(0,1fr))] items-center gap-3 border-t border-ag-border px-3 py-2 text-sm dark:border-ag-border">
-      <div className="font-mono text-xs font-medium text-[#24292f] dark:text-ag-text">{queueLabel(t, name)}</div>
+    <div className="grid grid-cols-[1.1fr_repeat(4,minmax(0,1fr))] items-center gap-3 border-t border-[#d8dee4] px-3 py-2 text-sm dark:border-[#30363d]">
+      <div className="font-mono text-xs font-medium text-[#24292f] dark:text-[#e6edf3]">{queueLabel(t, name)}</div>
       <div className="tabular text-xs text-[#57606a] dark:text-[#8b949e]">{stats.queued}</div>
       <div className={`tabular text-xs ${stats.scheduled > 0 ? "font-semibold text-[#bf8700] dark:text-[#d29922]" : "text-[#57606a] dark:text-[#8b949e]"}`}>{stats.scheduled}</div>
       <div className="tabular text-xs text-[#57606a] dark:text-[#8b949e]">{stats.started}</div>
@@ -155,7 +155,7 @@ export default function SchedulerPage() {
         )}
       </PageHeader>
 
-      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-ag-border bg-white p-3 dark:border-ag-border dark:bg-ag-surface">
+      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-[#d8dee4] bg-white p-3 dark:border-[#30363d] dark:bg-[#161b22]">
         <input
           value={search}
           onChange={(e) => updateParams({ q: e.target.value || null })}
@@ -168,7 +168,7 @@ export default function SchedulerPage() {
             <button
               key={key}
               onClick={() => updateParams({ filter: key || null })}
-              className={`rounded-md border px-2.5 py-1.5 text-xs font-medium ${filter === key ? "border-[#0969da] bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#58a6ff]" : "border-ag-border hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d]"}`}
+              className={`rounded-md border px-2.5 py-1.5 text-xs font-medium ${filter === key ? "border-[#0969da] bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#58a6ff]" : "border-[#d8dee4] hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]"}`}
             >
               {label}
             </button>
@@ -217,7 +217,7 @@ export default function SchedulerPage() {
           </div>
           {queueRows.map(([name, stats]) => <QueueRow key={name} name={name} stats={stats} />)}
           {queue.data?.queues && (
-            <div className="flex flex-wrap gap-2 border-t border-ag-border px-4 py-3 text-xs dark:border-ag-border">
+            <div className="flex flex-wrap gap-2 border-t border-[#d8dee4] px-4 py-3 text-xs dark:border-[#30363d]">
               {(["downloads", "imports"] as const).map((name) => {
                 const stats = queue.data?.queues?.[name];
                 if (!stats || (!stats.failed && !stats.scheduled && !stats.started)) return null;
@@ -255,7 +255,7 @@ export default function SchedulerPage() {
         {decisions.data && filteredItems.length === 0 && <EmptyState title={t("scheduler.no_sources")} description={t("scheduler.no_sources_desc")} />}
         {filteredItems.length > 0 && (
           <div className="table-shell overflow-hidden">
-            <div className="grid grid-cols-[1.2fr_1fr_1fr_1fr_1fr] gap-3 border-b border-ag-border bg-[#f6f8fa] px-4 py-2 text-xs font-semibold uppercase text-[#57606a] dark:border-ag-border dark:bg-[#21262d] dark:text-[#8b949e]">
+            <div className="grid grid-cols-[1.2fr_1fr_1fr_1fr_1fr] gap-3 border-b border-[#d8dee4] bg-[#f6f8fa] px-4 py-2 text-xs font-semibold uppercase text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]">
               <span>{t("scheduler.col_creator_source")}</span>
               <span>{t("scheduler.col_decision")}</span>
               <span>{t("scheduler.col_mode")}</span>
@@ -279,7 +279,7 @@ export default function SchedulerPage() {
                     </div>
                   </div>
                   <div className="text-xs text-[#57606a] dark:text-[#8b949e]">
-                    <div className="font-medium text-[#24292f] dark:text-ag-text">{scheduleModeLabel(t, item.effective_mode)}</div>
+                    <div className="font-medium text-[#24292f] dark:text-[#e6edf3]">{scheduleModeLabel(t, item.effective_mode)}</div>
                     <div>{item.effective_mode === "fixed_time" ? (item.scheduled_times || "—") : t("scheduler.interval_value", { hours: item.sync_interval_hours })}</div>
                   </div>
                   <div className="text-xs text-[#57606a] dark:text-[#8b949e]">

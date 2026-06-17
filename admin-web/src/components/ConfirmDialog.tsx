@@ -14,9 +14,9 @@ export default function ConfirmDialog({ open, title, message, onConfirm, onCance
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
-      <div className="w-full max-w-md rounded-md border border-ag-border bg-white shadow-xl dark:border-ag-border dark:bg-ag-surface">
-        <div className="border-b border-ag-border px-4 py-3 dark:border-ag-border">
-          <h3 className="text-base font-semibold text-[#24292f] dark:text-ag-text">{title}</h3>
+      <div className="w-full max-w-md rounded-md border border-[#d8dee4] bg-white shadow-xl dark:border-[#30363d] dark:bg-[#161b22]">
+        <div className="border-b border-[#d8dee4] px-4 py-3 dark:border-[#30363d]">
+          <h3 className="text-base font-semibold text-[#24292f] dark:text-[#e6edf3]">{title}</h3>
         </div>
         <div className="px-4 py-4">
         <p className="mb-4 text-sm leading-6 text-[#57606a] dark:text-[#8b949e]">{message}</p>

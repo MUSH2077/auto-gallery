@@ -44,7 +44,7 @@ function DecisionPill({ decision }: { decision?: SchedulerDecisionItem }) {
       ? "border-[#cf222e]/30 bg-[#ffebe9] text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]"
       : waiting
         ? "border-[#bf8700]/30 bg-[#fff8c5] text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]"
-        : "border-ag-border bg-[#f6f8fa] text-[#57606a] dark:border-ag-border dark:bg-[#21262d] dark:text-[#8b949e]";
+        : "border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]";
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>
       <span className={`h-1.5 w-1.5 rounded-full ${decision.due ? "animate-pulse bg-current" : "bg-current"}`} />
@@ -132,7 +132,7 @@ export default function RepositoryCard({
       onClick={handleCardClick}
       onKeyDown={handleCardKeyDown}
       aria-label={t("repo.open_details")}
-      className="cursor-pointer rounded-md border border-ag-border bg-white p-4 transition-colors hover:border-[#0969da]/50 focus:outline-none focus:ring-2 focus:ring-[#0969da]/40 dark:border-ag-border dark:bg-ag-surface dark:hover:border-[#58a6ff]/50 dark:focus:ring-[#58a6ff]/40"
+      className="cursor-pointer rounded-md border border-[#d8dee4] bg-white p-4 transition-colors hover:border-[#0969da]/50 focus:outline-none focus:ring-2 focus:ring-[#0969da]/40 dark:border-[#30363d] dark:bg-[#161b22] dark:hover:border-[#58a6ff]/50 dark:focus:ring-[#58a6ff]/40"
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 flex-1">
@@ -198,7 +198,7 @@ export default function RepositoryCard({
           )}
           {onDelete && (
             <button onClick={() => onDelete(repo)}
-              className="rounded-md border border-ag-border px-3 py-1.5 text-sm font-medium text-[#cf222e] hover:bg-[#ffebe9] dark:border-ag-border dark:text-[#f85149] dark:hover:bg-[#f8514926]">
+              className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-sm font-medium text-[#cf222e] hover:bg-[#ffebe9] dark:border-[#30363d] dark:text-[#f85149] dark:hover:bg-[#f8514926]">
               {t("repo.remove")}
             </button>
           )}

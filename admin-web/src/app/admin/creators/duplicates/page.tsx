@@ -73,7 +73,7 @@ export default function CreatorDuplicatesPage() {
 
           <div className="space-y-2">
             {group.creator_ids.map((cid, i) => (
-              <div key={cid} className="flex items-center gap-3 rounded-md border border-ag-border p-2 transition-colors hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d]">
+              <div key={cid} className="flex items-center gap-3 rounded-md border border-[#d8dee4] p-2 transition-colors hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
                 <input
                   type="checkbox"
                   checked={selectedSources.has(cid)}
@@ -100,7 +100,7 @@ export default function CreatorDuplicatesPage() {
 
       {/* Merge action bar */}
       {selectedSources.size > 0 && (
-        <div className="fixed right-0 bottom-0 left-0 z-30 flex items-center justify-between border-t border-ag-border bg-white p-4 shadow-lg dark:border-ag-border dark:bg-ag-surface">
+        <div className="fixed right-0 bottom-0 left-0 z-30 flex items-center justify-between border-t border-[#d8dee4] bg-white p-4 shadow-lg dark:border-[#30363d] dark:bg-[#161b22]">
           <div>
             <span className="text-sm font-medium">
               {t("duplicates.target")} <span className="font-mono text-blue-600">{selectedTarget?.slice(0, 8)}...</span>

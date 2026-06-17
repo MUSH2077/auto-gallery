@@ -107,7 +107,7 @@ function GridCard({
         </div>
         {trashMode && (
           <div className="mt-3 flex gap-2">
-            <button onClick={(e) => { e.stopPropagation(); onRestore?.(w.id); }} className="rounded border border-ag-border px-2 py-1 text-xs hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d]">{t("works.restore")}</button>
+            <button onClick={(e) => { e.stopPropagation(); onRestore?.(w.id); }} className="rounded border border-[#d8dee4] px-2 py-1 text-xs hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">{t("works.restore")}</button>
             <button onClick={(e) => { e.stopPropagation(); onPurge?.(w.id); }} className="rounded bg-[#cf222e] px-2 py-1 text-xs text-white hover:bg-[#a40e26]">{t("works.purge")}</button>
           </div>
         )}
@@ -312,20 +312,20 @@ function WorksContent() {
       <div className="mb-3 flex flex-wrap items-center gap-2 md:hidden">
         <button
           onClick={() => setFiltersOpen((value) => !value)}
-          className="rounded-md border border-ag-border px-3 py-1.5 text-sm font-medium dark:border-ag-border"
+          className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-sm font-medium dark:border-[#30363d]"
           aria-expanded={filtersOpen}
           aria-controls="works-filter-panel"
         >
           {t("works.filters")} {activeFilterCount > 0 && <span className="ml-1 rounded-full bg-[#0969da] px-1.5 py-0.5 text-xs text-white">{activeFilterCount}</span>}
         </button>
         {activeFilterCount > 0 && (
-          <button onClick={clearFilters} className="rounded-md border border-ag-border px-3 py-1.5 text-sm dark:border-ag-border">
+          <button onClick={clearFilters} className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-sm dark:border-[#30363d]">
             {t("works.clear_filters")}
           </button>
         )}
       </div>
 
-      <div id="works-filter-panel" className={`${filtersOpen ? "flex" : "hidden"} mb-4 flex-col gap-2 rounded-md border border-ag-border bg-white p-3 dark:border-ag-border dark:bg-slate-800 md:flex md:flex-row md:flex-wrap md:items-center md:border-0 md:bg-transparent md:p-0 md:dark:bg-transparent`}>
+      <div id="works-filter-panel" className={`${filtersOpen ? "flex" : "hidden"} mb-4 flex-col gap-2 rounded-md border border-[#d8dee4] bg-white p-3 dark:border-[#30363d] dark:bg-slate-800 md:flex md:flex-row md:flex-wrap md:items-center md:border-0 md:bg-transparent md:p-0 md:dark:bg-transparent`}>
         <div className="flex gap-0.5 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
           <button onClick={() => updateParams({ curation: null })}
             aria-label={t("works.gallery")}
@@ -420,7 +420,7 @@ function WorksContent() {
         <div className="flex-1" />
 
         {activeFilterCount > 0 && (
-          <button onClick={clearFilters} className="hidden rounded-md border border-ag-border px-2.5 py-1.5 text-xs hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d] md:inline-flex">
+          <button onClick={clearFilters} className="hidden rounded-md border border-[#d8dee4] px-2.5 py-1.5 text-xs hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d] md:inline-flex">
             {t("works.clear_filters")}
           </button>
         )}
@@ -441,14 +441,14 @@ function WorksContent() {
       </div>
 
       {works.data && works.data.items?.length > 0 && curationVisibility === "visible" && (
-        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-ag-border bg-white px-3 py-2 dark:border-ag-border dark:bg-slate-800" aria-live="polite">
-          <button onClick={toggleSelectPage} className="rounded-md border border-ag-border px-3 py-1.5 text-xs font-medium hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d]">
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-[#d8dee4] bg-white px-3 py-2 dark:border-[#30363d] dark:bg-slate-800" aria-live="polite">
+          <button onClick={toggleSelectPage} className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-xs font-medium hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
             {pageAllSelected ? t("works.deselect_page") : t("works.select_page")}
           </button>
           {selectedCount > 0 && (
             <>
               <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("works.selected_count", { count: selectedCount })}</span>
-              <button onClick={() => setSelectedWorkIds(new Set())} className="rounded-md border border-ag-border px-3 py-1.5 text-xs hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d]">
+              <button onClick={() => setSelectedWorkIds(new Set())} className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-xs hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
                 {t("works.clear_selection")}
               </button>
               <button onClick={moveSelectedToTrash} disabled={batchTrash.isPending} className="rounded-md bg-[#cf222e] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#a40e26] disabled:opacity-50">
@@ -542,7 +542,7 @@ function WorksContent() {
               </button>
               {curationVisibility === "trashed" && (
                 <div className="flex shrink-0 gap-2">
-                  <button onClick={(e) => { e.stopPropagation(); restoreWork.mutate(w.id); }} className="rounded border border-ag-border px-2 py-1 text-xs hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d]">{t("works.restore")}</button>
+                  <button onClick={(e) => { e.stopPropagation(); restoreWork.mutate(w.id); }} className="rounded border border-[#d8dee4] px-2 py-1 text-xs hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">{t("works.restore")}</button>
                   <button onClick={(e) => { e.stopPropagation(); if (window.confirm(t("works.purge_confirm"))) purgeWork.mutate(w.id); }} className="rounded bg-[#cf222e] px-2 py-1 text-xs text-white hover:bg-[#a40e26]">{t("works.purge")}</button>
                 </div>
               )}

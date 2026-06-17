@@ -126,7 +126,7 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
       </div>
 
       {selectedDay && (
-        <div className="mt-3 rounded-md border border-ag-border bg-[#f6f8fa] p-3 text-sm dark:border-ag-border dark:bg-ag-bg">
+        <div className="mt-3 rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-3 text-sm dark:border-[#30363d] dark:bg-[#0d1117]">
           <div className="flex items-center justify-between">
             <span className="font-medium dark:text-white">{selectedDay.date}</span>
             <button onClick={() => setSelectedDay(null)} className="text-[#57606a] hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3]">×</button>
@@ -145,7 +145,7 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
                   <div className="flex flex-wrap gap-1 ml-4">
                     {ids.slice(0, 20).map((wid) => (
                       <Link key={wid} href={`/admin/works/${wid}`}
-                        className="rounded-md border border-ag-border bg-white px-2 py-0.5 font-mono text-xs transition-colors hover:border-[#0969da] hover:text-[#0969da] dark:border-ag-border dark:bg-ag-surface dark:hover:border-[#58a6ff] dark:hover:text-[#58a6ff]">
+                        className="rounded-md border border-[#d8dee4] bg-white px-2 py-0.5 font-mono text-xs transition-colors hover:border-[#0969da] hover:text-[#0969da] dark:border-[#30363d] dark:bg-[#161b22] dark:hover:border-[#58a6ff] dark:hover:text-[#58a6ff]">
                         {wid.length > 12 ? wid.slice(0, 8) + "..." + wid.slice(-4) : wid}
                       </Link>
                     ))}

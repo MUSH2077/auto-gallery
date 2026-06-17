@@ -252,13 +252,13 @@ function NamingReferencePanel({
   };
 
   return (
-    <section className="rounded-md border border-[#d0d7de] bg-[#f6f8fa] text-sm dark:border-ag-border dark:bg-ag-surface">
-      <div className="flex flex-col gap-3 border-b border-[#d0d7de] px-4 py-3 dark:border-ag-border md:flex-row md:items-center md:justify-between">
+    <section className="rounded-md border border-[#d0d7de] bg-[#f6f8fa] text-sm dark:border-[#30363d] dark:bg-[#161b22]">
+      <div className="flex flex-col gap-3 border-b border-[#d0d7de] px-4 py-3 dark:border-[#30363d] md:flex-row md:items-center md:justify-between">
         <div>
-          <h5 className="font-semibold text-[#24292f] dark:text-ag-text">{reference.title} 命名规范</h5>
+          <h5 className="font-semibold text-[#24292f] dark:text-[#f0f6fc]">{reference.title} 命名规范</h5>
           <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">常用变量来自本项目已验证的 gallery-dl 配置；点击 token 会追加到当前目标输入框末尾。</p>
         </div>
-        <div className="inline-flex h-8 w-fit overflow-hidden rounded-md border border-[#d0d7de] bg-white dark:border-ag-border dark:bg-ag-bg">
+        <div className="inline-flex h-8 w-fit overflow-hidden rounded-md border border-[#d0d7de] bg-white dark:border-[#30363d] dark:bg-[#0d1117]">
           {(["directory", "filename"] as PatternTarget[]).map((item) => (
             <button
               key={item}
@@ -301,25 +301,25 @@ function NamingReferencePanel({
         </div>
 
         <div className="grid gap-3 md:grid-cols-2">
-          <div className="rounded-md border border-[#d0d7de] bg-white p-3 dark:border-ag-border dark:bg-ag-bg">
+          <div className="rounded-md border border-[#d0d7de] bg-white p-3 dark:border-[#30363d] dark:bg-[#0d1117]">
             <div className="flex items-center justify-between gap-3">
               <span className="text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">Directory template</span>
               <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => onDirectoryChange(reference.defaultDirectory)}>
                 使用目录模板
               </button>
             </div>
-            <code className="mt-2 block break-all rounded-md bg-[#f6f8fa] px-2 py-1.5 font-mono text-xs text-[#24292f] dark:bg-ag-surface dark:text-ag-text">
+            <code className="mt-2 block break-all rounded-md bg-[#f6f8fa] px-2 py-1.5 font-mono text-xs text-[#24292f] dark:bg-[#161b22] dark:text-[#f0f6fc]">
               {reference.defaultDirectory}
             </code>
           </div>
-          <div className="rounded-md border border-[#d0d7de] bg-white p-3 dark:border-ag-border dark:bg-ag-bg">
+          <div className="rounded-md border border-[#d0d7de] bg-white p-3 dark:border-[#30363d] dark:bg-[#0d1117]">
             <div className="flex items-center justify-between gap-3">
               <span className="text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">Filename template</span>
               <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => onFilenameChange(reference.defaultFilename)}>
                 使用文件名模板
               </button>
             </div>
-            <code className="mt-2 block break-all rounded-md bg-[#f6f8fa] px-2 py-1.5 font-mono text-xs text-[#24292f] dark:bg-ag-surface dark:text-ag-text">
+            <code className="mt-2 block break-all rounded-md bg-[#f6f8fa] px-2 py-1.5 font-mono text-xs text-[#24292f] dark:bg-[#161b22] dark:text-[#f0f6fc]">
               {reference.defaultFilename}
             </code>
           </div>
@@ -327,7 +327,7 @@ function NamingReferencePanel({
 
         <div>
           <div className="mb-1 text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">File tree preview</div>
-          <pre className="overflow-x-auto rounded-md border border-[#d0d7de] bg-white px-3 py-2 font-mono text-xs text-[#24292f] dark:border-ag-border dark:bg-ag-bg dark:text-ag-text">{reference.treeExample}</pre>
+          <pre className="overflow-x-auto rounded-md border border-[#d0d7de] bg-white px-3 py-2 font-mono text-xs text-[#24292f] dark:border-[#30363d] dark:bg-[#0d1117] dark:text-[#f0f6fc]">{reference.treeExample}</pre>
         </div>
 
         {reference.notes && reference.notes.length > 0 && (
@@ -336,9 +336,9 @@ function NamingReferencePanel({
           </div>
         )}
 
-        <div className="overflow-hidden rounded-md border border-[#d0d7de] dark:border-ag-border">
+        <div className="overflow-hidden rounded-md border border-[#d0d7de] dark:border-[#30363d]">
           <table className="min-w-full divide-y divide-[#d0d7de] text-left dark:divide-[#30363d]">
-            <thead className="bg-white dark:bg-ag-bg">
+            <thead className="bg-white dark:bg-[#0d1117]">
               <tr>
                 <th className="px-3 py-2 text-xs font-semibold text-[#57606a] dark:text-[#8b949e]">Token</th>
                 <th className="px-3 py-2 text-xs font-semibold text-[#57606a] dark:text-[#8b949e]">说明</th>
@@ -346,19 +346,19 @@ function NamingReferencePanel({
                 <th className="px-3 py-2 text-right text-xs font-semibold text-[#57606a] dark:text-[#8b949e]">插入到 {targetLabel}</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#d0d7de] bg-white dark:divide-[#30363d] dark:bg-ag-bg">
+            <tbody className="divide-y divide-[#d0d7de] bg-white dark:divide-[#30363d] dark:bg-[#0d1117]">
               {reference.tokens.map((item) => (
                 <tr key={item.token} className="hover:bg-[#f6f8fa] dark:hover:bg-[#161b22]">
                   <td className="px-3 py-2">
                     <button
                       type="button"
                       onClick={() => insertToken(item.token)}
-                      className="rounded-md border border-[#d0d7de] bg-[#f6f8fa] px-2 py-1 font-mono text-xs text-[#0969da] hover:border-[#0969da] dark:border-ag-border dark:bg-ag-surface dark:text-[#58a6ff]"
+                      className="rounded-md border border-[#d0d7de] bg-[#f6f8fa] px-2 py-1 font-mono text-xs text-[#0969da] hover:border-[#0969da] dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#58a6ff]"
                     >
                       {item.token}
                     </button>
                   </td>
-                  <td className="px-3 py-2 text-xs text-[#24292f] dark:text-ag-text">{item.description}</td>
+                  <td className="px-3 py-2 text-xs text-[#24292f] dark:text-[#f0f6fc]">{item.description}</td>
                   <td className="px-3 py-2 font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{item.example}</td>
                   <td className="px-3 py-2 text-right">
                     <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => insertToken(item.token)}>

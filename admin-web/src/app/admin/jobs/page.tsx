@@ -58,7 +58,7 @@ function SummaryCard({ label, value, sub, tone = "neutral" }: { label: string; v
   const color = tone === "danger" ? "text-[#cf222e] dark:text-[#f85149]"
     : tone === "warning" ? "text-[#9a6700] dark:text-[#d29922]"
       : tone === "active" ? "text-[#0969da] dark:text-[#58a6ff]"
-        : "text-[#24292f] dark:text-ag-text";
+        : "text-[#24292f] dark:text-[#e6edf3]";
   return (
     <div className="card p-4">
       <div className={`tabular text-2xl font-semibold ${color}`}>{value}</div>
@@ -118,7 +118,7 @@ function shortId(id?: string | null) {
 function JsonBlock({ value }: { value: unknown }) {
   if (!value) return null;
   return (
-    <pre className="max-h-64 overflow-auto rounded-md border border-ag-border bg-[#f6f8fa] p-3 font-mono text-xs whitespace-pre-wrap dark:border-ag-border dark:bg-ag-bg">
+    <pre className="max-h-64 overflow-auto rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-3 font-mono text-xs whitespace-pre-wrap dark:border-[#30363d] dark:bg-[#0d1117]">
       {JSON.stringify(value, null, 2)}
     </pre>
   );
@@ -126,7 +126,7 @@ function JsonBlock({ value }: { value: unknown }) {
 
 function DetailRow({ label, value }: { label: string; value?: ReactNode }) {
   return (
-    <div className="grid grid-cols-[120px_minmax(0,1fr)] gap-3 border-b border-ag-border py-2 text-sm last:border-b-0 dark:border-ag-border">
+    <div className="grid grid-cols-[120px_minmax(0,1fr)] gap-3 border-b border-[#d8dee4] py-2 text-sm last:border-b-0 dark:border-[#30363d]">
       <dt className="text-xs font-medium uppercase text-[#57606a] dark:text-[#8b949e]">{label}</dt>
       <dd className="min-w-0 break-all">{value || "—"}</dd>
     </div>
@@ -179,8 +179,8 @@ function JobDetailDrawer({
   const error = kind === "download" ? download.error : importJob.error;
 
   return (
-    <aside className="fixed inset-y-0 right-0 z-40 flex w-full max-w-xl flex-col border-l border-ag-border bg-white shadow-xl dark:border-ag-border dark:bg-ag-surface" aria-label={t("jobs.detail_title")}>
-      <div className="flex items-center justify-between border-b border-ag-border px-4 py-3 dark:border-ag-border">
+    <aside className="fixed inset-y-0 right-0 z-40 flex w-full max-w-xl flex-col border-l border-[#d8dee4] bg-white shadow-xl dark:border-[#30363d] dark:bg-[#161b22]" aria-label={t("jobs.detail_title")}>
+      <div className="flex items-center justify-between border-b border-[#d8dee4] px-4 py-3 dark:border-[#30363d]">
         <div className="min-w-0">
           <div className="text-sm font-semibold">{kind === "download" ? t("jobs.download_detail") : t("jobs.import_detail")}</div>
           <div className="font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{shortId(id)}</div>
@@ -199,7 +199,7 @@ function JobDetailDrawer({
               {dl.status === "paused" && <button onClick={() => onResumeDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.resume")}</button>}
               <button onClick={() => onDeleteDownload(dl.id)} className="btn-danger text-xs">{t("jobs.del")}</button>
             </div>
-            <dl className="rounded-md border border-ag-border px-3 dark:border-ag-border">
+            <dl className="rounded-md border border-[#d8dee4] px-3 dark:border-[#30363d]">
               <DetailRow label={t("jobs.status")} value={statusLabel(t, dl.status)} />
               <DetailRow label={t("jobs.source")} value={<span className="inline-flex items-center gap-2"><SourceBadge source={dl.source} />{dl.source}</span>} />
               <DetailRow label={t("jobs.source_url")} value={dl.source_url} />
@@ -227,7 +227,7 @@ function JobDetailDrawer({
               {imports.data?.length ? (
                 <div className="space-y-1">
                   {imports.data.map((job: ImportJob) => (
-                    <Link key={job.id} href={`/admin/jobs?tab=imports&download_job_id=${dl.id}&import_job=${job.id}`} className="flex items-center justify-between rounded-md border border-ag-border px-3 py-2 text-sm hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d]">
+                    <Link key={job.id} href={`/admin/jobs?tab=imports&download_job_id=${dl.id}&import_job=${job.id}`} className="flex items-center justify-between rounded-md border border-[#d8dee4] px-3 py-2 text-sm hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
                       <span className="font-mono text-xs">{shortId(job.id)}</span>
                       <span>{statusLabel(t, job.status)}</span>
                     </Link>
@@ -245,7 +245,7 @@ function JobDetailDrawer({
               <button onClick={() => onDeleteImport(im.id)} className="btn-danger text-xs">{t("jobs.del")}</button>
               <Link href={`/admin/jobs?tab=downloads&job=${im.download_job_id}`} className="btn-ghost text-xs">{t("jobs.open_download")}</Link>
             </div>
-            <dl className="rounded-md border border-ag-border px-3 dark:border-ag-border">
+            <dl className="rounded-md border border-[#d8dee4] px-3 dark:border-[#30363d]">
               <DetailRow label={t("jobs.status")} value={statusLabel(t, im.status)} />
               <DetailRow label={t("jobs.download_job")} value={<Link href={`/admin/jobs?tab=downloads&job=${im.download_job_id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{shortId(im.download_job_id)}</Link>} />
               <DetailRow label={t("jobs.created")} value={fmt.dateTime(im.created_at)} />
@@ -507,7 +507,7 @@ function JobsContent() {
           <button onClick={() => handleClear(["complete"])} className="btn-ghost text-xs">{t("jobs.clear_complete")}</button>
           <button onClick={() => killStuck.mutate()} disabled={killStuck.isPending} className="btn-ghost text-xs">{t("jobs.kill_stuck")}</button>
           <button onClick={() => retryAllFailed.mutate()} disabled={retryAllFailed.isPending} className="btn-primary text-xs">{t("jobs.retry_all_failed")}</button>
-          <span className={`w-2 h-2 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`} title={connected ? t("common.live") : t("common.disconnected")} />
+          <span className={`w-2 h-2 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`} title={connected ? "Live" : "Disconnected"} />
         </div>
       </PageHeader>
 
@@ -521,7 +521,7 @@ function JobsContent() {
         </div>
       )}
 
-      <div className="mb-4 flex flex-col gap-3 rounded-md border border-ag-border bg-white p-3 dark:border-ag-border dark:bg-ag-surface">
+      <div className="mb-4 flex flex-col gap-3 rounded-md border border-[#d8dee4] bg-white p-3 dark:border-[#30363d] dark:bg-[#161b22]">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex gap-1 rounded-md bg-[#f6f8fa] p-1 dark:bg-[#21262d]">
             <button onClick={() => updateParams({ tab: "downloads", status: null, import_job: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "downloads" ? "bg-white shadow-sm dark:bg-[#30363d]" : "text-[#57606a] dark:text-[#8b949e]"}`}>{t("jobs.download")}</button>
@@ -545,8 +545,8 @@ function JobsContent() {
           <option value="">{t("jobs.filter_all_source")}</option>
           {SOURCE_OPTIONS.filter(Boolean).map(s => <option key={s} value={s}>{s}</option>)}
         </select>}
-        {subscriptionSourceId && <span className="rounded-md border border-ag-border px-2 py-1 text-xs font-mono dark:border-ag-border">{t("jobs.repository")} {shortId(subscriptionSourceId)}</span>}
-        {downloadJobId && <span className="rounded-md border border-ag-border px-2 py-1 text-xs font-mono dark:border-ag-border">{t("jobs.download_job")} {shortId(downloadJobId)}</span>}
+        {subscriptionSourceId && <span className="rounded-md border border-[#d8dee4] px-2 py-1 text-xs font-mono dark:border-[#30363d]">{t("jobs.repository")} {shortId(subscriptionSourceId)}</span>}
+        {downloadJobId && <span className="rounded-md border border-[#d8dee4] px-2 py-1 text-xs font-mono dark:border-[#30363d]">{t("jobs.download_job")} {shortId(downloadJobId)}</span>}
         {activeTab === "downloads" && <select value={`${dlSort}-${dlOrder}`} onChange={(e) => { const [k, o] = e.target.value.split("-"); updateParams({ sort: k === "created_at" && o === "desc" ? null : k, order: o === "desc" ? null : o }); }} className="select px-2 py-1.5 text-xs">
           <option value="created_at-desc">{t("jobs.sort_newest")}</option>
           <option value="created_at-asc">{t("jobs.sort_oldest")}</option>

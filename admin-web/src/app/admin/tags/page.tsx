@@ -68,7 +68,6 @@ export default function TagsPage() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [showCreate, setShowCreate] = useState(false);
-  const [isDark, setIsDark] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [formName, setFormName] = useState("");
@@ -145,7 +144,13 @@ export default function TagsPage() {
               return (
                 <div key={tag.id}
                   className="group inline-flex items-center gap-1 rounded-full border cursor-pointer hover:shadow-md transition-shadow"
-                  style={isDark ? dark : light}
+                  style={{
+                    fontSize: light.fontSize,
+                    padding: light.padding,
+                    backgroundColor: light.backgroundColor,
+                    color: light.color,
+                    borderColor: light.borderColor,
+                  }}
                   onClick={() => router.push(`/admin/search?q=${encodeURIComponent(tag.normalized_name)}`)}>
                   <span className="font-semibold truncate max-w-[16rem]">{tag.normalized_name}</span>
                   {tag.category && (
