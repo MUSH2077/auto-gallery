@@ -50,13 +50,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       headers: { Authorization: `Bearer ${stored}` },
     })
       .then((res) => {
-        if (res.status === 403) {
-          // Password change still required — synthesize user so AuthGuard can redirect
-          setToken(stored);
-          setUser({ id: 0, username: "admin", display_name: "Admin", must_change_password: true });
-          setIsLoading(false);
-          return Promise.reject("handled");
-        }
         if (!res.ok) throw new Error("invalid");
         return res.json();
       })
@@ -64,8 +57,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setToken(stored);
         setUser(data);
       })
-      .catch((err) => {
-        if (err === "handled") return; // 403 already handled above
+      .catch(() => {
         localStorage.removeItem(TOKEN_KEY);
         clearTokenCookie();
       })
@@ -102,7 +94,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const meRes = await fetch("/api/v1/auth/me", {
       headers: { Authorization: `Bearer ${nextToken}` },
     });
-    if (!meRes.ok && meRes.status !== 403) {
+    if (!meRes.ok) {
       throw new Error("Failed to refresh session");
     }
     const me: AuthUser = await meRes.json();

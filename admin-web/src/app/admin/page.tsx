@@ -33,7 +33,7 @@ function MetricCard({ label, value, sub, tone = "muted" }: { label: string; valu
         <div className="text-xs font-medium uppercase text-[#57606a] dark:text-[#8b949e]">{label}</div>
         <StatusDot tone={tone} />
       </div>
-      <div className="mt-2 tabular text-2xl font-semibold tracking-tight text-[#24292f] dark:text-ag-text">{value}</div>
+      <div className="mt-2 tabular text-2xl font-semibold tracking-tight text-[#24292f] dark:text-[#e6edf3]">{value}</div>
       {sub && <div className="mt-1 truncate text-xs text-[#57606a] dark:text-[#8b949e]">{sub}</div>}
     </div>
   );
@@ -47,14 +47,14 @@ function AttentionCard({ title, value, description, href, tone }: { title: strin
       className={`rounded-md border p-4 transition-colors ${
         active
           ? "border-[#cf222e]/30 bg-[#fff8f7] hover:border-[#cf222e]/50 dark:border-[#f85149]/30 dark:bg-[#f8514914]"
-          : "border-ag-border bg-white hover:border-[#0969da]/40 dark:border-ag-border dark:bg-ag-surface"
+          : "border-[#d8dee4] bg-white hover:border-[#0969da]/40 dark:border-[#30363d] dark:bg-[#161b22]"
       }`}
     >
       <div className="flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-[#24292f] dark:text-ag-text">{title}</h3>
+        <h3 className="text-sm font-semibold text-[#24292f] dark:text-[#e6edf3]">{title}</h3>
         <StatusDot tone={tone === "ok" ? "ok" : tone === "muted" ? "muted" : tone} />
       </div>
-      <div className="mt-2 tabular text-xl font-semibold text-[#24292f] dark:text-ag-text">{value}</div>
+      <div className="mt-2 tabular text-xl font-semibold text-[#24292f] dark:text-[#e6edf3]">{value}</div>
       <p className="mt-1 text-xs leading-5 text-[#57606a] dark:text-[#8b949e]">{description}</p>
     </Link>
   );
@@ -106,10 +106,10 @@ function RecentActivity({ data }: { data: WorkbenchSummary }) {
           ))}
           {data.recent.works.slice(0, 5).map((work) => (
             <RecentRow key={work.id} href={`/admin/works/${work.id}`}>
-              <div className="h-8 w-8 shrink-0 overflow-hidden rounded-md border border-ag-border bg-[#f6f8fa] dark:border-ag-border dark:bg-[#21262d]">
+              <div className="h-8 w-8 shrink-0 overflow-hidden rounded-md border border-[#d8dee4] bg-[#f6f8fa] dark:border-[#30363d] dark:bg-[#21262d]">
                 {work.thumbnail_asset_id && <img src={api.mediaUrl(work.thumbnail_asset_id, "thumb")} alt="" className="h-full w-full object-cover" loading="lazy" />}
               </div>
-              <span className="min-w-0 flex-1 truncate text-sm text-[#24292f] dark:text-ag-text">{work.title || t("dashboard.untitled_work")}</span>
+              <span className="min-w-0 flex-1 truncate text-sm text-[#24292f] dark:text-[#e6edf3]">{work.title || t("dashboard.untitled_work")}</span>
               <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{fmt.dateTime(work.created_at)}</span>
             </RecentRow>
           ))}
@@ -125,7 +125,7 @@ function RecentActivity({ data }: { data: WorkbenchSummary }) {
             {data.recent.successful_syncs.map((sync) => (
               <RecentRow key={sync.source_id} href={`/admin/creators/${sync.creator_id}`}>
                 <SourceBadge source={sync.source} />
-                <span className="min-w-0 flex-1 truncate text-sm text-[#24292f] dark:text-ag-text">{sync.creator_name}</span>
+                <span className="min-w-0 flex-1 truncate text-sm text-[#24292f] dark:text-[#e6edf3]">{sync.creator_name}</span>
                 <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{fmt.relative(sync.last_synced_at)}</span>
               </RecentRow>
             ))}
@@ -158,10 +158,10 @@ export default function Dashboard() {
 
   return (
     <main className="mx-auto max-w-7xl p-6 page-transition">
-      <header className="mb-5 border-b border-ag-border pb-4 dark:border-ag-border">
+      <header className="mb-5 border-b border-[#d8dee4] pb-4 dark:border-[#30363d]">
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold tracking-normal text-[#24292f] dark:text-ag-text">{t("dashboard.title")}</h1>
+            <h1 className="text-2xl font-semibold tracking-normal text-[#24292f] dark:text-[#e6edf3]">{t("dashboard.title")}</h1>
             <p className="mt-1.5 max-w-3xl text-sm leading-6 text-[#57606a] dark:text-[#8b949e]">
               {t("dashboard.workbench_desc")}
             </p>
@@ -255,7 +255,7 @@ export default function Dashboard() {
                 <h2 className="mb-3 text-base font-semibold">{t("dashboard.services")}</h2>
                 <div className="grid grid-cols-2 gap-2">
                   {Object.entries(data.health).map(([name, status]) => (
-                    <div key={name} className="flex items-center justify-between gap-2 rounded-md border border-ag-border px-3 py-2 dark:border-ag-border">
+                    <div key={name} className="flex items-center justify-between gap-2 rounded-md border border-[#d8dee4] px-3 py-2 dark:border-[#30363d]">
                       <span className="truncate text-xs capitalize text-[#57606a] dark:text-[#8b949e]">{name}</span>
                       <StatusBadge status={status} />
                     </div>
@@ -273,7 +273,7 @@ export default function Dashboard() {
                     ["/admin/works", t("dashboard.quick_works")],
                     ["/admin/settings", t("dashboard.quick_settings")],
                   ].map(([href, label]) => (
-                    <Link key={href} href={href} className="rounded-md border border-ag-border px-3 py-2 text-sm font-medium hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d]">{label}</Link>
+                    <Link key={href} href={href} className="rounded-md border border-[#d8dee4] px-3 py-2 text-sm font-medium hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">{label}</Link>
                   ))}
                 </div>
               </section>

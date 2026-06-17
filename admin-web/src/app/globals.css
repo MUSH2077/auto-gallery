@@ -80,8 +80,8 @@
 
 @layer components {
   .card {
-    @apply bg-white dark:bg-ag-surface
-           border border-ag-border dark:border-ag-border
+    @apply bg-white dark:bg-[#161b22]
+           border border-[#d8dee4] dark:border-[#30363d]
            rounded-md shadow-sm dark:shadow-none;
   }
   .card-elevated {
@@ -106,9 +106,9 @@
   }
   .btn-ghost {
     @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium
-           border border-ag-border dark:border-ag-border
-           text-[#24292f] dark:text-ag-text
-           bg-white dark:bg-ag-surface
+           border border-[#d8dee4] dark:border-[#30363d]
+           text-[#24292f] dark:text-[#e6edf3]
+           bg-white dark:bg-[#161b22]
            hover:bg-[#f6f8fa] dark:hover:bg-[#21262d]
            disabled:opacity-50 disabled:cursor-not-allowed
            transition-colors duration-150
@@ -117,7 +117,7 @@
   .btn-danger {
     @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium
            border border-[#cf222e]/40 text-[#cf222e] bg-white hover:bg-[#ffebe9]
-           dark:border-[#f85149]/40 dark:text-[#f85149] dark:bg-ag-surface dark:hover:bg-[#f8514926]
+           dark:border-[#f85149]/40 dark:text-[#f85149] dark:bg-[#161b22] dark:hover:bg-[#f8514926]
            disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#cf222e]/30 dark:focus-visible:ring-[#f85149]/30;
   }
@@ -128,9 +128,9 @@
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0969da]/40 dark:focus-visible:ring-[#58a6ff]/40;
   }
   .input, .select, .textarea {
-    @apply rounded-md border border-ag-border bg-white px-3 py-2 text-sm text-[#24292f]
+    @apply rounded-md border border-[#d8dee4] bg-white px-3 py-2 text-sm text-[#24292f]
            placeholder:text-[#8c959f]
-           dark:border-ag-border dark:bg-ag-bg dark:text-ag-text
+           dark:border-[#30363d] dark:bg-[#0d1117] dark:text-[#e6edf3]
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0969da]/35 dark:focus-visible:ring-[#58a6ff]/35;
     color-scheme: light;
   }
@@ -171,34 +171,34 @@
     @apply min-h-[84px];
   }
   .toolbar {
-    @apply flex flex-wrap items-center gap-2 rounded-md border border-ag-border bg-white p-3
-           dark:border-ag-border dark:bg-ag-surface;
+    @apply flex flex-wrap items-center gap-2 rounded-md border border-[#d8dee4] bg-white p-3
+           dark:border-[#30363d] dark:bg-[#161b22];
   }
   .segmented-control {
-    @apply inline-flex gap-0.5 rounded-md border border-ag-border bg-[#f6f8fa] p-0.5
-           dark:border-ag-border dark:bg-ag-surface;
+    @apply inline-flex gap-0.5 rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-0.5
+           dark:border-[#30363d] dark:bg-[#161b22];
   }
   .segment {
     @apply rounded px-3 py-1 text-xs font-medium text-[#57606a] transition-colors
            hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3];
   }
   .segment-active {
-    @apply bg-white text-[#24292f] shadow-sm dark:bg-[#30363d] dark:text-ag-text;
+    @apply bg-white text-[#24292f] shadow-sm dark:bg-[#30363d] dark:text-[#e6edf3];
   }
   .badge {
     @apply inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium;
   }
   .table-shell {
-    @apply overflow-x-auto rounded-md border border-ag-border bg-white dark:border-ag-border dark:bg-ag-surface;
+    @apply overflow-x-auto rounded-md border border-[#d8dee4] bg-white dark:border-[#30363d] dark:bg-[#161b22];
   }
   .table-head {
-    @apply border-b border-ag-border bg-[#f6f8fa] text-[#57606a] dark:border-ag-border dark:bg-[#21262d] dark:text-[#8b949e];
+    @apply border-b border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e];
   }
   .table-row {
-    @apply border-b border-ag-border last:border-b-0 hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d];
+    @apply border-b border-[#d8dee4] last:border-b-0 hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d];
   }
   .divider {
-    @apply border-t border-ag-border dark:border-ag-border;
+    @apply border-t border-[#d8dee4] dark:border-[#30363d];
   }
   .section-title {
     @apply text-base font-semibold tracking-normal;

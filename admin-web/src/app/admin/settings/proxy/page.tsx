@@ -146,7 +146,7 @@ export default function ProxySettingsPage() {
             </ul>
           </div>
 
-          <div className="mt-4 rounded-md border border-ag-border bg-[#f6f8fa] p-5 dark:border-ag-border dark:bg-ag-bg">
+          <div className="mt-4 rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-5 dark:border-[#30363d] dark:bg-[#0d1117]">
             <div className="flex items-center justify-between">
               <div>
                 <span className="font-medium text-sm dark:text-white">{t("proxy.connectivity_test")}</span>

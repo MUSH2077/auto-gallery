@@ -42,14 +42,14 @@ function Pill({ children, tone = "neutral" }: { children: React.ReactNode; tone?
       ? "border-[#bf8700]/30 bg-[#fff8c5] text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]"
       : tone === "bad"
         ? "border-[#cf222e]/30 bg-[#ffebe9] text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]"
-        : "border-ag-border bg-[#f6f8fa] text-[#57606a] dark:border-ag-border dark:bg-[#21262d] dark:text-[#8b949e]";
+        : "border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]";
   return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>{children}</span>;
 }
 
 function StatCard({ label, value, hint }: { label: string; value: React.ReactNode; hint?: string }) {
   return (
-    <div className="rounded-md border border-ag-border bg-white p-3 dark:border-ag-border dark:bg-ag-surface">
-      <div className="truncate text-sm font-semibold text-[#24292f] dark:text-ag-text">{value}</div>
+    <div className="rounded-md border border-[#d8dee4] bg-white p-3 dark:border-[#30363d] dark:bg-[#161b22]">
+      <div className="truncate text-sm font-semibold text-[#24292f] dark:text-[#e6edf3]">{value}</div>
       <div className="mt-1 text-[11px] font-medium uppercase text-[#57606a] dark:text-[#8b949e]">{label}</div>
       {hint && <div className="mt-0.5 text-xs text-[#8c959f] dark:text-[#6e7681]">{hint}</div>}
     </div>
@@ -63,7 +63,7 @@ function JobsList({ jobs }: { jobs: RepositoryRecentJob[] }) {
     return <EmptyState title={t("repo_detail.no_jobs_title")} description={t("repo_detail.no_jobs_desc")} />;
   }
   return (
-    <div className="divide-y divide-[#d8dee4] rounded-md border border-ag-border bg-white dark:divide-[#30363d] dark:border-ag-border dark:bg-ag-surface">
+    <div className="divide-y divide-[#d8dee4] rounded-md border border-[#d8dee4] bg-white dark:divide-[#30363d] dark:border-[#30363d] dark:bg-[#161b22]">
       {jobs.map((job) => (
         <Link key={job.id} href="/admin/jobs" className="block p-4 hover:bg-[#f6f8fa] dark:hover:bg-[#21262d]">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -98,7 +98,7 @@ function WorksGrid({ works }: { works: RepositoryRecentWork[] }) {
     <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
       {works.map((work) => (
         <Link key={work.id} href={`/admin/works/${work.id}`}
-          className="group overflow-hidden rounded-md border border-ag-border bg-white transition-colors hover:border-[#0969da]/50 dark:border-ag-border dark:bg-ag-surface dark:hover:border-[#58a6ff]/50">
+          className="group overflow-hidden rounded-md border border-[#d8dee4] bg-white transition-colors hover:border-[#0969da]/50 dark:border-[#30363d] dark:bg-[#161b22] dark:hover:border-[#58a6ff]/50">
           <div className="aspect-[4/3] bg-[#f6f8fa] dark:bg-[#21262d]">
             {work.thumbnail_asset_id ? (
               <img src={api.mediaUrl(work.thumbnail_asset_id, "thumb")} alt={work.title || ""} className="h-full w-full object-cover" loading="lazy" />
@@ -148,14 +148,14 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
     ["work_purge", t("repo_detail.graph_filter_purge")],
     ["commit_revert", t("repo_detail.graph_filter_revert")],
   ];
-  if (graph.isLoading) return <div className="h-24 animate-pulse rounded-md border border-ag-border bg-white dark:border-ag-border dark:bg-ag-surface" />;
+  if (graph.isLoading) return <div className="h-24 animate-pulse rounded-md border border-[#d8dee4] bg-white dark:border-[#30363d] dark:bg-[#161b22]" />;
   if (!graph.data?.nodes.length) {
     return (
       <EmptyState
         title={t("repo_detail.graph_empty_title")}
         description={t("repo_detail.graph_empty_desc")}
         action={(
-          <Link href="/admin/curation" className="mt-3 inline-flex rounded-md border border-ag-border px-3 py-1.5 text-sm font-medium text-[#0969da] hover:bg-[#f6f8fa] dark:border-ag-border dark:text-[#58a6ff] dark:hover:bg-[#21262d]">
+          <Link href="/admin/curation" className="mt-3 inline-flex rounded-md border border-[#d8dee4] px-3 py-1.5 text-sm font-medium text-[#0969da] hover:bg-[#f6f8fa] dark:border-[#30363d] dark:text-[#58a6ff] dark:hover:bg-[#21262d]">
             {t("repo_detail.open_curation")}
           </Link>
         )}
@@ -169,7 +169,7 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
           {t("repo_detail.graph_showing", { shown: graph.data.nodes.length, total: graph.data.total })}
         </div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={() => setIncludeBaseline((value) => !value)} className={`rounded-md border px-2.5 py-1.5 text-xs ${includeBaseline ? "border-ag-border dark:border-ag-border" : "border-[#0969da] bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#58a6ff]"}`}>
+          <button onClick={() => setIncludeBaseline((value) => !value)} className={`rounded-md border px-2.5 py-1.5 text-xs ${includeBaseline ? "border-[#d8dee4] dark:border-[#30363d]" : "border-[#0969da] bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#58a6ff]"}`}>
             {includeBaseline ? t("repo_detail.hide_baseline") : t("repo_detail.show_baseline")}
           </button>
           <Link href={`/admin/curation?subject_type=repository&subject_id=${repositoryId}`} className="text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("repo_detail.open_full_history")}</Link>
@@ -177,17 +177,17 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
       </div>
       <div className="flex flex-wrap gap-1">
         {graphFilters.map(([key, label]) => (
-          <button key={key} onClick={() => { setTrigger(key); setOffset(0); }} className={`rounded-md border px-2.5 py-1.5 text-xs font-medium ${trigger === key ? "border-[#0969da] bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#58a6ff]" : "border-ag-border hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d]"}`}>
+          <button key={key} onClick={() => { setTrigger(key); setOffset(0); }} className={`rounded-md border px-2.5 py-1.5 text-xs font-medium ${trigger === key ? "border-[#0969da] bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#58a6ff]" : "border-[#d8dee4] hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]"}`}>
             {label}
           </button>
         ))}
       </div>
-      <div className="rounded-md border border-ag-border bg-white p-4 dark:border-ag-border dark:bg-ag-surface">
+      <div className="rounded-md border border-[#d8dee4] bg-white p-4 dark:border-[#30363d] dark:bg-[#161b22]">
         {graph.data.nodes.map((node, index) => (
           <div key={node.id} className="relative grid grid-cols-[32px_minmax(0,1fr)] gap-3 pb-5 last:pb-0">
             {index < graph.data.nodes.length - 1 && <div className="absolute left-[15px] top-8 h-[calc(100%-1.5rem)] w-px bg-[#d8dee4] dark:bg-[#30363d]" />}
             <div className={`relative z-10 mt-1 h-8 w-8 rounded-full border-2 ${graphTone(node)}`} />
-            <div role="button" tabIndex={0} onClick={() => setExpanded(expanded === node.id ? null : node.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setExpanded(expanded === node.id ? null : node.id); }} className="min-w-0 rounded-md border border-ag-border p-3 text-left hover:border-[#0969da]/50 dark:border-ag-border dark:hover:border-[#58a6ff]/50">
+            <div role="button" tabIndex={0} onClick={() => setExpanded(expanded === node.id ? null : node.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setExpanded(expanded === node.id ? null : node.id); }} className="min-w-0 rounded-md border border-[#d8dee4] p-3 text-left hover:border-[#0969da]/50 dark:border-[#30363d] dark:hover:border-[#58a6ff]/50">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold">{node.message}</div>
@@ -195,7 +195,7 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
                     <span className="font-mono">{node.id.slice(0, 8)}</span>
                     <span className="mx-1.5">·</span>
                     <span>{node.trigger}</span>
-                    {node.is_baseline && <span className="ml-1.5 rounded-full border border-ag-border px-1.5 py-0.5 text-[10px] dark:border-ag-border">{t("repo_detail.graph_baseline")}</span>}
+                    {node.is_baseline && <span className="ml-1.5 rounded-full border border-[#d8dee4] px-1.5 py-0.5 text-[10px] dark:border-[#30363d]">{t("repo_detail.graph_baseline")}</span>}
                     <span className="mx-1.5">·</span>
                     <span>{new Date(node.occurred_at).toLocaleString()}</span>
                   </div>
@@ -205,7 +205,7 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
               {node.changes_summary.length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-2">
                   {node.changes_summary.map((item) => (
-                    <span key={item.action} className="rounded-full border border-ag-border px-2 py-0.5 text-xs text-[#57606a] dark:border-ag-border dark:text-[#8b949e]">
+                    <span key={item.action} className="rounded-full border border-[#d8dee4] px-2 py-0.5 text-xs text-[#57606a] dark:border-[#30363d] dark:text-[#8b949e]">
                       {item.action.replaceAll("_", " ")} · {item.count}
                     </span>
                   ))}
@@ -214,15 +214,15 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
               {node.thumbnails.length > 0 && (
                 <div className="mt-3 flex gap-2 overflow-x-auto">
                   {node.thumbnails.map((assetId) => (
-                    <div key={assetId} className="h-14 w-14 shrink-0 overflow-hidden rounded-md border border-ag-border bg-[#f6f8fa] dark:border-ag-border dark:bg-[#21262d]">
+                    <div key={assetId} className="h-14 w-14 shrink-0 overflow-hidden rounded-md border border-[#d8dee4] bg-[#f6f8fa] dark:border-[#30363d] dark:bg-[#21262d]">
                       <img src={api.mediaUrl(assetId, "thumb")} alt="" className="h-full w-full object-cover" loading="lazy" />
                     </div>
                   ))}
                 </div>
               )}
               {expanded === node.id && (
-                <div className="mt-3 border-t border-ag-border pt-3 text-xs text-[#57606a] dark:border-ag-border dark:text-[#8b949e]">
-                  <div className="mb-2 font-medium text-[#24292f] dark:text-ag-text">{t("repo_detail.graph_node_details")}</div>
+                <div className="mt-3 border-t border-[#d8dee4] pt-3 text-xs text-[#57606a] dark:border-[#30363d] dark:text-[#8b949e]">
+                  <div className="mb-2 font-medium text-[#24292f] dark:text-[#e6edf3]">{t("repo_detail.graph_node_details")}</div>
                   <div className="flex flex-wrap gap-2">
                     <Link onClick={(e) => e.stopPropagation()} href={`/admin/curation?commit=${node.id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("repo_detail.open_commit")}</Link>
                     <Link onClick={(e) => e.stopPropagation()} href={`/admin/jobs?tab=downloads&subscription_source_id=${repositoryId}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("repo_detail.open_jobs")}</Link>
@@ -234,12 +234,12 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
         ))}
       </div>
       {offset + limit < graph.data.total && (
-        <button onClick={() => setOffset(offset + limit)} className="rounded-md border border-ag-border px-3 py-1.5 text-sm hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d]">
+        <button onClick={() => setOffset(offset + limit)} className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-sm hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
           {t("repo_detail.load_older")}
         </button>
       )}
       {offset > 0 && (
-        <button onClick={() => setOffset(Math.max(0, offset - limit))} className="ml-2 rounded-md border border-ag-border px-3 py-1.5 text-sm hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d]">
+        <button onClick={() => setOffset(Math.max(0, offset - limit))} className="ml-2 rounded-md border border-[#d8dee4] px-3 py-1.5 text-sm hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
           {t("repo_detail.newer")}
         </button>
       )}
@@ -262,11 +262,11 @@ function ConfigRows({ detail, decision }: { detail: RepositoryDetailResponse; de
     [t("repo_detail.next_due"), fmt.dateTime(decision?.next_due_at)],
   ];
   return (
-    <div className="rounded-md border border-ag-border bg-white dark:border-ag-border dark:bg-ag-surface">
+    <div className="rounded-md border border-[#d8dee4] bg-white dark:border-[#30363d] dark:bg-[#161b22]">
       {rows.map(([label, value]) => (
-        <div key={label} className="grid grid-cols-1 gap-1 border-b border-ag-border px-4 py-3 text-sm last:border-b-0 dark:border-ag-border md:grid-cols-[180px_1fr]">
+        <div key={label} className="grid grid-cols-1 gap-1 border-b border-[#d8dee4] px-4 py-3 text-sm last:border-b-0 dark:border-[#30363d] md:grid-cols-[180px_1fr]">
           <dt className="text-[#57606a] dark:text-[#8b949e]">{label}</dt>
-          <dd className="min-w-0 break-all font-mono text-xs text-[#24292f] dark:text-ag-text">{value}</dd>
+          <dd className="min-w-0 break-all font-mono text-xs text-[#24292f] dark:text-[#e6edf3]">{value}</dd>
         </div>
       ))}
     </div>
@@ -346,12 +346,12 @@ export default function RepositoryDetailPage() {
     <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
       <Link href={`/admin/creators/${creator.id}`} className="inline-flex items-center gap-1 text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">&larr; {t("repo_detail.back_to_creator")}</Link>
 
-      <header className="mt-4 border-b border-ag-border pb-5 dark:border-ag-border">
+      <header className="mt-4 border-b border-[#d8dee4] pb-5 dark:border-[#30363d]">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <SourceBadge source={repo.source} />
-              <h1 className="min-w-0 truncate text-2xl font-semibold tracking-normal text-[#24292f] dark:text-ag-text">{repoName(repo)}</h1>
+              <h1 className="min-w-0 truncate text-2xl font-semibold tracking-normal text-[#24292f] dark:text-[#e6edf3]">{repoName(repo)}</h1>
               <Pill tone={repo.is_enabled ? "good" : "neutral"}>{repo.is_enabled ? t("repo.enabled") : t("repo.disabled")}</Pill>
               <Pill tone={repo.auth_healthy ? "good" : "bad"}>{repo.auth_healthy ? t("repo.auth_healthy") : t("repo.auth_issue")}</Pill>
               <Pill tone={repo.url_valid ? "good" : "warn"}>{repo.url_valid ? t("repo_detail.valid_url") : t("repo.invalid_url")}</Pill>
@@ -377,10 +377,10 @@ export default function RepositoryDetailPage() {
         </div>
       </header>
 
-      <nav className="mt-4 flex gap-1 overflow-x-auto border-b border-ag-border dark:border-ag-border" aria-label="Repository sections">
+      <nav className="mt-4 flex gap-1 overflow-x-auto border-b border-[#d8dee4] dark:border-[#30363d]" aria-label="Repository sections">
         {tabs.map((item) => (
           <button key={item.key} onClick={() => setTab(item.key)}
-            className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${tab === item.key ? "border-[#fd8c73] font-semibold text-[#24292f] dark:text-ag-text" : "border-transparent text-[#57606a] hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3]"}`}>
+            className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${tab === item.key ? "border-[#fd8c73] font-semibold text-[#24292f] dark:text-[#e6edf3]" : "border-transparent text-[#57606a] hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3]"}`}>
             {item.label}{item.count !== undefined && <span className="ml-2 rounded-full bg-[#eaeef2] px-2 py-0.5 text-xs font-medium text-[#57606a] dark:bg-[#30363d] dark:text-[#8b949e]">{item.count}</span>}
           </button>
         ))}
@@ -389,7 +389,7 @@ export default function RepositoryDetailPage() {
       <section className="mt-5">
         {tab === "overview" && (
           <div className="space-y-5">
-            <div className={`rounded-md border p-4 text-sm ${hint.tone === "bad" ? "border-[#cf222e]/30 bg-[#ffebe9] text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]" : hint.tone === "warn" ? "border-[#bf8700]/30 bg-[#fff8c5] text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]" : "border-ag-border bg-white text-[#24292f] dark:border-ag-border dark:bg-ag-surface dark:text-ag-text"}`}>
+            <div className={`rounded-md border p-4 text-sm ${hint.tone === "bad" ? "border-[#cf222e]/30 bg-[#ffebe9] text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]" : hint.tone === "warn" ? "border-[#bf8700]/30 bg-[#fff8c5] text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]" : "border-[#d8dee4] bg-white text-[#24292f] dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#e6edf3]"}`}>
               <div className="font-semibold">{t("repo_detail.next_action")}</div>
               <div className="mt-1">{t(hint.text)}</div>
               <div className="mt-3 flex flex-wrap gap-2">

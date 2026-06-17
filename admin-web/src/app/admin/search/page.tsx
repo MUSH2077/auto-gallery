@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
-import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
+import { PageHeader, EmptyState, SourceBadge } from "@/components";
 
 function SearchContent() {
   const t = useT();
@@ -73,11 +73,11 @@ function SearchContent() {
                     {r.thumbnail_asset_id ? (
                       <img src={api.mediaUrl(r.thumbnail_asset_id, "thumb")} alt={r.title || ""} className="w-16 h-16 object-cover rounded shrink-0" loading="lazy" />
                     ) : (
-                      <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md border border-ag-border bg-[#f6f8fa] text-xs text-[#57606a] dark:border-ag-border dark:bg-[#21262d] dark:text-[#8b949e]">{t("search.na")}</div>
+                      <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md border border-[#d8dee4] bg-[#f6f8fa] text-xs text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]">{t("search.na")}</div>
                     )}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="truncate text-sm font-medium text-[#24292f] dark:text-ag-text">{r.title || t("search.untitled")}</span>
+                        <span className="truncate text-sm font-medium text-[#24292f] dark:text-[#e6edf3]">{r.title || t("search.untitled")}</span>
                         {r.is_nsfw && <span className="badge border-[#ffebe9] bg-[#ffebe9] text-[#cf222e] dark:border-[#da3633]/30 dark:bg-[#da3633]/15 dark:text-[#ff7b72]">{t("search.nsfw")}</span>}
                         {r.asset_count > 1 && <span className="shrink-0 text-xs text-[#57606a] dark:text-[#8b949e]">{r.asset_count}p</span>}
                       </div>
