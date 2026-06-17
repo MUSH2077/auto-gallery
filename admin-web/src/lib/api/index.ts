@@ -181,13 +181,13 @@ export const api = {
   cancelDownloadJob: (id: string, note?: string) =>
     request<{ job_id: string; status: string }>(`/api/v1/download-jobs/${id}/cancel`, {
       method: "POST",
-      body: note ? { note } : undefined,
+      body: note ? JSON.stringify({ note }) : undefined,
     }),
 
   batchDownloadJobsByFilter: (filters: Record<string, string>, action: string, note?: string) =>
     request<{ total_matched: number; succeeded: number; failed: number }>(`/api/v1/download-jobs/batch-by-filter`, {
       method: "POST",
-      body: { filters, action, note },
+      body: JSON.stringify({ filters, action, note }),
     }),
 
   getDownloadProgress: (id: string) =>
