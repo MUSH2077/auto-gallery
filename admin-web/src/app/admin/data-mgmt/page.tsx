@@ -185,7 +185,7 @@ export default function DataManagementPage() {
           <h3 className="font-medium text-sm mb-3">{t("datamgmt.storage_layers_title")}</h3>
           <div className="grid gap-3 md:grid-cols-4">
             {layerEntries.map(([key, layer]) => (
-              <div key={key} className="rounded-md border border-[#d0d7de] bg-[#f6f8fa] p-3 dark:border-[#30363d] dark:bg-[#161b22]">
+              <div key={key} className="rounded-md border border-[#d0d7de] bg-[#f6f8fa] p-3 dark:border-ag-border dark:bg-ag-surface">
                 <div className="text-xs text-[#57606a] dark:text-[#8b949e]">{t(`datamgmt.layer_${key}`)}</div>
                 <div className="mt-1 text-lg font-semibold dark:text-white">{formatSize(layer.size_mb)}</div>
                 <div className="mt-1 truncate font-mono text-[10px] text-[#57606a] dark:text-[#8b949e]" title={layer.path}>{layer.path}</div>

@@ -8,10 +8,10 @@ interface State { hasError: boolean; error: Error | null }
 function ErrorFallback({ error }: { error: Error | null }) {
   const t = useT();
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#f6f8fa] dark:bg-[#0d1117]">
+    <div className="flex min-h-screen items-center justify-center bg-[#f6f8fa] dark:bg-ag-bg">
       <div className="card mx-4 w-full max-w-lg p-8 text-center">
         <div className="text-4xl mb-4">⚠</div>
-        <h2 className="mb-2 text-xl font-semibold text-[#24292f] dark:text-[#e6edf3]">{t("common.something_wrong")}</h2>
+        <h2 className="mb-2 text-xl font-semibold text-[#24292f] dark:text-ag-text">{t("common.something_wrong")}</h2>
         <p className="mb-4 text-sm text-[#57606a] dark:text-[#8b949e]">
           {t("common.unexpected_error")}
         </p>

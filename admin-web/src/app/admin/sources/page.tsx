@@ -153,7 +153,7 @@ function ProviderCard({ s }: { s: ProviderInfo }) {
         {s.capabilities.can_import_local && <span className="badge border-[#dafbe1] bg-[#dafbe1] text-[#1a7f37] dark:border-[#238636]/30 dark:bg-[#238636]/15 dark:text-[#56d364]">{t("sources.local_import")}</span>}
       </div>
 
-      <div className="border-t border-[#d8dee4] pt-3 dark:border-[#30363d]">
+      <div className="border-t border-ag-border pt-3 dark:border-ag-border">
         <label className="mb-1 block text-xs text-[#57606a] dark:text-[#8b949e]">{t("sources.test_validation")}</label>
         <div className="flex gap-2 mb-2">
           <input type="text" value={url} onChange={(e) => setUrl(e.target.value)}

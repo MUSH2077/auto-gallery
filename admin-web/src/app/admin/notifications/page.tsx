@@ -60,7 +60,7 @@ function BatchJobCard({ job, t }: { job: BatchJobState; t: (k: string) => string
                 <div className="text-lg font-bold text-red-700 dark:text-red-400">{job.result.not_found_count || job.result.not_found?.length || 0}</div>
                 <div className="text-[10px] text-red-600">{t("danbooru.batch_result_not_found")}</div>
               </div>
-              <div className="rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-2 text-center dark:border-[#30363d] dark:bg-[#0d1117]">
+              <div className="rounded-md border border-ag-border bg-[#f6f8fa] p-2 text-center dark:border-ag-border dark:bg-ag-bg">
                 <div className="text-lg font-bold text-[#57606a] dark:text-[#8b949e]">{job.result.error_count || job.result.errors?.length || 0}</div>
                 <div className="text-[10px] text-[#57606a] dark:text-[#8b949e]">{t("danbooru.batch_result_errors")}</div>
               </div>

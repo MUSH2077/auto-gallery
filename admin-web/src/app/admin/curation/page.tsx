@@ -25,8 +25,8 @@ function shortId(id: string) {
 }
 
 function statusClass(status: string) {
-  if (status === "baseline") return "border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]";
-  if (status === "reverted") return "border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]";
+  if (status === "baseline") return "border-ag-border bg-[#f6f8fa] text-[#57606a] dark:border-ag-border dark:bg-[#21262d] dark:text-[#8b949e]";
+  if (status === "reverted") return "border-ag-border bg-[#f6f8fa] text-[#57606a] dark:border-ag-border dark:bg-[#21262d] dark:text-[#8b949e]";
   if (status === "partial_reverted") return "border-[#bf8700]/30 bg-[#fff8c5] text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]";
   return "border-[#1a7f37]/25 bg-[#dafbe1] text-[#1a7f37] dark:bg-[#23863626] dark:text-[#3fb950]";
 }
@@ -49,8 +49,8 @@ function CommitCard({ commit, onRevert, reverting }: { commit: CurationCommit; o
   return (
     <article className="relative pl-7">
       <div className="absolute left-[7px] top-2 h-full w-px bg-[#d8dee4] dark:bg-[#30363d]" />
-      <div className="absolute left-0 top-2 h-3.5 w-3.5 rounded-full border-2 border-[#0969da] bg-white dark:border-[#58a6ff] dark:bg-[#0d1117]" />
-      <div className="rounded-md border border-[#d8dee4] bg-white p-4 dark:border-[#30363d] dark:bg-[#161b22]">
+      <div className="absolute left-0 top-2 h-3.5 w-3.5 rounded-full border-2 border-[#0969da] bg-white dark:border-[#58a6ff] dark:bg-ag-bg" />
+      <div className="rounded-md border border-ag-border bg-white p-4 dark:border-ag-border dark:bg-ag-surface">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -58,8 +58,8 @@ function CommitCard({ commit, onRevert, reverting }: { commit: CurationCommit; o
                 {commit.message}
               </Link>
               <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${statusClass(commit.status)}`}>{commit.status}</span>
-              {commit.is_baseline && <span className="rounded-full border border-[#d8dee4] bg-[#f6f8fa] px-2 py-0.5 text-[11px] text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]">{t("curation.baseline")}</span>}
-              <span className="rounded-full border border-[#d8dee4] px-2 py-0.5 text-[11px] text-[#57606a] dark:border-[#30363d] dark:text-[#8b949e]">{commit.trigger}</span>
+              {commit.is_baseline && <span className="rounded-full border border-ag-border bg-[#f6f8fa] px-2 py-0.5 text-[11px] text-[#57606a] dark:border-ag-border dark:bg-[#21262d] dark:text-[#8b949e]">{t("curation.baseline")}</span>}
+              <span className="rounded-full border border-ag-border px-2 py-0.5 text-[11px] text-[#57606a] dark:border-ag-border dark:text-[#8b949e]">{commit.trigger}</span>
             </div>
             <div className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">
               <span className="font-mono">{shortId(commit.id)}</span>
@@ -73,12 +73,12 @@ function CommitCard({ commit, onRevert, reverting }: { commit: CurationCommit; o
             <button
               onClick={() => onRevert(commit.id)}
               disabled={reverting}
-              className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-xs font-medium hover:bg-[#f6f8fa] disabled:opacity-50 dark:border-[#30363d] dark:hover:bg-[#21262d]"
+              className="rounded-md border border-ag-border px-3 py-1.5 text-xs font-medium hover:bg-[#f6f8fa] disabled:opacity-50 dark:border-ag-border dark:hover:bg-[#21262d]"
             >
               {t("curation.revert")}
             </button>
           )}
-          <button onClick={() => setExpanded((value) => !value)} className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-xs font-medium hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
+          <button onClick={() => setExpanded((value) => !value)} className="rounded-md border border-ag-border px-3 py-1.5 text-xs font-medium hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d]">
             {expanded ? t("curation.compact") : t("curation.details")}
           </button>
         </div>
@@ -91,20 +91,20 @@ function CommitCard({ commit, onRevert, reverting }: { commit: CurationCommit; o
         </div>
 
         {commit.changes.length > 0 && (
-          <div className="mt-3 space-y-1 border-t border-[#d8dee4] pt-3 dark:border-[#30363d]">
+          <div className="mt-3 space-y-1 border-t border-ag-border pt-3 dark:border-ag-border">
             {thumbnails.length > 0 && (
               <div className="mb-2 flex gap-2 overflow-x-auto">
                 {thumbnails.map((assetId) => (
-                  <div key={assetId} className="h-12 w-12 shrink-0 overflow-hidden rounded-md border border-[#d8dee4] bg-[#f6f8fa] dark:border-[#30363d] dark:bg-[#21262d]">
+                  <div key={assetId} className="h-12 w-12 shrink-0 overflow-hidden rounded-md border border-ag-border bg-[#f6f8fa] dark:border-ag-border dark:bg-[#21262d]">
                     <img src={api.mediaUrl(assetId, "thumb")} alt="" className="h-full w-full object-cover" loading="lazy" />
                   </div>
                 ))}
               </div>
             )}
             {shownChanges.map((change) => (
-              <div key={change.id} className="rounded-md border border-[#d8dee4] p-2 text-xs dark:border-[#30363d]">
+              <div key={change.id} className="rounded-md border border-ag-border p-2 text-xs dark:border-ag-border">
                 <div className="flex items-center justify-between gap-3">
-                  <span className="min-w-0 truncate text-[#24292f] dark:text-[#e6edf3]">
+                  <span className="min-w-0 truncate text-[#24292f] dark:text-ag-text">
                     <span className="font-medium">{actionLabel(change.action)}</span>
                     <span className="mx-1 text-[#8c959f]">{t("curation.on")}</span>
                     <span className="font-mono">{change.subject_type}:{shortId(change.subject_id)}</span>
@@ -116,7 +116,7 @@ function CommitCard({ commit, onRevert, reverting }: { commit: CurationCommit; o
                   </span>
                 </div>
                 {expanded && change.diff && Object.keys(change.diff).length > 0 && (
-                  <pre className="mt-2 max-h-40 overflow-auto rounded bg-[#f6f8fa] p-2 font-mono text-[11px] text-[#57606a] dark:bg-[#0d1117] dark:text-[#8b949e]">{JSON.stringify(change.diff, null, 2)}</pre>
+                  <pre className="mt-2 max-h-40 overflow-auto rounded bg-[#f6f8fa] p-2 font-mono text-[11px] text-[#57606a] dark:bg-ag-bg dark:text-[#8b949e]">{JSON.stringify(change.diff, null, 2)}</pre>
                 )}
               </div>
             ))}
@@ -195,7 +195,7 @@ function CurationContent() {
     <main className="mx-auto max-w-7xl p-6">
       <PageHeader title={t("curation.title")} description={t("curation.desc")} />
       {(subjectType || subjectId) && (
-        <div className="mb-4 rounded-md border border-[#d8dee4] bg-white px-3 py-2 text-sm dark:border-[#30363d] dark:bg-[#161b22]">
+        <div className="mb-4 rounded-md border border-ag-border bg-white px-3 py-2 text-sm dark:border-ag-border dark:bg-ag-surface">
           {t("curation.filtered_by")} <span className="font-mono">{subjectType}:{subjectId}</span>
           <Link href="/admin/curation" className="ml-3 text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("common.clear")}</Link>
         </div>
@@ -206,14 +206,14 @@ function CurationContent() {
           <button
             key={key}
             onClick={() => updateParams({ trigger: key || null })}
-            className={`rounded-md border px-3 py-1.5 text-xs font-medium ${trigger === key ? "border-[#0969da] bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#58a6ff]" : "border-[#d8dee4] bg-white hover:bg-[#f6f8fa] dark:border-[#30363d] dark:bg-[#161b22] dark:hover:bg-[#21262d]"}`}
+            className={`rounded-md border px-3 py-1.5 text-xs font-medium ${trigger === key ? "border-[#0969da] bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#58a6ff]" : "border-ag-border bg-white hover:bg-[#f6f8fa] dark:border-ag-border dark:bg-ag-surface dark:hover:bg-[#21262d]"}`}
           >
             {label}
           </button>
         ))}
         <button
           onClick={() => updateParams({ include_baseline: includeBaseline ? "false" : null })}
-          className={`rounded-md border px-3 py-1.5 text-xs font-medium ${includeBaseline ? "border-[#d8dee4] bg-white hover:bg-[#f6f8fa] dark:border-[#30363d] dark:bg-[#161b22] dark:hover:bg-[#21262d]" : "border-[#0969da] bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#58a6ff]"}`}
+          className={`rounded-md border px-3 py-1.5 text-xs font-medium ${includeBaseline ? "border-ag-border bg-white hover:bg-[#f6f8fa] dark:border-ag-border dark:bg-ag-surface dark:hover:bg-[#21262d]" : "border-[#0969da] bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#58a6ff]"}`}
         >
           {includeBaseline ? t("curation.hide_baseline") : t("curation.show_baseline")}
         </button>
@@ -221,7 +221,7 @@ function CurationContent() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <section className="space-y-4">
-          {commits.isLoading && <div className="h-48 rounded-md border border-[#d8dee4] bg-white dark:border-[#30363d] dark:bg-[#161b22]" />}
+          {commits.isLoading && <div className="h-48 rounded-md border border-ag-border bg-white dark:border-ag-border dark:bg-ag-surface" />}
           {commits.error && <ErrorState message={(commits.error as Error).message} onRetry={() => commits.refetch()} />}
           {commits.data && commits.data.items.length === 0 && <EmptyState title={t("curation.empty_title")} description={t("curation.empty_desc")} />}
           {commits.data?.items.map((commit) => (
@@ -230,14 +230,14 @@ function CurationContent() {
         </section>
 
         <aside className="space-y-4">
-          <div className="rounded-md border border-[#d8dee4] bg-white p-4 dark:border-[#30363d] dark:bg-[#161b22]">
+          <div className="rounded-md border border-ag-border bg-white p-4 dark:border-ag-border dark:bg-ag-surface">
             <h2 className="text-sm font-semibold">{t("curation.baseline_title")}</h2>
             <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">
               {t("curation.baseline_desc")}
             </p>
             <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
               {(["creators", "repositories", "work_groups"] as const).map((key) => (
-                <div key={key} className="rounded-md border border-[#d8dee4] p-2 dark:border-[#30363d]">
+                <div key={key} className="rounded-md border border-ag-border p-2 dark:border-ag-border">
                   <div className="font-semibold">{backfillStatus.data?.missing?.[key] ?? "-"}</div>
                   <div className="mt-0.5 text-[#57606a] dark:text-[#8b949e]">{t(`curation.baseline_${key}`)}</div>
                   <div className="mt-1 text-[11px] text-[#8c959f] dark:text-[#6e7681]">
@@ -261,7 +261,7 @@ function CurationContent() {
             </button>
           </div>
 
-          <div className="rounded-md border border-[#d8dee4] bg-white p-4 dark:border-[#30363d] dark:bg-[#161b22]">
+          <div className="rounded-md border border-ag-border bg-white p-4 dark:border-ag-border dark:bg-ag-surface">
             <h2 className="text-sm font-semibold">{t("curation.trash")}</h2>
             <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
               <div>
@@ -274,7 +274,7 @@ function CurationContent() {
               </div>
             </div>
             <div className="mt-3 flex gap-2">
-              <Link href="/admin/works?curation=trashed" className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-xs font-medium hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">{t("curation.open_trash")}</Link>
+              <Link href="/admin/works?curation=trashed" className="rounded-md border border-ag-border px-3 py-1.5 text-xs font-medium hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d]">{t("curation.open_trash")}</Link>
               <button
                 onClick={() => {
                   if (window.confirm(t("curation.purge_confirm"))) purge.mutate();
@@ -287,11 +287,11 @@ function CurationContent() {
             </div>
           </div>
 
-          <div className="rounded-md border border-[#d8dee4] bg-white p-4 dark:border-[#30363d] dark:bg-[#161b22]">
+          <div className="rounded-md border border-ag-border bg-white p-4 dark:border-ag-border dark:bg-ag-surface">
             <h2 className="text-sm font-semibold">{t("curation.rule_suggestions")}</h2>
             <div className="mt-3 space-y-3">
               {suggestions.data?.length ? suggestions.data.map((item) => (
-                <div key={item.id} className="rounded-md border border-[#d8dee4] p-3 text-sm dark:border-[#30363d]">
+                <div key={item.id} className="rounded-md border border-ag-border p-3 text-sm dark:border-ag-border">
                   <div className="font-medium">{item.title}</div>
                   <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{item.description}</p>
                 </div>
