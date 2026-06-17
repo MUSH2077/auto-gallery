@@ -34,7 +34,7 @@ const ACTIONS = [
   { value: "delete", label: "Delete All" },
 ];
 
-export function BatchByFilter() {
+export function BatchByFilter({ onSuccess }: { onSuccess?: () => void }) {
   const [source, setSource] = useState("");
   const [status, setStatus] = useState("");
   const [action, setAction] = useState("");
@@ -52,7 +52,7 @@ export function BatchByFilter() {
       if (status) filters.status = status;
 
       const res = await api.batchDownloadJobsByFilter(filters, action, note || undefined);
-      setResult(`${res.succeeded} succeeded, ${res.failed} failed (${res.total_matched} matched)`);
+      setResult(`${res.succeeded} succeeded, ${res.failed} failed (${res.total_matched} matched)`); onSuccess?.();
     } catch (e) {
       setResult(`Error: ${e instanceof Error ? e.message : String(e)}`);
     } finally {

@@ -67,202 +67,6 @@ function SummaryCard({ label, value, sub, tone = "neutral" }: { label: string; v
   );
 }
 
-function JobLifecycle({ status }: { status: string }) {
-  const t = useT();
-  const steps = ["created", "downloading", "downloaded", "importing", status === "failed" || status === "stale" ? status : "complete"];
-  const activeIndex = status === "pending" ? 0
-    : status === "downloading" ? 1
-      : status === "downloaded" ? 2
-        : status === "importing" ? 3
-          : status === "complete" ? 4
-            : status === "failed" || status === "stale" ? 4
-              : 0;
-  const failed = status === "failed" || status === "stale";
-  return (
-    <div className="hidden min-w-[240px] items-center gap-1 lg:flex">
-      {steps.map((step, index) => {
-        const done = index < activeIndex || (index === activeIndex && status === "complete");
-        const active = index === activeIndex && status !== "complete";
-        const danger = failed && index === activeIndex;
-        return (
-          <div key={`${step}-${index}`} className="flex min-w-0 flex-1 items-center gap-1">
-            <span
-              title={t(`jobs.lifecycle_${step}`, step)}
-              className={`h-2 w-2 shrink-0 rounded-full ${
-                danger ? "bg-[#cf222e]" : active ? "animate-pulse bg-[#0969da]" : done ? "bg-[#1a7f37]" : "bg-[#d8dee4] dark:bg-[#30363d]"
-              }`}
-            />
-            {index < steps.length - 1 && <span className={`h-px flex-1 ${done ? "bg-[#1a7f37]" : "bg-[#d8dee4] dark:bg-[#30363d]"}`} />}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function ErrorExcerpt({ value }: { value?: string | null }) {
-  if (!value) return null;
-  const firstLine = value.split("\n").find(Boolean) || value;
-  return (
-    <div className="mt-1 line-clamp-1 rounded-md border border-[#cf222e]/20 bg-[#ffebe9] px-2 py-1 text-xs text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">
-      {firstLine.slice(0, 180)}
-    </div>
-  );
-}
-
-function shortId(id?: string | null) {
-  return id ? id.slice(0, 8) : "-";
-}
-
-function JsonBlock({ value }: { value: unknown }) {
-  if (!value) return null;
-  return (
-    <pre className="max-h-64 overflow-auto rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-3 font-mono text-xs whitespace-pre-wrap dark:border-[#30363d] dark:bg-[#0d1117]">
-      {JSON.stringify(value, null, 2)}
-    </pre>
-  );
-}
-
-function DetailRow({ label, value }: { label: string; value?: ReactNode }) {
-  return (
-    <div className="grid grid-cols-[120px_minmax(0,1fr)] gap-3 border-b border-[#d8dee4] py-2 text-sm last:border-b-0 dark:border-[#30363d]">
-      <dt className="text-xs font-medium uppercase text-[#57606a] dark:text-[#8b949e]">{label}</dt>
-      <dd className="min-w-0 break-all">{value || "—"}</dd>
-    </div>
-  );
-}
-
-function JobDetailDrawer({
-  kind,
-  id,
-  onClose,
-  onRetryDownload,
-  onPauseDownload,
-  onResumeDownload,
-  onDeleteDownload,
-  onRetryImport,
-  onDeleteImport,
-}: {
-  kind: "download" | "import";
-  id: string | null;
-  onClose: () => void;
-  onRetryDownload: (id: string) => void;
-  onPauseDownload: (id: string) => void;
-  onResumeDownload: (id: string) => void;
-  onDeleteDownload: (id: string) => void;
-  onRetryImport: (id: string) => void;
-  onDeleteImport: (id: string) => void;
-}) {
-  const t = useT();
-  const fmt = useI18nFormat();
-  const download = useQuery({
-    queryKey: queryKeys.downloadJobs.detail(id || ""),
-    queryFn: () => api.getDownloadJob(id || ""),
-    enabled: !!id && kind === "download",
-  });
-  const imports = useQuery({
-    queryKey: queryKeys.downloadJobs.imports(id || ""),
-    queryFn: () => api.getDownloadJobImports(id || ""),
-    enabled: !!id && kind === "download",
-  });
-  const importJob = useQuery({
-    queryKey: [...queryKeys.importJobs.all, "detail", id],
-    queryFn: () => api.getImportJob(id || ""),
-    enabled: !!id && kind === "import",
-  });
-
-  if (!id) return null;
-  const dl = download.data as DownloadJob | undefined;
-  const im = importJob.data as ImportJob | undefined;
-  const loading = kind === "download" ? download.isLoading : importJob.isLoading;
-  const error = kind === "download" ? download.error : importJob.error;
-
-  return (
-    <aside className="fixed inset-y-0 right-0 z-40 flex w-full max-w-xl flex-col border-l border-[#d8dee4] bg-white shadow-xl dark:border-[#30363d] dark:bg-[#161b22]" aria-label={t("jobs.detail_title")}>
-      <div className="flex items-center justify-between border-b border-[#d8dee4] px-4 py-3 dark:border-[#30363d]">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold">{kind === "download" ? t("jobs.download_detail") : t("jobs.import_detail")}</div>
-          <div className="font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{shortId(id)}</div>
-        </div>
-        <button onClick={onClose} className="btn-icon border-0 text-lg leading-none" aria-label={t("common.close")}>×</button>
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto p-4">
-        {loading && <div className="h-24 animate-pulse rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />}
-        {error && <ErrorState message={(error as Error).message} onRetry={() => (kind === "download" ? download.refetch() : importJob.refetch())} />}
-
-        {kind === "download" && dl && (
-          <div className="space-y-4">
-            <div className="flex flex-wrap gap-2">
-              <button onClick={() => onRetryDownload(dl.id)} className="btn-primary text-xs">{t("jobs.retry")}</button>
-              {["pending", "downloading"].includes(dl.status) && <button onClick={() => onPauseDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.pause")}</button>}
-              {dl.status === "paused" && <button onClick={() => onResumeDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.resume")}</button>}
-              <button onClick={() => onDeleteDownload(dl.id)} className="btn-danger text-xs">{t("jobs.del")}</button>
-            </div>
-            <dl className="rounded-md border border-[#d8dee4] px-3 dark:border-[#30363d]">
-              <DetailRow label={t("jobs.status")} value={statusLabel(t, dl.status)} />
-              <DetailRow label={t("jobs.source")} value={<span className="inline-flex items-center gap-2"><SourceBadge source={dl.source} />{dl.source}</span>} />
-              <DetailRow label={t("jobs.source_url")} value={dl.source_url} />
-              <DetailRow label={t("jobs.creator")} value={dl.creator_id ? <Link href={`/admin/creators/${dl.creator_id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{dl.creator_name || shortId(dl.creator_id)}</Link> : dl.creator_name} />
-              <DetailRow label={t("jobs.subscription")} value={dl.subscription_id ? <Link href={`/admin/subscriptions/${dl.subscription_id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{dl.subscription_name || shortId(dl.subscription_id)}</Link> : undefined} />
-              <DetailRow label={t("jobs.repository")} value={dl.subscription_source_id ? <Link href={`/admin/repositories/${dl.subscription_source_id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{shortId(dl.subscription_source_id)}</Link> : undefined} />
-              <DetailRow label={t("jobs.created")} value={fmt.dateTime(dl.created_at)} />
-              <DetailRow label={t("jobs.updated")} value={fmt.dateTime(dl.updated_at)} />
-            </dl>
-            {dl.error_log && (
-              <section>
-                <h3 className="mb-2 text-sm font-semibold">{t("jobs.error_log")}</h3>
-                <pre className="max-h-64 overflow-auto rounded-md border border-[#cf222e]/20 bg-[#ffebe9] p-3 font-mono text-xs whitespace-pre-wrap text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">{dl.error_log}</pre>
-              </section>
-            )}
-            {dl.manifest && (
-              <section>
-                <h3 className="mb-2 text-sm font-semibold">{t("jobs.manifest")}</h3>
-                <JsonBlock value={dl.manifest} />
-              </section>
-            )}
-            <section>
-              <h3 className="mb-2 text-sm font-semibold">{t("jobs.related_imports")}</h3>
-              {imports.isLoading && <div className="h-12 animate-pulse rounded bg-[#eaeef2] dark:bg-[#21262d]" />}
-              {imports.data?.length ? (
-                <div className="space-y-1">
-                  {imports.data.map((job: ImportJob) => (
-                    <Link key={job.id} href={`/admin/jobs?tab=imports&download_job_id=${dl.id}&import_job=${job.id}`} className="flex items-center justify-between rounded-md border border-[#d8dee4] px-3 py-2 text-sm hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
-                      <span className="font-mono text-xs">{shortId(job.id)}</span>
-                      <span>{statusLabel(t, job.status)}</span>
-                    </Link>
-                  ))}
-                </div>
-              ) : <p className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("jobs.no_imports_yet")}</p>}
-            </section>
-          </div>
-        )}
-
-        {kind === "import" && im && (
-          <div className="space-y-4">
-            <div className="flex flex-wrap gap-2">
-              {["failed", "stale"].includes(im.status) && <button onClick={() => onRetryImport(im.id)} className="btn-primary text-xs">{t("jobs.retry")}</button>}
-              <button onClick={() => onDeleteImport(im.id)} className="btn-danger text-xs">{t("jobs.del")}</button>
-              <Link href={`/admin/jobs?tab=downloads&job=${im.download_job_id}`} className="btn-ghost text-xs">{t("jobs.open_download")}</Link>
-            </div>
-            <dl className="rounded-md border border-[#d8dee4] px-3 dark:border-[#30363d]">
-              <DetailRow label={t("jobs.status")} value={statusLabel(t, im.status)} />
-              <DetailRow label={t("jobs.download_job")} value={<Link href={`/admin/jobs?tab=downloads&job=${im.download_job_id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{shortId(im.download_job_id)}</Link>} />
-              <DetailRow label={t("jobs.created")} value={fmt.dateTime(im.created_at)} />
-              <DetailRow label={t("jobs.updated")} value={fmt.dateTime(im.updated_at)} />
-            </dl>
-            {im.error_log && (
-              <section>
-                <h3 className="mb-2 text-sm font-semibold">{t("jobs.error_log")}</h3>
-                <pre className="max-h-80 overflow-auto rounded-md border border-[#cf222e]/20 bg-[#ffebe9] p-3 font-mono text-xs whitespace-pre-wrap text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">{im.error_log}</pre>
-              </section>
-            )}
-          </div>
-        )}
-      </div>
-    </aside>
-  );
-}
-
 function JobsContent() {
   const t = useT();
   const fmt = useI18nFormat();
@@ -272,13 +76,19 @@ function JobsContent() {
   const [downloadPipeline, setDownloadPipeline] = useState<Record<string, { current_stage: string; stages: Array<{ name: string; status: string }> }>>({});
 
   // WebSocket: invalidate queries on status change, update progress on progress events
-  useJobWebSocket({
+  const { connected } = useJobWebSocket({
     onStatusChange: (msg) => {
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
       qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
       qc.invalidateQueries({ queryKey: ["workbench"] });
       if (msg.new_status) {
         toast.info(`${msg.task_id.slice(0, 8)}: ${msg.old_status} → ${msg.new_status}`);
+      }
+      // Fetch pipeline data for visualizing stage progression
+      if (msg.task_type === "download") {
+        api.getDownloadPipeline(msg.task_id).then(pipeline => {
+          setDownloadPipeline(prev => ({ ...prev, [msg.task_id]: pipeline }));
+        }).catch(() => {});
       }
     },
     onProgress: (msg) => {
@@ -496,11 +306,12 @@ function JobsContent() {
       <PageHeader title={t("jobs.title")} description={t("jobs.desc")}>
         <div className="flex flex-wrap gap-2">
           <button onClick={refreshAll} className="btn-ghost text-xs">{t("jobs.refresh")}</button>
-          <BatchByFilter />
+          <BatchByFilter onSuccess={() => { qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); }} />
           <button onClick={() => handleClear(["failed", "stale"])} className="btn-danger text-xs">{t("jobs.clear_failed")}</button>
           <button onClick={() => handleClear(["complete"])} className="btn-ghost text-xs">{t("jobs.clear_complete")}</button>
           <button onClick={() => killStuck.mutate()} disabled={killStuck.isPending} className="btn-ghost text-xs">{t("jobs.kill_stuck")}</button>
           <button onClick={() => retryAllFailed.mutate()} disabled={retryAllFailed.isPending} className="btn-primary text-xs">{t("jobs.retry_all_failed")}</button>
+          <span className={`w-2 h-2 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`} title={connected ? "Live" : "Disconnected"} />
         </div>
       </PageHeader>
 
@@ -597,7 +408,7 @@ function JobsContent() {
                       </Link>
                     </div>
                     <span className="min-w-0 flex-1 truncate text-xs text-[#57606a] dark:text-[#8b949e]" title={j.source_url}>{j.source_url}</span>
-                    {/* Download progress from WebSocket or polling */}
+                    {downloadProgress[j.id] ? <RealProgressBar progress={downloadProgress[j.id]} /> : active ? <div className="w-20 h-1.5 bg-gray-200 dark:bg-slate-600 rounded-full overflow-hidden shrink-0"><div className="h-full bg-blue-500 rounded-full animate-pulse" style={{ width: "60%" }} /></div> : null}
                     <PipelineVisualizer stages={downloadPipeline[j.id]?.stages ?? []} />
                     {active ? (
                       <Elapsed since={j.created_at} active={true} />

@@ -1,13 +1,16 @@
 import logging
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
-from app.auth import RequireAdmin
+from app.auth import RequireAdmin, get_admin_key
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, cast, String, or_
 
 from app.database import get_db
 from app.models.import_job import ImportJob
+from app.schemas.import_job import ImportJobRead
 from app.services.job_state import transition_import_job
+from app.services.progress import ProgressTracker
+from app.services.task_engine import TaskEngine, TaskEngineError
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +93,7 @@ async def list_import_jobs(
     stmt = stmt.order_by(ImportJob.created_at.desc()).offset(offset).limit(limit)
     result = await db.execute(stmt)
     jobs = list(result.scalars().all())
-    return {"total": total, "items": [{"id": str(j.id), "download_job_id": str(j.download_job_id), "status": j.status, "error_log": j.error_log, "created_at": j.created_at.isoformat(), "updated_at": j.updated_at.isoformat()} for j in jobs]}
+    return {"total": total, "items": [ImportJobRead.model_validate(j).model_dump(mode="json") for j in jobs]}
 
 
 @router.get("/{job_id}")
@@ -99,7 +102,7 @@ async def get_import_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
     job = result.scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="Import job not found")
-    return {"id": str(job.id), "download_job_id": str(job.download_job_id), "status": job.status, "error_log": job.error_log, "created_at": job.created_at.isoformat(), "updated_at": job.updated_at.isoformat()}
+    return ImportJobRead.model_validate(job).model_dump(mode="json")
 
 
 @router.post("/{job_id}/retry")
@@ -137,3 +140,64 @@ async def delete_import_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
     await db.delete(job)
     await db.commit()
     return {"status": "ok"}
+
+# ── Task Engine endpoints ─────────────────────────────────────────
+
+
+@router.post("/{job_id}/cancel")
+async def cancel_import_job(
+    job_id: UUID,
+    data: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+    operator: str = Depends(get_admin_key),
+):
+    engine = TaskEngine(db)
+    try:
+        note = data.get("note") if data else None
+        result = await engine.cancel_import(job_id, note=note, operator=operator)
+        await db.commit()
+        return result
+    except TaskEngineError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{job_id}/priority")
+async def set_import_priority(
+    job_id: UUID,
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    operator: str = Depends(get_admin_key),
+):
+    priority = data.get("priority", 10)
+    engine = TaskEngine(db)
+    try:
+        result = await engine.set_priority_import(job_id, priority, operator=operator)
+        await db.commit()
+        return result
+    except TaskEngineError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/batch-by-filter")
+async def batch_import_by_filter(
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    operator: str = Depends(get_admin_key),
+):
+    filters = data.get("filters", {})
+    action = data.get("action", "")
+    note = data.get("note")
+    engine = TaskEngine(db)
+    try:
+        return await engine.batch_by_filter("import", filters, action, operator=operator, note=note)
+    except TaskEngineError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{job_id}/progress")
+async def get_import_progress(job_id: UUID):
+    progress = ProgressTracker.get(str(job_id))
+    if not progress:
+        raise HTTPException(status_code=404, detail="No progress data available")
+    return {"job_id": str(job_id), **progress}
+

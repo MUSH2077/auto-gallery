@@ -304,6 +304,15 @@ export interface ImportJob {
   error_log?: string | null;
   created_at: string;
   updated_at?: string;
+  priority: number;
+  user_note?: string | null;
+  operator_name?: string | null;
+  operator_action?: string | null;
+  import_retry_count: number;
+  max_import_retries: number;
+  progress_stage?: string | null;
+  progress_works_done?: number | null;
+  progress_works_total?: number | null;
 }
 
 export interface RepositoryGraphEdge {
