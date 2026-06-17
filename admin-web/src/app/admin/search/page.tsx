@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, Suspense } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, queryKeys } from "@/lib/api";
+import { api } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { PageHeader, EmptyState, SourceBadge } from "@/components";
@@ -34,7 +34,7 @@ function SearchContent() {
   }, [query]);
 
   const results = useQuery({
-    queryKey: [queryKeys.search, debounced],
+    queryKey: ["search", debounced],
     queryFn: () => api.search(debounced),
     enabled: debounced.length > 0,
   });
