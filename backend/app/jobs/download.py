@@ -3,6 +3,8 @@ import logging
 import os
 import re
 import subprocess
+import threading
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from uuid import UUID
@@ -11,9 +13,12 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.database import async_session
+from app.jobs.worker_control import ControlListener, HeartbeatPublisher
 from app.models.subscription_source import SubscriptionSource
 from app.repositories.download_job import DownloadJobRepository
 from app.services.job_manifest import append_manifest_event, update_manifest
+from app.services.redis_client import get_redis
+from app.services.redis_pubsub import TaskEventPublisher
 from app.services.settings import build_effective_gallerydl_config, get_download_defaults
 from app.services.subscription_enqueue import mark_source_sync_success
 
@@ -278,6 +283,11 @@ async def run_download_job(job_id: str):
     json_before: set[str] = _snapshot_metadata_jsons(job.source)
 
     result = None
+    stderr_lines: list[str] = []
+    proc = None
+    control_listener = None
+    heartbeat = None
+
     try:
         config_path = os.path.join(
             os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"), "config.json")
@@ -327,31 +337,117 @@ async def run_download_job(job_id: str):
                 await _manifest_db.commit()
 
         logger.info("Running gallery-dl: %s (timeout=%ds, proxy=%s)", " ".join(cmd), dl_timeout, proxy_enabled)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=dl_timeout, env=env)
-        logger.info("gallery-dl exit=%d, stdout=%d bytes, stderr=%d bytes", result.returncode, len(result.stdout), len(result.stderr))
-        if result.returncode != 0:
-            logger.warning("gallery-dl stderr (last 500): %s", result.stderr[-500:] if result.stderr else "(none)")
-        async with async_session() as _manifest_db:
-            _manifest_job = await DownloadJobRepository(_manifest_db).get(job_uuid)
-            if _manifest_job:
-                update_manifest(
-                    _manifest_job,
-                    gallerydl_returncode=result.returncode,
-                    stdout_bytes=len(result.stdout or ""),
-                    stderr_bytes=len(result.stderr or ""),
-                )
-                append_manifest_event(_manifest_job, "gallerydl_finished", returncode=result.returncode)
-                await _manifest_db.commit()
 
-    except subprocess.TimeoutExpired:
-        logger.warning("gallery-dl timed out after %ds for job %s", dl_timeout, job_id)
+        # ── Start gallery-dl in its own process group ──
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,  # process group isolation for safe kill
+            env=env,
+        )
+
+        # ── Start control listener + heartbeat ──
+        control_listener = ControlListener(job_id, proc_pid=proc.pid)
+        control_listener.start()
+        heartbeat = HeartbeatPublisher(job_id, "download", pid=proc.pid)
+        heartbeat.start()
+
+        # ── Stream stderr for progress + collection ──
+        progress_pattern = re.compile(r"\[(\d+)/(\d+)\]")
+        last_progress_publish = 0.0
+
+        def read_stderr():
+            for line in iter(proc.stderr.readline, ""):
+                stderr_lines.append(line)
+                # Parse and publish progress
+                m = progress_pattern.search(line)
+                if m:
+                    current, total = int(m.group(1)), int(m.group(2))
+                    progress = {
+                        "stage": "downloading",
+                        "current": current,
+                        "total": total,
+                        "percent": round(current / total * 100, 1) if total else 0,
+                        "message": line.strip()[:200],
+                    }
+                    # Store in Redis for polling
+                    try:
+                        get_redis().setex(f"task:{job_id}:progress", 30, json.dumps(progress))
+                    except Exception:
+                        pass
+                    # Publish throttled (max 2/sec to avoid flooding)
+                    nonlocal last_progress_publish
+                    now = time.time()
+                    if now - last_progress_publish >= 0.5:
+                        try:
+                            TaskEventPublisher.publish_progress(job_id, "download", progress)
+                        except Exception:
+                            pass
+                        last_progress_publish = now
+
+        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+        stderr_thread.start()
+
+        # ── Wait for completion with timeout ──
+        try:
+            proc.wait(timeout=dl_timeout)
+            stdout_text = proc.stdout.read()
+            stderr_thread.join(timeout=5)
+            stderr_text = "".join(stderr_lines)
+            returncode = proc.returncode
+
+            # Check if worker was paused/cancelled during execution
+            if control_listener.command == "pause":
+                result = None  # signal "paused" to downstream handlers
+                logger.info("Download job %s was paused during gallery-dl execution", job_id)
+            elif control_listener.command == "cancel":
+                result = None  # signal "cancelled"
+                logger.info("Download job %s was cancelled during gallery-dl execution", job_id)
+            else:
+                # Normal completion
+                result = subprocess.CompletedProcess(
+                    cmd, returncode, stdout=stdout_text, stderr=stderr_text
+                )
+                logger.info("gallery-dl exit=%d, stdout=%d bytes, stderr=%d bytes",
+                            returncode, len(stdout_text), len(stderr_text))
+                if returncode != 0:
+                    logger.warning("gallery-dl stderr (last 500): %s", stderr_text[-500:] if stderr_text else "(none)")
+
+        except subprocess.TimeoutExpired:
+            logger.warning("gallery-dl timed out after %ds for job %s", dl_timeout, job_id)
+            # Kill the process group on timeout
+            try:
+                os.killpg(os.getpgid(proc.pid), 2)  # SIGINT first
+                time.sleep(2)
+                os.killpg(os.getpgid(proc.pid), 9)  # SIGKILL
+            except (ProcessLookupError, OSError):
+                pass
+            stderr_thread.join(timeout=5)
+            proc.wait(timeout=10)
+            result = None  # signals timeout to downstream handlers
+
+        # ── Record gallery-dl result in manifest ──
         async with async_session() as _manifest_db:
             _manifest_job = await DownloadJobRepository(_manifest_db).get(job_uuid)
             if _manifest_job:
-                update_manifest(_manifest_job, gallerydl_timeout_seconds=dl_timeout)
-                append_manifest_event(_manifest_job, "gallerydl_timeout", timeout_seconds=dl_timeout)
+                if result is not None and control_listener.command is None:
+                    update_manifest(
+                        _manifest_job,
+                        gallerydl_returncode=result.returncode,
+                        stdout_bytes=len(result.stdout or ""),
+                        stderr_bytes=len(result.stderr or ""),
+                    )
+                    append_manifest_event(_manifest_job, "gallerydl_finished", returncode=result.returncode)
+                elif control_listener.command == "pause":
+                    append_manifest_event(_manifest_job, "gallerydl_interrupted", reason="paused")
+                elif control_listener.command == "cancel":
+                    append_manifest_event(_manifest_job, "gallerydl_interrupted", reason="cancelled")
+                else:
+                    update_manifest(_manifest_job, gallerydl_timeout_seconds=dl_timeout)
+                    append_manifest_event(_manifest_job, "gallerydl_timeout", timeout_seconds=dl_timeout)
                 await _manifest_db.commit()
-        result = None  # result is None signals timeout to the handlers below
 
     except Exception as e:
         logger.error("Unexpected error in download job %s: %s", job_id, e, exc_info=True)
@@ -370,11 +466,18 @@ async def run_download_job(job_id: str):
         # Always try partial import recovery
         metadata_count, _, new_json_paths = _count_new_artifacts(job.source, json_before)
         if metadata_count > 0:
-            logger.info("Partial recovery: found %d metadata JSONs after unexpected error for job %s", metadata_count, job_id)
+            logger.info("Partial recovery: found %d metadata JSONs after error for job %s", metadata_count, job_id)
             await _enqueue_import(str(job_uuid), f"partial import after unexpected error (found {metadata_count} metadata files)")
         _cleanup_temp_config(ai_config_path)
         _cleanup_temp_config(job_config_path)
         return
+
+    finally:
+        # ── Stop control listener + heartbeat ──
+        if heartbeat:
+            heartbeat.stop()
+        if control_listener:
+            control_listener.stop()
 
     # ── Cleanup temp configs ──
     _cleanup_temp_config(ai_config_path)
@@ -388,7 +491,18 @@ async def run_download_job(job_id: str):
         if not j:
             return
 
-        if result is not None:
+        ctrl_cmd = control_listener.command if control_listener else None
+
+        if ctrl_cmd == "pause":
+            # TaskEngine already set status to "paused" — don't touch status here.
+            # Don't increment retry_count — this was a user action, not a failure.
+            logger.info("Download job %s paused by user signal", job_id)
+
+        elif ctrl_cmd == "cancel":
+            # TaskEngine already set status to "cancelled" — terminal, no retry.
+            logger.info("Download job %s cancelled by user signal", job_id)
+
+        elif result is not None:
             # Normal completion (success or non-zero exit)
             if result.returncode == 0:
                 await repo2.update_status(j, "downloaded")
@@ -412,7 +526,7 @@ async def run_download_job(job_id: str):
                         if re.search(pattern, combined):
                             auth_issue = label
                             break
-                    if result is not None and result.returncode == 0 and not auth_issue:
+                    if result.returncode == 0 and not auth_issue:
                         source.last_successful_auth = datetime.now(timezone.utc)
                         source.auth_healthy = True
                         source.auth_status = "healthy"
@@ -424,8 +538,9 @@ async def run_download_job(job_id: str):
                         source.auth_error_reason = auth_issue
                         source.last_auth_checked_at = datetime.now(timezone.utc)
                         logger.warning("Auth issue for subscription_source %s: %s", source.id, auth_issue)
+
         else:
-            # Timeout — subprocess.TimeoutExpired was caught
+            # Timeout
             j.retry_count += 1
             timeout_msg = f"timeout after {dl_timeout}s"
             if j.retry_count < max_retries:
@@ -490,16 +605,22 @@ async def run_download_job(job_id: str):
             await _enqueue_import(str(job_uuid), f"partial import after download failure (found {metadata_count} metadata files)")
 
     else:
-        # Timeout — attempt partial import recovery
+        # Timeout or interrupted (pause/cancel) — attempt partial import recovery
+        ctrl_cmd = control_listener.command if control_listener else None
+        reason = "timeout" if ctrl_cmd is None else f"interrupted ({ctrl_cmd})"
         metadata_count, _, new_json_paths = _count_new_artifacts(job.source, json_before)
         if metadata_count > 0:
-            logger.info("Partial recovery: found %d metadata JSONs after timeout for job %s", metadata_count, job_id)
-            await _enqueue_import(str(job_uuid), f"partial import after timeout (found {metadata_count} metadata files)")
+            logger.info("Partial recovery: found %d metadata JSONs after %s for job %s", metadata_count, reason, job_id)
+            await _enqueue_import(str(job_uuid),
+                                 f"partial import after {reason} (found {metadata_count} metadata files)",
+                                 new_json_paths=new_json_paths)
 
     # ── Enqueue retry for transient failures ──
+    # Only auto-retry on actual failures (non-zero exit, timeout), NOT on pause/cancel.
 
-    if j and j.retry_count < max_retries:
-        # Only auto-retry non-zero exits and timeouts (skip unexpected errors — already handled above)
+    ctrl_cmd = control_listener.command if control_listener else None
+    if j and j.retry_count < max_retries and ctrl_cmd is None:
+        # Only auto-retry non-zero exits and timeouts
         needs_retry = (result is None) or (result.returncode != 0)
         if needs_retry:
             try:
