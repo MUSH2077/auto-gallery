@@ -34,7 +34,7 @@ function SearchContent() {
   }, [query]);
 
   const results = useQuery({
-    queryKey: ["search", debounced],
+    queryKey: [queryKeys.search, debounced],
     queryFn: () => api.search(debounced),
     enabled: debounced.length > 0,
   });

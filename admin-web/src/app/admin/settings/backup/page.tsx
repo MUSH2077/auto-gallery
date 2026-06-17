@@ -141,7 +141,7 @@ export default function BackupPage() {
         </div>
 
         <label className="flex items-center gap-2 mb-3 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
-          <input type="checkbox" checked={selected.size === ALL_CONTENTS.length} onChange={toggleAll} className="rounded" />
+          <input type="checkbox" aria-label="Select item" checked={selected.size === ALL_CONTENTS.length} onChange={toggleAll} className="rounded" />
           {t("backup.select_all")}
         </label>
 
@@ -158,7 +158,7 @@ export default function BackupPage() {
               <label key={c} className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
                 checked ? "border-slate-400 dark:border-slate-500 bg-slate-50 dark:bg-slate-700/30"
                   : "border-gray-200 dark:border-slate-600 hover:border-gray-300 dark:hover:border-slate-500"}`}>
-                <input type="checkbox" checked={checked} onChange={() => toggle(c)} className="mt-0.5 rounded" />
+                <input type="checkbox" aria-label="Select item" checked={checked} onChange={() => toggle(c)} className="mt-0.5 rounded" />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="text-sm">{CONTENT_ICONS[c] || ""}</span>

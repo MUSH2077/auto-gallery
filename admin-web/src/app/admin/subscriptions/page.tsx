@@ -231,7 +231,7 @@ function SubscriptionsContent() {
       {/* Select all */}
       {subs.data && subs.data.length > 0 && (
         <label className="mb-2 flex cursor-pointer items-center gap-2 text-xs text-[#57606a] dark:text-[#8b949e]">
-          <input type="checkbox" checked={selected.size === subs.data.length && subs.data.length > 0} onChange={selectAll} className="rounded" />
+          <input type="checkbox" aria-label="Select item" checked={selected.size === subs.data.length && subs.data.length > 0} onChange={selectAll} className="rounded" />
           {t("subscriptions.select_all")}
         </label>
       )}
@@ -245,7 +245,7 @@ function SubscriptionsContent() {
         <div className="overflow-hidden rounded-md border border-[#d8dee4] bg-white dark:border-[#30363d] dark:bg-[#161b22]">
           {subs.data.map((s: Subscription) => (
             <div key={s.id} className={`flex cursor-pointer items-center gap-3 border-b border-[#d8dee4] p-4 last:border-b-0 hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d] ${selected.has(s.id) ? "bg-[#ddf4ff] dark:bg-[#1f6feb26]" : ""}`} onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>
-              <input type="checkbox" checked={selected.has(s.id)} onChange={() => toggleSelect(s.id)} className="rounded shrink-0" onClick={(e) => e.stopPropagation()} />
+              <input type="checkbox" aria-label="Select item" checked={selected.has(s.id)} onChange={() => toggleSelect(s.id)} className="rounded shrink-0" onClick={(e) => e.stopPropagation()} />
               <div className="flex-1 min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="truncate text-sm font-semibold text-[#0969da] dark:text-[#58a6ff]">{s.name || s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8)}</span>

@@ -74,8 +74,7 @@ export default function CreatorDuplicatesPage() {
           <div className="space-y-2">
             {group.creator_ids.map((cid, i) => (
               <div key={cid} className="flex items-center gap-3 rounded-md border border-[#d8dee4] p-2 transition-colors hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
-                <input
-                  type="checkbox"
+                <input type="checkbox" aria-label="Select item"
                   checked={selectedSources.has(cid)}
                   onChange={() => toggleSource(cid, group.creator_ids[0] === cid ? group.creator_ids[1] : group.creator_ids[0])}
                   className="rounded shrink-0"
