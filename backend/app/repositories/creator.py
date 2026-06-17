@@ -100,7 +100,7 @@ class CreatorRepository:
             )
             .outerjoin(sub_agg, sub_agg.c.creator_id == Creator.id)
             .outerjoin(sc_agg, sc_agg.c.creator_id == Creator.id)
-            .order_by(Creator.name)
+            .order_by(Creator.created_at.desc())
         )
 
         if conditions:
