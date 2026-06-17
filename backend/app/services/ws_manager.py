@@ -27,7 +27,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import queue
 import threading
 from typing import Any
 
@@ -89,9 +88,15 @@ class ConnectionManager:
             await self.disconnect(cid)
 
     async def start_redis_listener(self) -> None:
-        """Subscribe to task:all:events and broadcast to all clients."""
+        """Subscribe to task:all:events and broadcast to all clients.
+
+        The Redis pub/sub listener runs in a daemon thread and calls
+        ``broadcast()`` via ``run_coroutine_threadsafe`` — no blocking
+        synchronous I/O on the event loop thread. The async task itself
+        just sleeps so it can be cancelled gracefully on shutdown.
+        """
         self._running = True
-        msg_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+        loop = asyncio.get_running_loop()
 
         def _reader():
             r = get_redis()
@@ -104,25 +109,23 @@ class ConnectionManager:
                 if message["type"] != "message":
                     continue
                 try:
-                    msg_queue.put(json.loads(message["data"]))
+                    data = json.loads(message["data"])
+                    asyncio.run_coroutine_threadsafe(self.broadcast(data), loop)
                 except (json.JSONDecodeError, TypeError):
+                    pass
+                except RuntimeError:
                     pass
             pubsub.unsubscribe()
             pubsub.close()
+            logger.info("Redis pub/sub listener stopped")
 
         reader_thread = threading.Thread(target=_reader, daemon=True, name="ws-redis")
         reader_thread.start()
 
         try:
+            # Keep the async task alive — all real work happens in _reader thread
             while self._running:
-                try:
-                    msg = msg_queue.get(timeout=1)
-                    try:
-                        asyncio.run_coroutine_threadsafe(self.broadcast(msg), asyncio.get_running_loop())
-                    except RuntimeError:
-                        pass
-                except queue.Empty:
-                    continue
+                await asyncio.sleep(10)
         except asyncio.CancelledError:
             self._running = False
             reader_thread.join(timeout=5)
