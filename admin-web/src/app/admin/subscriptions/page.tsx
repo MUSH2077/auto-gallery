@@ -242,9 +242,9 @@ function SubscriptionsContent() {
       {subs.data && !subs.data.length && <EmptyState title={t("subscriptions.no_subs")} description={t("subscriptions.no_subs_desc")} action={<button onClick={() => setShowCreate(true)} className="btn-primary">{t("subscriptions.create_sub")}</button>} />}
 
       {subs.data && subs.data.length > 0 && (
-        <div className="overflow-hidden rounded-md border border-[#d8dee4] bg-white dark:border-[#30363d] dark:bg-[#161b22]">
+        <div className="overflow-hidden rounded-md border border-ag-border bg-white dark:border-ag-border dark:bg-ag-surface">
           {subs.data.map((s: Subscription) => (
-            <div key={s.id} className={`flex cursor-pointer items-center gap-3 border-b border-[#d8dee4] p-4 last:border-b-0 hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d] ${selected.has(s.id) ? "bg-[#ddf4ff] dark:bg-[#1f6feb26]" : ""}`} onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>
+            <div key={s.id} className={`flex cursor-pointer items-center gap-3 border-b border-ag-border p-4 last:border-b-0 hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d] ${selected.has(s.id) ? "bg-[#ddf4ff] dark:bg-[#1f6feb26]" : ""}`} onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>
               <input type="checkbox" checked={selected.has(s.id)} onChange={() => toggleSelect(s.id)} className="rounded shrink-0" onClick={(e) => e.stopPropagation()} />
               <div className="flex-1 min-w-0">
                 <div className="flex flex-wrap items-center gap-2">

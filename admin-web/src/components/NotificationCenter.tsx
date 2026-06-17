@@ -507,8 +507,8 @@ export function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-2 max-h-[480px] w-80 overflow-hidden rounded-md border border-[#d8dee4] bg-white text-[#24292f] shadow-xl dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#e6edf3]">
-          <div className="flex items-center justify-between border-b border-[#d8dee4] px-4 py-2.5 dark:border-[#30363d]">
+        <div className="absolute right-0 z-50 mt-2 max-h-[480px] w-80 overflow-hidden rounded-md border border-ag-border bg-white text-[#24292f] shadow-xl dark:border-ag-border dark:bg-ag-surface dark:text-ag-text">
+          <div className="flex items-center justify-between border-b border-ag-border px-4 py-2.5 dark:border-ag-border">
             <span className="text-sm font-semibold">{t("notification.recent")}</span>
             <div className="flex items-center gap-3">
               <button onClick={() => { setOpen(false); router.push("/admin/notifications"); }}
@@ -531,7 +531,7 @@ export function NotificationBell() {
             ) : (
               <>
                 {batchJob && (
-                  <div className="cursor-pointer border-b border-[#d8dee4] px-4 py-2.5 transition-colors hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]"
+                  <div className="cursor-pointer border-b border-ag-border px-4 py-2.5 transition-colors hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d]"
                     onClick={() => { setOpen(false); router.push("/admin/reference/danbooru"); }}>
                     <div className="flex items-start gap-2.5">
                       <div className="mt-0.5">{statusIcon(batchJob.status)}</div>
@@ -575,7 +575,7 @@ export function NotificationBell() {
                   </div>
                 )}
                 {operationJob && (
-                  <div className="cursor-pointer border-b border-[#d8dee4] px-4 py-2.5 transition-colors hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]"
+                  <div className="cursor-pointer border-b border-ag-border px-4 py-2.5 transition-colors hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d]"
                     onClick={() => {
                       setOpen(false);
                       router.push(operationJob.kind === "danbooru-import-all" ? "/admin/reference/danbooru" : "/admin/data-mgmt");
@@ -621,7 +621,7 @@ export function NotificationBell() {
                 )}
                 {items.map((a) => (
                   <div key={a.id}
-                    className={`border-b border-[#d8dee4] px-4 py-2.5 transition-colors hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d] ${a.link ? "cursor-pointer" : "cursor-default"}`}
+                    className={`border-b border-ag-border px-4 py-2.5 transition-colors hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d] ${a.link ? "cursor-pointer" : "cursor-default"}`}
                     onClick={() => { if (a.link) { setOpen(false); router.push(a.link); } }}>
                     <div className="flex items-start gap-2.5">
                       <div className="mt-0.5">{statusIcon(a.status)}</div>

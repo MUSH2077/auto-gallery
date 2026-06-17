@@ -34,7 +34,7 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#f6f8fa] px-4 py-10 text-[#24292f] dark:bg-[#0d1117] dark:text-[#e6edf3]">
+    <main className="flex min-h-screen items-center justify-center bg-[#f6f8fa] px-4 py-10 text-[#24292f] dark:bg-ag-bg dark:text-ag-text">
       <div className="absolute right-4 top-4 flex items-center gap-2">
         <LangToggle />
         <ThemeToggle />
@@ -42,7 +42,7 @@ export default function LoginPage() {
 
       <section className="w-full max-w-sm">
         <div className="mb-6 text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-md border border-[#d8dee4] bg-white text-lg font-semibold tracking-tight shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-md border border-ag-border bg-white text-lg font-semibold tracking-tight shadow-sm dark:border-ag-border dark:bg-ag-surface">
             AG
           </div>
           <h1 className="text-2xl font-semibold tracking-normal">auto-gallery</h1>

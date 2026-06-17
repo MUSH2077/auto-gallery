@@ -242,7 +242,7 @@ function CreatorsContent() {
       </div>
 
       {selected.size > 0 && (
-        <div className="sticky top-2 z-20 mb-4 flex items-center gap-3 rounded-md border border-[#d8dee4] bg-white px-4 py-2 shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
+        <div className="sticky top-2 z-20 mb-4 flex items-center gap-3 rounded-md border border-ag-border bg-white px-4 py-2 shadow-sm dark:border-ag-border dark:bg-ag-surface">
           <span className="text-sm font-medium">{selected.size} selected</span>
           <button onClick={() => setSelected(new Set())} className="btn-ghost">Clear</button>
           <span className="flex-1" />
@@ -272,11 +272,11 @@ function CreatorsContent() {
       )}
 
       {creators.data && creators.data.items.length > 0 && (
-        <div className="overflow-hidden rounded-md border border-[#d8dee4] bg-white dark:border-[#30363d] dark:bg-[#161b22]">
+        <div className="overflow-hidden rounded-md border border-ag-border bg-white dark:border-ag-border dark:bg-ag-surface">
           {creators.data.items.map((c) => (
-            <div key={c.id} className={`flex cursor-pointer items-center gap-3 border-b border-[#d8dee4] p-4 last:border-b-0 hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d] ${selected.has(c.id) ? "bg-[#ddf4ff] dark:bg-[#1f6feb26]" : ""}`} onClick={() => router.push(`/admin/creators/${c.id}`)}>
+            <div key={c.id} className={`flex cursor-pointer items-center gap-3 border-b border-ag-border p-4 last:border-b-0 hover:bg-[#f6f8fa] dark:border-ag-border dark:hover:bg-[#21262d] ${selected.has(c.id) ? "bg-[#ddf4ff] dark:bg-[#1f6feb26]" : ""}`} onClick={() => router.push(`/admin/creators/${c.id}`)}>
               <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggleSelect(c.id)} className="rounded shrink-0" onClick={(e) => e.stopPropagation()} />
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#d8dee4] bg-[#0969da] text-sm font-semibold text-white dark:border-[#30363d]">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-ag-border bg-[#0969da] text-sm font-semibold text-white dark:border-ag-border">
                 {(c.display_name || c.name).slice(0, 2).toUpperCase()}
               </div>
               <div className="flex-1 min-w-0">

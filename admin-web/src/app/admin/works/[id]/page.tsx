@@ -98,7 +98,7 @@ function AssetThumb({ asset, active, index, onClick }: { asset: AssetData; activ
   return (
     <button
       onClick={onClick}
-      className={`h-16 w-16 shrink-0 overflow-hidden rounded-md border-2 ${active ? "border-[#0969da] dark:border-[#58a6ff]" : "border-[#d8dee4] hover:border-[#8c959f] dark:border-[#30363d]"}`}
+      className={`h-16 w-16 shrink-0 overflow-hidden rounded-md border-2 ${active ? "border-[#0969da] dark:border-[#58a6ff]" : "border-ag-border hover:border-[#8c959f] dark:border-ag-border"}`}
       title={asset.file_name}
     >
       {archive || mode === "error" ? (
@@ -137,9 +137,9 @@ function AllPages({ workId, sources }: { workId: string; sources: WorkSourceData
       {current && (
         <div className="mb-3">
           {currentIsArchive ? (
-            <div className="rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-6 text-center dark:border-[#30363d] dark:bg-[#21262d]">
-              <div className="mx-auto mb-2 flex h-16 w-16 items-center justify-center rounded-md border border-[#d8dee4] bg-white font-mono text-sm font-semibold text-[#57606a] dark:border-[#30363d] dark:bg-[#0d1117] dark:text-[#8b949e]">ZIP</div>
-              <div className="text-sm font-medium text-[#24292f] dark:text-[#e6edf3]">{t("work_detail.archive_asset")}</div>
+            <div className="rounded-md border border-ag-border bg-[#f6f8fa] p-6 text-center dark:border-ag-border dark:bg-[#21262d]">
+              <div className="mx-auto mb-2 flex h-16 w-16 items-center justify-center rounded-md border border-ag-border bg-white font-mono text-sm font-semibold text-[#57606a] dark:border-ag-border dark:bg-ag-bg dark:text-[#8b949e]">ZIP</div>
+              <div className="text-sm font-medium text-[#24292f] dark:text-ag-text">{t("work_detail.archive_asset")}</div>
               <div className="mt-1 truncate text-xs text-[#57606a] dark:text-[#8b949e]">{current.file_name}</div>
               <a href={current.original_url || ""} className="btn-ghost mt-3 inline-flex text-xs" target="_blank" rel="noopener noreferrer">
                 {t("work_detail.download_original")}
@@ -170,8 +170,8 @@ function AllPages({ workId, sources }: { workId: string; sources: WorkSourceData
 
       {/* Asset metadata for current page */}
       {current && (
-        <div className="mt-4 space-y-1 border-t border-[#d8dee4] pt-3 text-xs text-[#57606a] dark:border-[#30363d] dark:text-[#8b949e]">
-          <p className="mb-1 font-medium text-[#24292f] dark:text-[#e6edf3]">{t("work_detail.current_page")}</p>
+        <div className="mt-4 space-y-1 border-t border-ag-border pt-3 text-xs text-[#57606a] dark:border-ag-border dark:text-[#8b949e]">
+          <p className="mb-1 font-medium text-[#24292f] dark:text-ag-text">{t("work_detail.current_page")}</p>
           <div className="flex justify-between"><span>{t("work_detail.file")}</span><span className="font-mono">{current.file_name}</span></div>
           {current.width && current.height && (
             <div className="flex justify-between"><span>{t("work_detail.dimensions")}</span><span>{current.width} &times; {current.height}</span></div>
@@ -212,7 +212,7 @@ function WorkHistory({ workId }: { workId: string }) {
             </div>
             <div className="mt-1 flex flex-wrap gap-1.5">
               {commit.changes.filter((c) => c.subject_id === workId).map((change) => (
-                <span key={change.id} className="rounded-full border border-[#d8dee4] px-2 py-0.5 text-[11px] text-[#57606a] dark:border-[#30363d] dark:text-[#8b949e]">{change.action.replaceAll("_", " ")}</span>
+                <span key={change.id} className="rounded-full border border-ag-border px-2 py-0.5 text-[11px] text-[#57606a] dark:border-ag-border dark:text-[#8b949e]">{change.action.replaceAll("_", " ")}</span>
               ))}
             </div>
           </div>
@@ -286,7 +286,7 @@ export default function WorkDetailPage() {
                 {primaryWs?.source_creator_id && (
                   <span className="text-sm">{t("work_detail.creator_id")} <span className="font-mono">{primaryWs.source_creator_id}</span></span>
                 )}
-                {rating && <span className="badge border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]">{rating}</span>}
+                {rating && <span className="badge border-ag-border bg-[#f6f8fa] text-[#57606a] dark:border-ag-border dark:bg-[#21262d] dark:text-[#8b949e]">{rating}</span>}
                 {illustType && <span className="text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700">{illustType}</span>}
                 {w.is_nsfw && <span className="text-xs px-2 py-0.5 rounded bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400">{t("work_detail.nsfw")}</span>}
                 {isAiGenerated && <span className="text-xs px-2 py-0.5 rounded bg-yellow-100 text-yellow-700">{t("work_detail.ai_generated")}</span>}
@@ -298,12 +298,12 @@ export default function WorkDetailPage() {
         <div className="mt-1 flex shrink-0 gap-2">
           {visibility === "visible" ? (
             <button onClick={() => curateWork.mutate("trash")} disabled={curateWork.isPending}
-              className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-xs font-medium hover:bg-[#f6f8fa] disabled:opacity-50 dark:border-[#30363d] dark:hover:bg-[#21262d]">
+              className="rounded-md border border-ag-border px-3 py-1.5 text-xs font-medium hover:bg-[#f6f8fa] disabled:opacity-50 dark:border-ag-border dark:hover:bg-[#21262d]">
               Move to Trash
             </button>
           ) : visibility === "trashed" ? (
             <button onClick={() => curateWork.mutate("restore")} disabled={curateWork.isPending}
-              className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-xs font-medium hover:bg-[#f6f8fa] disabled:opacity-50 dark:border-[#30363d] dark:hover:bg-[#21262d]">
+              className="rounded-md border border-ag-border px-3 py-1.5 text-xs font-medium hover:bg-[#f6f8fa] disabled:opacity-50 dark:border-ag-border dark:hover:bg-[#21262d]">
               Restore
             </button>
           ) : null}

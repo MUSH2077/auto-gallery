@@ -196,7 +196,7 @@ export default function SubscriptionDetailPage() {
         <div className="card h-fit p-4 text-sm">
           <h4 className="font-medium mb-2">{t("subscription_detail.multi_source_title")}</h4>
           <p className="text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.multi_source_desc")}</p>
-          <div className="mt-4 space-y-2 border-t border-[#d8dee4] pt-4 text-xs dark:border-[#30363d]">
+          <div className="mt-4 space-y-2 border-t border-ag-border pt-4 text-xs dark:border-ag-border">
             <div className="flex justify-between"><span>Repositories</span><span className="font-semibold">{sources.data?.length || 0}</span></div>
             <div className="flex justify-between"><span>Enabled</span><span className="font-semibold">{sources.data?.filter((x) => x.is_enabled).length || 0}</span></div>
             <div className="flex justify-between"><span>Last sync</span><span className="font-semibold">{s.last_synced_at ? new Date(s.last_synced_at).toLocaleDateString() : t("subscription_detail.never_synced")}</span></div>

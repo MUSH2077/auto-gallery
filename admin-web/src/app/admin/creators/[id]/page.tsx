@@ -71,7 +71,7 @@ function WorkPreviewCard({ work }: { work: WorkListItem }) {
   const fmt = useI18nFormat();
   const assetId = work.preview_asset_ids?.[0] || work.thumbnail_asset_id;
   return (
-    <Link href={`/admin/works/${work.id}`} className="group overflow-hidden rounded-md border border-[#d8dee4] bg-white transition-colors hover:border-[#0969da]/50 dark:border-[#30363d] dark:bg-[#161b22] dark:hover:border-[#58a6ff]/50">
+    <Link href={`/admin/works/${work.id}`} className="group overflow-hidden rounded-md border border-ag-border bg-white transition-colors hover:border-[#0969da]/50 dark:border-ag-border dark:bg-ag-surface dark:hover:border-[#58a6ff]/50">
       <div className="aspect-[4/3] bg-[#f6f8fa] dark:bg-[#21262d]">
         {assetId ? (
           <img src={api.mediaUrl(assetId, "thumb")} alt={work.title || t("creator_detail.untitled")} className="h-full w-full object-cover" loading="lazy" />
@@ -118,7 +118,7 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-md border border-[#d8dee4] bg-white p-4 dark:border-[#30363d] dark:bg-[#161b22]">
+      <div className="rounded-md border border-ag-border bg-white p-4 dark:border-ag-border dark:bg-ag-surface">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <h2 className="text-base font-semibold">{t("creator_detail.works_title")}</h2>
@@ -333,14 +333,14 @@ export default function CreatorDetailPage() {
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-      <div className="mb-6 flex flex-col gap-4 border-b border-[#d8dee4] pb-5 dark:border-[#30363d] md:flex-row md:items-end md:justify-between">
+      <div className="mb-6 flex flex-col gap-4 border-b border-ag-border pb-5 dark:border-ag-border md:flex-row md:items-end md:justify-between">
         <div className="flex min-w-0 items-center gap-4">
-          <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full border border-[#d8dee4] bg-gradient-to-br from-[#0969da] to-[#8250df] text-2xl font-semibold text-white dark:border-[#30363d]">
+          <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full border border-ag-border bg-gradient-to-br from-[#0969da] to-[#8250df] text-2xl font-semibold text-white dark:border-ag-border">
             {initials(c.display_name || c.name)}
           </div>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="truncate text-2xl font-semibold tracking-normal text-[#24292f] dark:text-[#e6edf3]">{c.display_name || c.name}</h1>
+              <h1 className="truncate text-2xl font-semibold tracking-normal text-[#24292f] dark:text-ag-text">{c.display_name || c.name}</h1>
               {c.is_favorite && <span className="rounded-full border border-[#bf8700]/30 bg-[#fff8c5] px-2 py-0.5 text-xs text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]">{t("creator_detail.favorite")}</span>}
               {creatorVisibility !== "visible" && <span className="rounded-full border border-[#cf222e]/25 bg-[#ffebe9] px-2 py-0.5 text-xs text-[#cf222e] dark:bg-[#da363326]">{creatorVisibility}</span>}
             </div>
@@ -379,11 +379,11 @@ export default function CreatorDetailPage() {
           <section className="card p-4">
             <h2 className="mb-2 text-sm font-semibold">{t("creator_detail.profile")}</h2>
             {c.description ? (
-              <p className="whitespace-pre-wrap text-sm leading-6 text-[#24292f] dark:text-[#e6edf3]">{c.description}</p>
+              <p className="whitespace-pre-wrap text-sm leading-6 text-[#24292f] dark:text-ag-text">{c.description}</p>
             ) : (
               <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.no_description")}</p>
             )}
-            <dl className="mt-4 space-y-2 border-t border-[#d8dee4] pt-4 text-sm dark:border-[#30363d]">
+            <dl className="mt-4 space-y-2 border-t border-ag-border pt-4 text-sm dark:border-ag-border">
               <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.stat_works")}</dt><dd className="font-semibold">{st?.total_works != null ? fmt.number(st.total_works) : "-"}</dd></div>
               <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.stat_assets")}</dt><dd className="font-semibold">{st?.total_assets != null ? fmt.number(st.total_assets) : "-"}</dd></div>
               <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.stat_sources")}</dt><dd className="font-semibold">{st?.source_breakdown?.length ?? "-"}</dd></div>
@@ -400,7 +400,7 @@ export default function CreatorDetailPage() {
               <div className="space-y-3">
                 {curationHistory.data.items.map((commit) => (
                   <div key={commit.id} className="border-l-2 border-[#0969da] pl-3 text-xs dark:border-[#58a6ff]">
-                    <div className="font-medium text-[#24292f] dark:text-[#e6edf3]">{commit.message}</div>
+                    <div className="font-medium text-[#24292f] dark:text-ag-text">{commit.message}</div>
                     <div className="mt-0.5 text-[#57606a] dark:text-[#8b949e]">{commit.trigger} · {new Date(commit.occurred_at).toLocaleDateString()}</div>
                   </div>
                 ))}
@@ -433,10 +433,10 @@ export default function CreatorDetailPage() {
         </aside>
 
         <section className="min-w-0">
-          <nav className="mb-4 flex gap-1 overflow-x-auto border-b border-[#d8dee4] dark:border-[#30363d]" aria-label="Creator sections">
+          <nav className="mb-4 flex gap-1 overflow-x-auto border-b border-ag-border dark:border-ag-border" aria-label="Creator sections">
             {tabs.map((tab) => (
               <button key={tab.key} onClick={() => setActiveTab(tab.key)}
-                className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${activeTab === tab.key ? "border-[#fd8c73] font-semibold text-[#24292f] dark:text-[#e6edf3]" : "border-transparent text-[#57606a] hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3]"}`}>
+                className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${activeTab === tab.key ? "border-[#fd8c73] font-semibold text-[#24292f] dark:text-ag-text" : "border-transparent text-[#57606a] hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3]"}`}>
                 {tab.label}{tab.count !== undefined && <span className="ml-2 rounded-full bg-[#eaeef2] px-2 py-0.5 text-xs font-medium text-[#57606a] dark:bg-[#30363d] dark:text-[#8b949e]">{tab.count}</span>}
               </button>
             ))}
@@ -475,7 +475,7 @@ export default function CreatorDetailPage() {
                           key={item.tag}
                           type="button"
                           onClick={() => openWorksTag(item.tag)}
-                          className="rounded-full border border-[#d8dee4] bg-[#f6f8fa] px-2.5 py-1 text-xs font-medium text-[#0969da] hover:border-[#0969da]/40 hover:bg-[#ddf4ff] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#58a6ff] dark:hover:bg-[#1f6feb26]"
+                          className="rounded-full border border-ag-border bg-[#f6f8fa] px-2.5 py-1 text-xs font-medium text-[#0969da] hover:border-[#0969da]/40 hover:bg-[#ddf4ff] dark:border-ag-border dark:bg-[#21262d] dark:text-[#58a6ff] dark:hover:bg-[#1f6feb26]"
                           title={t("creator_detail.search_tag_title", { tag: item.tag })}
                         >
                           #{item.tag}
@@ -512,7 +512,7 @@ export default function CreatorDetailPage() {
 
           {activeTab === "repositories" && (
             <div className="space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-[#d8dee4] bg-white p-3 dark:border-[#30363d] dark:bg-[#161b22]">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-ag-border bg-white p-3 dark:border-ag-border dark:bg-ag-surface">
                 <div>
                   <h2 className="text-base font-semibold">{t("creator_detail.repositories_title")}</h2>
                   <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.repositories_desc")}</p>
@@ -528,7 +528,7 @@ export default function CreatorDetailPage() {
                   [t("creator_detail.last_success"), repoSummary.lastSuccess ? fmt.dateTime(repoSummary.lastSuccess) : t("creator_detail.never"), t("creator_detail.source_sync")],
                 ].map(([label, value, sub]) => (
                   <div key={label} className="card p-3">
-                    <div className="truncate text-sm font-semibold text-[#24292f] dark:text-[#e6edf3]">{value}</div>
+                    <div className="truncate text-sm font-semibold text-[#24292f] dark:text-ag-text">{value}</div>
                     <div className="mt-1 text-[11px] font-medium uppercase text-[#57606a] dark:text-[#8b949e]">{label}</div>
                     <div className="mt-0.5 text-xs text-[#8c959f] dark:text-[#6e7681]">{sub}</div>
                   </div>
@@ -551,7 +551,7 @@ export default function CreatorDetailPage() {
 
           {activeTab === "links" && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between rounded-md border border-[#d8dee4] bg-white p-3 dark:border-[#30363d] dark:bg-[#161b22]">
+              <div className="flex items-center justify-between rounded-md border border-ag-border bg-white p-3 dark:border-ag-border dark:bg-ag-surface">
                 <div>
                   <h2 className="text-base font-semibold">{t("creator_detail.external_links")}</h2>
                   <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.links_desc")}</p>
@@ -559,7 +559,7 @@ export default function CreatorDetailPage() {
                 <button onClick={() => setShowAddLink(true)} className="btn-primary">{t("creator_detail.add_link_short")}</button>
               </div>
               {links.data?.length ? links.data.map((l: CreatorLinkType) => (
-                <div key={l.id} className="rounded-md border border-[#d8dee4] bg-white p-4 dark:border-[#30363d] dark:bg-[#161b22]">
+                <div key={l.id} className="rounded-md border border-ag-border bg-white p-4 dark:border-ag-border dark:bg-ag-surface">
                   <div className="flex items-center gap-2">
                     <SourceBadge source={l.link_type} />
                     <a href={l.url} target="_blank" rel="noopener noreferrer" className="truncate text-sm font-medium text-[#0969da] hover:underline dark:text-[#58a6ff]">{l.url}</a>
@@ -634,7 +634,7 @@ function DanbooruAliases({ artistId, currentDisplay, onSelectAlias }: {
                   ? "border-[#0969da] bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#58a6ff]"
                   : type === "pixiv"
                     ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300"
-                    : "border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] hover:bg-[#eaeef2] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]"
+                    : "border-ag-border bg-[#f6f8fa] text-[#57606a] hover:bg-[#eaeef2] dark:border-ag-border dark:bg-[#21262d] dark:text-[#8b949e]"
               }`}>
               {label}
             </button>

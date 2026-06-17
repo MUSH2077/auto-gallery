@@ -38,7 +38,7 @@ function UserMenu() {
         <span className="hidden sm:inline max-w-[100px] truncate">{user?.display_name || user?.username}</span>
       </button>
       {open && (
-        <div className="absolute right-0 mt-1 w-44 bg-white dark:bg-[#161b22] border border-[#d8dee4] dark:border-[#30363d] rounded-md shadow-lg z-50 text-[#24292f] dark:text-[#e6edf3] text-sm overflow-hidden">
+        <div className="absolute right-0 mt-1 w-44 bg-white dark:bg-ag-surface border border-ag-border dark:border-ag-border rounded-md shadow-lg z-50 text-[#24292f] dark:text-ag-text text-sm overflow-hidden">
           <Link
             href="/admin/settings/profile"
             onClick={() => setOpen(false)}
@@ -85,7 +85,7 @@ function AdminNav() {
   ];
 
   return (
-    <nav className="bg-[#24292f] dark:bg-[#010409] text-white px-4 sm:px-6 py-3 border-b border-[#57606a]/30 dark:border-[#30363d]">
+    <nav className="bg-[#24292f] dark:bg-[#010409] text-white px-4 sm:px-6 py-3 border-b border-[#57606a]/30 dark:border-ag-border">
       <div className="flex items-center gap-4 text-sm">
         <Link href="/admin" className="font-semibold text-base shrink-0 tracking-tight">auto-gallery</Link>
         {/* Desktop links */}
