@@ -12,3 +12,6 @@ export { default as WorkGrid } from "./WorkGrid";
 export { default as RepositoryCard } from "./RepositoryCard";
 export { ToastProvider, useToast } from "./Toast";
 export { NotificationProvider, NotificationBell, useNotifications } from "./NotificationCenter";
+export { RealProgressBar } from "./RealProgressBar";
+export { PipelineVisualizer } from "./PipelineVisualizer";
+export { BatchByFilter } from "./BatchByFilter";
