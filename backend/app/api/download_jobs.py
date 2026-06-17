@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from app.auth import RequireAdmin
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,6 +8,8 @@ from app.database import get_db
 from app.schemas.download_job import DownloadJobCreate, DownloadJobRead
 from app.schemas.import_job import ImportJobRead
 from app.services.download import DownloadService
+from app.services.progress import ProgressTracker
+from app.services.task_engine import TaskEngine, TaskEngineError
 
 router = APIRouter(dependencies=[RequireAdmin])
 
@@ -140,3 +142,102 @@ async def retry_all_failed(db: AsyncSession = Depends(get_db)):
 async def list_imports(job_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = DownloadService(db)
     return await svc.list_imports(job_id)
+
+
+# ── Task Engine endpoints (Phase 7) ──────────────────────────────
+
+
+@router.post("/{job_id}/cancel")
+async def cancel_job(
+    job_id: UUID,
+    data: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+    operator: str = Depends(RequireAdmin),
+):
+    """Cancel a download job. Sends SIGTERM to the process group. Terminal."""
+    engine = TaskEngine(db)
+    try:
+        note = data.get("note") if data else None
+        result = await engine.cancel_download(job_id, note=note, operator=operator)
+        await db.commit()
+        return result
+    except TaskEngineError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{job_id}/priority")
+async def set_priority(
+    job_id: UUID,
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    operator: str = Depends(RequireAdmin),
+):
+    """Set the priority of a download job."""
+    priority = data.get("priority", 10)
+    engine = TaskEngine(db)
+    try:
+        result = await engine.set_priority_download(job_id, priority, operator=operator)
+        await db.commit()
+        return result
+    except TaskEngineError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/batch-by-filter")
+async def batch_by_filter(
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    operator: str = Depends(RequireAdmin),
+):
+    """Batch action on download jobs matching filter criteria.
+
+    Accepts: ``{"filters": {"source": "pixiv", "status": "failed"}, "action": "retry", "note": "..."}``
+    """
+    filters = data.get("filters", {})
+    action = data.get("action", "")
+    note = data.get("note")
+    engine = TaskEngine(db)
+    try:
+        result = await engine.batch_by_filter("download", filters, action, operator=operator, note=note)
+        return result
+    except TaskEngineError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{job_id}/progress")
+async def get_progress(job_id: UUID):
+    """Get the latest progress snapshot for a download job."""
+    progress = ProgressTracker.get(str(job_id))
+    if not progress:
+        raise HTTPException(status_code=404, detail="No progress data available")
+    return {"job_id": str(job_id), **progress}
+
+
+@router.get("/{job_id}/pipeline")
+async def get_pipeline(job_id: UUID, db: AsyncSession = Depends(get_db)):
+    """Get pipeline stage data for a download job."""
+    svc = DownloadService(db)
+    try:
+        job = await svc.get_job(job_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    from app.models.task_state import PipelineStage
+    stages = PipelineStage.ordered_stages()
+    current_stage = getattr(job, "pipeline_stage", None)
+
+    pipeline = []
+    for s in stages:
+        status = "pending"
+        if s == current_stage:
+            status = "active"
+        elif stages.index(s) < stages.index(current_stage or stages[0]):
+            status = "complete"
+        pipeline.append({"name": s, "status": status})
+
+    return {
+        "job_id": str(job.id),
+        "current_stage": current_stage,
+        "stages": pipeline,
+        "progress": ProgressTracker.get(str(job_id)),
+    }
