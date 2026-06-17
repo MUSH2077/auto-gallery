@@ -65,7 +65,7 @@ async def get_admin_key(
 
         username = payload.get("sub")
         if username:
-            if payload.get("pwd_chg_required") and request.url.path != "/api/v1/auth/change-password":
+            if payload.get("pwd_chg_required") and request.url.path not in ("/api/v1/auth/change-password", "/api/v1/auth/me"):
                 raise HTTPException(status_code=403, detail="Password change required")
             return username
 
