@@ -31,8 +31,8 @@ except ImportError:
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[RequireAdmin])
 
-DOWNLOAD_RUNNING_STATUSES = {"pending", "downloading", "downloaded", "importing"}
-IMPORT_RUNNING_STATUSES = {"pending", "running"}
+DOWNLOAD_RUNNING_STATUSES = {"enqueued", "downloading", "downloaded", "importing"}
+IMPORT_RUNNING_STATUSES = {"enqueued", "running"}
 FAILED_STATUSES = {"failed", "stale"}
 QUEUE_NAMES = ("default", "downloads", "imports", "scheduled")
 

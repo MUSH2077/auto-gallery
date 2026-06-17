@@ -16,7 +16,7 @@ const REFETCH_IDLE_MS = 10000;
 const PAGE_LIMIT = 200;
 
 const STATUS_OPTIONS = ["", "enqueued", "downloading", "paused", "downloaded", "importing", "complete", "failed", "stale", "cancelled"];
-const IMPORT_STATUS_OPTIONS = ["", "pending", "running", "complete", "failed", "stale"];
+const IMPORT_STATUS_OPTIONS = ["", "enqueued", "running", "complete", "failed", "stale"];
 const SOURCE_OPTIONS = ["", "pixiv", "x", "iwara", "danbooru", "pinterest", "lofter", "weibo", "bilibili"];
 
 function Elapsed({ since, active }: { since: string; active: boolean }) {
@@ -414,7 +414,7 @@ function JobsContent() {
     onMutate: (id) => {
       qc.setQueriesData({ queryKey: queryKeys.downloadJobs.all }, (old: any) => {
         if (!Array.isArray(old)) return old;
-        return old.map((j: any) => j.id === id ? { ...j, status: "pending" } : j);
+        return old.map((j: any) => j.id === id ? { ...j, status: "enqueued" } : j);
       });
     },
     onSettled: () => { qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.detail(selectedDownloadJobId || "") }); },
@@ -577,7 +577,7 @@ function JobsContent() {
           <div className="overflow-x-auto pb-2">
           <div className="min-w-[980px] space-y-1">
             {downloads.data.map((j: any) => {
-              const active = j.status === "downloading" || j.status === "pending";
+              const active = j.status === "downloading" || j.status === "enqueued" || j.status === "pending";
               return (
                 <div key={j.id}>
                   <div onClick={() => openDownloadDetail(j.id)} className={`card flex cursor-pointer items-center gap-3 p-3 text-sm hover:border-[#0969da]/50 ${active ? "border-l-2 border-l-[#0969da]" : j.status === "failed" ? "border-l-2 border-l-[#cf222e]" : j.status === "paused" ? "border-l-2 border-l-[#bf8700]" : j.status === "stale" ? "border-l-2 border-l-[#d29922]" : ""}`}>

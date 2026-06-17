@@ -152,7 +152,7 @@ async def enqueue_subscription_source_sync(
             subscription_source_id=ss.id,
             source=ss.source,
             source_url=normalized_url,
-            status="pending",
+            status="enqueued",
         )
         update_manifest(job,
             trigger=trigger,

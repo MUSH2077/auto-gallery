@@ -149,7 +149,7 @@ async def _enqueue_import(download_job_id: str, import_error: str | None = None,
             extra = {"error_log": import_error} if import_error else {}
             import_job = await repo.create_import({
                 "download_job_id": UUID(download_job_id),
-                "status": "pending",
+                "status": "enqueued",
                 **extra,
             })
             download_job = await repo.get(UUID(download_job_id))
@@ -458,7 +458,7 @@ async def run_download_job(job_id: str):
                 j.retry_count += 1
                 error_text = str(e)[:10000]
                 if j.retry_count < max_retries:
-                    await repo2.update_status(j, "pending", f"unexpected error: {error_text}")
+                    await repo2.update_status(j, "enqueued", f"unexpected error: {error_text}")
                 else:
                     await repo2.update_status(j, "failed", f"unexpected error: {error_text}")
                 await db2.commit()
@@ -509,7 +509,7 @@ async def run_download_job(job_id: str):
             else:
                 j.retry_count += 1
                 if j.retry_count < max_retries:
-                    await repo2.update_status(j, "pending", result.stderr[:5000] if result.stderr else None)
+                    await repo2.update_status(j, "enqueued", result.stderr[:5000] if result.stderr else None)
                 else:
                     await repo2.update_status(j, "failed", result.stderr[:5000] if result.stderr else None)
 
@@ -544,7 +544,7 @@ async def run_download_job(job_id: str):
             j.retry_count += 1
             timeout_msg = f"timeout after {dl_timeout}s"
             if j.retry_count < max_retries:
-                await repo2.update_status(j, "pending", timeout_msg)
+                await repo2.update_status(j, "enqueued", timeout_msg)
             else:
                 await repo2.update_status(j, "failed", timeout_msg)
 

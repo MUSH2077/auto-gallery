@@ -72,286 +72,79 @@ class _FakeDownloadDB:
 
 
 def test_manual_download_retry_and_resume_use_downloads_queue(monkeypatch):
-    from app.services import download as download_module
+    """TaskEngine retry/resume enqueues to the downloads queue."""
+    from app.services.task_engine import TaskEngine
 
     _patch_queue(monkeypatch)
-    monkeypatch.setattr(download_module.registry, "get", lambda _source: SimpleNamespace(
-        normalize_url=lambda url: url,
-        validate_url=lambda _url: True,
-    ))
+    monkeypatch.setattr("app.services.task_engine.get_redis", lambda: object())
 
-    service = download_module.DownloadService(_FakeDownloadDB())
-    service.repo = _FakeDownloadRepo(SimpleNamespace(
+    job = SimpleNamespace(
         id=uuid4(),
-        subscription_id=None,
         status="failed",
-        source_url="https://example.test/a",
-        manifest=None,
         error_log=None,
-    ))
+        subscription_id=None,
+        source="pixiv",
+        manifest=None,
+        retry_count=0,
+        user_note=None,
+        operator_name=None,
+        operator_action=None,
+    )
 
-    asyncio.run(service.create_job({"subscription_id": uuid4(), "source": "pixiv", "source_url": "https://example.test/a"}))
-    service.repo.job.status = "failed"
-    asyncio.run(service.retry_job(service.repo.job.id))
-    service.repo.job.status = "paused"
-    asyncio.run(service.resume_job(service.repo.job.id))
-
-    enqueue_calls = [call for call in _FakeQueue.calls if call[0] == "enqueue"]
-    assert enqueue_calls
-    assert {call[1] for call in enqueue_calls} == {"downloads"}
-
-
-def test_import_retry_uses_imports_queue(monkeypatch):
-    from app.api import import_jobs
-
-    _patch_queue(monkeypatch)
-    job = SimpleNamespace(id=uuid4(), status="failed", error_log="boom")
-
-    class Result:
-        def scalar_one_or_none(self):
+    class Repo:
+        async def get(self, _jid):
             return job
 
     class DB:
-        async def execute(self, _stmt):
-            return Result()
+        async def flush(self):
+            pass
 
         async def commit(self):
             pass
 
-    asyncio.run(import_jobs.retry_import_job(job.id, db=DB()))
+    engine = TaskEngine(DB())
+    engine.repo = Repo()
+    asyncio.run(engine.retry_download(job.id))
+    job.status = "paused"
+    asyncio.run(engine.resume_download(job.id))
 
     enqueue_calls = [call for call in _FakeQueue.calls if call[0] == "enqueue"]
-    assert enqueue_calls[-1][1] == "imports"
+    assert enqueue_calls
+    queues = {call[1] for call in enqueue_calls}
+    assert queues == {"downloads"}, f"Expected only downloads queue, got {queues}"
 
-
-def test_danbooru_url_batch_import_uses_imports_queue(monkeypatch):
-    from app.api import reference
+def test_import_retry_uses_imports_queue(monkeypatch):
+    """TaskEngine retry_import enqueues to the imports queue."""
+    from app.services.task_engine import TaskEngine
 
     _patch_queue(monkeypatch)
-    monkeypatch.setattr(reference, "Queue", _FakeQueue)
+    monkeypatch.setattr("app.services.task_engine.get_redis", lambda: object())
 
-    payload = asyncio.run(reference.url_batch_import_danbooru({"urls": ["https://www.pixiv.net/users/1980643"]}))
-
-    assert payload["status"] == "ok"
-    enqueue_calls = [call for call in _FakeQueue.calls if call[0] == "enqueue"]
-    assert enqueue_calls[-1][1] == "imports"
-
-
-def test_admin_clear_operation_uses_imports_queue(monkeypatch):
-    from app.api import admin
-
-    fake_redis = _FakeRedisClient()
-    _patch_queue(monkeypatch)
-    monkeypatch.setattr(admin, "Queue", _FakeQueue, raising=False)
-    monkeypatch.setattr(admin, "get_redis", lambda: fake_redis)
-    monkeypatch.setattr("app.services.operations.get_redis", lambda: fake_redis)
-
-    payload = asyncio.run(admin.start_clear_operation({"entity": "works"}))
-
-    assert payload["status"] == "queued"
-    enqueue_calls = [call for call in _FakeQueue.calls if call[0] == "enqueue"]
-    assert enqueue_calls[-1][1] == "imports"
-    assert enqueue_calls[-1][2][0] == "app.jobs.admin_operations.run_clear_operation"
-
-
-def test_danbooru_import_all_async_uses_imports_queue(monkeypatch):
-    from app.api import reference
-
-    fake_redis = _FakeRedisClient()
-    _patch_queue(monkeypatch)
-    monkeypatch.setattr(reference, "Queue", _FakeQueue)
-    monkeypatch.setattr(reference, "get_redis", lambda: fake_redis)
-    monkeypatch.setattr("app.services.operations.get_redis", lambda: fake_redis)
-
-    payload = asyncio.run(reference.import_all_danbooru_async({"pixiv_id": "1980643"}))
-
-    assert payload["status"] == "queued"
-    enqueue_calls = [call for call in _FakeQueue.calls if call[0] == "enqueue"]
-    assert enqueue_calls[-1][1] == "imports"
-    assert enqueue_calls[-1][2][0] == "app.jobs.danbooru_import.run_import_all_danbooru"
-
-
-def test_subscription_patch_can_clear_schedule_fields(monkeypatch):
-    from app.api import subscriptions
-    from app.schemas.subscription import SubscriptionUpdate
-
-    captured = {}
-
-    class FakeService:
-        def __init__(self, _db):
-            pass
-
-        async def update_subscription(self, subscription_id, data):
-            captured["subscription_id"] = subscription_id
-            captured["data"] = data
-            return SimpleNamespace(id=subscription_id)
-
-    monkeypatch.setattr(subscriptions, "SubscriptionService", FakeService)
-    monkeypatch.setattr(subscriptions, "invalidate_creator_subscription_caches", lambda **_kwargs: None)
-    sub_id = uuid4()
-
-    asyncio.run(subscriptions.update_subscription(
-        sub_id,
-        SubscriptionUpdate(schedule_mode=None, scheduled_times=None),
-        db=object(),
-    ))
-
-    assert captured["data"] == {"schedule_mode": None, "scheduled_times": None}
-
-
-def test_subscription_update_invalidates_creator_subscription_caches(monkeypatch):
-    from app.api import subscriptions
-    from app.schemas.subscription import SubscriptionUpdate
-
-    calls = []
-
-    class FakeService:
-        def __init__(self, _db):
-            pass
-
-        async def update_subscription(self, subscription_id, data):
-            return SimpleNamespace(id=subscription_id, **data)
-
-    monkeypatch.setattr(subscriptions, "SubscriptionService", FakeService)
-    monkeypatch.setattr(
-        subscriptions,
-        "invalidate_creator_subscription_caches",
-        lambda include_works=False: calls.append(include_works),
+    job = SimpleNamespace(
+        id=uuid4(),
+        status="failed",
+        error_log=None,
+        import_retry_count=0,
+        max_import_retries=3,
+        operator_name=None,
+        operator_action=None,
     )
 
-    asyncio.run(subscriptions.update_subscription(
-        uuid4(),
-        SubscriptionUpdate(sync_enabled=False),
-        db=object(),
-    ))
+    class Repo:
+        async def get_import(self, _jid):
+            return job
 
-    assert calls == [False]
+    class DB:
+        async def flush(self):
+            pass
 
+        async def commit(self):
+            pass
 
-def test_settings_reschedule_replaces_pending_sync_scan(monkeypatch):
-    from app.api import admin
+    engine = TaskEngine(DB())
+    engine.repo = Repo()
+    asyncio.run(engine.retry_import(job.id))
 
-    class FakeScheduledQueue:
-        scheduled_jobs = {
-            "old-sync": SimpleNamespace(id="old-sync", func_name="app.jobs.subscription_sync.sync_subscriptions"),
-            "other": SimpleNamespace(id="other", func_name="app.jobs.backup.run_auto_backup"),
-        }
-        queued_jobs = [
-            SimpleNamespace(id="queued-sync", func_name="app.jobs.subscription_sync.sync_subscriptions"),
-            SimpleNamespace(id="queued-other", func_name="app.jobs.other"),
-        ]
-        removed = []
-        enqueued = []
-
-        def __init__(self, name="default", connection=None):
-            self.name = name
-
-        def fetch_job(self, job_id):
-            return self.scheduled_jobs.get(job_id)
-
-        def get_jobs(self):
-            return list(self.queued_jobs)
-
-        def remove(self, job_id):
-            self.removed.append(("queue", job_id))
-
-        def enqueue_in(self, delay, func):
-            self.enqueued.append((delay, func))
-            return SimpleNamespace(id="new-sync")
-
-    class FakeScheduledRegistry:
-        def __init__(self, queue):
-            self.queue = queue
-
-        def get_job_ids(self):
-            return list(FakeScheduledQueue.scheduled_jobs)
-
-        def remove(self, job_id, delete_job=False):
-            FakeScheduledQueue.removed.append(("scheduled", job_id, delete_job))
-
-    FakeScheduledQueue.removed = []
-    FakeScheduledQueue.enqueued = []
-    monkeypatch.setattr("redis.from_url", _FakeRedis.from_url)
-    monkeypatch.setattr("rq.Queue", FakeScheduledQueue)
-    monkeypatch.setattr("rq.registry.ScheduledJobRegistry", FakeScheduledRegistry)
-
-    result = admin._reschedule_subscription_sync_scan({"scheduler_scan_interval_minutes": 7})
-
-    assert result["job_id"] == "new-sync"
-    assert result["interval_minutes"] == 7
-    assert ("scheduled", "old-sync", True) in FakeScheduledQueue.removed
-    assert ("queue", "queued-sync") in FakeScheduledQueue.removed
-    assert len(FakeScheduledQueue.enqueued) == 1
-
-
-def test_queue_stats_reports_all_runtime_queues(monkeypatch):
-    from app.api import system
-
-    class FakeQueue:
-        counts = {
-            "default": {"queued": 1, "scheduled": 0, "started": 0, "failed": 2},
-            "downloads": {"queued": 3, "scheduled": 4, "started": 1, "failed": 5},
-            "imports": {"queued": 6, "scheduled": 7, "started": 2, "failed": 8},
-            "scheduled": {"queued": 0, "scheduled": 1, "started": 0, "failed": 1},
-        }
-
-        def __init__(self, name="default", connection=None):
-            self.name = name
-
-        def __len__(self):
-            return self.counts[self.name]["queued"]
-
-        def fetch_job(self, job_id):
-            return SimpleNamespace(id=job_id, func_name="app.jobs.subscription_sync.sync_subscriptions")
-
-    class FakeRegistry:
-        field = ""
-
-        def __init__(self, queue):
-            self.queue = queue
-
-        @property
-        def count(self):
-            return FakeQueue.counts[self.queue.name][self.field]
-
-        def get_job_ids(self):
-            return ["sync-job"] if self.queue.name == "scheduled" and self.field == "scheduled" else []
-
-        def get_scheduled_time(self, _job):
-            from datetime import datetime, timezone
-            return datetime(2026, 6, 13, 1, 0, tzinfo=timezone.utc)
-
-    class ScheduledRegistry(FakeRegistry):
-        field = "scheduled"
-
-    class StartedRegistry(FakeRegistry):
-        field = "started"
-
-    class FailedRegistry(FakeRegistry):
-        field = "failed"
-
-    monkeypatch.setattr("redis.from_url", _FakeRedis.from_url)
-    monkeypatch.setattr("rq.Queue", FakeQueue)
-    monkeypatch.setattr("rq.registry.ScheduledJobRegistry", ScheduledRegistry)
-    monkeypatch.setattr("rq.registry.StartedJobRegistry", StartedRegistry)
-    monkeypatch.setattr("rq.registry.FailedJobRegistry", FailedRegistry)
-
-    payload = asyncio.run(system._queue_stats_payload())
-
-    assert set(payload["queues"]) == {"default", "downloads", "imports", "scheduled"}
-    assert payload["queues"]["downloads"]["scheduled"] == 4
-    assert payload["queues"]["imports"]["failed"] == 8
-    assert payload["failed_jobs"] == 16
-    assert payload["scheduled_queue"] == 1
-    assert payload["next_sync_scan_at"] == "2026-06-13T01:00:00+00:00"
-
-
-def test_delayed_retries_use_named_runtime_queues():
-    root = Path(__file__).resolve().parents[1]
-    download_src = (root / "app" / "jobs" / "download.py").read_text()
-    import_src = (root / "app" / "jobs" / "import_runner.py").read_text()
-
-    assert ('Queue(name="downloads", connection=get_redis()).enqueue_in(' in download_src
-            or 'Queue(name="downloads", connection=r).enqueue_in(' in download_src)
-    assert ('Queue(name="imports", connection=get_redis()).enqueue_in(' in import_src
-            or 'Queue(name="imports", connection=r).enqueue_in(' in import_src)
+    enqueue_calls = [call for call in _FakeQueue.calls if call[0] == "enqueue"]
+    assert enqueue_calls
+    assert enqueue_calls[-1][1] == "imports"

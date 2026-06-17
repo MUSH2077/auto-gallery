@@ -49,22 +49,28 @@ async def create_job(data: DownloadJobCreate, db: AsyncSession = Depends(get_db)
 
 
 @router.post("/{job_id}/retry")
-async def retry_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
-    svc = DownloadService(db)
+async def retry_job(
+    job_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    operator: str = Depends(get_admin_key),
+):
+    engine = TaskEngine(db)
     try:
-        return await svc.retry_job(job_id)
-    except ValueError as e:
+        result = await engine.retry_download(job_id, operator=operator)
+        await db.commit()
+        return result
+    except TaskEngineError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.delete("/{job_id}")
 async def delete_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
-    svc = DownloadService(db)
+    engine = TaskEngine(db)
     try:
-        await svc.delete_job(job_id)
+        await engine.delete_download(job_id)
         return {"status": "ok"}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except TaskEngineError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/{job_id}/pause")
@@ -142,27 +148,28 @@ async def clear_jobs(data: dict, db: AsyncSession = Depends(get_db)):
 
 @router.post("/kill-stuck")
 async def kill_stuck(db: AsyncSession = Depends(get_db)):
-    """Mark all 'downloading' jobs as stale."""
-    svc = DownloadService(db)
-    count = await svc.kill_stuck_jobs()
+    """Detect and mark stale tasks via heartbeat timeout."""
+    engine = TaskEngine(db)
+    count = await engine.detect_stale_tasks()
+    await db.commit()
     return {"status": "ok", "killed": count}
 
 
 @router.post("/retry-all")
 async def retry_all_failed(db: AsyncSession = Depends(get_db)):
-    """Retry all failed and stale download jobs."""
-    svc = DownloadService(db)
-    jobs = await svc.list_jobs(status="failed")
-    jobs += await svc.list_jobs(status="stale")
-    results = {"succeeded": 0, "failed": 0, "errors": []}
-    for j in jobs:
-        try:
-            await svc.retry_job(j.id)
-            results["succeeded"] += 1
-        except Exception as e:
-            results["failed"] += 1
-            results["errors"].append({"id": str(j.id), "error": str(e)})
-    return {"status": "ok", **results}
+    """Retry all failed and stale download jobs via batch-by-filter."""
+    engine = TaskEngine(db)
+    result = await engine.batch_by_filter(
+        "download", {"status": "failed"}, "retry")
+    stale_result = await engine.batch_by_filter(
+        "download", {"status": "stale"}, "retry")
+    total = {
+        "succeeded": result["succeeded"] + stale_result["succeeded"],
+        "failed": result["failed"] + stale_result["failed"],
+        "errors": result.get("errors", []) + stale_result.get("errors", []),
+    }
+    await db.commit()
+    return {"status": "ok", **total}
 
 
 @router.get("/{job_id}/imports", response_model=list[ImportJobRead])

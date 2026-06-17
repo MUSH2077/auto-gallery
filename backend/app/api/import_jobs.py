@@ -106,40 +106,28 @@ async def get_import_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{job_id}/retry")
-async def retry_import_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(ImportJob).where(ImportJob.id == job_id))
-    job = result.scalar_one_or_none()
-    if not job:
-        raise HTTPException(status_code=404, detail="Import job not found")
-    if job.status not in ("failed", "stale"):
-        raise HTTPException(status_code=400, detail=f"Cannot retry job with status '{job.status}'")
-    transition_import_job(job, "pending")
-    job.error_log = None
-    await db.commit()
-
+async def retry_import_job(
+    job_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    operator: str = Depends(get_admin_key),
+):
+    engine = TaskEngine(db)
     try:
-        import redis as redis_lib
-        from rq import Queue
-        from app.config import settings
-        r = redis_lib.from_url(settings.redis_url)
-        Queue(name="imports", connection=r).enqueue("app.jobs.import_runner.run_import_job", str(job_id), job_timeout=7200)
-    except Exception:
-        logger.warning("Failed to enqueue retry for import job %s", job_id, exc_info=True)
-
-    return {"status": "ok", "message": f"Retry triggered for import job {job_id}"}
+        result = await engine.retry_import(job_id, operator=operator)
+        await db.commit()
+        return result
+    except TaskEngineError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.delete("/{job_id}")
 async def delete_import_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(ImportJob).where(ImportJob.id == job_id))
-    job = result.scalar_one_or_none()
-    if not job:
-        raise HTTPException(status_code=404, detail="Import job not found")
-    if job.status in ("pending", "running"):
-        raise HTTPException(status_code=400, detail=f"Cannot delete job with status '{job.status}'")
-    await db.delete(job)
-    await db.commit()
-    return {"status": "ok"}
+    engine = TaskEngine(db)
+    try:
+        await engine.delete_import(job_id)
+        return {"status": "ok"}
+    except TaskEngineError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 # ── Task Engine endpoints ─────────────────────────────────────────
 

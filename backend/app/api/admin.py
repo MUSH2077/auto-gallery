@@ -161,7 +161,7 @@ async def import_progress():
         jobs = result.scalars().all()
         return {
             "running": sum(1 for j in jobs if j.status == "running"),
-            "pending": sum(1 for j in jobs if j.status == "pending"),
+            "enqueued": sum(1 for j in jobs if j.status == "enqueued"),
             "complete": sum(1 for j in jobs if j.status == "complete"),
             "failed": sum(1 for j in jobs if j.status == "failed"),
             "recent": [{"id": str(j.id), "status": j.status, "error": (j.error_log or "")[:200]} for j in jobs[:5]],

@@ -21,7 +21,7 @@ from app.services.subscription_enqueue import enqueue_subscription_source_sync
 
 router = APIRouter(dependencies=[RequireAdmin])
 
-RUNNING_STATUSES = {"pending", "downloading", "downloaded", "importing"}
+RUNNING_STATUSES = {"enqueued", "downloading", "downloaded", "importing"}
 
 
 def _provider_payload(ss: SubscriptionSource) -> dict:
