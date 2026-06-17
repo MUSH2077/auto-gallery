@@ -2,7 +2,7 @@
 
 interface PipelineStage {
   name: string;
-  status: "pending" | "active" | "complete" | "failed";
+  status: string;
 }
 
 const STAGE_LABELS: Record<string, string> = {
