@@ -659,25 +659,31 @@ async def run_import_job(import_job_id: str):
         async with async_session() as db:
             ij = await db.get(ImportJob, job_uuid)
             if ij:
-                # Check if this is a first failure — if so, retry once
-                already_retried = ij.error_log and "RETRY_ATTEMPT" in (ij.error_log or "")
-                if not already_retried:
-                    transition_import_job(ij, "pending", f"RETRY_ATTEMPT\n{error_text}")
+                # Retry up to max_import_retries times (default 3)
+                retry_count = (ij.import_retry_count or 0) + 1
+                max_retries = ij.max_import_retries or 3
+                if retry_count <= max_retries:
+                    ij.import_retry_count = retry_count
+                    transition_import_job(ij, "enqueued",
+                        f"RETRY {retry_count}/{max_retries}\n{error_text}")
                     await db.commit()
-                    # Re-enqueue with backoff
+                    # Re-enqueue with backoff (60s * retry_count)
                     try:
                         from rq import Queue
                         from datetime import timedelta
                         from app.services.redis_client import get_redis
+                        backoff_seconds = 60 * retry_count
                         Queue(name="imports", connection=get_redis()).enqueue_in(
-                            timedelta(seconds=60),
+                            timedelta(seconds=backoff_seconds),
                             "app.jobs.import_runner.run_import_job", import_job_id,
                             job_timeout=7200)
-                        logger.info("Re-enqueued import job %s for retry", import_job_id)
+                        logger.info("Re-enqueued import job %s for retry %d/%d",
+                                   import_job_id, retry_count, max_retries)
                     except Exception:
                         logger.warning("Failed to enqueue import retry for %s", import_job_id, exc_info=True)
                 else:
-                    transition_import_job(ij, "failed", error_text)
+                    transition_import_job(ij, "failed",
+                        f"Exhausted {max_retries} retries\n{error_text}")
                     await db.commit()
 
 async def cleanup_metadata_jsons(download_root: str = None):

@@ -68,20 +68,36 @@ async def delete_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{job_id}/pause")
-async def pause_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
-    svc = DownloadService(db)
+async def pause_job(
+    job_id: UUID,
+    data: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+    operator: str = Depends(get_admin_key),
+):
+    """Pause a download job. Sends SIGTERM to the running process group."""
+    engine = TaskEngine(db)
     try:
-        return await svc.pause_job(job_id)
-    except ValueError as e:
+        note = data.get("note") if data else None
+        result = await engine.pause_download(job_id, note=note, operator=operator)
+        await db.commit()
+        return result
+    except TaskEngineError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/{job_id}/resume")
-async def resume_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
-    svc = DownloadService(db)
+async def resume_job(
+    job_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    operator: str = Depends(get_admin_key),
+):
+    """Resume a paused download job by re-enqueuing it."""
+    engine = TaskEngine(db)
     try:
-        return await svc.resume_job(job_id)
-    except ValueError as e:
+        result = await engine.resume_download(job_id, operator=operator)
+        await db.commit()
+        return result
+    except TaskEngineError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
