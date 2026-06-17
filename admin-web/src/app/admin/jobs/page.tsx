@@ -42,7 +42,7 @@ function ActiveIndicator({ status }: { status: string }) {
     status === "failed" ? "bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400" :
     status === "stale" ? "bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400" :
     status === "paused" ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400" :
-    status === "enqueued" || status === "pending" ? "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400" :
+    status === "enqueued" || (status === "enqueued" || status === "pending") ? "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400" :
     status === "cancelled" ? "bg-gray-200 dark:bg-slate-600 text-gray-400 dark:text-gray-500 line-through" :
     "bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-gray-400";
   if (isActive) {
@@ -195,7 +195,7 @@ function JobDetailDrawer({
           <div className="space-y-4">
             <div className="flex flex-wrap gap-2">
               <button onClick={() => onRetryDownload(dl.id)} className="btn-primary text-xs">{t("jobs.retry")}</button>
-              {["pending", "downloading"].includes(dl.status) && <button onClick={() => onPauseDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.pause")}</button>}
+              {["enqueued","downloading","downloaded","importing","failed","stale"].includes(dl.status) && <button onClick={() => onPauseDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.pause")}</button>}
               {dl.status === "paused" && <button onClick={() => onResumeDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.resume")}</button>}
               <button onClick={() => onDeleteDownload(dl.id)} className="btn-danger text-xs">{t("jobs.del")}</button>
             </div>
@@ -619,7 +619,7 @@ function JobsContent() {
                         <button onClick={() => setExpandedLog(expandedLog === j.id ? null : j.id)} className="text-xs text-orange-500 hover:underline">{expandedLog === j.id ? "▲" : t("downloads.log")}</button>
                       )}
                       <button onClick={() => setExpandedImports(expandedImports === j.id ? null : j.id)} className="text-xs text-purple-500 hover:underline">{t("jobs.imports")}</button>
-                      {(j.status === "pending" || j.status === "downloading") && (
+                      {["enqueued","downloading","downloaded","importing","failed","stale"].includes(j.status) && (
                         <button onClick={() => pauseDL.mutate(j.id)} disabled={pauseDL.isPending} className="text-xs text-yellow-600 hover:underline">{t("jobs.pause")}</button>
                       )}
                       {j.status === "paused" && (
