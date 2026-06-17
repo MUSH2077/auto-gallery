@@ -42,23 +42,17 @@ export function useJobWebSocket(options?: UseWsOptions) {
 
       ws.onopen = () => setConnected(true);
 
-      let shouldReconnect = true;
+      ws.onopen = () => setConnected(true);
 
-      ws.onclose = (event) => {
+      ws.onclose = () => {
         setConnected(false);
-        // Don't retry on auth failures (4001 = invalid token, 4003 = not admin)
-        if (event.code === 4001 || event.code === 4003) {
-          shouldReconnect = false;
-          return;
-        }
-        if (shouldReconnect) {
-          reconnectTimer.current = setTimeout(connect, 5000);
-        }
+        // Don't retry — polling is the fallback. WebSocket will reconnect
+        // on next page navigation or manual refresh only.
       };
 
       ws.onerror = () => {
-        shouldReconnect = false;
-        ws.close();
+        // Connection failed — close silently, rely on polling
+        setConnected(false);
       };
 
       ws.onmessage = (event) => {
