@@ -2,12 +2,23 @@
 WebSocket connection manager — bridges Redis pub/sub events to
 browser WebSocket connections for real-time task status updates.
 
+Security model (single-tenant NAS):
+    The current deployment is single-admin. All authenticated clients
+    receive all task events — there is no per-user event filtering.
+    The connection manager does track which username each WebSocket
+    belongs to, so event-scoping can be added later by checking
+    ``connection_usernames[client_id]`` against an event's ``user`` field.
+
+If multi-tenancy is added:
+    1. Add a ``user`` field to published events
+    2. In ``broadcast()``, skip clients whose username doesn't match
+
 Architecture::
 
     Redis pub/sub ──► ConnectionManager (background thread)
                           │
-                          ├──► WebSocket client A
-                          ├──► WebSocket client B
+                          ├──► WebSocket client A (user: admin)
+                          ├──► WebSocket client B (user: admin)
                           └──► WebSocket client C
 """
 
@@ -29,26 +40,39 @@ logger = logging.getLogger(__name__)
 
 
 class ConnectionManager:
-    """Manages WebSocket connections and forwards Redis pub/sub events."""
+    """Manages WebSocket connections and forwards Redis pub/sub events.
+
+    Currently broadcasts all events to all authenticated clients — this is
+    intentional for the single-admin NAS deployment. Per-user scoping can be
+    added later via ``connection_usernames``.
+    """
 
     def __init__(self):
         self._connections: dict[str, WebSocket] = {}
+        self._connection_usernames: dict[str, str] = {}
         self._lock = threading.Lock()
         self._running = False
 
-    async def connect(self, client_id: str, websocket: WebSocket) -> None:
+    async def connect(self, client_id: str, websocket: WebSocket, *, username: str = "unknown") -> None:
         await websocket.accept()
         with self._lock:
             self._connections[client_id] = websocket
-        logger.info("WS client %s connected (%d total)", client_id, len(self._connections))
+            self._connection_usernames[client_id] = username
+        logger.info("WS client %s (user=%s) connected (%d total)", client_id, username, len(self._connections))
         await websocket.send_json({"type": "connected", "client_id": client_id})
 
     async def disconnect(self, client_id: str) -> None:
         with self._lock:
             self._connections.pop(client_id, None)
+            self._connection_usernames.pop(client_id, None)
         logger.info("WS client %s disconnected (%d remaining)", client_id, len(self._connections))
 
     async def broadcast(self, message: dict[str, Any]) -> None:
+        """Send a message to all connected clients.
+
+        Currently broadcasts to ALL clients (single-tenant model).
+        To add per-user scoping: check message.user against self._connection_usernames.
+        """
         disconnected: list[str] = []
         with self._lock:
             clients = list(self._connections.items())

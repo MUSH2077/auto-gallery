@@ -1,12 +1,15 @@
 """
 WebSocket endpoint for real-time task status updates.
 
-Clients connect with a JWT token as a query parameter::
+Authentication uses the JWT cookie (``ag_token``) set by the admin-web login
+flow. The browser sends this cookie automatically on the WebSocket upgrade
+request, avoiding token leakage in server access logs that would occur with
+query-parameter tokens.
 
-    ws://host:8000/api/v1/ws?token=<jwt>
-
-The server broadcasts all task events (status changes, progress updates,
-heartbeats) to every connected client.
+The server broadcasts all task events to every authenticated client.
+This is intentional — the current deployment is single-admin NAS and the
+global event stream is the simplest correct model. If multi-tenant support
+is added in the future, scope broadcasts by user/tenant.
 """
 
 from __future__ import annotations
@@ -14,29 +17,33 @@ from __future__ import annotations
 import logging
 from uuid import uuid4
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.auth import decode_access_token_payload
+from app.auth import decode_access_token_payload, RequireAdmin
 from app.services.ws_manager import manager
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[RequireAdmin])
 
 
 @router.websocket("/ws")
-async def websocket_endpoint(
-    websocket: WebSocket,
-    token: str = Query(...),
-):
-    """Real-time task event stream. Requires JWT auth via query parameter."""
+async def websocket_endpoint(websocket: WebSocket):
+    """Real-time task event stream. Authenticated via JWT cookie."""
+    # Read token from cookie (set by admin-web login, stored as ag_token)
+    token = websocket.cookies.get("ag_token")
+    if not token:
+        await websocket.close(code=4001, reason="Missing auth cookie")
+        return
+
     payload = decode_access_token_payload(token)
     if not payload:
         await websocket.close(code=4001, reason="Invalid or expired token")
         return
 
+    username = payload.get("sub", "unknown")
     client_id = str(uuid4())
-    await manager.connect(client_id, websocket)
+    await manager.connect(client_id, websocket, username=username)
 
     try:
         while True:
