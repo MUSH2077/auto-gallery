@@ -14,8 +14,10 @@ from app.api.import_jobs import router as import_jobs_router
 from app.api.auth_api import router as auth_router
 from app.api.repositories import router as repositories_router
 from app.api.curation import router as curation_router
+from app.api.ws import router as ws_router
 
 api_router = APIRouter(prefix="/api/v1")
+api_router.include_router(ws_router, tags=["websocket"])
 api_router.include_router(auth_router, prefix="/auth", tags=["auth"])
 api_router.include_router(system_router, tags=["system"])
 api_router.include_router(sources_router, prefix="/sources", tags=["sources"])
