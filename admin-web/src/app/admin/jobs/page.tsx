@@ -604,7 +604,11 @@ function JobsContent() {
                       </Link>
                     </div>
                     <span className="min-w-0 flex-1 truncate text-xs text-[#57606a] dark:text-[#8b949e]" title={j.source_url}>{j.source_url}</span>
-                    {/* Download progress from WebSocket or polling */}
+                    {downloadProgress[j.id] ? (
+                      <RealProgressBar progress={downloadProgress[j.id]} />
+                    ) : active ? (
+                      <div className="w-20 h-1.5 bg-gray-200 dark:bg-slate-600 rounded-full overflow-hidden shrink-0"><div className="h-full bg-blue-500 rounded-full animate-pulse" style={{ width: "60%" }} /></div>
+                    ) : null}
                     <PipelineVisualizer stages={downloadPipeline[j.id]?.stages ?? []} />
                     {active ? (
                       <Elapsed since={j.created_at} active={true} />
