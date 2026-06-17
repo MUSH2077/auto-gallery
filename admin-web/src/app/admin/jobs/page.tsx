@@ -6,7 +6,8 @@ import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, DownloadJob, ImportJob, queryKeys } from "@/lib/api";
-import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge } from "@/components";
+import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, PipelineVisualizer, BatchByFilter } from "@/components";
+import { useJobWebSocket } from "@/lib/useWebSocket";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 
 
@@ -14,7 +15,7 @@ const REFETCH_ACTIVE_MS = 3000;
 const REFETCH_IDLE_MS = 10000;
 const PAGE_LIMIT = 200;
 
-const STATUS_OPTIONS = ["", "pending", "downloading", "paused", "downloaded", "importing", "complete", "failed", "stale"];
+const STATUS_OPTIONS = ["", "enqueued", "downloading", "paused", "downloaded", "importing", "complete", "failed", "stale", "cancelled"];
 const IMPORT_STATUS_OPTIONS = ["", "pending", "running", "complete", "failed", "stale"];
 const SOURCE_OPTIONS = ["", "pixiv", "x", "iwara", "danbooru", "pinterest", "lofter", "weibo", "bilibili"];
 
@@ -31,10 +32,7 @@ function Elapsed({ since, active }: { since: string; active: boolean }) {
   return <span className="text-xs text-blue-500 font-mono">{Math.floor(seconds / 3600)}h {Math.floor((seconds % 3600) / 60)}m</span>;
 }
 
-function ProgressBar({ active }: { active: boolean }) {
-  if (!active) return null;
-  return <div className="w-20 h-1.5 bg-gray-200 dark:bg-slate-600 rounded-full overflow-hidden shrink-0"><div className="h-full bg-blue-500 rounded-full animate-pulse" style={{ width: "60%" }} /></div>;
-}
+// ProgressBar replaced by RealProgressBar from components — data-driven with actual percent/current/total
 
 function ActiveIndicator({ status }: { status: string }) {
   const t = useT();
@@ -270,6 +268,25 @@ function JobsContent() {
   const fmt = useI18nFormat();
   const toast = useToast();
   const qc = useQueryClient();
+  const [downloadProgress, setDownloadProgress] = useState<Record<string, { stage: string; current: number; total: number; percent: number }>>({});
+  const [downloadPipeline, setDownloadPipeline] = useState<Record<string, { current_stage: string; stages: Array<{ name: string; status: string }> }>>({});
+
+  // WebSocket: invalidate queries on status change, update progress on progress events
+  useJobWebSocket({
+    onStatusChange: (msg) => {
+      qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+      qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
+      qc.invalidateQueries({ queryKey: ["workbench"] });
+      if (msg.new_status) {
+        toast.info(`${msg.task_id.slice(0, 8)}: ${msg.old_status} → ${msg.new_status}`);
+      }
+    },
+    onProgress: (msg) => {
+      if (msg.task_type === "download" && msg.progress) {
+        setDownloadProgress(prev => ({ ...prev, [msg.task_id]: msg.progress as any }));
+      }
+    },
+  });
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
@@ -446,9 +463,10 @@ function JobsContent() {
     if (!downloads.data) return [];
     const allowed: Record<string, string[]> = {
       retry: ["failed", "stale", "downloading", "complete"],
-      pause: ["pending", "downloading"],
+      pause: ["enqueued", "downloading", "downloaded", "importing", "failed", "stale"],
       resume: ["paused"],
-      delete: ["pending", "downloading", "downloaded", "failed", "stale", "complete", "paused"],
+      delete: ["enqueued", "downloading", "downloaded", "failed", "stale", "complete", "paused", "cancelled"],
+      cancel: ["enqueued", "downloading", "downloaded", "importing", "failed", "stale", "paused"],
     };
     const ok = allowed[action] || [];
     return downloads.data.filter((j: any) => selected.has(j.id) && ok.includes(j.status)).map((j: any) => j.id);
@@ -458,6 +476,13 @@ function JobsContent() {
     const eligible = getEligibleIds(action);
     if (eligible.length === 0) { toast.warning({ message: t("common.no_eligible") }); return; }
     if (eligible.length < selected.size && !confirm(t("common.partial_selected"))) return;
+    if (action === "cancel") {
+      // Cancel each job individually (different API)
+      Promise.all(eligible.map((id: string) => api.cancelDownloadJob(id).catch(() => null)))
+        .then(() => { qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); toast.info(t("jobs.batch_result", { succeeded: eligible.length, failed: 0 })); });
+      setSelected(new Set()); setSelectAll(false);
+      return;
+    }
     batchDL.mutate({ ids: eligible, action });
   };
 
@@ -471,6 +496,7 @@ function JobsContent() {
       <PageHeader title={t("jobs.title")} description={t("jobs.desc")}>
         <div className="flex flex-wrap gap-2">
           <button onClick={refreshAll} className="btn-ghost text-xs">{t("jobs.refresh")}</button>
+          <BatchByFilter />
           <button onClick={() => handleClear(["failed", "stale"])} className="btn-danger text-xs">{t("jobs.clear_failed")}</button>
           <button onClick={() => handleClear(["complete"])} className="btn-ghost text-xs">{t("jobs.clear_complete")}</button>
           <button onClick={() => killStuck.mutate()} disabled={killStuck.isPending} className="btn-ghost text-xs">{t("jobs.kill_stuck")}</button>
@@ -528,6 +554,7 @@ function JobsContent() {
             <button onClick={() => handleBatch("pause")} className="px-2 py-0.5 text-xs bg-yellow-500 text-white rounded hover:bg-yellow-600">{t("jobs.batch_pause")}</button>
             <button onClick={() => handleBatch("resume")} className="px-2 py-0.5 text-xs bg-green-500 text-white rounded hover:bg-green-600">{t("jobs.batch_resume")}</button>
             <button onClick={() => handleBatch("retry")} className="px-2 py-0.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600">{t("jobs.batch_retry")}</button>
+            <button onClick={() => handleBatch("cancel")} className="px-2 py-0.5 text-xs bg-gray-500 text-white rounded hover:bg-gray-600">{t("jobs.batch_cancel")}</button>
             <button onClick={() => handleBatch("delete")} className="px-2 py-0.5 text-xs bg-red-500 text-white rounded hover:bg-red-600">{t("jobs.batch_delete")}</button>
           </div>
         )}
@@ -570,8 +597,8 @@ function JobsContent() {
                       </Link>
                     </div>
                     <span className="min-w-0 flex-1 truncate text-xs text-[#57606a] dark:text-[#8b949e]" title={j.source_url}>{j.source_url}</span>
-                    <ProgressBar active={active} />
-                    <JobLifecycle status={j.status} />
+                    {/* Download progress from WebSocket or polling */}
+                    <PipelineVisualizer stages={downloadPipeline[j.id]?.stages ?? []} />
                     {active ? (
                       <Elapsed since={j.created_at} active={true} />
                     ) : (
