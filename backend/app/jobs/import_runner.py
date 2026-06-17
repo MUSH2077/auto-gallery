@@ -341,6 +341,23 @@ async def run_import_job(import_job_id: str):
                 continue
 
             stats["works"] += 1
+
+            # ── Progress reporting (every 5 works) ──
+            if stats["works"] % 5 == 0:
+                total_works = len(groups)
+                progress = {
+                    "stage": "importing",
+                    "current": stats["works"],
+                    "total": total_works,
+                    "percent": round(stats["works"] / total_works * 100, 1) if total_works else 0,
+                    "assets": stats["assets"],
+                }
+                try:
+                    import json as _json
+                    get_redis().setex(f"task:{import_job_id}:progress", 30, _json.dumps(progress))
+                    TaskEventPublisher.publish_progress(import_job_id, "import", progress)
+                except Exception:
+                    pass
             if len(asset_files) > 1:
                 stats["multi_page"] += 1
             stats["assets"] += len(asset_files)
@@ -590,6 +607,32 @@ async def run_import_job(import_job_id: str):
                     await svc._batch_index_works(meili_docs)
                 except Exception:
                     logger.warning("Failed to flush remaining Meilisearch batch", exc_info=True)
+
+        # Stop control listener + heartbeat
+        heartbeat.stop()
+        listener.stop()
+
+        # Determine final status based on control signal
+        if listener.command == "pause":
+            async with async_session() as db:
+                ij = await db.get(ImportJob, job_uuid)
+                if ij:
+                    ij.status = "paused"
+                    if listener.reason:
+                        ij.user_note = listener.reason
+                    await db.commit()
+            logger.info("Import %s paused after %d works", import_job_id, stats["works"])
+            return
+        elif listener.command == "cancel":
+            async with async_session() as db:
+                ij = await db.get(ImportJob, job_uuid)
+                if ij:
+                    ij.status = "cancelled"
+                    if listener.reason:
+                        ij.user_note = listener.reason
+                    await db.commit()
+            logger.info("Import %s cancelled after %d works", import_job_id, stats["works"])
+            return
 
         # Mark import complete and update parent download_job
         async with async_session() as db:

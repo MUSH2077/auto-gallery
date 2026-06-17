@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -73,7 +74,42 @@ async def lifespan(app: FastAPI):
         await ensure_admin_user()
     except Exception as e:
         logger.warning("ensure_admin_user failed (may be first run before migration)", error=str(e))
+
+    # ── Start WebSocket Redis listener ──
+    from app.services.ws_manager import manager as ws_manager
+    ws_task = asyncio.create_task(ws_manager.start_redis_listener())
+    logger.info("WebSocket Redis listener started")
+
+    # ── Start stale detection background task ──
+    async def stale_detection_loop():
+        while True:
+            await asyncio.sleep(30)
+            try:
+                async with async_session() as db:
+                    from app.services.task_engine import TaskEngine
+                    engine = TaskEngine(db)
+                    count = await engine.detect_stale_tasks()
+                    if count:
+                        logger.info("Stale detection: marked %d tasks as stale", count)
+            except Exception:
+                logger.warning("Stale detection cycle failed", exc_info=True)
+
+    stale_task = asyncio.create_task(stale_detection_loop())
+    logger.info("Stale detection background task started")
+
     yield
+
+    # ── Cleanup ──
+    ws_task.cancel()
+    stale_task.cancel()
+    try:
+        await ws_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await stale_task
+    except asyncio.CancelledError:
+        pass
     await engine.dispose()
     logger.info("backend stopped")
 
