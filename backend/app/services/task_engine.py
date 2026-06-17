@@ -432,7 +432,7 @@ class TaskEngine:
     ) -> dict[str, Any]:
         """Apply an action to all tasks matching the given filters.
 
-        ``filters`` may contain: ``source``, ``status``, ``subscription_id``.
+        ``filters`` may contain: ``source``, ``status``, ``subscription_id``, ``ids``.
         ``action`` must be: ``retry``, ``pause``, ``resume``, ``cancel``, or ``delete``.
         """
         valid_actions = {"retry", "pause", "resume", "cancel", "delete"}
@@ -448,6 +448,9 @@ class TaskEngine:
         else:
             raise TaskEngineError(f"Invalid task_type '{task_type}'.")
 
+        if filters.get("ids"):
+            ids = [UUID(i) for i in filters["ids"]]
+            stmt = stmt.where(model.id.in_(ids))
         if filters.get("status"):
             stmt = stmt.where(model.status == filters["status"])
         if filters.get("source") and task_type == "download":
