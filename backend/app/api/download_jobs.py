@@ -102,20 +102,31 @@ async def resume_job(
 
 
 @router.post("/batch")
-async def batch_jobs(data: dict, db: AsyncSession = Depends(get_db)):
-    """Batch action on multiple download jobs.
+async def batch_jobs(
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    operator: str = Depends(get_admin_key),
+):
+    """Batch action on multiple download jobs via TaskEngine.
 
-    Accepts: {ids: [UUID, ...], action: "retry"|"delete"|"pause"|"resume"}
+    Accepts: {ids: [UUID, ...], action: "retry"|"delete"|"pause"|"resume"|"cancel"}
     """
     ids_raw = data.get("ids", [])
     action = data.get("action", "")
+    note = data.get("note")
     if not ids_raw or not isinstance(ids_raw, list):
         raise HTTPException(status_code=400, detail="ids list is required")
-    if action not in ("retry", "delete", "pause", "resume"):
-        raise HTTPException(status_code=400, detail="action must be retry/delete/pause/resume")
+    if action not in ("retry", "delete", "pause", "resume", "cancel"):
+        raise HTTPException(status_code=400, detail="action must be retry/delete/pause/resume/cancel")
     ids = [UUID(i) for i in ids_raw]
-    svc = DownloadService(db)
-    return await svc.batch_action(ids, action)
+    engine = TaskEngine(db)
+    # Reuse batch_by_filter with an explicit ID list
+    result = await engine.batch_by_filter(
+        "download", {"ids": [str(i) for i in ids]}, action,
+        operator=operator, note=note,
+    )
+    await db.commit()
+    return result
 
 
 @router.post("/clear")
