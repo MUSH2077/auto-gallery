@@ -1621,6 +1621,23 @@ const zh: Record<string, string> = {
   "notifications.desc": "所有系统通知和任务活动。",
 };
 
+  "common.live": "在线",
+  "common.disconnected": "断开",
+  "common.select_item": "选择项目",
+  "common.dismiss": "忽略",
+  "creators.source_url_label": "来源 URL",
+  "creators.source_url_placeholder": "粘贴 URL 自动提取创作者名…",
+  "creators.display_name_optional": "可选显示名",
+  "jobs.no_jobs": "无任务",
+  "jobs.sync_partial": "同步部分失败",
+  "jobs.repositories_label": "仓库",
+  "jobs.enabled_label": "已启用",
+  "jobs.last_sync_label": "上次同步",
+  "search.results_count": "{count} 个结果",
+  "settings.language_zh": "中文",
+  "settings.language_en": "English",
+  "auth.login_failed": "登录失败",
+  "auth.session_refresh_failed": "会话刷新失败",
 const en: Record<string, string> = {};
 
 function buildEn(zh: Record<string, string>): Record<string, string> {
@@ -3217,7 +3234,24 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
 }
 
 const enBuilt = buildEn(zh);
-const dictionaries: Record<Lang, Record<string, string>> = { zh, en: enBuilt };
+const dictionaries: Record<Lang, Record<string, string>> = { zh, en: enBuilt     "common.live": "Live",
+      "common.disconnected": "Disconnected",
+      "common.select_item": "Select item",
+      "common.dismiss": "Dismiss",
+      "creators.source_url_label": "Source URL",
+      "creators.source_url_placeholder": "Paste URL to auto-detect creator name…",
+      "creators.display_name_optional": "Display name (optional)",
+      "jobs.no_jobs": "No jobs",
+      "jobs.sync_partial": "Sync partially failed",
+      "jobs.repositories_label": "Repositories",
+      "jobs.enabled_label": "Enabled",
+      "jobs.last_sync_label": "Last sync",
+      "search.results_count": "{count} results",
+      "settings.language_zh": "中文",
+      "settings.language_en": "English",
+      "auth.login_failed": "Login failed",
+      "auth.session_refresh_failed": "Failed to refresh session",
+  };
 
 interface I18nContextType {
   lang: Lang;
