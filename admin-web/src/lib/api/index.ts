@@ -178,6 +178,24 @@ export const api = {
   getDownloadJob: (id: string) =>
     request<T.DownloadJob>(`/api/v1/download-jobs/${id}`),
 
+  cancelDownloadJob: (id: string, note?: string) =>
+    request<{ job_id: string; status: string }>(`/api/v1/download-jobs/${id}/cancel`, {
+      method: "POST",
+      body: note ? { note } : undefined,
+    }),
+
+  batchDownloadJobsByFilter: (filters: Record<string, string>, action: string, note?: string) =>
+    request<{ total_matched: number; succeeded: number; failed: number }>(`/api/v1/download-jobs/batch-by-filter`, {
+      method: "POST",
+      body: { filters, action, note },
+    }),
+
+  getDownloadProgress: (id: string) =>
+    request<{ job_id: string; stage: string; current: number; total: number; percent: number }>(`/api/v1/download-jobs/${id}/progress`),
+
+  getDownloadPipeline: (id: string) =>
+    request<{ job_id: string; current_stage: string; stages: Array<{ name: string; status: string }>; progress: Record<string, unknown> | null }>(`/api/v1/download-jobs/${id}/pipeline`),
+
   createDownloadJob: (data: { subscription_id: string; subscription_source_id?: string; source: string; source_url: string }) =>
     request<{ job_id: string; status: string }>("/api/v1/download-jobs", { method: "POST", body: JSON.stringify(data) }),
 

@@ -27,11 +27,10 @@ export function useJobWebSocket(options?: UseWsOptions) {
 
   const connect = useCallback(() => {
     if (typeof window === "undefined") return;
-    const token = localStorage.getItem("ag_token");
-    if (!token) return;
-
+    // Auth is via JWT cookie (ag_token) — browser sends it automatically
+    // on the WebSocket upgrade request. No token in URL needed.
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/api/v1/ws?token=${token}`;
+    const wsUrl = `${protocol}//${window.location.host}/api/v1/ws`;
 
     try {
       const ws = new WebSocket(wsUrl);
