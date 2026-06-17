@@ -104,11 +104,4 @@ async def ensure_admin_user() -> None:
             )
             session.add(admin)
             await session.commit()
-        else:
-            await session.execute(
-                update(User)
-                .where(User.username == "admin")
-                .where(User.must_change_password == False)  # noqa: E712
-                .values(must_change_password=True)
-            )
-            await session.commit()
+        # Once password is changed, never force-reset on restart
