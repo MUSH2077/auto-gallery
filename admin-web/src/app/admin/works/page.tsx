@@ -566,14 +566,14 @@ function WorksContent() {
       {confirmAction && (
         <ConfirmDialog
           open={!!confirmAction}
-          title={confirmAction.type === "trash" ? t("works.trash") : t("works.purge")}
-          message={confirmAction.type === "trash"
+          title={confirmAction?.type === "trash" ? t("works.trash") : t("works.purge")}
+          message={confirmAction?.type === "trash"
             ? t("works.purge_confirm", { count: confirmAction.ids?.length ?? 0 })
             : t("works.purge_confirm")}
           onConfirm={() => {
-            if (confirmAction.type === "trash" && confirmAction.ids) {
+            if (confirmAction?.type === "trash" && confirmAction.ids) {
               batchTrash.mutate(confirmAction.ids);
-            } else if (confirmAction.id) {
+            } else if (confirmAction?.id) {
               purgeWork.mutate(confirmAction.id);
             }
             setConfirmAction(null);
