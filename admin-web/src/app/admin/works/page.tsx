@@ -4,7 +4,7 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
 import { api, queryKeys, WorkListItem } from "@/lib/api";
-import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
+import { PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar } from "@/components";
 
 function Img({ assetId, alt, className }: { assetId: string | undefined; alt: string; className?: string }) {
   const t = useT();
@@ -305,7 +305,7 @@ function WorksContent() {
   };
 
   return (
-    <main className="max-w-7xl mx-auto p-6">
+    <PageShell>
       <PageHeader title={t("works.title")} description={t("works.count", "0 works").replace("{count}", String(works.data?.total ?? 0))} />
 
       {/* Search & Filters */}
@@ -441,22 +441,27 @@ function WorksContent() {
       </div>
 
       {works.data && works.data.items?.length > 0 && curationVisibility === "visible" && (
-        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-[#d8dee4] bg-white px-3 py-2 dark:border-[#30363d] dark:bg-slate-800" aria-live="polite">
-          <button onClick={toggleSelectPage} className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-xs font-medium hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
-            {pageAllSelected ? t("works.deselect_page") : t("works.select_page")}
-          </button>
-          {selectedCount > 0 && (
-            <>
-              <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("works.selected_count", { count: selectedCount })}</span>
-              <button onClick={() => setSelectedWorkIds(new Set())} className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-xs hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
-                {t("works.clear_selection")}
-              </button>
-              <button onClick={moveSelectedToTrash} disabled={batchTrash.isPending} className="rounded-md bg-[#cf222e] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#a40e26] disabled:opacity-50">
-                {batchTrash.isPending ? t("works.moving_to_trash") : t("works.move_to_trash")}
-              </button>
-            </>
-          )}
-        </div>
+        selectedCount > 0 ? (
+          <SelectionBar
+            count={selectedCount}
+            label={t("works.selected_count", { count: selectedCount })}
+            clearLabel={t("works.clear_selection")}
+            onClear={() => setSelectedWorkIds(new Set())}
+          >
+            <button onClick={toggleSelectPage} className="btn-ghost text-xs">
+              {pageAllSelected ? t("works.deselect_page") : t("works.select_page")}
+            </button>
+            <button onClick={moveSelectedToTrash} disabled={batchTrash.isPending} className="btn-danger text-xs disabled:opacity-50">
+              {batchTrash.isPending ? t("works.moving_to_trash") : t("works.move_to_trash")}
+            </button>
+          </SelectionBar>
+        ) : (
+          <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-[#d8dee4] bg-white px-3 py-2 dark:border-[#30363d] dark:bg-[#161b22]" aria-live="polite">
+            <button onClick={toggleSelectPage} className="btn-ghost text-xs">
+              {pageAllSelected ? t("works.deselect_page") : t("works.select_page")}
+            </button>
+          </div>
+        )
       )}
 
       {/* Loading */}
@@ -559,7 +564,7 @@ function WorksContent() {
           <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!works.data || (page + 1) * limit >= works.data.total} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("works.next")}</button>
         </div>
       )}
-    </main>
+    </PageShell>
   );
 }
 

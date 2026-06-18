@@ -9,12 +9,23 @@ from app.database import get_db
 from app.models.import_job import ImportJob
 from app.schemas.import_job import ImportJobRead
 from app.services.job_state import transition_import_job
+from app.services.job_progress import import_progress_from_job
 from app.services.progress import ProgressTracker
 from app.services.task_engine import TaskEngine, TaskEngineError
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[RequireAdmin])
+
+
+def _import_job_payload(job: ImportJob) -> dict:
+    payload = ImportJobRead.model_validate(job).model_dump(mode="json")
+    progress = ProgressTracker.get(str(job.id))
+    if progress:
+        payload["progress_data"] = progress
+    else:
+        payload["progress_data"] = import_progress_from_job(job)
+    return payload
 
 
 @router.post("/scan")
@@ -93,7 +104,7 @@ async def list_import_jobs(
     stmt = stmt.order_by(ImportJob.created_at.desc()).offset(offset).limit(limit)
     result = await db.execute(stmt)
     jobs = list(result.scalars().all())
-    return {"total": total, "items": [ImportJobRead.model_validate(j).model_dump(mode="json") for j in jobs]}
+    return {"total": total, "items": [_import_job_payload(j) for j in jobs]}
 
 
 @router.get("/{job_id}")
@@ -102,7 +113,7 @@ async def get_import_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
     job = result.scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="Import job not found")
-    return ImportJobRead.model_validate(job).model_dump(mode="json")
+    return _import_job_payload(job)
 
 
 @router.post("/{job_id}/retry")
@@ -188,4 +199,3 @@ async def get_import_progress(job_id: UUID):
     if not progress:
         raise HTTPException(status_code=404, detail="No progress data available")
     return {"job_id": str(job_id), **progress}
-

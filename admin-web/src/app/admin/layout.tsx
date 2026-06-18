@@ -68,31 +68,29 @@ function AdminNav() {
   const t = useT();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const links = [
-    ["/admin", t("nav.dashboard")],
-    ["/admin/sources", t("nav.sources")],
-    ["/admin/creators", t("nav.creators")],
-    ["/admin/subscriptions", t("nav.subscriptions")],
-    ["/admin/jobs", t("nav.jobs")],
-    ["/admin/notifications", t("notifications.title")],
-    ["/admin/works", t("nav.works")],
-    ["/admin/curation", t("nav.curation", "Curation")],
-    ["/admin/tags", t("nav.tags")],
-    ["/admin/scheduler", t("nav.scheduler")],
-    ["/admin/reference/danbooru", t("nav.danbooru")],
-    ["/admin/data-mgmt", t("nav.datamgmt")],
-    ["/admin/settings", t("nav.settings")],
+  const groups = [
+    { label: t("nav.dashboard"), links: [["/admin", t("nav.dashboard")]] },
+    { label: t("nav.library", "图库"), links: [["/admin/works", t("nav.works")], ["/admin/tags", t("nav.tags")], ["/admin/curation", t("nav.curation", "Curation")]] },
+    { label: t("nav.sources"), links: [["/admin/sources", t("nav.sources")], ["/admin/creators", t("nav.creators")], ["/admin/subscriptions", t("nav.subscriptions")], ["/admin/reference/danbooru", t("nav.danbooru")]] },
+    { label: t("nav.operations", "任务"), links: [["/admin/jobs", t("nav.jobs")], ["/admin/scheduler", t("nav.scheduler")], ["/admin/notifications", t("notifications.title")]] },
+    { label: t("nav.admin", "管理"), links: [["/admin/data-mgmt", t("nav.datamgmt")], ["/admin/settings", t("nav.settings")]] },
   ];
+  const links = groups.flatMap((group) => group.links);
+  const isActive = (href: string) => pathname === href || (href !== "/admin" && pathname.startsWith(href));
 
   return (
     <nav className="bg-[#24292f] dark:bg-[#010409] text-white px-4 sm:px-6 py-3 border-b border-[#57606a]/30 dark:border-[#30363d]">
       <div className="flex items-center gap-4 text-sm">
         <Link href="/admin" className="font-semibold text-base shrink-0 tracking-tight">auto-gallery</Link>
         {/* Desktop links */}
-        <div className="hidden md:flex items-center gap-3 flex-1 flex-wrap">
-          {links.map(([href, label]) => (
-            <Link key={href} href={href}
-                className={`rounded-md px-2 py-1 transition-colors ${pathname === href || (href !== "/admin" && pathname.startsWith(href)) ? "bg-white/10 text-white font-medium" : "text-gray-300 hover:bg-white/10 hover:text-white"}`}>{label}</Link>
+        <div className="hidden md:flex items-center gap-2 flex-1 flex-wrap">
+          {groups.map((group) => (
+            <div key={group.label} className="flex items-center gap-1 rounded-lg bg-white/[0.03] px-1 py-1">
+              {group.links.map(([href, label]) => (
+                <Link key={href} href={href}
+                    className={`rounded-md px-2 py-1 transition-colors ${isActive(href) ? "bg-white/10 text-white font-medium shadow-sm" : "text-gray-300 hover:bg-white/10 hover:text-white"}`}>{label}</Link>
+              ))}
+            </div>
           ))}
         </div>
         <div className="flex items-center gap-1 shrink-0 ml-auto">
@@ -117,9 +115,14 @@ function AdminNav() {
       {/* Mobile menu */}
       {open && (
         <div className="md:hidden mt-3 pt-3 border-t border-[#57606a]/40 flex flex-col gap-1 pb-1">
-          {links.map(([href, label]) => (
-            <Link key={href} href={href} onClick={() => setOpen(false)}
-              className="hover:bg-white/10 hover:text-white rounded-md transition-colors px-2 py-1 text-sm">{label}</Link>
+          {groups.map((group) => (
+            <div key={group.label} className="py-1">
+              <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400">{group.label}</div>
+              {group.links.map(([href, label]) => (
+                <Link key={href} href={href} onClick={() => setOpen(false)}
+                  className={`block hover:bg-white/10 hover:text-white rounded-md transition-colors px-2 py-1 text-sm ${isActive(href) ? "bg-white/10 text-white" : ""}`}>{label}</Link>
+              ))}
+            </div>
           ))}
           <Link href="/admin/search" onClick={() => setOpen(false)}
             className="hover:bg-white/10 hover:text-white rounded-md transition-colors px-2 py-1 text-sm">{t("nav.search")}</Link>

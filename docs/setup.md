@@ -16,6 +16,24 @@
 
 Both ports are configurable via `BACKEND_PORT` and `ADMIN_WEB_PORT` in `.env`.
 
+The Jobs page uses WebSocket for live progress. By default it connects to the
+current site's `/api/v1/ws`; if your NAS reverse proxy does not forward
+WebSocket upgrades, or you access the UI directly through the `admin-web` port,
+set the public endpoint in `.env` and rebuild admin-web:
+
+```bash
+# Direct backend port
+NEXT_PUBLIC_WS_URL=ws://192.168.1.100:8818/api/v1/ws
+
+# HTTPS reverse proxy
+NEXT_PUBLIC_WS_URL=wss://autogallery.example.com/api/v1/ws
+```
+
+If WebSocket is unavailable, the Jobs page automatically falls back to 3-second
+polling and still updates task status. When cross-port auth fallback is needed,
+admin-web requests a 30-second one-time ticket over the normal API and never
+puts the long-lived login JWT in the WebSocket URL.
+
 ## Installation
 
 ### 1. Directory Structure

@@ -17,8 +17,8 @@ from app.jobs.worker_control import ControlListener, HeartbeatPublisher
 from app.models.subscription_source import SubscriptionSource
 from app.repositories.download_job import DownloadJobRepository
 from app.services.job_manifest import append_manifest_event, update_manifest
+from app.services.job_progress import apply_download_progress, apply_import_progress, publish_progress
 from app.services.redis_client import get_redis
-from app.services.redis_pubsub import TaskEventPublisher
 from app.services.settings import build_effective_gallerydl_config, get_download_defaults
 from app.services.subscription_enqueue import mark_source_sync_success
 
@@ -152,9 +152,22 @@ async def _enqueue_import(download_job_id: str, import_error: str | None = None,
                 "status": "enqueued",
                 **extra,
             })
+            apply_import_progress(
+                import_job,
+                "enqueued",
+                "Queued; waiting for import worker",
+                publish=False,
+            )
             download_job = await repo.get(UUID(download_job_id))
             if download_job:
                 await repo.update_status(download_job, "importing", import_error)
+                apply_download_progress(
+                    download_job,
+                    "importing",
+                    "Import job queued; waiting for import worker",
+                    publish=False,
+                    import_job_id=str(import_job.id),
+                )
                 append_manifest_event(download_job, "import_job_created", import_job_id=str(import_job.id), reason=import_error)
             await db.commit()
             import_job_id = str(import_job.id)
@@ -174,6 +187,23 @@ async def _enqueue_import(download_job_id: str, import_error: str | None = None,
         Queue(name="imports", connection=_r).enqueue(
             "app.jobs.import_runner.run_import_job", import_job_id,
             job_timeout=RQ_JOB_TIMEOUT)
+        publish_progress(
+            download_job_id,
+            "download",
+            {
+                "stage": "importing",
+                "message": "Import job queued; waiting for import worker",
+                "import_job_id": import_job_id,
+            },
+        )
+        publish_progress(
+            import_job_id,
+            "import",
+            {
+                "stage": "enqueued",
+                "message": "Queued; waiting for import worker",
+            },
+        )
         logger.info("Enqueued import job %s (recovery) for download %s", import_job_id, download_job_id)
         return import_job_id
     except Exception as e:
@@ -199,6 +229,11 @@ async def run_download_job(job_id: str):
             return
 
         await repo.update_status(job, "downloading")
+        apply_download_progress(
+            job,
+            "configuring",
+            "Download worker started; preparing gallery-dl config",
+        )
         if job.subscription_source_id:
             ss = await db.get(SubscriptionSource, job.subscription_source_id)
             if ss:
@@ -278,6 +313,16 @@ async def run_download_job(job_id: str):
                 new_query = url_parse.urlencode({"tags": tags}, doseq=True)
                 source_url = url_parse.urlunparse(parsed._replace(query=new_query))
 
+    async with async_session() as _progress_db:
+        _progress_job = await DownloadJobRepository(_progress_db).get(job_uuid)
+        if _progress_job:
+            apply_download_progress(
+                _progress_job,
+                "configuring",
+                "Gallery-dl config ready; applying source options",
+            )
+            await _progress_db.commit()
+
     # Snapshot metadata JSONs before running gallery-dl to detect new files.
     # This works regardless of the configured directory layout.
     json_before: set[str] = _snapshot_metadata_jsons(job.source)
@@ -322,6 +367,16 @@ async def run_download_job(job_id: str):
         except Exception:
             logger.warning("Failed to apply proxy env for download job %s", job_id, exc_info=True)
 
+        async with async_session() as _progress_db:
+            _progress_job = await DownloadJobRepository(_progress_db).get(job_uuid)
+            if _progress_job:
+                apply_download_progress(
+                    _progress_job,
+                    "downloading",
+                    "Starting gallery-dl",
+                )
+                await _progress_db.commit()
+
         async with async_session() as _manifest_db:
             _manifest_repo = DownloadJobRepository(_manifest_db)
             _manifest_job = await _manifest_repo.get(job_uuid)
@@ -334,6 +389,11 @@ async def run_download_job(job_id: str):
                     proxy_enabled=proxy_enabled,
                 )
                 append_manifest_event(_manifest_job, "gallerydl_started", source_url=source_url)
+                apply_download_progress(
+                    _manifest_job,
+                    "downloading",
+                    "Gallery-dl is running",
+                )
                 await _manifest_db.commit()
 
         logger.info("Running gallery-dl: %s (timeout=%ds, proxy=%s)", " ".join(cmd), dl_timeout, proxy_enabled)
@@ -372,17 +432,12 @@ async def run_download_job(job_id: str):
                         "percent": round(current / total * 100, 1) if total else 0,
                         "message": line.strip()[:200],
                     }
-                    # Store in Redis for polling
-                    try:
-                        get_redis().setex(f"task:{job_id}:progress", 30, json.dumps(progress))
-                    except Exception:
-                        pass
                     # Publish throttled (max 2/sec to avoid flooding)
                     nonlocal last_progress_publish
                     now = time.time()
                     if now - last_progress_publish >= 0.5:
                         try:
-                            TaskEventPublisher.publish_progress(job_id, "download", progress)
+                            publish_progress(job_id, "download", progress)
                         except Exception:
                             pass
                         last_progress_publish = now
@@ -432,6 +487,11 @@ async def run_download_job(job_id: str):
         async with async_session() as _manifest_db:
             _manifest_job = await DownloadJobRepository(_manifest_db).get(job_uuid)
             if _manifest_job:
+                apply_download_progress(
+                    _manifest_job,
+                    "post_download",
+                    "Gallery-dl finished; scanning downloaded metadata",
+                )
                 if result is not None and control_listener.command is None:
                     update_manifest(
                         _manifest_job,
@@ -459,8 +519,18 @@ async def run_download_job(job_id: str):
                 error_text = str(e)[:10000]
                 if j.retry_count < max_retries:
                     await repo2.update_status(j, "enqueued", f"unexpected error: {error_text}")
+                    apply_download_progress(
+                        j,
+                        "enqueued",
+                        f"Retry queued after unexpected error: {error_text[:180]}",
+                    )
                 else:
                     await repo2.update_status(j, "failed", f"unexpected error: {error_text}")
+                    apply_download_progress(
+                        j,
+                        "failed",
+                        f"Download failed: {error_text[:180]}",
+                    )
                 await db2.commit()
 
         # Always try partial import recovery
@@ -506,12 +576,27 @@ async def run_download_job(job_id: str):
             # Normal completion (success or non-zero exit)
             if result.returncode == 0:
                 await repo2.update_status(j, "downloaded")
+                apply_download_progress(
+                    j,
+                    "downloaded",
+                    "Download complete; waiting for metadata scan",
+                )
             else:
                 j.retry_count += 1
                 if j.retry_count < max_retries:
                     await repo2.update_status(j, "enqueued", result.stderr[:5000] if result.stderr else None)
+                    apply_download_progress(
+                        j,
+                        "enqueued",
+                        "Retry queued after gallery-dl returned an error",
+                    )
                 else:
                     await repo2.update_status(j, "failed", result.stderr[:5000] if result.stderr else None)
+                    apply_download_progress(
+                        j,
+                        "failed",
+                        "Download failed after gallery-dl error",
+                    )
 
             # Auth health monitoring — scan stderr regardless of exit code
             if j.subscription_source_id:
@@ -545,8 +630,18 @@ async def run_download_job(job_id: str):
             timeout_msg = f"timeout after {dl_timeout}s"
             if j.retry_count < max_retries:
                 await repo2.update_status(j, "enqueued", timeout_msg)
+                apply_download_progress(
+                    j,
+                    "enqueued",
+                    f"Retry queued after timeout ({dl_timeout}s)",
+                )
             else:
                 await repo2.update_status(j, "failed", timeout_msg)
+                apply_download_progress(
+                    j,
+                    "failed",
+                    f"Download failed after timeout ({dl_timeout}s)",
+                )
 
         await db2.commit()
 
@@ -562,8 +657,28 @@ async def run_download_job(job_id: str):
             if _manifest_job:
                 update_manifest(_manifest_job, metadata_json_count=metadata_count, image_count=image_count)
                 append_manifest_event(_manifest_job, "artifacts_counted", metadata_json_count=metadata_count, image_count=image_count)
+                apply_download_progress(
+                    _manifest_job,
+                    "post_download",
+                    f"Found {metadata_count} metadata files and {image_count} media files",
+                    current=metadata_count,
+                    total=metadata_count or None,
+                    assets=image_count,
+                )
                 await _manifest_db.commit()
         if metadata_count > 0:
+            async with async_session() as _progress_db:
+                _progress_job = await DownloadJobRepository(_progress_db).get(job_uuid)
+                if _progress_job:
+                    apply_download_progress(
+                        _progress_job,
+                        "enqueuing_import",
+                        f"Found {metadata_count} works; queuing import",
+                        current=0,
+                        total=metadata_count,
+                        assets=image_count,
+                    )
+                    await _progress_db.commit()
             await _enqueue_import(str(job_uuid), new_json_paths=new_json_paths)
         else:
             # No new metadata JSONs — distinguish "already imported" from "nothing to download"
@@ -593,6 +708,12 @@ async def run_download_job(job_id: str):
                 j3 = await repo3.get(job_uuid)
                 if j3:
                     await repo3.update_status(j3, new_status, new_error)
+                    apply_download_progress(
+                        j3,
+                        "complete" if new_status == "complete" else "failed",
+                        new_error or "Download complete; no new metadata to import",
+                        assets=image_count,
+                    )
                     if new_status == "complete" and j3.subscription_source_id:
                         await mark_source_sync_success(db3, j3.subscription_source_id)
                     await db3.commit()

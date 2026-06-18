@@ -12,6 +12,7 @@ from app.models.subscription_source import SubscriptionSource
 from app.providers import registry
 from app.services.job_manifest import append_manifest_event, update_manifest
 from app.services.job_state import DOWNLOAD_RUNNING_STATUSES, transition_download_job
+from app.services.job_progress import apply_download_progress
 from app.services.locks import redis_lock
 from app.services.redis_client import get_redis
 from app.services.settings import get_download_defaults
@@ -154,6 +155,12 @@ async def enqueue_subscription_source_sync(
             source_url=normalized_url,
             status="enqueued",
         )
+        apply_download_progress(
+            job,
+            "enqueued",
+            "Queued; waiting for download worker",
+            publish=False,
+        )
         update_manifest(job,
             trigger=trigger,
             subscription_source_id=str(ss.id),
@@ -173,6 +180,11 @@ async def enqueue_subscription_source_sync(
                 "app.jobs.download.run_download_job",
                 str(job.id),
                 job_timeout=RQ_JOB_TIMEOUT,
+            )
+            apply_download_progress(
+                job,
+                "enqueued",
+                "Queued; waiting for download worker",
             )
             append_manifest_event(job, "enqueued", queue="downloads")
         except Exception as exc:

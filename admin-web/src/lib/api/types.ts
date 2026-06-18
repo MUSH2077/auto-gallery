@@ -313,6 +313,7 @@ export interface ImportJob {
   progress_stage?: string | null;
   progress_works_done?: number | null;
   progress_works_total?: number | null;
+  progress_data?: JobProgress | null;
 }
 
 export interface RepositoryGraphEdge {
@@ -509,6 +510,23 @@ export interface DownloadJob {
   manifest?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
+  priority?: number;
+  user_note?: string | null;
+  operator_name?: string | null;
+  operator_action?: string | null;
+  last_heartbeat_at?: string | null;
+  worker_pid?: number | null;
+  pipeline_stage?: string | null;
+  progress_data?: JobProgress | null;
+}
+
+export interface JobProgress {
+  stage?: string;
+  current?: number;
+  total?: number;
+  percent?: number;
+  message?: string;
+  assets?: number;
 }
 
 export interface WorkListItem {

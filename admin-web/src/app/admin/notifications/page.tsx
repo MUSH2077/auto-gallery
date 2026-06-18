@@ -2,7 +2,7 @@
 import { useT } from "@/lib/i18n";
 import { useNotifications, type BatchJobState } from "@/components/NotificationCenter";
 import { useRouter } from "next/navigation";
-import { PageHeader, EmptyState } from "@/components";
+import { PageHeader, EmptyState, StatusBadge } from "@/components";
 
 function BatchJobCard({ job, t }: { job: BatchJobState; t: (k: string) => string }) {
   const router = useRouter();
@@ -11,13 +11,13 @@ function BatchJobCard({ job, t }: { job: BatchJobState; t: (k: string) => string
   const statusBadge = () => {
     switch (job.status) {
       case "running":
-        return <span className="badge border-[#ddf4ff] bg-[#ddf4ff] text-[#0969da] dark:border-[#1f6feb]/30 dark:bg-[#1f6feb]/15 dark:text-[#58a6ff] animate-pulse">{t("notification.running")}</span>;
+        return <StatusBadge status="running" label={t("notification.running")} />;
       case "completed":
-        return <span className="badge border-[#dafbe1] bg-[#dafbe1] text-[#1a7f37] dark:border-[#238636]/30 dark:bg-[#238636]/15 dark:text-[#56d364]">{t("notification.completed")}</span>;
+        return <StatusBadge status="complete" label={t("notification.completed")} />;
       case "error":
-        return <span className="badge border-[#ffebe9] bg-[#ffebe9] text-[#cf222e] dark:border-[#da3633]/30 dark:bg-[#da3633]/15 dark:text-[#ff7b72]">{t("notification.error")}</span>;
+        return <StatusBadge status="failed" label={t("notification.error")} />;
       default:
-        return <span className="badge">{job.status}</span>;
+        return <StatusBadge status={job.status} />;
     }
   };
 

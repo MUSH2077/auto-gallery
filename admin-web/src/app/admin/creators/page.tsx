@@ -2,7 +2,7 @@
 import { useState, useMemo, useEffect, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { PageHeader, EmptyState, ErrorState, ConfirmDialog, Modal } from "@/components";
+import { PageHeader, EmptyState, ErrorState, ConfirmDialog, Modal, FilterBar, SelectionBar, PageShell } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useT } from "@/lib/i18n";
@@ -219,7 +219,7 @@ function CreatorsContent() {
   };
 
   return (
-    <main className="max-w-6xl mx-auto p-6">
+    <PageShell size="normal">
       <PageHeader title={t("creators.title")} description={t("creators.count", "0 creators").replace("{count}", String(creatorCount.data?.count ?? 0))}>
         <div className="flex gap-2">
           <button onClick={() => router.push("/admin/creators/duplicates")} className="btn-ghost">{t("creators.duplicates")}</button>
@@ -228,7 +228,7 @@ function CreatorsContent() {
       </PageHeader>
 
       {/* Toolbar */}
-      <div className="toolbar mb-4">
+      <FilterBar>
         <input value={inputVal} onChange={(e) => handleSearchChange(e.target.value)} placeholder={t("creators.search")} className="input w-56 py-1.5" />
         <div className="segmented-control">
           {FILTERS.map((f) => (
@@ -238,19 +238,18 @@ function CreatorsContent() {
             </button>
           ))}
         </div>
-        <div className="flex-1" />
-      </div>
+      </FilterBar>
 
-      {selected.size > 0 && (
-        <div className="sticky top-2 z-20 mb-4 flex items-center gap-3 rounded-md border border-[#d8dee4] bg-white px-4 py-2 shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
-          <span className="text-sm font-medium">{selected.size} selected</span>
-          <button onClick={() => setSelected(new Set())} className="btn-ghost">Clear</button>
-          <span className="flex-1" />
-          <button onClick={() => setConfirmBatchDel(true)} className="btn-danger">
-            {t("creators.delete_selected").replace("{count}", String(selected.size))}
-          </button>
-        </div>
-      )}
+      <SelectionBar
+        count={selected.size}
+        label={t("creators.delete_selected").replace("{count}", String(selected.size))}
+        clearLabel={t("common.clear")}
+        onClear={() => setSelected(new Set())}
+      >
+        <button onClick={() => setConfirmBatchDel(true)} className="btn-danger text-xs">
+          {t("creators.delete_selected").replace("{count}", String(selected.size))}
+        </button>
+      </SelectionBar>
 
       {/* Select all */}
       {creators.data && creators.data.items.length > 0 && (
@@ -321,7 +320,7 @@ function CreatorsContent() {
       </Modal>
       {deleteId && <ConfirmDialog open title={t("creators.delete_title")} message={t("creators.delete_msg")} onConfirm={() => del.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={del.isPending} error={(del.error as Error)?.message} />}
       {confirmBatchDel && <ConfirmDialog open title={t("creators.batch_delete_title")} message={t("creators.batch_delete_msg").replace("{count}", String(selected.size))} onConfirm={() => batchDel.mutate([...selected])} onCancel={() => setConfirmBatchDel(false)} isPending={batchDel.isPending} error={(batchDel.error as Error)?.message} />}
-    </main>
+    </PageShell>
   );
 }
 

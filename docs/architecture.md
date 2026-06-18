@@ -251,6 +251,7 @@ Key environment variables used by the application:
 | `ADMIN_WEB_PORT` | `13000` | Host port for admin web (maps to container 3000) |
 | `CORS_ORIGINS` | `http://localhost:13000` | Allowed CORS origins |
 | `BACKEND_INTERNAL_URL` | `http://backend:8000` | Internal URL for admin-web SSR to reach backend |
+| `NEXT_PUBLIC_WS_URL` | current site `/api/v1/ws` | Public browser WebSocket URL for live job updates |
 | `DATABASE_URL` | (required) | PostgreSQL connection string |
 | `REDIS_URL` | (required) | Redis connection string |
 | `SECRET_KEY` | (required) | JWT signing secret |

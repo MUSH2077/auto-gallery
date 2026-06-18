@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { PageHeader, ConfirmDialog } from "@/components";
+import { PageHeader, ConfirmDialog, PageShell, StatCard, StatusBadge } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useT } from "@/lib/i18n";
 import { useRouter } from "next/navigation";
@@ -130,7 +130,7 @@ export default function DataManagementPage() {
   const layerEntries = breakdown?.layers ? Object.entries(breakdown.layers) : [];
 
   return (
-    <main className="max-w-5xl mx-auto p-6">
+    <PageShell size="normal">
       <PageHeader title={t("datamgmt.title")} description={t("datamgmt.desc")} />
 
       {result && (
@@ -150,7 +150,7 @@ export default function DataManagementPage() {
         }`}>
           <div className="flex items-center justify-between gap-3">
             <span className="font-medium">{clearOperation.title}</span>
-            <span className="text-xs uppercase">{clearOperation.status}</span>
+            <StatusBadge status={clearOperation.status} className="uppercase" />
           </div>
           <div className="mt-1 text-xs opacity-80">
             {clearOperation.error || clearOperation.result?.message || clearOperation.progress?.label || "Queued in the background"}
@@ -169,14 +169,7 @@ export default function DataManagementPage() {
           { label: t("datamgmt.stats_downloads"), value: info ? formatSize(info.downloads_size_mb) : "-", color: "pink" },
           { label: t("datamgmt.stats_library"), value: info ? formatSize(info.library_size_mb) : "-", color: "teal" },
         ].map((s) => (
-          <div key={s.label} className="card p-3 text-center">
-            <div className={`text-xl font-bold ${
-              s.color === "blue" ? "text-blue-600" : s.color === "indigo" ? "text-indigo-600" :
-              s.color === "purple" ? "text-purple-600" : s.color === "green" ? "text-green-600" :
-              s.color === "amber" ? "text-amber-600" : s.color === "pink" ? "text-pink-600" : "text-teal-600"
-            }`}>{s.value}</div>
-            <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{s.label}</div>
-          </div>
+          <StatCard key={s.label} label={s.label} value={s.value} tone={s.color === "green" ? "success" : s.color === "amber" ? "warning" : "active"} className="p-3 text-center [&>div:first-child]:text-xl" />
         ))}
       </div>
 
@@ -534,6 +527,6 @@ export default function DataManagementPage() {
           isPending={clearOperationMutation.isPending && activeAction === confirmAction}
         />
       )}
-    </main>
+    </PageShell>
   );
 }

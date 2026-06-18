@@ -251,6 +251,7 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 | `ADMIN_WEB_PORT` | `13000` | 管理端主机端口（映射容器 3000） |
 | `CORS_ORIGINS` | `http://localhost:13000` | 允许的 CORS 来源 |
 | `BACKEND_INTERNAL_URL` | `http://backend:8000` | admin-web SSR 访问后端的内部 URL |
+| `NEXT_PUBLIC_WS_URL` | 当前站点 `/api/v1/ws` | 浏览器连接实时任务 WebSocket 的公开地址 |
 | `DATABASE_URL` | （必需） | PostgreSQL 连接字符串 |
 | `REDIS_URL` | （必需） | Redis 连接字符串 |
 | `SECRET_KEY` | （必需） | JWT 签名密钥 |

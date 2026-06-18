@@ -21,10 +21,10 @@ from app.models.import_job import ImportJob
 from app.models.download_job import DownloadJob
 from app.providers import registry
 from app.repositories.download_job import DownloadJobRepository
+from app.services.job_progress import apply_download_progress, apply_import_progress
 from app.services.job_manifest import append_manifest_event, update_manifest
 from app.services.job_state import transition_import_job
 from app.services.redis_client import get_redis
-from app.services.redis_pubsub import TaskEventPublisher
 from app.services.subscription_enqueue import mark_source_sync_success
 from app.services.curation import CurationService
 
@@ -191,6 +191,13 @@ async def run_import_job(import_job_id: str):
         if not import_job:
             return
         transition_import_job(import_job, "running")
+        apply_import_progress(
+            import_job,
+            "importing",
+            "Import worker started",
+            current=0,
+            total=import_job.progress_works_total,
+        )
         await db.commit()
 
     # ── Start control listener + heartbeat ──
@@ -206,6 +213,17 @@ async def run_import_job(import_job_id: str):
             dj = r2.scalar_one_or_none()
         if not dj:
             return
+        async with async_session() as db:
+            dj_repo = DownloadJobRepository(db)
+            parent = await dj_repo.get(import_job.download_job_id)
+            if parent:
+                apply_download_progress(
+                    parent,
+                    "importing",
+                    "Import worker started",
+                    import_job_id=import_job_id,
+                )
+                await db.commit()
         provider = registry.get(dj.source)
 
         # Get new JSON file paths from Redis (stored by download runner via snapshot diff).
@@ -227,12 +245,28 @@ async def run_import_job(import_job_id: str):
             all_json_files = sorted(Path(p) for p in _new_json_paths if Path(p).exists())
             logger.info("Import %s: processing %d files from download snapshot (%d already gone)",
                        import_job_id, len(all_json_files), len(_new_json_paths) - len(all_json_files))
+            async with async_session() as db:
+                ij = await db.get(ImportJob, job_uuid)
+                if ij:
+                    apply_import_progress(
+                        ij,
+                        "importing",
+                        f"Processing {len(all_json_files)} metadata files from download",
+                        current=0,
+                        total=len(all_json_files) or None,
+                    )
+                    await db.commit()
         else:
             # Fallback: scan filesystem (legacy path for jobs created before this fix)
             if not source_root.exists():
                 async with async_session() as db:
                     ij = await db.get(ImportJob, job_uuid)
                     if ij:
+                        apply_import_progress(
+                            ij,
+                            "failed",
+                            f"Source directory not found: {source_root}",
+                        )
                         transition_import_job(ij, "failed", f"Source directory not found: {source_root}")
                         await db.commit()
                 return
@@ -244,11 +278,27 @@ async def run_import_job(import_job_id: str):
                 scan_root = source_root
 
             all_json_files = sorted(scan_root.rglob("*.json"))
+            async with async_session() as db:
+                ij = await db.get(ImportJob, job_uuid)
+                if ij:
+                    apply_import_progress(
+                        ij,
+                        "importing",
+                        f"Scanning {len(all_json_files)} metadata files",
+                        current=0,
+                        total=len(all_json_files) or None,
+                    )
+                    await db.commit()
 
         if not all_json_files:
             async with async_session() as db:
                 ij = await db.get(ImportJob, job_uuid)
                 if ij:
+                    apply_import_progress(
+                        ij,
+                        "failed",
+                        "No metadata JSON files found",
+                    )
                     transition_import_job(ij, "failed", "No metadata JSON files found")
                     await db.commit()
             return
@@ -270,9 +320,26 @@ async def run_import_job(import_job_id: str):
             async with async_session() as db:
                 ij = await db.get(ImportJob, job_uuid)
                 if ij:
+                    apply_import_progress(
+                        ij,
+                        "failed",
+                        "Could not extract work IDs from any JSON",
+                    )
                     transition_import_job(ij, "failed", "Could not extract work IDs from any JSON")
                     await db.commit()
             return
+
+        async with async_session() as db:
+            ij = await db.get(ImportJob, job_uuid)
+            if ij:
+                apply_import_progress(
+                    ij,
+                    "importing",
+                    f"Importing {len(groups)} works",
+                    current=0,
+                    total=len(groups),
+                )
+                await db.commit()
 
         stats = {"works": 0, "assets": 0, "multi_page": 0}
         batch_count = 0
@@ -341,26 +408,21 @@ async def run_import_job(import_job_id: str):
                 continue
 
             stats["works"] += 1
-
-            # ── Progress reporting (every 5 works) ──
-            if stats["works"] % 5 == 0:
-                total_works = len(groups)
-                progress = {
-                    "stage": "importing",
-                    "current": stats["works"],
-                    "total": total_works,
-                    "percent": round(stats["works"] / total_works * 100, 1) if total_works else 0,
-                    "assets": stats["assets"],
-                }
-                try:
-                    import json as _json
-                    get_redis().setex(f"task:{import_job_id}:progress", 30, _json.dumps(progress))
-                    TaskEventPublisher.publish_progress(import_job_id, "import", progress)
-                except Exception:
-                    pass
             if len(asset_files) > 1:
                 stats["multi_page"] += 1
             stats["assets"] += len(asset_files)
+            async with async_session() as progress_db:
+                ij_progress = await progress_db.get(ImportJob, job_uuid)
+                if ij_progress:
+                    apply_import_progress(
+                        ij_progress,
+                        "importing",
+                        f"Importing work {stats['works']} of {len(groups)}",
+                        current=stats["works"],
+                        total=len(groups),
+                        assets=stats["assets"],
+                    )
+                    await progress_db.commit()
 
             # Create DB records — files stay in place
             async with async_session() as db:
@@ -620,6 +682,14 @@ async def run_import_job(import_job_id: str):
                     ij.status = "paused"
                     if listener.reason:
                         ij.user_note = listener.reason
+                    apply_import_progress(
+                        ij,
+                        "paused",
+                        f"Paused after {stats['works']} works",
+                        current=stats["works"],
+                        total=len(groups),
+                        assets=stats["assets"],
+                    )
                     await db.commit()
             logger.info("Import %s paused after %d works", import_job_id, stats["works"])
             return
@@ -630,6 +700,14 @@ async def run_import_job(import_job_id: str):
                     ij.status = "cancelled"
                     if listener.reason:
                         ij.user_note = listener.reason
+                    apply_import_progress(
+                        ij,
+                        "cancelled",
+                        f"Cancelled after {stats['works']} works",
+                        current=stats["works"],
+                        total=len(groups),
+                        assets=stats["assets"],
+                    )
                     await db.commit()
             logger.info("Import %s cancelled after %d works", import_job_id, stats["works"])
             return
@@ -639,11 +717,24 @@ async def run_import_job(import_job_id: str):
             ij = await db.get(ImportJob, job_uuid)
             if ij:
                 transition_import_job(ij, "complete")
+                apply_import_progress(
+                    ij,
+                    "complete",
+                    f"Import complete: {stats['works']} works, {stats['assets']} assets",
+                    current=stats["works"],
+                    total=len(groups),
+                    assets=stats["assets"],
+                )
                 # Also mark the parent download job as complete
                 dj_repo = DownloadJobRepository(db)
                 dj = await dj_repo.get(ij.download_job_id)
                 if dj:
                     await dj_repo.update_status(dj, "complete")
+                    apply_download_progress(
+                        dj,
+                        "complete",
+                        f"Import complete: {stats['works']} works, {stats['assets']} assets",
+                    )
                     update_manifest(dj, import_stats=stats)
                     append_manifest_event(dj, "import_complete", **stats)
                     if dj.subscription_source_id:
@@ -666,6 +757,11 @@ async def run_import_job(import_job_id: str):
                     ij.import_retry_count = retry_count
                     transition_import_job(ij, "enqueued",
                         f"RETRY {retry_count}/{max_retries}\n{error_text}")
+                    apply_import_progress(
+                        ij,
+                        "enqueued",
+                        f"Retry {retry_count}/{max_retries} queued after import error",
+                    )
                     await db.commit()
                     # Re-enqueue with backoff (60s * retry_count)
                     try:
@@ -684,6 +780,11 @@ async def run_import_job(import_job_id: str):
                 else:
                     transition_import_job(ij, "failed",
                         f"Exhausted {max_retries} retries\n{error_text}")
+                    apply_import_progress(
+                        ij,
+                        "failed",
+                        "Import failed after all retries",
+                    )
                     await db.commit()
 
 async def cleanup_metadata_jsons(download_root: str = None):

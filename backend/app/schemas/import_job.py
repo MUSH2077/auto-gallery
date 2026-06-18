@@ -23,5 +23,6 @@ class ImportJobRead(BaseModel):
     progress_stage: str | None = None
     progress_works_done: int | None = None
     progress_works_total: int | None = None
+    progress_data: dict | None = None
 
     model_config = {"from_attributes": True}

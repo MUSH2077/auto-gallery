@@ -11,11 +11,13 @@ from app.auth import (
     bearer_scheme,
     create_access_token,
     decode_access_token,
+    get_admin_key,
     hash_password,
     verify_password,
 )
 from app.database import get_db
 from app.models.user import User
+from app.services.ws_tickets import issue_ws_ticket
 
 router = APIRouter()
 
@@ -44,6 +46,11 @@ class UserResponse(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
+
+
+class WebSocketTicketResponse(BaseModel):
+    ticket: str
+    expires_in: int
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────
@@ -90,6 +97,12 @@ async def me(current_user: User = Depends(get_current_user)):
         is_active=current_user.is_active,
         must_change_password=bool(current_user.must_change_password),
     )
+
+
+@router.post("/ws-ticket", response_model=WebSocketTicketResponse)
+async def create_websocket_ticket(username: str = Depends(get_admin_key)):
+    ticket, ttl = issue_ws_ticket(username)
+    return WebSocketTicketResponse(ticket=ticket, expires_in=ttl)
 
 
 @router.post("/change-password")

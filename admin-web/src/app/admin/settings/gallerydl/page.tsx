@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import type { PixivSourceConfig, TwitterSourceConfig, IwaraSourceConfig, DanbooruSourceConfig, PinterestSourceConfig, LofterSourceConfig, WeiboSourceConfig, BilibiliSourceConfig, GalleryDLSourceMeta } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
-import { PageHeader, ErrorState } from "@/components";
+import { PageHeader, ErrorState, PageShell } from "@/components";
 import Link from "next/link";
 
 type TabKey = "pixiv" | "twitter" | "iwara" | "danbooru" | "pinterest" | "lofter" | "weibo" | "bilibili";
@@ -239,9 +239,10 @@ function NamingReferencePanel({
   onDirectoryChange: (value: string) => void;
   onFilenameChange: (value: string) => void;
 }) {
+  const t = useT();
   const [target, setTarget] = useState<PatternTarget>("directory");
   const reference = NAMING_REFERENCE[source];
-  const targetLabel = target === "directory" ? "Directory" : "Filename";
+  const targetLabel = target === "directory" ? t("gallerydl.directory", "目录") : t("gallerydl.filename", "文件名");
 
   const insertToken = (token: string) => {
     if (target === "directory") {
@@ -270,7 +271,7 @@ function NamingReferencePanel({
                   : "text-[#57606a] hover:bg-[#f3f4f6] dark:text-[#8b949e] dark:hover:bg-[#21262d]"
               }`}
             >
-              {item === "directory" ? "Directory" : "Filename"}
+              {item === "directory" ? t("gallerydl.directory", "目录") : t("gallerydl.filename", "文件名")}
             </button>
           ))}
         </div>
@@ -279,7 +280,7 @@ function NamingReferencePanel({
       <div className="space-y-4 p-4">
         <div className="grid gap-3 md:grid-cols-2">
           <div>
-            <label className="mb-1 block text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">Directory pattern</label>
+            <label className="mb-1 block text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">{t("gallerydl.directory_pattern", "目录模板")}</label>
             <input
               type="text"
               value={directory}
@@ -289,7 +290,7 @@ function NamingReferencePanel({
             />
           </div>
           <div>
-            <label className="mb-1 block text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">Filename pattern</label>
+            <label className="mb-1 block text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">{t("gallerydl.filename_pattern", "文件名模板")}</label>
             <input
               type="text"
               value={filename}
@@ -303,9 +304,9 @@ function NamingReferencePanel({
         <div className="grid gap-3 md:grid-cols-2">
           <div className="rounded-md border border-[#d0d7de] bg-white p-3 dark:border-[#30363d] dark:bg-[#0d1117]">
             <div className="flex items-center justify-between gap-3">
-              <span className="text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">Directory template</span>
+              <span className="text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">{t("gallerydl.directory_template", "目录默认模板")}</span>
               <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => onDirectoryChange(reference.defaultDirectory)}>
-                使用目录模板
+                {t("gallerydl.use_directory_template", "使用目录模板")}
               </button>
             </div>
             <code className="mt-2 block break-all rounded-md bg-[#f6f8fa] px-2 py-1.5 font-mono text-xs text-[#24292f] dark:bg-[#161b22] dark:text-[#f0f6fc]">
@@ -314,9 +315,9 @@ function NamingReferencePanel({
           </div>
           <div className="rounded-md border border-[#d0d7de] bg-white p-3 dark:border-[#30363d] dark:bg-[#0d1117]">
             <div className="flex items-center justify-between gap-3">
-              <span className="text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">Filename template</span>
+              <span className="text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">{t("gallerydl.filename_template", "文件名默认模板")}</span>
               <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => onFilenameChange(reference.defaultFilename)}>
-                使用文件名模板
+                {t("gallerydl.use_filename_template", "使用文件名模板")}
               </button>
             </div>
             <code className="mt-2 block break-all rounded-md bg-[#f6f8fa] px-2 py-1.5 font-mono text-xs text-[#24292f] dark:bg-[#161b22] dark:text-[#f0f6fc]">
@@ -326,7 +327,7 @@ function NamingReferencePanel({
         </div>
 
         <div>
-          <div className="mb-1 text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">File tree preview</div>
+          <div className="mb-1 text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">{t("gallerydl.file_tree_preview", "文件树预览")}</div>
           <pre className="overflow-x-auto rounded-md border border-[#d0d7de] bg-white px-3 py-2 font-mono text-xs text-[#24292f] dark:border-[#30363d] dark:bg-[#0d1117] dark:text-[#f0f6fc]">{reference.treeExample}</pre>
         </div>
 
@@ -341,9 +342,9 @@ function NamingReferencePanel({
             <thead className="bg-white dark:bg-[#0d1117]">
               <tr>
                 <th className="px-3 py-2 text-xs font-semibold text-[#57606a] dark:text-[#8b949e]">Token</th>
-                <th className="px-3 py-2 text-xs font-semibold text-[#57606a] dark:text-[#8b949e]">说明</th>
-                <th className="px-3 py-2 text-xs font-semibold text-[#57606a] dark:text-[#8b949e]">示例值</th>
-                <th className="px-3 py-2 text-right text-xs font-semibold text-[#57606a] dark:text-[#8b949e]">插入到 {targetLabel}</th>
+                <th className="px-3 py-2 text-xs font-semibold text-[#57606a] dark:text-[#8b949e]">{t("gallerydl.description", "说明")}</th>
+                <th className="px-3 py-2 text-xs font-semibold text-[#57606a] dark:text-[#8b949e]">{t("gallerydl.example_value", "示例值")}</th>
+                <th className="px-3 py-2 text-right text-xs font-semibold text-[#57606a] dark:text-[#8b949e]">{t("gallerydl.insert_to", "插入到")} {targetLabel}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#d0d7de] bg-white dark:divide-[#30363d] dark:bg-[#0d1117]">
@@ -362,7 +363,7 @@ function NamingReferencePanel({
                   <td className="px-3 py-2 font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{item.example}</td>
                   <td className="px-3 py-2 text-right">
                     <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => insertToken(item.token)}>
-                      插入
+                      {t("gallerydl.insert", "插入")}
                     </button>
                   </td>
                 </tr>
@@ -523,21 +524,21 @@ export default function GalleryDLConfigPage() {
   });
 
   if (config.isError) {
-    return <main className="max-w-4xl mx-auto p-6">
+    return <PageShell size="normal">
       <ErrorState message={config.error?.message || t("gallerydl.failed")} onRetry={() => config.refetch()} />
-    </main>;
+    </PageShell>;
   }
   if (!config.data) {
-    return <main className="max-w-4xl mx-auto p-6">
+    return <PageShell size="normal">
       <div className="animate-pulse space-y-4"><div className="h-8 bg-gray-200 rounded w-1/3" /><div className="h-64 bg-gray-200 rounded" /></div>
-    </main>;
+    </PageShell>;
   }
 
   const meta = config.data.sources || {} as Record<string, GalleryDLSourceMeta>;
   const currentMeta = meta[activeTab];
 
   return (
-    <main className="max-w-4xl mx-auto p-6">
+    <PageShell size="normal">
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("gallerydl.back")}</Link>
       </div>
@@ -597,7 +598,7 @@ export default function GalleryDLConfigPage() {
           )}
         </div>
       </div>
-    </main>
+    </PageShell>
   );
 }
 
