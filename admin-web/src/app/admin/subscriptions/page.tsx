@@ -5,17 +5,10 @@ import { useT } from "@/lib/i18n";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, Subscription } from "@/lib/api";
-import { PageHeader, EmptyState, ErrorState, ConfirmDialog, Modal, SourceBadge } from "@/components";
+import { PageHeader, EmptyState, ErrorState, ConfirmDialog, Modal, SourceBadge, StatusBadge, FilterBar, SelectionBar, PageShell } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 
 type FilterMode = "all" | "active" | "inactive" | "sync_on" | "sync_off" | "never_synced";
-
-function jobClass(status?: string) {
-  if (!status) return "bg-[#eaeef2] text-[#57606a] dark:bg-[#30363d] dark:text-[#8b949e]";
-  if (["pending", "downloading", "downloaded", "importing"].includes(status)) return "bg-[#ddf4ff] text-[#0969da] dark:bg-[#1f6feb26] dark:text-[#58a6ff]";
-  if (["failed", "stale"].includes(status)) return "bg-[#ffebe9] text-[#cf222e] dark:bg-[#f8514926] dark:text-[#f85149]";
-  return "bg-[#dafbe1] text-[#1a7f37] dark:bg-[#2ea04326] dark:text-[#3fb950]";
-}
 
 function CreateForm({ isPending, error, onSubmit, onClose }: {
   isPending: boolean; error: Error | null;
@@ -198,13 +191,13 @@ function SubscriptionsContent() {
   };
 
   return (
-    <main className="max-w-6xl mx-auto p-6">
+    <PageShell size="normal">
       <PageHeader title={t("subscriptions.title")} description={t("subscriptions.count", "0 subscriptions").replace("{count}", String(subsCount.data?.count ?? 0))}>
         <button onClick={() => setShowCreate(true)} className="btn-primary">{t("subscriptions.new")}</button>
       </PageHeader>
 
       {/* Toolbar */}
-      <div className="toolbar mb-4">
+      <FilterBar>
         <input value={inputVal} onChange={(e) => { setInputVal(e.target.value); }} placeholder={t("subscriptions.search")} className="input w-56 py-1.5" />
         <div className="segmented-control">
           {FILTERS.map((f) => (
@@ -214,19 +207,22 @@ function SubscriptionsContent() {
             </button>
           ))}
         </div>
-        <div className="flex-1" />
-        {selected.size > 0 && (
-          <div className="flex gap-2">
-            <button onClick={() => batchSync.mutate({ ids: [...selected], enable: true })} disabled={batchSync.isPending}
-              className="btn-primary disabled:opacity-50">{t("subscriptions.enable_sync")}</button>
-            <button onClick={() => batchSync.mutate({ ids: [...selected], enable: false })} disabled={batchSync.isPending}
-              className="btn-ghost disabled:opacity-50">{t("subscriptions.disable_sync")}</button>
-            <button onClick={() => setConfirmBatchDel(true)} className="btn-danger">
-              {t("subscriptions.delete_selected").replace("{count}", String(selected.size))}
-            </button>
-          </div>
-        )}
-      </div>
+      </FilterBar>
+
+      <SelectionBar
+        count={selected.size}
+        label={t("subscriptions.delete_selected").replace("{count}", String(selected.size))}
+        clearLabel={t("common.clear")}
+        onClear={() => setSelected(new Set())}
+      >
+        <button onClick={() => batchSync.mutate({ ids: [...selected], enable: true })} disabled={batchSync.isPending}
+          className="btn-primary text-xs disabled:opacity-50">{t("subscriptions.enable_sync")}</button>
+        <button onClick={() => batchSync.mutate({ ids: [...selected], enable: false })} disabled={batchSync.isPending}
+          className="btn-ghost text-xs disabled:opacity-50">{t("subscriptions.disable_sync")}</button>
+        <button onClick={() => setConfirmBatchDel(true)} className="btn-danger text-xs">
+          {t("subscriptions.delete_selected").replace("{count}", String(selected.size))}
+        </button>
+      </SelectionBar>
 
       {/* Select all */}
       {subs.data && subs.data.length > 0 && (
@@ -250,7 +246,7 @@ function SubscriptionsContent() {
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="truncate text-sm font-semibold text-[#0969da] dark:text-[#58a6ff]">{s.name || s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8)}</span>
                   {s.is_active ? <span className="w-1.5 h-1.5 bg-green-500 rounded-full shrink-0" /> : <span className="w-1.5 h-1.5 bg-gray-300 rounded-full shrink-0" />}
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${jobClass(s.latest_job_status)}`}>{s.latest_job_status || "no jobs"}</span>
+                  <StatusBadge status={s.latest_job_status || "unknown"} label={s.latest_job_status ? undefined : t("subscriptions.no_jobs", "No jobs")} className="py-0 text-[10px]" />
                 </div>
                 <div className="text-xs text-[#57606a] dark:text-[#8b949e]">
                   {t("subscriptions.creator_prefix")}{" "}
@@ -300,7 +296,7 @@ function SubscriptionsContent() {
       </Modal>
       {deleteId && <ConfirmDialog open title={t("subscriptions.delete_title")} message={t("subscriptions.delete_msg")} onConfirm={() => del.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={del.isPending} error={(del.error as Error)?.message} />}
       {confirmBatchDel && <ConfirmDialog open title={t("subscriptions.batch_delete_title")} message={t("subscriptions.batch_delete_msg").replace("{count}", String(selected.size))} onConfirm={() => batchDel.mutate([...selected])} onCancel={() => setConfirmBatchDel(false)} isPending={batchDel.isPending} error={(batchDel.error as Error)?.message} />}
-    </main>
+    </PageShell>
   );
 }
 

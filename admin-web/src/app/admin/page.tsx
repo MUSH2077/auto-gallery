@@ -4,9 +4,9 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys, WorkbenchSummary } from "@/lib/api";
-import { EmptyState, ErrorState, SourceBadge, StatusBadge } from "@/components";
+import { EmptyState, ErrorState, SourceBadge, StatusBadge, PageHeader, PageShell } from "@/components";
 import { useT } from "@/lib/i18n";
-import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
+import { useI18nFormat } from "@/lib/i18n-format";
 
 function fmtBytes(bytes?: number | null): string {
   if (!bytes) return "0 B";
@@ -87,7 +87,7 @@ function RecentActivity({ data }: { data: WorkbenchSummary }) {
               <RecentRow key={job.id} href="/admin/jobs">
                 <SourceBadge source={job.source} />
                 <span className="min-w-0 flex-1 truncate font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{job.source_url}</span>
-                <span className="badge">{statusLabel(t, job.status)}</span>
+                <StatusBadge status={job.status} />
               </RecentRow>
             ))}
           </div>
@@ -101,7 +101,7 @@ function RecentActivity({ data }: { data: WorkbenchSummary }) {
             <RecentRow key={job.id} href="/admin/import-jobs">
               <span className="w-20 font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{job.id.slice(0, 8)}</span>
               <span className="min-w-0 flex-1 truncate text-xs text-[#57606a] dark:text-[#8b949e]">{t("dashboard.import_for", { id: job.download_job_id.slice(0, 8) })}</span>
-              <span className="badge">{statusLabel(t, job.status)}</span>
+              <StatusBadge status={job.status} />
             </RecentRow>
           ))}
           {data.recent.works.slice(0, 5).map((work) => (
@@ -153,27 +153,19 @@ export default function Dashboard() {
   const activeJobs = (data?.queue.active_download_count || 0) + (data?.queue.active_import_count || 0);
 
   if (workbench.error) {
-    return <main className="mx-auto max-w-7xl p-6"><ErrorState message={(workbench.error as Error).message} onRetry={() => workbench.refetch()} /></main>;
+    return <PageShell><ErrorState message={(workbench.error as Error).message} onRetry={() => workbench.refetch()} /></PageShell>;
   }
 
   return (
-    <main className="mx-auto max-w-7xl p-6 page-transition">
-      <header className="mb-5 border-b border-[#d8dee4] pb-4 dark:border-[#30363d]">
-        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-normal text-[#24292f] dark:text-[#e6edf3]">{t("dashboard.title")}</h1>
-            <p className="mt-1.5 max-w-3xl text-sm leading-6 text-[#57606a] dark:text-[#8b949e]">
-              {t("dashboard.workbench_desc")}
-            </p>
-          </div>
+    <PageShell className="page-transition">
+      <PageHeader title={t("dashboard.title")} description={t("dashboard.workbench_desc")}>
           <div className="flex items-center gap-2 text-xs text-[#57606a] dark:text-[#8b949e]">
             <span className={`h-2 w-2 rounded-full ${activeJobs > 0 ? "animate-pulse bg-[#0969da]" : "bg-[#1a7f37]"}`} />
             <span>{activeJobs > 0 ? t("dashboard.live") : t("dashboard.idle")}</span>
             <span>·</span>
             <span>{t("dashboard.updated", { time: fmt.dateTime(data?.updated_at) })}</span>
           </div>
-        </div>
-      </header>
+      </PageHeader>
 
       {!data && workbench.isLoading && (
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">{Array.from({ length: 8 }).map((_, i) => <div key={`skel-${i}`} className="card h-28 animate-pulse" />)}</div>
@@ -281,6 +273,6 @@ export default function Dashboard() {
           </section>
         </div>
       )}
-    </main>
+    </PageShell>
   );
 }

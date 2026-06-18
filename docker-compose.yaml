@@ -210,6 +210,7 @@ services:
       dockerfile: Dockerfile
       args:
         NPM_REGISTRY: ${NPM_REGISTRY:-}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-}
     ports:
       - "${ADMIN_WEB_PORT:-13000}:3000"
     environment:

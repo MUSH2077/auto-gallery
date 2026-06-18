@@ -4,9 +4,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { KeyboardEvent, MouseEvent } from "react";
 import type { CreatorRepository, RepositoryLatestJob, SchedulerDecisionItem } from "@/lib/api";
-import { scheduleModeLabel, schedulerDecisionLabel, statusLabel, useI18nFormat } from "@/lib/i18n-format";
+import { scheduleModeLabel, schedulerDecisionLabel, useI18nFormat } from "@/lib/i18n-format";
 import { useT } from "@/lib/i18n";
 import SourceBadge from "./SourceBadge";
+import StatusBadge from "./StatusBadge";
 
 type RepoLike = Pick<CreatorRepository,
   "id" | "subscription_id" | "source" | "source_display_name" | "source_creator_id" |
@@ -56,17 +57,9 @@ function DecisionPill({ decision }: { decision?: SchedulerDecisionItem }) {
 function JobPill({ job }: { job?: RepositoryLatestJob | null }) {
   const t = useT();
   if (!job) return <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("repo.no_jobs")}</span>;
-  const running = ["pending", "downloading", "downloaded", "importing"].includes(job.status);
-  const failed = ["failed", "stale"].includes(job.status);
-  const cls = running
-    ? "border-[#0969da]/30 bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff]/30 dark:bg-[#1f6feb26] dark:text-[#58a6ff]"
-    : failed
-      ? "border-[#cf222e]/30 bg-[#ffebe9] text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]"
-      : "border-[#1a7f37]/30 bg-[#dafbe1] text-[#1a7f37] dark:border-[#3fb950]/30 dark:bg-[#2ea04326] dark:text-[#3fb950]";
   return (
-    <Link href={`/admin/jobs`} className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${running ? "animate-pulse bg-current" : "bg-current"}`} />
-      {statusLabel(t, job.status)}
+    <Link href={`/admin/jobs`} className="inline-flex">
+      <StatusBadge status={job.status} />
     </Link>
   );
 }

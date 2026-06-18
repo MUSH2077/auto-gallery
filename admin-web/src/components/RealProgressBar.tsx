@@ -1,31 +1,56 @@
 "use client";
 
+import { useT } from "@/lib/i18n";
+
 interface ProgressData {
   stage?: string;
   current?: number;
   total?: number;
   percent?: number;
+  message?: string;
 }
 
 export function RealProgressBar({ progress }: { progress: ProgressData | null }) {
-  if (!progress || progress.percent == null) return null;
+  const t = useT();
+  if (!progress) return null;
 
-  const pct = Math.min(100, Math.max(0, progress.percent));
+  const computedPercent = progress.percent != null
+    ? progress.percent
+    : progress.total && progress.total > 0 && progress.current != null
+      ? (progress.current / progress.total) * 100
+      : null;
+  const hasPercent = computedPercent != null;
+  const pct = hasPercent ? Math.round(Math.min(100, Math.max(0, computedPercent ?? 0))) : null;
   const stage = progress.stage ?? "processing";
+  const stageLabel = t(`progress.stage.${stage}`, t(`status.${stage}`, stage.replaceAll("_", " ")));
+  const detail = progress.message || stageLabel;
+  const hasCount = progress.current != null && progress.total != null;
 
   return (
-    <div className="flex flex-col gap-0.5 w-36 shrink-0">
-      <div className="w-full h-2 bg-gray-200 dark:bg-slate-600 rounded-full overflow-hidden">
-        <div
-          className="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <div className="flex justify-between text-[10px] text-gray-400 tabular-nums">
-        <span>{stage}</span>
-        <span>
-          {progress.current ?? "-"}/{progress.total ?? "-"} ({pct}%)
+    <div className="flex w-56 shrink-0 flex-col gap-1">
+      <div className="flex items-center justify-between gap-2 text-[11px] leading-tight">
+        <span className="min-w-0 truncate font-medium text-[#24292f] dark:text-[#e6edf3]" title={detail}>
+          {detail}
         </span>
+        {pct != null && <span className="shrink-0 font-mono text-[#57606a] dark:text-[#8b949e]">{pct}%</span>}
+      </div>
+      <div className="h-2 w-full overflow-hidden rounded-full bg-[#d8dee4] dark:bg-[#30363d]">
+        {hasPercent ? (
+          <div
+            className="h-full rounded-full bg-[#0969da] transition-all duration-500 ease-out"
+            style={{ width: `${pct}%` }}
+          />
+        ) : (
+          <div className="h-full w-3/5 animate-pulse rounded-full bg-[#0969da]" />
+        )}
+      </div>
+      <div className="flex items-center justify-between gap-2 text-[10px] text-[#57606a] dark:text-[#8b949e]">
+        <span className="min-w-0 truncate" title={stageLabel}>{stageLabel}</span>
+        {hasCount && (
+          <span className="shrink-0 font-mono tabular-nums">
+            {progress.current}/{progress.total}
+          </span>
+        )}
       </div>
     </div>
   );

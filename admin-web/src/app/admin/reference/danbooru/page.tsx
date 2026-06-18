@@ -508,7 +508,7 @@ export default function DanbooruReferencePage() {
               <p className="text-red-600 text-sm">{(urlBatchImport.error as Error).message}</p>
             )}
             {urlBatchImport.isSuccess && !displayBatchResult && (
-              <p className="text-xs text-blue-600 dark:text-blue-400 mt-2">Job enqueued — see progress below.</p>
+              <p className="mt-2 text-xs text-blue-600 dark:text-blue-400">{t("danbooru.job_enqueued", "任务已入队，可在下方查看进度。")}</p>
             )}
           </div>
         )}

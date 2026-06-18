@@ -11,6 +11,8 @@ from app.repositories.download_job import DownloadJobRepository
 from app.repositories.subscription import SubscriptionRepository
 from app.providers import registry
 from app.services.job_manifest import append_manifest_event, update_manifest
+from app.services.job_progress import apply_download_progress
+from app.services.progress import ProgressTracker
 from app.services.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,13 @@ class DownloadService:
                 job.creator_name = None
         return jobs
 
+    def _enrich_progress(self, jobs):
+        for job in jobs:
+            progress = ProgressTracker.get(str(job.id))
+            if progress:
+                job.progress_data = progress
+        return jobs
+
     async def list_jobs(self, status: str | None = None, source: str | None = None,
                         subscription_id: str | None = None,
                         subscription_source_id: str | None = None,
@@ -75,6 +84,7 @@ class DownloadService:
                                         sort_by=sort_by, sort_order=sort_order,
                                         offset=offset, limit=limit)
         jobs = await self._enrich_job_context(jobs)
+        self._enrich_progress(jobs)
         if q:
             needle = q.strip().lower()
             jobs = [
@@ -91,6 +101,7 @@ class DownloadService:
         if not job:
             raise ValueError("DownloadJob not found")
         enriched = await self._enrich_job_context([job])
+        self._enrich_progress(enriched)
         return enriched[0]
 
     async def create_job(self, data: dict) -> dict:
@@ -132,6 +143,12 @@ class DownloadService:
             "source_url": normalized_url,
             "status": "enqueued",
         })
+        apply_download_progress(
+            job,
+            "enqueued",
+            "Queued; waiting for download worker",
+            publish=False,
+        )
         update_manifest(job, trigger="manual_url", source=source, source_url=normalized_url)
         append_manifest_event(job, "created", trigger="manual_url")
         await self.db.commit()
@@ -140,6 +157,11 @@ class DownloadService:
             from rq import Queue
             q = Queue(name="downloads", connection=get_redis())
             q.enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
+            apply_download_progress(
+                job,
+                "enqueued",
+                "Queued; waiting for download worker",
+            )
             append_manifest_event(job, "enqueued", queue="downloads")
             await self.db.commit()
         except Exception:

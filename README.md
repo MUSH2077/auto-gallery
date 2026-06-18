@@ -106,6 +106,7 @@ For a full deployment guide, see [docs/setup.md](docs/setup.md).
 - Choose host paths for downloads, library, app config, gallery-dl config, and
   service data.
 - Set `TIMEZONE` for scheduler behavior.
+- If using a reverse proxy, ensure `/api/v1/ws` forwards WebSocket upgrades; otherwise set `NEXT_PUBLIC_WS_URL` and rebuild admin-web. If WebSocket is unavailable, the Jobs page falls back to polling so task status still refreshes.
 - Start Docker Compose.
 - Run Alembic migrations.
 - Confirm backend health at `/api/v1/system/health`.

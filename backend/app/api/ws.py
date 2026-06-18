@@ -1,10 +1,11 @@
 """
 WebSocket endpoint for real-time task status updates.
 
-Authentication uses the JWT cookie (``ag_token``) set by the admin-web login
-flow. The browser sends this cookie automatically on the WebSocket upgrade
-request, avoiding token leakage in server access logs that would occur with
-query-parameter tokens.
+Authentication prefers the JWT cookie (``ag_token``) set by the admin-web
+login flow. The browser sends this cookie automatically on the WebSocket
+upgrade request. A short-lived one-time ``?ticket=`` fallback is accepted for
+cross-port or reverse-proxy deployments where the cookie is not visible to the
+backend.
 
 The server broadcasts all task events to every authenticated client.
 This is intentional — the current deployment is single-admin NAS and the
@@ -20,6 +21,7 @@ from uuid import uuid4
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.auth import decode_access_token_payload
+from app.services.ws_tickets import consume_ws_ticket
 from app.services.ws_manager import manager
 
 logger = logging.getLogger(__name__)
@@ -31,19 +33,26 @@ router = APIRouter()
 
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """Real-time task event stream. Authenticated via JWT cookie."""
-    # Read token from cookie (set by admin-web login, stored as ag_token)
+    """Real-time task event stream. Authenticated via JWT cookie or ticket."""
+    username = "unknown"
     token = websocket.cookies.get("ag_token")
-    if not token:
-        await websocket.close(code=4001, reason="Missing auth cookie")
-        return
+    if token:
+        payload = decode_access_token_payload(token)
+        if not payload:
+            await websocket.close(code=4001, reason="Invalid or expired token")
+            return
+        username = payload.get("sub", "unknown")
+    else:
+        ticket = websocket.query_params.get("ticket")
+        if not ticket:
+            await websocket.close(code=4001, reason="Missing auth cookie or ticket")
+            return
+        ticket_username = consume_ws_ticket(ticket)
+        if not ticket_username:
+            await websocket.close(code=4001, reason="Invalid or expired ticket")
+            return
+        username = ticket_username
 
-    payload = decode_access_token_payload(token)
-    if not payload:
-        await websocket.close(code=4001, reason="Invalid or expired token")
-        return
-
-    username = payload.get("sub", "unknown")
     client_id = str(uuid4())
     await manager.connect(client_id, websocket, username=username)
 

@@ -2,6 +2,7 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
@@ -26,5 +27,6 @@ class ImportJob(TimestampMixin, Base):
     progress_stage: Mapped[str | None] = mapped_column(String(50))
     progress_works_done: Mapped[int | None] = mapped_column(Integer)
     progress_works_total: Mapped[int | None] = mapped_column(Integer)
+    progress_data: Mapped[dict | None] = mapped_column(JSONB)
 
     download_job = relationship("DownloadJob", back_populates="import_jobs")

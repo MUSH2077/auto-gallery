@@ -91,6 +91,7 @@ http://<host>:13000
 - 首次登录账号为 `admin / change-me-admin`；也可以部署前把 `ADMIN_PASSWORD` 改成自定义初始密码。登录后系统会强制修改密码。
 - 设置 downloads、library、app config、gallery-dl config 和服务数据的宿主机路径。
 - 设置 `TIMEZONE`，确保调度器按预期运行。
+- 如果通过反向代理访问，确认 `/api/v1/ws` 支持 WebSocket upgrade；否则设置 `NEXT_PUBLIC_WS_URL` 后重新构建 admin-web。WebSocket 不通时任务页会自动使用轮询，不会影响任务状态刷新。
 - 启动 Docker Compose。
 - 运行 Alembic 迁移。
 - 访问 `/api/v1/system/health` 检查后端健康。

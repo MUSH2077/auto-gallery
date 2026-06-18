@@ -1,6 +1,13 @@
 export { default as StatusBadge } from "./StatusBadge";
+export { getStatusTone } from "./StatusBadge";
 export { default as SourceBadge } from "./SourceBadge";
 export { default as PageHeader } from "./PageHeader";
+export { default as PageShell } from "./PageShell";
+export { default as SectionPanel } from "./SectionPanel";
+export { default as FilterBar } from "./FilterBar";
+export { default as SelectionBar } from "./SelectionBar";
+export { default as StatCard } from "./StatCard";
+export { default as IconButton } from "./IconButton";
 export { default as EmptyState } from "./EmptyState";
 export { default as ErrorState } from "./ErrorState";
 export { default as ConfirmDialog } from "./ConfirmDialog";
@@ -13,7 +20,6 @@ export { default as RepositoryCard } from "./RepositoryCard";
 export { ToastProvider, useToast } from "./Toast";
 export { NotificationProvider, NotificationBell, useNotifications } from "./NotificationCenter";
 export { RealProgressBar } from "./RealProgressBar";
-export { PipelineVisualizer } from "./PipelineVisualizer";
 export { BatchByFilter } from "./BatchByFilter";
 
 export { default as PageLayout } from "./PageLayout";

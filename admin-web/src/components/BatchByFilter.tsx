@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { api } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { statusLabel } from "@/lib/i18n-format";
 
 const SOURCES = [
   { value: "", label: "All sources" },
@@ -15,16 +17,7 @@ const SOURCES = [
   { value: "lofter", label: "LOFTER" },
 ];
 
-const STATUSES = [
-  { value: "", label: "Any status" },
-  { value: "enqueued", label: "Enqueued" },
-  { value: "downloading", label: "Downloading" },
-  { value: "downloaded", label: "Downloaded" },
-  { value: "importing", label: "Importing" },
-  { value: "failed", label: "Failed" },
-  { value: "stale", label: "Stale" },
-  { value: "paused", label: "Paused" },
-];
+const STATUSES = ["", "enqueued", "downloading", "downloaded", "importing", "failed", "stale", "paused"];
 
 const ACTIONS = [
   { value: "retry", label: "Retry All" },
@@ -35,6 +28,7 @@ const ACTIONS = [
 ];
 
 export function BatchByFilter({ onSuccess }: { onSuccess?: () => void }) {
+  const t = useT();
   const [source, setSource] = useState("");
   const [status, setStatus] = useState("");
   const [action, setAction] = useState("");
@@ -77,7 +71,7 @@ export function BatchByFilter({ onSuccess }: { onSuccess?: () => void }) {
         className="text-xs px-2 py-1 rounded border bg-white dark:bg-slate-700 dark:border-slate-600"
       >
         {STATUSES.map((s) => (
-          <option key={s.value} value={s.value}>{s.label}</option>
+          <option key={s} value={s}>{s ? statusLabel(t, s) : t("jobs.filter_all_status")}</option>
         ))}
       </select>
       <select

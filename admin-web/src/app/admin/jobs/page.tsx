@@ -5,8 +5,8 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, DownloadJob, ImportJob, queryKeys } from "@/lib/api";
-import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, PipelineVisualizer, BatchByFilter } from "@/components";
+import { api, DownloadJob, ImportJob, JobProgress, queryKeys } from "@/lib/api";
+import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, BatchByFilter, StatusBadge, StatCard } from "@/components";
 import { useJobWebSocket } from "@/lib/useWebSocket";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 
@@ -18,6 +18,17 @@ const PAGE_LIMIT = 200;
 const STATUS_OPTIONS = ["", "enqueued", "downloading", "paused", "downloaded", "importing", "complete", "failed", "stale", "cancelled"];
 const IMPORT_STATUS_OPTIONS = ["", "enqueued", "running", "complete", "failed", "stale"];
 const SOURCE_OPTIONS = ["", "pixiv", "x", "iwara", "danbooru", "pinterest", "lofter", "weibo", "bilibili"];
+function isActiveDownload(status: string) {
+  return ["pending", "enqueued", "downloading", "downloaded", "importing"].includes(status);
+}
+
+function isActiveImport(status: string) {
+  return ["pending", "enqueued", "running"].includes(status);
+}
+
+function fallbackProgress(stage: string): JobProgress {
+  return { stage };
+}
 
 function Elapsed({ since, active }: { since: string; active: boolean }) {
   const [now, setNow] = useState(Date.now());
@@ -33,40 +44,6 @@ function Elapsed({ since, active }: { since: string; active: boolean }) {
 }
 
 // ProgressBar replaced by RealProgressBar from components — data-driven with actual percent/current/total
-
-function ActiveIndicator({ status }: { status: string }) {
-  const t = useT();
-  const isActive = status === "downloading" || status === "running" || status === "importing" || status === "enqueued";
-  const color = 
-    status === "complete" || status === "downloaded" ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400" :
-    status === "failed" ? "bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400" :
-    status === "stale" ? "bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400" :
-    status === "paused" ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400" :
-    status === "enqueued" || (status === "enqueued" || status === "pending") ? "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400" :
-    status === "cancelled" ? "bg-gray-200 dark:bg-slate-600 text-gray-400 dark:text-gray-500 line-through" :
-    "bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-gray-400";
-  if (isActive) {
-    return <span className="flex items-center gap-1.5 shrink-0 w-28">
-      <span className="relative flex h-2.5 w-2.5"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" /><span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500" /></span>
-      <span className="text-xs text-blue-600 dark:text-blue-400 font-medium">{statusLabel(t, status)}</span>
-    </span>;
-  }
-  return <span className={`shrink-0 w-28 text-xs px-1.5 py-0.5 rounded text-center ${color}`}>{statusLabel(t, status)}</span>;
-}
-
-function SummaryCard({ label, value, sub, tone = "neutral" }: { label: string; value: number | string; sub?: string; tone?: "neutral" | "active" | "danger" | "warning" }) {
-  const color = tone === "danger" ? "text-[#cf222e] dark:text-[#f85149]"
-    : tone === "warning" ? "text-[#9a6700] dark:text-[#d29922]"
-      : tone === "active" ? "text-[#0969da] dark:text-[#58a6ff]"
-        : "text-[#24292f] dark:text-[#e6edf3]";
-  return (
-    <div className="card p-4">
-      <div className={`tabular text-2xl font-semibold ${color}`}>{value}</div>
-      <div className="mt-1 text-xs font-medium uppercase text-[#57606a] dark:text-[#8b949e]">{label}</div>
-      {sub && <div className="mt-1 text-xs text-[#8c959f] dark:text-[#6e7681]">{sub}</div>}
-    </div>
-  );
-}
 
 function JobLifecycle({ status }: { status: string }) {
   const t = useT();
@@ -269,27 +246,26 @@ function JobsContent() {
   const fmt = useI18nFormat();
   const toast = useToast();
   const qc = useQueryClient();
-  const [downloadProgress, setDownloadProgress] = useState<Record<string, { stage: string; current: number; total: number; percent: number }>>({});
-  const [downloadPipeline, setDownloadPipeline] = useState<Record<string, { current_stage: string; stages: Array<{ name: string; status: string }> }>>({});
+  const [downloadProgress, setDownloadProgress] = useState<Record<string, JobProgress>>({});
+  const [importProgress, setImportProgress] = useState<Record<string, JobProgress>>({});
 
   // WebSocket: invalidate queries on status change, update progress on progress events
-  const { connected } = useJobWebSocket({
+  const { connected, status: wsStatus } = useJobWebSocket({
     onStatusChange: (msg) => {
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
       qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
       qc.invalidateQueries({ queryKey: ["workbench"] });
-      if (msg.new_status) {
+      if (msg.task_id && msg.new_status) {
         toast.info(`${msg.task_id.slice(0, 8)}: ${msg.old_status} → ${msg.new_status}`);
-      }
-      if (msg.task_type === "download") {
-        api.getDownloadPipeline(msg.task_id).then(p => {
-          setDownloadPipeline(prev => ({ ...prev, [msg.task_id]: p }));
-        }).catch(() => {});
       }
     },
     onProgress: (msg) => {
-      if (msg.task_type === "download" && msg.progress) {
-        setDownloadProgress(prev => ({ ...prev, [msg.task_id]: msg.progress as any }));
+      const taskId = msg.task_id;
+      if (taskId && msg.task_type === "download" && msg.progress) {
+        setDownloadProgress(prev => ({ ...prev, [taskId]: msg.progress as JobProgress }));
+      }
+      if (taskId && msg.task_type === "import" && msg.progress) {
+        setImportProgress(prev => ({ ...prev, [taskId]: msg.progress as JobProgress }));
       }
     },
   });
@@ -342,7 +318,7 @@ function JobsContent() {
   const downloads = useQuery({
     queryKey: [...queryKeys.downloadJobs.all, dlParams],
     queryFn: () => api.listDownloadJobs(dlParams),
-    refetchInterval: (status === "downloading" || !status) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
+    refetchInterval: (!status || isActiveDownload(status)) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
   });
 
   const workbench = useQuery({
@@ -363,8 +339,50 @@ function JobsContent() {
       offset: 0,
       limit: PAGE_LIMIT,
     }),
-    refetchInterval: (status === "running" || !status) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
+    refetchInterval: (!status || isActiveImport(status)) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
   });
+
+  useEffect(() => {
+    const rows = downloads.data ?? [];
+    setDownloadProgress((prev) => {
+      const next = { ...prev };
+      const visibleIds = new Set(rows.map((job) => job.id));
+      for (const id of Object.keys(next)) {
+        if (!visibleIds.has(id)) delete next[id];
+      }
+      for (const job of rows) {
+        if (!isActiveDownload(job.status)) {
+          delete next[job.id];
+        } else if (job.progress_data) {
+          next[job.id] = job.progress_data;
+        } else if (job.pipeline_stage && !next[job.id]) {
+          next[job.id] = fallbackProgress(job.pipeline_stage);
+        }
+      }
+      return next;
+    });
+  }, [downloads.data]);
+
+  useEffect(() => {
+    const rows = imports.data?.items ?? [];
+    setImportProgress((prev) => {
+      const next = { ...prev };
+      const visibleIds = new Set(rows.map((job) => job.id));
+      for (const id of Object.keys(next)) {
+        if (!visibleIds.has(id)) delete next[id];
+      }
+      for (const job of rows) {
+        if (!isActiveImport(job.status)) {
+          delete next[job.id];
+        } else if (job.progress_data) {
+          next[job.id] = job.progress_data;
+        } else if (job.progress_stage && !next[job.id]) {
+          next[job.id] = fallbackProgress(job.progress_stage);
+        }
+      }
+      return next;
+    });
+  }, [imports.data]);
 
   const activeFilterCount = [
     status,
@@ -507,17 +525,27 @@ function JobsContent() {
           <button onClick={() => handleClear(["complete"])} className="btn-ghost text-xs">{t("jobs.clear_complete")}</button>
           <button onClick={() => killStuck.mutate()} disabled={killStuck.isPending} className="btn-ghost text-xs">{t("jobs.kill_stuck")}</button>
           <button onClick={() => retryAllFailed.mutate()} disabled={retryAllFailed.isPending} className="btn-primary text-xs">{t("jobs.retry_all_failed")}</button>
-          <span className={`w-2 h-2 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`} title={connected ? "Live" : "Disconnected"} />
+          <span
+            className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs ${
+              connected
+                ? "border-[#2da44e]/30 bg-[#dafbe1] text-[#1a7f37] dark:border-[#3fb950]/30 dark:bg-[#23863626] dark:text-[#3fb950]"
+                : "border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]"
+            }`}
+            title={connected ? t("jobs.live_connected") : t("jobs.live_polling_title")}
+          >
+            <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-current" : "animate-pulse bg-current"}`} />
+            {connected ? t("jobs.live_connected") : wsStatus === "connecting" ? t("jobs.live_connecting") : t("jobs.live_polling")}
+          </span>
         </div>
       </PageHeader>
 
       {workbench.data && (
         <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-5">
-          <SummaryCard label={t("jobs.summary_active")} value={workbench.data.queue.active_download_count + workbench.data.queue.active_import_count} sub={t("jobs.summary_active_sub")} tone="active" />
-          <SummaryCard label={t("jobs.summary_queued")} value={workbench.data.queue.default} sub={t("jobs.summary_queued_sub")} />
-          <SummaryCard label={t("jobs.summary_importing")} value={workbench.data.queue.active_import_count} sub={t("jobs.summary_importing_sub")} tone={workbench.data.queue.active_import_count ? "active" : "neutral"} />
-          <SummaryCard label={t("jobs.summary_failed")} value={workbench.data.queue.failed_download_count + workbench.data.queue.failed_import_count} tone={workbench.data.queue.failed_download_count + workbench.data.queue.failed_import_count ? "danger" : "neutral"} />
-          <SummaryCard label={t("jobs.summary_stale")} value={workbench.data.queue.stale_count} sub={t("jobs.summary_stale_sub")} tone={workbench.data.queue.stale_count ? "warning" : "neutral"} />
+          <StatCard label={t("jobs.summary_active")} value={workbench.data.queue.active_download_count + workbench.data.queue.active_import_count} sub={t("jobs.summary_active_sub")} tone="active" />
+          <StatCard label={t("jobs.summary_queued")} value={workbench.data.queue.default} sub={t("jobs.summary_queued_sub")} />
+          <StatCard label={t("jobs.summary_importing")} value={workbench.data.queue.active_import_count} sub={t("jobs.summary_importing_sub")} tone={workbench.data.queue.active_import_count ? "active" : "neutral"} />
+          <StatCard label={t("jobs.summary_failed")} value={workbench.data.queue.failed_download_count + workbench.data.queue.failed_import_count} tone={workbench.data.queue.failed_download_count + workbench.data.queue.failed_import_count ? "danger" : "neutral"} />
+          <StatCard label={t("jobs.summary_stale")} value={workbench.data.queue.stale_count} sub={t("jobs.summary_stale_sub")} tone={workbench.data.queue.stale_count ? "warning" : "neutral"} />
         </div>
       )}
 
@@ -577,12 +605,15 @@ function JobsContent() {
           <div className="overflow-x-auto pb-2">
           <div className="min-w-[980px] space-y-1">
             {downloads.data.map((j: any) => {
-              const active = j.status === "downloading" || j.status === "enqueued" || j.status === "pending";
+              const active = isActiveDownload(j.status);
+              const progress = active
+                ? downloadProgress[j.id] || (j.progress_data as JobProgress | null) || fallbackProgress(j.pipeline_stage || j.status)
+                : null;
               return (
                 <div key={j.id}>
                   <div onClick={() => openDownloadDetail(j.id)} className={`card flex cursor-pointer items-center gap-3 p-3 text-sm hover:border-[#0969da]/50 ${active ? "border-l-2 border-l-[#0969da]" : j.status === "failed" ? "border-l-2 border-l-[#cf222e]" : j.status === "paused" ? "border-l-2 border-l-[#bf8700]" : j.status === "stale" ? "border-l-2 border-l-[#d29922]" : ""}`}>
                     <input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="w-4 h-4 rounded border-gray-300 shrink-0" />
-                    <ActiveIndicator status={j.status} />
+                    <div className="w-28 shrink-0"><StatusBadge status={j.status} /></div>
                     <span className="w-16 shrink-0 font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{j.id.slice(0, 8)}</span>
                     {j.source && <SourceBadge source={j.source} />}
                     <div className="min-w-[9rem] max-w-[12rem] shrink-0 leading-tight">
@@ -604,12 +635,7 @@ function JobsContent() {
                       </Link>
                     </div>
                     <span className="min-w-0 flex-1 truncate text-xs text-[#57606a] dark:text-[#8b949e]" title={j.source_url}>{j.source_url}</span>
-                    {downloadProgress[j.id] ? (
-                      <RealProgressBar progress={downloadProgress[j.id]} />
-                    ) : active ? (
-                      <div className="w-20 h-1.5 bg-gray-200 dark:bg-slate-600 rounded-full overflow-hidden shrink-0"><div className="h-full bg-blue-500 rounded-full animate-pulse" style={{ width: "60%" }} /></div>
-                    ) : null}
-                    <PipelineVisualizer stages={downloadPipeline[j.id]?.stages ?? []} />
+                    <RealProgressBar progress={progress} />
                     {active ? (
                       <Elapsed since={j.created_at} active={true} />
                     ) : (
@@ -662,12 +688,16 @@ function JobsContent() {
           <div className="overflow-x-auto pb-2">
           <div className="min-w-[720px] space-y-1">
             {imports.data?.items?.map((j: any) => {
-              const active = j.status === "running";
+              const active = isActiveImport(j.status);
+              const progress = active
+                ? importProgress[j.id] || (j.progress_data as JobProgress | null) || fallbackProgress(j.progress_stage || j.status)
+                : null;
               return (
                 <div key={j.id} onClick={() => openImportDetail(j.id)} className={`card flex cursor-pointer items-center gap-3 p-3 text-sm hover:border-[#0969da]/50 ${active ? "border-l-2 border-l-[#0969da]" : j.status === "failed" ? "border-l-2 border-l-[#cf222e]" : ""}`}>
-                  <ActiveIndicator status={j.status} />
+                  <div className="w-28 shrink-0"><StatusBadge status={j.status} /></div>
                   <span className="font-mono text-xs text-gray-400 dark:text-gray-500 w-16 shrink-0">{j.id.slice(0, 8)}</span>
                   <span className="font-mono text-xs text-gray-400 truncate flex-1">{j.download_job_id?.slice(0, 8) || "-"}</span>
+                  <RealProgressBar progress={progress} />
                   <Link href={`/admin/jobs?tab=downloads&job=${j.download_job_id}`} onClick={(e) => e.stopPropagation()} className="text-xs text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("jobs.open_download")}</Link>
                   <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                   {j.error_log && (
@@ -720,7 +750,7 @@ function ImportJobsList({ downloadJobId }: { downloadJobId: string }) {
       {imports.data?.map((imp: any) => (
         <div key={imp.id} className="flex items-center gap-2 text-xs bg-gray-50 dark:bg-slate-700/50 rounded px-2 py-1">
           <span className="font-mono text-gray-400">{imp.id.slice(0, 8)}</span>
-          <span className={`px-1 rounded ${imp.status === "complete" ? "bg-green-100 text-green-700" : imp.status === "failed" ? "bg-red-100 text-red-600" : imp.status === "running" ? "bg-blue-100 text-blue-600" : "bg-gray-100 text-gray-500"}`}>{statusLabel(t, imp.status)}</span>
+          <StatusBadge status={imp.status} className="px-2 py-0 text-[10px]" />
           {imp.error_log && <span className="text-orange-500 truncate max-w-xs">{imp.error_log.slice(0, 100)}</span>}
         </div>
       ))}
