@@ -126,7 +126,8 @@ function WorksContent() {
   const sp = useSearchParams();
   const pathname = usePathname();
   const [selectedWorkIds, setSelectedWorkIds] = useState<Set<string>>(new Set());
-  const [confirmAction, setConfirmAction] = useState<{type: string; id?: string; ids?: string[]} | null>(null);
+  const [confirmTrash, setConfirmTrash] = useState<string[] | null>(null);
+  const [confirmPurge, setConfirmPurge] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   const SORT_OPTIONS: { key: SortKey; label: string }[] = [
@@ -302,7 +303,7 @@ function WorksContent() {
   const moveSelectedToTrash = () => {
     const ids = [...selectedWorkIds];
     if (!ids.length) return;
-    setConfirmAction({ type: "trash", ids });
+    setConfirmTrash(ids);
   };
 
   return (
@@ -497,7 +498,7 @@ function WorksContent() {
               onToggleFavorite={(id) => toggleFavorite.mutate(id)}
               onRestore={(id) => restoreWork.mutate(id)}
               onPurge={(id) => {
-                setConfirmAction({ type: "purge", id });
+                setConfirmPurge(id);
               }}
             />
           ))}
@@ -544,7 +545,7 @@ function WorksContent() {
               {curationVisibility === "trashed" && (
                 <div className="flex shrink-0 gap-2">
                   <button onClick={(e) => { e.stopPropagation(); restoreWork.mutate(w.id); }} className="rounded border border-[#d8dee4] px-2 py-1 text-xs hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">{t("works.restore")}</button>
-                  <button onClick={(e) => { e.stopPropagation(); setConfirmAction({ type: "purge", id: w.id }); }} className="rounded bg-[#cf222e] px-2 py-1 text-xs text-white hover:bg-[#a40e26]">{t("works.purge")}</button>
+                  <button onClick={(e) => { e.stopPropagation(); setConfirmPurge(w.id); }} className="rounded bg-[#cf222e] px-2 py-1 text-xs text-white hover:bg-[#a40e26]">{t("works.purge")}</button>
                 </div>
               )}
             </div>
@@ -563,24 +564,14 @@ function WorksContent() {
     </main>
   );
 
-      {confirmAction && (
-        <ConfirmDialog
-          open={!!confirmAction}
-          title={confirmAction?.type === "trash" ? t("works.trash") : t("works.purge")}
-          message={confirmAction?.type === "trash"
-            ? t("works.purge_confirm", { count: confirmAction.ids?.length ?? 0 })
-            : t("works.purge_confirm")}
-          onConfirm={() => {
-            if (confirmAction?.type === "trash" && confirmAction.ids) {
-              batchTrash.mutate(confirmAction.ids);
-            } else if (confirmAction?.id) {
-              purgeWork.mutate(confirmAction.id);
-            }
-            setConfirmAction(null);
-          }}
-          onCancel={() => setConfirmAction(null)}
-        />
-      )}
+      <ConfirmDialog open={!!confirmTrash} title={t("works.trash")}
+        message={t("works.purge_confirm")}
+        onConfirm={() => { if (confirmTrash) { batchTrash.mutate(confirmTrash); setConfirmTrash(null); }}}
+        onCancel={() => setConfirmTrash(null)} />
+      <ConfirmDialog open={!!confirmPurge} title={t("works.purge")}
+        message={t("works.purge_confirm")}
+        onConfirm={() => { if (confirmPurge) { purgeWork.mutate(confirmPurge); setConfirmPurge(null); }}}
+        onCancel={() => setConfirmPurge(null)} />
 }
 
 export default function WorksPage() {
