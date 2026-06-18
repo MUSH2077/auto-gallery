@@ -4,7 +4,7 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
 import { api, queryKeys, WorkListItem } from "@/lib/api";
-import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge } from "@/components";
+import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
 
 function Img({ assetId, alt, className }: { assetId: string | undefined; alt: string; className?: string }) {
   const t = useT();
@@ -126,8 +126,6 @@ function WorksContent() {
   const sp = useSearchParams();
   const pathname = usePathname();
   const [selectedWorkIds, setSelectedWorkIds] = useState<Set<string>>(new Set());
-  const [confirmTrash, setConfirmTrash] = useState<string[] | null>(null);
-  const [confirmPurge, setConfirmPurge] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   const SORT_OPTIONS: { key: SortKey; label: string }[] = [
@@ -303,7 +301,7 @@ function WorksContent() {
   const moveSelectedToTrash = () => {
     const ids = [...selectedWorkIds];
     if (!ids.length) return;
-    setConfirmTrash(ids);
+    if (window.confirm(t("works.batch_trash_confirm", { count: ids.length }))) batchTrash.mutate(ids);
   };
 
   return (
@@ -498,7 +496,7 @@ function WorksContent() {
               onToggleFavorite={(id) => toggleFavorite.mutate(id)}
               onRestore={(id) => restoreWork.mutate(id)}
               onPurge={(id) => {
-                setConfirmPurge(id);
+                if (window.confirm(t("works.purge_confirm"))) purgeWork.mutate(id);
               }}
             />
           ))}
@@ -545,7 +543,7 @@ function WorksContent() {
               {curationVisibility === "trashed" && (
                 <div className="flex shrink-0 gap-2">
                   <button onClick={(e) => { e.stopPropagation(); restoreWork.mutate(w.id); }} className="rounded border border-[#d8dee4] px-2 py-1 text-xs hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">{t("works.restore")}</button>
-                  <button onClick={(e) => { e.stopPropagation(); setConfirmPurge(w.id); }} className="rounded bg-[#cf222e] px-2 py-1 text-xs text-white hover:bg-[#a40e26]">{t("works.purge")}</button>
+                  <button onClick={(e) => { e.stopPropagation(); if (window.confirm(t("works.purge_confirm"))) purgeWork.mutate(w.id); }} className="rounded bg-[#cf222e] px-2 py-1 text-xs text-white hover:bg-[#a40e26]">{t("works.purge")}</button>
                 </div>
               )}
             </div>
@@ -563,15 +561,6 @@ function WorksContent() {
       )}
     </main>
   );
-
-      <ConfirmDialog open={!!confirmTrash} title={t("works.trash")}
-        message={t("works.purge_confirm")}
-        onConfirm={() => { if (confirmTrash) { batchTrash.mutate(confirmTrash); setConfirmTrash(null); }}}
-        onCancel={() => setConfirmTrash(null)} />
-      <ConfirmDialog open={!!confirmPurge} title={t("works.purge")}
-        message={t("works.purge_confirm")}
-        onConfirm={() => { if (confirmPurge) { purgeWork.mutate(confirmPurge); setConfirmPurge(null); }}}
-        onCancel={() => setConfirmPurge(null)} />
 }
 
 export default function WorksPage() {
