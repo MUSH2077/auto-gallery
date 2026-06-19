@@ -250,82 +250,23 @@ async def run_import_job(import_job_id: str):
                 await db.commit()
         provider = registry.get(dj.source)
 
-        # Get new JSON file paths from Redis (stored by download runner via snapshot diff).
-        # This avoids re-scanning the filesystem which is unreliable due to:
-        # - Naming template output directories not matching download_dir hint
-        # - Concurrent imports processing the same JSONs
-        # - Race conditions between snapshot and re-scan
-        from app.services.redis_client import get_redis
-        _new_json_paths: list[str] | None = None
-        try:
-            _new_json_paths = _consume_import_file_list(get_redis(), import_job_id)
-        except Exception:
-            logger.warning("Failed to parse import file list for %s", import_job_id, exc_info=True)
+        # Get new JSONs from FileIndex (primary), fall back to Redis key (backward compat)
+        from app.services.file_index import FileIndex
+        _file_index = FileIndex(os.path.join(str(settings.download_root), ".file-index.sqlite3"))
+        json_rel_paths = _file_index.get_new_metadata_jsons(provider.source_name, str(dj.id))
 
-        source_root = Path(settings.download_root) / provider.source_name
-
-        if _new_json_paths:
-            # Use the exact file list from the download runner's snapshot diff
-            all_json_files = sorted(Path(p) for p in _new_json_paths if Path(p).exists())
-            logger.info("Import %s: processing %d files from download snapshot (%d already gone)",
-                       import_job_id, len(all_json_files), len(_new_json_paths) - len(all_json_files))
-            async with async_session() as db:
-                ij = await db.get(ImportJob, job_uuid)
-                if ij:
-                    apply_import_progress(
-                        ij,
-                        "importing",
-                        f"Processing {len(all_json_files)} metadata files from download",
-                        current=0,
-                        total=len(all_json_files) or None,
-                    )
-                    await db.commit()
-        else:
-            # Fallback: scan filesystem (legacy path for jobs created before this fix)
-            if not source_root.exists():
-                async with async_session() as db:
-                    ij = await db.get(ImportJob, job_uuid)
-                    if ij:
-                        apply_import_progress(
-                            ij,
-                            "failed",
-                            f"Source directory not found: {source_root}",
-                        )
-                        transition_import_job(ij, "failed", f"Source directory not found: {source_root}")
-                        await db.commit()
-                return
-
-            if dj.download_dir:
-                candidate_root = source_root / dj.download_dir
-                scan_root = candidate_root if candidate_root.exists() else source_root
-            else:
-                scan_root = source_root
-
-            all_json_files = sorted(scan_root.rglob("*.json"))
-            async with async_session() as db:
-                ij = await db.get(ImportJob, job_uuid)
-                if ij:
-                    apply_import_progress(
-                        ij,
-                        "importing",
-                        f"Scanning {len(all_json_files)} metadata files",
-                        current=0,
-                        total=len(all_json_files) or None,
-                    )
-                    await db.commit()
+        all_json_files = sorted(
+            Path(settings.download_root) / p for p in json_rel_paths
+            if (Path(settings.download_root) / p).exists()
+        )
 
         if not all_json_files:
-            async with async_session() as db:
-                ij = await db.get(ImportJob, job_uuid)
-                if ij:
-                    apply_import_progress(
-                        ij,
-                        "failed",
-                        "No metadata JSON files found",
-                    )
-                    transition_import_job(ij, "failed", "No metadata JSON files found")
-                    await db.commit()
-            return
+            from app.services.redis_client import get_redis as _get_redis_fb
+            legacy = _consume_import_file_list(_get_redis_fb(), import_job_id)
+            if legacy:
+                all_json_files = sorted(Path(p) for p in legacy if Path(p).exists())
+                logger.info("Import %s: loaded %d files from legacy Redis key",
+                           import_job_id, len(all_json_files))
 
         # Group JSONs by work_id
         groups = defaultdict(list)
@@ -383,6 +324,9 @@ async def run_import_job(import_job_id: str):
                 continue
 
             first_file, first_raw = items[0]
+
+            _json_rel = str(first_file.relative_to(settings.download_root))
+            _file_index.mark_importing(_json_rel, import_job_id)
 
             try:
                 ws_data = provider.parse_work_source(first_raw)
@@ -688,6 +632,7 @@ async def run_import_job(import_job_id: str):
             for jf, _ in items:
                 try:
                     jf.unlink()
+                    _file_index.mark_imported(str(jf.relative_to(settings.download_root)), import_job_id)
                 except Exception:
                     logger.warning("Failed to unlink processed JSON %s", jf, exc_info=True)
 
