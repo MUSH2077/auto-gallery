@@ -118,6 +118,8 @@ services:
       - ${HOST_LIBRARY:-./data/library}:/library
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "python3", "-c", "import os, shutil, redis; assert redis.from_url(os.environ['REDIS_URL']).ping(); assert shutil.which('gallery-dl')"]
       interval: 30s
@@ -154,6 +156,8 @@ services:
       - ${HOST_LIBRARY:-./data/library}:/library
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "python3", "-c", "import os, redis; assert redis.from_url(os.environ['REDIS_URL']).ping()"]
       interval: 30s
@@ -190,6 +194,8 @@ services:
       - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
       - ${HOST_LIBRARY:-./data/library}:/library
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "python3", "-c", "import os, redis; assert redis.from_url(os.environ['REDIS_URL']).ping()"]
       interval: 30s
