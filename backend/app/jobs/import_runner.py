@@ -165,14 +165,38 @@ def _mime_type(suffix: str) -> str:
 
 
 def _consume_import_file_list(redis_client, import_job_id: str) -> list[str] | None:
-    """Read and delete the exact JSON file list captured by the download job."""
+    """Read and delete the exact JSON file list captured by the download job.
+
+    Checks Redis first (fast path), then falls back to a durable on-disk
+    copy that survives Redis restarts and long queue delays.
+    """
     files_key = f"import:{import_job_id}:files"
     files_raw = redis_client.get(files_key)
-    if not files_raw:
-        return None
-    new_json_paths = json.loads(files_raw)
-    redis_client.delete(files_key)
-    return new_json_paths
+    if files_raw:
+        new_json_paths = json.loads(files_raw)
+        redis_client.delete(files_key)
+        # Also clean up the disk fallback if it exists
+        try:
+            fallback_path = Path(settings.download_root) / ".import-lists" / f"{import_job_id}.json"
+            if fallback_path.exists():
+                fallback_path.unlink()
+        except Exception:
+            pass
+        return new_json_paths
+
+    # Fallback: check durable on-disk copy (survives Redis restarts, long queues)
+    try:
+        fallback_path = Path(settings.download_root) / ".import-lists" / f"{import_job_id}.json"
+        if fallback_path.exists():
+            data = json.loads(fallback_path.read_text())
+            fallback_path.unlink()  # consume it
+            logger.info("Import %s: loaded file list from disk fallback (%d files)",
+                       import_job_id, len(data))
+            return data
+    except Exception:
+        logger.warning("Failed to read import file list fallback for %s", import_job_id, exc_info=True)
+
+    return None
 
 
 def _can_generate_thumbnail(suffix: str) -> bool:
@@ -478,9 +502,33 @@ async def run_import_job(import_job_id: str):
                 db.add(ws)
                 await db.flush()
 
-                # Library dir uses display name (from JSON metadata)
+                # Use gallery-dl directory template for library path (aligns with downloads)
+                from app.services.settings import load_gallerydl_config, extractor_key_for_source
+                _extractor_key = extractor_key_for_source(provider.source_name)
+                _config = load_gallerydl_config()
+                _extractor_cfg = _config.get("extractor", {}).get(_extractor_key, {})
+                _dir_template = _extractor_cfg.get("directory", [provider.source_name, "{id}"])
+
+                _resolved_parts = []
+                for part in _dir_template:
+                    resolved = str(part)
+                    if isinstance(first_raw, dict):
+                        for k, v in first_raw.items():
+                            if isinstance(v, dict):
+                                for sk, sv in v.items():
+                                    resolved = resolved.replace(f"{{user[{sk}]}}", str(sv) if sv else "")
+                                    resolved = resolved.replace(f"{{{sk}}}", str(sv) if sv else "")
+                            elif isinstance(v, (str, int, float)):
+                                resolved = resolved.replace(f"{{{k}}}", str(v) if v is not None else "")
+                    resolved = resolved.replace("{id}", src_work_id)
+                    resolved = resolved.replace("{category}", str(first_raw.get("category", "")))
+                    if isinstance(first_raw.get("board"), dict):
+                        resolved = resolved.replace("{board[name]}", str(first_raw["board"].get("name", "")))
+                    _resolved_parts.append(resolved.strip().replace("/", "_"))
+
+                _creator_dir = _resolved_parts[1] if len(_resolved_parts) > 1 else dir_name
                 lib_dir = (Path(settings.library_root) / provider.source_name
-                           / dir_name / src_work_id)
+                           / _creator_dir / src_work_id)
                 lib_dir.mkdir(parents=True, exist_ok=True)
 
                 # Assets from the media files (already in final location)
