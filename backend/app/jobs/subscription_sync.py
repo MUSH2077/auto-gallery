@@ -1,4 +1,5 @@
 import logging
+import os
 import sqlite3
 import asyncio
 from datetime import datetime, timezone, timedelta
@@ -315,28 +316,52 @@ async def _sync_subscriptions_locked():
                     logger.debug("Auto-sync skipped source after enqueue check",
                                  extra={**log_context, **decision, "skip_reason": result.get("skip_reason") or result})
 
-    # Stale job detection: mark download jobs stuck "downloading" for too long
+    # Stale job detection: check Redis heartbeat keys set by HeartbeatPublisher.
+    # The heartbeat thread publishes to Redis pub/sub AND sets a TTL key
+    # ``task:{job_id}:heartbeat_ts`` (90s TTL). If the key exists the worker
+    # is alive; if missing, the worker has died or stalled.
     try:
         async with async_session() as stale_db:
             dl_defaults = await get_download_defaults(stale_db)
             dl_timeout = int(dl_defaults.get("timeout_seconds", 600))
-            stale_cutoff = datetime.now(timezone.utc) - timedelta(seconds=dl_timeout * 2)
-            stale_result = await stale_db.execute(
-                select(DownloadJob).where(
-                    DownloadJob.status == "downloading",
-                    DownloadJob.created_at < stale_cutoff,
-                )
+            now = datetime.now(timezone.utc)
+            created_at_fallback_cutoff = now - timedelta(seconds=dl_timeout * 2)
+
+            # Find all jobs currently "downloading"
+            result = await stale_db.execute(
+                select(DownloadJob).where(DownloadJob.status == "downloading")
             )
-            stale_jobs = stale_result.scalars().all()
-            stale_repo = DownloadJobRepository(stale_db)
-            for sj in stale_jobs:
-                if sj.error_log:
-                    error_log = sj.error_log + "\n[auto] Marked stale: stuck downloading for > 2x timeout"
-                else:
-                    error_log = "[auto] Marked stale: stuck downloading for > 2x timeout"
-                await stale_repo.update_status(sj, "stale", error_log)
-                logger.warning("Marked download job %s as stale (stuck downloading)", sj.id)
+            candidates = result.scalars().all()
+
+            if not candidates:
+                return
+
+            # Check Redis heartbeat keys for each candidate
+            r = get_redis()
+            stale_jobs = []
+            for job in candidates:
+                hb_key = f"task:{str(job.id)}:heartbeat_ts"
+                try:
+                    if r.exists(hb_key):
+                        continue  # heartbeat key exists → worker is alive
+                except Exception:
+                    pass  # Redis error → fall through to created_at check
+
+                # No heartbeat key → check created_at fallback
+                created = job.created_at
+                if created is not None and created < created_at_fallback_cutoff:
+                    stale_jobs.append(job)
+
             if stale_jobs:
+                stale_repo = DownloadJobRepository(stale_db)
+                for sj in stale_jobs:
+                    if sj.error_log:
+                        error_log = sj.error_log + "\n[auto] Marked stale: lost heartbeat (stuck downloading)"
+                    else:
+                        error_log = "[auto] Marked stale: lost heartbeat (stuck downloading)"
+                    await stale_repo.update_status(sj, "stale", error_log)
+                    logger.warning("Marked download job %s as stale (no heartbeat key in Redis)",
+                                  sj.id)
                 await stale_db.commit()
     except Exception:
         logger.debug("Stale job detection skipped", exc_info=True)
@@ -354,6 +379,16 @@ async def _sync_subscriptions_locked():
                 logger.debug("Failed to VACUUM archive %s", archive_file.name, exc_info=True)
     except Exception:
         logger.debug("Archive maintenance skipped", exc_info=True)
+
+    # Vacuum file index alongside download archives
+    try:
+        from app.services.file_index import FileIndex
+        fi_path = os.path.join(str(settings.download_root), ".file-index.sqlite3")
+        if os.path.exists(fi_path):
+            FileIndex(fi_path).vacuum()
+            logger.debug("VACUUMed file index")
+    except Exception:
+        logger.debug("File index VACUUM skipped", exc_info=True)
 
     mode = config.get("schedule_mode", "interval")
     logger.info("Auto-sync scan complete: %d jobs created, %d skipped (enabled=%s, mode=%s, timezone=%s, scan_every=%dm, default_interval=%dh)",
