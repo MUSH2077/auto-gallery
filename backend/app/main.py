@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 
 import httpx
@@ -74,6 +75,17 @@ async def lifespan(app: FastAPI):
         await ensure_admin_user()
     except Exception as e:
         logger.warning("ensure_admin_user failed (may be first run before migration)", error=str(e))
+
+    # ── Clean orphaned admin operations from previous runs ──
+    try:
+        from app.services.redis_client import get_redis
+        r = get_redis()
+        keys = r.keys("admin_operation:*")
+        if keys:
+            r.delete(*keys)
+            logger.info("Cleaned %d orphaned admin operation keys", len(keys))
+    except Exception:
+        pass
 
     # ── Start WebSocket Redis listener ──
     from app.services.ws_manager import manager as ws_manager
@@ -181,9 +193,21 @@ async def _service_readiness() -> dict[str, str]:
     return services
 
 
+_readiness_cache: dict | None = None
+_readiness_cache_ts: float = 0.0
+_READINESS_CACHE_TTL = 15.0
+
+
 @app.get("/api/v1/system/ready")
 async def ready():
-    services = await _service_readiness()
+    global _readiness_cache, _readiness_cache_ts
+    now_mono = time.monotonic()
+    if _readiness_cache is not None and (now_mono - _readiness_cache_ts) < _READINESS_CACHE_TTL:
+        services = _readiness_cache
+    else:
+        services = await _service_readiness()
+        _readiness_cache = services
+        _readiness_cache_ts = now_mono
     all_up = all(v == "up" for v in services.values())
     return JSONResponse(
         status_code=200 if all_up else 503,
@@ -195,7 +219,7 @@ async def ready():
 async def health():
     services = await _service_readiness()
 
-    # Disk space check
+    # Disk space check (cached)
     disk = "unknown"
     try:
         import shutil
