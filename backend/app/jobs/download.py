@@ -667,6 +667,45 @@ async def run_download_job(job_id: str):
             _registered = _register_new_files()
             logger.info("Registered %d new files in FileIndex for job %s", _registered, job_id)
 
+            # Publish new works to Redis Stream for streaming import consumers
+            if _registered > 0:
+                try:
+                    _file_index2 = FileIndex(os.path.join(str(settings.download_root), ".file-index.sqlite3"))
+                    _new_jsons = _file_index2.get_new_metadata_jsons(job.source, str(job_id))
+                    _r = get_redis()
+                    _published = 0
+                    for _jp in _new_jsons:
+                        _jf = Path(settings.download_root) / _jp
+                        if not _jf.exists():
+                            continue
+                        try:
+                            with open(_jf) as _jfh:
+                                _raw = json.load(_jfh)
+                            _provider = registry.get(job.source)
+                            _ws = _provider.parse_work_source(_raw)
+                            _src_work_id = _ws.get("source_work_id", "")
+                            _parts = _jp.split("/")
+                            _asset_paths = [
+                                str(af.relative_to(settings.download_root))
+                                for af in _jf.parent.iterdir()
+                                if af.is_file() and af.suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".zip"}
+                            ]
+                            _msg = {
+                                "download_job_id": str(job_id),
+                                "source": job.source,
+                                "work_id": _src_work_id,
+                                "json_path": _jp,
+                                "asset_paths": _asset_paths,
+                                "creator_dir": _parts[1] if len(_parts) > 2 else "",
+                            }
+                            _r.xadd("work:ready", _msg, maxlen=10000, approximate=True)
+                            _published += 1
+                        except Exception:
+                            logger.debug("Failed to XADD work for %s", _jp, exc_info=True)
+                    logger.info("Published %d works to Redis Stream work:ready for job %s", _published, job_id)
+                except Exception:
+                    logger.warning("Failed to publish works to Redis Stream for job %s", job_id, exc_info=True)
+
     except Exception as e:
         logger.error("Unexpected error in download job %s: %s", job_id, e, exc_info=True)
         async with async_session() as db2:

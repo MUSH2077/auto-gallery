@@ -172,6 +172,42 @@ services:
     restart: unless-stopped
     mem_limit: 512M
 
+  stream-import:
+    image: auto-gallery-backend:latest
+    pull_policy: never
+    command: python worker_entrypoint.py --stream work:ready 2
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      MEILI_URL: http://meilisearch:7700
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      SECRET_KEY: ${SECRET_KEY}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      DOWNLOAD_ROOT: /downloads
+      LIBRARY_ROOT: /library
+      GALLERYDL_CONFIG_ROOT: /gallerydl-config
+      APP_CONFIG_ROOT: /app-config
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TIMEZONE: ${TIMEZONE:-UTC}
+    volumes:
+      - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
+      - ${HOST_LIBRARY:-./data/library}:/library
+      - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
+      - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import os, redis; assert redis.from_url(os.environ['REDIS_URL']).ping()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 512M
+
   scheduler:
     image: auto-gallery-backend:latest
     pull_policy: never
