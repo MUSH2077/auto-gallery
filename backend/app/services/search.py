@@ -54,32 +54,39 @@ class SearchService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def search(self, query: str, offset: int = 0, limit: int = 20) -> dict:
+    async def search(self, query: str, offset: int = 0, limit: int = 20, kind: str = "all") -> dict:
         try:
             client = _client()
-            works_result = client.index(WORKS_INDEX).search(query, offset=offset, limit=limit)
-            works_hits = getattr(works_result, 'hits', []) or []
-            works_total = getattr(works_result, 'estimated_total_hits', 0) or getattr(works_result, 'estimatedTotalHits', 0) or 0
+            result = {"query": query, "total": 0, "results": [], "creators": [], "tags": []}
 
-            try:
-                creators_result = client.index(CREATORS_INDEX).search(query, limit=10)
-                creators_hits = getattr(creators_result, 'hits', []) or []
-            except Exception:
-                creators_hits = []
+            # Works — searched for 'all' and 'works'
+            if kind in ("all", "works"):
+                works_result = client.index(WORKS_INDEX).search(query, offset=offset, limit=limit)
+                works_hits = getattr(works_result, 'hits', []) or []
+                result["results"] = list(works_hits)
+                result["total"] = getattr(works_result, 'estimated_total_hits', 0) or 0
 
-            try:
-                tags_result = client.index(TAGS_INDEX).search(query, limit=10)
-                tags_hits = getattr(tags_result, 'hits', []) or []
-            except Exception:
-                tags_hits = []
+            # Creators — searched for 'all' and 'creators'
+            if kind in ("all", "creators"):
+                try:
+                    cr = client.index(CREATORS_INDEX).search(query, limit=10 if kind == "all" else limit)
+                    result["creators"] = list(getattr(cr, 'hits', []) or [])
+                    if kind == "creators":
+                        result["total"] = getattr(cr, 'estimated_total_hits', 0) or 0
+                except Exception:
+                    pass
 
-            return {
-                "results": list(works_hits),
-                "total": works_total,
-                "query": query,
-                "creators": list(creators_hits),
-                "tags": list(tags_hits),
-            }
+            # Tags — searched for 'all' and 'tags'
+            if kind in ("all", "tags"):
+                try:
+                    tr = client.index(TAGS_INDEX).search(query, limit=10 if kind == "all" else limit)
+                    result["tags"] = list(getattr(tr, 'hits', []) or [])
+                    if kind == "tags":
+                        result["total"] = getattr(tr, 'estimated_total_hits', 0) or 0
+                except Exception:
+                    pass
+
+            return result
         except Exception as e:
             logger.warning("Meilisearch search failed: %s", e)
             return {"results": [], "total": 0, "query": query, "creators": [], "tags": []}
@@ -121,6 +128,45 @@ class SearchService:
             logger.info("Cleared all works from Meilisearch index")
         except Exception as e:
             logger.warning("Failed to clear works index: %s", e)
+
+    async def index_creator(self, creator_id: str, name: str, display_name: str | None,
+                            description: str | None, is_active: bool, created_at: str):
+        try:
+            client = _client()
+            _ensure_indexes(client)
+            client.index(CREATORS_INDEX).add_documents([{
+                "id": creator_id, "name": name,
+                "display_name": display_name or name,
+                "description": (description or "")[:500],
+                "is_active": is_active, "created_at": created_at,
+            }])
+        except Exception as e:
+            logger.warning("Failed to index creator %s: %s", creator_id, e)
+
+    async def index_tag(self, tag_id: str, normalized_name: str, category: str | None, created_at: str):
+        try:
+            client = _client()
+            _ensure_indexes(client)
+            client.index(TAGS_INDEX).add_documents([{
+                "id": tag_id, "normalized_name": normalized_name,
+                "category": category or "general", "created_at": created_at,
+            }])
+        except Exception as e:
+            logger.warning("Failed to index tag %s: %s", tag_id, e)
+
+    async def delete_creator(self, creator_id: str):
+        try:
+            client = _client()
+            client.index(CREATORS_INDEX).delete_document(creator_id)
+        except Exception as e:
+            logger.debug("Failed to delete creator %s from index: %s", creator_id, e)
+
+    async def delete_tag(self, tag_id: str):
+        try:
+            client = _client()
+            client.index(TAGS_INDEX).delete_document(tag_id)
+        except Exception as e:
+            logger.debug("Failed to delete tag %s from index: %s", tag_id, e)
 
     async def _batch_index_works(self, docs: list[dict]):
         """Index multiple works in a single Meilisearch call."""

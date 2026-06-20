@@ -11,9 +11,10 @@ router = APIRouter(dependencies=[RequireAdmin])
 @router.get("")
 async def search(
     q: str = Query("", description="Search query"),
+    kind: str = Query("all", description="Entity type: all, works, creators, tags"),
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ):
     svc = SearchService(db)
-    return await svc.search(q, offset, limit)
+    return await svc.search(q, offset, limit, kind=kind)
