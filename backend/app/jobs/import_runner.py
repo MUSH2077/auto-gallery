@@ -1,3 +1,4 @@
+from app.services.image_utils import can_generate_thumbnail, get_mime_type, get_image_dims, can_compute_phash
 import asyncio
 import json
 import logging
@@ -251,8 +252,8 @@ async def run_import_job(import_job_id: str):
         provider = registry.get(dj.source)
 
         # Get new JSONs from FileIndex (primary), fall back to Redis key (backward compat)
-        from app.services.file_index import FileIndex
-        _file_index = FileIndex(os.path.join(str(settings.download_root), ".file-index.sqlite3"))
+        from app.services.file_index import FileIndex, get_file_index
+        _file_index = get_file_index()
         json_rel_paths = _file_index.get_new_metadata_jsons(provider.source_name, str(dj.id))
 
         all_json_files = sorted(

@@ -211,3 +211,18 @@ class FileIndex:
                 conn.execute("VACUUM")
             finally:
                 conn.close()
+
+
+import os as _os
+from app.config import settings as _settings
+
+_file_index_instance: FileIndex | None = None
+
+
+def get_file_index() -> FileIndex:
+    """Return a process-level singleton FileIndex pointing at DOWNLOAD_ROOT/.file-index.sqlite3."""
+    global _file_index_instance
+    if _file_index_instance is None:
+        _file_index_instance = FileIndex(
+            _os.path.join(str(_settings.download_root), ".file-index.sqlite3"))
+    return _file_index_instance

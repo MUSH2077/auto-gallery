@@ -101,7 +101,7 @@ async def rebuild_library_index(db: AsyncSession) -> dict:
     from sqlalchemy import select
     from app.config import settings
     from app.models import Work, Asset, WorkSource, AssetSource, SourceCreator
-    from app.services.file_index import FileIndex
+    from app.services.file_index import FileIndex, get_file_index
     from app.services.thumbnail import generate_thumbnail
     from app.services.settings import load_gallerydl_config, extractor_key_for_source
     from app.services.redis_client import get_redis
@@ -118,7 +118,7 @@ async def rebuild_library_index(db: AsyncSession) -> dict:
     progress_key = "library:rebuild:progress"
     r.setex(progress_key, 3600, json.dumps({"current": 0, "total": total, "status": "running"}))
 
-    file_index = FileIndex(os.path.join(str(settings.download_root), ".file-index.sqlite3"))
+    file_index = get_file_index()
     config = load_gallerydl_config()
     rebuilt = 0
     errors = 0

@@ -1,3 +1,4 @@
+from app.services.image_utils import can_generate_thumbnail, get_mime_type, get_image_dims, can_compute_phash
 """Streaming import worker — consumes works from Redis Stream "work:ready".
 
 Replaces the batch import_job flow with real-time per-work processing.
@@ -31,7 +32,7 @@ from app.models.subscription import Subscription
 from app.models.download_job import DownloadJob
 from app.providers import registry
 from app.services.curation import CurationService
-from app.services.file_index import FileIndex
+from app.services.file_index import FileIndex, get_file_index
 from app.services.redis_client import get_redis
 from app.services.thumbnail import generate_thumbnail
 
@@ -67,7 +68,7 @@ async def process_work(msg: dict, consumer_id: str) -> bool:
         return True
 
     # Idempotency: FileIndex status guard
-    file_index = FileIndex(os.path.join(str(settings.download_root), ".file-index.sqlite3"))
+    file_index = get_file_index()
 
     try:
         with open(json_file) as f:
