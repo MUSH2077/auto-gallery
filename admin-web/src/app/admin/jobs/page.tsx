@@ -9,6 +9,7 @@ import { api, DownloadJob, ImportJob, JobProgress, queryKeys } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, BatchByFilter, StatusBadge, StatCard } from "@/components";
 import { useJobWebSocket } from "@/lib/useWebSocket";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
+import { classifyJob, categoryBorderClass, classifyError, estimatedRetryBackoff } from "@/lib/jobCategory";
 
 
 const REFETCH_ACTIVE_MS = 3000;
@@ -185,13 +186,58 @@ function JobDetailDrawer({
               <DetailRow label={t("jobs.repository")} value={dl.subscription_source_id ? <Link href={`/admin/repositories/${dl.subscription_source_id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{shortId(dl.subscription_source_id)}</Link> : undefined} />
               <DetailRow label={t("jobs.created")} value={fmt.dateTime(dl.created_at)} />
               <DetailRow label={t("jobs.updated")} value={fmt.dateTime(dl.updated_at)} />
+              {dl.last_heartbeat_at && (
+                <DetailRow label={t("jobs.last_heartbeat")} value={
+                  <span className="text-xs">
+                    {fmt.relative(dl.last_heartbeat_at)}
+                    {dl.status === "stale" && (
+                      <span className="ml-2 text-orange-500 font-medium">
+                        {t("jobs.stale_lost_heartbeat", { time: fmt.relative(dl.last_heartbeat_at) || "—" })}
+                      </span>
+                    )}
+                  </span>
+                } />
+              )}
+              {dl.retry_count > 0 && (
+                <DetailRow label={t("jobs.recovery_retry", { current: String(dl.retry_count), max: "3" })} value={
+                  <span className="text-xs text-blue-600 dark:text-blue-400 font-medium">{dl.retry_count} / 3</span>
+                } />
+              )}
             </dl>
-            {dl.error_log && (
+            {dl.error_log && (() => {
+              const errInfo = classifyError(dl.error_log);
+              const hintKey = `jobs.error_type_${errInfo.type}`;
+              return (
               <section>
-                <h3 className="mb-2 text-sm font-semibold">{t("jobs.error_log")}</h3>
+                <h3 className="mb-2 text-sm font-semibold flex items-center gap-2">
+                  {t("jobs.error_log")}
+                  {errInfo.type !== "unknown" && (
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${
+                      errInfo.type === "auth" ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" :
+                      errInfo.type === "timeout" || errInfo.type === "stall" ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400" :
+                      "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
+                    }`}>{t(hintKey)}</span>
+                  )}
+                </h3>
+                {errInfo.type === "auth" && (
+                  <p className="text-xs text-red-600 dark:text-red-400 mb-2">
+                    {t("auth.desc")}: <Link href="/admin/settings/auth-status" className="underline">{t("settings.auth")} →</Link>
+                  </p>
+                )}
+                {errInfo.type === "timeout" && (
+                  <p className="text-xs text-yellow-600 dark:text-yellow-400 mb-2">
+                    {t("dldefaults.timeout.desc")}: <Link href="/admin/settings/download-defaults" className="underline">{t("dldefaults.title")} →</Link>
+                  </p>
+                )}
+                {errInfo.type === "stall" && (
+                  <p className="text-xs text-yellow-600 dark:text-yellow-400 mb-2">
+                    {t("dldefaults.stall_timeout.desc")}: <Link href="/admin/settings/download-defaults" className="underline">{t("dldefaults.title")} →</Link>
+                  </p>
+                )}
                 <pre className="max-h-64 overflow-auto rounded-md border border-[#cf222e]/20 bg-[#ffebe9] p-3 font-mono text-xs whitespace-pre-wrap text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">{dl.error_log}</pre>
               </section>
-            )}
+              );
+            })()}
             {dl.manifest && (
               <section>
                 <h3 className="mb-2 text-sm font-semibold">{t("jobs.manifest")}</h3>
@@ -611,7 +657,7 @@ function JobsContent() {
                 : null;
               return (
                 <div key={j.id}>
-                  <div onClick={() => openDownloadDetail(j.id)} className={`card flex cursor-pointer items-center gap-3 p-3 text-sm hover:border-[#0969da]/50 ${active ? "border-l-2 border-l-[#0969da]" : j.status === "failed" ? "border-l-2 border-l-[#cf222e]" : j.status === "paused" ? "border-l-2 border-l-[#bf8700]" : j.status === "stale" ? "border-l-2 border-l-[#d29922]" : ""}`}>
+                  <div onClick={() => openDownloadDetail(j.id)} className={`card flex cursor-pointer items-center gap-3 p-3 text-sm hover:border-[#0969da]/50 ${(() => { const cat = classifyJob(j.status, j.retry_count, 3); const cls = categoryBorderClass(cat); return cls ? `border-l-2 ${cls}` : ""; })()}`}>
                     <input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="w-4 h-4 rounded border-gray-300 shrink-0" />
                     <div className="w-28 shrink-0"><StatusBadge status={j.status} /></div>
                     <span className="w-16 shrink-0 font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{j.id.slice(0, 8)}</span>
@@ -638,6 +684,15 @@ function JobsContent() {
                     <RealProgressBar progress={progress} />
                     {active ? (
                       <Elapsed since={j.created_at} active={true} />
+                    ) : classifyJob(j.status, j.retry_count, 3) === "retrying" ? (
+                      <span className="text-xs text-blue-500 shrink-0 w-22 text-right font-medium">
+                        ↻ {t("jobs.recovery_retry", { current: String(j.retry_count), max: "3" })}
+                        {estimatedRetryBackoff(j.retry_count, 60) != null && (
+                          <span className="block text-[10px] text-gray-400">
+                            {t("jobs.recovery_waiting", { seconds: String(estimatedRetryBackoff(j.retry_count, 60)) })}
+                          </span>
+                        )}
+                      </span>
                     ) : (
                       <span className="text-xs text-gray-400 shrink-0 w-20 text-right">
                         {j.retry_count > 0 && <span className="mr-1">↻{j.retry_count}</span>}

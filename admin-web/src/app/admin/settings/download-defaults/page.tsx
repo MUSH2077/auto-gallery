@@ -72,6 +72,19 @@ export default function DownloadDefaultsPage() {
 
             <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
               <div>
+                <span className="font-medium">{t("dldefaults.stall_timeout")}</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.stall_timeout.desc")}</p>
+              </div>
+              <input
+                type="number" min={30} max={600} step={30}
+                value={current.stall_timeout_seconds}
+                onChange={(e) => setNum("stall_timeout_seconds", parseInt(e.target.value) || 120)}
+                className="input w-20 px-2 py-1 text-center font-mono"
+              />
+            </div>
+
+            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+              <div>
                 <span className="font-medium">{t("dldefaults.retries")}</span>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.retries.desc")}</p>
               </div>
@@ -92,6 +105,45 @@ export default function DownloadDefaultsPage() {
                 type="number" min={10} max={600} step={10}
                 value={current.retry_backoff_base_seconds}
                 onChange={(e) => setNum("retry_backoff_base_seconds", parseInt(e.target.value) || 60)}
+                className="input w-20 px-2 py-1 text-center font-mono"
+              />
+            </div>
+
+            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+              <div>
+                <span className="font-medium">{t("dldefaults.gallerydl_retries")}</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.gallerydl_retries.desc")}</p>
+              </div>
+              <input
+                type="number" min={1} max={10}
+                value={current.gallerydl_retries}
+                onChange={(e) => setNum("gallerydl_retries", parseInt(e.target.value) || 3)}
+                className="input w-20 px-2 py-1 text-center font-mono"
+              />
+            </div>
+
+            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+              <div>
+                <span className="font-medium">{t("dldefaults.gallerydl_timeout")}</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.gallerydl_timeout.desc")}</p>
+              </div>
+              <input
+                type="number" min={10} max={120} step={5}
+                value={current.gallerydl_timeout}
+                onChange={(e) => setNum("gallerydl_timeout", parseInt(e.target.value) || 30)}
+                className="input w-20 px-2 py-1 text-center font-mono"
+              />
+            </div>
+
+            <div className="flex items-center justify-between py-3">
+              <div>
+                <span className="font-medium">{t("dldefaults.gallerydl_abort")}</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.gallerydl_abort.desc")}</p>
+              </div>
+              <input
+                type="number" min={1} max={20}
+                value={current.gallerydl_abort}
+                onChange={(e) => setNum("gallerydl_abort", parseInt(e.target.value) || 5)}
                 className="input w-20 px-2 py-1 text-center font-mono"
               />
             </div>

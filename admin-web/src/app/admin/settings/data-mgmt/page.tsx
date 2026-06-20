@@ -78,6 +78,12 @@ export default function DataManagementPage() {
     onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
   });
 
+  const clearLibrary = useMutation({
+    mutationFn: () => api.clearEntity("library"),
+    onSuccess: (d) => { toast.success({ message: d.message }); clearCacheThenRefetch(); setConfirmAction(null); },
+    onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
+  });
+
   const resetSettings = useMutation({
     mutationFn: () => api.resetSettings(),
     onSuccess: (d) => { toast.success({ message: d.message }); clearCacheThenRefetch(); setConfirmAction(null); },
@@ -126,6 +132,13 @@ export default function DataManagementPage() {
       desc: t("datamgmt.clear_tags.desc", "Delete all tags and tag associations (work_tags, work_source_tags). Works and assets remain intact."),
       color: "yellow",
       mutation: clearTags,
+    },
+    {
+      key: "library",
+      title: t("datamgmt.clear_library"),
+      desc: t("datamgmt.clear_library.desc"),
+      color: "yellow",
+      mutation: clearLibrary,
     },
     {
       key: "settings",
