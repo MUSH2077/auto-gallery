@@ -1,4 +1,3 @@
-from app.services.image_utils import can_generate_thumbnail, get_mime_type, get_image_dims, can_compute_phash
 """Streaming import worker — consumes works from Redis Stream "work:ready".
 
 Replaces the batch import_job flow with real-time per-work processing.
@@ -32,14 +31,14 @@ from app.models.subscription import Subscription
 from app.models.download_job import DownloadJob
 from app.providers import registry
 from app.services.curation import CurationService
-from app.services.file_index import FileIndex, get_file_index
+from app.services.file_index import get_file_index
+from app.services.image_utils import can_generate_thumbnail, get_mime_type, get_image_dims, can_compute_phash, IMAGE_EXTS
+from app.services.library_sync import resolve_creator_directory, write_metadata_json, register_metadata_in_fileindex
 from app.services.redis_client import get_redis
-from app.services.thumbnail import generate_thumbnail
 
-# Reuse import_runner helpers
+# Reuse import_runner helpers (non-image functions)
 from app.jobs.import_runner import (
     _parse_posted_at, _posted_at_json, _detect_ai_generated, _detect_nsfw,
-    _get_image_dims, _mime_type, _can_generate_thumbnail, _can_compute_phash,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,8 +47,7 @@ STREAM_NAME = "work:ready"
 GROUP_NAME = "import-workers"
 BLOCK_MS = 5000
 BATCH_SIZE = 10
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
-ASSET_EXTENSIONS = IMAGE_EXTENSIONS | {".zip"}
+ASSET_EXTENSIONS = IMAGE_EXTS | {".zip"}
 
 
 async def process_work(msg: dict, consumer_id: str) -> bool:
@@ -197,19 +195,19 @@ async def process_work(msg: dict, consumer_id: str) -> bool:
 
             # Assets
             for idx, fp in enumerate(asset_files):
-                dims = _get_image_dims(fp) if fp.suffix.lower() in IMAGE_EXTENSIONS else None
+                dims = get_image_dims(fp) if fp.suffix.lower() in IMAGE_EXTS else None
                 width, height = dims if dims else (None, None)
                 dl_rel = str(fp.relative_to(settings.download_root))
                 asset = Asset(
                     file_name=fp.name, file_path=dl_rel,
                     file_size=fp.stat().st_size,
                     width=width, height=height,
-                    mime_type=_mime_type(fp.suffix),
+                    mime_type=get_mime_type(fp.suffix),
                 )
                 db.add(asset)
                 await db.flush()
 
-                if _can_generate_thumbnail(fp.suffix):
+                if can_generate_thumbnail(fp.suffix):
                     tp = await asyncio.to_thread(generate_thumbnail, str(fp), lib_dir, f"{fp.stem}.thumbnail")
                     if tp:
                         asset.thumb_sm_path = str(Path(tp).relative_to(settings.library_root))
@@ -225,7 +223,7 @@ async def process_work(msg: dict, consumer_id: str) -> bool:
                 except Exception:
                     pass
 
-                if _can_compute_phash(fp.suffix):
+                if can_compute_phash(fp.suffix):
                     try:
                         import imagehash
                         from PIL import Image as PILImage

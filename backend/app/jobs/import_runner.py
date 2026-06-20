@@ -1,4 +1,6 @@
-from app.services.image_utils import can_generate_thumbnail, get_mime_type, get_image_dims, can_compute_phash
+from app.services.image_utils import can_generate_thumbnail, get_mime_type, get_image_dims, can_compute_phash, IMAGE_EXTS
+from app.services.library_sync import resolve_creator_directory, write_metadata_json, register_metadata_in_fileindex
+from app.services.file_index import get_file_index
 import asyncio
 import json
 import logging
@@ -31,9 +33,8 @@ from app.services.curation import CurationService
 
 logger = logging.getLogger(__name__)
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 ARCHIVE_EXTENSIONS = {".zip"}
-ASSET_EXTENSIONS = IMAGE_EXTENSIONS | ARCHIVE_EXTENSIONS
+ASSET_EXTENSIONS = IMAGE_EXTS | ARCHIVE_EXTENSIONS
 
 
 def _parse_posted_at(value: Any) -> datetime | None:
@@ -138,33 +139,6 @@ def _detect_nsfw(raw: dict, source: str) -> bool:
     return False
 
 
-def _get_image_dims(filepath: Path) -> tuple[int, int] | None:
-    img = None
-    try:
-        import pyvips
-        img = pyvips.Image.new_from_file(str(filepath), access="sequential")
-        return (img.width, img.height)
-    except Exception:
-        return None
-    finally:
-        del img
-
-
-def _mime_type(suffix: str) -> str:
-    s = suffix.lower()
-    if s in (".jpg", ".jpeg"):
-        return "image/jpeg"
-    if s == ".png":
-        return "image/png"
-    if s == ".webp":
-        return "image/webp"
-    if s == ".gif":
-        return "image/gif"
-    if s == ".zip":
-        return "application/zip"
-    return "application/octet-stream"
-
-
 def _consume_import_file_list(redis_client, import_job_id: str) -> list[str] | None:
     """Read and delete the exact JSON file list captured by the download job.
 
@@ -199,13 +173,6 @@ def _consume_import_file_list(redis_client, import_job_id: str) -> list[str] | N
 
     return None
 
-
-def _can_generate_thumbnail(suffix: str) -> bool:
-    return suffix.lower() in IMAGE_EXTENSIONS
-
-
-def _can_compute_phash(suffix: str) -> bool:
-    return suffix.lower() in IMAGE_EXTENSIONS and suffix.lower() not in {".gif"}
 
 
 async def run_import_job(import_job_id: str):
@@ -478,7 +445,7 @@ async def run_import_job(import_job_id: str):
 
                 # Assets from the media files (already in final location)
                 for idx, fp in enumerate(asset_files):
-                    dims = _get_image_dims(fp) if fp.suffix.lower() in IMAGE_EXTENSIONS else None
+                    dims = get_image_dims(fp) if fp.suffix.lower() in IMAGE_EXTS else None
                     width, height = dims if dims else (None, None)
 
                     dl_rel = str(fp.relative_to(settings.download_root))
@@ -488,13 +455,13 @@ async def run_import_job(import_job_id: str):
                         file_size=fp.stat().st_size,
                         width=width,
                         height=height,
-                        mime_type=_mime_type(fp.suffix),
+                        mime_type=get_mime_type(fp.suffix),
                     )
                     db.add(asset)
                     await db.flush()
 
                     # Generate per-page thumbnail in thread pool (CPU-bound pyvips)
-                    if _can_generate_thumbnail(fp.suffix):
+                    if can_generate_thumbnail(fp.suffix):
                         from app.services.thumbnail import generate_thumbnail
                         tp = await asyncio.to_thread(
                             generate_thumbnail, str(fp), lib_dir, f"{fp.stem}.thumbnail")
@@ -516,7 +483,7 @@ async def run_import_job(import_job_id: str):
                         logger.warning("sha256 failed for %s: %s", fp, _sha256_err)
 
                     # Compute pHash in thread pool (CPU-bound PIL)
-                    if _can_compute_phash(fp.suffix):
+                    if can_compute_phash(fp.suffix):
                         try:
                             def _compute_phash(filepath: str) -> str:
                                 import imagehash
