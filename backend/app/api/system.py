@@ -531,14 +531,12 @@ async def scheduler_decisions(db: AsyncSession = Depends(get_db)):
             "can_download": can_download,
         })
 
-    _workbench_cache = {
+    return {
         "updated_at": now.isoformat(),
         "scheduler_enabled": scheduler_enabled,
         "timezone": tz_name,
         "items": items,
     }
-    _workbench_cache_ts = _now_mono
-    return _workbench_cache
 
 
 @router.get("/system/logs")
