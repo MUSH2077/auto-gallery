@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, QueueBreakdown, SchedulerDecisionItem } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { scheduleModeLabel, schedulerDecisionLabel, useI18nFormat } from "@/lib/i18n-format";
 import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
+import { useToast } from "@/components/Toast";
 
 function decisionTone(item: SchedulerDecisionItem): string {
   if (item.due) return "border-[#0969da]/30 bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff]/30 dark:bg-[#1f6feb26] dark:text-[#58a6ff]";
@@ -68,12 +69,16 @@ function matchesDecisionFilter(item: SchedulerDecisionItem, filter: string): boo
 export default function SchedulerPage() {
   const t = useT();
   const fmt = useI18nFormat();
+  const toast = useToast();
   const qc = useQueryClient();
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
   const filter = sp.get("filter") || "";
   const search = sp.get("q") || "";
+
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selectAll, setSelectAll] = useState(false);
 
   const updateParams = (updates: Record<string, string | null>) => {
     const next = new URLSearchParams(sp.toString());
@@ -103,6 +108,31 @@ export default function SchedulerPage() {
       qc.invalidateQueries({ queryKey: ["queue-stats"] });
       qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+    },
+  });
+
+  // Batch enable/disable sources
+  const batchToggleSources = useMutation({
+    mutationFn: async ({ ids, enabled }: { ids: string[]; enabled: boolean }) => {
+      let ok = 0;
+      let fail = 0;
+      for (const sourceId of ids) {
+        const item = items.find((it) => it.source_id === sourceId);
+        if (!item) continue;
+        try {
+          await api.updateSubscriptionSource(item.subscription_id, sourceId, { is_enabled: enabled });
+          ok++;
+        } catch {
+          fail++;
+        }
+      }
+      return { ok, fail };
+    },
+    onSuccess: (result) => {
+      toast.info(t("scheduler.batch_toggle_result", { ok: result.ok, fail: result.fail }));
+      setSelected(new Set());
+      setSelectAll(false);
+      qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
     },
   });
 
@@ -137,6 +167,21 @@ export default function SchedulerPage() {
   const refreshAll = () => {
     qc.invalidateQueries({ queryKey: ["queue-stats"] });
     qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
+  };
+
+  const handleSelectAll = () => {
+    if (selectAll) { setSelected(new Set()); setSelectAll(false); return; }
+    setSelected(new Set(filteredItems.map((it) => it.source_id)));
+    setSelectAll(true);
+  };
+  const toggleSelect = (id: string) => {
+    const next = new Set(selected);
+    if (next.has(id)) { next.delete(id); setSelectAll(false); } else next.add(id);
+    setSelected(next);
+  };
+  const handleBatchToggle = (enabled: boolean) => {
+    if (selected.size === 0) return;
+    batchToggleSources.mutate({ ids: Array.from(selected), enabled });
   };
 
   return (
@@ -250,12 +295,37 @@ export default function SchedulerPage() {
           </div>
         </div>
 
+        {/* Batch action bar */}
+        {selected.size > 0 && (
+          <div className="mb-3 flex items-center gap-2 rounded-md border border-[#bf8700]/30 bg-[#fff8c5] px-4 py-2 dark:bg-[#bb800926]">
+            <span className="text-xs font-medium text-[#9a6700] dark:text-[#d29922]">{t("common.selected_count", { count: selected.size })}</span>
+            <button
+              onClick={() => handleBatchToggle(false)}
+              disabled={batchToggleSources.isPending}
+              className="rounded px-3 py-1 text-xs font-medium bg-[#cf222e] text-white hover:bg-[#a40e26] disabled:opacity-50"
+            >
+              {batchToggleSources.isPending ? "..." : t("scheduler.batch_disable_sync")}
+            </button>
+            <button
+              onClick={() => handleBatchToggle(true)}
+              disabled={batchToggleSources.isPending}
+              className="rounded px-3 py-1 text-xs font-medium bg-[#1a7f37] text-white hover:bg-[#116329] disabled:opacity-50"
+            >
+              {batchToggleSources.isPending ? "..." : t("scheduler.batch_enable_sync")}
+            </button>
+            <button onClick={() => { setSelected(new Set()); setSelectAll(false); }} className="ml-auto text-xs text-[#9a6700] hover:underline dark:text-[#d29922]">{t("common.deselect_all")}</button>
+          </div>
+        )}
+
         {decisions.isLoading && <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-20 animate-pulse rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />)}</div>}
         {decisions.error && <ErrorState message={(decisions.error as Error).message} onRetry={() => decisions.refetch()} />}
         {decisions.data && filteredItems.length === 0 && <EmptyState title={t("scheduler.no_sources")} description={t("scheduler.no_sources_desc")} />}
         {filteredItems.length > 0 && (
           <div className="table-shell overflow-hidden">
-            <div className="grid grid-cols-[1.2fr_1fr_1fr_1fr_1fr] gap-3 border-b border-[#d8dee4] bg-[#f6f8fa] px-4 py-2 text-xs font-semibold uppercase text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]">
+            <div className="grid grid-cols-[auto_1.2fr_1fr_1fr_1fr_1fr] gap-3 border-b border-[#d8dee4] bg-[#f6f8fa] px-4 py-2 text-xs font-semibold uppercase text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]">
+              <span className="flex items-center">
+                <input type="checkbox" checked={selectAll} onChange={handleSelectAll} className="w-4 h-4 rounded border-gray-300" title={t("common.select_all")} />
+              </span>
               <span>{t("scheduler.col_creator_source")}</span>
               <span>{t("scheduler.col_decision")}</span>
               <span>{t("scheduler.col_mode")}</span>
@@ -264,7 +334,10 @@ export default function SchedulerPage() {
             </div>
             <div className="divide-y divide-[#d8dee4] dark:divide-[#30363d]">
               {filteredItems.map((item) => (
-                <div key={item.source_id} className="grid grid-cols-1 gap-3 px-4 py-3 text-sm hover:bg-[#f6f8fa] dark:hover:bg-[#21262d] lg:grid-cols-[1.2fr_1fr_1fr_1fr_1fr]">
+                <div key={item.source_id} className="grid grid-cols-1 gap-3 px-4 py-3 text-sm hover:bg-[#f6f8fa] dark:hover:bg-[#21262d] lg:grid-cols-[auto_1.2fr_1fr_1fr_1fr_1fr]">
+                  <div className="flex items-center">
+                    <input type="checkbox" checked={selected.has(item.source_id)} onChange={() => toggleSelect(item.source_id)} className="w-4 h-4 rounded border-gray-300" onClick={(e) => e.stopPropagation()} />
+                  </div>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <SourceBadge source={item.source} />

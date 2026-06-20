@@ -593,10 +593,14 @@ export interface SubscriptionDefaults {
 
 export interface DownloadDefaults {
   timeout_seconds: number;
+  stall_timeout_seconds: number;
   max_retries: number;
   retry_backoff_base_seconds: number;
   max_posts: number;
   skip_ai_generated: boolean;
+  gallerydl_retries: number;
+  gallerydl_timeout: number;
+  gallerydl_abort: number;
 }
 
 // Gallery-dl multi-source config types
