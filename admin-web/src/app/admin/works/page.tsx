@@ -1,5 +1,6 @@
 "use client";
 import { useState, useMemo, useEffect, Suspense } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
@@ -98,9 +99,15 @@ function GridCard({
       <div className="p-3">
         <div className="text-sm font-medium truncate dark:text-white">{w.title || t("works.untitled")}</div>
         <div className="flex items-center gap-1.5 mt-1">
-          {w.source && <SourceBadge source={w.source} />}
+          {w.source && <SourceBadge source={w.source} href={`/admin/works?source=${w.source}`} />}
           {w.has_ugoira && <span className="text-[10px] bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 px-1 rounded">{t("works.gif_badge")}</span>}
-          {w.creator_name && <span className="text-xs text-gray-400 dark:text-gray-500 truncate">{w.creator_name}</span>}
+          {w.creator_name && w.creator_id && (
+  <Link href={`/admin/creators/${w.creator_id}`}
+    className="text-xs text-blue-600 hover:underline truncate"
+    onClick={(e) => e.stopPropagation()}>
+    {w.creator_name}
+  </Link>
+)}
         </div>
         <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
           {w.posted_at ? new Date(w.posted_at).toLocaleDateString() : t("works.no_date")}
@@ -534,8 +541,10 @@ function WorksContent() {
                   {w.has_ugoira && <span className="text-xs bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 px-1 rounded">{t("works.gif_badge")}</span>}
                 </div>
                 <div className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-                  {w.source && <SourceBadge source={w.source} />}
-                  {w.creator_name && <span>{w.creator_name}</span>}
+                  {w.source && <SourceBadge source={w.source} href={`/admin/works?source=${w.source}`} />}
+                  {w.creator_name && w.creator_id && (
+  <Link href={`/admin/creators/${w.creator_id}`} onClick={(e) => e.stopPropagation()} className="text-blue-600 hover:underline">{w.creator_name}</Link>
+)}
                   <span>{w.posted_at ? new Date(w.posted_at).toLocaleDateString() : "—"}</span>
                 </div>
               </div>
