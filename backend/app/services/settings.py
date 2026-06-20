@@ -16,8 +16,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_SYNC_INTERVAL_HOURS = 6
 DEFAULT_SCAN_MINUTES = 60
 DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 600
+DEFAULT_STALL_TIMEOUT_SECONDS = 120
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_BACKOFF_BASE_SECONDS = 60
+DEFAULT_GALLERYDL_RETRIES = 3
+DEFAULT_GALLERYDL_TIMEOUT = 30
+DEFAULT_GALLERYDL_ABORT = 5
 
 GALLERYDL_METADATA_POSTPROCESSOR = {
     "name": "metadata",
@@ -139,8 +143,12 @@ async def get_download_defaults(db: AsyncSession) -> dict:
     defaults = await get_system_setting(db, "download_defaults")
     return {
         "timeout_seconds": int(defaults.get("timeout_seconds", DEFAULT_DOWNLOAD_TIMEOUT_SECONDS)),
+        "stall_timeout_seconds": int(defaults.get("stall_timeout_seconds", DEFAULT_STALL_TIMEOUT_SECONDS)),
         "max_retries": int(defaults.get("max_retries", DEFAULT_MAX_RETRIES)),
         "retry_backoff_base_seconds": int(defaults.get("retry_backoff_base_seconds", DEFAULT_BACKOFF_BASE_SECONDS)),
+        "gallerydl_retries": int(defaults.get("gallerydl_retries", DEFAULT_GALLERYDL_RETRIES)),
+        "gallerydl_timeout": int(defaults.get("gallerydl_timeout", DEFAULT_GALLERYDL_TIMEOUT)),
+        "gallerydl_abort": int(defaults.get("gallerydl_abort", DEFAULT_GALLERYDL_ABORT)),
         **defaults,
     }
 

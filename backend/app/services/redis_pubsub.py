@@ -168,6 +168,8 @@ class TaskEventPublisher:
 
     # ── heartbeat ──────────────────────────────────
 
+    HEARTBEAT_TTL = 90  # Redis key TTL — must exceed stale detection window
+
     @staticmethod
     def publish_heartbeat(
         task_id: str,
@@ -180,6 +182,11 @@ class TaskEventPublisher:
 
         Called every ~10s by the worker's heartbeat thread. The WebSocket
         manager and stale-detector use this to know the worker is alive.
+
+        Also sets a Redis key ``task:{task_id}:heartbeat_ts`` with a TTL so
+        that the scheduler's stale-detection can check liveness without
+        querying the database (the heartbeat thread cannot safely use
+        async DB sessions).
         """
         event: dict[str, Any] = {
             "type": "heartbeat",
@@ -193,4 +200,11 @@ class TaskEventPublisher:
             event["stage"] = stage
 
         payload = json.dumps(event, ensure_ascii=False)
-        get_redis().publish(TaskChannel.heartbeat(task_id), payload)
+        r = get_redis()
+        r.publish(TaskChannel.heartbeat(task_id), payload)
+        # Set a TTL key so the stale detector can check liveness from Redis
+        r.setex(
+            f"task:{task_id}:heartbeat_ts",
+            TaskEventPublisher.HEARTBEAT_TTL,
+            _now_iso(),
+        )

@@ -29,6 +29,7 @@ ENTITIES = {
     "downloads": ["import_jobs", "download_jobs"],
     "jobs": ["import_jobs", "download_jobs"],
     "tags": ["work_source_tags", "work_tags", "tags"],
+    "library": [],
     "settings": [],
 }
 
@@ -56,6 +57,15 @@ async def clear_entity_data(entity: str, db: AsyncSession) -> dict:
     tables = ENTITIES.get(entity)
     if tables is None:
         raise ValueError(f"Unknown entity: {entity}")
+
+    if entity == "library":
+        _clear_files([str(settings.library_root)])
+        invalidate_api_caches("works", "creators")
+        return {
+            "status": "ok",
+            "message": "Library metadata and thumbnails cleared (media files untouched)",
+            "deleted": {"library_files": "cleared"},
+        }
 
     if entity == "settings":
         deleted = await _reset_settings(db)
