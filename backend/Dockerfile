@@ -1,4 +1,4 @@
-ARG PYTHON_BASE=public.ecr.aws/docker/library/python:3.12.13-slim-bookworm
+ARG PYTHON_BASE=python:3.12.13-slim-bookworm
 FROM ${PYTHON_BASE}
 
 WORKDIR /app
