@@ -277,6 +277,26 @@ Key format: `namespace.natural_name` (e.g., `jobs.download`, `creators.title`).
 
 ## Debugging
 
+### Debug Toolkit (recommended first stop)
+
+```bash
+# Quick overview — container health, disk, queue lengths
+bash scripts/debug.sh quick
+
+# Targeted modes
+bash scripts/debug.sh backend   # Backend logs, DB pool, API checks
+bash scripts/debug.sh download  # Download worker logs, per-source queues
+bash scripts/debug.sh storage   # Disk usage, FileIndex stats
+bash scripts/debug.sh proxy     # Proxy connectivity, DNS checks
+```
+
+### Deploying changes
+
+```bash
+# Single-command deploy — detect changes, build, restart, verify
+bash scripts/deploy.sh
+```
+
 ### Viewing logs
 
 ```bash
@@ -286,6 +306,7 @@ docker compose logs -f
 # Specific services
 docker compose logs -f worker-download
 docker compose logs -f worker-import
+docker compose logs -f stream-import
 
 # Last 100 lines
 docker compose logs --tail=100 backend
