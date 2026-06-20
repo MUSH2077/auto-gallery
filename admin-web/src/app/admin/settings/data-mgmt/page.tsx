@@ -84,6 +84,12 @@ export default function DataManagementPage() {
     onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
   });
 
+  const rebuildLibrary = useMutation({
+    mutationFn: () => api.rebuildLibrary(),
+    onSuccess: (d) => { toast.success({ message: d.message }); clearCacheThenRefetch(); setConfirmAction(null); },
+    onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
+  });
+
   const resetSettings = useMutation({
     mutationFn: () => api.resetSettings(),
     onSuccess: (d) => { toast.success({ message: d.message }); clearCacheThenRefetch(); setConfirmAction(null); },
@@ -139,6 +145,13 @@ export default function DataManagementPage() {
       desc: t("datamgmt.clear_library.desc"),
       color: "yellow",
       mutation: clearLibrary,
+    },
+    {
+      key: "rebuild-library",
+      title: t("datamgmt.rebuild_library"),
+      desc: t("datamgmt.rebuild_library.desc"),
+      color: "blue",
+      mutation: rebuildLibrary,
     },
     {
       key: "settings",

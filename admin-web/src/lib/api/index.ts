@@ -358,6 +358,9 @@ export const api = {
   clearEntity: (entity: string) =>
     request<{ status: string; message: string; deleted?: Record<string, number> }>(`/api/v1/admin/clear/${entity}`, { method: "POST" }),
 
+  rebuildLibrary: () =>
+    request<{ status: string; message: string; rebuilt: number; errors: number }>("/api/v1/admin/library/rebuild", { method: "POST" }),
+
   startClearOperation: (entity: string) =>
     request<{ job_id: string; status: "queued" }>("/api/v1/admin/operations/clear", {
       method: "POST",
