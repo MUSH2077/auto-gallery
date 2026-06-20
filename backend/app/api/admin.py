@@ -858,6 +858,14 @@ async def reindex_search(db: AsyncSession = Depends(get_db)):
     return await svc.reindex()
 
 
+# ── Library ──
+
+@router.post("/library/rebuild")
+async def rebuild_library(db: AsyncSession = Depends(get_db)):
+    """Rebuild /library/ metadata.json and thumbnails from database records."""
+    return await admin_data.rebuild_library_index(db)
+
+
 # ── gallery-dl Config ──
 
 class PixivSourceConfig(BaseModel):
