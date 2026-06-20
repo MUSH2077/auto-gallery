@@ -171,7 +171,22 @@ class WorkRepository:
         return work
 
     async def get(self, work_id: UUID) -> Work | None:
-        return await self.session.get(Work, work_id)
+        work = await self.session.get(Work, work_id)
+        if work is None:
+            return None
+        from app.models.creator import Creator
+        row = await self.session.execute(
+            select(Creator.id, Creator.display_name, Creator.name)
+            .join(SourceCreator, SourceCreator.creator_id == Creator.id)
+            .join(WorkSource, WorkSource.source_creator_id == SourceCreator.source_creator_id)
+            .where(WorkSource.work_id == work_id)
+            .limit(1)
+        )
+        result = row.one_or_none()
+        if result:
+            work.creator_id = result[0]
+            work.creator_name = result[1] or result[2]
+        return work
 
     async def get_sources(self, work_id: UUID) -> list[WorkSource]:
         result = await self.session.execute(
