@@ -151,7 +151,7 @@ export default function TagsPage() {
                     color: light.color,
                     borderColor: light.borderColor,
                   }}
-                  onClick={() => router.push(`/admin/search?q=${encodeURIComponent(tag.normalized_name)}`)}>
+                  onClick={() => router.push(`/admin/tags/${tag.id}`)}>
                   <span className="font-semibold truncate max-w-[16rem]">{tag.normalized_name}</span>
                   {tag.category && (
                     <span className="opacity-60" style={{ fontSize: `calc(${light.fontSize} * 0.7)` }}>

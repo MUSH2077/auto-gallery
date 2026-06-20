@@ -290,7 +290,13 @@ export const api = {
     request<{ status: string }>(`/api/v1/tags/${id}`, { method: "DELETE" }),
 
   // Search
-  search: (q: string, offset = 0, limit = 20) => request<{ results: T.SearchWorkResult[]; total: number; creators?: { id: string; name: string; display_name?: string }[]; tags?: { id: string; normalized_name: string; category?: string }[] }>(`/api/v1/search?q=${encodeURIComponent(q)}&offset=${offset}&limit=${limit}`),
+  search: (q: string, offset = 0, limit = 20, kind = "all") => {
+    const params = new URLSearchParams({ q, offset: String(offset), limit: String(limit) });
+    if (kind !== "all") params.set("kind", kind);
+    return request<{ results: T.SearchWorkResult[]; total: number; query?: string; creators?: { id: string; name: string; display_name?: string }[]; tags?: { id: string; normalized_name: string; category?: string }[] }>(`/api/v1/search?${params.toString()}`);
+  },
+
+  getTagDetail: (id: string) => request<T.TagDetail>(`/api/v1/tags/${id}`),
 
   // Import Jobs
   listImportJobs: (statusOrParams?: string | { status?: string; download_job_id?: string; q?: string; offset?: number; limit?: number }, offset = 0, limit = 50) => {

@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
 import { Modal, RepositoryCard, SourceBadge, StatusBadge, WorkGrid } from "@/components";
+import { Breadcrumb } from "@/components/Breadcrumb";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
@@ -333,6 +334,10 @@ export default function CreatorDetailPage() {
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <Breadcrumb items={[
+        { label: t("creators.title"), href: "/admin/creators" },
+        { label: c.display_name || c.name },
+      ]} />
       <div className="mb-6 flex flex-col gap-4 border-b border-[#d8dee4] pb-5 dark:border-[#30363d] md:flex-row md:items-end md:justify-between">
         <div className="flex min-w-0 items-center gap-4">
           <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full border border-[#d8dee4] bg-gradient-to-br from-[#0969da] to-[#8250df] text-2xl font-semibold text-white dark:border-[#30363d]">

@@ -748,6 +748,12 @@ const zh: Record<string, string> = {
   "tags.delete_title": "删除标签",
   "tags.delete_msg": "删除此标签？它将从所有关联作品中移除。",
 
+  "tag_detail.work_count": "作品数",
+  "tag_detail.created": "创建于",
+  "tag_detail.top_creators": "主要画师",
+  "tag_detail.works_with_tag": "{count} 个作品",
+  "tag_detail.no_works": "没有使用此标签的作品",
+
   // Search
   "search.title": "搜索",
   "search.desc": "跨作品、创作者和标签的全文搜索",
