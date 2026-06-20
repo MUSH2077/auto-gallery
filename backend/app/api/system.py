@@ -281,10 +281,21 @@ async def _get_proxy_health_summary() -> dict:
 async def _count_active_rebuilds() -> int:
     try:
         from app.services.redis_client import get_redis
+        import json
         r = get_redis()
-        keys = r.keys("op:*:status")
-        return sum(1 for k in keys if r.get(k) == b"running")
-    except:
+        keys = r.keys("admin_operation:*")
+        count = 0
+        for k in keys:
+            raw = r.get(k)
+            if raw:
+                try:
+                    payload = json.loads(raw if isinstance(raw, str) else raw.decode("utf-8"))
+                    if payload.get("status") == "running":
+                        count += 1
+                except Exception:
+                    pass
+        return count
+    except Exception:
         return 0
 
 

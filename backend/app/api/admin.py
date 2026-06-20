@@ -829,6 +829,27 @@ async def get_admin_operation(job_id: str):
     return status
 
 
+@router.get("/operations")
+async def list_active_operations():
+    """List all active (running + enqueued) admin operations."""
+    import json
+    from app.services.redis_client import get_redis
+    r = get_redis()
+    keys = r.keys("admin_operation:*")
+    ops = []
+    for k in keys:
+        raw = r.get(k)
+        if raw:
+            try:
+                payload = json.loads(raw if isinstance(raw, str) else raw.decode("utf-8"))
+                if payload.get("status") in ("enqueued", "running"):
+                    ops.append(payload)
+            except Exception:
+                pass
+    ops.sort(key=lambda o: o.get("updated_at", 0), reverse=True)
+    return {"operations": ops}
+
+
 @router.post("/reset-settings")
 async def reset_settings(db: AsyncSession = Depends(get_db)):
     """Reset all system settings to defaults."""

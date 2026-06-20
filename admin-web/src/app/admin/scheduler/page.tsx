@@ -7,7 +7,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, QueueBreakdown, SchedulerDecisionItem } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { scheduleModeLabel, schedulerDecisionLabel, useI18nFormat } from "@/lib/i18n-format";
-import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
+import { PageHeader, EmptyState, ErrorState, SourceBadge, StatusBadge } from "@/components";
 import { useToast } from "@/components/Toast";
 
 function decisionTone(item: SchedulerDecisionItem): string {
@@ -64,6 +64,68 @@ function matchesDecisionFilter(item: SchedulerDecisionItem, filter: string): boo
   if (filter === "url") return !item.url_valid || item.reason === "url_invalid";
   if (filter === "disabled") return ["scheduler_disabled", "source_disabled", "subscription_inactive", "subscription_sync_disabled"].includes(item.reason);
   return true;
+}
+
+function AdminOperationsSection() {
+  const t = useT();
+  const toast = useToast();
+
+  const ops = useQuery({
+    queryKey: ["admin-operations"],
+    queryFn: () => api.listAdminOperations(),
+    refetchInterval: 2000,
+  });
+
+  const rebuild = useMutation({
+    mutationFn: () => api.rebuildLibrary(),
+    onSuccess: (d) => toast.success(d.message || t("scheduler.rebuild_enqueued")),
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const activeOps = ops.data?.operations || [];
+
+  return (
+    <section className="card mb-6 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-base font-semibold">{t("scheduler.admin_operations")}</h2>
+        <div className="flex gap-2">
+          <button onClick={() => rebuild.mutate()} disabled={rebuild.isPending}
+            className="btn-ghost px-3 py-1.5 text-xs">
+            {rebuild.isPending ? t("scheduler.rebuilding") : t("scheduler.rebuild_library")}
+          </button>
+          <button onClick={() => ops.refetch()} className="btn-ghost px-2 py-1 text-xs">
+            {t("scheduler.refresh")}
+          </button>
+        </div>
+      </div>
+
+      {activeOps.length === 0 && (
+        <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("scheduler.no_active_operations")}</p>
+      )}
+
+      {activeOps.length > 0 && (
+        <div className="space-y-2">
+          {activeOps.map((op) => (
+            <div key={op.job_id} className="flex items-center gap-3 rounded-md border border-[#d8dee4] bg-[#f6f8fa] px-3 py-2 dark:border-[#30363d] dark:bg-[#21262d]">
+              <StatusBadge status={op.status === "running" ? "downloading" : op.status === "enqueued" ? "pending" : op.status === "complete" ? "complete" : "failed"} />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium truncate">
+                  {op.operation_type === "admin-rebuild" ? t("scheduler.rebuild_library") :
+                   op.operation_type === "admin-clear" ? t("datamgmt.clear_all") :
+                   op.operation_type}
+                </div>
+                {op.progress && (
+                  <div className="text-xs text-[#57606a] dark:text-[#8b949e]">{op.progress.label}</div>
+                )}
+              </div>
+              {op.error && <div className="text-xs text-[#cf222e] dark:text-[#f85149] truncate max-w-[200px]">{op.error}</div>}
+              <span className="text-[10px] text-[#8c959f] shrink-0">{new Date(op.updated_at * 1000).toLocaleTimeString()}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
 }
 
 export default function SchedulerPage() {
@@ -280,6 +342,8 @@ export default function SchedulerPage() {
           )}
         </section>
       )}
+
+      <AdminOperationsSection />
 
       <section>
         <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">

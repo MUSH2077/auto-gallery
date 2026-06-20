@@ -365,7 +365,10 @@ export const api = {
     request<{ status: string; message: string; deleted?: Record<string, number> }>(`/api/v1/admin/clear/${entity}`, { method: "POST" }),
 
   rebuildLibrary: () =>
-    request<{ status: string; message: string; rebuilt: number; errors: number }>("/api/v1/admin/library/rebuild", { method: "POST" }),
+    request<{ job_id: string; status: string; message: string }>("/api/v1/admin/library/rebuild", { method: "POST" }),
+
+  listAdminOperations: () =>
+    request<{ operations: { job_id: string; status: string; operation_type: string; progress?: { phase: string; label: string }; error?: string; updated_at: number }[] }>("/api/v1/admin/operations"),
 
   startClearOperation: (entity: string) =>
     request<{ job_id: string; status: "queued" }>("/api/v1/admin/operations/clear", {
