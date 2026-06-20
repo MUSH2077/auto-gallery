@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, SourceBadge, ErrorState, EmptyState } from "@/components";
+import { Breadcrumb } from "@/components/Breadcrumb";
 
 interface WorkSourceData {
   id: string;
@@ -275,15 +276,27 @@ export default function WorkDetailPage() {
 
   return (
     <main className="max-w-6xl mx-auto p-6">
+      <Breadcrumb items={[
+        { label: t("works.title"), href: "/admin/works" },
+        ...(w.creator_name && w.creator_id ? [{ label: w.creator_name, href: `/admin/creators/${w.creator_id}` }] : []),
+        { label: w.title || t("work_detail.untitled") },
+      ]} />
       {/* Header */}
       <div className="mb-6 flex items-start gap-3">
         <div className="flex-1 min-w-0">
-          <Link href="/admin/works" className="text-sm text-blue-600 hover:underline inline-flex items-center gap-1">&larr; 返回</Link>
       <PageHeader title={w.title || t("work_detail.untitled")}
             description={
               <span className="flex items-center gap-3 flex-wrap">
-                {primaryWs && <SourceBadge source={primaryWs.source} />}
-                {primaryWs?.source_creator_id && (
+                {primaryWs && <SourceBadge source={primaryWs.source} href={`/admin/works?source=${primaryWs.source}`} />}
+                {w.creator_name && w.creator_id && (
+                  <span className="text-sm">
+                    {t("work_detail.by")}{" "}
+                    <Link href={`/admin/creators/${w.creator_id}`} className="text-blue-600 hover:underline font-medium">
+                      {w.creator_name}
+                    </Link>
+                  </span>
+                )}
+                {!w.creator_name && primaryWs?.source_creator_id && (
                   <span className="text-sm">{t("work_detail.creator_id")} <span className="font-mono">{primaryWs.source_creator_id}</span></span>
                 )}
                 {rating && <span className="badge border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]">{rating}</span>}
@@ -369,7 +382,7 @@ export default function WorkDetailPage() {
               {workTags.data && workTags.data.length > 0 && (
                 <div className="flex flex-wrap gap-2 mb-3">
                   {workTags.data.map((t) => (
-                    <span key={t.id} onClick={() => router.push(`/admin/search?q=${encodeURIComponent(t.normalized_name)}`)}
+                    <span key={t.id} onClick={() => router.push(`/admin/tags/${t.id}`)}
                       className="px-3 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-700 rounded-full text-sm border border-blue-200 dark:border-blue-800 cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-800/50 transition-colors"
                       title={`Search: ${t.normalized_name}${t.category ? ` (${t.category})` : ""}`}>
                       {t.normalized_name}
@@ -434,6 +447,10 @@ export default function WorkDetailPage() {
         <div className="space-y-4">
           <AllPages workId={id} sources={wsList} />
 
+          {w.creator_id && (
+            <MoreFromCreator creatorId={w.creator_id} currentWorkId={id} />
+          )}
+
           {/* Series info */}
           {series && (
             <div className="card p-4">
@@ -455,6 +472,39 @@ export default function WorkDetailPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+function MoreFromCreator({ creatorId, currentWorkId }: { creatorId: string; currentWorkId: string }) {
+  const t = useT();
+  const works = useQuery({
+    queryKey: ["more-from-creator", creatorId],
+    queryFn: () => api.listWorks(0, 6, { creator_id: creatorId, sort_by: "posted_at", sort_order: "desc" }),
+  });
+  if (works.isLoading || !works.data?.items?.length) return null;
+  const others = works.data.items.filter(w => w.id !== currentWorkId).slice(0, 5);
+  if (!others.length) return null;
+  return (
+    <div className="card p-4">
+      <h3 className="font-medium mb-3 text-sm">{t("work_detail.more_from_creator")}</h3>
+      <div className="grid grid-cols-2 gap-2">
+        {others.map(w => (
+          <Link key={w.id} href={`/admin/works/${w.id}`} className="group">
+            <div className="aspect-[4/3] bg-gray-100 dark:bg-slate-700 rounded overflow-hidden">
+              {w.thumbnail_asset_id ? (
+                <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="w-full h-full object-cover" loading="lazy" />
+              ) : (
+                <div className="flex h-full items-center justify-center text-xs text-gray-400">{t("works.na")}</div>
+              )}
+            </div>
+            <p className="text-xs mt-1 truncate group-hover:text-blue-600">{w.title || t("works.untitled")}</p>
+          </Link>
+        ))}
+      </div>
+      <Link href={`/admin/works?creator=${creatorId}`} className="text-xs text-blue-600 hover:underline mt-2 inline-block">
+        {t("work_detail.view_all_from_creator")}
+      </Link>
+    </div>
   );
 }
 
