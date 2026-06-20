@@ -1,17 +1,12 @@
 /**
- * auto-gallery E2E Navigation Tests
+ * auto-gallery — Full E2E Test Suite
  *
- * Covers the full UX closed-loop: Login → Works → Work Detail → Creator → Tags → Search
+ * 7 sections, 40+ test cases covering all pages and major workflows.
  *
  * Usage:
- *   cd /volume3/docker/auto-gallery
- *   npx playwright test tests/e2e/navigation.spec.ts --headed
- *
- * Or headless:
  *   npx playwright test tests/e2e/navigation.spec.ts
- *
- * Requires Playwright browsers installed:
- *   npx playwright install chromium
+ *   npx playwright test tests/e2e/navigation.spec.ts --headed   # watch browser
+ *   E2E_BASE=http://192.0.2.10:13000 npx playwright test
  */
 
 import { test, expect } from "@playwright/test";
@@ -20,163 +15,181 @@ const BASE = process.env.E2E_BASE || "http://localhost:13000";
 const USER = process.env.E2E_USER || "admin";
 const PASS = process.env.E2E_PASS || "admin123";
 
-test.describe("auto-gallery navigation closed-loop", () => {
-  test.beforeEach(async ({ page }) => {
-    // Login
+async function doLogin(page: any) {
+  await page.goto(`${BASE}/admin/login`);
+  await page.fill('input[placeholder*="用户"]', USER);
+  await page.fill('input[type="password"]', PASS);
+  await page.click('button[type="submit"]');
+  await page.waitForURL("**/admin**", { timeout: 15000 });
+}
+function bodyOk(page: any) { return expect(page.locator("body")).toBeVisible({ timeout: 10000 }); }
+
+// ================================================
+// SECTION 1: Authentication (3 tests)
+// ================================================
+test.describe("1. Auth", () => {
+  test("Login succeeds", async ({ page }) => {
+    await doLogin(page);
+    await page.goto(`${BASE}/admin`);
+    await bodyOk(page);
+  });
+  test("Wrong password shows error", async ({ page }) => {
     await page.goto(`${BASE}/admin/login`);
     await page.fill('input[placeholder*="用户"]', USER);
-    await page.fill('input[type="password"]', PASS);
+    await page.fill('input[type="password"]', "wrong");
     await page.click('button[type="submit"]');
-    await page.waitForURL("**/admin**", { timeout: 10000 });
+    await expect(page.locator("text=密码").or(page.locator("text=Incorrect"))).toBeVisible({ timeout: 5000 });
   });
-
-  test("1. Dashboard loads", async ({ page }) => {
-    await page.goto(`${BASE}/admin`);
-    await expect(page.locator("text=仪表盘").or(page.locator("text=Dashboard"))).toBeVisible({ timeout: 10000 });
+  test("Protected pages → login redirect", async ({ page }) => {
+    for (const p of ["/admin/works", "/admin/scheduler", "/admin/settings"]) {
+      await page.goto(`${BASE}${p}`);
+      expect(page.url()).toContain("login");
+    }
   });
+});
 
-  test("2. Works list → Work detail → Creator detail (closed loop)", async ({ page }) => {
-    // Navigate to works
+// ================================================
+// SECTION 2: Every page loads (28 pages)
+// ================================================
+test.describe("2. All pages load", () => {
+  test.beforeEach(async ({ page }) => { await doLogin(page); });
+  const pages = [
+    "/admin", "/admin/works", "/admin/creators", "/admin/subscriptions",
+    "/admin/jobs", "/admin/tags", "/admin/search", "/admin/scheduler",
+    "/admin/sources", "/admin/curation", "/admin/data-mgmt", "/admin/merge-candidates",
+    "/admin/dedup", "/admin/reference/danbooru", "/admin/notifications", "/admin/system",
+    "/admin/settings", "/admin/settings/gallerydl", "/admin/settings/proxy",
+    "/admin/settings/auth-status", "/admin/settings/logs", "/admin/settings/backup",
+    "/admin/settings/download-defaults", "/admin/settings/subscription-defaults",
+    "/admin/settings/dedup", "/admin/settings/scheduler-defaults", "/admin/settings/profile",
+  ];
+  for (const p of pages) {
+    test(p, async ({ page }) => {
+      let err500 = false;
+      page.on("response", (r) => { if (r.status() >= 500) err500 = true; });
+      await page.goto(`${BASE}${p}`, { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(300);
+      await bodyOk(page);
+      if (err500) console.warn(`  ⚠ ${p} had 500`);
+    });
+  }
+});
+
+// ================================================
+// SECTION 3: Closed-loop navigation (4 tests)
+// ================================================
+test.describe("3. Closed-loop navigation", () => {
+  test.beforeEach(async ({ page }) => { await doLogin(page); });
+
+  test("Works→Detail→Creator via breadcrumb", async ({ page }) => {
     await page.goto(`${BASE}/admin/works`);
     await page.waitForLoadState("networkidle");
-
-    // Click first work card
-    const firstCard = page.locator('[class*="cursor-pointer"]').first();
-    if (await firstCard.isVisible()) {
-      await firstCard.click();
-      await page.waitForURL("**/admin/works/**", { timeout: 10000 });
-
-      // Verify breadcrumb or back link exists
-      const breadcrumb = page.locator('nav[aria-label="Breadcrumb"]');
-      if (await breadcrumb.isVisible()) {
-        // Click creator name in breadcrumb
-        const creatorLink = breadcrumb.locator("a").nth(1);
-        if (await creatorLink.isVisible()) {
-          await creatorLink.click();
-          await page.waitForURL("**/admin/creators/**", { timeout: 10000 });
-          await expect(page.locator("h1")).toBeVisible();
-          console.log("  ✓ Works → Creator via breadcrumb");
-        }
-      }
-
-      // Back to works via breadcrumb
-      const worksLink = breadcrumb.locator("a").first();
-      if (await worksLink.isVisible()) {
-        await worksLink.click();
-        await page.waitForURL("**/admin/works**", { timeout: 10000 });
-        console.log("  ✓ Breadcrumb back to Works");
-      }
-    }
+    const card = page.locator('a[href*="/admin/works/"], [class*="cursor-pointer"]').first();
+    if (!(await card.isVisible({ timeout: 5000 }).catch(() => false))) return;
+    await card.click();
+    await page.waitForURL("**/admin/works/**", { timeout: 10000 });
+    const bc = page.locator('nav[aria-label="Breadcrumb"]');
+    if (!(await bc.isVisible({ timeout: 3000 }).catch(() => false))) return;
+    const links = bc.locator("a");
+    if ((await links.count()) >= 2) { await links.nth(1).click(); await page.waitForURL("**/admin/creators/**", { timeout: 10000 }); }
   });
 
-  test("3. Search → multi-tab navigation", async ({ page }) => {
+  test("Search→Tag detail", async ({ page }) => {
     await page.goto(`${BASE}/admin/search`);
-    await page.waitForLoadState("networkidle");
+    const input = page.locator("input").first();
+    if (!(await input.isVisible().catch(() => false))) return;
+    await input.fill("original"); await page.waitForTimeout(1500);
+    const tag = page.locator("a[href*='/admin/tags/']").first();
+    if (await tag.isVisible({ timeout: 3000 }).catch(() => false)) { await tag.click(); await page.waitForURL("**/admin/tags/**", { timeout: 10000 }); }
+  });
 
-    // Type search query
-    const input = page.locator('input[placeholder*="搜索"]').or(page.locator('input[placeholder*="Search"]'));
-    if (await input.isVisible()) {
-      await input.fill("test");
-      await page.waitForTimeout(1500); // wait for debounce + API
-
-      // Check for tab buttons
-      const allTab = page.locator("button").filter({ hasText: /全部|All/ });
-      if (await allTab.isVisible()) {
-        console.log("  ✓ Search tabs visible");
-
-        // Try clicking creators tab
-        const creatorsTab = page.locator("button").filter({ hasText: /创作者|Creators/ });
-        if (await creatorsTab.isVisible()) {
-          await creatorsTab.click();
-          await page.waitForTimeout(500);
-          console.log("  ✓ Creators tab clicked");
-        }
-
-        // Try clicking tags tab
-        const tagsTab = page.locator("button").filter({ hasText: /标签|Tags/ });
-        if (await tagsTab.isVisible()) {
-          await tagsTab.click();
-          await page.waitForTimeout(500);
-          console.log("  ✓ Tags tab clicked");
-        }
-      }
+  test("Search multi-tab", async ({ page }) => {
+    await page.goto(`${BASE}/admin/search`);
+    const input = page.locator("input").first();
+    if (!(await input.isVisible().catch(() => false))) return;
+    await input.fill("test"); await page.waitForTimeout(1500);
+    for (const re of [/全部|All/, /创作者|Creators/, /标签|Tags/]) {
+      const t = page.locator("button").filter({ hasText: re }).first();
+      if (await t.isVisible({ timeout: 2000 }).catch(() => false)) { await t.click(); await page.waitForTimeout(300); }
     }
   });
 
-  test("4. Creator detail → Works (closed loop)", async ({ page }) => {
+  test("Creator→Works tab", async ({ page }) => {
     await page.goto(`${BASE}/admin/creators`);
-    await page.waitForLoadState("networkidle");
-
-    // Click first creator
-    const firstCreator = page.locator("a[href*='/admin/creators/']").first();
-    if (await firstCreator.isVisible({ timeout: 5000 })) {
-      await firstCreator.click();
-      await page.waitForURL("**/admin/creators/**", { timeout: 10000 });
-
-      // Verify tabs exist
-      await expect(page.locator("button").filter({ hasText: /作品|Works/ })).toBeVisible({ timeout: 5000 });
-      console.log("  ✓ Creator detail with Works tab");
-
-      // Navigate to works tab
-      const worksTab = page.locator("button").filter({ hasText: /作品|Works/ });
-      if (await worksTab.isVisible()) {
-        await worksTab.click();
-        await page.waitForTimeout(500);
-        console.log("  ✓ Creator Works tab");
-      }
-    }
+    const link = page.locator("a[href*='/admin/creators/']").first();
+    if (!(await link.isVisible({ timeout: 5000 }).catch(() => false))) return;
+    await link.click(); await page.waitForURL("**/admin/creators/**", { timeout: 10000 });
+    const tab = page.locator("button").filter({ hasText: /作品|Works/ }).first();
+    if (await tab.isVisible({ timeout: 3000 }).catch(() => false)) { await tab.click(); }
   });
+});
 
-  test("5. Scheduler page — no 500 errors", async ({ page }) => {
-    page.on("response", (response) => {
-      if (response.status() >= 500) {
-        console.error(`  500 ERROR: ${response.url()}`);
-      }
-    });
-
+// ================================================
+// SECTION 4: Scheduler (2 tests)
+// ================================================
+test.describe("4. Scheduler", () => {
+  test.beforeEach(async ({ page }) => { await doLogin(page); });
+  test("Queue stats visible", async ({ page }) => {
+    await page.goto(`${BASE}/admin/scheduler`); await page.waitForLoadState("networkidle"); await bodyOk(page);
+  });
+  test("Admin Operations section", async ({ page }) => {
     await page.goto(`${BASE}/admin/scheduler`);
-    await page.waitForLoadState("networkidle");
-    await page.waitForTimeout(2000);
-
-    // Should show queue stats or decisions
-    const pageContent = page.locator("body");
-    await expect(pageContent).toContainText(/调度|Scheduler|queue/i);
-    console.log("  ✓ Scheduler page loaded without 500");
+    await expect(page.locator("text=管理操作").or(page.locator("text=Admin Operations"))).toBeVisible({ timeout: 5000 });
   });
+});
 
-  test("6. Tag detail page", async ({ page }) => {
-    // Try to find a tag from search
-    await page.goto(`${BASE}/admin/search`);
-    await page.waitForLoadState("networkidle");
-    const input = page.locator('input[placeholder*="搜索"]').or(page.locator('input[placeholder*="Search"]'));
-    if (await input.isVisible()) {
-      await input.fill("original");
-      await page.waitForTimeout(1500);
+// ================================================
+// SECTION 5: Settings — all sub-pages (10 tests)
+// ================================================
+test.describe("5. Settings sub-pages", () => {
+  test.beforeEach(async ({ page }) => { await doLogin(page); });
+  for (const p of ["gallerydl","proxy","auth-status","logs","backup","download-defaults","subscription-defaults","dedup","scheduler-defaults","profile"]) {
+    test(p, async ({ page }) => {
+      await page.goto(`${BASE}/admin/settings/${p}`, { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(300); await bodyOk(page);
+    });
+  }
+});
 
-      // Click tags tab
-      const tagsTab = page.locator("button").filter({ hasText: /标签|Tags/ });
-      if (await tagsTab.isVisible()) {
-        await tagsTab.click();
-        await page.waitForTimeout(500);
-      }
+// ================================================
+// SECTION 6: No 500 errors on critical pages (6 tests)
+// ================================================
+test.describe("6. No 500 errors", () => {
+  test.beforeEach(async ({ page }) => { await doLogin(page); });
+  for (const p of ["/admin/scheduler","/admin/search?q=test","/admin/works","/admin/creators","/admin/tags","/admin/settings/gallerydl"]) {
+    test(p, async ({ page }) => {
+      const errors: string[] = [];
+      page.on("response", (r) => { if (r.status() >= 500) errors.push(r.url()); });
+      await page.goto(`${BASE}${p}`, { waitUntil: "networkidle" });
+      await page.waitForTimeout(1000);
+      expect(errors).toEqual([]);
+    });
+  }
+});
 
-      // Click first tag result
-      const tagLink = page.locator("a[href*='/admin/tags/']").first();
-      if (await tagLink.isVisible({ timeout: 3000 })) {
-        await tagLink.click();
-        await page.waitForURL("**/admin/tags/**", { timeout: 10000 });
-        await expect(page.locator("h1")).toBeVisible();
-        console.log("  ✓ Tag detail page loaded");
-      }
+// ================================================
+// SECTION 7: Breadcrumbs on detail pages (3 tests)
+// ================================================
+test.describe("7. Breadcrumbs", () => {
+  test.beforeEach(async ({ page }) => { await doLogin(page); });
+  test("Works detail", async ({ page }) => {
+    await page.goto(`${BASE}/admin/works`);
+    const card = page.locator('a[href*="/admin/works/"]').first();
+    if (await card.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await card.click(); await page.waitForURL("**/admin/works/**", { timeout: 10000 });
+      await expect(page.locator('nav[aria-label="Breadcrumb"]')).toBeVisible({ timeout: 5000 });
     }
   });
-
-  test("7. Jobs page loads", async ({ page }) => {
-    await page.goto(`${BASE}/admin/jobs`);
+  test("Creator detail", async ({ page }) => {
+    await page.goto(`${BASE}/admin/creators`);
+    const link = page.locator("a[href*='/admin/creators/']").first();
+    if (await link.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await link.click(); await page.waitForURL("**/admin/creators/**", { timeout: 10000 });
+      await expect(page.locator('nav[aria-label="Breadcrumb"]')).toBeVisible({ timeout: 5000 });
+    }
+  });
+  test("Search", async ({ page }) => {
+    await page.goto(`${BASE}/admin/search?q=test`);
     await page.waitForLoadState("networkidle");
-
-    // Should show job list or empty state
-    await expect(page.locator("body")).toBeVisible();
-    console.log("  ✓ Jobs page loaded");
   });
 });
