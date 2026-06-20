@@ -95,15 +95,15 @@ class SearchService:
                           creator_name: str | None, is_nsfw: bool, source: str,
                           tags: list[str], posted_at: str | None, created_at: str,
                           thumbnail_asset_id: str | None = None, asset_count: int = 1,
-                          is_ai_generated: bool = False):
+                          is_ai_generated: bool = False, creator_id: str | None = None):
         try:
             client = _client()
             _ensure_indexes(client)
             client.index(WORKS_INDEX).add_documents([{
                 "id": work_id, "title": title or "",
                 "description": (description or "")[:500],
-                "creator_name": creator_name or "", "is_nsfw": is_nsfw,
-                "is_ai_generated": is_ai_generated,
+                "creator_name": creator_name or "", "creator_id": creator_id or "",
+                "is_nsfw": is_nsfw, "is_ai_generated": is_ai_generated,
                 "source": source, "tags": tags,
                 "thumbnail_asset_id": thumbnail_asset_id,
                 "asset_count": asset_count,
@@ -198,7 +198,8 @@ class SearchService:
             work_tags.setdefault(str(wid), []).append(tname)
 
         sc_rows = await self.db.execute(
-            select(WorkSource.work_id, WorkSource.source, SourceCreator.display_name).outerjoin(
+            select(WorkSource.work_id, WorkSource.source, SourceCreator.display_name,
+                   SourceCreator.creator_id).outerjoin(
                 SourceCreator,
                 (SourceCreator.source_creator_id == WorkSource.source_creator_id)
                 & (SourceCreator.source == WorkSource.source),
@@ -206,12 +207,15 @@ class SearchService:
         )
         work_source: dict[str, str] = {}
         work_creator: dict[str, str] = {}
-        for wid, src, cname in sc_rows.all():
+        work_creator_id: dict[str, str] = {}
+        for wid, src, cname, cid in sc_rows.all():
             key = str(wid)
             if key not in work_source:
                 work_source[key] = src
                 if cname:
                     work_creator[key] = cname
+                if cid:
+                    work_creator_id[key] = str(cid)
 
         # Clear existing indexes before reindex
         try:
@@ -241,6 +245,7 @@ class SearchService:
                     "id": wid, "title": w.title or "",
                     "description": (w.description or "")[:500],
                     "creator_name": work_creator.get(wid) or "",
+                    "creator_id": work_creator_id.get(wid) or "",
                     "is_nsfw": w.is_nsfw, "is_ai_generated": w.is_ai_generated,
                     "source": work_source.get(wid) or "unknown",
                     "tags": work_tags.get(wid) or [],
