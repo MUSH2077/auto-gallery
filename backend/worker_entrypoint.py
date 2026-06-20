@@ -31,6 +31,7 @@ def main():
         return
 
     queue = sys.argv[1]
+    queues = queue.split(",") if "," in queue else [queue]
     concurrency = int(sys.argv[2]) if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else 1
     with_scheduler = "--with-scheduler" in sys.argv[2:]
 
@@ -40,7 +41,7 @@ def main():
     def shutdown(signum, frame):
         nonlocal running
         running = False
-        print(f"\nShutting down {len(procs)} worker(s) on queue '{queue}'...")
+        print(f"\nShutting down {len(procs)} worker(s) on queues {queues}...")
         for p in procs:
             p.terminate()
         # Grace period then force-kill
@@ -56,11 +57,12 @@ def main():
         cmd = ["rq", "worker", "--url", REDIS_URL]
         if with_scheduler and i == 0:
             cmd.append("--with-scheduler")
-        cmd.append(queue)
+        q = queues[i % len(queues)]
+        cmd.append(q)
         proc = subprocess.Popen(cmd)
         procs.append(proc)
         scheduler_note = " with scheduler" if with_scheduler and i == 0 else ""
-        print(f"Started worker {i+1}/{concurrency} on queue '{queue}'{scheduler_note} (pid={proc.pid})")
+        print(f"Started worker {i+1}/{concurrency} on queue '{q}'{scheduler_note} (pid={proc.pid})")
 
     while running:
         dead = [p for p in procs if p.poll() is not None]
@@ -72,10 +74,11 @@ def main():
                 restart_cmd = ["rq", "worker", "--url", REDIS_URL]
                 if with_scheduler and not any("--with-scheduler" in getattr(proc, "args", []) for proc in procs):
                     restart_cmd.append("--with-scheduler")
-                restart_cmd.append(queue)
+                q = queues[len(procs) % len(queues)]
+                restart_cmd.append(q)
                 new_proc = subprocess.Popen(restart_cmd)
                 procs.append(new_proc)
-                print(f"Restarted worker on queue '{queue}' (pid={new_proc.pid})")
+                print(f"Restarted worker on queue '{q}' (pid={new_proc.pid})")
         time.sleep(1)
 
     for p in procs:

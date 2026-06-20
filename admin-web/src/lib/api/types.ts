@@ -388,6 +388,9 @@ export interface WorkbenchSummary {
     disk_free_percent?: number | null;
     risk_level: "ok" | "warning" | "critical" | "unknown" | string;
   };
+  proxy_health?: {
+    sources: Record<string, { status: string; last_check: string; warnings: string }>;
+  };
   health: Record<string, string>;
   attention: {
     auth_unhealthy_count: number;

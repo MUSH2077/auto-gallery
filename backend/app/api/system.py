@@ -258,6 +258,26 @@ async def queue_stats():
         return {"default_queue": -1, "scheduled_queue": -1, "failed_jobs": -1, "scheduler_enabled": True}
 
 
+async def _get_proxy_health_summary() -> dict:
+    """Read proxy health from Redis keys set by download pre-flight checks."""
+    sources = ["pixiv", "danbooru", "iwara", "weibo", "bilibili", "pinterest", "lofter"]
+    result = {}
+    try:
+        from app.services.redis_client import get_redis
+        r = get_redis()
+        for source in sources:
+            data = r.hgetall(f"proxy:health:{source}")
+            if data:
+                result[source] = {
+                    "status": data.get(b"status", b"unknown").decode(),
+                    "last_check": data.get(b"last_check", b"").decode(),
+                    "warnings": data.get(b"warnings", b"").decode(),
+                }
+    except Exception:
+        pass
+    return {"sources": result}
+
+
 @router.get("/system/workbench")
 async def workbench_summary(db: AsyncSession = Depends(get_db)):
     """Read-only dashboard aggregation for the live admin workbench."""
@@ -333,6 +353,7 @@ async def workbench_summary(db: AsyncSession = Depends(get_db)):
             "scan_interval_minutes": int(scheduler_config.get("scheduler_scan_interval_minutes", 60)),
             "next_scan_at": queue_payload["next_sync_scan_at"],
         },
+        "proxy_health": await _get_proxy_health_summary(),
         "storage": {
             "original_media_size_bytes": storage["downloads"]["size_bytes"],
             "original_media_file_count": storage["downloads"]["file_count"],

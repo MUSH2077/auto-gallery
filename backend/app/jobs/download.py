@@ -425,6 +425,30 @@ async def run_download_job(job_id: str):
         except Exception:
             logger.debug("Pre-flight check skipped", exc_info=True)
 
+        # Record proxy health in Redis for scheduler awareness
+        if preflight_warnings:
+            try:
+                r_ph = get_redis()
+                r_ph.hset(f"proxy:health:{job.source}", mapping={
+                    "last_check": _now_iso(),
+                    "status": "degraded",
+                    "warnings": ",".join(preflight_warnings),
+                })
+                r_ph.expire(f"proxy:health:{job.source}", 3600)
+            except Exception:
+                pass
+        elif preflight_warnings is not None:
+            try:
+                r_ph = get_redis()
+                r_ph.hset(f"proxy:health:{job.source}", mapping={
+                    "last_check": _now_iso(),
+                    "status": "healthy",
+                    "warnings": "",
+                })
+                r_ph.expire(f"proxy:health:{job.source}", 3600)
+            except Exception:
+                pass
+
         async with async_session() as _progress_db:
             _progress_job = await DownloadJobRepository(_progress_db).get(job_uuid)
             if _progress_job:
