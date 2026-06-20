@@ -10,7 +10,7 @@ echo "=== auto-gallery Deploy ==="
 STAMP=".deploy-build-stamp"
 SOURCE_CHANGED=false
 if [ -f "$STAMP" ]; then
-    CHANGED=$(find backend/app admin-web/src -newer "$STAMP" -type f 2>/dev/null | wc -l)
+    CHANGED=$(find backend/ admin-web/ docker-compose.yaml scripts/ -newer "$STAMP" -type f 2>/dev/null | wc -l)
     [ "$CHANGED" -gt 0 ] && SOURCE_CHANGED=true
 else
     SOURCE_CHANGED=true

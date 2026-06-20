@@ -12,8 +12,8 @@ import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { classifyJob, categoryBorderClass, classifyError, estimatedRetryBackoff } from "@/lib/jobCategory";
 
 
-const REFETCH_ACTIVE_MS = 3000;
-const REFETCH_IDLE_MS = 10000;
+const REFETCH_ACTIVE_MS = 8000;
+const REFETCH_IDLE_MS = 30000;
 const PAGE_LIMIT = 200;
 
 const STATUS_OPTIONS = ["", "enqueued", "downloading", "paused", "downloaded", "importing", "complete", "failed", "stale", "cancelled"];

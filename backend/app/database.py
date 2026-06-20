@@ -10,8 +10,8 @@ from app.config import settings
 engine = create_async_engine(
     settings.database_url,
     echo=False,
-    pool_size=3,            # steady-state connections per process  (default 10)
-    max_overflow=3,          # burst connections per process         (default 10)
+    pool_size=2,            # steady-state connections per process  (was 3)
+    max_overflow=2,          # burst connections per process         (was 3)
     pool_recycle=3600,       # recycle connections hourly to avoid stale pg connections
     pool_pre_ping=True,      # verify connection is alive before use
     pool_timeout=10,         # fail fast (don't queue) when pool is exhausted
