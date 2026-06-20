@@ -660,6 +660,11 @@ function JobsContent() {
                   <div onClick={() => openDownloadDetail(j.id)} className={`card flex cursor-pointer items-center gap-3 p-3 text-sm hover:border-[#0969da]/50 ${(() => { const cat = classifyJob(j.status, j.retry_count, 3); const cls = categoryBorderClass(cat); return cls ? `border-l-2 ${cls}` : ""; })()}`}>
                     <input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="w-4 h-4 rounded border-gray-300 shrink-0" />
                     <div className="w-28 shrink-0"><StatusBadge status={j.status} /></div>
+                    {j.operation_type && j.operation_type !== "download" && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 shrink-0">
+                        {t(`jobs.op_${j.operation_type}`, j.operation_type)}
+                      </span>
+                    )}
                     <span className="w-16 shrink-0 font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{j.id.slice(0, 8)}</span>
                     {j.source && <SourceBadge source={j.source} />}
                     <div className="min-w-[9rem] max-w-[12rem] shrink-0 leading-tight">

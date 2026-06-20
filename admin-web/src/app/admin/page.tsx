@@ -210,6 +210,9 @@ export default function Dashboard() {
               sub={t("dashboard.index_files", { count: fmt.number(data.storage.library_file_count) })}
               tone="muted"
             />
+            {(workbench.data as any)?.queue?.rebuild_active > 0 && (
+              <MetricCard label={t("dashboard.rebuild_active")} value={(workbench.data as any).queue.rebuild_active} sub={t("dashboard.rebuild_active_sub")} tone="info" />
+            )}
           </section>
           <div className="grid gap-3 md:grid-cols-3">
             <div className="card p-3 text-xs text-[#57606a] dark:text-[#8b949e]">
