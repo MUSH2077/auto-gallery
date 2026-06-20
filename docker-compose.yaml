@@ -99,7 +99,7 @@ services:
   worker-download:
     image: auto-gallery-backend:latest
     pull_policy: never
-    command: python worker_entrypoint.py downloads 2 --with-scheduler
+    command: python worker_entrypoint.py downloads:pixiv,downloads:danbooru,downloads:iwara,downloads:weibo,downloads:bilibili,downloads:pinterest,downloads:lofter 3 --with-scheduler
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0

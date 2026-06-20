@@ -103,6 +103,14 @@ async def enqueue_subscription_source_sync(
         return skip_result(ss.id, "source_disabled")
     if not force and ss.auth_healthy is False:
         return skip_result(ss.id, "auth_unhealthy", auth_status=ss.auth_status, auth_error_reason=ss.auth_error_reason)
+    if not force:
+        try:
+            r_ph = get_redis()
+            ph = r_ph.hgetall(f"proxy:health:{ss.source}")
+            if ph and ph.get(b"status", b"").decode() == "degraded":
+                return skip_result(ss.id, "proxy_degraded", warnings=ph.get(b"warnings", b"").decode())
+        except Exception:
+            pass
     if not ss.source_url:
         return skip_result(ss.id, "source_url_empty")
 
@@ -176,7 +184,8 @@ async def enqueue_subscription_source_sync(
         try:
             from rq import Queue
 
-            Queue(name="downloads", connection=get_redis()).enqueue(
+            queue_name = f"downloads:{job.source}"
+            Queue(name=queue_name, connection=get_redis()).enqueue(
                 "app.jobs.download.run_download_job",
                 str(job.id),
                 job_timeout=RQ_JOB_TIMEOUT,
