@@ -96,7 +96,7 @@ HOST_MEILISEARCH=/volume1/auto-gallery/docker/meilisearch
 docker compose up -d
 ```
 
-This starts all services: postgres, redis, meilisearch, backend, worker, scheduler, and admin-web. The backend automatically runs database migrations on startup, so no separate migration step is needed.
+This starts all services: postgres, redis, meilisearch, backend, worker-download (per-source queues), worker-import, stream-import (event-driven import), scheduler, and admin-web. The backend automatically runs database migrations on startup, so no separate migration step is needed.
 
 Wait for health checks:
 
@@ -111,10 +111,15 @@ If you need to start only the infrastructure services for local development:
 docker compose up -d postgres redis meilisearch
 ```
 
+**Tip:** For rapid redeploys after code changes, use `bash scripts/deploy.sh` — it detects changed sources, rebuilds only when needed, and waits for all containers to report healthy.
+
 ### 4. Verify
 
 ```bash
-# Health check
+# Quick health summary (container status, disk, queue depth)
+bash scripts/debug.sh quick
+
+# Or manually:
 curl http://localhost:8818/api/v1/system/health
 
 # Expected response:

@@ -96,13 +96,17 @@ Every provider implements:
 
 Providers never access the database. They receive raw metadata dicts and return data dicts. The service layer handles persistence.
 
-## Job Queue (RQ)
+## Job Queue (RQ + Redis Stream)
 
-auto-gallery uses RQ (Redis Queue) as the job queue backend. Key design choices:
+auto-gallery uses RQ (Redis Queue) for downloads and batch imports, plus Redis Stream for event-driven imports. Key design choices:
 
 - **Why RQ**: Simpler than Celery, uses Redis already in the stack. `download_job`/`import_job` database tables are the source of truth; the queue backend is replaceable.
+- **Per-source download queues**: Each source has its own RQ queue (`downloads:pixiv`, `downloads:danbooru`, etc.) for isolation — one slow source never blocks another. The `worker-download` container listens on all source queues.
+- **Redis Stream for imports**: After a download completes, the job publishes a `work:ready` message to a Redis Stream. The `stream-import` container consumes via a consumer group (`import-workers`), enabling at-least-once delivery with pending-message recovery.
 - **Job timeout**: `job_timeout=7200` (2 hours) on all enqueue calls to prevent RQ from killing long-running downloads (default is 180s).
-- **State machine**: `pending → downloading → downloaded → importing → complete | failed | stale | paused`. Paused jobs skip execution. Stale detection marks stuck downloading jobs after 2x timeout. Partial import recovery on timeout/failure.
+- **State machine**: `pending → downloading → downloaded → importing → complete | failed | stale | paused`. Paused jobs skip execution. Stale detection uses Redis heartbeat keys (`task:{job_id}:heartbeat_ts` with 90s TTL) — if the key is absent and the job is past its retry grace period, it's marked stale. Partial import recovery on timeout/failure.
+- **Adaptive timeouts**: Retry count increments the stall and deadline timeouts (1.0x → 1.5x → 2.0x) to give later attempts more headroom.
+- **Proxy pre-flight**: Before launching gallery-dl, the worker runs DNS resolution + proxy connectivity checks (non-blocking diagnostics).
 
 ## Data Flow
 
@@ -111,34 +115,55 @@ auto-gallery uses RQ (Redis Queue) as the job queue backend. Key design choices:
 Scheduler (timezone-aware, configurable interval or daily schedule)
   → Check each subscription_source: is sync due?
     → create download_job (pending)
+      → Enqueue to per-source queue (downloads:{source})
       → Worker picks up job (downloading)
+        → Proxy/DNS pre-flight checks
         → Provider.build_gallerydl_config()
-        → subprocess.run(["gallery-dl", "--write-metadata",
-            "--range", "1-{max_posts}", ...], shell=False)
+        → subprocess.Popen(["gallery-dl", ...], shell=False)
+            with stall detection polling loop
         → Files land in DOWNLOAD_ROOT/{source}/{creator_name}/{source_work_id}/
+        → FileIndex registration (SQLite)
         → Job status = downloaded
-        → Enqueue import_job
+        → XADD work:ready → Redis Stream (event-driven import)
 ```
 
 Key download details:
 - `--write-metadata`: Required flag — without it, import runner has no JSON metadata to parse.
 - `--range`: Limits download to the most recent N posts for incremental syncs. Configurable per subscription.
 - **Scheduler**: Timezone-aware via the `TIMEZONE` env var (defaults to UTC). Supports interval mode (sync every N hours) or scheduled mode (sync at specific times daily).
+- **Stall detection**: Polling loop checks progress every 4s; kills gallery-dl if no file output for `stall_timeout` seconds (default 120s, after 30s grace period). Adaptive timeout on retries.
+- **Three-layer timeout**: (1) gallery-dl internal `--retries`/`--abort`, (2) stall detection kills frozen subprocess, (3) overall deadline timeout.
 
 ### Import Flow
+
+**Event-driven (primary):**
 ```
-Worker picks up import_job
-  → Scan DOWNLOAD_ROOT/{source}/ for *.json metadata files (--write-metadata output)
-  → Provider.parse_work_source() → group JSONs by source_work_id
+Download job completes → XADD work:ready (Redis Stream)
+  → stream-import consumer reads via XREADGROUP
+  → FileIndex.query() finds new files by work_id (O(log n), not rglob)
+  → Provider.parse_work_source() → group files by source_work_id
   → Provider.parse_source_creator() → upsert source_creator
   → Provider.parse_work_source() → upsert work_source
   → Create Asset + AssetSource from image files in work directory
   → Provider.parse_source_tags() → upsert tags + work_source_tags
   → Generate thumbnails (pyvips WebP) in LIBRARY_ROOT/{source}/{creator_name}/{source_work_id}/
   → Write metadata.json to LIBRARY_ROOT/{source}/{creator_name}/{source_work_id}/
-  → Delete processed JSON files (image files remain in DOWNLOAD_ROOT)
+  → FileIndex.mark_imported()
+  → XACK work:ready
+```
+
+**Batch import (RQ, for Danbooru reference):**
+```
+Worker picks up import_job from imports queue
+  → FileIndex.query_unimported() → new files since last scan
+  → Same parse → upsert → thumbnail → metadata.json pipeline
   → Job status = complete
 ```
+
+Key details:
+- JSON metadata files are deleted after processing; image files remain in DOWNLOAD_ROOT.
+- FileIndex (SQLite) replaces rglob scans — O(log n) lookups by work_id instead of O(n) filesystem traversal.
+- Consumer group `import-workers` ensures at-least-once delivery: if a consumer crashes mid-import, the pending message is reclaimed by another consumer.
 
 ### Danbooru Reference Flow
 ```
