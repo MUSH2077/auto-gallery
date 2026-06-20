@@ -578,6 +578,37 @@ export interface Tag {
   created_at: string;
 }
 
+export interface CreatorRef {
+  creator_id: string;
+  creator_name: string;
+  work_count: number;
+}
+
+export interface TagDetail {
+  id: string;
+  normalized_name: string;
+  category?: string;
+  usage_count: number;
+  top_creators: CreatorRef[];
+  created_at: string;
+}
+
+export interface CreatorSearchHit {
+  id: string;
+  name: string;
+  display_name: string;
+  description?: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface TagSearchHit {
+  id: string;
+  normalized_name: string;
+  category?: string;
+  created_at: string;
+}
+
 export interface DedupSettings {
   source_level_enabled: boolean;
   cross_source_enabled: boolean;

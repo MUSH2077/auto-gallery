@@ -100,3 +100,4 @@ temp/
 gallery-dl/cookies/
 gallery-dl/jobs/
 !gallery-dl/config.example.json
+.claude/worktrees/
