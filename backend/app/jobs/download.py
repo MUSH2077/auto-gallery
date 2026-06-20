@@ -22,7 +22,7 @@ from app.services.job_progress import apply_download_progress, apply_import_prog
 from app.services.redis_client import get_redis
 from app.services.settings import build_effective_gallerydl_config, get_download_defaults
 from app.services.subscription_enqueue import mark_source_sync_success
-from app.services.file_index import FileIndex
+from app.services.file_index import FileIndex, get_file_index
 
 logger = logging.getLogger(__name__)
 
@@ -265,7 +265,7 @@ async def run_download_job(job_id: str):
     gdl_abort = int(dl_defaults.get("gallerydl_abort", FALLBACK_GALLERYDL_ABORT))
 
     # Initialize file index (one-time bootstrap on first run)
-    _file_index = FileIndex(os.path.join(str(settings.download_root), ".file-index.sqlite3"))
+    _file_index = get_file_index()
 
     skip_ai = dl_defaults.get("skip_ai_generated", False)
     ai_config_path = None
@@ -694,7 +694,7 @@ async def run_download_job(job_id: str):
             # Publish new works to Redis Stream for streaming import consumers
             if _registered > 0:
                 try:
-                    _file_index2 = FileIndex(os.path.join(str(settings.download_root), ".file-index.sqlite3"))
+                    _file_index2 = get_file_index()
                     _new_jsons = _file_index2.get_new_metadata_jsons(job.source, str(job_id))
                     _r = get_redis()
                     _published = 0
@@ -758,7 +758,7 @@ async def run_download_job(job_id: str):
                 await db2.commit()
 
         # Always try partial import recovery
-        _file_index2 = FileIndex(os.path.join(str(settings.download_root), ".file-index.sqlite3"))
+        _file_index2 = get_file_index()
         metadata_count, image_count, new_json_paths = _file_index2.count_new_artifacts(job.source, str(job_id))
         if metadata_count > 0:
             logger.info("Partial recovery: found %d metadata JSONs after error for job %s", metadata_count, job_id)
@@ -886,7 +886,7 @@ async def run_download_job(job_id: str):
         # Full success — but only enqueue import if there are new metadata JSONs.
         # gallery-dl exits 0 even when all files were skipped (already in archive),
         # or when the source has no content at all.
-        _file_index2 = FileIndex(os.path.join(str(settings.download_root), ".file-index.sqlite3"))
+        _file_index2 = get_file_index()
         metadata_count, image_count, new_json_paths = _file_index2.count_new_artifacts(job.source, str(job_id))
         async with async_session() as _manifest_db:
             _manifest_job = await DownloadJobRepository(_manifest_db).get(job_uuid)
@@ -956,7 +956,7 @@ async def run_download_job(job_id: str):
 
     elif result is not None and result.returncode != 0:
         # Non-zero exit — maybe partial files were downloaded
-        _file_index2 = FileIndex(os.path.join(str(settings.download_root), ".file-index.sqlite3"))
+        _file_index2 = get_file_index()
         metadata_count, image_count, new_json_paths = _file_index2.count_new_artifacts(job.source, str(job_id))
         if metadata_count > 0:
             logger.info("Partial recovery: found %d metadata JSONs after failure for job %s", metadata_count, job_id)
@@ -966,7 +966,7 @@ async def run_download_job(job_id: str):
         # Timeout or interrupted (pause/cancel) — attempt partial import recovery
         ctrl_cmd = control_listener.command if control_listener else None
         reason = "timeout" if ctrl_cmd is None else f"interrupted ({ctrl_cmd})"
-        _file_index2 = FileIndex(os.path.join(str(settings.download_root), ".file-index.sqlite3"))
+        _file_index2 = get_file_index()
         metadata_count, image_count, new_json_paths = _file_index2.count_new_artifacts(job.source, str(job_id))
         if metadata_count > 0:
             logger.info("Partial recovery: found %d metadata JSONs after %s for job %s", metadata_count, reason, job_id)

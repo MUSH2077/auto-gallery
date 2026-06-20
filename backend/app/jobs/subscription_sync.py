@@ -382,7 +382,7 @@ async def _sync_subscriptions_locked():
 
     # Vacuum file index alongside download archives
     try:
-        from app.services.file_index import FileIndex
+        from app.services.file_index import FileIndex, get_file_index
         fi_path = os.path.join(str(settings.download_root), ".file-index.sqlite3")
         if os.path.exists(fi_path):
             FileIndex(fi_path).vacuum()
