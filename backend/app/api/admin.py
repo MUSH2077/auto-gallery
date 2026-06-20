@@ -862,8 +862,22 @@ async def reindex_search(db: AsyncSession = Depends(get_db)):
 
 @router.post("/library/rebuild")
 async def rebuild_library(db: AsyncSession = Depends(get_db)):
-    """Rebuild /library/ metadata.json and thumbnails from database records."""
-    return await admin_data.rebuild_library_index(db)
+    """Enqueue a library rebuild operation and return immediately."""
+    from rq import Queue
+    import uuid
+    from app.services.redis_client import get_redis
+    from app.services.operations import set_operation_status
+
+    job_id = str(uuid.uuid4())
+    set_operation_status(job_id, "enqueued", "admin-rebuild",
+        progress={"phase": "enqueued", "label": "Library rebuild queued"},
+        meta={"entity": "library"})
+
+    Queue(name="operations", connection=get_redis()).enqueue(
+        "app.jobs.admin_operations.run_library_rebuild_operation",
+        job_id, job_timeout=7200)
+
+    return {"status": "enqueued", "job_id": job_id, "message": "Library rebuild queued"}
 
 
 # ── gallery-dl Config ──

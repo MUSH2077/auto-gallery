@@ -48,3 +48,27 @@ async def _run_clear_operation(entity: str, job_id: str) -> dict:
             meta={"entity": entity},
         )
         raise
+
+
+def run_library_rebuild_operation(job_id: str) -> dict:
+    """Entry point for RQ workers — rebuild /library/ from DB."""
+    return asyncio.run(_run_library_rebuild_operation(job_id))
+
+
+async def _run_library_rebuild_operation(job_id: str) -> dict:
+    from app.services.admin_data import rebuild_library_index
+    set_operation_status(job_id, "running", "admin-rebuild",
+        progress={"phase": "running", "label": "Rebuilding library index..."},
+        meta={"entity": "library"})
+    try:
+        async with async_session() as db:
+            result = await rebuild_library_index(db)
+        set_operation_status(job_id, "complete", "admin-rebuild",
+            progress={"phase": "complete", "label": result.get("message", "Complete")},
+            result=result, meta={"entity": "library"})
+        return result
+    except Exception as exc:
+        logger.exception("Library rebuild failed: job_id=%s", job_id)
+        set_operation_status(job_id, "failed", "admin-rebuild",
+            progress={"phase": "failed"}, error=str(exc), meta={"entity": "library"})
+        raise
