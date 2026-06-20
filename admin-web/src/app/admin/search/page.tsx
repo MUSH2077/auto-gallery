@@ -1,9 +1,10 @@
 "use client";
 import { useState, useEffect, useRef, Suspense } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
+import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { PageHeader, EmptyState, SourceBadge } from "@/components";
 import { Breadcrumb } from "@/components/Breadcrumb";
@@ -12,7 +13,9 @@ type Kind = "all" | "works" | "creators" | "tags";
 
 function SearchContent() {
   const t = useT();
+  const toast = useToast();
   const router = useRouter();
+  const qc = useQueryClient();
   const searchParams = useSearchParams();
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -52,7 +55,13 @@ function SearchContent() {
   return (
     <main className="max-w-6xl mx-auto p-6">
       <Breadcrumb items={[{ label: t("search.title") }, { label: debounced || "..." }]} />
-      <PageHeader title={t("search.title")} description={t("search.desc")} />
+      <PageHeader title={t("search.title")} description={t("search.desc")}>
+        <button className="btn-ghost px-3 py-1.5 text-xs" onClick={() => {
+          if (confirm(t("settings.reindex_confirm_msg"))) {
+            api.reindexSearch().then((d) => toast.info(d.message || d.status)).catch((e: Error) => toast.info(e.message));
+          }
+        }}>{t("settings.reindex")}</button>
+      </PageHeader>
       <div className="flex gap-2 mb-6">
         <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("search.placeholder")}
           className="input flex-1 px-4" autoFocus />
@@ -112,7 +121,7 @@ function SearchContent() {
                       <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
                         {w.source && <SourceBadge source={w.source} href={`/admin/works?source=${w.source}`} />}
                         {w.creator_name && (
-                          <Link href={`/admin/creators/${w.id}`} onClick={(e) => e.stopPropagation()}
+                          <Link href={`/admin/creators/${w.creator_id || w.id}`} onClick={(e) => e.stopPropagation()}
                             className="text-blue-600 hover:underline">{w.creator_name}</Link>
                         )}
                         {w.posted_at && <span>{new Date(w.posted_at).toLocaleDateString()}</span>}
