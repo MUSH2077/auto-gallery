@@ -17,6 +17,7 @@ export { default as Modal } from "./Modal";
 export { default as ErrorBoundary } from "./ErrorBoundary";
 export { default as WorkGrid } from "./WorkGrid";
 export { default as RepositoryCard } from "./RepositoryCard";
+export { Breadcrumb, type Crumb } from "./Breadcrumb";
 export { ToastProvider, useToast } from "./Toast";
 export { NotificationProvider, NotificationBell, useNotifications } from "./NotificationCenter";
 export { RealProgressBar } from "./RealProgressBar";
