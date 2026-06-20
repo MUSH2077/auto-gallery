@@ -6,7 +6,7 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
-import { PageHeader, EmptyState, SourceBadge } from "@/components";
+import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
 import { Breadcrumb } from "@/components/Breadcrumb";
 
 type Kind = "all" | "works" | "creators" | "tags";
@@ -69,8 +69,9 @@ function SearchContent() {
 
       {!debounced && <EmptyState title={t("search.empty")} description={t("search.empty_desc")} />}
       {results.isLoading && debounced && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-20 rounded-md bg-gray-200 animate-pulse dark:bg-slate-700" />)}</div>}
+      {results.isError && debounced && <ErrorState message={(results.error as Error).message} onRetry={() => results.refetch()} />}
 
-      {data && debounced && (
+      {data && debounced && !results.isError && (
         <>
           <div className="flex gap-1 mb-4 border-b border-gray-200 dark:border-gray-700">
             {tabs.map(tab => (
