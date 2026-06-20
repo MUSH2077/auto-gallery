@@ -565,6 +565,8 @@ export interface Work {
   thumbnail_asset_id?: string;
   asset_count: number;
   is_favorite: boolean;
+  creator_id?: string | null;
+  creator_name?: string | null;
   curation_state?: CurationState;
   created_at: string;
   updated_at: string;
