@@ -94,7 +94,7 @@ services:
       retries: 3
       start_period: 60s
     restart: unless-stopped
-    mem_limit: 512M
+    mem_limit: 1024M
 
   worker-download:
     image: auto-gallery-backend:latest

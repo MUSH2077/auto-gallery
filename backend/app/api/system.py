@@ -288,9 +288,19 @@ async def _count_active_rebuilds() -> int:
         return 0
 
 
+_workbench_cache: dict | None = None
+_workbench_cache_ts: float = 0.0
+_WORKBENCH_CACHE_TTL = 30.0
+
+
 @router.get("/system/workbench")
 async def workbench_summary(db: AsyncSession = Depends(get_db)):
     """Read-only dashboard aggregation for the live admin workbench."""
+    global _workbench_cache, _workbench_cache_ts
+    _now_mono = time.monotonic()
+    if _workbench_cache is not None and (_now_mono - _workbench_cache_ts) < _WORKBENCH_CACHE_TTL:
+        return _workbench_cache
+
     now = datetime.now(timezone.utc)
     storage = await storage_stats()
     storage_risk = _storage_risk(storage)
@@ -347,7 +357,7 @@ async def workbench_summary(db: AsyncSession = Depends(get_db)):
             "scheduled": queue_payload["scheduled_queue"],
             "failed": queue_payload["failed_jobs"],
             "started": queue_payload["started_jobs"],
-            "rebuild_active": _count_active_rebuilds(),
+            "rebuild_active": await _count_active_rebuilds(),
             "active_download_count": active_download_count,
             "active_import_count": active_import_count,
             "failed_download_count": failed_download_count,
@@ -510,12 +520,14 @@ async def scheduler_decisions(db: AsyncSession = Depends(get_db)):
             "can_download": can_download,
         })
 
-    return {
+    _workbench_cache = {
         "updated_at": now.isoformat(),
         "scheduler_enabled": scheduler_enabled,
         "timezone": tz_name,
         "items": items,
     }
+    _workbench_cache_ts = _now_mono
+    return _workbench_cache
 
 
 @router.get("/system/logs")
