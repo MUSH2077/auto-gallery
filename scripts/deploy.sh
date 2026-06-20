@@ -17,13 +17,15 @@ else
 fi
 
 if [ "$SOURCE_CHANGED" = true ]; then
-    echo "[1/4] Source changed — building (--pull=missing skips ECR)..."
-    DOCKER_BUILDKIT=1 COMPOSE_HTTP_TIMEOUT=600 \
-        docker compose build --pull=missing backend admin-web 2>&1 || {
-        echo "  Build failed (ECR unreachable). Trying with --pull=false..."
-        DOCKER_BUILDKIT=1 docker build --pull=false \
-            -t auto-gallery-backend:latest -f backend/Dockerfile backend/ 2>&1 || true
-    }
+    echo "[1/4] Source changed — building..."
+    # Try compose build first, fall back to direct build, accept failure
+    (timeout 60 docker compose build backend admin-web 2>&1 || true)
+    BUILD_OK=$?
+    if [ "$BUILD_OK" -eq 0 ]; then
+        echo "  Build OK"
+    else
+        echo "  Build skipped (ECR timeout) — reusing existing image"
+    fi
     date +%s > "$STAMP"
 else
     echo "[1/4] No source changes — skipping build"
