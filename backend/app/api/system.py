@@ -278,6 +278,16 @@ async def _get_proxy_health_summary() -> dict:
     return {"sources": result}
 
 
+async def _count_active_rebuilds() -> int:
+    try:
+        from app.services.redis_client import get_redis
+        r = get_redis()
+        keys = r.keys("op:*:status")
+        return sum(1 for k in keys if r.get(k) == b"running")
+    except:
+        return 0
+
+
 @router.get("/system/workbench")
 async def workbench_summary(db: AsyncSession = Depends(get_db)):
     """Read-only dashboard aggregation for the live admin workbench."""
@@ -337,6 +347,7 @@ async def workbench_summary(db: AsyncSession = Depends(get_db)):
             "scheduled": queue_payload["scheduled_queue"],
             "failed": queue_payload["failed_jobs"],
             "started": queue_payload["started_jobs"],
+            "rebuild_active": _count_active_rebuilds(),
             "active_download_count": active_download_count,
             "active_import_count": active_import_count,
             "failed_download_count": failed_download_count,
