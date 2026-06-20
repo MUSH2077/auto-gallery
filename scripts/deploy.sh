@@ -6,9 +6,28 @@ cd "$(dirname "$0")/.."
 
 echo "=== auto-gallery Deploy ==="
 
-# 1. Build images with latest code
-echo "[1/4] Building images..."
-docker compose build backend admin-web
+# 1. Build only if source changed
+STAMP=".deploy-build-stamp"
+SOURCE_CHANGED=false
+if [ -f "$STAMP" ]; then
+    CHANGED=$(find backend/app admin-web/src -newer "$STAMP" -type f 2>/dev/null | wc -l)
+    [ "$CHANGED" -gt 0 ] && SOURCE_CHANGED=true
+else
+    SOURCE_CHANGED=true
+fi
+
+if [ "$SOURCE_CHANGED" = true ]; then
+    echo "[1/4] Source changed — building (--pull=missing skips ECR)..."
+    DOCKER_BUILDKIT=1 COMPOSE_HTTP_TIMEOUT=600 \
+        docker compose build --pull=missing backend admin-web 2>&1 || {
+        echo "  Build failed (ECR unreachable). Trying with --pull=false..."
+        DOCKER_BUILDKIT=1 docker build --pull=false \
+            -t auto-gallery-backend:latest -f backend/Dockerfile backend/ 2>&1 || true
+    }
+    date +%s > "$STAMP"
+else
+    echo "[1/4] No source changes — skipping build"
+fi
 
 # 2. Force-recreate all containers
 echo "[2/4] Restarting containers..."
@@ -16,14 +35,11 @@ docker compose up -d --force-recreate backend worker-download worker-import stre
 
 # 3. Wait for healthy
 echo "[3/4] Waiting for healthy..."
-for i in $(seq 1 12); do
-    unhealthy=$(docker ps --filter "name=auto-gallery" --filter "health=unhealthy" --format '{{.Names}}' 2>/dev/null | wc -l)
-    starting=$(docker ps --filter "name=auto-gallery" --filter "health=starting" --format '{{.Names}}' 2>/dev/null | wc -l)
-    if [ "$unhealthy" -eq 0 ] && [ "$starting" -eq 0 ]; then
-        echo "  All healthy"
-        break
-    fi
-    echo "  Waiting... ($unhealthy unhealthy, $starting starting)"
+for i in $(seq 1 18); do
+    UNHEALTHY=$(docker ps --filter "name=auto-gallery" --filter "health=unhealthy" --format '{{.Names}}' 2>/dev/null | wc -l)
+    STARTING=$(docker ps --filter "name=auto-gallery" --filter "health=starting" --format '{{.Names}}' 2>/dev/null | wc -l)
+    [ "$UNHEALTHY" -eq 0 ] && [ "$STARTING" -eq 0 ] && echo "  All healthy" && break
+    echo "  Waiting... ($UNHEALTHY unhealthy, $STARTING starting)"
     sleep 5
 done
 
@@ -33,7 +49,4 @@ bash scripts/debug.sh quick
 
 echo ""
 echo "=== Deploy complete ==="
-echo "  API:      http://localhost:8818"
-echo "  Frontend: http://localhost:13000"
-echo "  Debug:    ./scripts/debug.sh [backend|download|storage|proxy]"
-echo "  Smoke:    ./scripts/smoke-test.sh"
+echo "  API: http://localhost:8818  |  Frontend: http://localhost:13000"
