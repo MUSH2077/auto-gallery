@@ -373,14 +373,16 @@ async def run_import_job(import_job_id: str):
                     await db.rollback()
                     continue
 
-                # SourceCreator (upsert) — link to creator via subscription
+                # SourceCreator — identity comes from the subscription (set up via
+                # Danbooru reference or manual creation). Never create a new Creator
+                # here; the subscription_source → subscription → creator chain is
+                # the single source of truth for identity mapping.
                 existing_sc = await db.execute(select(SourceCreator).where(
                     SourceCreator.source == sc_data["source"],
                     SourceCreator.source_creator_id == sc_data["source_creator_id"]))
                 sc_obj = existing_sc.scalar_one_or_none()
                 linked_creator_id = sc_obj.creator_id if sc_obj else None
                 if not sc_obj:
-                    # Find creator via download_job -> subscription
                     creator_id = None
                     if dj.subscription_id:
                         sub = await db.get(Subscription, dj.subscription_id)
@@ -396,7 +398,6 @@ async def run_import_job(import_job_id: str):
                     ))
                     await db.flush()
                 elif sc_obj.creator_id is None and dj.subscription_id:
-                    # Update existing source_creator with creator link
                     sub = await db.get(Subscription, dj.subscription_id)
                     if sub:
                         sc_obj.creator_id = sub.creator_id
