@@ -22,22 +22,11 @@ async def find_existing_creator(
     """Find an existing creator by identity markers.
 
     Checks in priority order:
-    1. danbooru_artist_id match (most reliable)
-    2. SourceCreator source+source_creator_id match
+    1. SourceCreator source+source_creator_id match (same platform + same ID)
+    2. danbooru_artist_id match (cross-platform identity hint, NOT a merge trigger)
     3. CreatorLink URL match (same URL pointing to another creator)
     """
-    # 1. Danbooru artist ID — gold standard
-    if danbooru_artist_id is not None:
-        result = await db.execute(
-            select(Creator).where(Creator.danbooru_artist_id == danbooru_artist_id)
-        )
-        creator = result.scalar_one_or_none()
-        if creator:
-            logger.info("Found existing creator %s by danbooru_artist_id=%d",
-                        creator.id, danbooru_artist_id)
-            return creator
-
-    # 2. SourceCreator match — same platform + platform ID
+    # 1. SourceCreator match — same platform + platform ID, never merge
     if source and source_creator_id:
         result = await db.execute(
             select(Creator).join(SourceCreator).where(
@@ -49,6 +38,17 @@ async def find_existing_creator(
         if creator:
             logger.info("Found existing creator %s by source_creator %s:%s",
                         creator.id, source, source_creator_id)
+            return creator
+
+    # 2. Danbooru artist ID — cross-platform identity hint
+    if danbooru_artist_id is not None:
+        result = await db.execute(
+            select(Creator).where(Creator.danbooru_artist_id == danbooru_artist_id)
+        )
+        creator = result.scalar_one_or_none()
+        if creator:
+            logger.info("Found existing creator %s by danbooru_artist_id=%d",
+                        creator.id, danbooru_artist_id)
             return creator
 
     # 3. CreatorLink URL match — same URL claimed by a different creator
