@@ -1,6 +1,6 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, queryKeys } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState } from "@/components";
 import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
@@ -9,8 +9,8 @@ export default function DedupPage() {
   const t = useT();
   const router = useRouter();
   const qc = useQueryClient();
-  const dups = useQuery({ queryKey: ["dedup-duplicates"], queryFn: api.listDuplicates });
-  const scan = useMutation({ mutationFn: api.scanDuplicates, onSuccess: () => qc.invalidateQueries({ queryKey: ["dedup-duplicates"] }) });
+  const dups = useQuery({ queryKey: queryKeys.dedup.duplicates, queryFn: api.listDuplicates });
+  const scan = useMutation({ mutationFn: api.scanDuplicates, onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.dedup.duplicates }) });
 
   return (
     <main className="max-w-4xl mx-auto p-6">

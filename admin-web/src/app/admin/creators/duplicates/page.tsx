@@ -10,7 +10,7 @@ export default function CreatorDuplicatesPage() {
   const t = useT();
   const router = useRouter();
   const qc = useQueryClient();
-  const dups = useQuery({ queryKey: ["creator-duplicates"], queryFn: api.listDuplicateCreators });
+  const dups = useQuery({ queryKey: queryKeys.creators.duplicates, queryFn: api.listDuplicateCreators });
   const [selectedTarget, setSelectedTarget] = useState<string | null>(null);
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
   const [confirmMerge, setConfirmMerge] = useState(false);

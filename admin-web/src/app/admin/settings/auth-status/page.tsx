@@ -1,13 +1,13 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, queryKeys } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
 import { useT } from "@/lib/i18n";
 import Link from "next/link";
 
 export default function AuthStatusPage() {
   const t = useT();
-  const auth = useQuery({ queryKey: ["auth-status"], queryFn: api.getAuthStatus, refetchInterval: 30000 });
+  const auth = useQuery({ queryKey: queryKeys.admin.authStatus, queryFn: api.getAuthStatus, refetchInterval: 30000 });
 
   return (
     <main className="max-w-5xl mx-auto p-6">
