@@ -34,7 +34,11 @@ router = APIRouter(dependencies=[RequireAdmin])
 DOWNLOAD_RUNNING_STATUSES = {"enqueued", "downloading", "downloaded", "importing"}
 IMPORT_RUNNING_STATUSES = {"enqueued", "running"}
 FAILED_STATUSES = {"failed", "stale"}
-QUEUE_NAMES = ("default", "downloads", "imports", "scheduled")
+QUEUE_NAMES = (
+    "default", "downloads", "imports", "operations", "scheduled",
+    "downloads:pixiv", "downloads:danbooru", "downloads:iwara",
+    "downloads:weibo", "downloads:bilibili", "downloads:pinterest", "downloads:lofter",
+)
 
 # ── Storage stats TTL cache ────────────────────────────────────────────────────
 _storage_cache: dict | None = None
@@ -281,27 +285,21 @@ async def _get_proxy_health_summary() -> dict:
 async def _count_active_rebuilds() -> int:
     try:
         from app.services.redis_client import get_redis
-        import json
         r = get_redis()
-        keys = r.keys("admin_operation:*")
-        count = 0
-        for k in keys:
-            raw = r.get(k)
-            if raw:
-                try:
-                    payload = json.loads(raw if isinstance(raw, str) else raw.decode("utf-8"))
-                    if payload.get("status") == "running":
-                        count += 1
-                except Exception:
-                    pass
-        return count
+        active = r.get("library:rebuild:active")
+        if not active:
+            return 0
+        from app.services.operations import get_operation_status
+        jid = active.decode() if isinstance(active, bytes) else active
+        status = get_operation_status(jid)
+        return 1 if status and status.get("status") == "running" else 0
     except Exception:
         return 0
 
 
 _workbench_cache: dict | None = None
 _workbench_cache_ts: float = 0.0
-_WORKBENCH_CACHE_TTL = 30.0
+_WORKBENCH_CACHE_TTL = 120.0
 
 
 @router.get("/system/workbench")
@@ -313,8 +311,21 @@ async def workbench_summary(db: AsyncSession = Depends(get_db)):
         return _workbench_cache
 
     now = datetime.now(timezone.utc)
-    storage = await storage_stats()
-    storage_risk = _storage_risk(storage)
+    # O(1) disk stats via statvfs instead of recursive filesystem scans
+    try:
+        stat = os.statvfs(settings.download_root)
+        disk_total_bytes = stat.f_frsize * stat.f_blocks
+        disk_free_bytes = stat.f_frsize * stat.f_bavail
+        disk_used_bytes = disk_total_bytes - disk_free_bytes
+        disk_used_percent = round((disk_used_bytes / disk_total_bytes) * 100, 1) if disk_total_bytes else None
+        disk_free_percent = round((disk_free_bytes / disk_total_bytes) * 100, 1) if disk_total_bytes else None
+    except (OSError, PermissionError):
+        disk_total_bytes = disk_free_bytes = disk_used_bytes = 0
+        disk_used_percent = disk_free_percent = None
+    storage_risk = "unknown"
+    if disk_total_bytes > 0:
+        free_pct = (disk_free_bytes / disk_total_bytes) * 100
+        storage_risk = "critical" if free_pct < 5 else "warning" if free_pct < 15 else "ok"
     queue_payload = await _queue_stats_payload()
     scheduler_config = await get_scheduler_config(db)
     download_defaults = await get_download_defaults(db)
@@ -387,15 +398,11 @@ async def workbench_summary(db: AsyncSession = Depends(get_db)):
         },
         "proxy_health": await _get_proxy_health_summary(),
         "storage": {
-            "original_media_size_bytes": storage["downloads"]["size_bytes"],
-            "original_media_file_count": storage["downloads"]["file_count"],
-            "library_size_bytes": storage["library"]["size_bytes"],
-            "library_file_count": storage["library"]["file_count"],
-            "disk_total_bytes": storage["disk"]["total_bytes"],
-            "disk_free_bytes": storage["disk"]["free_bytes"],
-            "disk_used_bytes": storage["disk"]["used_bytes"],
-            "disk_used_percent": round((storage["disk"]["used_bytes"] / storage["disk"]["total_bytes"]) * 100, 1) if storage["disk"]["total_bytes"] else None,
-            "disk_free_percent": round((storage["disk"]["free_bytes"] / storage["disk"]["total_bytes"]) * 100, 1) if storage["disk"]["total_bytes"] else None,
+            "disk_total_bytes": disk_total_bytes,
+            "disk_free_bytes": disk_free_bytes,
+            "disk_used_bytes": disk_used_bytes,
+            "disk_used_percent": disk_used_percent,
+            "disk_free_percent": disk_free_percent,
             "risk_level": storage_risk,
         },
         "health": await _quick_service_health(db),
