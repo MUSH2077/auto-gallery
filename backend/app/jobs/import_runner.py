@@ -1,6 +1,4 @@
 from app.services.image_utils import can_generate_thumbnail, get_mime_type, get_image_dims, can_compute_phash, IMAGE_EXTS
-from app.services.library_sync import resolve_creator_directory, write_metadata_json, register_metadata_in_fileindex
-from app.services.file_index import get_file_index
 import asyncio
 import json
 import logging
@@ -30,11 +28,17 @@ from app.services.job_state import transition_import_job
 from app.services.redis_client import get_redis
 from app.services.subscription_enqueue import mark_source_sync_success
 from app.services.curation import CurationService
+from app.services.work_import import WorkImportService
 
 logger = logging.getLogger(__name__)
 
 ARCHIVE_EXTENSIONS = {".zip"}
 ASSET_EXTENSIONS = IMAGE_EXTS | ARCHIVE_EXTENSIONS
+
+# Backward-compatible private aliases used by older extensions and tests.
+_can_generate_thumbnail = can_generate_thumbnail
+_can_compute_phash = can_compute_phash
+_mime_type = get_mime_type
 
 
 def _parse_posted_at(value: Any) -> datetime | None:
@@ -218,10 +222,11 @@ async def run_import_job(import_job_id: str):
                 await db.commit()
         provider = registry.get(dj.source)
 
-        # Get new JSONs from FileIndex (primary), fall back to Redis key (backward compat)
-        from app.services.file_index import FileIndex, get_file_index
-        _file_index = get_file_index()
-        json_rel_paths = _file_index.get_new_metadata_jsons(provider.source_name, str(dj.id))
+        # PostgreSQL is the durable source of truth. The Redis/disk list remains
+        # a compatibility fallback for jobs created before the ledger migration.
+        from app.services.artifact_ledger import ArtifactLedger
+        async with async_session() as ledger_db:
+            json_rel_paths = await ArtifactLedger(ledger_db).new_metadata_paths(dj.id)
 
         all_json_files = sorted(
             Path(settings.download_root) / p for p in json_rel_paths
@@ -294,7 +299,6 @@ async def run_import_job(import_job_id: str):
             first_file, first_raw = items[0]
 
             _json_rel = str(first_file.relative_to(settings.download_root))
-            _file_index.mark_importing(_json_rel, import_job_id)
 
             try:
                 ws_data = provider.parse_work_source(first_raw)
@@ -302,6 +306,9 @@ async def run_import_job(import_job_id: str):
                 posted_at = _parse_posted_at(ws_data.get("posted_at"))
             except Exception:
                 logger.warning("Failed to parse provider data for %s/%s", provider.source_name, src_work_id, exc_info=True)
+                async with async_session() as ledger_db:
+                    await ArtifactLedger(ledger_db).mark_work(dj.id, src_work_id, "failed", "provider metadata parse failed")
+                    await ledger_db.commit()
                 continue
 
             # Directory name: provider knows which field matches its gallery-dl template
@@ -319,11 +326,9 @@ async def run_import_job(import_job_id: str):
                     )
                 )
                 if existing_ws.scalar_one_or_none():
-                    for jf, _ in items:
-                        try:
-                            jf.unlink()
-                        except Exception:
-                            logger.warning("Failed to unlink JSON %s", jf, exc_info=True)
+                    async with async_session() as ledger_db:
+                        await ArtifactLedger(ledger_db).mark_work(dj.id, src_work_id, "done")
+                        await ledger_db.commit()
                     continue
 
             # Media assets are in the SAME directory as the JSONs
@@ -336,11 +341,9 @@ async def run_import_job(import_job_id: str):
             )
 
             if not asset_files:
-                for jf, _ in items:
-                    try:
-                        jf.unlink()
-                    except Exception:
-                        logger.warning("Failed to unlink JSON %s", jf, exc_info=True)
+                async with async_session() as ledger_db:
+                    await ArtifactLedger(ledger_db).mark_work(dj.id, src_work_id, "failed", "no media assets found")
+                    await ledger_db.commit()
                 continue
 
             stats["works"] += 1
@@ -362,6 +365,14 @@ async def run_import_job(import_job_id: str):
 
             # Create DB records — files stay in place
             async with async_session() as db:
+                # Claim work in the same transaction so a crash rolls back the claim
+                claimed = await ArtifactLedger(db).claim_work(
+                    dj.id, src_work_id, job_uuid)
+                if not claimed:
+                    logger.info("Import %s: work %s already claimed or complete", import_job_id, src_work_id)
+                    await db.rollback()
+                    continue
+
                 # SourceCreator (upsert) — link to creator via subscription
                 existing_sc = await db.execute(select(SourceCreator).where(
                     SourceCreator.source == sc_data["source"],
@@ -414,33 +425,8 @@ async def run_import_job(import_job_id: str):
                 db.add(ws)
                 await db.flush()
 
-                # Use gallery-dl directory template for library path (aligns with downloads)
-                from app.services.settings import load_gallerydl_config, extractor_key_for_source
-                _extractor_key = extractor_key_for_source(provider.source_name)
-                _config = load_gallerydl_config()
-                _extractor_cfg = _config.get("extractor", {}).get(_extractor_key, {})
-                _dir_template = _extractor_cfg.get("directory", [provider.source_name, "{id}"])
-
-                _resolved_parts = []
-                for part in _dir_template:
-                    resolved = str(part)
-                    if isinstance(first_raw, dict):
-                        for k, v in first_raw.items():
-                            if isinstance(v, dict):
-                                for sk, sv in v.items():
-                                    resolved = resolved.replace(f"{{user[{sk}]}}", str(sv) if sv else "")
-                                    resolved = resolved.replace(f"{{{sk}}}", str(sv) if sv else "")
-                            elif isinstance(v, (str, int, float)):
-                                resolved = resolved.replace(f"{{{k}}}", str(v) if v is not None else "")
-                    resolved = resolved.replace("{id}", src_work_id)
-                    resolved = resolved.replace("{category}", str(first_raw.get("category", "")))
-                    if isinstance(first_raw.get("board"), dict):
-                        resolved = resolved.replace("{board[name]}", str(first_raw["board"].get("name", "")))
-                    _resolved_parts.append(resolved.strip().replace("/", "_"))
-
-                _creator_dir = _resolved_parts[1] if len(_resolved_parts) > 1 else dir_name
-                lib_dir = (Path(settings.library_root) / provider.source_name
-                           / _creator_dir / src_work_id)
+                _creator_dir, lib_dir = WorkImportService.library_directory(
+                    provider.source_name, first_raw, src_work_id)
                 lib_dir.mkdir(parents=True, exist_ok=True)
 
                 # Assets from the media files (already in final location)
@@ -471,26 +457,14 @@ async def run_import_job(import_job_id: str):
 
                     # Compute sha256 in thread pool (CPU-bound hashing)
                     try:
-                        def _compute_sha256(filepath: str) -> str:
-                            import hashlib
-                            h = hashlib.sha256()
-                            with open(filepath, "rb") as _hf:
-                                for _chunk in iter(lambda: _hf.read(8192), b""):
-                                    h.update(_chunk)
-                            return h.hexdigest()
-                        asset.sha256 = await asyncio.to_thread(_compute_sha256, str(fp))
+                        asset.sha256 = await asyncio.to_thread(WorkImportService.sha256, fp)
                     except Exception as _sha256_err:
                         logger.warning("sha256 failed for %s: %s", fp, _sha256_err)
 
                     # Compute pHash in thread pool (CPU-bound PIL)
                     if can_compute_phash(fp.suffix):
                         try:
-                            def _compute_phash(filepath: str) -> str:
-                                import imagehash
-                                from PIL import Image as _PILImage
-                                with _PILImage.open(filepath) as _pil_img:
-                                    return str(imagehash.phash(_pil_img))
-                            asset.phash = await asyncio.to_thread(_compute_phash, str(fp))
+                            asset.phash = await asyncio.to_thread(WorkImportService.phash, fp)
                         except Exception as _phash_err:
                             logger.warning("pHash failed for %s: %s", fp, _phash_err)
 
@@ -537,19 +511,8 @@ async def run_import_job(import_job_id: str):
 
                 # Write metadata.json to library
                 try:
-                    assets_meta = []
-                    for fp in asset_files:
-                        assets_meta.append({"file_name": fp.name})
-                    with open(lib_dir / "metadata.json", "w") as mf:
-                        json.dump({
-                            "work_id": str(work.id),
-                            "source": provider.source_name,
-                            "source_work_id": src_work_id,
-                            "title": ws_data.get("title"),
-                            "posted_at": _posted_at_json(posted_at),
-                            "creator": display_name,
-                            "assets": assets_meta,
-                        }, mf, indent=2, ensure_ascii=False, default=str)
+                    WorkImportService.write_library_metadata(
+                        lib_dir, work, ws, display_name, asset_files)
                 except Exception:
                     logger.warning("Failed to write metadata.json for %s/%s", provider.source_name, src_work_id, exc_info=True)
 
@@ -596,13 +559,20 @@ async def run_import_job(import_job_id: str):
                     meili_docs = []
                     batch_count = 0
 
-            # Delete processed JSONs (keep image files)
-            for jf, _ in items:
-                try:
-                    jf.unlink()
-                    _file_index.mark_imported(str(jf.relative_to(settings.download_root)), import_job_id)
-                except Exception:
-                    logger.warning("Failed to unlink processed JSON %s", jf, exc_info=True)
+            # Keep source metadata as an auditable, restart-safe input. The
+            # ledger state prevents it from being imported again.
+            async with async_session() as ledger_db:
+                from app.services.artifact_ledger import managed_artifact_row
+                ledger = ArtifactLedger(ledger_db)
+                await ledger.mark_work(dj.id, src_work_id, "done")
+                library_paths = [lib_dir / "metadata.json", *lib_dir.glob("*.thumbnail.webp")]
+                await ledger.upsert_many([
+                    managed_artifact_row(path, Path(settings.library_root), "library",
+                                         provider.source_name, _creator_dir, src_work_id,
+                                         "metadata_json" if path.name == "metadata.json" else "thumbnail")
+                    for path in library_paths if path.exists()
+                ])
+                await ledger_db.commit()
 
             # Remove empty directories (no images left)
             try:

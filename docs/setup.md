@@ -96,7 +96,7 @@ HOST_MEILISEARCH=/volume1/auto-gallery/docker/meilisearch
 docker compose up -d
 ```
 
-This starts all services: postgres, redis, meilisearch, backend, worker-download (per-source queues), worker-import, stream-import (event-driven import), scheduler, and admin-web. The backend automatically runs database migrations on startup, so no separate migration step is needed.
+This starts all services: postgres, redis, meilisearch, backend, worker-download (per-source queues), worker-import (the single durable RQ import pipeline), worker-operations, scheduler, and admin-web. The backend automatically runs database migrations on startup, so no separate migration step is needed.
 
 Wait for health checks:
 

@@ -102,7 +102,7 @@ auto-gallery uses RQ (Redis Queue) for downloads and batch imports, plus Redis S
 
 - **Why RQ**: Simpler than Celery, uses Redis already in the stack. `download_job`/`import_job` database tables are the source of truth; the queue backend is replaceable.
 - **Per-source download queues**: Each source has its own RQ queue (`downloads:pixiv`, `downloads:danbooru`, etc.) for isolation — one slow source never blocks another. The `worker-download` container listens on all source queues.
-- **Redis Stream for imports**: After a download completes, the job publishes a `work:ready` message to a Redis Stream. The `stream-import` container consumes via a consumer group (`import-workers`), enabling at-least-once delivery with pending-message recovery.
+- **Durable RQ imports**: Download artifacts are recorded in PostgreSQL and a single RQ import pipeline claims work with leases, enabling restart-safe recovery without competing consumers.
 - **Job timeout**: `job_timeout=7200` (2 hours) on all enqueue calls to prevent RQ from killing long-running downloads (default is 180s).
 - **State machine**: `pending → downloading → downloaded → importing → complete | failed | stale | paused`. Paused jobs skip execution. Stale detection uses Redis heartbeat keys (`task:{job_id}:heartbeat_ts` with 90s TTL) — if the key is absent and the job is past its retry grace period, it's marked stale. Partial import recovery on timeout/failure.
 - **Adaptive timeouts**: Retry count increments the stall and deadline timeouts (1.0x → 1.5x → 2.0x) to give later attempts more headroom.
@@ -124,7 +124,7 @@ Scheduler (timezone-aware, configurable interval or daily schedule)
         → Files land in DOWNLOAD_ROOT/{source}/{creator_name}/{source_work_id}/
         → FileIndex registration (SQLite)
         → Job status = downloaded
-        → XADD work:ready → Redis Stream (event-driven import)
+        → PostgreSQL storage_artifacts → RQ import job
 ```
 
 Key download details:
@@ -138,8 +138,8 @@ Key download details:
 
 **Event-driven (primary):**
 ```
-Download job completes → XADD work:ready (Redis Stream)
-  → stream-import consumer reads via XREADGROUP
+Download job completes → storage_artifacts batch UPSERT
+  → worker-import claims work with a lease
   → FileIndex.query() finds new files by work_id (O(log n), not rglob)
   → Provider.parse_work_source() → group files by source_work_id
   → Provider.parse_source_creator() → upsert source_creator
@@ -149,7 +149,7 @@ Download job completes → XADD work:ready (Redis Stream)
   → Generate thumbnails (pyvips WebP) in LIBRARY_ROOT/{source}/{creator_name}/{source_work_id}/
   → Write metadata.json to LIBRARY_ROOT/{source}/{creator_name}/{source_work_id}/
   → FileIndex.mark_imported()
-  → XACK work:ready
+  → mark artifact work done/failed
 ```
 
 **Batch import (RQ, for Danbooru reference):**

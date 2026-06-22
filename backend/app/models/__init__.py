@@ -14,6 +14,7 @@ from app.models.subscription_source import SubscriptionSource
 from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
 from app.models.system_setting import SystemSetting
+from app.models.storage_artifact import StorageArtifact
 from app.models.user import User
 from app.models.curation import (
     AssetStorageState,
@@ -41,6 +42,7 @@ __all__ = [
     "DownloadJob",
     "ImportJob",
     "SystemSetting",
+    "StorageArtifact",
     "User",
     "AssetStorageState",
     "CreatorCurationState",

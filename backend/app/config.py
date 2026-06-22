@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     timezone: str = "UTC"
+    min_download_free_gb: float = 5.0
+    max_pending_artifacts: int = 50000
 
     model_config = {"env_prefix": "", "case_sensitive": False}
 

@@ -306,7 +306,7 @@ docker compose logs -f
 # Specific services
 docker compose logs -f worker-download
 docker compose logs -f worker-import
-docker compose logs -f stream-import
+docker compose logs -f worker-import
 
 # Last 100 lines
 docker compose logs --tail=100 backend
