@@ -52,16 +52,6 @@ export default function DataManagementPage() {
     onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
   });
 
-  const clearDownloads = useMutation({
-    mutationFn: async () => {
-      await api.clearEntity("downloads");
-      await api.clearFailedJobs();
-      return { message: "Download history and Redis failed jobs cleared" };
-    },
-    onSuccess: (d) => { toast.success({ message: d.message }); clearCacheThenRefetch(); setConfirmAction(null); },
-    onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
-  });
-
   const clearJobs = useMutation({
     mutationFn: async () => {
       await api.clearEntity("jobs");
@@ -111,13 +101,6 @@ export default function DataManagementPage() {
       desc: t("datamgmt.clear_creators.desc"),
       color: "orange",
       mutation: clearCreators,
-    },
-    {
-      key: "downloads",
-      title: t("datamgmt.clear_downloads"),
-      desc: t("datamgmt.clear_downloads.desc"),
-      color: "yellow",
-      mutation: clearDownloads,
     },
     {
       key: "jobs",

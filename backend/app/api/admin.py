@@ -6,8 +6,10 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from typing import Literal
 from uuid import UUID
 import uuid
 
@@ -231,9 +233,19 @@ async def system_info():
     return info
 
 
+_storage_breakdown_cache: dict | None = None
+_storage_breakdown_cache_ts: float = 0.0
+_STORAGE_BREAKDOWN_CACHE_TTL = 60.0
+
+
 @router.get("/storage-breakdown")
 async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     """Return per-source and per-creator storage breakdown."""
+    global _storage_breakdown_cache, _storage_breakdown_cache_ts
+    _now_mono = time.monotonic()
+    if _storage_breakdown_cache is not None and (_now_mono - _storage_breakdown_cache_ts) < _STORAGE_BREAKDOWN_CACHE_TTL:
+        return _storage_breakdown_cache
+
     from sqlalchemy import text
 
     dl_root = Path(settings.download_root)
@@ -437,7 +449,7 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     except Exception:
         db_stats = {}
 
-    return {
+    result = {
         "sources": sources,
         "creators": creators,
         "db_stats": db_stats,
@@ -464,6 +476,9 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
             },
         },
     }
+    _storage_breakdown_cache = result
+    _storage_breakdown_cache_ts = time.monotonic()
+    return result
 
 
 @router.get("/integrity-check")
@@ -881,24 +896,46 @@ async def reindex_search(db: AsyncSession = Depends(get_db)):
 
 # ── Library ──
 
+class RebuildLibraryRequest(BaseModel):
+    mode: Literal["repair", "full"] = "repair"
+    source: str | None = None
+    creator_id: UUID | None = None
+    work_id: UUID | None = None
+    resume: bool = True
+
+
 @router.post("/library/rebuild")
-async def rebuild_library(db: AsyncSession = Depends(get_db)):
+async def rebuild_library(data: RebuildLibraryRequest | None = None):
     """Enqueue a library rebuild operation and return immediately."""
     from rq import Queue
     import uuid
     from app.services.redis_client import get_redis
     from app.services.operations import set_operation_status
 
+    options = (data or RebuildLibraryRequest()).model_dump(mode="json")
+    redis = get_redis()
     job_id = str(uuid.uuid4())
+    active_job = redis.get("library:rebuild:active")
+    if isinstance(active_job, bytes):
+        active_job = active_job.decode()
+    if active_job:
+        active_status = get_operation_status(active_job)
+        if not active_status or active_status.get("status") in {"complete", "failed", "cancelled"}:
+            redis.delete("library:rebuild:active")
+    if not redis.set("library:rebuild:active", job_id, nx=True, ex=604800):
+        active_job = redis.get("library:rebuild:active")
+        if isinstance(active_job, bytes):
+            active_job = active_job.decode()
+        raise HTTPException(status_code=409, detail={"message": "Library rebuild already running", "job_id": active_job})
     set_operation_status(job_id, "enqueued", "admin-rebuild",
         progress={"phase": "enqueued", "label": "Library rebuild queued"},
-        meta={"entity": "library"})
+        meta={"entity": "library", **options})
 
-    Queue(name="operations", connection=get_redis()).enqueue(
+    Queue(name="operations", connection=redis).enqueue(
         "app.jobs.admin_operations.run_library_rebuild_operation",
-        job_id, job_timeout=7200)
+        job_id, options, job_timeout=14400, result_ttl=604800)
 
-    return {"status": "enqueued", "job_id": job_id, "message": "Library rebuild queued"}
+    return {"status": "enqueued", "job_id": job_id, "message": "Library rebuild queued", "options": options}
 
 
 # ── gallery-dl Config ──
