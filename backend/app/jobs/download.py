@@ -5,6 +5,7 @@ import re
 import subprocess
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from uuid import UUID
@@ -22,7 +23,6 @@ from app.services.job_progress import apply_download_progress, apply_import_prog
 from app.services.redis_client import get_redis
 from app.services.settings import build_effective_gallerydl_config, get_download_defaults
 from app.services.subscription_enqueue import mark_source_sync_success
-from app.services.file_index import FileIndex, get_file_index
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,34 @@ def _parse_progress(stderr: str) -> dict | None:
 RQ_JOB_TIMEOUT = 7200  # 2 hours
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _promote_staged_files(stage_root: Path, download_root: Path) -> list[Path]:
+    """Move one job's staged files into the canonical tree on the same volume."""
+    promoted: list[Path] = []
+    if not stage_root.exists():
+        return promoted
+    for staged in sorted(stage_root.rglob("*")):
+        if not staged.is_file():
+            continue
+        target = download_root / staged.relative_to(stage_root)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(staged, target)
+        promoted.append(target)
+    for directory in sorted((p for p in stage_root.rglob("*") if p.is_dir()), reverse=True):
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
+    try:
+        stage_root.rmdir()
+    except OSError:
+        pass
+    return promoted
+
+
 async def _read_download_defaults():
     """Read download job defaults from system_settings table."""
     try:
@@ -63,6 +91,12 @@ async def _read_download_defaults():
     except Exception:
         logger.warning("Failed to read download_defaults, using fallbacks", exc_info=True)
     return {}
+
+
+async def _artifact_counts(download_job_id: UUID) -> tuple[int, int, list[str]]:
+    from app.services.artifact_ledger import ArtifactLedger
+    async with async_session() as db:
+        return await ArtifactLedger(db).counts(download_job_id)
 
 
 AUTH_ERROR_PATTERNS = [
@@ -264,9 +298,6 @@ async def run_download_job(job_id: str):
     gdl_timeout = int(dl_defaults.get("gallerydl_timeout", FALLBACK_GALLERYDL_TIMEOUT))
     gdl_abort = int(dl_defaults.get("gallerydl_abort", FALLBACK_GALLERYDL_ABORT))
 
-    # Initialize file index (one-time bootstrap on first run)
-    _file_index = get_file_index()
-
     skip_ai = dl_defaults.get("skip_ai_generated", False)
     ai_config_path = None
     job_config_path = None
@@ -346,7 +377,8 @@ async def run_download_job(job_id: str):
             await _progress_db.commit()
 
     result = None
-    stderr_lines: list[str] = []
+    stderr_lines = deque(maxlen=2000)
+    stdout_lines = deque(maxlen=2000)
     proc = None
     control_listener = None
     heartbeat = None
@@ -503,9 +535,15 @@ async def run_download_job(job_id: str):
         last_progress_time = time.time()  # shared with main thread (GLock)
         progress_lock = threading.Lock()
 
-        def read_stderr():
-            for line in iter(proc.stderr.readline, ""):
-                stderr_lines.append(line)
+        def read_output(pipe, sink, parse_progress=False):
+            nonlocal last_progress_time, last_progress_publish
+            for line in iter(pipe.readline, ""):
+                sink.append(line)
+                now = time.time()
+                with progress_lock:
+                    last_progress_time = now
+                if not parse_progress:
+                    continue
                 # Parse and publish progress
                 m = progress_pattern.search(line)
                 if m:
@@ -518,21 +556,16 @@ async def run_download_job(job_id: str):
                         "message": line.strip()[:200],
                     }
                     # Publish throttled (max 2/sec to avoid flooding)
-                    nonlocal last_progress_publish
-                    now = time.time()
                     if now - last_progress_publish >= 0.5:
                         try:
                             publish_progress(job_id, "download", progress)
                         except Exception:
                             pass
                         last_progress_publish = now
-                    # Update shared progress timestamp for stall detection
-                    nonlocal last_progress_time
-                    with progress_lock:
-                        last_progress_time = now
-
-        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+        stderr_thread = threading.Thread(target=read_output, args=(proc.stderr, stderr_lines, True), daemon=True)
+        stdout_thread = threading.Thread(target=read_output, args=(proc.stdout, stdout_lines, False), daemon=True)
         stderr_thread.start()
+        stdout_thread.start()
 
         # ── Wait for completion with dual timeout (overall + stall) ──
         STALL_GRACE_PERIOD = 30  # grace period before stall detection kicks in
@@ -587,6 +620,7 @@ async def run_download_job(job_id: str):
                 except (ProcessLookupError, OSError):
                     pass
                 stderr_thread.join(timeout=5)
+                stdout_thread.join(timeout=5)
                 try:
                     proc.wait(timeout=10)
                 except subprocess.TimeoutExpired:
@@ -594,8 +628,9 @@ async def run_download_job(job_id: str):
                 result = None  # signals timeout/stall to downstream handlers
             else:
                 # Normal completion or pause/cancel
-                stdout_text = proc.stdout.read()
                 stderr_thread.join(timeout=5)
+                stdout_thread.join(timeout=5)
+                stdout_text = "".join(stdout_lines)
                 stderr_text = "".join(stderr_lines)
                 returncode = proc.returncode
 
@@ -623,6 +658,7 @@ async def run_download_job(job_id: str):
             except Exception:
                 pass
             stderr_thread.join(timeout=5)
+            stdout_thread.join(timeout=5)
             try:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
@@ -655,80 +691,28 @@ async def run_download_job(job_id: str):
                     append_manifest_event(_manifest_job, "gallerydl_timeout", timeout_seconds=dl_timeout)
                 await _manifest_db.commit()
 
-            # Register newly downloaded files in FileIndex
-            def _register_new_files():
-                source_root = Path(settings.download_root) / job.source
-                if not source_root.exists():
-                    return 0
-                count = 0
-                IMG_EXTS_REG = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+            # Register newly downloaded files via filesystem scan
+            from app.services.artifact_ledger import ArtifactLedger, artifact_row
+            source_root = Path(settings.download_root) / job.source
+            rows = []
+            seen = set()
+            if source_root.exists():
                 for jf in source_root.rglob("*.json"):
-                    if not jf.is_file():
-                        continue
-                    rel = str(jf.relative_to(settings.download_root))
-                    parts = rel.split("/")
-                    if len(parts) < 3:
-                        continue
-                    _file_index.upsert(
-                        file_path=rel, storage_root="downloads", source=job.source,
-                        creator_dir=parts[1], work_id=parts[2], file_name=jf.name,
-                        file_type="metadata_json", file_size=jf.stat().st_size,
-                        download_job_id=str(job_id),
-                    )
-                    count += 1
-                    work_dir = jf.parent
-                    for af in work_dir.iterdir():
-                        if af.is_file() and af.suffix.lower() in IMG_EXTS_REG:
-                            arel = str(af.relative_to(settings.download_root))
-                            _file_index.upsert(
-                                file_path=arel, storage_root="downloads", source=job.source,
-                                creator_dir=parts[1], work_id=parts[2], file_name=af.name,
-                                file_type="image", file_size=af.stat().st_size,
-                                download_job_id=str(job_id),
-                            )
-                return count
-
-            _registered = _register_new_files()
-            logger.info("Registered %d new files in FileIndex for job %s", _registered, job_id)
-
-            # Publish new works to Redis Stream for streaming import consumers
-            if _registered > 0:
-                try:
-                    _file_index2 = get_file_index()
-                    _new_jsons = _file_index2.get_new_metadata_jsons(job.source, str(job_id))
-                    _r = get_redis()
-                    _published = 0
-                    for _jp in _new_jsons:
-                        _jf = Path(settings.download_root) / _jp
-                        if not _jf.exists():
-                            continue
-                        try:
-                            with open(_jf) as _jfh:
-                                _raw = json.load(_jfh)
-                            _provider = registry.get(job.source)
-                            _ws = _provider.parse_work_source(_raw)
-                            _src_work_id = _ws.get("source_work_id", "")
-                            _parts = _jp.split("/")
-                            _asset_paths = [
-                                str(af.relative_to(settings.download_root))
-                                for af in _jf.parent.iterdir()
-                                if af.is_file() and af.suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".zip"}
-                            ]
-                            _msg = {
-                                "download_job_id": str(job_id),
-                                "source": job.source,
-                                "work_id": _src_work_id,
-                                "json_path": _jp,
-                                "asset_paths": _asset_paths,
-                                "creator_dir": _parts[1] if len(_parts) > 2 else "",
-                            }
-                            _r.xadd("work:ready", _msg, maxlen=10000, approximate=True)
-                            _published += 1
-                        except Exception:
-                            logger.debug("Failed to XADD work for %s", _jp, exc_info=True)
-                    logger.info("Published %d works to Redis Stream work:ready for job %s", _published, job_id)
-                except Exception:
-                    logger.warning("Failed to publish works to Redis Stream for job %s", job_id, exc_info=True)
+                    if jf.is_file() and jf.parent != source_root:
+                        for af in jf.parent.iterdir():
+                            if af.is_file() and af.suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".zip"}:
+                                ar = artifact_row(af, Path(settings.download_root), job_uuid)
+                                if ar and ar["file_path"] not in seen:
+                                    seen.add(ar["file_path"])
+                                    rows.append(ar)
+                        row = artifact_row(jf, Path(settings.download_root), job_uuid)
+                        if row and row["file_path"] not in seen:
+                            seen.add(row["file_path"])
+                            rows.append(row)
+            _registered = await ArtifactLedger(_manifest_db).upsert_many(rows)
+            await _manifest_db.commit()
+            logger.info("Registered %d artifacts for job %s", _registered, job_id)
+            logger.info("Registered %d staged artifacts for job %s", _registered, job_id)
 
     except Exception as e:
         logger.error("Unexpected error in download job %s: %s", job_id, e, exc_info=True)
@@ -758,8 +742,7 @@ async def run_download_job(job_id: str):
                 await db2.commit()
 
         # Always try partial import recovery
-        _file_index2 = get_file_index()
-        metadata_count, image_count, new_json_paths = _file_index2.count_new_artifacts(job.source, str(job_id))
+        metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
         if metadata_count > 0:
             logger.info("Partial recovery: found %d metadata JSONs after error for job %s", metadata_count, job_id)
             await _enqueue_import(str(job_uuid), f"partial import after unexpected error (found {metadata_count} metadata files)")
@@ -886,8 +869,7 @@ async def run_download_job(job_id: str):
         # Full success — but only enqueue import if there are new metadata JSONs.
         # gallery-dl exits 0 even when all files were skipped (already in archive),
         # or when the source has no content at all.
-        _file_index2 = get_file_index()
-        metadata_count, image_count, new_json_paths = _file_index2.count_new_artifacts(job.source, str(job_id))
+        metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
         async with async_session() as _manifest_db:
             _manifest_job = await DownloadJobRepository(_manifest_db).get(job_uuid)
             if _manifest_job:
@@ -956,8 +938,7 @@ async def run_download_job(job_id: str):
 
     elif result is not None and result.returncode != 0:
         # Non-zero exit — maybe partial files were downloaded
-        _file_index2 = get_file_index()
-        metadata_count, image_count, new_json_paths = _file_index2.count_new_artifacts(job.source, str(job_id))
+        metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
         if metadata_count > 0:
             logger.info("Partial recovery: found %d metadata JSONs after failure for job %s", metadata_count, job_id)
             await _enqueue_import(str(job_uuid), f"partial import after download failure (found {metadata_count} metadata files)")
@@ -966,8 +947,7 @@ async def run_download_job(job_id: str):
         # Timeout or interrupted (pause/cancel) — attempt partial import recovery
         ctrl_cmd = control_listener.command if control_listener else None
         reason = "timeout" if ctrl_cmd is None else f"interrupted ({ctrl_cmd})"
-        _file_index2 = get_file_index()
-        metadata_count, image_count, new_json_paths = _file_index2.count_new_artifacts(job.source, str(job_id))
+        metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
         if metadata_count > 0:
             logger.info("Partial recovery: found %d metadata JSONs after %s for job %s", metadata_count, reason, job_id)
             await _enqueue_import(str(job_uuid),
@@ -984,7 +964,6 @@ async def run_download_job(job_id: str):
         if needs_retry:
             try:
                 from rq import Queue
-                from app.services.redis_client import get_redis
                 Queue(name="downloads", connection=get_redis()).enqueue_in(
                     timedelta(seconds=backoff_base * (2 ** (j.retry_count - 1))),
                     "app.jobs.download.run_download_job", job_id,
