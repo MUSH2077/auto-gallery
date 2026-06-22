@@ -1,6 +1,6 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, queryKeys } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
 import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
@@ -8,7 +8,7 @@ import { useT } from "@/lib/i18n";
 export default function MergeCandidatesPage() {
   const t = useT();
   const router = useRouter();
-  const mc = useQuery({ queryKey: ["merge-candidates"], queryFn: api.listMergeCandidates });
+  const mc = useQuery({ queryKey: queryKeys.dedup.mergeCandidates, queryFn: api.listMergeCandidates });
 
   return (
     <main className="max-w-4xl mx-auto p-6">

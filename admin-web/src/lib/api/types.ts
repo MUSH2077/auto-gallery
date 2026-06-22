@@ -377,10 +377,6 @@ export interface WorkbenchSummary {
     next_scan_at?: string | null;
   };
   storage: {
-    original_media_size_bytes: number;
-    original_media_file_count: number;
-    library_size_bytes: number;
-    library_file_count: number;
     disk_total_bytes: number;
     disk_free_bytes: number;
     disk_used_bytes: number;

@@ -364,8 +364,11 @@ export const api = {
   clearEntity: (entity: string) =>
     request<{ status: string; message: string; deleted?: Record<string, number> }>(`/api/v1/admin/clear/${entity}`, { method: "POST" }),
 
-  rebuildLibrary: () =>
-    request<{ job_id: string; status: string; message: string }>("/api/v1/admin/library/rebuild", { method: "POST" }),
+  rebuildLibrary: (options: { mode?: "repair" | "full"; source?: string; creator_id?: string; work_id?: string; resume?: boolean } = {}) =>
+    request<{ job_id: string; status: string; message: string }>("/api/v1/admin/library/rebuild", {
+      method: "POST",
+      body: JSON.stringify(options),
+    }),
 
   listAdminOperations: () =>
     request<{ operations: { job_id: string; status: string; operation_type: string; progress?: { phase: string; label: string }; error?: string; updated_at: number }[] }>("/api/v1/admin/operations"),
@@ -459,14 +462,6 @@ export const api = {
       "/api/v1/reference/danbooru/url-batch-import",
       { method: "POST", body: JSON.stringify({ urls }) }),
 
-  syncDanbooruFavorites: () =>
-    request<{
-      status: string; message?: string;
-      total_favorites?: number; created: number; matched: number; errors: number;
-      details?: { artist_name: string; danbooru_id?: number; action: string;
-                  creator_id?: string; post_count?: number; error?: string }[];
-    }>("/api/v1/reference/danbooru/favorites/sync", { method: "POST" }),
-
   getBatchImportStatus: (jobId?: string) =>
     request<{
       status: string; progress: { current: number; total: number; imported: number; errors: number } | null;
@@ -538,6 +533,7 @@ export const queryKeys = {
     list: (page = 0, limit = 50, filters?: unknown) => ["creators", "list", page, limit, filters || {}] as const,
     detail: (id: string) => ["creators", id] as const,
     links: (id: string) => ["creators", id, "links"] as const,
+    duplicates: ["creators", "duplicates"] as const,
   },
   subscriptions: {
     all: ["subscriptions"] as const,
@@ -561,23 +557,46 @@ export const queryKeys = {
     all: ["download-jobs"] as const,
     detail: (id: string) => ["download-jobs", id] as const,
     imports: (id: string) => ["download-jobs", id, "imports"] as const,
+    progress: (id: string) => ["download-jobs", id, "progress"] as const,
+    pipeline: (id: string) => ["download-jobs", id, "pipeline"] as const,
+  },
+  importJobs: {
+    all: ["import-jobs"] as const,
+    detail: (id: string) => ["import-jobs", id] as const,
   },
   works: {
     all: ["works"] as const,
     detail: (id: string) => ["works", id] as const,
     sources: (id: string) => ["works", id, "sources"] as const,
+    assets: (id: string) => ["works", id, "assets"] as const,
+    tags: (id: string) => ["works", id, "tags"] as const,
   },
   tags: {
     all: ["tags"] as const,
-  },
-  importJobs: {
-    all: ["import-jobs"] as const,
+    detail: (id: string) => ["tags", id] as const,
   },
   admin: {
     settings: ["admin", "settings"] as const,
+    gallerydlConfig: ["admin", "gallerydl-config"] as const,
+    authStatus: ["admin", "auth-status"] as const,
   },
   reference: {
     danbooru: ["reference", "danbooru"] as const,
+  },
+  system: {
+    logs: (limit?: number, level?: string, name?: string) => ["system", "logs", limit, level, name] as const,
+    storage: ["system", "storage"] as const,
+    queueStats: ["system", "queue-stats"] as const,
+    systemInfo: ["system", "info"] as const,
+    integrityCheck: ["system", "integrity-check"] as const,
+  },
+  backups: {
+    list: ["backups", "list"] as const,
+    estimate: ["backups", "estimate"] as const,
+  },
+  dedup: {
+    duplicates: ["dedup", "duplicates"] as const,
+    mergeCandidates: ["dedup", "merge-candidates"] as const,
   },
 } as const;
 

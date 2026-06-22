@@ -1,7 +1,7 @@
 "use client";
 import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import Link from "next/link";
 import { PageHeader, ConfirmDialog, EmptyState, ErrorState } from "@/components";
@@ -48,8 +48,8 @@ export default function BackupPage() {
   const [isCreating, setIsCreating] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
 
-  const backups = useQuery({ queryKey: ["backups"], queryFn: api.listBackups });
-  const estimate = useQuery({ queryKey: ["backup-estimate"], queryFn: () => api.estimateBackupSizes() });
+  const backups = useQuery({ queryKey: queryKeys.backups.list, queryFn: api.listBackups });
+  const estimate = useQuery({ queryKey: queryKeys.backups.estimate, queryFn: () => api.estimateBackupSizes() });
 
   const toggle = (c: string) => {
     const next = new Set(selected);
