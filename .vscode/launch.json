@@ -1,0 +1,124 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Deploy: Build + Restart + Verify",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "cd ${workspaceFolder} && bash scripts/deploy.sh",
+            "presentation": { "reveal": "always", "panel": "dedicated" }
+        },
+        {
+            "name": "Debug: Full System Check",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "cd ${workspaceFolder} && bash scripts/debug.sh",
+            "presentation": { "reveal": "always", "panel": "dedicated" }
+        },
+        {
+            "name": "Debug: Quick Health",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "cd ${workspaceFolder} && bash scripts/debug.sh quick",
+            "presentation": { "reveal": "always", "panel": "dedicated" }
+        },
+        {
+            "name": "Debug: Backend Deep Dive",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "cd ${workspaceFolder} && bash scripts/debug.sh backend",
+            "presentation": { "reveal": "always", "panel": "dedicated" }
+        },
+        {
+            "name": "Debug: Download Pipeline",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "cd ${workspaceFolder} && bash scripts/debug.sh download",
+            "presentation": { "reveal": "always", "panel": "dedicated" }
+        },
+        {
+            "name": "Debug: Storage + FileIndex",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "cd ${workspaceFolder} && bash scripts/debug.sh storage",
+            "presentation": { "reveal": "always", "panel": "dedicated" }
+        },
+        {
+            "name": "Debug: Proxy Connectivity",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "cd ${workspaceFolder} && bash scripts/debug.sh proxy",
+            "presentation": { "reveal": "always", "panel": "dedicated" }
+        },
+        {
+            "name": "Docker: Build + Restart Backend",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "cd ${workspaceFolder} && docker compose build backend && docker compose up -d --force-recreate backend worker-download worker-import worker-operations scheduler && bash scripts/debug.sh quick",
+            "presentation": { "reveal": "always", "panel": "dedicated" }
+        },
+        {
+            "name": "Docker: Build + Restart All",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "cd ${workspaceFolder} && docker compose build backend admin-web && docker compose up -d --force-recreate backend worker-download worker-import worker-operations scheduler admin-web && sleep 20 && bash scripts/debug.sh quick",
+            "presentation": { "reveal": "always", "panel": "dedicated" }
+        },
+        {
+            "name": "Docker: Recreate Backend Only",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "cd ${workspaceFolder} && docker compose up -d --force-recreate backend && sleep 15 && bash scripts/debug.sh quick",
+            "presentation": { "reveal": "always", "panel": "dedicated" }
+        },
+        {
+            "name": "Docker: Logs (backend)",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "docker logs auto-gallery-backend-1 --tail 100 -f",
+            "presentation": { "reveal": "always", "panel": "dedicated" }
+        },
+        {
+            "name": "Docker: Logs (worker-download)",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "docker logs auto-gallery-worker-download-1 --tail 100 -f",
+            "presentation": { "reveal": "always", "panel": "dedicated" }
+        },
+        {
+            "name": "Docker: Logs (worker-import)",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "docker logs auto-gallery-worker-import-1 --tail 100 -f",
+            "presentation": { "reveal": "always", "panel": "dedicated" }
+        },
+        {
+            "name": "Docker: Logs (scheduler)",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "docker logs auto-gallery-scheduler-1 --tail 100 -f",
+            "presentation": { "reveal": "always", "panel": "dedicated" }
+        },
+        {
+            "name": "Python: DB Stats",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "docker exec auto-gallery-backend-1 python3 -c \"import asyncio; from app.database import async_session; from sqlalchemy import text; async def p(): async with async_session() as db: r=await db.execute(text('SELECT COUNT(*) FROM works')); r2=await db.execute(text('SELECT COUNT(*) FROM assets')); r3=await db.execute(text('SELECT COUNT(*) FROM creators')); r4=await db.execute(text('SELECT COUNT(*) FROM download_jobs')); r5=await db.execute(text('SELECT COUNT(*) FROM import_jobs')); r6=await db.execute(text('SELECT COUNT(*) FROM tags')); print(f'works={r.scalar()} assets={r2.scalar()} creators={r3.scalar()} download_jobs={r4.scalar()} import_jobs={r5.scalar()} tags={r6.scalar()}')\nasyncio.run(p())\"",
+            "presentation": { "reveal": "always", "panel": "dedicated" }
+        },
+        {
+            "name": "API: Health",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "curl -sf http://localhost:8818/api/v1/system/health | python3 -m json.tool",
+            "presentation": { "reveal": "always", "panel": "dedicated" }
+        },
+        {
+            "name": "API: Workbench",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "curl -sf http://localhost:8818/api/v1/system/workbench | python3 -m json.tool 2>/dev/null | head -40",
+            "presentation": { "reveal": "always", "panel": "dedicated" }
+        }
+    ]
+}
