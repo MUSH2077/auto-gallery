@@ -33,7 +33,7 @@ fi
 
 # 2. Force-recreate all containers
 echo "[2/4] Restarting containers..."
-docker compose up -d --force-recreate backend worker-download worker-import stream-import scheduler admin-web
+docker compose up -d --force-recreate backend worker-download worker-import scheduler admin-web
 
 # 3. Wait for healthy
 echo "[3/4] Waiting for healthy..."

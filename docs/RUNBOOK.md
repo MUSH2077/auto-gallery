@@ -25,7 +25,7 @@ This single command:
 docker compose build backend admin-web
 
 # 2. Restart all app containers
-docker compose up -d --force-recreate backend worker-download worker-import stream-import scheduler admin-web
+docker compose up -d --force-recreate backend worker-download worker-import worker-operations scheduler admin-web
 
 # 3. Wait for healthy (up to 90s)
 docker compose ps --format "table {{.Name}}\t{{.Status}}"
@@ -65,7 +65,7 @@ bash scripts/debug.sh quick
 | `backend` | `curl /api/v1/system/ready` | 30s | 15s |
 | `worker-download` | Redis ping + gallery-dl exists | 30s | 10s |
 | `worker-import` | Redis ping | 30s | 10s |
-| `stream-import` | Redis ping | 30s | 10s |
+| `worker-import` | Redis ping | 30s | 10s |
 | `scheduler` | Redis ping | 30s | 10s |
 | `admin-web` | `wget /` | 15s | 5s |
 
@@ -83,7 +83,7 @@ docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\
 # Queue lengths
 docker compose exec redis redis-cli -a "$REDIS_PASSWORD" LLEN rq:queue:downloads:pixiv
 docker compose exec redis redis-cli -a "$REDIS_PASSWORD" LLEN rq:queue:imports
-docker compose exec redis redis-cli -a "$REDIS_PASSWORD" XLEN work:ready
+docker compose exec redis redis-cli -a "$REDIS_PASSWORD" LLEN rq:queue:imports
 ```
 
 ### Log Tailing
@@ -94,7 +94,7 @@ docker compose logs -f --tail=50
 
 # Specific service
 docker compose logs -f --tail=50 worker-download
-docker compose logs -f --tail=50 stream-import
+docker compose logs -f --tail=50 worker-import
 ```
 
 ### Debug Toolkit
@@ -174,7 +174,7 @@ curl -X POST -H "Authorization: Bearer <token>" http://localhost:8818/api/v1/dow
 docker compose exec postgres psql -U autogallery -c "SELECT count(*) FROM pg_stat_activity WHERE datname='autogallery';"
 
 # Restart all Python containers to free connections
-docker compose up -d --force-recreate backend worker-download worker-import stream-import scheduler
+docker compose up -d --force-recreate backend worker-download worker-import worker-operations scheduler
 ```
 
 ### Health check failures after deploy
@@ -216,7 +216,7 @@ If a previous image tag is still available:
 docker tag auto-gallery-backend:<previous-version> auto-gallery-backend:latest
 
 # Recreate containers
-docker compose up -d --force-recreate backend worker-download worker-import stream-import scheduler admin-web
+docker compose up -d --force-recreate backend worker-download worker-import worker-operations scheduler admin-web
 ```
 
 ### Configuration rollback
@@ -240,7 +240,7 @@ docker compose up -d --force-recreate
 |--------|-----------|--------|
 | Backend memory | >80% (820M/1024M) | Restart backend, investigate leak |
 | Download queue depth | >50 per source | Check proxy, source platform status |
-| Import queue depth | >100 | Check stream-import consumer lag |
+| Import queue depth | >100 | Check worker-import logs and artifact backlog |
 | Failed jobs (24h) | >10 | Investigate error patterns in job logs |
 | Disk usage | >90% | Run cleanup, consider expansion |
 | Health check failures | >3 consecutive | Check service logs, restart |

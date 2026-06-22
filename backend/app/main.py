@@ -76,16 +76,8 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("ensure_admin_user failed (may be first run before migration)", error=str(e))
 
-    # ── Clean orphaned admin operations from previous runs ──
-    try:
-        from app.services.redis_client import get_redis
-        r = get_redis()
-        keys = r.keys("admin_operation:*")
-        if keys:
-            r.delete(*keys)
-            logger.info("Cleaned %d orphaned admin operation keys", len(keys))
-    except Exception:
-        pass
+    # Operation state is intentionally retained across API restarts. Workers
+    # own terminal transitions and long-running rebuilds resume from checkpoints.
 
     # ── Start WebSocket Redis listener ──
     from app.services.ws_manager import manager as ws_manager

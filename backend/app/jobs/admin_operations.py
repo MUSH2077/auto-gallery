@@ -50,25 +50,38 @@ async def _run_clear_operation(entity: str, job_id: str) -> dict:
         raise
 
 
-def run_library_rebuild_operation(job_id: str) -> dict:
+def run_library_rebuild_operation(job_id: str, options: dict | None = None) -> dict:
     """Entry point for RQ workers — rebuild /library/ from DB."""
-    return asyncio.run(_run_library_rebuild_operation(job_id))
+    return asyncio.run(_run_library_rebuild_operation(job_id, options or {}))
 
 
-async def _run_library_rebuild_operation(job_id: str) -> dict:
+async def _run_library_rebuild_operation(job_id: str, options: dict) -> dict:
     from app.services.admin_data import rebuild_library_index
     set_operation_status(job_id, "running", "admin-rebuild",
         progress={"phase": "running", "label": "Rebuilding library index..."},
-        meta={"entity": "library"})
+        meta={"entity": "library", **options})
     try:
+        def update_progress(progress: dict):
+            set_operation_status(job_id, "running", "admin-rebuild",
+                progress={**progress, "label": f"Scanned {progress['scanned']} of {progress['total']}"},
+                meta={"entity": "library", **options})
+
         async with async_session() as db:
-            result = await rebuild_library_index(db)
+            result = await rebuild_library_index(db, options, update_progress)
         set_operation_status(job_id, "complete", "admin-rebuild",
             progress={"phase": "complete", "label": result.get("message", "Complete")},
-            result=result, meta={"entity": "library"})
+            result=result, meta={"entity": "library", **options})
         return result
     except Exception as exc:
         logger.exception("Library rebuild failed: job_id=%s", job_id)
         set_operation_status(job_id, "failed", "admin-rebuild",
-            progress={"phase": "failed"}, error=str(exc), meta={"entity": "library"})
+            progress={"phase": "failed"}, error=str(exc), meta={"entity": "library", **options})
         raise
+    finally:
+        from app.services.redis_client import get_redis
+        redis = get_redis()
+        current = redis.get("library:rebuild:active")
+        if isinstance(current, bytes):
+            current = current.decode()
+        if current == job_id:
+            redis.delete("library:rebuild:active")
