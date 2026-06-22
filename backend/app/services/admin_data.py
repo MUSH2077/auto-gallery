@@ -6,20 +6,23 @@ import json
 import logging
 import os
 import shutil
+import inspect
+from datetime import datetime
 from pathlib import Path
+from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.system_setting import SystemSetting
 from app.services.cache import invalidate_api_caches, invalidate_creator_subscription_caches
-from app.services.file_index import get_file_index
 from app.services.library_sync import (
     resolve_creator_directory,
+    library_version,
+    metadata_version,
     sync_thumbnails,
     write_metadata_json,
-    register_metadata_in_fileindex,
 )
 from app.services.redis_client import get_redis
 
@@ -32,10 +35,9 @@ ENTITIES = {
         "assets", "work_sources", "works",
     ],
     "creators": [
-        "import_jobs", "download_jobs", "subscription_sources", "subscriptions",
+        "subscription_sources", "subscriptions",
         "source_creators", "creator_links", "creator_curation_states", "creators",
     ],
-    "downloads": ["import_jobs", "download_jobs"],
     "jobs": ["import_jobs", "download_jobs"],
     "tags": ["work_source_tags", "work_tags", "tags"],
     "library": [],
@@ -46,12 +48,18 @@ ENTITIES = {
 async def clear_entity_data(entity: str, db: AsyncSession) -> dict:
     """Clear one data area and return the legacy response shape."""
     if entity == "all":
+        # Clear self-referencing FKs on curation_commits before delete
+        await db.execute(text(
+            "UPDATE curation_commits SET parent_commit_id = NULL, reverts_commit_id = NULL"
+        ))
+        await db.flush()
         order = [
             "work_source_tags", "work_tags", "asset_sources",
             "curation_changes", "work_curation_states", "creator_curation_states",
             "asset_storage_states", "curation_commits", "assets", "work_sources",
-            "works", "import_jobs", "download_jobs", "subscription_sources",
-            "subscriptions", "source_creators", "creator_links", "creators", "tags",
+            "works", "storage_artifacts", "import_jobs", "download_jobs",
+            "subscription_sources", "subscriptions", "source_creators",
+            "creator_links", "creators", "tags",
         ]
         results = await _delete_tables(order, db)
         await db.commit()
@@ -92,10 +100,12 @@ async def clear_entity_data(entity: str, db: AsyncSession) -> dict:
         _clear_files([str(settings.download_root), str(settings.library_root)])
         results["files"] = "downloads + library cleared"
         await _clear_search_index(db, "works")
+        # Also clear storage_artifacts
+        await db.execute(text("DELETE FROM storage_artifacts"))
         invalidate_api_caches("works", "creators", "subscriptions")
     elif entity == "creators":
         invalidate_creator_subscription_caches(include_works=True)
-    elif entity in {"downloads", "jobs"}:
+    elif entity == "jobs":
         invalidate_api_caches("subscriptions", "creators")
     elif entity == "tags":
         invalidate_api_caches("tags", "works")
@@ -103,75 +113,152 @@ async def clear_entity_data(entity: str, db: AsyncSession) -> dict:
     return {"status": "ok", "message": f"Cleared {entity}", "deleted": results}
 
 
-async def rebuild_library_index(db: AsyncSession) -> dict:
-    """Regenerate all /library/ metadata.json + thumbnails from DB records."""
-    from sqlalchemy import select
+async def rebuild_library_index(db: AsyncSession, options: dict | None = None, progress_callback=None) -> dict:
+    """Incrementally repair /library/ with bounded keyset-pagination batches."""
     from app.models import Work, WorkSource, Asset, AssetSource, SourceCreator
     from app.services.settings import load_gallerydl_config
-    from app.services.redis_client import get_redis
+    options = options or {}
+    mode = options.get("mode", "repair")
+    if mode not in {"repair", "full"}:
+        raise ValueError("mode must be 'repair' or 'full'")
+    batch_size = min(max(int(options.get("batch_size", 500)), 10), 2000)
+    source_filter = options.get("source")
+    work_filter = UUID(str(options["work_id"])) if options.get("work_id") else None
+    creator_filter = UUID(str(options["creator_id"])) if options.get("creator_id") else None
 
-    result = await db.execute(select(Work).order_by(Work.created_at.desc()))
-    all_works = result.scalars().all()
-    total = len(all_works)
+    filters = []
+    if work_filter:
+        filters.append(Work.id == work_filter)
+    if source_filter:
+        filters.append(Work.work_sources.any(WorkSource.source == source_filter))
+    if creator_filter:
+        filters.append(Work.work_sources.any(
+            WorkSource.source_creator_id.in_(
+                select(SourceCreator.source_creator_id).where(SourceCreator.creator_id == creator_filter)
+            )
+        ))
+
+    id_query = select(Work.id, Work.created_at).where(*filters)
+    total = (await db.execute(select(func.count()).select_from(id_query.subquery()))).scalar_one()
     if total == 0:
-        return {"status": "ok", "message": "No works to rebuild", "rebuilt": 0, "errors": 0}
+        return {"status": "ok", "message": "No works to rebuild", "scanned": 0, "skipped": 0,
+                "metadata_written": 0, "thumbnails_generated": 0, "errors": 0, "cursor": None}
 
     r = get_redis()
     progress_key = "library:rebuild:progress"
-    r.setex(progress_key, 3600, json.dumps({"current": 0, "total": total, "status": "running"}))
+    checkpoint_key = "library:rebuild:checkpoint"
+    cursor_created_at = None
+    cursor_id = None
+    resumed_stats = None
+    resumed_errors = 0
+    if options.get("resume", True):
+        raw_checkpoint = r.get(checkpoint_key)
+        if raw_checkpoint:
+            if isinstance(raw_checkpoint, bytes):
+                raw_checkpoint = raw_checkpoint.decode()
+            checkpoint = json.loads(raw_checkpoint)
+            if checkpoint.get("options") == {k: options.get(k) for k in ("mode", "source", "creator_id", "work_id")}:
+                cursor_created_at = datetime.fromisoformat(checkpoint["created_at"])
+                cursor_id = UUID(checkpoint["id"])
+                resumed_stats = checkpoint.get("stats")
+                resumed_errors = int(checkpoint.get("errors", 0))
 
-    file_index = get_file_index()
+    from app.services.artifact_ledger import ArtifactLedger, managed_artifact_row
+    file_index = None
     config = load_gallerydl_config()
-    rebuilt = 0
-    errors = 0
+    stats = resumed_stats or {"scanned": 0, "skipped": 0, "metadata_written": 0, "thumbnails_generated": 0}
+    errors = resumed_errors
+    while True:
+        page_query = id_query
+        if cursor_created_at is not None:
+            page_query = page_query.where(or_(
+                Work.created_at > cursor_created_at,
+                and_(Work.created_at == cursor_created_at, Work.id > cursor_id),
+            ))
+        page = (await db.execute(page_query.order_by(Work.created_at, Work.id).limit(batch_size))).all()
+        if not page:
+            break
+        work_ids = [row.id for row in page]
+        source_conditions = [Work.id.in_(work_ids)]
+        if source_filter:
+            source_conditions.append(WorkSource.source == source_filter)
+        if creator_filter:
+            source_conditions.append(SourceCreator.creator_id == creator_filter)
+        source_rows = (await db.execute(
+            select(Work, WorkSource, SourceCreator)
+            .join(WorkSource, WorkSource.work_id == Work.id)
+            .outerjoin(SourceCreator, and_(SourceCreator.source == WorkSource.source,
+                                          SourceCreator.source_creator_id == WorkSource.source_creator_id))
+            .where(*source_conditions)
+            .order_by(Work.created_at, Work.id, WorkSource.id)
+        )).all()
+        asset_rows = (await db.execute(
+            select(WorkSource.id, Asset, AssetSource)
+            .join(AssetSource, AssetSource.work_source_id == WorkSource.id)
+            .join(Asset, Asset.id == AssetSource.asset_id)
+            .where(WorkSource.work_id.in_(work_ids))
+            .order_by(WorkSource.id, Asset.file_name)
+        )).all()
+        assets_by_source = {}
+        library_artifacts = []
+        for ws_id, asset, asset_source in asset_rows:
+            assets_by_source.setdefault(ws_id, []).append((asset, asset_source))
 
-    for idx, work in enumerate(all_works):
-        try:
-            ws_result = await db.execute(select(WorkSource).where(WorkSource.work_id == work.id))
-            ws = ws_result.scalar_one_or_none()
-            if not ws:
+        for work, ws, creator in source_rows:
+            rows = assets_by_source.get(ws.id, [])
+            if not rows:
+                stats["skipped"] += 1
                 continue
-
-            as_result = await db.execute(
-                select(Asset, AssetSource).join(AssetSource, AssetSource.asset_id == Asset.id)
-                .where(AssetSource.work_source_id == ws.id).order_by(Asset.file_name)
-            )
-            asset_rows = as_result.all()
-            if not asset_rows:
-                continue
-
-            creator_dir = resolve_creator_directory(ws.source, ws.raw_metadata, ws.source_work_id, config)
-            lib_dir = Path(settings.library_root) / ws.source / creator_dir / ws.source_work_id
-
-            # Display name
-            display_name = creator_dir
-            if ws.source_creator_id:
-                sc_result = await db.execute(
-                    select(SourceCreator).where(
-                        SourceCreator.source_creator_id == ws.source_creator_id,
-                        SourceCreator.source == ws.source,
-                    )
+            try:
+                creator_dir = resolve_creator_directory(ws.source, ws.raw_metadata, ws.source_work_id, config)
+                lib_dir = Path(settings.library_root) / ws.source / creator_dir / ws.source_work_id
+                version = library_version(work, ws, rows)
+                expected_thumbs = [lib_dir / f"{Path(asset.file_path).stem}.thumbnail.webp"
+                                   for asset, _ in rows if Path(asset.file_path).suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}]
+                if mode == "repair" and metadata_version(lib_dir) == version and all(path.exists() for path in expected_thumbs):
+                    stats["skipped"] += 1
+                    continue
+                generated = await sync_thumbnails(
+                    rows, lib_dir, file_index, ws.source, creator_dir, ws.source_work_id,
+                    force=mode == "full")
+                assets_meta = [{"file_name": asset.file_name} for asset, _ in rows]
+                write_metadata_json(lib_dir, work, ws,
+                                    creator.display_name if creator and creator.display_name else creator_dir,
+                                    assets_meta, version=version)
+                managed_paths = [lib_dir / "metadata.json", *lib_dir.glob("*.thumbnail.webp")]
+                library_artifacts.extend(
+                    managed_artifact_row(path, Path(settings.library_root), "library",
+                                         ws.source, creator_dir, ws.source_work_id,
+                                         "metadata_json" if path.name == "metadata.json" else "thumbnail")
+                    for path in managed_paths if path.exists()
                 )
-                sc = sc_result.scalar_one_or_none()
-                if sc and sc.display_name:
-                    display_name = sc.display_name
+                stats["metadata_written"] += 1
+                stats["thumbnails_generated"] += generated
+            except Exception:
+                errors += 1
+                logger.warning("Library rebuild: failed work %s source %s", work.id, ws.source, exc_info=True)
 
-            assets_meta = [{"file_name": asset.file_name} for asset, _as in asset_rows]
+        stats["scanned"] += len(page)
+        await ArtifactLedger(db).upsert_many(library_artifacts)
+        await db.commit()
+        cursor_created_at, cursor_id = page[-1].created_at, page[-1].id
+        cursor = {"created_at": cursor_created_at.isoformat(), "id": str(cursor_id)}
+        checkpoint = {**cursor, "options": {k: options.get(k) for k in ("mode", "source", "creator_id", "work_id")},
+                      "stats": stats, "errors": errors}
+        r.setex(checkpoint_key, 86400, json.dumps(checkpoint))
+        progress = {**stats, "errors": errors, "total": total, "cursor": cursor, "phase": "running"}
+        r.setex(progress_key, 3600, json.dumps(progress))
+        if progress_callback:
+            callback_result = progress_callback(progress)
+            if inspect.isawaitable(callback_result):
+                await callback_result
+        db.expunge_all()
 
-            await sync_thumbnails(asset_rows, lib_dir, file_index, ws.source, creator_dir, ws.source_work_id)
-            write_metadata_json(lib_dir, work, ws, display_name, assets_meta)
-            register_metadata_in_fileindex(file_index, ws.source, creator_dir, ws.source_work_id, lib_dir)
-
-            rebuilt += 1
-        except Exception:
-            errors += 1
-            logger.warning("Library rebuild: failed work %s", work.id, exc_info=True)
-
-        if idx % 50 == 0:
-            r.setex(progress_key, 3600, json.dumps({"current": idx + 1, "total": total, "status": "running"}))
-
-    r.setex(progress_key, 3600, json.dumps({"current": total, "total": total, "status": "done", "rebuilt": rebuilt, "errors": errors}))
-    return {"status": "ok", "message": f"Rebuilt {rebuilt} works ({errors} errors)", "rebuilt": rebuilt, "errors": errors}
+    r.delete(checkpoint_key)
+    result = {"status": "ok", **stats, "errors": errors, "cursor": None,
+              "message": f"Scanned {stats['scanned']} sources, wrote {stats['metadata_written']} metadata files ({errors} errors)"}
+    r.setex(progress_key, 3600, json.dumps({**result, "status": "done"}))
+    return result
 
 
 async def _delete_tables(tables: list[str], db: AsyncSession) -> dict[str, int]:
