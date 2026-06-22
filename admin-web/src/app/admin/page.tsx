@@ -201,14 +201,8 @@ export default function Dashboard() {
             <MetricCard
               label={t("dashboard.disk")}
               value={data.storage.disk_free_percent == null ? "—" : t("dashboard.disk_free_percent", { percent: data.storage.disk_free_percent })}
-              sub={t("dashboard.original_media_size", { size: fmtBytes(data.storage.original_media_size_bytes) })}
+              sub={t("dashboard.disk_free", { size: fmtBytes(data.storage.disk_free_bytes) })}
               tone={data.storage.risk_level === "critical" ? "danger" : data.storage.risk_level === "warning" ? "warning" : "ok"}
-            />
-            <MetricCard
-              label={t("dashboard.library")}
-              value={fmtBytes(data.storage.library_size_bytes)}
-              sub={t("dashboard.index_files", { count: fmt.number(data.storage.library_file_count) })}
-              tone="muted"
             />
             {(workbench.data as any)?.queue?.rebuild_active > 0 && (
               <MetricCard label={t("dashboard.rebuild_active")} value={(workbench.data as any).queue.rebuild_active} sub={t("dashboard.rebuild_active_sub")} tone="info" />
