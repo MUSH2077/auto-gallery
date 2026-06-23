@@ -76,7 +76,14 @@ class ArtifactLedger:
                 set_={
                     "file_size": stmt.excluded.file_size,
                     "mtime_ns": stmt.excluded.mtime_ns,
-                    "download_job_id": stmt.excluded.download_job_id,
+                    # Only reassign download_job_id when the file has genuinely
+                    # changed (mtime differs).  Otherwise keep the original owner
+                    # to prevent cross-contamination between jobs of different
+                    # creators that share the same source root.
+                    "download_job_id": case(
+                        (StorageArtifact.mtime_ns.is_distinct_from(stmt.excluded.mtime_ns), stmt.excluded.download_job_id),
+                        else_=StorageArtifact.download_job_id,
+                    ),
                     "state": case(
                         (StorageArtifact.mtime_ns.is_distinct_from(stmt.excluded.mtime_ns), "new"),
                         else_=StorageArtifact.state,

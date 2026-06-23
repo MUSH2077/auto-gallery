@@ -54,14 +54,14 @@
             "name": "Docker: Build + Restart Backend",
             "type": "node-terminal",
             "request": "launch",
-            "command": "cd ${workspaceFolder} && docker compose build backend && docker compose up -d --force-recreate backend worker-download worker-import worker-operations scheduler && bash scripts/debug.sh quick",
+            "command": "cd ${workspaceFolder} && docker compose build --build-arg CACHEBUST=\"$(date +%s)\" backend && docker compose up -d --force-recreate backend worker-download worker-import worker-operations scheduler && bash scripts/debug.sh quick",
             "presentation": { "reveal": "always", "panel": "dedicated" }
         },
         {
             "name": "Docker: Build + Restart All",
             "type": "node-terminal",
             "request": "launch",
-            "command": "cd ${workspaceFolder} && docker compose build backend admin-web && docker compose up -d --force-recreate backend worker-download worker-import worker-operations scheduler admin-web && sleep 20 && bash scripts/debug.sh quick",
+            "command": "cd ${workspaceFolder} && docker compose build --build-arg CACHEBUST=\"$(date +%s)\" backend admin-web && docker compose up -d --force-recreate backend worker-download worker-import worker-operations scheduler admin-web && sleep 20 && bash scripts/debug.sh quick",
             "presentation": { "reveal": "always", "panel": "dedicated" }
         },
         {
