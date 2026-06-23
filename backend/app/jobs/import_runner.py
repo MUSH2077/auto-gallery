@@ -472,6 +472,29 @@ async def run_import_job(import_job_id: str):
                     ))
                     await db.flush()
 
+                elif sc_obj.creator_id is None:
+                    # Existing SourceCreator that was never linked —
+                    # retry auto-link with identity comparison guard.
+                    ss = None
+                    if dj.subscription_source_id:
+                        ss = await db.get(SubscriptionSource, dj.subscription_source_id)
+
+                    should_link, url_creator, meta_creator = _should_auto_link_creator(
+                        provider, first_raw, ss,
+                    )
+
+                    if should_link and dj.subscription_id:
+                        sub = await db.get(Subscription, dj.subscription_id)
+                        if sub and sub.creator_id:
+                            sc_obj.creator_id = sub.creator_id
+                            linked_creator_id = sub.creator_id
+                            logger.info(
+                                "Import %s: retroactively linked existing "
+                                "SourceCreator %s/%s to creator %s",
+                                import_job_id, sc_data["source"],
+                                sc_data["source_creator_id"], sub.creator_id,
+                            )
+
                 # Work
                 is_ai = _detect_ai_generated(first_raw, provider.source_name)
                 is_nsfw = _detect_nsfw(first_raw, provider.source_name)
