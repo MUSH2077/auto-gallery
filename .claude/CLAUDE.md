@@ -127,6 +127,15 @@ subscription_source enabled → enqueue download_job (downloads queue)
 - Worker containers need `ADMIN_PASSWORD` env var (config.py validates at import time)
 - Alembic versions are baked into image via `COPY . .` — no bind mount needed
 
+## Skills First (MANDATORY)
+
+Before ANY task — whether a question, bug investigation, feature request, or code change — check whether a relevant skill exists and invoke it. Never skip this step, even for seemingly trivial tasks.
+
+- Check the available skills list in the session context for matches
+- If even a 1% chance a skill applies, invoke it via the Skill tool FIRST
+- Skills determine HOW to approach the task (debugging, planning, code review, etc.)
+- Never rationalize skipping: "this is simple" "I know this already" "let me explore first" are all wrong
+
 ## Coding Rules
 
 - Business logic in services, never in routes
