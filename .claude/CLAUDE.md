@@ -165,7 +165,7 @@ All tests must pass. Do NOT proceed past a failure.
 Backend code is baked into the Docker image via `COPY . .`; stale containers run old code.
 
 ```bash
-docker compose build --build-arg CACHEBUST="$(date +%s)" backend
+docker compose build --build-arg CACHEBUST="$(date +%s)" --pull backend
 docker compose up -d --force-recreate backend worker-download worker-import worker-operations scheduler
 ```
 
