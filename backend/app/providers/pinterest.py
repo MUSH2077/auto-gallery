@@ -96,5 +96,9 @@ class PinterestProvider(BaseProvider):
     def get_creator_dir_from_url(self, source_url: str) -> str | None:
         # Pinterest user/board URLs: pinterest.com/{username}/pins/ or
         # pinterest.com/{username}/{board-name}/
-        m = re.search(r'pinterest\.\w+/([\w.-]+)/(?:pins|[\w.-]+)', source_url)
-        return m.group(1) if m else None
+        # Pinterest usernames are alphanumeric + underscores only (no dots).
+        m = re.search(r'pinterest\.\w+/([\w]+)/(?:pins|[\w.-]+)', source_url)
+        username = m.group(1) if m else None
+        if username and (".." in username or username.startswith("/")):
+            return None
+        return username
