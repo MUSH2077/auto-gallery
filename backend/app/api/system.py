@@ -551,7 +551,8 @@ async def get_logs(limit: int = 200, level: str | None = None, name: str | None 
     """Get recent application log entries from the in-memory ring buffer."""
     from app.services.log_buffer import get_recent, MAX_ENTRIES
     entries = get_recent(limit=min(limit, MAX_ENTRIES), level=level, name_filter=name)
-    levels = sorted(set(e["level"] for e in entries), key=lambda x: ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"].index(x) if x in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] else 0)
+    _LEVEL_ORDER = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+    levels = sorted(set(e["level"] for e in entries), key=lambda x: _LEVEL_ORDER.index(x) if x in _LEVEL_ORDER else len(_LEVEL_ORDER))
     return {"entries": entries, "total": len(entries), "levels": levels}
 
 

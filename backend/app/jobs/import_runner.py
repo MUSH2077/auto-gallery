@@ -18,6 +18,7 @@ from app.models import (
     Work, WorkSource, Asset, AssetSource, Tag, WorkTag, WorkSourceTag, SourceCreator,
 )
 from app.models.subscription import Subscription
+from app.models.subscription_source import SubscriptionSource
 from app.models.import_job import ImportJob
 from app.models.download_job import DownloadJob
 from app.providers import registry
@@ -279,7 +280,7 @@ async def run_import_job(import_job_id: str):
                 )
                 await db.commit()
 
-        stats = {"works": 0, "assets": 0, "multi_page": 0}
+        stats = {"works": 0, "assets": 0, "multi_page": 0, "skipped": 0}
         batch_count = 0
         BATCH_SIZE = 50
 
@@ -306,6 +307,7 @@ async def run_import_job(import_job_id: str):
                 posted_at = _parse_posted_at(ws_data.get("posted_at"))
             except Exception:
                 logger.warning("Failed to parse provider data for %s/%s", provider.source_name, src_work_id, exc_info=True)
+                stats["skipped"] += 1
                 async with async_session() as ledger_db:
                     await ArtifactLedger(ledger_db).mark_work(dj.id, src_work_id, "failed", "provider metadata parse failed")
                     await ledger_db.commit()
@@ -341,6 +343,7 @@ async def run_import_job(import_job_id: str):
             )
 
             if not asset_files:
+                stats["skipped"] += 1
                 async with async_session() as ledger_db:
                     await ArtifactLedger(ledger_db).mark_work(dj.id, src_work_id, "failed", "no media assets found")
                     await ledger_db.commit()
@@ -373,21 +376,54 @@ async def run_import_job(import_job_id: str):
                     await db.rollback()
                     continue
 
-                # SourceCreator — identity comes from the subscription (set up via
-                # Danbooru reference or manual creation). Never create a new Creator
-                # here; the subscription_source → subscription → creator chain is
-                # the single source of truth for identity mapping.
+                # SourceCreator — maps a platform identity (source +
+                # source_creator_id) to an auto-gallery Creator.
+                #
+                # The mapping is established during Danbooru reference import
+                # (or manual admin action).  The download importer only LOOKS UP
+                # existing mappings; it never creates new ones with a creator_id
+                # unless the subscription source URL is demonstrably single-creator
+                # (user profile page, not a search/pool/list).
                 existing_sc = await db.execute(select(SourceCreator).where(
                     SourceCreator.source == sc_data["source"],
                     SourceCreator.source_creator_id == sc_data["source_creator_id"]))
                 sc_obj = existing_sc.scalar_one_or_none()
                 linked_creator_id = sc_obj.creator_id if sc_obj else None
+
                 if not sc_obj:
+                    # New platform identity — should we auto-link it?
                     creator_id = None
-                    if dj.subscription_id:
-                        sub = await db.get(Subscription, dj.subscription_id)
-                        if sub:
-                            creator_id = sub.creator_id
+
+                    # Resolve the subscription source to check whether its URL
+                    # identifies a single creator (profile page) or a collection
+                    # (search / pool / tag).
+                    ss = None
+                    if dj.subscription_source_id:
+                        ss = await db.get(SubscriptionSource, dj.subscription_source_id)
+
+                    is_single_creator_url = False
+                    if ss and ss.source_url:
+                        try:
+                            _prov = registry.get(ss.source)
+                            is_single_creator_url = _prov.get_creator_dir_from_url(ss.source_url) is not None
+                        except KeyError:
+                            pass
+
+                    if is_single_creator_url:
+                        # Profile/user page — safe to inherit from subscription.
+                        if dj.subscription_id:
+                            sub = await db.get(Subscription, dj.subscription_id)
+                            if sub:
+                                creator_id = sub.creator_id
+                    else:
+                        # Search/pool/list URL — may contain works from multiple
+                        # creators.  Leave unlinked; admin can map it later.
+                        logger.info(
+                            "Import %s: new SourceCreator %s/%s from multi-creator source — "
+                            "leaving creator_id unlinked.",
+                            import_job_id, sc_data["source"], sc_data["source_creator_id"],
+                        )
+
                     linked_creator_id = creator_id
                     db.add(SourceCreator(
                         source=sc_data["source"],
@@ -397,11 +433,6 @@ async def run_import_job(import_job_id: str):
                         creator_id=creator_id,
                     ))
                     await db.flush()
-                elif sc_obj.creator_id is None and dj.subscription_id:
-                    sub = await db.get(Subscription, dj.subscription_id)
-                    if sub:
-                        sc_obj.creator_id = sub.creator_id
-                        linked_creator_id = sub.creator_id
 
                 # Work
                 is_ai = _detect_ai_generated(first_raw, provider.source_name)
@@ -644,37 +675,70 @@ async def run_import_job(import_job_id: str):
             logger.info("Import %s cancelled after %d works", import_job_id, stats["works"])
             return
 
-        # Mark import complete and update parent download_job
+        # ── Detect high skip rate — may indicate provider/gallery-dl incompatibility ──
+        total_works = len(groups)
+        skipped = stats.get("skipped", 0)
+        _high_skip_rate = total_works > 0 and skipped > 0 and (skipped / total_works) >= 0.5
+
+        # Mark import complete (or failed on high skip rate) and update parent download_job
         async with async_session() as db:
             ij = await db.get(ImportJob, job_uuid)
             if ij:
-                transition_import_job(ij, "complete")
-                apply_import_progress(
-                    ij,
-                    "complete",
-                    f"Import complete: {stats['works']} works, {stats['assets']} assets",
-                    current=stats["works"],
-                    total=len(groups),
-                    assets=stats["assets"],
-                )
-                # Also mark the parent download job as complete
+                if _high_skip_rate:
+                    skip_msg = (
+                        f"High import skip rate: {skipped}/{total_works} works skipped "
+                        f"({round(skipped / total_works * 100)}%). "
+                        f"Imported {stats['works']} works, {stats['assets']} assets. "
+                        f"This may indicate a provider metadata format change or gallery-dl incompatibility."
+                    )
+                    transition_import_job(ij, "failed", skip_msg)
+                    apply_import_progress(
+                        ij,
+                        "failed",
+                        skip_msg,
+                        current=stats["works"],
+                        total=total_works,
+                        assets=stats["assets"],
+                    )
+                    logger.warning("Import %s: %s", import_job_id, skip_msg)
+                else:
+                    transition_import_job(ij, "complete")
+                    apply_import_progress(
+                        ij,
+                        "complete",
+                        f"Import complete: {stats['works']} works, {stats['assets']} assets",
+                        current=stats["works"],
+                        total=total_works,
+                        assets=stats["assets"],
+                    )
+
+                # Also mark the parent download job accordingly
                 dj_repo = DownloadJobRepository(db)
                 dj = await dj_repo.get(ij.download_job_id)
                 if dj:
-                    await dj_repo.update_status(dj, "complete")
-                    apply_download_progress(
-                        dj,
-                        "complete",
-                        f"Import complete: {stats['works']} works, {stats['assets']} assets",
-                    )
+                    if _high_skip_rate:
+                        await dj_repo.update_status(dj, "failed",
+                            f"Import had high skip rate: {skipped}/{total_works} works skipped")
+                        apply_download_progress(
+                            dj,
+                            "failed",
+                            f"Import failed: {skipped}/{total_works} works skipped ({stats['works']} imported)",
+                        )
+                    else:
+                        await dj_repo.update_status(dj, "complete")
+                        apply_download_progress(
+                            dj,
+                            "complete",
+                            f"Import complete: {stats['works']} works, {stats['assets']} assets",
+                        )
                     update_manifest(dj, import_stats=stats)
                     append_manifest_event(dj, "import_complete", **stats)
-                    if dj.subscription_source_id:
+                    if dj.subscription_source_id and not _high_skip_rate:
                         await mark_source_sync_success(db, dj.subscription_source_id)
                 await db.commit()
 
-        logger.info("Import complete: %d works, %d assets, %d multi-page (batched)",
-                     stats["works"], stats["assets"], stats["multi_page"])
+        logger.info("Import finished: %d works, %d assets, %d skipped, %d multi-page (batched)",
+                     stats["works"], stats["assets"], stats.get("skipped", 0), stats["multi_page"])
 
     except Exception as e:
         import traceback
@@ -687,6 +751,10 @@ async def run_import_job(import_job_id: str):
                 max_retries = ij.max_import_retries or 3
                 if retry_count <= max_retries:
                     ij.import_retry_count = retry_count
+                    # Two-step transition: running → failed → enqueued
+                    # (state machine does not allow running → enqueued directly)
+                    transition_import_job(ij, "failed",
+                        f"RETRY {retry_count}/{max_retries}\n{error_text}")
                     transition_import_job(ij, "enqueued",
                         f"RETRY {retry_count}/{max_retries}\n{error_text}")
                     apply_import_progress(

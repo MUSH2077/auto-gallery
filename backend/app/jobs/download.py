@@ -691,14 +691,20 @@ async def run_download_job(job_id: str):
                     append_manifest_event(_manifest_job, "gallerydl_timeout", timeout_seconds=dl_timeout)
                 await _manifest_db.commit()
 
-            # Register newly downloaded files via filesystem scan
+            # Register newly downloaded files via filesystem scan.
+            # Scope to download_dir when available to avoid picking up files
+            # from other creators' directories (cross-contamination bug).
             from app.services.artifact_ledger import ArtifactLedger, artifact_row
             source_root = Path(settings.download_root) / job.source
+            if job.download_dir:
+                scan_root = source_root / job.download_dir
+            else:
+                scan_root = source_root
             rows = []
             seen = set()
-            if source_root.exists():
-                for jf in source_root.rglob("*.json"):
-                    if jf.is_file() and jf.parent != source_root:
+            if scan_root.exists():
+                for jf in scan_root.rglob("*.json"):
+                    if jf.is_file() and jf.parent != scan_root:
                         for af in jf.parent.iterdir():
                             if af.is_file() and af.suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".zip"}:
                                 ar = artifact_row(af, Path(settings.download_root), job_uuid)

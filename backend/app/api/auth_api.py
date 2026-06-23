@@ -1,7 +1,7 @@
 """Authentication endpoints: login, me, change-password."""
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -17,9 +17,13 @@ from app.auth import (
 )
 from app.database import get_db
 from app.models.user import User
+from app.services.rate_limiter import RateLimiter
 from app.services.ws_tickets import issue_ws_ticket
 
 router = APIRouter()
+
+# Rate limit login attempts: 5 per minute per IP
+_login_limiter = RateLimiter(prefix="login", max_requests=5, window_seconds=60)
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -76,7 +80,17 @@ async def get_current_user(
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest, session: AsyncSession = Depends(get_db)):
+async def login(body: LoginRequest, request: Request, session: AsyncSession = Depends(get_db)):
+    # Rate limit by client IP (fail open if Redis is unavailable)
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, remaining, retry_after = await _login_limiter.check(client_ip)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Please try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     result = await session.execute(select(User).where(User.username == body.username, User.is_active == True))
     user = result.scalars().first()
 

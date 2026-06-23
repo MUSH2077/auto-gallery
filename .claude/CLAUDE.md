@@ -138,3 +138,23 @@ subscription_source enabled → enqueue download_job (downloads queue)
 - Batch operations return per-item results, never silently swallow errors
 - Frontend: typed API client, TanStack Query, thin pages, i18n keys natural-language
 - Commit immediately after each completed task
+
+## Deploy Rule (MANDATORY)
+
+**Every time backend code is modified**, the Docker image MUST be rebuilt and containers restarted before the changes take effect. This is NOT optional — stale containers run old code.
+
+After any edit to `backend/app/**`:
+
+```bash
+docker compose build --build-arg CACHEBUST="$(date +%s)" backend
+docker compose up -d --force-recreate backend worker-download worker-import worker-operations scheduler
+```
+
+Or use the shortcut:
+```bash
+bash scripts/deploy.sh
+```
+
+- This also applies to frontend changes (`admin-web/**`), which require `admin-web` in the build + restart list.
+- The `CACHEBUST` arg is required; without it Docker may reuse a stale `COPY . .` layer.
+- Verify with: `docker compose logs worker-import --tail=20` to confirm no import errors.

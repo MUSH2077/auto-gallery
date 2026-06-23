@@ -26,6 +26,10 @@ RUN TWITTER_PY=$(python3 -c "import gallery_dl.extractor.twitter; print(gallery_
     sed -i 's/^            state = reset = 2$/            return/' "$TWITTER_PY" && \
     echo "Patched gallery-dl twitter.py: removed SearchTimeline fallback"
 
+# ── Application source ────────────────────────────────────────────
+# CACHEBUST ensures Docker always copies the latest source code.
+# Without it, Docker may reuse a stale COPY layer even when files changed.
+ARG CACHEBUST=1
 COPY . .
 
 RUN mkdir -p /downloads /library /gallerydl-config /app-config
