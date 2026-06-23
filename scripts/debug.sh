@@ -30,6 +30,10 @@ for c in "${CONTAINERS[@]}"; do
     hc=$(docker inspect "$name" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}}' 2>/dev/null)
     ec=$(docker inspect "$name" --format '{{.State.ExitCode}}' 2>/dev/null)
     ts=$(docker inspect "$name" --format '{{.State.StartedAt}}' 2>/dev/null | cut -d. -f1 | sed 's/T/ /')
+    # Docker returns UTC; convert to local time for display
+    if command -v date >/dev/null 2>&1 && [ -n "$ts" ]; then
+        ts=$(date -d "$ts UTC" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$ts")
+    fi
     case "$st-$hc" in
         running-healthy) ok    "$c: up (healthy) $ts" ;;
         running-unhealthy) err "$c: up (UNHEALTHY) exit=$ec $ts" ;;
