@@ -76,8 +76,7 @@ class DanbooruProvider(BaseProvider):
             "source": self.source_name,
             "source_work_id": post_id,
             "source_url": f"https://danbooru.donmai.us/posts/{post_id}",
-            "source_creator_id": (raw_metadata.get("tag_string_artist", "").split()[0]
-                                  if raw_metadata.get("tag_string_artist") else None),
+            "source_creator_id": (tag_artist if (tag_artist := raw_metadata.get("tag_string_artist", "").strip()) else None),
             "title": None,
             "description": raw_metadata.get("artist_commentary_desc"),
             "posted_at": raw_metadata.get("created_at"),

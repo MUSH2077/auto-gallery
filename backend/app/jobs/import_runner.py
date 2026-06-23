@@ -42,6 +42,39 @@ _can_compute_phash = can_compute_phash
 _mime_type = get_mime_type
 
 
+def _should_auto_link_creator(
+    provider: Any,
+    first_raw: dict,
+    subscription_source: Any | None,
+) -> tuple[bool, str | None, str | None]:
+    """Determine whether a new SourceCreator should be auto-linked to a subscription's creator.
+
+    Returns (should_link, url_creator, meta_creator).
+
+    Only returns should_link=True when the creator identity extracted from the
+    subscription source URL matches the creator identity parsed from the work
+    metadata.  Mismatch occurs with retweets, reposts, bookmarked/favorited
+    content from other creators — these are left unlinked for admin review.
+    """
+    if not subscription_source or not subscription_source.source_url:
+        return False, None, None
+
+    try:
+        _prov = registry.get(subscription_source.source)
+        url_creator = _prov.get_creator_dir_from_url(subscription_source.source_url)
+    except KeyError:
+        return False, None, None
+
+    if url_creator is None:
+        return False, url_creator, None
+
+    meta_creator = provider.get_creator_directory_name(first_raw)
+    if not meta_creator:
+        return False, url_creator, meta_creator
+
+    return str(url_creator) == str(meta_creator), url_creator, meta_creator
+
+
 def _parse_posted_at(value: Any) -> datetime | None:
     """Normalize provider date values to timezone-aware datetimes."""
     if value is None:
@@ -394,30 +427,35 @@ async def run_import_job(import_job_id: str):
                     # New platform identity — should we auto-link it?
                     creator_id = None
 
-                    # Resolve the subscription source to check whether its URL
-                    # identifies a single creator (profile page) or a collection
-                    # (search / pool / tag).
                     ss = None
                     if dj.subscription_source_id:
                         ss = await db.get(SubscriptionSource, dj.subscription_source_id)
 
-                    is_single_creator_url = False
-                    if ss and ss.source_url:
-                        try:
-                            _prov = registry.get(ss.source)
-                            is_single_creator_url = _prov.get_creator_dir_from_url(ss.source_url) is not None
-                        except KeyError:
-                            pass
+                    should_link, url_creator, meta_creator = _should_auto_link_creator(
+                        provider, first_raw, ss,
+                    )
 
-                    if is_single_creator_url:
-                        # Profile/user page — safe to inherit from subscription.
+                    if should_link:
+                        # Creator identity from URL matches metadata —
+                        # safe to auto-link to the subscription's creator.
                         if dj.subscription_id:
                             sub = await db.get(Subscription, dj.subscription_id)
                             if sub:
                                 creator_id = sub.creator_id
+                    elif url_creator is not None:
+                        # Single-creator URL but identity mismatch —
+                        # likely a retweet, repost, bookmark, or favorite
+                        # of content from a different creator.
+                        logger.info(
+                            "Import %s: new SourceCreator %s/%s from single-creator URL but "
+                            "creator identity mismatch (url_creator=%s, meta_creator=%s) — "
+                            "leaving creator_id unlinked.",
+                            import_job_id, sc_data["source"], sc_data["source_creator_id"],
+                            url_creator, meta_creator,
+                        )
                     else:
-                        # Search/pool/list URL — may contain works from multiple
-                        # creators.  Leave unlinked; admin can map it later.
+                        # Multi-creator URL (search/pool/list) or provider
+                        # that cannot determine creator from URL alone.
                         logger.info(
                             "Import %s: new SourceCreator %s/%s from multi-creator source — "
                             "leaving creator_id unlinked.",

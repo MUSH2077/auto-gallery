@@ -139,22 +139,41 @@ subscription_source enabled → enqueue download_job (downloads queue)
 - Frontend: typed API client, TanStack Query, thin pages, i18n keys natural-language
 - Commit immediately after each completed task
 
-## Deploy Rule (MANDATORY)
+## Completion Workflow (MANDATORY)
 
-**Every time backend code is modified**, the Docker image MUST be rebuilt and containers restarted before the changes take effect. This is NOT optional — stale containers run old code.
+After completing any non-trivial code change, execute these steps in order:
 
-After any edit to `backend/app/**`:
+### 1. Verify — run tests
+
+```bash
+docker compose exec backend python -m pytest -v
+```
+
+All tests must pass. Do NOT proceed past a failure.
+
+### 2. Deploy — rebuild and restart
+
+Backend code is baked into the Docker image via `COPY . .`; stale containers run old code.
 
 ```bash
 docker compose build --build-arg CACHEBUST="$(date +%s)" backend
 docker compose up -d --force-recreate backend worker-download worker-import worker-operations scheduler
 ```
 
-Or use the shortcut:
+Or: `bash scripts/deploy.sh`
+
+- Also applies to frontend changes (`admin-web/**`) — add `admin-web` to build + restart list.
+- `CACHEBUST` is required; without it Docker may reuse a stale `COPY . .` layer.
+- Verify: `docker compose logs worker-import --tail=20`
+
+### 3. Commit — record the change
+
 ```bash
-bash scripts/deploy.sh
+git add -A
+git commit -m "<conventional-commit-message>"
 ```
 
-- This also applies to frontend changes (`admin-web/**`), which require `admin-web` in the build + restart list.
-- The `CACHEBUST` arg is required; without it Docker may reuse a stale `COPY . .` layer.
-- Verify with: `docker compose logs worker-import --tail=20` to confirm no import errors.
+Always end commit messages with:
+```
+Co-Authored-By: Claude <noreply@anthropic.com>
+```
