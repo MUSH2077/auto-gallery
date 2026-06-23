@@ -35,7 +35,7 @@ class TestDanbooruProvider:
     def test_parse_source_creator(self):
         meta = {"tag_string_artist": "ask askzy", "id": 12345}
         r = self.p.parse_source_creator(meta)
-        assert r["source_creator_id"] == "ask askzy"
+        assert r["source_creator_id"] == "ask"  # first artist only
 
     def test_parse_source_creator_no_tag(self):
         meta = {"tag_string_artist": "", "id": 12345}
@@ -69,10 +69,10 @@ class TestDanbooruProvider:
         assert names.count("ask") == 1
 
     def test_parse_work_source_multi_word_artist(self):
-        """parse_work_source should use full tag_string_artist, not just first word."""
+        """parse_work_source should use first artist name, matching parse_source_creator."""
         meta = {"id": 12345, "tag_string_artist": "john smith doe"}
         r = self.p.parse_work_source(meta)
-        assert r["source_creator_id"] == "john smith doe"
+        assert r["source_creator_id"] == "john"
 
     def test_parse_work_source_empty_tag_string(self):
         meta = {"id": 12345, "tag_string_artist": ""}

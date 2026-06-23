@@ -556,12 +556,15 @@ async def run_import_job(import_job_id: str):
 
                     # Generate per-page thumbnail in thread pool (CPU-bound pyvips)
                     if can_generate_thumbnail(fp.suffix):
-                        from app.services.thumbnail import generate_thumbnail
-                        tp = await asyncio.to_thread(
-                            generate_thumbnail, str(fp), lib_dir, f"{fp.stem}.thumbnail")
-                        if tp:
-                            asset.thumb_sm_path = str(
-                                Path(tp).relative_to(settings.library_root))
+                        try:
+                            from app.services.thumbnail import generate_thumbnail
+                            tp = await asyncio.to_thread(
+                                generate_thumbnail, str(fp), lib_dir, f"{fp.stem}.thumbnail")
+                            if tp:
+                                asset.thumb_sm_path = str(
+                                    Path(tp).relative_to(settings.library_root))
+                        except Exception as _thumb_err:
+                            logger.warning("Thumbnail failed for %s: %s", fp, _thumb_err)
 
                     # Compute sha256 in thread pool (CPU-bound hashing)
                     try:
@@ -592,6 +595,7 @@ async def run_import_job(import_job_id: str):
                 try:
                     tags = provider.parse_source_tags(first_raw)
                     seen = set()
+                    tag_names = []  # collected for Meilisearch, avoids re-query
                     for td in tags:
                         n = td.get("original_name", "").lower().strip()
                         if not n or n in seen:
@@ -608,6 +612,7 @@ async def run_import_job(import_job_id: str):
                                 WorkTag.tag_id == tag.id))).scalar_one_or_none():
                             db.add(WorkTag(work_id=work.id, tag_id=tag.id,
                                            source=provider.source_name))
+                            tag_names.append(n)
                         if not (await db.execute(select(WorkSourceTag).where(
                                 WorkSourceTag.work_source_id == ws.id,
                                 WorkSourceTag.tag_id == tag.id))).scalar_one_or_none():
@@ -634,9 +639,7 @@ async def run_import_job(import_job_id: str):
                 )
 
                 # Collect Meilisearch document for this work
-                tag_names = [t.normalized_name for t in (await db.execute(
-                    select(Tag.normalized_name).join(WorkTag).where(WorkTag.work_id == work.id)
-                )).all()]
+                # tag_names collected during tag processing above
                 asset_count = len(asset_files)
                 if curation_visibility == "visible":
                     meili_docs.append({
