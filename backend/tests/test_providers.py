@@ -156,3 +156,35 @@ class TestXProvider:
         tag_names = [(t["original_name"], t["category"]) for t in result]
         assert ("fanart", "hashtag") in tag_names
         assert ("illustration", "hashtag") in tag_names
+
+    def test_get_creator_dir_from_url(self):
+        """get_creator_dir_from_url extracts screen name from profile URL."""
+        assert self.p.get_creator_dir_from_url("https://x.com/artist_handle") == "artist_handle"
+        assert self.p.get_creator_dir_from_url("https://twitter.com/other_user") == "other_user"
+        # Status URLs also match (the regex captures the screen name)
+        assert self.p.get_creator_dir_from_url("https://x.com/user/status/123") == "user"
+        # Non-matching URL
+        assert self.p.get_creator_dir_from_url("https://pixiv.net/users/123") is None
+
+    def test_get_creator_directory_name(self, sample_twitter_metadata):
+        """get_creator_directory_name returns the screen name from metadata."""
+        assert self.p.get_creator_directory_name(sample_twitter_metadata) == "artist_handle"
+
+    def test_creator_identity_match_own_tweet(self, sample_twitter_metadata):
+        """Own tweet: URL creator and metadata creator should match."""
+        url_creator = self.p.get_creator_dir_from_url("https://x.com/artist_handle")
+        meta_creator = self.p.get_creator_directory_name(sample_twitter_metadata)
+        assert url_creator == meta_creator == "artist_handle"
+
+    def test_creator_identity_mismatch_retweet(self):
+        """Retweet: URL creator differs from metadata creator — should NOT match."""
+        retweet_meta = {
+            "id_str": "999",
+            "full_text": "RT of someone else",
+            "user": {"id": 999888777, "name": "other_artist", "nick": "Other Artist"},
+        }
+        url_creator = self.p.get_creator_dir_from_url("https://x.com/artist_handle")
+        meta_creator = self.p.get_creator_directory_name(retweet_meta)
+        assert url_creator != meta_creator
+        assert url_creator == "artist_handle"
+        assert meta_creator == "other_artist"

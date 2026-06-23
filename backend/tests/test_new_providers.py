@@ -68,6 +68,24 @@ class TestDanbooruProvider:
         names = [t["original_name"] for t in r]
         assert names.count("ask") == 1
 
+    def test_parse_work_source_multi_word_artist(self):
+        """parse_work_source should use full tag_string_artist, not just first word."""
+        meta = {"id": 12345, "tag_string_artist": "john smith doe"}
+        r = self.p.parse_work_source(meta)
+        assert r["source_creator_id"] == "john smith doe"
+
+    def test_parse_work_source_empty_tag_string(self):
+        meta = {"id": 12345, "tag_string_artist": ""}
+        r = self.p.parse_work_source(meta)
+        assert r["source_creator_id"] is None
+
+    def test_source_creator_id_consistency(self):
+        """parse_source_creator and parse_work_source must return the same source_creator_id."""
+        meta = {"id": 12345, "tag_string_artist": "ask askzy"}
+        sc = self.p.parse_source_creator(meta)
+        ws = self.p.parse_work_source(meta)
+        assert sc["source_creator_id"] == ws["source_creator_id"]
+
 
 class TestPinterestProvider:
     def setup_method(self):
@@ -101,6 +119,38 @@ class TestPinterestProvider:
 
     def test_parse_source_tags_returns_empty(self):
         assert self.p.parse_source_tags({}) == []
+
+    def test_parse_work_source_uses_board_owner_username(self):
+        """parse_work_source should prefer board.owner.username over top-level user."""
+        meta = {
+            "id": 12345,
+            "user": "pin_user",
+            "board": {"owner": {"username": "board_owner"}, "name": "My Board"},
+        }
+        r = self.p.parse_work_source(meta)
+        assert r["source_creator_id"] == "board_owner"
+
+    def test_parse_work_source_falls_back_to_user(self):
+        """parse_work_source should use top-level user when board.owner.username is absent."""
+        meta = {"id": 12345, "user": "pin_user", "board": {}}
+        r = self.p.parse_work_source(meta)
+        assert r["source_creator_id"] == "pin_user"
+
+    def test_parse_work_source_empty_when_no_identity(self):
+        meta = {"id": 12345}
+        r = self.p.parse_work_source(meta)
+        assert r["source_creator_id"] == ""
+
+    def test_source_creator_id_consistency(self):
+        """parse_source_creator and parse_work_source must return the same source_creator_id."""
+        meta = {
+            "id": 12345,
+            "user": "pin_user",
+            "board": {"owner": {"username": "board_owner"}, "name": "My Board"},
+        }
+        sc = self.p.parse_source_creator(meta)
+        ws = self.p.parse_work_source(meta)
+        assert sc["source_creator_id"] == ws["source_creator_id"] == "board_owner"
 
 
 class TestLofterProvider:

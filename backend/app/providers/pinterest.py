@@ -64,11 +64,15 @@ class PinterestProvider(BaseProvider):
 
     def parse_work_source(self, raw_metadata: dict) -> dict:
         pin_id = str(raw_metadata.get("id", ""))
+        user = raw_metadata.get("user", "")
+        board = raw_metadata.get("board", {})
+        username = board.get("owner", {}).get("username", "") if isinstance(board, dict) else ""
+        creator_id = username or user or ""
         return {
             "source": self.source_name,
             "source_work_id": pin_id,
             "source_url": f"https://www.pinterest.com/pin/{pin_id}",
-            "source_creator_id": raw_metadata.get("user", ""),
+            "source_creator_id": creator_id,
             "title": None,
             "description": raw_metadata.get("description") or raw_metadata.get("closeup_description"),
             "posted_at": None,
