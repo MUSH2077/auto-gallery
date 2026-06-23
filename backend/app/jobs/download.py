@@ -324,19 +324,6 @@ async def run_download_job(job_id: str):
                     update_manifest(_cfg_j, gallerydl_config_path=job_config_path, effective_gallerydl_config=_cfg)
                     append_manifest_event(_cfg_j, "effective_config_written", path=job_config_path)
                     await _cfg_db.commit()
-        # Record creator dir so import_runner can scope its scan
-        try:
-            _creator_dir = _prov.get_creator_dir_from_url(job.source_url)
-            if _creator_dir and not job.download_dir:
-                async with async_session() as _dir_db:
-                    from app.repositories.download_job import DownloadJobRepository as _DJRepo
-                    _dir_j = await _DJRepo(_dir_db).get(job_uuid)
-                    if _dir_j and not _dir_j.download_dir:
-                        _dir_j.download_dir = _creator_dir
-                        update_manifest(_dir_j, download_dir=_creator_dir)
-                        await _dir_db.commit()
-        except Exception:
-            logger.debug("Failed to record download_dir for job %s", job_id, exc_info=True)
     except Exception:
         logger.debug("Failed to write per-job config for %s", job_id, exc_info=True)
 
@@ -692,14 +679,12 @@ async def run_download_job(job_id: str):
                 await _manifest_db.commit()
 
             # Register newly downloaded files via filesystem scan.
-            # Scope to download_dir when available to avoid picking up files
-            # from other creators' directories (cross-contamination bug).
+            # Always scan the full source root — the gallery-dl directory
+            # template (user-configurable) determines where files land, and
+            # ArtifactLedger.upsert_many deduplicates via mtime-based
+            # download_job_id reassignment.
             from app.services.artifact_ledger import ArtifactLedger, artifact_row
-            source_root = Path(settings.download_root) / job.source
-            if job.download_dir:
-                scan_root = source_root / job.download_dir
-            else:
-                scan_root = source_root
+            scan_root = Path(settings.download_root) / job.source
             rows = []
             seen = set()
             if scan_root.exists():
