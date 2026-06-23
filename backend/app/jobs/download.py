@@ -679,10 +679,10 @@ async def run_download_job(job_id: str):
                 await _manifest_db.commit()
 
             # Register newly downloaded files via filesystem scan.
-            # Always scan the full source root — the gallery-dl directory
-            # template (user-configurable) determines where files land, and
-            # ArtifactLedger.upsert_many deduplicates via mtime-based
-            # download_job_id reassignment.
+            # Scan the full source root but only register files modified
+            # after download_start — prevents cross-contamination from
+            # concurrent jobs while remaining independent of the exact
+            # gallery-dl directory template.
             from app.services.artifact_ledger import ArtifactLedger, artifact_row
             scan_root = Path(settings.download_root) / job.source
             rows = []
@@ -690,8 +690,12 @@ async def run_download_job(job_id: str):
             if scan_root.exists():
                 for jf in scan_root.rglob("*.json"):
                     if jf.is_file() and jf.parent != scan_root:
+                        if jf.stat().st_mtime < download_start:
+                            continue  # not created by this job
                         for af in jf.parent.iterdir():
                             if af.is_file() and af.suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".zip"}:
+                                if af.stat().st_mtime < download_start:
+                                    continue
                                 ar = artifact_row(af, Path(settings.download_root), job_uuid)
                                 if ar and ar["file_path"] not in seen:
                                     seen.add(ar["file_path"])
@@ -703,7 +707,6 @@ async def run_download_job(job_id: str):
             _registered = await ArtifactLedger(_manifest_db).upsert_many(rows)
             await _manifest_db.commit()
             logger.info("Registered %d artifacts for job %s", _registered, job_id)
-            logger.info("Registered %d staged artifacts for job %s", _registered, job_id)
 
     except Exception as e:
         logger.error("Unexpected error in download job %s: %s", job_id, e, exc_info=True)
