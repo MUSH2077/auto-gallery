@@ -26,9 +26,9 @@ from app.services.subscription_enqueue import mark_source_sync_success
 
 logger = logging.getLogger(__name__)
 
-FALLBACK_TIMEOUT = 600
+FALLBACK_TIMEOUT = 6000
 FALLBACK_STALL_TIMEOUT = 120
-FALLBACK_MAX_RETRIES = 3
+FALLBACK_MAX_RETRIES = 4
 FALLBACK_BACKOFF_BASE = 60
 FALLBACK_GALLERYDL_RETRIES = 3
 FALLBACK_GALLERYDL_TIMEOUT = 30
