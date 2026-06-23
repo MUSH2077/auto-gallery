@@ -15,6 +15,7 @@ echo -e "${GREEN}=== auto-gallery Deploy ===${NC}"
 echo -e "${YELLOW}[1/4] Building images...${NC}"
 docker compose build \
     --build-arg CACHEBUST="$(date +%s)" \
+    --pull \
     backend admin-web
 echo -e "${GREEN}  Build OK${NC}"
 
