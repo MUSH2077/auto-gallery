@@ -77,7 +77,7 @@ DEFAULT_GALLERYDL_CONFIG = {
             "stories": True,
             "videos": True,
             "sections": True,
-            "directory": ["pinterest", "{category}", "{user}", "{board[name]}"],
+            "directory": ["pinterest", "{user}", "{category}", "{board[name]}"],
             "filename": "{id}_{num}.{extension}",
         },
         "lofter": {

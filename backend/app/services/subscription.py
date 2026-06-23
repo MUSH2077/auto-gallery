@@ -1,11 +1,11 @@
 import logging
 from uuid import UUID
 
-from sqlalchemy import select, delete as sql_delete
+from sqlalchemy import select, delete as sql_delete, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.subscription import SubscriptionRepository
-from app.models import SubscriptionSource, DownloadJob, ImportJob, CreatorLink, Subscription
+from app.models import SubscriptionSource, DownloadJob, ImportJob, CreatorLink, Subscription, SourceCreator
 from app.providers import registry
 from app.services.settings import get_subscription_defaults
 
@@ -42,7 +42,30 @@ class SubscriptionService:
 
     async def update_subscription(self, sub_id: UUID, data: dict):
         sub = await self.get_subscription(sub_id)
+        old_creator_id = sub.creator_id
+        new_creator_id = data.get("creator_id")
+
         sub = await self.repo.update(sub, data)
+
+        # When creator_id changes, propagate to all SourceCreators that
+        # were previously linked to the old creator_id.  This prevents
+        # works from being split across two Creator records when an admin
+        # corrects or merges a creator identity.
+        if (
+            new_creator_id is not None
+            and old_creator_id is not None
+            and str(new_creator_id) != str(old_creator_id)
+        ):
+            await self.db.execute(
+                sql_update(SourceCreator)
+                .where(SourceCreator.creator_id == old_creator_id)
+                .values(creator_id=new_creator_id)
+            )
+            logger.info(
+                "Propagated creator_id change: moved SourceCreators from %s to %s",
+                old_creator_id, new_creator_id,
+            )
+
         await self.db.commit()
         return sub
 
