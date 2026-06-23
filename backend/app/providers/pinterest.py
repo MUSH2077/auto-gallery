@@ -92,3 +92,9 @@ class PinterestProvider(BaseProvider):
 
     def parse_source_tags(self, raw_metadata: dict) -> list[dict]:
         return []
+
+    def get_creator_dir_from_url(self, source_url: str) -> str | None:
+        # Pinterest user/board URLs: pinterest.com/{username}/pins/ or
+        # pinterest.com/{username}/{board-name}/
+        m = re.search(r'pinterest\.\w+/([\w.-]+)/(?:pins|[\w.-]+)', source_url)
+        return m.group(1) if m else None
