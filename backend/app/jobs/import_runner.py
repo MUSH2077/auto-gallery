@@ -353,6 +353,65 @@ async def run_import_job(import_job_id: str):
             dir_name = dir_name.replace("/", "_").replace("\\", "_").strip()
             display_name = (sc_data.get("display_name") or dir_name)
 
+            # ── SourceCreator resolution (runs BEFORE idempotency check
+            # so retroactive linking fires even for already-imported works)
+            sc_creator_id = None
+            async with async_session() as sc_db:
+                for sc_attempt in range(3):
+                    try:
+                        existing_sc = await sc_db.execute(select(SourceCreator).where(
+                            SourceCreator.source == sc_data["source"],
+                            SourceCreator.source_creator_id == sc_data["source_creator_id"]))
+                        sc_obj = existing_sc.scalar_one_or_none()
+
+                        if not sc_obj:
+                            creator_id = None
+                            ss = None
+                            if dj.subscription_source_id:
+                                ss = await sc_db.get(SubscriptionSource, dj.subscription_source_id)
+                            should_link, _, _ = _should_auto_link_creator(provider, first_raw, ss)
+                            if should_link and dj.subscription_id:
+                                sub = await sc_db.get(Subscription, dj.subscription_id)
+                                if sub:
+                                    creator_id = sub.creator_id
+                            sc_obj = SourceCreator(
+                                source=sc_data["source"],
+                                source_creator_id=sc_data["source_creator_id"],
+                                source_url=sc_data.get("source_url"),
+                                display_name=sc_data.get("display_name"),
+                                creator_id=creator_id,
+                            )
+                            sc_db.add(sc_obj)
+                            await sc_db.flush()
+                            sc_creator_id = creator_id
+
+                        elif sc_obj.creator_id is None:
+                            ss = None
+                            if dj.subscription_source_id:
+                                ss = await sc_db.get(SubscriptionSource, dj.subscription_source_id)
+                            should_link, _, _ = _should_auto_link_creator(provider, first_raw, ss)
+                            if should_link and dj.subscription_id:
+                                sub = await sc_db.get(Subscription, dj.subscription_id)
+                                if sub and sub.creator_id:
+                                    sc_obj.creator_id = sub.creator_id
+                                    sc_creator_id = sub.creator_id
+                                    logger.info(
+                                        "Import %s: retroactively linked "
+                                        "SourceCreator %s/%s to creator %s",
+                                        import_job_id, sc_data["source"],
+                                        sc_data["source_creator_id"], sub.creator_id,
+                                    )
+                        else:
+                            sc_creator_id = sc_obj.creator_id
+
+                        await sc_db.commit()
+                        break
+                    except IntegrityError:
+                        if sc_attempt < 2:
+                            await sc_db.rollback()
+                            continue
+                        raise
+
             # Idempotency: skip if this work_source already exists
             async with async_session() as check_db:
                 existing_ws = await check_db.execute(
@@ -410,105 +469,9 @@ async def run_import_job(import_job_id: str):
                     await db.rollback()
                     continue
 
-                # SourceCreator — maps a platform identity (source +
-                # source_creator_id) to an auto-gallery Creator.
-                #
-                # The mapping is established during Danbooru reference import
-                # (or manual admin action).  The download importer only LOOKS UP
-                # existing mappings; it never creates new ones with a creator_id
-                # unless the subscription source URL is demonstrably single-creator
-                # (user profile page, not a search/pool/list).
-                #
-                # Retry loop: concurrent import workers may race to insert the
-                # same new SourceCreator.  The loser's IntegrityError is caught
-                # and retried — the next SELECT finds the winner's row.
-                SC_MAX_RETRIES = 3
-                for sc_attempt in range(SC_MAX_RETRIES):
-                    try:
-                        existing_sc = await db.execute(select(SourceCreator).where(
-                            SourceCreator.source == sc_data["source"],
-                            SourceCreator.source_creator_id == sc_data["source_creator_id"]))
-                        sc_obj = existing_sc.scalar_one_or_none()
-                        linked_creator_id = sc_obj.creator_id if sc_obj else None
-
-                        if not sc_obj:
-                            # New platform identity — should we auto-link it?
-                            creator_id = None
-
-                            ss = None
-                            if dj.subscription_source_id:
-                                ss = await db.get(SubscriptionSource, dj.subscription_source_id)
-
-                            should_link, url_creator, meta_creator = _should_auto_link_creator(
-                                provider, first_raw, ss,
-                            )
-
-                            if should_link:
-                                if dj.subscription_id:
-                                    sub = await db.get(Subscription, dj.subscription_id)
-                                    if sub:
-                                        creator_id = sub.creator_id
-                            elif url_creator is not None:
-                                logger.info(
-                                    "Import %s: new SourceCreator %s/%s from single-creator URL but "
-                                    "creator identity mismatch (url_creator=%s, meta_creator=%s) — "
-                                    "leaving creator_id unlinked.",
-                                    import_job_id, sc_data["source"], sc_data["source_creator_id"],
-                                    url_creator, meta_creator,
-                                )
-                            else:
-                                logger.info(
-                                    "Import %s: new SourceCreator %s/%s from multi-creator source — "
-                                    "leaving creator_id unlinked.",
-                                    import_job_id, sc_data["source"], sc_data["source_creator_id"],
-                                )
-
-                            linked_creator_id = creator_id
-                            db.add(SourceCreator(
-                                source=sc_data["source"],
-                                source_creator_id=sc_data["source_creator_id"],
-                                source_url=sc_data.get("source_url"),
-                                display_name=sc_data.get("display_name"),
-                                creator_id=creator_id,
-                            ))
-                            await db.flush()
-
-                        elif sc_obj.creator_id is None:
-                            # Existing SourceCreator that was never linked —
-                            # retry auto-link with identity comparison guard.
-                            ss = None
-                            if dj.subscription_source_id:
-                                ss = await db.get(SubscriptionSource, dj.subscription_source_id)
-
-                            should_link, url_creator, meta_creator = _should_auto_link_creator(
-                                provider, first_raw, ss,
-                            )
-
-                            if should_link and dj.subscription_id:
-                                sub = await db.get(Subscription, dj.subscription_id)
-                                if sub and sub.creator_id:
-                                    sc_obj.creator_id = sub.creator_id
-                                    linked_creator_id = sub.creator_id
-                                    logger.info(
-                                        "Import %s: retroactively linked existing "
-                                        "SourceCreator %s/%s to creator %s",
-                                        import_job_id, sc_data["source"],
-                                        sc_data["source_creator_id"], sub.creator_id,
-                                    )
-
-                        break  # success — exit retry loop
-
-                    except IntegrityError:
-                        if sc_attempt < SC_MAX_RETRIES - 1:
-                            await db.rollback()
-                            logger.debug(
-                                "Import %s: SourceCreator insert race for %s/%s, retry %d/%d",
-                                import_job_id, sc_data["source"],
-                                sc_data["source_creator_id"],
-                                sc_attempt + 1, SC_MAX_RETRIES,
-                            )
-                            continue
-                        raise
+                # SourceCreator already resolved above (before idempotency check).
+                # sc_creator_id carries the linked creator_id for curation.
+                linked_creator_id = sc_creator_id
 
                 # Work
                 is_ai = _detect_ai_generated(first_raw, provider.source_name)
