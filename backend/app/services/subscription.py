@@ -47,24 +47,37 @@ class SubscriptionService:
 
         sub = await self.repo.update(sub, data)
 
-        # When creator_id changes, propagate to all SourceCreators that
-        # were previously linked to the old creator_id.  This prevents
-        # works from being split across two Creator records when an admin
-        # corrects or merges a creator identity.
+        # When creator_id changes, propagate to SourceCreators that were
+        # previously linked to the old creator_id AND match this
+        # subscription's sources.  This prevents works from being split
+        # across two Creator records while avoiding cross-subscription
+        # mutation.
         if (
             new_creator_id is not None
             and old_creator_id is not None
             and str(new_creator_id) != str(old_creator_id)
         ):
-            await self.db.execute(
-                sql_update(SourceCreator)
-                .where(SourceCreator.creator_id == old_creator_id)
-                .values(creator_id=new_creator_id)
+            # Collect the sources (e.g. "pixiv", "x") of this subscription
+            ss_result = await self.db.execute(
+                select(SubscriptionSource.source).where(
+                    SubscriptionSource.subscription_id == sub_id
+                )
             )
-            logger.info(
-                "Propagated creator_id change: moved SourceCreators from %s to %s",
-                old_creator_id, new_creator_id,
-            )
+            sub_sources = [row[0] for row in ss_result.all()]
+            if sub_sources:
+                await self.db.execute(
+                    sql_update(SourceCreator)
+                    .where(
+                        SourceCreator.creator_id == old_creator_id,
+                        SourceCreator.source.in_(sub_sources),
+                    )
+                    .values(creator_id=new_creator_id)
+                )
+                logger.info(
+                    "Propagated creator_id change: moved SourceCreators "
+                    "from %s to %s (sources: %s)",
+                    old_creator_id, new_creator_id, sub_sources,
+                )
 
         await self.db.commit()
         return sub
