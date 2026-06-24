@@ -326,7 +326,7 @@ async def run_download_job(job_id: str):
                     append_manifest_event(_cfg_j, "effective_config_written", path=job_config_path)
                     await _cfg_db.commit()
     except Exception:
-        logger.debug("Failed to write per-job config for %s", job_id, exc_info=True)
+        logger.warning("Failed to write per-job config for %s", job_id, exc_info=True)
 
     # Per-source AI filtering
     if skip_ai:
@@ -456,7 +456,7 @@ async def run_download_job(job_id: str):
                 })
                 r_ph.expire(f"proxy:health:{job.source}", 3600)
             except Exception:
-                pass
+                logger.warning("Failed to record proxy health for %s", job.source, exc_info=True)
         elif preflight_warnings is not None:
             try:
                 r_ph = get_redis()
@@ -467,7 +467,7 @@ async def run_download_job(job_id: str):
                 })
                 r_ph.expire(f"proxy:health:{job.source}", 3600)
             except Exception:
-                pass
+                logger.warning("Failed to record proxy health for %s", job.source, exc_info=True)
 
         async with async_session() as _progress_db:
             _progress_job = await DownloadJobRepository(_progress_db).get(job_uuid)
