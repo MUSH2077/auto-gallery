@@ -14,6 +14,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.database import async_session
+from app.jobs.download_outcome import classify_no_metadata_outcome
 from app.jobs.worker_control import ControlListener, HeartbeatPublisher
 from app.models.subscription_source import SubscriptionSource
 from app.repositories.download_job import DownloadJobRepository
@@ -904,16 +905,18 @@ async def run_download_job(job_id: str):
                     auth_warning = label
                     break
 
-            # Determine status — then commit in single session
-            if image_count == 0 and auth_warning:
-                new_status = "failed"
-                new_error = f"Download produced 0 files: {auth_warning}\n{stderr_text[:2000]}"
-            elif image_count == 0:
-                new_status = "complete"
-                new_error = "Source has no downloadable content or all content is restricted"
-            else:
-                new_status = "complete"
-                new_error = None
+            # Determine status via pure helper (manual empty -> failed; subscription
+            # re-sync with no new content -> complete; see download_outcome.py).
+            async with async_session() as _sub_db:
+                _sub_job = await DownloadJobRepository(_sub_db).get(job_uuid)
+                is_subscription = bool(_sub_job and _sub_job.subscription_source_id)
+            new_status, new_error = classify_no_metadata_outcome(
+                image_count=image_count,
+                auth_warning=auth_warning,
+                is_subscription=is_subscription,
+            )
+            if new_status == "failed" and auth_warning:
+                new_error = f"{new_error}\n{stderr_text[:2000]}"
 
             async with async_session() as db3:
                 repo3 = DownloadJobRepository(db3)
