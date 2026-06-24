@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.jobs.import_outcome import DEFAULT_IMPORT_SKIP_THRESHOLD, clamp_threshold
 from app.models.system_setting import SystemSetting
 
 logger = logging.getLogger(__name__)
@@ -149,6 +150,8 @@ async def get_download_defaults(db: AsyncSession) -> dict:
         "gallerydl_retries": int(defaults.get("gallerydl_retries", DEFAULT_GALLERYDL_RETRIES)),
         "gallerydl_timeout": int(defaults.get("gallerydl_timeout", DEFAULT_GALLERYDL_TIMEOUT)),
         "gallerydl_abort": int(defaults.get("gallerydl_abort", DEFAULT_GALLERYDL_ABORT)),
+        "import_skip_threshold": clamp_threshold(
+            float(defaults.get("import_skip_threshold", DEFAULT_IMPORT_SKIP_THRESHOLD))),
         **defaults,
     }
 
