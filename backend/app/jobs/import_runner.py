@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.database import async_session
+from app.jobs.import_outcome import classify_import_outcome, clamp_threshold
 from app.jobs.worker_control import ControlListener, HeartbeatPublisher
 from app.models import (
     Work, WorkSource, Asset, AssetSource, Tag, WorkTag, WorkSourceTag, SourceCreator,
@@ -27,6 +28,7 @@ from app.repositories.download_job import DownloadJobRepository
 from app.services.job_progress import apply_download_progress, apply_import_progress
 from app.services.job_manifest import append_manifest_event, update_manifest
 from app.services.job_state import transition_import_job
+from app.services.settings import get_download_defaults
 from app.services.redis_client import get_redis
 from app.services.subscription_enqueue import mark_source_sync_success
 from app.services.curation import CurationService
@@ -314,7 +316,7 @@ async def run_import_job(import_job_id: str):
                 )
                 await db.commit()
 
-        stats = {"works": 0, "assets": 0, "multi_page": 0, "skipped": 0}
+        stats = {"works": 0, "assets": 0, "multi_page": 0, "skipped": 0, "existing": 0}
         batch_count = 0
         BATCH_SIZE = 50
 
@@ -421,6 +423,7 @@ async def run_import_job(import_job_id: str):
                     )
                 )
                 if existing_ws.scalar_one_or_none():
+                    stats["existing"] += 1
                     async with async_session() as ledger_db:
                         await ArtifactLedger(ledger_db).mark_work(dj.id, src_work_id, "done")
                         await ledger_db.commit()
@@ -717,65 +720,39 @@ async def run_import_job(import_job_id: str):
             logger.info("Import %s cancelled after %d works", import_job_id, stats["works"])
             return
 
-        # ── Detect high skip rate — may indicate provider/gallery-dl incompatibility ──
-        total_works = len(groups)
-        skipped = stats.get("skipped", 0)
-        _high_skip_rate = total_works > 0 and skipped > 0 and (skipped / total_works) >= 0.5
+        # ── Classify outcome (pure, unit-tested) ──
+        total_groups = len(groups)
+        async with async_session() as _cfg_db:
+            _defaults = await get_download_defaults(_cfg_db)
+        threshold = clamp_threshold(_defaults.get("import_skip_threshold", 0.5))
+        status, message = classify_import_outcome(
+            total_groups=total_groups,
+            works=stats["works"],
+            assets=stats["assets"],
+            existing=stats["existing"],
+            skipped=stats["skipped"],
+            threshold=threshold,
+        )
 
-        # Mark import complete (or failed on high skip rate) and update parent download_job
         async with async_session() as db:
             ij = await db.get(ImportJob, job_uuid)
             if ij:
-                if _high_skip_rate:
-                    skip_msg = (
-                        f"High import skip rate: {skipped}/{total_works} works skipped "
-                        f"({round(skipped / total_works * 100)}%). "
-                        f"Imported {stats['works']} works, {stats['assets']} assets. "
-                        f"This may indicate a provider metadata format change or gallery-dl incompatibility."
-                    )
-                    transition_import_job(ij, "failed", skip_msg)
-                    apply_import_progress(
-                        ij,
-                        "failed",
-                        skip_msg,
-                        current=stats["works"],
-                        total=total_works,
-                        assets=stats["assets"],
-                    )
-                    logger.warning("Import %s: %s", import_job_id, skip_msg)
-                else:
-                    transition_import_job(ij, "complete")
-                    apply_import_progress(
-                        ij,
-                        "complete",
-                        f"Import complete: {stats['works']} works, {stats['assets']} assets",
-                        current=stats["works"],
-                        total=total_works,
-                        assets=stats["assets"],
-                    )
+                transition_import_job(ij, status, message if status == "failed" else None)
+                apply_import_progress(
+                    ij, status, message,
+                    current=stats["works"], total=total_groups, assets=stats["assets"],
+                )
+                if status == "failed":
+                    logger.warning("Import %s classified failed: %s", import_job_id, message)
 
-                # Also mark the parent download job accordingly
                 dj_repo = DownloadJobRepository(db)
                 dj = await dj_repo.get(ij.download_job_id)
                 if dj:
-                    if _high_skip_rate:
-                        await dj_repo.update_status(dj, "failed",
-                            f"Import had high skip rate: {skipped}/{total_works} works skipped")
-                        apply_download_progress(
-                            dj,
-                            "failed",
-                            f"Import failed: {skipped}/{total_works} works skipped ({stats['works']} imported)",
-                        )
-                    else:
-                        await dj_repo.update_status(dj, "complete")
-                        apply_download_progress(
-                            dj,
-                            "complete",
-                            f"Import complete: {stats['works']} works, {stats['assets']} assets",
-                        )
+                    await dj_repo.update_status(dj, status, message if status == "failed" else None)
+                    apply_download_progress(dj, status, message)
                     update_manifest(dj, import_stats=stats)
-                    append_manifest_event(dj, "import_complete", **stats)
-                    if dj.subscription_source_id and not _high_skip_rate:
+                    append_manifest_event(dj, "import_complete", status=status, **stats)
+                    if status == "complete" and dj.subscription_source_id:
                         await mark_source_sync_success(db, dj.subscription_source_id)
                 await db.commit()
 
