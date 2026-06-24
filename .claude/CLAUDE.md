@@ -136,6 +136,20 @@ Before ANY task — whether a question, bug investigation, feature request, or c
 - Skills determine HOW to approach the task (debugging, planning, code review, etc.)
 - Never rationalize skipping: "this is simple" "I know this already" "let me explore first" are all wrong
 
+## Constraint Docs (load on demand)
+
+Detailed non-negotiable rules live in `.claude/constraints/`. Read the relevant file BEFORE touching that area (the `/plan` command loads all of them; otherwise pull the ones below as needed):
+
+- `security.md` — subprocess `shell=False`, URL validation at boundary, auth, CORS, `/media` serving
+- `source-abstraction.md` — source-agnostic naming, the provider interface
+- `filesystem-paths.md` — `Path.relative_to` containment, `DOWNLOAD_ROOT`/`LIBRARY_ROOT`
+- `metadata-detection.md` — before/after snapshot, gallery-dl metadata JSON detection
+- `deduplication.md` — dedup defaults OFF, no auto-merge/auto-delete
+- `creator-display-name.md` · `danbooru-reference.md` — creator identity & Danbooru reference-only rules
+- `docker.md` · `deployment.md` · `remote-access.md` — Compose, NAS deploy flow, remote access
+- `frontend-discipline.md` · `client-api.md` · `source-colors.md` — frontend, typed API client, per-source colors
+- `tech-stack.md` · `verification.md` · `commit-checklist.md` — stack, verification, commit gate
+
 ## Coding Rules
 
 - Business logic in services, never in routes

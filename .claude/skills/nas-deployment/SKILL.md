@@ -1,3 +1,8 @@
+---
+name: nas-deployment
+description: Use when deploying, rebuilding, or troubleshooting auto-gallery on the NAS via Docker Compose — image builds (CACHEBUST), env vars, volumes, service restarts, and the mandatory build-then-restart deploy flow.
+---
+
 # NAS Deployment Skill
 
 Guidance for deploying and configuring auto-gallery on a NAS host. Read `.claude/constraints/docker.md` and `.claude/constraints/security.md` before working on deployment.

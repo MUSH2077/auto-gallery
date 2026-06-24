@@ -1,3 +1,8 @@
+---
+name: provider-design
+description: Use when implementing or modifying a source provider (Pixiv, X/Twitter, Iwara, Danbooru, Weibo, Bilibili, Pinterest, LOFTER) — the provider interface, source abstraction (no platform-specific names in core), URL normalize/validate, gallery-dl config, and creator/work/asset/tag parsing.
+---
+
 # Provider Design Skill
 
 Guidance for implementing source providers. Read `.claude/constraints/source-abstraction.md` and `.claude/constraints/creator-display-name.md` before implementing any provider.
