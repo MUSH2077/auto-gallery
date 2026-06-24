@@ -1,3 +1,8 @@
+---
+name: backend-architecture
+description: Use when implementing or modifying backend code — routes, services, repositories, models, schemas, Alembic migrations, or RQ jobs. Enforces the layered architecture (thin route → service → repository → model), model/API conventions, migration safety, and startup/logging strategy for the FastAPI + SQLAlchemy async backend.
+---
+
 # Backend Architecture Skill
 
 Guidance for implementing backend code that follows the project's layered architecture and constraint rules.
@@ -131,7 +136,7 @@ From risk analysis (see `docs/risks.md`):
 - `status: String` must follow the state machine: `pending | downloading | downloaded | complete | failed | stale | paused`
 - `error_log: Text` captures gallery-dl stderr on failure
 - `retry_count: Integer` defaults to 0, max 3
-- See `.claude/skills/gallerydl-integration.md` for the canonical state machine with transitions
+- See `.claude/skills/gallerydl-integration/SKILL.md` (skill: gallerydl-integration) for the canonical state machine with transitions
 
 **`subscription_source`**:
 - `last_successful_auth: DateTime` for cookie expiration visibility

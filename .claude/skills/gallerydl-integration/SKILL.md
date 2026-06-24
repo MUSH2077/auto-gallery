@@ -1,3 +1,8 @@
+---
+name: gallerydl-integration
+description: Use when integrating, configuring, or debugging gallery-dl in the worker — the download/import job state machine, subprocess execution (shell=False), config merging, cookies/auth, and metadata JSON handling. Read before touching worker download or import code.
+---
+
 # gallery-dl Integration Skill
 
 Guidance for integrating gallery-dl into the worker service. Read `.claude/constraints/docker.md`, `.claude/constraints/security.md`, and `.claude/constraints/filesystem-paths.md` before implementing.
