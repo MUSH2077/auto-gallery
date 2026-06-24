@@ -19,6 +19,7 @@ from app.jobs.worker_control import ControlListener, HeartbeatPublisher
 from app.models.subscription_source import SubscriptionSource
 from app.repositories.download_job import DownloadJobRepository
 from app.models.task_state import transition_download_job
+from app.jobs.stage_timing import stage_timer
 from app.services.job_manifest import append_manifest_event, update_manifest
 from app.services.job_progress import apply_download_progress, apply_import_progress, publish_progress
 from app.services.redis_client import get_redis
@@ -864,10 +865,11 @@ async def run_download_job(job_id: str):
         # Full success — but only enqueue import if there are new metadata JSONs.
         # gallery-dl exits 0 even when all files were skipped (already in archive),
         # or when the source has no content at all.
-        metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
         async with async_session() as _manifest_db:
             _manifest_job = await DownloadJobRepository(_manifest_db).get(job_uuid)
             if _manifest_job:
+                with stage_timer(_manifest_job, "scan"):
+                    metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
                 update_manifest(_manifest_job, metadata_json_count=metadata_count, image_count=image_count)
                 append_manifest_event(_manifest_job, "artifacts_counted", metadata_json_count=metadata_count, image_count=image_count)
                 apply_download_progress(
@@ -879,6 +881,8 @@ async def run_download_job(job_id: str):
                     assets=image_count,
                 )
                 await _manifest_db.commit()
+            else:
+                metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
         if metadata_count > 0:
             async with async_session() as _progress_db:
                 _progress_job = await DownloadJobRepository(_progress_db).get(job_uuid)
