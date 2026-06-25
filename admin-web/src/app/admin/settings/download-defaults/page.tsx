@@ -150,6 +150,23 @@ export default function DownloadDefaultsPage() {
 
             <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
               <div>
+                <span className="font-medium">{t("dldefaults.concurrency")}</span>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.concurrency.desc")}</p>
+              </div>
+              <select
+                aria-label={t("dldefaults.concurrency")}
+                value={current.download_concurrency ?? 3}
+                onChange={(e) => setNum("download_concurrency", parseInt(e.target.value) || 3)}
+                className="input w-20 px-2 py-1 text-center font-mono"
+              >
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+              <div>
                 <span className="font-medium">{t("dldefaults.max_posts")}</span>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.max_posts.desc")}</p>
               </div>
