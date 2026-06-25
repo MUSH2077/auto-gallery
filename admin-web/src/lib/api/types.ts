@@ -633,6 +633,7 @@ export interface DownloadDefaults {
   gallerydl_retries: number;
   gallerydl_timeout: number;
   gallerydl_abort: number;
+  download_concurrency: number;
 }
 
 // Gallery-dl multi-source config types
