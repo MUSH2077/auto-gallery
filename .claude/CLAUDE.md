@@ -2,6 +2,11 @@
 
 NAS-hosted multi-source media archive and gallery manager. Downloads, imports, indexes, and manages creator-based media from 8 platforms through Docker Compose.
 
+## Communication (语言规范)
+
+- 默认用中文（简体）回复用户。Reply to the user in Chinese (Simplified) by default.
+- 代码、标识符、commit message、文件内容保持原语言（通常为英文），不要翻译。
+
 ## Quick Start
 
 ```bash
