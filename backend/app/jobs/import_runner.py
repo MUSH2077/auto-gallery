@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+from time import monotonic
 from collections import defaultdict
 from datetime import datetime, time, timezone
 from pathlib import Path
@@ -278,7 +279,8 @@ async def run_import_job(import_job_id: str):
                 logger.info("Import %s: loaded %d files from legacy Redis key",
                            import_job_id, len(all_json_files))
 
-        # Group JSONs by work_id
+        # Group JSONs by work_id ("parse" stage — timed for observability)
+        _parse_started = monotonic()
         groups = defaultdict(list)
         for jf in all_json_files:
             try:
@@ -290,17 +292,22 @@ async def run_import_job(import_job_id: str):
                     groups[src_work_id].append((jf, raw))
             except Exception:
                 logger.warning("Failed to parse JSON %s", jf, exc_info=True)
+        _parse_ms = int((monotonic() - _parse_started) * 1000)
 
         if not groups:
+            _empty_msg = "Could not extract work IDs from any JSON"
             async with async_session() as db:
                 ij = await db.get(ImportJob, job_uuid)
                 if ij:
-                    apply_import_progress(
-                        ij,
-                        "failed",
-                        "Could not extract work IDs from any JSON",
-                    )
-                    transition_import_job(ij, "failed", "Could not extract work IDs from any JSON")
+                    apply_import_progress(ij, "failed", _empty_msg)
+                    transition_import_job(ij, "failed", _empty_msg)
+                    # Also fail the parent download_job so an empty parse is not a
+                    # silent complete-but-empty (G1).
+                    _dj_repo = DownloadJobRepository(db)
+                    _parent = await _dj_repo.get(ij.download_job_id)
+                    if _parent:
+                        await _dj_repo.update_status(_parent, "failed", _empty_msg)
+                        apply_download_progress(_parent, "failed", _empty_msg)
                     await db.commit()
             return
 
@@ -323,6 +330,7 @@ async def run_import_job(import_job_id: str):
         # Batch Meilisearch documents
         meili_docs = []
 
+        _process_started = monotonic()  # "process" stage timing (per-work loop)
         for src_work_id, items in groups.items():
             # ── Safe interrupt point: check for pause/cancel signals ──
             if listener.should_stop():
@@ -721,7 +729,11 @@ async def run_import_job(import_job_id: str):
             return
 
         # ── Classify outcome (pure, unit-tested) ──
+        # Note: total_groups is always >= 1 here — the empty case returned early
+        # above ("if not groups"). classify_import_outcome's total_groups==0 rule is
+        # a defensive safety net for the pure helper, not the live empty guard.
         total_groups = len(groups)
+        _process_ms = int((monotonic() - _process_started) * 1000)
         async with async_session() as _cfg_db:
             _defaults = await get_download_defaults(_cfg_db)
         threshold = clamp_threshold(_defaults.get("import_skip_threshold", 0.5))
@@ -752,6 +764,8 @@ async def run_import_job(import_job_id: str):
                     apply_download_progress(dj, status, message)
                     update_manifest(dj, import_stats=stats)
                     append_manifest_event(dj, "import_complete", status=status, **stats)
+                    append_manifest_event(dj, "stage_timing", stage="parse", ms=_parse_ms)
+                    append_manifest_event(dj, "stage_timing", stage="process", ms=_process_ms)
                     if status == "complete" and dj.subscription_source_id:
                         await mark_source_sync_success(db, dj.subscription_source_id)
                 await db.commit()
