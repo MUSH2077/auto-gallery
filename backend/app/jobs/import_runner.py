@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from app.config import settings
 from app.database import async_session
 from app.jobs.import_outcome import classify_import_outcome, clamp_threshold
+from app.jobs.import_list_cleanup import cleanup_import_list, prune_import_lists
 from app.jobs.worker_control import ControlListener, HeartbeatPublisher
 from app.models import (
     Work, WorkSource, Asset, AssetSource, Tag, WorkTag, WorkSourceTag, SourceCreator,
@@ -278,6 +279,18 @@ async def run_import_job(import_job_id: str):
                 all_json_files = sorted(Path(p) for p in legacy if Path(p).exists())
                 logger.info("Import %s: loaded %d files from legacy Redis key",
                            import_job_id, len(all_json_files))
+
+        # Maintenance: the file list is in memory now, so drop this job's disk
+        # handoff file (the ledger path never consumes it) and sweep stale
+        # orphans left by imports that never ran. Best-effort; never fatal.
+        try:
+            _il_dir = Path(settings.download_root) / ".import-lists"
+            cleanup_import_list(_il_dir, import_job_id)
+            _pruned = prune_import_lists(_il_dir, max_age_seconds=86400)
+            if _pruned:
+                logger.info("Pruned %d stale .import-lists file(s)", _pruned)
+        except Exception:
+            logger.warning("import-list cleanup failed for %s", import_job_id, exc_info=True)
 
         # Group JSONs by work_id ("parse" stage — timed for observability)
         _parse_started = monotonic()
