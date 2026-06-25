@@ -337,6 +337,9 @@ def test_clear_all_deletes_curation_tables_before_works(monkeypatch):
         async def commit(self):
             pass
 
+        async def flush(self):
+            pass
+
     class FakeSearchService:
         def __init__(self, _db):
             pass
