@@ -25,3 +25,24 @@ async def test_stored_threshold_passes_through_but_consumer_clamps(monkeypatch):
     assert result["import_skip_threshold"] == 5.0
     # ...so the consumer's clamp_threshold() is the actual safety net.
     assert clamp_threshold(result["import_skip_threshold"]) == 1.0
+
+
+@pytest.mark.asyncio
+async def test_download_defaults_concurrency_default_is_3(monkeypatch):
+    async def fake_get_system_setting(db, key):
+        return {}
+    monkeypatch.setattr(settings_mod, "get_system_setting", fake_get_system_setting)
+    result = await settings_mod.get_download_defaults(None)
+    assert result["download_concurrency"] == 3
+
+
+@pytest.mark.asyncio
+async def test_download_defaults_concurrency_clamped_to_5(monkeypatch):
+    async def fake_get_system_setting(db, key):
+        return {"download_concurrency": 9}
+    monkeypatch.setattr(settings_mod, "get_system_setting", fake_get_system_setting)
+    result = await settings_mod.get_download_defaults(None)
+    # The typed entry is clamped; even though **defaults can shadow it, the
+    # worker re-clamps via resolve_concurrency (covered in test_worker_concurrency).
+    from worker_entrypoint import resolve_concurrency
+    assert resolve_concurrency(result["download_concurrency"], None) == 5

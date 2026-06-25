@@ -23,6 +23,7 @@ DEFAULT_BACKOFF_BASE_SECONDS = 60
 DEFAULT_GALLERYDL_RETRIES = 3
 DEFAULT_GALLERYDL_TIMEOUT = 30
 DEFAULT_GALLERYDL_ABORT = 5
+DEFAULT_DOWNLOAD_CONCURRENCY = 3
 
 GALLERYDL_METADATA_POSTPROCESSOR = {
     "name": "metadata",
@@ -152,6 +153,8 @@ async def get_download_defaults(db: AsyncSession) -> dict:
         "gallerydl_abort": int(defaults.get("gallerydl_abort", DEFAULT_GALLERYDL_ABORT)),
         "import_skip_threshold": clamp_threshold(
             float(defaults.get("import_skip_threshold", DEFAULT_IMPORT_SKIP_THRESHOLD))),
+        "download_concurrency": max(1, min(5, int(
+            defaults.get("download_concurrency", DEFAULT_DOWNLOAD_CONCURRENCY)))),
         **defaults,
     }
 

@@ -13,6 +13,45 @@ import time
 REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 
 
+def resolve_concurrency(db_value, argv_value, default=3, lo=1, hi=5):
+    """Pick the first usable concurrency value and clamp it to [lo, hi].
+
+    Precedence: DB setting -> CLI arg -> default. Non-numeric values are skipped.
+    """
+    for candidate in (db_value, argv_value, default):
+        if candidate is None:
+            continue
+        try:
+            n = int(candidate)
+        except (TypeError, ValueError):
+            continue
+        return max(lo, min(hi, n))
+    return default
+
+
+def _db_download_concurrency():
+    """Best-effort read of download_concurrency from the DB settings.
+
+    Returns None on any failure (DB down at boot, import error) so the caller
+    falls back to the CLI arg / default. Never raises.
+    """
+    try:
+        import asyncio
+        from app.database import async_session
+        from app.services.settings import get_download_defaults
+
+        async def _query():
+            async with async_session() as db:
+                defaults = await get_download_defaults(db)
+                return defaults.get("download_concurrency")
+
+        return asyncio.run(_query())
+    except Exception as exc:  # noqa: BLE001 - boot-time best effort
+        print(f"[worker_entrypoint] DB concurrency read failed ({exc}); using fallback",
+              file=sys.stderr)
+        return None
+
+
 def main():
     if len(sys.argv) < 2:
         print(f"Usage: {sys.argv[0]} <queue_name> [concurrency]", file=sys.stderr)
@@ -20,8 +59,24 @@ def main():
 
     queue = sys.argv[1]
     queues = queue.split(",") if "," in queue else [queue]
-    concurrency = int(sys.argv[2]) if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else 1
+    argv_concurrency = (
+        sys.argv[2]
+        if len(sys.argv) > 2 and not sys.argv[2].startswith("--")
+        else None
+    )
     with_scheduler = "--with-scheduler" in sys.argv[2:]
+
+    # The downloads worker pool is user-configurable (1-5, default 3) via the
+    # download_defaults.download_concurrency setting, applied on (re)start.
+    # Other queues (imports, operations) keep their CLI-supplied concurrency.
+    if queues and queues[0].startswith("downloads"):
+        concurrency = resolve_concurrency(_db_download_concurrency(), argv_concurrency, default=3)
+        print(f"[worker_entrypoint] downloads concurrency = {concurrency}", file=sys.stderr, flush=True)
+    else:
+        try:
+            concurrency = int(argv_concurrency) if argv_concurrency is not None else 1
+        except (TypeError, ValueError):
+            concurrency = 1
 
     procs: list[subprocess.Popen] = []
     running = True

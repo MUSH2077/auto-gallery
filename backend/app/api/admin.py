@@ -54,11 +54,16 @@ class SubscriptionDefaults(BaseModel):
 DEFAULT_SUB = {"default_sync_interval_hours": 6, "scheduler_scan_interval_minutes": 60, "scheduler_enabled": True, "schedule_mode": "interval", "scheduled_times": "", "timezone": "UTC", "auto_enable_sources": "pixiv"}
 
 class DownloadDefaults(BaseModel):
+    # extra="allow" preserves fields the frontend sends that aren't declared here
+    # (stall_timeout_seconds, gallerydl_*, import_skip_threshold). Without it,
+    # saving this page silently dropped those keys back to their defaults.
+    model_config = {"extra": "allow"}
     timeout_seconds: int = 600
     max_retries: int = 3
     retry_backoff_base_seconds: int = 60
     max_posts: int = 200
     skip_ai_generated: bool = False
+    download_concurrency: int = 3  # parallel download jobs, clamped to 1-5 on read
 
 class ProxySettings(BaseModel):
     http_proxy: str = ""
