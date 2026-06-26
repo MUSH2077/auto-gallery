@@ -28,6 +28,7 @@ function GridCard({
   selectable,
   selected,
   onToggleSelect,
+  index,
 }: {
   w: WorkListItem;
   onToggleFavorite: (id: string) => void;
@@ -37,6 +38,7 @@ function GridCard({
   selectable?: boolean;
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
+  index?: number;
 }) {
   const t = useT();
   const router = useRouter();
@@ -49,7 +51,11 @@ function GridCard({
   const nextPage = (e: React.MouseEvent) => { e.stopPropagation(); setPageIdx((pageIdx + 1) % assetIds.length); };
 
   return (
-    <div className={`bg-white dark:bg-slate-800 rounded-lg shadow overflow-hidden cursor-pointer hover:shadow-md transition-shadow group ${selected ? "ring-2 ring-[#0969da] dark:ring-[#58a6ff]" : ""}`} onClick={() => router.push(`/admin/works/${w.id}`)}>
+    <div
+      className={`card-interactive page-item overflow-hidden cursor-pointer group ${selected ? "ring-2 ring-[#0969da] dark:ring-[#58a6ff]" : ""}`}
+      style={{ "--delay": `${Math.min((index ?? 0) * 30, 300)}ms` } as React.CSSProperties}
+      onClick={() => router.push(`/admin/works/${w.id}`)}
+    >
       <div className="h-32 bg-gray-100 dark:bg-slate-700 flex items-center justify-center text-gray-400 text-xs overflow-hidden relative">
         <Img assetId={currentId} alt={w.title || ""} className="w-full h-full object-cover" />
         {selectable && (
@@ -497,9 +503,10 @@ function WorksContent() {
       {/* Grid View */}
       {works.data && works.data.items?.length > 0 && viewMode === "grid" && (
         <div className="overflow-x-auto grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 mb-6">
-          {works.data.items.map((w: WorkListItem) => (
+          {works.data.items.map((w: WorkListItem, i: number) => (
             <GridCard
               key={w.id}
+              index={i}
               w={w}
               trashMode={curationVisibility === "trashed"}
               selectable={curationVisibility === "visible"}
