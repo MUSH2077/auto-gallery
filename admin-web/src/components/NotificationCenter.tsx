@@ -507,7 +507,7 @@ export function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-2 max-h-[480px] w-80 overflow-hidden rounded-md border border-[#d8dee4] bg-white text-[#24292f] shadow-xl dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#e6edf3]">
+        <div className="popover absolute right-0 z-50 mt-2 max-h-[480px] w-80 overflow-hidden rounded-md border border-[#d8dee4] bg-white text-[#24292f] shadow-overlay dark:shadow-overlay-dark dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#e6edf3]">
           <div className="flex items-center justify-between border-b border-[#d8dee4] px-4 py-2.5 dark:border-[#30363d]">
             <span className="text-sm font-semibold">{t("notification.recent")}</span>
             <div className="flex items-center gap-3">
