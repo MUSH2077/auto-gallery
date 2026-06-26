@@ -23,6 +23,8 @@ export default function SettingsPage() {
   const cards = [
     { href: "/admin/settings/gallerydl", title: t("settings.gallerydl"), desc: t("settings.gallerydl.desc") },
     { href: "/admin/settings/scheduler-defaults", title: t("settings.scheduler_defaults"), desc: t("settings.scheduler_defaults.desc") },
+    { href: "/admin/settings/subscription-defaults", title: t("settings.subscription_defaults", "订阅默认值"), desc: t("settings.subscription_defaults.desc", "默认同步间隔与调度器行为") },
+    { href: "/admin/settings/download-defaults", title: t("settings.download_defaults", "下载任务默认值"), desc: t("settings.download_defaults.desc", "超时、重试、并行下载数等") },
     { href: "/admin/settings/dedup", title: t("settings.dedup"), desc: t("settings.dedup.desc") },
     { href: "/admin/settings/proxy", title: t("settings.proxy"), desc: t("settings.proxy.desc") },
     { href: "/admin/settings/auth-status", title: t("settings.auth"), desc: t("settings.auth.desc") },
