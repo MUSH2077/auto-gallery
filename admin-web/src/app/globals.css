@@ -260,4 +260,14 @@
   .animate-bar-grow {
     animation: barGrow 0.7s cubic-bezier(0.16, 1, 0.3, 1);
   }
+  /* Overlay enter (P3): dropdowns / menus / popovers fade + scale in instead
+     of popping. Exit stays instant for now (the quieter half — follow-up). */
+  @keyframes popIn {
+    from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .popover {
+    animation: popIn 120ms cubic-bezier(0.16, 1, 0.3, 1);
+    transform-origin: top;
+  }
 }

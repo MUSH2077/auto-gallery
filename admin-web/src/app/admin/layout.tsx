@@ -38,7 +38,7 @@ function UserMenu() {
         <span className="hidden sm:inline max-w-[100px] truncate">{user?.display_name || user?.username}</span>
       </button>
       {open && (
-        <div className="absolute right-0 mt-1 w-44 bg-white dark:bg-[#161b22] border border-[#d8dee4] dark:border-[#30363d] rounded-md shadow-lg z-50 text-[#24292f] dark:text-[#e6edf3] text-sm overflow-hidden">
+        <div className="popover absolute right-0 mt-1 w-44 bg-white dark:bg-[#161b22] border border-[#d8dee4] dark:border-[#30363d] rounded-md shadow-overlay dark:shadow-overlay-dark z-50 text-[#24292f] dark:text-[#e6edf3] text-sm overflow-hidden">
           <Link
             href="/admin/settings/profile"
             onClick={() => setOpen(false)}
