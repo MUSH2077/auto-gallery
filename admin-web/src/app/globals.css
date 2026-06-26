@@ -90,6 +90,14 @@
     }
   }
 
+  /* Touch ergonomics (P2): comfortable 44px hit areas on coarse pointers,
+     keeping the dense 32px desktop sizing for mouse users. */
+  @media (pointer: coarse) {
+    .btn-primary, .btn-ghost, .btn-danger, .btn-icon, .clickable,
+    .input, .select, .textarea { min-height: 44px; }
+    .btn-icon { min-width: 44px; }
+  }
+
 @layer components {
   .card {
     @apply bg-white dark:bg-[#161b22]
@@ -212,6 +220,14 @@
   }
   .divider {
     @apply border-t border-[#d8dee4] dark:border-[#30363d];
+  }
+  /* Page containers (P2): consistent gutters + max line-length across pages.
+     Adopt opportunistically in place of per-page max-width / padding wrappers. */
+  .page {
+    @apply mx-auto w-full max-w-7xl px-4 py-6 sm:px-6;
+  }
+  .page-narrow {
+    @apply mx-auto w-full max-w-3xl px-4 py-6 sm:px-6;
   }
   .section-title {
     @apply text-base font-semibold tracking-normal;
