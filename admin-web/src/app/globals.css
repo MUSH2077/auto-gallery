@@ -70,6 +70,18 @@
 
   .btn-primary, .btn-ghost, .btn-danger, .btn-icon, .clickable { min-height: 32px; }
 
+  /* Tactile press (P3 motion primitive). Unlayered so it cleanly extends the
+     @layer components transition-property to include transform — no cancel. */
+  .btn-primary, .btn-ghost, .btn-danger, .btn-icon, .clickable {
+    transition-property: color, background-color, border-color, box-shadow, opacity, transform;
+    transition-duration: 150ms;
+    transition-timing-function: ease-out;
+  }
+  .btn-primary:active, .btn-ghost:active, .btn-danger:active, .btn-icon:active, .clickable:active {
+    transform: scale(0.97);
+  }
+  .no-press:active { transform: none; }
+
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
       animation-duration: 0.01ms !important;
@@ -88,11 +100,12 @@
     @apply card;
   }
   .card-interactive {
-    transition-property: background-color, border-color;
+    transition-property: background-color, border-color, transform, box-shadow;
     transition-duration: 150ms;
     transition-timing-function: ease-out;
     @apply card
-           hover:bg-[#f6f8fa] hover:border-[#0969da]/50
+           hover:bg-[#f6f8fa] hover:border-[#0969da]/50 hover:-translate-y-px hover:shadow-md
+           active:translate-y-0 active:scale-[0.99]
            dark:hover:bg-[#21262d] dark:hover:border-[#58a6ff]/50;
   }
   .btn-primary {
