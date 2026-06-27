@@ -54,17 +54,18 @@ jobs:
   dependency-review:
     name: Dependency review
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    # Only run where it can ENFORCE. Private repos need GitHub Advanced Security
+    # (+ Dependency Graph); without it the action errors. Gate the whole job on a
+    # repo variable so it is either skipped (off) or enforcing (on) — never
+    # silently passing on a real CVE (no continue-on-error fail-open).
+    # To turn the gate on: enable GHAS, then set repo variable GHAS_ENABLED=true.
+    if: github.event_name == 'pull_request' && vars.GHAS_ENABLED == 'true'
     permissions:
       contents: read
       pull-requests: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/dependency-review-action@v4
-        # Private repos without GitHub Advanced Security can't run dependency
-        # review (the action errors). Keep it report-only so it never blocks PRs;
-        # it activates automatically once Dependency Graph + GHAS are enabled.
-        continue-on-error: true
         with:
           fail-on-severity: high
 
