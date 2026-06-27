@@ -10,7 +10,7 @@ import Link from "next/link";
 function Toggle({ checked, onChange }: { checked: boolean; onChange: () => void }) {
   return (
     <button onClick={onChange}
-      className={"relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 " + (checked ? "bg-green-600" : "bg-gray-300 dark:bg-gray-600")}>
+      className={"relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 " + (checked ? "bg-green-600" : "bg-subtle")}>
       <span className={"inline-block h-4 w-4 transform rounded-full bg-white transition-transform " + (checked ? "translate-x-6" : "translate-x-1")} />
     </button>
   );
@@ -32,7 +32,7 @@ export default function DedupSettingsPage() {
   const current = local || settings.data?.dedup;
 
   if (settings.isError) return <main className="max-w-4xl mx-auto p-6"><ErrorState message={settings.error?.message || t("dedup.failed")} onRetry={() => settings.refetch()} /></main>;
-  if (!settings.data) return <main className="max-w-4xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 rounded-md bg-[#eaeef2] dark:bg-[#21262d] w-1/3" /><div className="h-64 rounded-md bg-[#eaeef2] dark:bg-[#21262d]" /></div></main>;
+  if (!settings.data) return <main className="max-w-4xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 rounded-md bg-subtle dark:bg-subtle w-1/3" /><div className="h-64 rounded-md bg-subtle dark:bg-subtle" /></div></main>;
   if (!local && settings.data.dedup) setLocal({ ...settings.data.dedup });
 
   const toggle = (key: keyof DedupSettings) => {
@@ -57,10 +57,10 @@ export default function DedupSettingsPage() {
               ["cross_source_enabled", t("dedup.cross_source.desc")],
               ["auto_merge", t("dedup.auto_merge.desc")],
             ] as [keyof DedupSettings, string][]).map(([key, desc]) => (
-              <div key={key} className="flex items-center justify-between py-3.5 border-b dark:border-slate-700 last:border-0">
+              <div key={key} className="flex items-center justify-between py-3.5 border-b border-border last:border-0">
                 <div>
                   <span className="font-medium text-sm dark:text-white">{t("dedup." + key as any)}</span>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{desc}</p>
+                  <p className="text-xs text-muted mt-0.5">{desc}</p>
                 </div>
                 <Toggle checked={!!current[key]} onChange={() => toggle(key)} />
               </div>
@@ -69,18 +69,18 @@ export default function DedupSettingsPage() {
             <div className="flex items-center justify-between py-3.5">
               <div>
                 <span className="font-medium text-sm dark:text-white">{t("dedup.phash")}</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{t("dedup.phash.desc")}</p>
+                <p className="text-xs text-muted mt-0.5">{t("dedup.phash.desc")}</p>
               </div>
               <div className="flex items-center gap-1">
                 <input type="number" min={0} max={64} value={current.phash_threshold}
                   onChange={(e) => setLocal({ ...current, phash_threshold: parseInt(e.target.value) || 0 })}
                   className="input w-16 px-2 py-1.5 text-center font-mono" />
-                <span className="text-xs text-gray-500 dark:text-gray-400 pr-2">bits</span>
+                <span className="text-xs text-muted pr-2">bits</span>
               </div>
             </div>
           </div>
 
-          <div className="mt-4 rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm text-[#9a6700] dark:border-[#d29922]/30 dark:bg-[#d29922]/15 dark:text-[#f2cc60]">
+          <div className="mt-4 rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-[#f2cc60]">
             <strong>&#9888; {t("dedup.warning")}</strong>
             {current.auto_merge && <span className="block mt-1 text-red-600 dark:text-red-400 font-medium">{t("dedup.warning_auto")}</span>}
           </div>

@@ -68,10 +68,10 @@ function JobLifecycle({ status }: { status: string }) {
             <span
               title={t(`jobs.lifecycle_${step}`, step)}
               className={`h-2 w-2 shrink-0 rounded-full ${
-                danger ? "bg-[#cf222e]" : active ? "animate-pulse bg-[#0969da]" : done ? "bg-[#1a7f37]" : "bg-[#d8dee4] dark:bg-[#30363d]"
+                danger ? "bg-danger" : active ? "animate-pulse bg-accent" : done ? "bg-success" : "bg-border dark:bg-border"
               }`}
             />
-            {index < steps.length - 1 && <span className={`h-px flex-1 ${done ? "bg-[#1a7f37]" : "bg-[#d8dee4] dark:bg-[#30363d]"}`} />}
+            {index < steps.length - 1 && <span className={`h-px flex-1 ${done ? "bg-success" : "bg-border dark:bg-border"}`} />}
           </div>
         );
       })}
@@ -83,7 +83,7 @@ function ErrorExcerpt({ value }: { value?: string | null }) {
   if (!value) return null;
   const firstLine = value.split("\n").find(Boolean) || value;
   return (
-    <div className="mt-1 line-clamp-1 rounded-md border border-[#cf222e]/20 bg-[#ffebe9] px-2 py-1 text-xs text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">
+    <div className="mt-1 line-clamp-1 rounded-md border border-danger/20 bg-[#ffebe9] px-2 py-1 text-xs text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger">
       {firstLine.slice(0, 180)}
     </div>
   );
@@ -96,7 +96,7 @@ function shortId(id?: string | null) {
 function JsonBlock({ value }: { value: unknown }) {
   if (!value) return null;
   return (
-    <pre className="max-h-64 overflow-auto rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-3 font-mono text-xs whitespace-pre-wrap dark:border-[#30363d] dark:bg-[#0d1117]">
+    <pre className="max-h-64 overflow-auto rounded-md border border-border bg-subtle p-3 font-mono text-xs whitespace-pre-wrap dark:border-border dark:bg-canvas">
       {JSON.stringify(value, null, 2)}
     </pre>
   );
@@ -104,8 +104,8 @@ function JsonBlock({ value }: { value: unknown }) {
 
 function DetailRow({ label, value }: { label: string; value?: ReactNode }) {
   return (
-    <div className="grid grid-cols-[120px_minmax(0,1fr)] gap-3 border-b border-[#d8dee4] py-2 text-sm last:border-b-0 dark:border-[#30363d]">
-      <dt className="text-xs font-medium uppercase text-[#57606a] dark:text-[#8b949e]">{label}</dt>
+    <div className="grid grid-cols-[120px_minmax(0,1fr)] gap-3 border-b border-border py-2 text-sm last:border-b-0 dark:border-border">
+      <dt className="text-xs font-medium uppercase text-muted">{label}</dt>
       <dd className="min-w-0 break-all">{value || "—"}</dd>
     </div>
   );
@@ -157,16 +157,16 @@ function JobDetailDrawer({
   const error = kind === "download" ? download.error : importJob.error;
 
   return (
-    <aside className="fixed inset-y-0 right-0 z-40 flex w-full max-w-xl flex-col border-l border-[#d8dee4] bg-white shadow-xl dark:border-[#30363d] dark:bg-[#161b22]" aria-label={t("jobs.detail_title")}>
-      <div className="flex items-center justify-between border-b border-[#d8dee4] px-4 py-3 dark:border-[#30363d]">
+    <aside className="fixed inset-y-0 right-0 z-40 flex w-full max-w-xl flex-col border-l border-border bg-white shadow-xl dark:border-border dark:bg-surface" aria-label={t("jobs.detail_title")}>
+      <div className="flex items-center justify-between border-b border-border px-4 py-3 dark:border-border">
         <div className="min-w-0">
           <div className="text-sm font-semibold">{kind === "download" ? t("jobs.download_detail") : t("jobs.import_detail")}</div>
-          <div className="font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{shortId(id)}</div>
+          <div className="font-mono text-xs text-muted">{shortId(id)}</div>
         </div>
         <button onClick={onClose} className="btn-icon border-0 text-lg leading-none" aria-label={t("common.close")}>×</button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-4">
-        {loading && <div className="h-24 animate-pulse rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />}
+        {loading && <div className="h-24 animate-pulse rounded-md bg-subtle dark:bg-subtle" />}
         {error && <ErrorState message={(error as Error).message} onRetry={() => (kind === "download" ? download.refetch() : importJob.refetch())} />}
 
         {kind === "download" && dl && (
@@ -177,13 +177,13 @@ function JobDetailDrawer({
               {dl.status === "paused" && <button onClick={() => onResumeDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.resume")}</button>}
               <button onClick={() => onDeleteDownload(dl.id)} className="btn-danger text-xs">{t("jobs.del")}</button>
             </div>
-            <dl className="rounded-md border border-[#d8dee4] px-3 dark:border-[#30363d]">
+            <dl className="rounded-md border border-border px-3 dark:border-border">
               <DetailRow label={t("jobs.status")} value={statusLabel(t, dl.status)} />
               <DetailRow label={t("jobs.source")} value={<span className="inline-flex items-center gap-2"><SourceBadge source={dl.source} />{dl.source}</span>} />
               <DetailRow label={t("jobs.source_url")} value={dl.source_url} />
-              <DetailRow label={t("jobs.creator")} value={dl.creator_id ? <Link href={`/admin/creators/${dl.creator_id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{dl.creator_name || shortId(dl.creator_id)}</Link> : dl.creator_name} />
-              <DetailRow label={t("jobs.subscription")} value={dl.subscription_id ? <Link href={`/admin/subscriptions/${dl.subscription_id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{dl.subscription_name || shortId(dl.subscription_id)}</Link> : undefined} />
-              <DetailRow label={t("jobs.repository")} value={dl.subscription_source_id ? <Link href={`/admin/repositories/${dl.subscription_source_id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{shortId(dl.subscription_source_id)}</Link> : undefined} />
+              <DetailRow label={t("jobs.creator")} value={dl.creator_id ? <Link href={`/admin/creators/${dl.creator_id}`} className="text-accent hover:underline dark:text-accent">{dl.creator_name || shortId(dl.creator_id)}</Link> : dl.creator_name} />
+              <DetailRow label={t("jobs.subscription")} value={dl.subscription_id ? <Link href={`/admin/subscriptions/${dl.subscription_id}`} className="text-accent hover:underline dark:text-accent">{dl.subscription_name || shortId(dl.subscription_id)}</Link> : undefined} />
+              <DetailRow label={t("jobs.repository")} value={dl.subscription_source_id ? <Link href={`/admin/repositories/${dl.subscription_source_id}`} className="text-accent hover:underline dark:text-accent">{shortId(dl.subscription_source_id)}</Link> : undefined} />
               <DetailRow label={t("jobs.created")} value={fmt.dateTime(dl.created_at)} />
               <DetailRow label={t("jobs.updated")} value={fmt.dateTime(dl.updated_at)} />
               {dl.last_heartbeat_at && (
@@ -215,7 +215,7 @@ function JobDetailDrawer({
                     <span className={`text-xs px-2 py-0.5 rounded-full ${
                       errInfo.type === "auth" ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" :
                       errInfo.type === "timeout" || errInfo.type === "stall" ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400" :
-                      "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
+                      "bg-subtle text-muted dark:bg-subtle dark:text-muted"
                     }`}>{t(hintKey)}</span>
                   )}
                 </h3>
@@ -234,7 +234,7 @@ function JobDetailDrawer({
                     {t("dldefaults.stall_timeout.desc")}: <Link href="/admin/settings/download-defaults" className="underline">{t("dldefaults.title")} →</Link>
                   </p>
                 )}
-                <pre className="max-h-64 overflow-auto rounded-md border border-[#cf222e]/20 bg-[#ffebe9] p-3 font-mono text-xs whitespace-pre-wrap text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">{dl.error_log}</pre>
+                <pre className="max-h-64 overflow-auto rounded-md border border-danger/20 bg-[#ffebe9] p-3 font-mono text-xs whitespace-pre-wrap text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger">{dl.error_log}</pre>
               </section>
               );
             })()}
@@ -246,17 +246,17 @@ function JobDetailDrawer({
             )}
             <section>
               <h3 className="mb-2 text-sm font-semibold">{t("jobs.related_imports")}</h3>
-              {imports.isLoading && <div className="h-12 animate-pulse rounded bg-[#eaeef2] dark:bg-[#21262d]" />}
+              {imports.isLoading && <div className="h-12 animate-pulse rounded bg-subtle dark:bg-subtle" />}
               {imports.data?.length ? (
                 <div className="space-y-1">
                   {imports.data.map((job: ImportJob) => (
-                    <Link key={job.id} href={`/admin/jobs?tab=imports&download_job_id=${dl.id}&import_job=${job.id}`} className="flex items-center justify-between rounded-md border border-[#d8dee4] px-3 py-2 text-sm hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
+                    <Link key={job.id} href={`/admin/jobs?tab=imports&download_job_id=${dl.id}&import_job=${job.id}`} className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-sm hover:bg-subtle dark:border-border dark:hover:bg-subtle">
                       <span className="font-mono text-xs">{shortId(job.id)}</span>
                       <span>{statusLabel(t, job.status)}</span>
                     </Link>
                   ))}
                 </div>
-              ) : <p className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("jobs.no_imports_yet")}</p>}
+              ) : <p className="text-xs text-muted">{t("jobs.no_imports_yet")}</p>}
             </section>
           </div>
         )}
@@ -268,16 +268,16 @@ function JobDetailDrawer({
               <button onClick={() => onDeleteImport(im.id)} className="btn-danger text-xs">{t("jobs.del")}</button>
               <Link href={`/admin/jobs?tab=downloads&job=${im.download_job_id}`} className="btn-ghost text-xs">{t("jobs.open_download")}</Link>
             </div>
-            <dl className="rounded-md border border-[#d8dee4] px-3 dark:border-[#30363d]">
+            <dl className="rounded-md border border-border px-3 dark:border-border">
               <DetailRow label={t("jobs.status")} value={statusLabel(t, im.status)} />
-              <DetailRow label={t("jobs.download_job")} value={<Link href={`/admin/jobs?tab=downloads&job=${im.download_job_id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{shortId(im.download_job_id)}</Link>} />
+              <DetailRow label={t("jobs.download_job")} value={<Link href={`/admin/jobs?tab=downloads&job=${im.download_job_id}`} className="text-accent hover:underline dark:text-accent">{shortId(im.download_job_id)}</Link>} />
               <DetailRow label={t("jobs.created")} value={fmt.dateTime(im.created_at)} />
               <DetailRow label={t("jobs.updated")} value={fmt.dateTime(im.updated_at)} />
             </dl>
             {im.error_log && (
               <section>
                 <h3 className="mb-2 text-sm font-semibold">{t("jobs.error_log")}</h3>
-                <pre className="max-h-80 overflow-auto rounded-md border border-[#cf222e]/20 bg-[#ffebe9] p-3 font-mono text-xs whitespace-pre-wrap text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">{im.error_log}</pre>
+                <pre className="max-h-80 overflow-auto rounded-md border border-danger/20 bg-[#ffebe9] p-3 font-mono text-xs whitespace-pre-wrap text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger">{im.error_log}</pre>
               </section>
             )}
           </div>
@@ -574,8 +574,8 @@ function JobsContent() {
           <span
             className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs ${
               connected
-                ? "border-[#2da44e]/30 bg-[#dafbe1] text-[#1a7f37] dark:border-[#3fb950]/30 dark:bg-[#23863626] dark:text-[#3fb950]"
-                : "border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]"
+                ? "border-success/30 bg-[#dafbe1] text-success dark:border-success/30 dark:bg-[#23863626] dark:text-success"
+                : "border-border bg-subtle text-muted dark:border-border dark:bg-subtle dark:text-muted"
             }`}
             title={connected ? t("jobs.live_connected") : t("jobs.live_polling_title")}
           >
@@ -595,16 +595,16 @@ function JobsContent() {
         </div>
       )}
 
-      <div className="mb-4 flex flex-col gap-3 rounded-md border border-[#d8dee4] bg-white p-3 dark:border-[#30363d] dark:bg-[#161b22]">
+      <div className="mb-4 flex flex-col gap-3 rounded-md border border-border bg-white p-3 dark:border-border dark:bg-surface">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex gap-1 rounded-md bg-[#f6f8fa] p-1 dark:bg-[#21262d]">
-            <button onClick={() => updateParams({ tab: "downloads", status: null, import_job: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "downloads" ? "bg-white shadow-sm dark:bg-[#30363d]" : "text-[#57606a] dark:text-[#8b949e]"}`}>{t("jobs.download")}</button>
-            <button onClick={() => updateParams({ tab: "imports", status: null, job: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "imports" ? "bg-white shadow-sm dark:bg-[#30363d]" : "text-[#57606a] dark:text-[#8b949e]"}`}>{t("jobs.import")}</button>
+          <div className="flex gap-1 rounded-md bg-subtle p-1 dark:bg-subtle">
+            <button onClick={() => updateParams({ tab: "downloads", status: null, import_job: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "downloads" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("jobs.download")}</button>
+            <button onClick={() => updateParams({ tab: "imports", status: null, job: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "imports" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("jobs.import")}</button>
           </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs text-[#57606a] dark:text-[#8b949e]">
-            {activeFilterCount > 0 && <span className="rounded-full bg-[#ddf4ff] px-2 py-0.5 font-medium text-[#0969da] dark:bg-[#1f6feb26] dark:text-[#58a6ff]">{t("jobs.active_filters", { count: activeFilterCount })}</span>}
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+            {activeFilterCount > 0 && <span className="rounded-full bg-[#ddf4ff] px-2 py-0.5 font-medium text-accent dark:bg-[#1f6feb26] dark:text-accent">{t("jobs.active_filters", { count: activeFilterCount })}</span>}
             <span>{t("jobs.last_refreshed", { time: lastUpdated ? fmt.time(new Date(lastUpdated).toISOString()) : "—" })}</span>
-            {activeFilterCount > 0 && <button onClick={clearFilters} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("jobs.clear_filters")}</button>}
+            {activeFilterCount > 0 && <button onClick={clearFilters} className="text-accent hover:underline dark:text-accent">{t("jobs.clear_filters")}</button>}
           </div>
         </div>
 
@@ -619,8 +619,8 @@ function JobsContent() {
           <option value="">{t("jobs.filter_all_source")}</option>
           {SOURCE_OPTIONS.filter(Boolean).map(s => <option key={s} value={s}>{s}</option>)}
         </select>}
-        {subscriptionSourceId && <span className="rounded-md border border-[#d8dee4] px-2 py-1 text-xs font-mono dark:border-[#30363d]">{t("jobs.repository")} {shortId(subscriptionSourceId)}</span>}
-        {downloadJobId && <span className="rounded-md border border-[#d8dee4] px-2 py-1 text-xs font-mono dark:border-[#30363d]">{t("jobs.download_job")} {shortId(downloadJobId)}</span>}
+        {subscriptionSourceId && <span className="rounded-md border border-border px-2 py-1 text-xs font-mono dark:border-border">{t("jobs.repository")} {shortId(subscriptionSourceId)}</span>}
+        {downloadJobId && <span className="rounded-md border border-border px-2 py-1 text-xs font-mono dark:border-border">{t("jobs.download_job")} {shortId(downloadJobId)}</span>}
         {activeTab === "downloads" && <select value={`${dlSort}-${dlOrder}`} onChange={(e) => { const [k, o] = e.target.value.split("-"); updateParams({ sort: k === "created_at" && o === "desc" ? null : k, order: o === "desc" ? null : o }); }} className="select px-2 py-1.5 text-xs">
           <option value="created_at-desc">{t("jobs.sort_newest")}</option>
           <option value="created_at-asc">{t("jobs.sort_oldest")}</option>
@@ -630,12 +630,12 @@ function JobsContent() {
         {activeTab === "downloads" && <button onClick={handleSelectAll} className="btn-ghost text-xs">{selectAll ? t("common.deselect_all") : t("common.select_all")}</button>}
 
         {selected.size > 0 && (
-          <div className="ml-auto flex items-center gap-1 rounded-md border border-[#bf8700]/30 bg-[#fff8c5] px-3 py-1.5 dark:bg-[#bb800926]">
-            <span className="text-xs text-[#9a6700] dark:text-[#d29922]">{selected.size} {t("common.selected")}</span>
+          <div className="ml-auto flex items-center gap-1 rounded-md border border-warning/30 bg-[#fff8c5] px-3 py-1.5 dark:bg-[#bb800926]">
+            <span className="text-xs text-warning dark:text-warning">{selected.size} {t("common.selected")}</span>
             <button onClick={() => handleBatch("pause")} className="px-2 py-0.5 text-xs bg-yellow-500 text-white rounded hover:bg-yellow-600">{t("jobs.batch_pause")}</button>
             <button onClick={() => handleBatch("resume")} className="px-2 py-0.5 text-xs bg-green-500 text-white rounded hover:bg-green-600">{t("jobs.batch_resume")}</button>
             <button onClick={() => handleBatch("retry")} className="px-2 py-0.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600">{t("jobs.batch_retry")}</button>
-            <button onClick={() => handleBatch("cancel")} className="px-2 py-0.5 text-xs bg-gray-500 text-white rounded hover:bg-gray-600">{t("jobs.batch_cancel")}</button>
+            <button onClick={() => handleBatch("cancel")} className="px-2 py-0.5 text-xs bg-subtle text-white rounded hover:bg-subtle">{t("jobs.batch_cancel")}</button>
             <button onClick={() => handleBatch("delete")} className="px-2 py-0.5 text-xs bg-red-500 text-white rounded hover:bg-red-600">{t("jobs.batch_delete")}</button>
           </div>
         )}
@@ -644,7 +644,7 @@ function JobsContent() {
 
       {/* Download Jobs list */}
       {activeTab === "downloads" && <section className="mb-8">
-        {downloads.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-14 rounded-md bg-[#eaeef2] dark:bg-[#21262d] animate-pulse" />)}</div>}
+        {downloads.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-14 rounded-md bg-subtle dark:bg-subtle animate-pulse" />)}</div>}
         {downloads.error && <ErrorState message={(downloads.error as Error).message} onRetry={() => downloads.refetch()} />}
         {downloads.data && !downloads.data?.length && <EmptyState title={t("jobs.no_dl")} description={t("jobs.no_dl_desc")} />}
         {downloads.data && downloads.data?.length > 0 && (
@@ -657,21 +657,21 @@ function JobsContent() {
                 : null;
               return (
                 <div key={j.id}>
-                  <div onClick={() => openDownloadDetail(j.id)} className={`card flex cursor-pointer items-center gap-3 p-3 text-sm hover:border-[#0969da]/50 ${(() => { const cat = classifyJob(j.status, j.retry_count, 3); const cls = categoryBorderClass(cat); return cls ? `border-l-2 ${cls}` : ""; })()}`}>
-                    <input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="w-4 h-4 rounded border-gray-300 shrink-0" />
+                  <div onClick={() => openDownloadDetail(j.id)} className={`card flex cursor-pointer items-center gap-3 p-3 text-sm hover:border-accent/50 ${(() => { const cat = classifyJob(j.status, j.retry_count, 3); const cls = categoryBorderClass(cat); return cls ? `border-l-2 ${cls}` : ""; })()}`}>
+                    <input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="w-4 h-4 rounded border-border shrink-0" />
                     <div className="w-28 shrink-0"><StatusBadge status={j.status} /></div>
                     {j.operation_type && j.operation_type !== "download" && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 shrink-0">
                         {t(`jobs.op_${j.operation_type}`, j.operation_type)}
                       </span>
                     )}
-                    <span className="w-16 shrink-0 font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{j.id.slice(0, 8)}</span>
+                    <span className="w-16 shrink-0 font-mono text-xs text-muted">{j.id.slice(0, 8)}</span>
                     {j.source && <SourceBadge source={j.source} />}
                     <div className="min-w-[9rem] max-w-[12rem] shrink-0 leading-tight">
                       <Link
                         href={`/admin/subscriptions/${j.subscription_id}`}
                         onClick={(e) => e.stopPropagation()}
-                        className="block truncate text-xs font-medium text-[#0969da] hover:underline dark:text-[#58a6ff]"
+                        className="block truncate text-xs font-medium text-accent hover:underline dark:text-accent"
                         title={j.creator_name || j.subscription_name || j.subscription_id}
                       >
                         {j.creator_name || j.subscription_name || j.subscription_id.slice(0, 8)}
@@ -679,13 +679,13 @@ function JobsContent() {
                       <Link
                         href={`/admin/subscriptions/${j.subscription_id}`}
                         onClick={(e) => e.stopPropagation()}
-                        className="block truncate text-[11px] text-[#57606a] hover:underline dark:text-[#8b949e]"
+                        className="block truncate text-[11px] text-muted hover:underline dark:text-muted"
                         title={j.subscription_name || j.subscription_id}
                       >
                         {j.subscription_name || `${t("jobs.subscription")} ${j.subscription_id.slice(0, 8)}`}
                       </Link>
                     </div>
-                    <span className="min-w-0 flex-1 truncate text-xs text-[#57606a] dark:text-[#8b949e]" title={j.source_url}>{j.source_url}</span>
+                    <span className="min-w-0 flex-1 truncate text-xs text-muted" title={j.source_url}>{j.source_url}</span>
                     <RealProgressBar progress={progress} />
                     {active ? (
                       <Elapsed since={j.created_at} active={true} />
@@ -693,13 +693,13 @@ function JobsContent() {
                       <span className="text-xs text-blue-500 shrink-0 w-22 text-right font-medium">
                         ↻ {t("jobs.recovery_retry", { current: String(j.retry_count), max: "3" })}
                         {estimatedRetryBackoff(j.retry_count, 60) != null && (
-                          <span className="block text-[10px] text-gray-400">
+                          <span className="block text-[10px] text-muted">
                             {t("jobs.recovery_waiting", { seconds: String(estimatedRetryBackoff(j.retry_count, 60)) })}
                           </span>
                         )}
                       </span>
                     ) : (
-                      <span className="text-xs text-gray-400 shrink-0 w-20 text-right">
+                      <span className="text-xs text-muted shrink-0 w-20 text-right">
                         {j.retry_count > 0 && <span className="mr-1">↻{j.retry_count}</span>}
                         {fmt.time(j.created_at)}
                       </span>
@@ -723,7 +723,7 @@ function JobsContent() {
                   </div>
                   {j.error_log && expandedLog !== j.id && <ErrorExcerpt value={j.error_log} />}
                   {expandedLog === j.id && j.error_log && (
-                    <pre className="mt-1 max-h-48 overflow-auto rounded-md border border-[#cf222e]/20 bg-[#ffebe9] p-3 font-mono text-xs whitespace-pre-wrap text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">{j.error_log}</pre>
+                    <pre className="mt-1 max-h-48 overflow-auto rounded-md border border-danger/20 bg-[#ffebe9] p-3 font-mono text-xs whitespace-pre-wrap text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger">{j.error_log}</pre>
                   )}
                   {expandedImports === j.id && (
                     <ImportJobsList downloadJobId={j.id} />
@@ -740,10 +740,10 @@ function JobsContent() {
       {activeTab === "imports" && <section className="mb-8">
         <h3 className="text-base font-semibold mb-2 flex items-center gap-3">
           {t("jobs.import")}
-          <span className="text-xs font-normal text-[#57606a] dark:text-[#8b949e]">{imports.data?.total ?? 0} {t("common.items")}</span>
+          <span className="text-xs font-normal text-muted">{imports.data?.total ?? 0} {t("common.items")}</span>
         </h3>
-        {imports.isLoading && <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-12 rounded-md bg-[#eaeef2] dark:bg-[#21262d] animate-pulse" />)}</div>}
-        {imports.data?.items && !imports.data?.items.length && <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("jobs.no_im")}</p>}
+        {imports.isLoading && <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-12 rounded-md bg-subtle dark:bg-subtle animate-pulse" />)}</div>}
+        {imports.data?.items && !imports.data?.items.length && <p className="text-sm text-muted">{t("jobs.no_im")}</p>}
         {imports.data?.items && imports.data?.items.length > 0 && (
           <div className="overflow-x-auto pb-2">
           <div className="min-w-[720px] space-y-1">
@@ -753,12 +753,12 @@ function JobsContent() {
                 ? importProgress[j.id] || (j.progress_data as JobProgress | null) || fallbackProgress(j.progress_stage || j.status)
                 : null;
               return (
-                <div key={j.id} onClick={() => openImportDetail(j.id)} className={`card flex cursor-pointer items-center gap-3 p-3 text-sm hover:border-[#0969da]/50 ${active ? "border-l-2 border-l-[#0969da]" : j.status === "failed" ? "border-l-2 border-l-[#cf222e]" : ""}`}>
+                <div key={j.id} onClick={() => openImportDetail(j.id)} className={`card flex cursor-pointer items-center gap-3 p-3 text-sm hover:border-accent/50 ${active ? "border-l-2 border-l-[#0969da]" : j.status === "failed" ? "border-l-2 border-l-[#cf222e]" : ""}`}>
                   <div className="w-28 shrink-0"><StatusBadge status={j.status} /></div>
-                  <span className="font-mono text-xs text-gray-400 dark:text-gray-500 w-16 shrink-0">{j.id.slice(0, 8)}</span>
-                  <span className="font-mono text-xs text-gray-400 truncate flex-1">{j.download_job_id?.slice(0, 8) || "-"}</span>
+                  <span className="font-mono text-xs text-muted w-16 shrink-0">{j.id.slice(0, 8)}</span>
+                  <span className="font-mono text-xs text-muted truncate flex-1">{j.download_job_id?.slice(0, 8) || "-"}</span>
                   <RealProgressBar progress={progress} />
-                  <Link href={`/admin/jobs?tab=downloads&job=${j.download_job_id}`} onClick={(e) => e.stopPropagation()} className="text-xs text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("jobs.open_download")}</Link>
+                  <Link href={`/admin/jobs?tab=downloads&job=${j.download_job_id}`} onClick={(e) => e.stopPropagation()} className="text-xs text-accent hover:underline dark:text-accent">{t("jobs.open_download")}</Link>
                   <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                   {j.error_log && (
                     <button onClick={() => setExpandedLog(expandedLog === j.id ? null : j.id)} className="text-xs text-orange-500 hover:underline">{expandedLog === j.id ? "▲" : t("downloads.log")}</button>
@@ -803,13 +803,13 @@ function ImportJobsList({ downloadJobId }: { downloadJobId: string }) {
     queryKey: ["import-jobs", downloadJobId],
     queryFn: () => api.getDownloadJobImports(downloadJobId),
   });
-  if (imports.isLoading) return <div className="ml-8 mt-1 text-xs text-gray-400">{t("common.loading")}...</div>;
-  if (!imports.data?.length) return <div className="ml-8 mt-1 text-xs text-gray-400">{t("jobs.no_imports_yet")}</div>;
+  if (imports.isLoading) return <div className="ml-8 mt-1 text-xs text-muted">{t("common.loading")}...</div>;
+  if (!imports.data?.length) return <div className="ml-8 mt-1 text-xs text-muted">{t("jobs.no_imports_yet")}</div>;
   return (
     <div className="ml-8 mt-1 space-y-0.5">
       {imports.data?.map((imp: any) => (
-        <div key={imp.id} className="flex items-center gap-2 text-xs bg-gray-50 dark:bg-slate-700/50 rounded px-2 py-1">
-          <span className="font-mono text-gray-400">{imp.id.slice(0, 8)}</span>
+        <div key={imp.id} className="flex items-center gap-2 text-xs bg-subtle rounded px-2 py-1">
+          <span className="font-mono text-muted">{imp.id.slice(0, 8)}</span>
           <StatusBadge status={imp.status} className="px-2 py-0 text-[10px]" />
           {imp.error_log && <span className="text-orange-500 truncate max-w-xs">{imp.error_log.slice(0, 100)}</span>}
         </div>

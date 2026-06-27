@@ -30,7 +30,7 @@ function contentBadgeColor(content: string): string {
     "download-archives": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
     "library-metadata": "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400",
   };
-  return colors[content] || "bg-gray-100 text-gray-700";
+  return colors[content] || "bg-subtle text-fg";
 }
 
 export default function BackupPage() {
@@ -130,7 +130,7 @@ export default function BackupPage() {
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-medium dark:text-white">{t("backup.create")}</h3>
           <div className="flex items-center gap-3">
-            <span className="text-xs text-gray-500 dark:text-gray-400">
+            <span className="text-xs text-muted">
               {t("backup.estimated_size")}: <span className="font-mono font-medium">{fmtKB(estTotal)}</span>
             </span>
             <button onClick={handleCreate} disabled={isCreating || selected.size === 0}
@@ -140,7 +140,7 @@ export default function BackupPage() {
           </div>
         </div>
 
-        <label className="flex items-center gap-2 mb-3 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+        <label className="flex items-center gap-2 mb-3 text-xs text-muted cursor-pointer">
           <input type="checkbox" aria-label="Select item" checked={selected.size === ALL_CONTENTS.length} onChange={toggleAll} className="rounded" />
           {t("backup.select_all")}
         </label>
@@ -156,16 +156,16 @@ export default function BackupPage() {
             const sk = keyMap[c] || c;
             return (
               <label key={c} className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                checked ? "border-slate-400 dark:border-slate-500 bg-slate-50 dark:bg-slate-700/30"
-                  : "border-gray-200 dark:border-slate-600 hover:border-gray-300 dark:hover:border-slate-500"}`}>
+                checked ? "border-border bg-subtle"
+                  : "border-border hover:border-border dark:hover:border-border"}`}>
                 <input type="checkbox" aria-label="Select item" checked={checked} onChange={() => toggle(c)} className="mt-0.5 rounded" />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="text-sm">{CONTENT_ICONS[c] || ""}</span>
                     <span className="text-sm font-medium dark:text-white">{t(`backup.item_${sk}`)}</span>
-                    {size !== undefined && <span className="text-xs text-gray-400 dark:text-gray-500 ml-auto">{fmtKB(size)}</span>}
+                    {size !== undefined && <span className="text-xs text-muted ml-auto">{fmtKB(size)}</span>}
                   </div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 ml-6">{t(`backup.item_${sk}_desc`)}</p>
+                  <p className="text-xs text-muted mt-0.5 ml-6">{t(`backup.item_${sk}_desc`)}</p>
                 </div>
               </label>
             );
@@ -176,19 +176,19 @@ export default function BackupPage() {
       {/* Existing Backups */}
       <div className="card p-6 mb-6">
         <h3 className="font-medium dark:text-white mb-4">{t("backup.list_title")}</h3>
-        {backups.isLoading && <div className="animate-pulse space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />)}</div>}
+        {backups.isLoading && <div className="animate-pulse space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-subtle dark:bg-subtle" />)}</div>}
         {backups.error && <ErrorState message={(backups.error as Error).message} onRetry={() => backups.refetch()} />}
         {backups.data?.backups && backups.data.backups.length === 0 && <EmptyState title={t("backup.no_backups")} description={t("backup.no_backups_desc")} />}
         {backups.data?.backups && backups.data.backups.length > 0 && (
           <div className="space-y-2">
             {backups.data.backups.map((b) => (
-              <div key={b.filename} className="flex items-start justify-between p-3 bg-gray-50 dark:bg-slate-700/50 rounded-lg text-sm">
+              <div key={b.filename} className="flex items-start justify-between p-3 bg-subtle rounded-lg text-sm">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-medium dark:text-white font-mono text-xs">{b.filename}</span>
-                    {b.version && <span className="text-[10px] text-gray-400 dark:text-gray-500">{t("backup.manifest_version")} {b.version}</span>}
+                    {b.version && <span className="text-[10px] text-muted">{t("backup.manifest_version")} {b.version}</span>}
                   </div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{b.size_mb} MB &middot; {new Date(b.created_at).toLocaleString()}</div>
+                  <div className="text-xs text-muted mt-1">{b.size_mb} MB &middot; {new Date(b.created_at).toLocaleString()}</div>
                   {b.contents && b.contents.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1.5">
                       {b.contents.map((c: string) => (
@@ -212,7 +212,7 @@ export default function BackupPage() {
       {/* Restore */}
       <div className="card p-6">
         <h3 className="font-medium dark:text-white mb-1">{t("backup.restore_title")}</h3>
-        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">{t("backup.restore_desc")}</p>
+        <p className="text-xs text-muted mb-4">{t("backup.restore_desc")}</p>
         <input ref={fileRef} type="file" accept=".tar.gz" className="hidden" onChange={handleFileSelected} />
         <button onClick={handleRestoreClick} disabled={isRestoring}
           className="btn-danger">

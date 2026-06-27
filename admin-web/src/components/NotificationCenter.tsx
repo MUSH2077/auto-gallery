@@ -507,8 +507,8 @@ export function NotificationBell() {
       </button>
 
       {open && (
-        <div className="popover absolute right-0 z-50 mt-2 max-h-[480px] w-80 overflow-hidden rounded-md border border-[#d8dee4] bg-white text-[#24292f] shadow-overlay dark:shadow-overlay-dark dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#e6edf3]">
-          <div className="flex items-center justify-between border-b border-[#d8dee4] px-4 py-2.5 dark:border-[#30363d]">
+        <div className="popover absolute right-0 z-50 mt-2 max-h-[480px] w-80 overflow-hidden rounded-md border border-border bg-white text-fg shadow-overlay dark:shadow-overlay-dark dark:border-border dark:bg-surface dark:text-fg">
+          <div className="flex items-center justify-between border-b border-border px-4 py-2.5 dark:border-border">
             <span className="text-sm font-semibold">{t("notification.recent")}</span>
             <div className="flex items-center gap-3">
               <button onClick={() => { setOpen(false); router.push("/admin/notifications"); }}
@@ -517,7 +517,7 @@ export function NotificationBell() {
               </button>
               {(items.length > 0 || batchJob || operationJob) && (
                 <button onClick={() => { clearRecent(); }}
-                  className="text-xs text-[#57606a] transition-colors hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3]">
+                  className="text-xs text-muted transition-colors hover:text-fg dark:text-muted dark:hover:text-fg">
                   {t("notification.clear_all")}
                 </button>
               )}
@@ -525,13 +525,13 @@ export function NotificationBell() {
           </div>
           <div className="overflow-y-auto max-h-[420px]">
             {!hasRecent ? (
-              <div className="px-4 py-8 text-center text-sm text-[#57606a] dark:text-[#8b949e]">
+              <div className="px-4 py-8 text-center text-sm text-muted">
                 {t("notification.empty")}
               </div>
             ) : (
               <>
                 {batchJob && (
-                  <div className="cursor-pointer border-b border-[#d8dee4] px-4 py-2.5 transition-colors hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]"
+                  <div className="cursor-pointer border-b border-border px-4 py-2.5 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle"
                     onClick={() => { setOpen(false); router.push("/admin/reference/danbooru"); }}>
                     <div className="flex items-start gap-2.5">
                       <div className="mt-0.5">{statusIcon(batchJob.status)}</div>
@@ -544,26 +544,26 @@ export function NotificationBell() {
                         )}
                         {batchJob.progress && (
                           <>
-                            <p className="mt-0.5 text-xs text-[#57606a] dark:text-[#8b949e]">
+                            <p className="mt-0.5 text-xs text-muted">
                               {batchJob.progress.current}/{batchJob.progress.total} · {batchJob.progress.imported} imported
                             </p>
-                            <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
+                            <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-subtle dark:bg-border">
                               <div className="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
                                 style={{ width: `${(batchJob.progress.current / batchJob.progress.total) * 100}%` }} />
                             </div>
                           </>
                         )}
                         {batchJob.result && (
-                          <p className="mt-0.5 text-xs text-[#57606a] dark:text-[#8b949e]">
+                          <p className="mt-0.5 text-xs text-muted">
                             Done: {batchJob.result.imported_count || batchJob.result.imported?.length || 0} imported
                           </p>
                         )}
-                        <span className="text-[10px] text-[#57606a] dark:text-[#8b949e]">{timeAgo(batchJob.startedAt)}</span>
+                        <span className="text-[10px] text-muted">{timeAgo(batchJob.startedAt)}</span>
                       </div>
                       {batchJob.status !== "running" && (
                         <button
                           onClick={(e) => { e.stopPropagation(); clearBatchJob(); }}
-                          className="mt-0.5 shrink-0 text-[#8b949e] hover:text-[#57606a] dark:hover:text-[#e6edf3]"
+                          className="mt-0.5 shrink-0 text-muted hover:text-muted dark:hover:text-fg"
                           aria-label="Dismiss"
                         >
                           <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
@@ -575,7 +575,7 @@ export function NotificationBell() {
                   </div>
                 )}
                 {operationJob && (
-                  <div className="cursor-pointer border-b border-[#d8dee4] px-4 py-2.5 transition-colors hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]"
+                  <div className="cursor-pointer border-b border-border px-4 py-2.5 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle"
                     onClick={() => {
                       setOpen(false);
                       router.push(operationJob.kind === "danbooru-import-all" ? "/admin/reference/danbooru" : "/admin/data-mgmt");
@@ -588,27 +588,27 @@ export function NotificationBell() {
                           <p className="text-xs text-red-400 mt-0.5 truncate">{operationJob.error || "Operation failed"}</p>
                         )}
                         {operationJob.progress?.label && operationJob.status === "running" && (
-                          <p className="mt-0.5 text-xs text-[#57606a] dark:text-[#8b949e] truncate">
+                          <p className="mt-0.5 text-xs text-muted truncate">
                             {operationJob.progress.label}
                           </p>
                         )}
                         {operationJob.progress?.total && operationJob.progress.current !== undefined && (
-                          <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
+                          <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-subtle dark:bg-border">
                             <div className="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
                               style={{ width: `${(operationJob.progress.current / operationJob.progress.total) * 100}%` }} />
                           </div>
                         )}
                         {operationJob.result && (
-                          <p className="mt-0.5 text-xs text-[#57606a] dark:text-[#8b949e] truncate">
+                          <p className="mt-0.5 text-xs text-muted truncate">
                             {operationResultMessage(operationJob)}
                           </p>
                         )}
-                        <span className="text-[10px] text-[#57606a] dark:text-[#8b949e]">{timeAgo(operationJob.startedAt)}</span>
+                        <span className="text-[10px] text-muted">{timeAgo(operationJob.startedAt)}</span>
                       </div>
                       {operationJob.status !== "running" && (
                         <button
                           onClick={(e) => { e.stopPropagation(); clearOperationJob(); }}
-                          className="mt-0.5 shrink-0 text-[#8b949e] hover:text-[#57606a] dark:hover:text-[#e6edf3]"
+                          className="mt-0.5 shrink-0 text-muted hover:text-muted dark:hover:text-fg"
                           aria-label="Dismiss"
                         >
                           <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
@@ -621,25 +621,25 @@ export function NotificationBell() {
                 )}
                 {items.map((a) => (
                   <div key={a.id}
-                    className={`border-b border-[#d8dee4] px-4 py-2.5 transition-colors hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d] ${a.link ? "cursor-pointer" : "cursor-default"}`}
+                    className={`border-b border-border px-4 py-2.5 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle ${a.link ? "cursor-pointer" : "cursor-default"}`}
                     onClick={() => { if (a.link) { setOpen(false); router.push(a.link); } }}>
                     <div className="flex items-start gap-2.5">
                       <div className="mt-0.5">{statusIcon(a.status)}</div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-2">
                           <p className={`text-sm truncate ${a.status === "running" ? "font-medium" : ""}`}>{a.title}</p>
-                          <span className="shrink-0 text-[10px] text-[#57606a] dark:text-[#8b949e]">{timeAgo(a.timestamp)}</span>
+                          <span className="shrink-0 text-[10px] text-muted">{timeAgo(a.timestamp)}</span>
                         </div>
-                        {a.message && <p className="mt-0.5 truncate text-xs text-[#57606a] dark:text-[#8b949e]">{a.message}</p>}
+                        {a.message && <p className="mt-0.5 truncate text-xs text-muted">{a.message}</p>}
                         {a.status === "running" && a.progress !== undefined && (
-                          <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
+                          <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-subtle dark:bg-border">
                             <div className="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
                               style={{ width: `${a.progress}%` }} />
                           </div>
                         )}
                       </div>
                       <button onClick={(e) => { e.stopPropagation(); removeActivity(a.id); }}
-                        className="mt-0.5 shrink-0 text-[#8b949e] hover:text-[#57606a] dark:hover:text-[#e6edf3]" aria-label="Dismiss">
+                        className="mt-0.5 shrink-0 text-muted hover:text-muted dark:hover:text-fg" aria-label="Dismiss">
                         <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                           <path d="M18 6L6 18M6 6l12 12" />
                         </svg>

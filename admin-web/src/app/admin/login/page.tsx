@@ -34,7 +34,7 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#f6f8fa] px-4 py-10 text-[#24292f] dark:bg-[#0d1117] dark:text-[#e6edf3]">
+    <main className="flex min-h-screen items-center justify-center bg-subtle px-4 py-10 text-fg dark:bg-canvas dark:text-fg">
       <div className="absolute right-4 top-4 flex items-center gap-2">
         <LangToggle />
         <ThemeToggle />
@@ -42,11 +42,11 @@ export default function LoginPage() {
 
       <section className="w-full max-w-sm">
         <div className="mb-6 text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-md border border-[#d8dee4] bg-white text-lg font-semibold tracking-tight shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-md border border-border bg-white text-lg font-semibold tracking-tight shadow-sm dark:border-border dark:bg-surface">
             AG
           </div>
           <h1 className="text-2xl font-semibold tracking-normal">auto-gallery</h1>
-          <p className="mt-1 text-sm text-[#57606a] dark:text-[#8b949e]">{t("auth.admin_panel")}</p>
+          <p className="mt-1 text-sm text-muted">{t("auth.admin_panel")}</p>
         </div>
 
         <form onSubmit={handleSubmit} className="card p-5">
@@ -80,7 +80,7 @@ export default function LoginPage() {
             </div>
 
             {error && (
-              <div className="rounded-md border border-[#cf222e]/30 bg-[#ffebe9] px-3 py-2 text-sm text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">
+              <div className="rounded-md border border-danger/30 bg-[#ffebe9] px-3 py-2 text-sm text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger">
                 {error}
               </div>
             )}
@@ -91,7 +91,7 @@ export default function LoginPage() {
           </div>
         </form>
 
-        <p className="mt-5 text-center text-xs text-[#57606a] dark:text-[#8b949e]">
+        <p className="mt-5 text-center text-xs text-muted">
           v0.1.0 · secure admin access
         </p>
       </section>

@@ -33,14 +33,14 @@ function BatchJobCard({ job, t }: { job: BatchJobState; t: (k: string) => string
             </h3>
             {statusBadge()}
           </div>
-          <p className="text-xs text-[#57606a] dark:text-[#8b949e]">{timeStr}</p>
+          <p className="text-xs text-muted">{timeStr}</p>
           {job.progress && (
             <div className="mt-3">
-              <div className="mb-1 flex justify-between text-xs text-[#57606a] dark:text-[#8b949e]">
+              <div className="mb-1 flex justify-between text-xs text-muted">
                 <span>{job.progress.current}/{job.progress.total}</span>
                 <span>{job.progress.imported} imported</span>
               </div>
-              <div className="h-2 w-full rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
+              <div className="h-2 w-full rounded-full bg-subtle dark:bg-border">
                 <div className="bg-blue-500 h-2 rounded-full transition-all duration-500"
                   style={{ width: `${(job.progress.current / job.progress.total) * 100}%` }} />
               </div>
@@ -60,9 +60,9 @@ function BatchJobCard({ job, t }: { job: BatchJobState; t: (k: string) => string
                 <div className="text-lg font-bold text-red-700 dark:text-red-400">{job.result.not_found_count || job.result.not_found?.length || 0}</div>
                 <div className="text-[10px] text-red-600">{t("danbooru.batch_result_not_found")}</div>
               </div>
-              <div className="rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-2 text-center dark:border-[#30363d] dark:bg-[#0d1117]">
-                <div className="text-lg font-bold text-[#57606a] dark:text-[#8b949e]">{job.result.error_count || job.result.errors?.length || 0}</div>
-                <div className="text-[10px] text-[#57606a] dark:text-[#8b949e]">{t("danbooru.batch_result_errors")}</div>
+              <div className="rounded-md border border-border bg-subtle p-2 text-center dark:border-border dark:bg-canvas">
+                <div className="text-lg font-bold text-muted">{job.result.error_count || job.result.errors?.length || 0}</div>
+                <div className="text-[10px] text-muted">{t("danbooru.batch_result_errors")}</div>
               </div>
             </div>
           )}
@@ -108,14 +108,14 @@ export default function NotificationsPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <h3 className="text-sm font-semibold dark:text-white">{a.title}</h3>
-                    {a.status === "running" && <span className="badge border-[#ddf4ff] bg-[#ddf4ff] text-[#0969da] dark:border-[#1f6feb]/30 dark:bg-[#1f6feb]/15 dark:text-[#58a6ff] animate-pulse">{t("notification.running")}</span>}
-                    {a.status === "completed" && <span className="badge border-[#dafbe1] bg-[#dafbe1] text-[#1a7f37] dark:border-[#238636]/30 dark:bg-[#238636]/15 dark:text-[#56d364]">{t("notification.completed")}</span>}
-                    {a.status === "error" && <span className="badge border-[#ffebe9] bg-[#ffebe9] text-[#cf222e] dark:border-[#da3633]/30 dark:bg-[#da3633]/15 dark:text-[#ff7b72]">{t("notification.error")}</span>}
+                    {a.status === "running" && <span className="badge border-[#ddf4ff] bg-[#ddf4ff] text-accent dark:border-accent/30 dark:bg-accent/15 dark:text-accent animate-pulse">{t("notification.running")}</span>}
+                    {a.status === "completed" && <span className="badge border-[#dafbe1] bg-[#dafbe1] text-success dark:border-primary/30 dark:bg-primary/15 dark:text-[#56d364]">{t("notification.completed")}</span>}
+                    {a.status === "error" && <span className="badge border-[#ffebe9] bg-[#ffebe9] text-danger dark:border-danger/30 dark:bg-danger/15 dark:text-[#ff7b72]">{t("notification.error")}</span>}
                   </div>
-                  {a.message && <p className="mt-0.5 text-xs text-[#57606a] dark:text-[#8b949e]">{a.message}</p>}
-                  <p className="mt-1 text-[10px] text-[#57606a] dark:text-[#8b949e]">{new Date(a.timestamp).toLocaleString()}</p>
+                  {a.message && <p className="mt-0.5 text-xs text-muted">{a.message}</p>}
+                  <p className="mt-1 text-[10px] text-muted">{new Date(a.timestamp).toLocaleString()}</p>
                   {a.status === "running" && a.progress !== undefined && (
-                    <div className="mt-2 h-1.5 w-full rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
+                    <div className="mt-2 h-1.5 w-full rounded-full bg-subtle dark:bg-border">
                       <div className="bg-blue-500 h-1.5 rounded-full transition-all duration-500" style={{ width: `${a.progress}%` }} />
                     </div>
                   )}

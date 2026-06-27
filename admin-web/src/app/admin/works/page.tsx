@@ -11,7 +11,7 @@ function Img({ assetId, alt, className }: { assetId: string | undefined; alt: st
   const t = useT();
   const [err, setErr] = useState(false);
   if (!assetId || err) {
-    return <div className={`${className || ""} flex items-center justify-center text-gray-400 text-xs bg-gray-100 dark:bg-slate-700`}>{t("works.na")}</div>;
+    return <div className={`${className || ""} flex items-center justify-center text-muted text-xs bg-subtle`}>{t("works.na")}</div>;
   }
   return (
     <img src={api.mediaUrl(assetId, "thumb")} alt={alt} className={className} loading="lazy"
@@ -52,11 +52,11 @@ function GridCard({
 
   return (
     <div
-      className={`card-interactive page-item overflow-hidden cursor-pointer group ${selected ? "ring-2 ring-[#0969da] dark:ring-[#58a6ff]" : ""}`}
+      className={`card-interactive page-item overflow-hidden cursor-pointer group ${selected ? "ring-2 ring-accent dark:ring-accent" : ""}`}
       style={{ "--delay": `${Math.min((index ?? 0) * 30, 300)}ms` } as React.CSSProperties}
       onClick={() => router.push(`/admin/works/${w.id}`)}
     >
-      <div className="h-32 bg-gray-100 dark:bg-slate-700 flex items-center justify-center text-gray-400 text-xs overflow-hidden relative">
+      <div className="h-32 bg-subtle flex items-center justify-center text-muted text-xs overflow-hidden relative">
         <Img assetId={currentId} alt={w.title || ""} className="w-full h-full object-cover" />
         {selectable && (
           <label className="absolute left-1 top-1 z-20 flex h-7 w-7 items-center justify-center rounded bg-black/60 text-white shadow-sm">
@@ -99,7 +99,7 @@ function GridCard({
           </div>
         )}
         {trashMode && !selectable && (
-          <span className="absolute left-1 top-1 rounded bg-[#cf222e]/90 px-1.5 py-0.5 text-xs font-medium text-white">Trash</span>
+          <span className="absolute left-1 top-1 rounded bg-danger/90 px-1.5 py-0.5 text-xs font-medium text-white">Trash</span>
         )}
       </div>
       <div className="p-3">
@@ -115,13 +115,13 @@ function GridCard({
   </Link>
 )}
         </div>
-        <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+        <div className="text-xs text-muted mt-0.5">
           {w.posted_at ? new Date(w.posted_at).toLocaleDateString() : t("works.no_date")}
         </div>
         {trashMode && (
           <div className="mt-3 flex gap-2">
-            <button onClick={(e) => { e.stopPropagation(); onRestore?.(w.id); }} className="rounded border border-[#d8dee4] px-2 py-1 text-xs hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">{t("works.restore")}</button>
-            <button onClick={(e) => { e.stopPropagation(); onPurge?.(w.id); }} className="rounded bg-[#cf222e] px-2 py-1 text-xs text-white hover:bg-[#a40e26]">{t("works.purge")}</button>
+            <button onClick={(e) => { e.stopPropagation(); onRestore?.(w.id); }} className="rounded border border-border px-2 py-1 text-xs hover:bg-subtle dark:border-border dark:hover:bg-subtle">{t("works.restore")}</button>
+            <button onClick={(e) => { e.stopPropagation(); onPurge?.(w.id); }} className="rounded bg-danger px-2 py-1 text-xs text-white hover:bg-danger">{t("works.purge")}</button>
           </div>
         )}
       </div>
@@ -325,41 +325,41 @@ function WorksContent() {
       <div className="mb-3 flex flex-wrap items-center gap-2 md:hidden">
         <button
           onClick={() => setFiltersOpen((value) => !value)}
-          className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-sm font-medium dark:border-[#30363d]"
+          className="rounded-md border border-border px-3 py-1.5 text-sm font-medium dark:border-border"
           aria-expanded={filtersOpen}
           aria-controls="works-filter-panel"
         >
-          {t("works.filters")} {activeFilterCount > 0 && <span className="ml-1 rounded-full bg-[#0969da] px-1.5 py-0.5 text-xs text-white">{activeFilterCount}</span>}
+          {t("works.filters")} {activeFilterCount > 0 && <span className="ml-1 rounded-full bg-accent px-1.5 py-0.5 text-xs text-white">{activeFilterCount}</span>}
         </button>
         {activeFilterCount > 0 && (
-          <button onClick={clearFilters} className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-sm dark:border-[#30363d]">
+          <button onClick={clearFilters} className="rounded-md border border-border px-3 py-1.5 text-sm dark:border-border">
             {t("works.clear_filters")}
           </button>
         )}
       </div>
 
-      <div id="works-filter-panel" className={`${filtersOpen ? "flex" : "hidden"} mb-4 flex-col gap-2 rounded-md border border-[#d8dee4] bg-white p-3 dark:border-[#30363d] dark:bg-slate-800 md:flex md:flex-row md:flex-wrap md:items-center md:border-0 md:bg-transparent md:p-0 md:dark:bg-transparent`}>
-        <div className="flex gap-0.5 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
+      <div id="works-filter-panel" className={`${filtersOpen ? "flex" : "hidden"} mb-4 flex-col gap-2 rounded-md border border-border bg-white p-3 dark:border-border dark:bg-subtle md:flex md:flex-row md:flex-wrap md:items-center md:border-0 md:bg-transparent md:p-0 md:dark:bg-transparent`}>
+        <div className="flex gap-0.5 bg-subtle rounded p-0.5">
           <button onClick={() => updateParams({ curation: null })}
             aria-label={t("works.gallery")}
-            className={`px-2.5 py-1 text-xs rounded transition-colors ${curationVisibility === "visible" ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
+            className={`px-2.5 py-1 text-xs rounded transition-colors ${curationVisibility === "visible" ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
             {t("works.gallery")}
           </button>
           <button onClick={() => updateParams({ curation: "trashed" })}
             aria-label={t("works.trash")}
-            className={`px-2.5 py-1 text-xs rounded transition-colors ${curationVisibility === "trashed" ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
+            className={`px-2.5 py-1 text-xs rounded transition-colors ${curationVisibility === "trashed" ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
             {t("works.trash")}
           </button>
         </div>
 
         <input value={inputVal} onChange={(e) => setInputVal(e.target.value)}
           aria-label={t("works.search_title")}
-          placeholder={t("works.search_title")} className="border rounded px-3 py-1.5 text-sm w-48 dark:bg-slate-700 dark:text-white dark:border-slate-600" />
+          placeholder={t("works.search_title")} className="border rounded px-3 py-1.5 text-sm w-48 dark:bg-subtle dark:text-white dark:border-border" />
 
         {/* Source filter — dropdown */}
         <select value={sourceFilter} onChange={(e) => updateParams({ source: e.target.value || null })}
           aria-label={t("works.filter_source")}
-          className="border rounded px-2 py-1.5 text-xs dark:bg-slate-700 dark:text-white dark:border-slate-600">
+          className="border rounded px-2 py-1.5 text-xs dark:bg-subtle dark:text-white dark:border-border">
           {SOURCE_FILTERS.map((f) => (
             <option key={f.key} value={f.key}>{f.label}</option>
           ))}
@@ -369,7 +369,7 @@ function WorksContent() {
         {(creators.data?.items.length || 0) > 0 && (
           <select value={creatorFilter} onChange={(e) => updateParams({ creator: e.target.value || null })}
             aria-label={t("works.filter_creator")}
-            className="border rounded px-2 py-1.5 text-xs dark:bg-slate-700 dark:text-white dark:border-slate-600">
+            className="border rounded px-2 py-1.5 text-xs dark:bg-subtle dark:text-white dark:border-border">
             <option value="">{t("works.filter_all_creators")}</option>
             {creators.data?.items.map((c) => (
               <option key={c.id} value={c.id}>{c.display_name || c.name}</option>
@@ -378,11 +378,11 @@ function WorksContent() {
         )}
 
         {/* NSFW filter */}
-        <div className="flex gap-0.5 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
+        <div className="flex gap-0.5 bg-subtle rounded p-0.5">
           {NSFW_FILTERS.map((f) => (
             <button key={f.key} onClick={() => updateParams({ nsfw: f.key === "all" ? null : f.key })}
               aria-label={f.label}
-              className={`px-2.5 py-1 text-xs rounded transition-colors ${nsfwFilter === f.key ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
+              className={`px-2.5 py-1 text-xs rounded transition-colors ${nsfwFilter === f.key ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
               {f.label}
             </button>
           ))}
@@ -391,12 +391,12 @@ function WorksContent() {
         {/* Favorites filter */}
         <button onClick={() => updateParams({ fav: isFavoriteFilter ? null : "1" })}
           aria-label={t("works.filter_favorites")}
-          className={`px-2.5 py-1 text-xs rounded transition-colors ${isFavoriteFilter ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
+          className={`px-2.5 py-1 text-xs rounded transition-colors ${isFavoriteFilter ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 font-medium" : "text-muted hover:text-fg"}`}>
           {"★"} {t("works.filter_favorites")}
         </button>
 
         {/* AI filter */}
-        <div className="flex gap-0.5 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
+        <div className="flex gap-0.5 bg-subtle rounded p-0.5">
           {[
             { key: "all", label: t("works.ai_filter_all") },
             { key: "human", label: t("works.ai_filter_human") },
@@ -404,14 +404,14 @@ function WorksContent() {
           ].map((f) => (
             <button key={f.key} onClick={() => updateParams({ ai: f.key === "all" ? null : f.key })}
               aria-label={f.label}
-              className={`px-2.5 py-1 text-xs rounded transition-colors ${aiFilter === f.key ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
+              className={`px-2.5 py-1 text-xs rounded transition-colors ${aiFilter === f.key ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
               {f.label}
             </button>
           ))}
         </div>
 
         {/* Sort — click same field toggles direction */}
-        <div className="flex gap-0.5 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
+        <div className="flex gap-0.5 bg-subtle rounded p-0.5">
           {SORT_OPTIONS.map((s) => {
             const active = sortBy === s.key;
             const dir = active ? sortOrder : "desc";
@@ -423,7 +423,7 @@ function WorksContent() {
                   order: nextDir === "desc" ? null : nextDir,
                 })}
                 aria-label={t("works.sort_by", { sort: s.label })}
-                className={`px-2.5 py-1 text-xs rounded transition-colors ${active ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
+                className={`px-2.5 py-1 text-xs rounded transition-colors ${active ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
                 {s.label} {active ? (dir === "desc" ? "↓" : "↑") : ""}
               </button>
             );
@@ -433,21 +433,21 @@ function WorksContent() {
         <div className="flex-1" />
 
         {activeFilterCount > 0 && (
-          <button onClick={clearFilters} className="hidden rounded-md border border-[#d8dee4] px-2.5 py-1.5 text-xs hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d] md:inline-flex">
+          <button onClick={clearFilters} className="hidden rounded-md border border-border px-2.5 py-1.5 text-xs hover:bg-subtle dark:border-border dark:hover:bg-subtle md:inline-flex">
             {t("works.clear_filters")}
           </button>
         )}
 
         {/* View toggle */}
-        <div className="flex gap-0.5 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
+        <div className="flex gap-0.5 bg-subtle rounded p-0.5">
           <button onClick={() => updateParams({ view: null }, false)}
             aria-label={t("works.view_grid")}
-            className={`px-2.5 py-1 rounded text-xs ${viewMode === "grid" ? "bg-white dark:bg-slate-600 shadow-sm" : "text-gray-500"}`}>
+            className={`px-2.5 py-1 rounded text-xs ${viewMode === "grid" ? "bg-surface shadow-sm" : "text-muted"}`}>
             {t("works.view_grid")}
           </button>
           <button onClick={() => updateParams({ view: "list" }, false)}
             aria-label={t("works.view_list")}
-            className={`px-2.5 py-1 rounded text-xs ${viewMode === "list" ? "bg-white dark:bg-slate-600 shadow-sm" : "text-gray-500"}`}>
+            className={`px-2.5 py-1 rounded text-xs ${viewMode === "list" ? "bg-surface shadow-sm" : "text-muted"}`}>
             {t("works.view_list")}
           </button>
         </div>
@@ -469,7 +469,7 @@ function WorksContent() {
             </button>
           </SelectionBar>
         ) : (
-          <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-[#d8dee4] bg-white px-3 py-2 dark:border-[#30363d] dark:bg-[#161b22]" aria-live="polite">
+          <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-border bg-white px-3 py-2 dark:border-border dark:bg-surface" aria-live="polite">
             <button onClick={toggleSelectPage} className="btn-ghost text-xs">
               {pageAllSelected ? t("works.deselect_page") : t("works.select_page")}
             </button>
@@ -481,15 +481,15 @@ function WorksContent() {
       {works.isLoading && viewMode === "grid" && (
         <div className="overflow-x-auto grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
           {Array.from({ length: 10 }).map((_, i) => (
-            <div key={i} className="bg-white dark:bg-slate-800 rounded-lg shadow p-3 animate-pulse">
-              <div className="h-32 bg-gray-200 dark:bg-slate-700 rounded mb-2" />
-              <div className="h-3 bg-gray-200 dark:bg-slate-700 rounded w-3/4" />
+            <div key={i} className="bg-surface rounded-lg shadow p-3 animate-pulse">
+              <div className="h-32 bg-subtle rounded mb-2" />
+              <div className="h-3 bg-subtle rounded w-3/4" />
             </div>
           ))}
         </div>
       )}
       {works.isLoading && viewMode === "list" && (
-        <div className="space-y-1">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-12 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>
+        <div className="space-y-1">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-12 bg-subtle rounded animate-pulse" />)}</div>
       )}
 
       {/* Error */}
@@ -526,7 +526,7 @@ function WorksContent() {
       {works.data && works.data.items?.length > 0 && viewMode === "list" && (
         <div className="space-y-1 mb-6">
           {works.data.items.map((w: WorkListItem) => (
-            <div key={w.id} className={`bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 flex items-center gap-3 cursor-pointer hover:shadow-md transition-shadow ${selectedWorkIds.has(w.id) ? "ring-2 ring-[#0969da] dark:ring-[#58a6ff]" : ""}`} onClick={() => router.push(`/admin/works/${w.id}`)}>
+            <div key={w.id} className={`bg-surface rounded-lg shadow-sm p-3 flex items-center gap-3 cursor-pointer hover:shadow-md transition-shadow ${selectedWorkIds.has(w.id) ? "ring-2 ring-accent dark:ring-accent" : ""}`} onClick={() => router.push(`/admin/works/${w.id}`)}>
               {curationVisibility === "visible" && (
                 <input
                   type="checkbox"
@@ -534,20 +534,20 @@ function WorksContent() {
                   onClick={(e) => e.stopPropagation()}
                   onChange={(e) => { e.stopPropagation(); toggleSelectWork(w.id); }}
                   aria-label={t("works.select_work")}
-                  className="h-4 w-4 shrink-0 rounded border-gray-300"
+                  className="h-4 w-4 shrink-0 rounded border-border"
                 />
               )}
-              <div className="w-12 h-12 bg-gray-100 dark:bg-slate-700 rounded overflow-hidden shrink-0">
+              <div className="w-12 h-12 bg-subtle rounded overflow-hidden shrink-0">
                 <Img assetId={w.thumbnail_asset_id} alt={w.title || ""} className="w-full h-full object-cover" />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium dark:text-white truncate">{w.title || t("works.untitled")}</span>
                   {w.is_nsfw && <span className="text-xs bg-red-100 dark:bg-red-900/30 text-red-600 px-1 rounded">{t("works.nsfw_badge")}</span>}
-                  {w.asset_count > 1 && <span className="text-xs text-gray-400">{w.asset_count}p</span>}
+                  {w.asset_count > 1 && <span className="text-xs text-muted">{w.asset_count}p</span>}
                   {w.has_ugoira && <span className="text-xs bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 px-1 rounded">{t("works.gif_badge")}</span>}
                 </div>
-                <div className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                <div className="flex items-center gap-2 text-xs text-muted mt-0.5">
                   {w.source && <SourceBadge source={w.source} href={`/admin/works?source=${w.source}`} />}
                   {w.creator_name && w.creator_id && (
   <Link href={`/admin/creators/${w.creator_id}`} onClick={(e) => e.stopPropagation()} className="text-blue-600 hover:underline">{w.creator_name}</Link>
@@ -556,15 +556,15 @@ function WorksContent() {
                 </div>
               </div>
               <button onClick={(e) => { e.stopPropagation(); toggleFavorite.mutate(w.id); }}
-                className={`text-lg shrink-0 ${w.is_favorite ? "text-yellow-500" : "text-gray-300 dark:text-gray-600 hover:text-yellow-400"}`}
+                className={`text-lg shrink-0 ${w.is_favorite ? "text-yellow-500" : "text-muted hover:text-yellow-400"}`}
                 title={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}
                 aria-label={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}>
                 {w.is_favorite ? "★" : "☆"}
               </button>
               {curationVisibility === "trashed" && (
                 <div className="flex shrink-0 gap-2">
-                  <button onClick={(e) => { e.stopPropagation(); restoreWork.mutate(w.id); }} className="rounded border border-[#d8dee4] px-2 py-1 text-xs hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">{t("works.restore")}</button>
-                  <button onClick={(e) => { e.stopPropagation(); if (window.confirm(t("works.purge_confirm"))) purgeWork.mutate(w.id); }} className="rounded bg-[#cf222e] px-2 py-1 text-xs text-white hover:bg-[#a40e26]">{t("works.purge")}</button>
+                  <button onClick={(e) => { e.stopPropagation(); restoreWork.mutate(w.id); }} className="rounded border border-border px-2 py-1 text-xs hover:bg-subtle dark:border-border dark:hover:bg-subtle">{t("works.restore")}</button>
+                  <button onClick={(e) => { e.stopPropagation(); if (window.confirm(t("works.purge_confirm"))) purgeWork.mutate(w.id); }} className="rounded bg-danger px-2 py-1 text-xs text-white hover:bg-danger">{t("works.purge")}</button>
                 </div>
               )}
             </div>
@@ -575,9 +575,9 @@ function WorksContent() {
       {/* Pagination */}
       {(works.data?.total ?? 0) > 0 && (
         <div className="flex gap-2 justify-center">
-          <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("works.prev")}</button>
-          <span className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400">{t("works.page").replace("{page}", String(page + 1))}</span>
-          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!works.data || (page + 1) * limit >= works.data.total} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("works.next")}</button>
+          <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-border dark:text-muted">{t("works.prev")}</button>
+          <span className="px-3 py-1 text-sm text-muted">{t("works.page").replace("{page}", String(page + 1))}</span>
+          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!works.data || (page + 1) * limit >= works.data.total} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-border dark:text-muted">{t("works.next")}</button>
         </div>
       )}
     </PageShell>

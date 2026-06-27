@@ -23,7 +23,7 @@ export default function SystemPage() {
         </button>
       </PageHeader>
 
-      {health.error && <div className="mb-4 rounded-md border border-[#ff8182]/40 bg-[#ffebe9] p-4 text-sm text-[#cf222e] dark:border-[#da3633]/40 dark:bg-[#da3633]/15 dark:text-[#ff7b72]">{(health.error as Error).message}</div>}
+      {health.error && <div className="mb-4 rounded-md border border-[#ff8182]/40 bg-[#ffebe9] p-4 text-sm text-danger dark:border-danger/40 dark:bg-danger/15 dark:text-[#ff7b72]">{(health.error as Error).message}</div>}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-8">
         {health.data ? Object.entries(health.data.services).map(([name, status]) => (
@@ -32,12 +32,12 @@ export default function SystemPage() {
               <span className="font-medium capitalize">{name}</span>
               <StatusBadge status={status as string} />
             </div>
-            <div className="text-xs text-[#57606a] dark:text-[#8b949e]">
+            <div className="text-xs text-muted">
               {status === "up" ? t("system_health.connected") : status === "down" ? t("system_health.unavailable") : t("system_health.unknown")}
             </div>
           </div>
         )) : (
-          Array.from({ length: 3 }).map((_, i) => <div key={i} className="card p-4 animate-pulse"><div className="mb-2 h-4 w-1/2 rounded bg-[#eaeef2] dark:bg-[#21262d]" /><div className="h-3 w-3/4 rounded bg-[#eaeef2] dark:bg-[#21262d]" /></div>)
+          Array.from({ length: 3 }).map((_, i) => <div key={i} className="card p-4 animate-pulse"><div className="mb-2 h-4 w-1/2 rounded bg-subtle dark:bg-subtle" /><div className="h-3 w-3/4 rounded bg-subtle dark:bg-subtle" /></div>)
         )}
       </div>
 
@@ -50,7 +50,7 @@ export default function SystemPage() {
               {sources.data?.sources?.map((s) => (
                 <tr key={s.source_name} className="table-row">
                   <td className="px-4 py-3 font-medium">{s.display_name}</td>
-                  <td className="px-4 py-3 text-[#57606a] dark:text-[#8b949e]">{s.source_name}</td>
+                  <td className="px-4 py-3 text-muted">{s.source_name}</td>
                   <td className="px-4 py-3">{s.capabilities.can_download ? <StatusBadge status="up" /> : <StatusBadge status="down" />}</td>
                   <td className="px-4 py-3">{s.capabilities.supports_gallerydl ? "✓" : "—"}</td>
                   <td className="px-4 py-3">{s.capabilities.supports_tags ? "✓" : "—"}</td>
@@ -62,7 +62,7 @@ export default function SystemPage() {
         </div>
       </section>
 
-      {health.data && <p className="mt-4 text-xs text-[#57606a] dark:text-[#8b949e]">{t("system_health.version")} {health.data.version} · {t("system_health.last_update")} {new Date().toLocaleTimeString()}</p>}
+      {health.data && <p className="mt-4 text-xs text-muted">{t("system_health.version")} {health.data.version} · {t("system_health.last_update")} {new Date().toLocaleTimeString()}</p>}
     </main>
   );
 }

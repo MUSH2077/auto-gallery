@@ -40,7 +40,7 @@ function ScheduledTimePicker({ value, onChange }: { value: string; onChange: (v:
             onChange={(e) => setTime(i, e.target.value)}
             className="input px-2 py-1 font-mono w-36"
           />
-          <span className="text-xs text-gray-400 font-mono">{t}</span>
+          <span className="text-xs text-muted font-mono">{t}</span>
           <button onClick={() => removeTime(i)} className="text-red-500 hover:text-red-700 text-lg leading-none" title="Remove">×</button>
           {i === times.length - 1 && (
             <button onClick={addTime} className="text-blue-600 hover:text-blue-800 text-sm" title="Add">+</button>
@@ -76,8 +76,8 @@ export default function SubscriptionDefaultsPage() {
     return (
       <main className="max-w-4xl mx-auto p-6">
         <div className="animate-pulse space-y-4">
-          <div className="h-8 rounded-md bg-[#eaeef2] dark:bg-[#21262d] w-1/3" />
-          <div className="h-48 rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />
+          <div className="h-8 rounded-md bg-subtle dark:bg-subtle w-1/3" />
+          <div className="h-48 rounded-md bg-subtle dark:bg-subtle" />
         </div>
       </main>
     );
@@ -97,26 +97,26 @@ export default function SubscriptionDefaultsPage() {
       {!current ? null : (
         <>
           <div className="card p-6 space-y-5 text-sm">
-            <h4 className="font-medium text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("subdefaults.sync_timing")}</h4>
+            <h4 className="font-medium text-fg border-b border-border pb-2">{t("subdefaults.sync_timing")}</h4>
 
-            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+            <div className="flex items-center justify-between py-3 border-b border-border">
               <div>
                 <span className="font-medium">{t("subdefaults.scheduler_enabled")}</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("subdefaults.scheduler_enabled.desc")}</p>
+                <p className="text-xs text-muted mt-1">{t("subdefaults.scheduler_enabled.desc")}</p>
               </div>
               <button
                 type="button"
                 onClick={() => setLocal({ ...current, scheduler_enabled: !(current.scheduler_enabled ?? true) })}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${(current.scheduler_enabled ?? true) ? "bg-green-600" : "bg-gray-300 dark:bg-gray-600"}`}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${(current.scheduler_enabled ?? true) ? "bg-green-600" : "bg-subtle"}`}
               >
                 <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${(current.scheduler_enabled ?? true) ? "translate-x-6" : "translate-x-1"}`} />
               </button>
             </div>
 
-            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+            <div className="flex items-center justify-between py-3 border-b border-border">
               <div>
                 <span className="font-medium">{t("subdefaults.schedule_mode")}</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("subdefaults.schedule_mode.desc")}</p>
+                <p className="text-xs text-muted mt-1">{t("subdefaults.schedule_mode.desc")}</p>
               </div>
               <select
                 value={current.schedule_mode || "interval"}
@@ -129,10 +129,10 @@ export default function SubscriptionDefaultsPage() {
             </div>
 
             {current.schedule_mode === "interval" ? (
-              <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+              <div className="flex items-center justify-between py-3 border-b border-border">
                 <div>
                   <span className="font-medium">{t("subdefaults.sync_interval")}</span>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("subdefaults.sync_interval.desc")}</p>
+                  <p className="text-xs text-muted mt-1">{t("subdefaults.sync_interval.desc")}</p>
                 </div>
                 <input type="number" min={1} max={168}
                   value={current.default_sync_interval_hours}
@@ -141,10 +141,10 @@ export default function SubscriptionDefaultsPage() {
                 />
               </div>
             ) : (
-              <div className="py-3 border-b dark:border-slate-700">
+              <div className="py-3 border-b border-border">
                 <div className="mb-2">
                   <span className="font-medium">{t("subdefaults.scheduled_times")}</span>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("subdefaults.scheduled_times.desc")}</p>
+                  <p className="text-xs text-muted mt-1">{t("subdefaults.scheduled_times.desc")}</p>
                 </div>
                 <ScheduledTimePicker
                   value={current.scheduled_times || ""}
@@ -153,10 +153,10 @@ export default function SubscriptionDefaultsPage() {
               </div>
             )}
 
-            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+            <div className="flex items-center justify-between py-3 border-b border-border">
               <div>
                 <span className="font-medium">{t("subdefaults.timezone")}</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("subdefaults.timezone.desc")}</p>
+                <p className="text-xs text-muted mt-1">{t("subdefaults.timezone.desc")}</p>
               </div>
               <select value={current.timezone || "UTC"} onChange={(e) => setLocal({ ...current, timezone: e.target.value })}
                 className="select px-2 py-1">
@@ -169,10 +169,10 @@ export default function SubscriptionDefaultsPage() {
               </select>
             </div>
 
-            <h4 className="font-medium text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-2">{t("subdefaults.scheduler")}</h4>
-            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+            <h4 className="font-medium text-fg border-b border-border pb-2 pt-2">{t("subdefaults.scheduler")}</h4>
+            <div className="flex items-center justify-between py-3 border-b border-border">
               <div><span className="font-medium">{t("subdefaults.scan_interval")}</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("subdefaults.scan_interval.desc")}</p>
+                <p className="text-xs text-muted mt-1">{t("subdefaults.scan_interval.desc")}</p>
               </div>
               <input type="number" min={5} max={1440}
                 value={current.scheduler_scan_interval_minutes}

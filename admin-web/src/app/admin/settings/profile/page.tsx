@@ -50,14 +50,14 @@ export default function ProfilePage() {
 
       {/* User Info */}
       <div className="card p-5 mb-6">
-        <h2 className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-3">{t("auth.account_info")}</h2>
+        <h2 className="text-sm font-medium text-muted mb-3">{t("auth.account_info")}</h2>
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-700 dark:text-blue-300 font-bold text-lg">
             {(user?.display_name || user?.username || "?")[0].toUpperCase()}
           </div>
           <div>
-            <div className="font-medium text-slate-900 dark:text-slate-100">{user?.display_name || user?.username}</div>
-            <div className="text-sm text-slate-500 dark:text-slate-400">@{user?.username}</div>
+            <div className="font-medium text-fg">{user?.display_name || user?.username}</div>
+            <div className="text-sm text-muted">@{user?.username}</div>
           </div>
         </div>
       </div>
@@ -70,10 +70,10 @@ export default function ProfilePage() {
             <div>{t("auth.force_change_message")}</div>
           </div>
         )}
-        <h2 className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-4">{t("auth.change_password")}</h2>
+        <h2 className="text-sm font-medium text-muted mb-4">{t("auth.change_password")}</h2>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+            <label className="block text-sm font-medium text-fg mb-1">
               {t("auth.current_password")}
             </label>
             <input
@@ -86,7 +86,7 @@ export default function ProfilePage() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+            <label className="block text-sm font-medium text-fg mb-1">
               {t("auth.new_password")}
             </label>
             <input
@@ -99,7 +99,7 @@ export default function ProfilePage() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+            <label className="block text-sm font-medium text-fg mb-1">
               {t("auth.confirm_password")}
             </label>
             <input
