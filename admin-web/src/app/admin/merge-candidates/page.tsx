@@ -14,7 +14,7 @@ export default function MergeCandidatesPage() {
     <main className="max-w-4xl mx-auto p-6">
       <PageHeader title={t("merge.title")} description={t("merge.desc")} />
 
-      <div className="mb-6 rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-[#f2cc60]">
+      <div className="mb-6 rounded-md border border-warning-subtle bg-warning-subtle p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-warning">
         <strong>{t("merge.warning")}</strong> {t("merge.warning_detail")}
       </div>
 

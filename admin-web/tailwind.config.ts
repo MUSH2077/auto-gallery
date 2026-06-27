@@ -29,6 +29,10 @@ const config: Config = {
         placeholder: t("--ag-placeholder"),
         nav: t("--ag-nav"),
         "nav-fg": t("--ag-nav-fg"),
+        "accent-subtle": t("--ag-accent-subtle"),
+        "danger-subtle": t("--ag-danger-subtle"),
+        "warning-subtle": t("--ag-warning-subtle"),
+        "success-subtle": t("--ag-success-subtle"),
       },
       boxShadow: {
         overlay:

@@ -83,7 +83,7 @@ function ErrorExcerpt({ value }: { value?: string | null }) {
   if (!value) return null;
   const firstLine = value.split("\n").find(Boolean) || value;
   return (
-    <div className="mt-1 line-clamp-1 rounded-md border border-danger/20 bg-[#ffebe9] px-2 py-1 text-xs text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger">
+    <div className="mt-1 line-clamp-1 rounded-md border border-danger/20 bg-danger-subtle px-2 py-1 text-xs text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">
       {firstLine.slice(0, 180)}
     </div>
   );
@@ -234,7 +234,7 @@ function JobDetailDrawer({
                     {t("dldefaults.stall_timeout.desc")}: <Link href="/admin/settings/download-defaults" className="underline">{t("dldefaults.title")} →</Link>
                   </p>
                 )}
-                <pre className="max-h-64 overflow-auto rounded-md border border-danger/20 bg-[#ffebe9] p-3 font-mono text-xs whitespace-pre-wrap text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger">{dl.error_log}</pre>
+                <pre className="max-h-64 overflow-auto rounded-md border border-danger/20 bg-danger-subtle p-3 font-mono text-xs whitespace-pre-wrap text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">{dl.error_log}</pre>
               </section>
               );
             })()}
@@ -277,7 +277,7 @@ function JobDetailDrawer({
             {im.error_log && (
               <section>
                 <h3 className="mb-2 text-sm font-semibold">{t("jobs.error_log")}</h3>
-                <pre className="max-h-80 overflow-auto rounded-md border border-danger/20 bg-[#ffebe9] p-3 font-mono text-xs whitespace-pre-wrap text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger">{im.error_log}</pre>
+                <pre className="max-h-80 overflow-auto rounded-md border border-danger/20 bg-danger-subtle p-3 font-mono text-xs whitespace-pre-wrap text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">{im.error_log}</pre>
               </section>
             )}
           </div>
@@ -574,7 +574,7 @@ function JobsContent() {
           <span
             className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs ${
               connected
-                ? "border-success/30 bg-[#dafbe1] text-success dark:border-success/30 dark:bg-[#23863626] dark:text-success"
+                ? "border-success/30 bg-success-subtle text-success dark:border-success/30 dark:bg-success-subtle dark:text-success"
                 : "border-border bg-subtle text-muted dark:border-border dark:bg-subtle dark:text-muted"
             }`}
             title={connected ? t("jobs.live_connected") : t("jobs.live_polling_title")}
@@ -602,7 +602,7 @@ function JobsContent() {
             <button onClick={() => updateParams({ tab: "imports", status: null, job: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "imports" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("jobs.import")}</button>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-            {activeFilterCount > 0 && <span className="rounded-full bg-[#ddf4ff] px-2 py-0.5 font-medium text-accent dark:bg-[#1f6feb26] dark:text-accent">{t("jobs.active_filters", { count: activeFilterCount })}</span>}
+            {activeFilterCount > 0 && <span className="rounded-full bg-accent-subtle px-2 py-0.5 font-medium text-accent dark:bg-accent-subtle dark:text-accent">{t("jobs.active_filters", { count: activeFilterCount })}</span>}
             <span>{t("jobs.last_refreshed", { time: lastUpdated ? fmt.time(new Date(lastUpdated).toISOString()) : "—" })}</span>
             {activeFilterCount > 0 && <button onClick={clearFilters} className="text-accent hover:underline dark:text-accent">{t("jobs.clear_filters")}</button>}
           </div>
@@ -630,7 +630,7 @@ function JobsContent() {
         {activeTab === "downloads" && <button onClick={handleSelectAll} className="btn-ghost text-xs">{selectAll ? t("common.deselect_all") : t("common.select_all")}</button>}
 
         {selected.size > 0 && (
-          <div className="ml-auto flex items-center gap-1 rounded-md border border-warning/30 bg-[#fff8c5] px-3 py-1.5 dark:bg-[#bb800926]">
+          <div className="ml-auto flex items-center gap-1 rounded-md border border-warning/30 bg-warning-subtle px-3 py-1.5 dark:bg-warning-subtle">
             <span className="text-xs text-warning dark:text-warning">{selected.size} {t("common.selected")}</span>
             <button onClick={() => handleBatch("pause")} className="px-2 py-0.5 text-xs bg-yellow-500 text-white rounded hover:bg-yellow-600">{t("jobs.batch_pause")}</button>
             <button onClick={() => handleBatch("resume")} className="px-2 py-0.5 text-xs bg-green-500 text-white rounded hover:bg-green-600">{t("jobs.batch_resume")}</button>
@@ -723,7 +723,7 @@ function JobsContent() {
                   </div>
                   {j.error_log && expandedLog !== j.id && <ErrorExcerpt value={j.error_log} />}
                   {expandedLog === j.id && j.error_log && (
-                    <pre className="mt-1 max-h-48 overflow-auto rounded-md border border-danger/20 bg-[#ffebe9] p-3 font-mono text-xs whitespace-pre-wrap text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger">{j.error_log}</pre>
+                    <pre className="mt-1 max-h-48 overflow-auto rounded-md border border-danger/20 bg-danger-subtle p-3 font-mono text-xs whitespace-pre-wrap text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">{j.error_log}</pre>
                   )}
                   {expandedImports === j.id && (
                     <ImportJobsList downloadJobId={j.id} />

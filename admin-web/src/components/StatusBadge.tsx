@@ -6,12 +6,12 @@ import { statusLabel } from "@/lib/i18n-format";
 type Tone = "success" | "danger" | "active" | "warning" | "muted" | "stale";
 
 const toneClasses: Record<Tone, string> = {
-  success: "bg-[#dafbe1] text-success border-success/30 dark:bg-[#2ea04326] dark:text-success dark:border-success/30",
-  danger: "bg-[#ffebe9] text-danger border-danger/30 dark:bg-[#f8514926] dark:text-danger dark:border-danger/30",
-  active: "bg-[#ddf4ff] text-accent border-accent/30 dark:bg-[#1f6feb26] dark:text-accent dark:border-accent/30",
-  warning: "bg-[#fff8c5] text-warning border-warning/30 dark:bg-[#bb800926] dark:text-warning dark:border-warning/30",
-  muted: "bg-subtle text-muted border-[#8c959f]/30 dark:bg-border dark:text-muted dark:border-muted/30",
-  stale: "bg-[#fff1e6] text-[#bc4c00] border-[#bc4c00]/30 dark:bg-[#d2992226] dark:text-[#e3b341] dark:border-[#e3b341]/30",
+  success: "bg-success-subtle text-success border-success/30",
+  danger: "bg-danger-subtle text-danger border-danger/30",
+  active: "bg-accent-subtle text-accent border-accent/30",
+  warning: "bg-warning-subtle text-warning border-warning/30",
+  muted: "bg-subtle text-muted border-muted/30 dark:bg-border",
+  stale: "bg-warning-subtle text-warning border-warning/30",
 };
 
 const statusTone: Record<string, Tone> = {

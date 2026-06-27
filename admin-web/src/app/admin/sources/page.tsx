@@ -145,12 +145,12 @@ function ProviderCard({ s }: { s: ProviderInfo }) {
       <p className="mb-3 text-xs leading-relaxed text-muted">{SOURCE_DESCRIPTIONS[s.source_name] || t("sources.no_desc")}</p>
       <div className="flex gap-2 flex-wrap mb-3">
         {s.capabilities.can_download
-          ? <span className="badge border-[#dafbe1] bg-[#dafbe1] text-success dark:border-primary/30 dark:bg-primary/15 dark:text-[#56d364]">{t("sources.download_available")}</span>
+          ? <span className="badge border-success-subtle bg-success-subtle text-success dark:border-primary/30 dark:bg-primary/15 dark:text-success">{t("sources.download_available")}</span>
           : <span className="badge">{t("sources.download_placeholder")}</span>}
-        {s.capabilities.supports_gallerydl && <span className="badge border-[#ddf4ff] bg-[#ddf4ff] text-accent dark:border-accent/30 dark:bg-accent/15 dark:text-accent">{t("sources.gallerydl")}</span>}
+        {s.capabilities.supports_gallerydl && <span className="badge border-accent-subtle bg-accent-subtle text-accent dark:border-accent/30 dark:bg-accent/15 dark:text-accent">{t("sources.gallerydl")}</span>}
         {s.capabilities.supports_tags && <span className="badge">{t("sources.tags")}</span>}
-        {s.capabilities.is_reference_only && <span className="badge border-[#fff8c5] bg-[#fff8c5] text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-[#f2cc60]">{t("sources.reference_only")}</span>}
-        {s.capabilities.can_import_local && <span className="badge border-[#dafbe1] bg-[#dafbe1] text-success dark:border-primary/30 dark:bg-primary/15 dark:text-[#56d364]">{t("sources.local_import")}</span>}
+        {s.capabilities.is_reference_only && <span className="badge border-warning-subtle bg-warning-subtle text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-warning">{t("sources.reference_only")}</span>}
+        {s.capabilities.can_import_local && <span className="badge border-success-subtle bg-success-subtle text-success dark:border-primary/30 dark:bg-primary/15 dark:text-success">{t("sources.local_import")}</span>}
       </div>
 
       <div className="border-t border-border pt-3 dark:border-border">
@@ -167,7 +167,7 @@ function ProviderCard({ s }: { s: ProviderInfo }) {
           {t("sources.try_default")} <span className="font-mono text-muted">{DEFAULT_URLS[s.source_name]?.slice(0, 40)}{(DEFAULT_URLS[s.source_name]?.length || 0) > 40 ? "..." : ""}</span>
         </button>
         {validResult && (
-          <div className={`rounded-md border p-2 text-xs ${validResult.ok ? "border-[#dafbe1] bg-[#dafbe1] text-success dark:border-primary/30 dark:bg-primary/15 dark:text-[#56d364]" : "border-[#ff8182]/40 bg-[#ffebe9] text-danger dark:border-danger/40 dark:bg-danger/15 dark:text-[#ff7b72]"}`}>
+          <div className={`rounded-md border p-2 text-xs ${validResult.ok ? "border-success-subtle bg-success-subtle text-success dark:border-primary/30 dark:bg-primary/15 dark:text-success" : "border-danger/40 bg-danger-subtle text-danger dark:border-danger/40 dark:bg-danger/15 dark:text-danger"}`}>
             {validResult.ok ? "✓ " : "✗ "}{validResult.msg}
           </div>
         )}
@@ -189,7 +189,7 @@ export default function SourcesPage() {
 
       {sources.isLoading && <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="card p-4 animate-pulse"><div className="mb-2 h-4 w-1/2 rounded bg-subtle dark:bg-subtle" /><div className="mb-4 h-3 w-3/4 rounded bg-subtle dark:bg-subtle" /><div className="h-16 rounded bg-subtle dark:bg-subtle" /></div>)}</div>}
 
-      {sources.error && <div className="rounded-md border border-[#ff8182]/40 bg-[#ffebe9] p-4 text-sm text-danger dark:border-danger/40 dark:bg-danger/15 dark:text-[#ff7b72]">{(sources.error as Error).message}</div>}
+      {sources.error && <div className="rounded-md border border-danger/40 bg-danger-subtle p-4 text-sm text-danger dark:border-danger/40 dark:bg-danger/15 dark:text-danger">{(sources.error as Error).message}</div>}
 
       {sources.data && !sources.data.sources.length && <EmptyState title={t("sources.no_providers")} description={t("sources.no_providers_desc")} />}
 

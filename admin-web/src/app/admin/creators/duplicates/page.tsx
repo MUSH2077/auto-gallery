@@ -47,7 +47,7 @@ export default function CreatorDuplicatesPage() {
     <main className="max-w-5xl mx-auto p-6">
       <PageHeader title={t("duplicates.title")} description={t("duplicates.desc")} />
 
-      <div className="mb-6 rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-[#f2cc60]">
+      <div className="mb-6 rounded-md border border-warning-subtle bg-warning-subtle p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-warning">
         <strong>{t("duplicates.warning")}</strong> {t("duplicates.warning_detail")}
       </div>
 

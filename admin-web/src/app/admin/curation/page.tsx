@@ -27,8 +27,8 @@ function shortId(id: string) {
 function statusClass(status: string) {
   if (status === "baseline") return "border-border bg-subtle text-muted dark:border-border dark:bg-subtle dark:text-muted";
   if (status === "reverted") return "border-border bg-subtle text-muted dark:border-border dark:bg-subtle dark:text-muted";
-  if (status === "partial_reverted") return "border-warning/30 bg-[#fff8c5] text-warning dark:bg-[#bb800926] dark:text-warning";
-  return "border-success/25 bg-[#dafbe1] text-success dark:bg-[#23863626] dark:text-success";
+  if (status === "partial_reverted") return "border-warning/30 bg-warning-subtle text-warning dark:bg-warning-subtle dark:text-warning";
+  return "border-success/25 bg-success-subtle text-success dark:bg-success-subtle dark:text-success";
 }
 
 function actionLabel(action: string) {
@@ -106,7 +106,7 @@ function CommitCard({ commit, onRevert, reverting }: { commit: CurationCommit; o
                 <div className="flex items-center justify-between gap-3">
                   <span className="min-w-0 truncate text-fg">
                     <span className="font-medium">{actionLabel(change.action)}</span>
-                    <span className="mx-1 text-[#8c959f]">{t("curation.on")}</span>
+                    <span className="mx-1 text-placeholder">{t("curation.on")}</span>
                     <span className="font-mono">{change.subject_type}:{shortId(change.subject_id)}</span>
                   </span>
                   <span className="flex shrink-0 gap-2">
@@ -206,14 +206,14 @@ function CurationContent() {
           <button
             key={key}
             onClick={() => updateParams({ trigger: key || null })}
-            className={`rounded-md border px-3 py-1.5 text-xs font-medium ${trigger === key ? "border-accent bg-[#ddf4ff] text-accent dark:border-accent dark:bg-[#1f6feb26] dark:text-accent" : "border-border bg-white hover:bg-subtle dark:border-border dark:bg-surface dark:hover:bg-subtle"}`}
+            className={`rounded-md border px-3 py-1.5 text-xs font-medium ${trigger === key ? "border-accent bg-accent-subtle text-accent dark:border-accent dark:bg-accent-subtle dark:text-accent" : "border-border bg-white hover:bg-subtle dark:border-border dark:bg-surface dark:hover:bg-subtle"}`}
           >
             {label}
           </button>
         ))}
         <button
           onClick={() => updateParams({ include_baseline: includeBaseline ? "false" : null })}
-          className={`rounded-md border px-3 py-1.5 text-xs font-medium ${includeBaseline ? "border-border bg-white hover:bg-subtle dark:border-border dark:bg-surface dark:hover:bg-subtle" : "border-accent bg-[#ddf4ff] text-accent dark:border-accent dark:bg-[#1f6feb26] dark:text-accent"}`}
+          className={`rounded-md border px-3 py-1.5 text-xs font-medium ${includeBaseline ? "border-border bg-white hover:bg-subtle dark:border-border dark:bg-surface dark:hover:bg-subtle" : "border-accent bg-accent-subtle text-accent dark:border-accent dark:bg-accent-subtle dark:text-accent"}`}
         >
           {includeBaseline ? t("curation.hide_baseline") : t("curation.show_baseline")}
         </button>
@@ -240,7 +240,7 @@ function CurationContent() {
                 <div key={key} className="rounded-md border border-border p-2 dark:border-border">
                   <div className="font-semibold">{backfillStatus.data?.missing?.[key] ?? "-"}</div>
                   <div className="mt-0.5 text-muted">{t(`curation.baseline_${key}`)}</div>
-                  <div className="mt-1 text-[11px] text-[#8c959f] dark:text-muted">
+                  <div className="mt-1 text-[11px] text-placeholder dark:text-muted">
                     {t("curation.baseline_counts", {
                       existing: backfillStatus.data?.existing?.[key] ?? "-",
                       expected: backfillStatus.data?.expected?.[key] ?? "-",

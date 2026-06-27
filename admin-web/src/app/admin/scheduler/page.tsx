@@ -11,12 +11,12 @@ import { PageHeader, EmptyState, ErrorState, SourceBadge, StatusBadge } from "@/
 import { useToast } from "@/components/Toast";
 
 function decisionTone(item: SchedulerDecisionItem): string {
-  if (item.due) return "border-accent/30 bg-[#ddf4ff] text-accent dark:border-accent/30 dark:bg-[#1f6feb26] dark:text-accent";
+  if (item.due) return "border-accent/30 bg-accent-subtle text-accent dark:border-accent/30 dark:bg-accent-subtle dark:text-accent";
   if (["auth_unhealthy", "url_invalid", "unknown_provider", "scheduler_disabled"].includes(item.reason)) {
-    return "border-danger/30 bg-[#ffebe9] text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger";
+    return "border-danger/30 bg-danger-subtle text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger";
   }
   if (["already_attempted_in_window", "source_disabled", "subscription_sync_disabled"].includes(item.reason)) {
-    return "border-warning/30 bg-[#fff8c5] text-warning dark:bg-[#bb800926] dark:text-warning";
+    return "border-warning/30 bg-warning-subtle text-warning dark:bg-warning-subtle dark:text-warning";
   }
   return "border-border bg-subtle text-muted dark:border-border dark:bg-subtle dark:text-muted";
 }
@@ -26,7 +26,7 @@ function SummaryTile({ label, value, sub, danger }: { label: string; value: stri
     <div className="card p-4">
       <div className={`tabular text-2xl font-semibold ${danger ? "text-danger dark:text-danger" : "text-fg"}`}>{value}</div>
       <div className="mt-1 text-xs font-medium uppercase text-muted">{label}</div>
-      {sub && <div className="mt-1 text-xs text-[#8c959f] dark:text-muted">{sub}</div>}
+      {sub && <div className="mt-1 text-xs text-placeholder dark:text-muted">{sub}</div>}
     </div>
   );
 }
@@ -119,7 +119,7 @@ function AdminOperationsSection() {
                 )}
               </div>
               {op.error && <div className="text-xs text-danger dark:text-danger truncate max-w-[200px]">{op.error}</div>}
-              <span className="text-[10px] text-[#8c959f] shrink-0">{new Date(op.updated_at * 1000).toLocaleTimeString()}</span>
+              <span className="text-[10px] text-placeholder shrink-0">{new Date(op.updated_at * 1000).toLocaleTimeString()}</span>
             </div>
           ))}
         </div>
@@ -275,7 +275,7 @@ export default function SchedulerPage() {
             <button
               key={key}
               onClick={() => updateParams({ filter: key || null })}
-              className={`rounded-md border px-2.5 py-1.5 text-xs font-medium ${filter === key ? "border-accent bg-[#ddf4ff] text-accent dark:border-accent dark:bg-[#1f6feb26] dark:text-accent" : "border-border hover:bg-subtle dark:border-border dark:hover:bg-subtle"}`}
+              className={`rounded-md border px-2.5 py-1.5 text-xs font-medium ${filter === key ? "border-accent bg-accent-subtle text-accent dark:border-accent dark:bg-accent-subtle dark:text-accent" : "border-border hover:bg-subtle dark:border-border dark:hover:bg-subtle"}`}
             >
               {label}
             </button>
@@ -332,7 +332,7 @@ export default function SchedulerPage() {
                   <Link
                     key={name}
                     href={`/admin/jobs?tab=${name === "imports" ? "imports" : "downloads"}${stats.failed ? "&status=failed" : ""}`}
-                    className="rounded-full border border-warning/30 bg-[#fff8c5] px-2 py-1 text-warning hover:underline dark:bg-[#bb800926] dark:text-warning"
+                    className="rounded-full border border-warning/30 bg-warning-subtle px-2 py-1 text-warning hover:underline dark:bg-warning-subtle dark:text-warning"
                   >
                     {t("scheduler.queue_attention", { queue: name, failed: stats.failed, scheduled: stats.scheduled, started: stats.started })}
                   </Link>
@@ -361,7 +361,7 @@ export default function SchedulerPage() {
 
         {/* Batch action bar */}
         {selected.size > 0 && (
-          <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/30 bg-[#fff8c5] px-4 py-2 dark:bg-[#bb800926]">
+          <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/30 bg-warning-subtle px-4 py-2 dark:bg-warning-subtle">
             <span className="text-xs font-medium text-warning dark:text-warning">{t("common.selected_count", { count: selected.size })}</span>
             <button
               onClick={() => handleBatchToggle(false)}

@@ -20,7 +20,7 @@ export default function ConfirmDialog({ open, title, message, onConfirm, onCance
         </div>
         <div className="px-4 py-4">
         <p className="mb-4 text-sm leading-6 text-muted">{message}</p>
-        {error && <p className="mb-3 rounded-md border border-danger/30 bg-[#ffebe9] p-2 text-sm text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger">{error}</p>}
+        {error && <p className="mb-3 rounded-md border border-danger/30 bg-danger-subtle p-2 text-sm text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">{error}</p>}
         <div className="flex justify-end gap-3">
           <button onClick={onCancel} disabled={isPending} className="btn-ghost">{t("common.cancel")}</button>
           <button onClick={onConfirm} disabled={isPending}

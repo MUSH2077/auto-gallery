@@ -40,11 +40,11 @@ function DecisionPill({ decision }: { decision?: SchedulerDecisionItem }) {
   const warning = ["auth_unhealthy", "url_invalid", "scheduler_disabled"].includes(decision.reason);
   const waiting = ["already_attempted_in_window", "manual_mode", "source_disabled"].includes(decision.reason);
   const cls = decision.due
-    ? "border-accent/30 bg-[#ddf4ff] text-accent dark:border-accent/30 dark:bg-[#1f6feb26] dark:text-accent"
+    ? "border-accent/30 bg-accent-subtle text-accent dark:border-accent/30 dark:bg-accent-subtle dark:text-accent"
     : warning
-      ? "border-danger/30 bg-[#ffebe9] text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger"
+      ? "border-danger/30 bg-danger-subtle text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger"
       : waiting
-        ? "border-warning/30 bg-[#fff8c5] text-warning dark:bg-[#bb800926] dark:text-warning"
+        ? "border-warning/30 bg-warning-subtle text-warning dark:bg-warning-subtle dark:text-warning"
         : "border-border bg-subtle text-muted dark:border-border dark:bg-subtle dark:text-muted";
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>
@@ -70,7 +70,7 @@ function RepoHealthLine({ repo }: { repo: RepoLike }) {
   return (
     <>
       <span className="inline-flex items-center gap-1.5">
-        <span className={`h-2 w-2 rounded-full ${repo.is_enabled ? "bg-success" : "bg-[#8c959f]"}`} />
+        <span className={`h-2 w-2 rounded-full ${repo.is_enabled ? "bg-success" : "bg-placeholder"}`} />
         {repo.is_enabled ? t("repo.enabled") : t("repo.disabled")}
       </span>
       <span className="inline-flex items-center gap-1.5">
@@ -141,7 +141,7 @@ export default function RepositoryCard({
               </button>
             </h3>
             {!legal && (
-              <span className="rounded-full border border-warning/30 bg-[#fff8c5] px-2 py-0.5 text-xs text-warning dark:bg-[#bb800926] dark:text-warning">
+              <span className="rounded-full border border-warning/30 bg-warning-subtle px-2 py-0.5 text-xs text-warning dark:bg-warning-subtle dark:text-warning">
                 {t("repo.not_downloadable")}
               </span>
             )}
@@ -163,7 +163,7 @@ export default function RepositoryCard({
           )}
           {disabledReason && <p className="mt-2 text-xs text-warning dark:text-warning">{disabledReason}</p>}
           {repo.latest_job?.error_log_excerpt && (
-            <p className="mt-2 line-clamp-2 rounded-md bg-[#ffebe9] px-2 py-1 text-xs text-danger dark:bg-[#f8514926] dark:text-danger">
+            <p className="mt-2 line-clamp-2 rounded-md bg-danger-subtle px-2 py-1 text-xs text-danger dark:bg-danger-subtle dark:text-danger">
               {repo.latest_job.error_log_excerpt}
             </p>
           )}
@@ -191,7 +191,7 @@ export default function RepositoryCard({
           )}
           {onDelete && (
             <button onClick={() => onDelete(repo)}
-              className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-danger hover:bg-[#ffebe9] dark:border-border dark:text-danger dark:hover:bg-[#f8514926]">
+              className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-danger hover:bg-danger-subtle dark:border-border dark:text-danger dark:hover:bg-danger-subtle">
               {t("repo.remove")}
             </button>
           )}

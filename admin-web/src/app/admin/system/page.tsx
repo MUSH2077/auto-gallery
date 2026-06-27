@@ -23,7 +23,7 @@ export default function SystemPage() {
         </button>
       </PageHeader>
 
-      {health.error && <div className="mb-4 rounded-md border border-[#ff8182]/40 bg-[#ffebe9] p-4 text-sm text-danger dark:border-danger/40 dark:bg-danger/15 dark:text-[#ff7b72]">{(health.error as Error).message}</div>}
+      {health.error && <div className="mb-4 rounded-md border border-danger/40 bg-danger-subtle p-4 text-sm text-danger dark:border-danger/40 dark:bg-danger/15 dark:text-danger">{(health.error as Error).message}</div>}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-8">
         {health.data ? Object.entries(health.data.services).map(([name, status]) => (

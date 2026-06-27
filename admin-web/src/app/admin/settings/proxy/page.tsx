@@ -15,12 +15,12 @@ function TestResults({ data, proxyEnabled }: { data: any | null; proxyEnabled: b
   return (
     <div className="mt-5">
       {proxy_reachable !== null && proxy_reachable !== undefined && (
-        <div className={"mb-3 rounded-md border p-4 text-sm font-medium " + (proxy_reachable ? "border-[#dafbe1] bg-[#dafbe1] text-success dark:border-primary/30 dark:bg-primary/15 dark:text-[#56d364]" : "border-[#ff8182]/40 bg-[#ffebe9] text-danger dark:border-danger/40 dark:bg-danger/15 dark:text-[#ff7b72]")}>
+        <div className={"mb-3 rounded-md border p-4 text-sm font-medium " + (proxy_reachable ? "border-success-subtle bg-success-subtle text-success dark:border-primary/30 dark:bg-primary/15 dark:text-success" : "border-danger/40 bg-danger-subtle text-danger dark:border-danger/40 dark:bg-danger/15 dark:text-danger")}>
           {proxy_reachable ? t("proxy.reachable") : t("proxy.unreachable") + " — " + proxy_reachable_error}
         </div>
       )}
       {proxy_reachable === false && (
-        <div className="mb-3 rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-[#f2cc60]">
+        <div className="mb-3 rounded-md border border-warning-subtle bg-warning-subtle p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-warning">
           {t("proxy.troubleshoot")}
         </div>
       )}
@@ -137,7 +137,7 @@ export default function ProxySettingsPage() {
             </div>
           </div>
 
-          <div className="mt-4 rounded-md border border-[#ddf4ff] bg-[#ddf4ff] p-4 text-sm text-accent dark:border-accent/30 dark:bg-accent/15 dark:text-accent">
+          <div className="mt-4 rounded-md border border-accent-subtle bg-accent-subtle p-4 text-sm text-accent dark:border-accent/30 dark:bg-accent/15 dark:text-accent">
             <strong>{t("proxy.scope")}</strong>
             <ul className="list-disc list-inside mt-1 space-y-1">
               <li>{t("proxy.scope.1")}</li>
