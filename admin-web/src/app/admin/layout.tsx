@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { useT } from "@/lib/i18n";
-import { ThemeToggle, LangToggle } from "@/lib/theme";
+import { ThemeToggle, LangToggle, PaletteToggle } from "@/lib/theme";
 import { useAuth } from "@/lib/auth";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { NotificationBell } from "@/components/NotificationCenter";
@@ -102,6 +102,7 @@ function AdminNav() {
           </Link>
           <NotificationBell />
           <LangToggle />
+          <PaletteToggle />
           <ThemeToggle />
           <UserMenu />
           {/* Hamburger — mobile only */}

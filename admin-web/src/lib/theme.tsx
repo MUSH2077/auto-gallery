@@ -3,19 +3,27 @@ import { createContext, useContext, useState, useEffect, useCallback, type React
 
 type Theme = "light" | "dark" | "system";
 type ResolvedTheme = "light" | "dark";
+export type Palette = "github" | "nord" | "rose";
 
 const STORAGE_KEY = "auto-gallery-theme";
+const PALETTE_KEY = "auto-gallery-palette";
+export const PALETTES: Palette[] = ["github", "nord", "rose"];
+export const PALETTE_LABELS: Record<Palette, string> = { github: "GitHub", nord: "Nord", rose: "Rosé" };
 
 interface ThemeContextType {
   theme: Theme;
   resolved: ResolvedTheme;
   setTheme: (t: Theme) => void;
+  palette: Palette;
+  setPalette: (p: Palette) => void;
 }
 
 const ThemeContext = createContext<ThemeContextType>({
   theme: "system",
   resolved: "light",
   setTheme: () => {},
+  palette: "github",
+  setPalette: () => {},
 });
 
 export function useTheme() {
@@ -35,6 +43,7 @@ function resolveTheme(theme: Theme): ResolvedTheme {
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<Theme>("system");
   const [resolved, setResolved] = useState<ResolvedTheme>("light");
+  const [palette, setPaletteState] = useState<Palette>("github");
 
   useEffect(() => {
     try {
@@ -71,7 +80,23 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     applyTheme(t);
   }, [applyTheme]);
 
-  return <ThemeContext.Provider value={{ theme, resolved, setTheme }}>{children}</ThemeContext.Provider>;
+  // ── Palette (data-theme) ──
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(PALETTE_KEY) as Palette | null;
+      if (stored && PALETTES.includes(stored)) setPaletteState(stored);
+    } catch {}
+  }, []);
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", palette);
+  }, [palette]);
+  const setPalette = useCallback((p: Palette) => {
+    setPaletteState(p);
+    try { localStorage.setItem(PALETTE_KEY, p); } catch {}
+    document.documentElement.setAttribute("data-theme", p);
+  }, []);
+
+  return <ThemeContext.Provider value={{ theme, resolved, setTheme, palette, setPalette }}>{children}</ThemeContext.Provider>;
 }
 
 import { useI18n } from "@/lib/i18n";
@@ -138,6 +163,33 @@ export function ThemeToggle() {
       title={`${labels[theme]} — click for ${labels[next]}`}
     >
       {icon}
+    </button>
+  );
+}
+
+function PaletteIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="13.5" cy="6.5" r=".75" fill="currentColor" stroke="none" />
+      <circle cx="17.5" cy="10.5" r=".75" fill="currentColor" stroke="none" />
+      <circle cx="8.5" cy="7.5" r=".75" fill="currentColor" stroke="none" />
+      <circle cx="6.5" cy="12.5" r=".75" fill="currentColor" stroke="none" />
+      <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.44-.18-.83-.44-1.12-.29-.29-.44-.65-.44-1.13a1.64 1.64 0 0 1 1.67-1.67h2C19.5 16.4 22 13.9 22 10.85 22 6 17.5 2 12 2z" />
+    </svg>
+  );
+}
+
+export function PaletteToggle() {
+  const { palette, setPalette } = useTheme();
+  const next = PALETTES[(PALETTES.indexOf(palette) + 1) % PALETTES.length];
+  return (
+    <button
+      onClick={() => setPalette(next)}
+      className="p-1.5 rounded hover:bg-white/10 transition-colors text-white/80 hover:text-white flex items-center gap-1"
+      title={`Theme: ${PALETTE_LABELS[palette]} — click for ${PALETTE_LABELS[next]}`}
+    >
+      <PaletteIcon className="w-5 h-5" />
+      <span className="hidden sm:inline text-xs font-medium">{PALETTE_LABELS[palette]}</span>
     </button>
   );
 }
