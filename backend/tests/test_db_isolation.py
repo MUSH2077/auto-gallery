@@ -13,6 +13,7 @@ def test_database_url_is_isolated_test_db():
     assert name != "autogallery", "tests must not target the production database"
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_app_session_is_bound_to_test_db():
     """The app's own engine/session must actually talk to the *_test database,
