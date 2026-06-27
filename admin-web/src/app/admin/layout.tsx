@@ -28,7 +28,7 @@ function UserMenu() {
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-[#21262d] transition-colors text-sm"
+        className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-subtle transition-colors text-sm"
         title={user?.display_name || user?.username}
       >
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -38,11 +38,11 @@ function UserMenu() {
         <span className="hidden sm:inline max-w-[100px] truncate">{user?.display_name || user?.username}</span>
       </button>
       {open && (
-        <div className="popover absolute right-0 mt-1 w-44 bg-white dark:bg-[#161b22] border border-[#d8dee4] dark:border-[#30363d] rounded-md shadow-overlay dark:shadow-overlay-dark z-50 text-[#24292f] dark:text-[#e6edf3] text-sm overflow-hidden">
+        <div className="popover absolute right-0 mt-1 w-44 bg-surface border border-border rounded-md shadow-overlay dark:shadow-overlay-dark z-50 text-fg text-sm overflow-hidden">
           <Link
             href="/admin/settings/profile"
             onClick={() => setOpen(false)}
-            className="flex items-center gap-2 px-3 py-2 hover:bg-[#f6f8fa] dark:hover:bg-[#21262d] transition-colors"
+            className="flex items-center gap-2 px-3 py-2 hover:bg-subtle dark:hover:bg-subtle transition-colors"
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
@@ -51,7 +51,7 @@ function UserMenu() {
           </Link>
           <button
             onClick={() => { setOpen(false); logout(); }}
-            className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[#f6f8fa] dark:hover:bg-[#21262d] transition-colors text-left text-[#cf222e] dark:text-[#f85149]"
+            className="w-full flex items-center gap-2 px-3 py-2 hover:bg-subtle dark:hover:bg-subtle transition-colors text-left text-danger dark:text-danger"
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" />
@@ -156,8 +156,8 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-slate-600" />
+      <div className="min-h-screen flex items-center justify-center bg-subtle">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-border" />
       </div>
     );
   }
@@ -179,7 +179,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     <ErrorBoundary>
       <AuthGuard>
         <div>
-          <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-slate-900 focus:text-nav-fg focus:rounded">Skip to content</a>
+          <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-subtle focus:text-nav-fg focus:rounded">Skip to content</a>
           <AdminNav />
           <main id="main-content" className="min-h-[calc(100vh-52px)]">{children}</main>
         </div>

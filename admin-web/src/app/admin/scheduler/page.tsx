@@ -11,22 +11,22 @@ import { PageHeader, EmptyState, ErrorState, SourceBadge, StatusBadge } from "@/
 import { useToast } from "@/components/Toast";
 
 function decisionTone(item: SchedulerDecisionItem): string {
-  if (item.due) return "border-[#0969da]/30 bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff]/30 dark:bg-[#1f6feb26] dark:text-[#58a6ff]";
+  if (item.due) return "border-accent/30 bg-[#ddf4ff] text-accent dark:border-accent/30 dark:bg-[#1f6feb26] dark:text-accent";
   if (["auth_unhealthy", "url_invalid", "unknown_provider", "scheduler_disabled"].includes(item.reason)) {
-    return "border-[#cf222e]/30 bg-[#ffebe9] text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]";
+    return "border-danger/30 bg-[#ffebe9] text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger";
   }
   if (["already_attempted_in_window", "source_disabled", "subscription_sync_disabled"].includes(item.reason)) {
-    return "border-[#bf8700]/30 bg-[#fff8c5] text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]";
+    return "border-warning/30 bg-[#fff8c5] text-warning dark:bg-[#bb800926] dark:text-warning";
   }
-  return "border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]";
+  return "border-border bg-subtle text-muted dark:border-border dark:bg-subtle dark:text-muted";
 }
 
 function SummaryTile({ label, value, sub, danger }: { label: string; value: string | number; sub?: string; danger?: boolean }) {
   return (
     <div className="card p-4">
-      <div className={`tabular text-2xl font-semibold ${danger ? "text-[#cf222e] dark:text-[#f85149]" : "text-[#24292f] dark:text-[#e6edf3]"}`}>{value}</div>
-      <div className="mt-1 text-xs font-medium uppercase text-[#57606a] dark:text-[#8b949e]">{label}</div>
-      {sub && <div className="mt-1 text-xs text-[#8c959f] dark:text-[#6e7681]">{sub}</div>}
+      <div className={`tabular text-2xl font-semibold ${danger ? "text-danger dark:text-danger" : "text-fg"}`}>{value}</div>
+      <div className="mt-1 text-xs font-medium uppercase text-muted">{label}</div>
+      {sub && <div className="mt-1 text-xs text-[#8c959f] dark:text-muted">{sub}</div>}
     </div>
   );
 }
@@ -44,12 +44,12 @@ function queueLabel(t: ReturnType<typeof useT>, key: string): string {
 function QueueRow({ name, stats }: { name: string; stats: QueueBreakdown }) {
   const t = useT();
   return (
-    <div className="grid grid-cols-[1.1fr_repeat(4,minmax(0,1fr))] items-center gap-3 border-t border-[#d8dee4] px-3 py-2 text-sm dark:border-[#30363d]">
-      <div className="font-mono text-xs font-medium text-[#24292f] dark:text-[#e6edf3]">{queueLabel(t, name)}</div>
-      <div className="tabular text-xs text-[#57606a] dark:text-[#8b949e]">{stats.queued}</div>
-      <div className={`tabular text-xs ${stats.scheduled > 0 ? "font-semibold text-[#bf8700] dark:text-[#d29922]" : "text-[#57606a] dark:text-[#8b949e]"}`}>{stats.scheduled}</div>
-      <div className="tabular text-xs text-[#57606a] dark:text-[#8b949e]">{stats.started}</div>
-      <div className={`tabular text-xs ${stats.failed > 0 ? "font-semibold text-[#cf222e] dark:text-[#f85149]" : "text-[#57606a] dark:text-[#8b949e]"}`}>{stats.failed}</div>
+    <div className="grid grid-cols-[1.1fr_repeat(4,minmax(0,1fr))] items-center gap-3 border-t border-border px-3 py-2 text-sm dark:border-border">
+      <div className="font-mono text-xs font-medium text-fg">{queueLabel(t, name)}</div>
+      <div className="tabular text-xs text-muted">{stats.queued}</div>
+      <div className={`tabular text-xs ${stats.scheduled > 0 ? "font-semibold text-warning dark:text-warning" : "text-muted"}`}>{stats.scheduled}</div>
+      <div className="tabular text-xs text-muted">{stats.started}</div>
+      <div className={`tabular text-xs ${stats.failed > 0 ? "font-semibold text-danger dark:text-danger" : "text-muted"}`}>{stats.failed}</div>
     </div>
   );
 }
@@ -100,13 +100,13 @@ function AdminOperationsSection() {
       </div>
 
       {activeOps.length === 0 && (
-        <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("scheduler.no_active_operations")}</p>
+        <p className="text-sm text-muted">{t("scheduler.no_active_operations")}</p>
       )}
 
       {activeOps.length > 0 && (
         <div className="space-y-2">
           {activeOps.map((op) => (
-            <div key={op.job_id} className="flex items-center gap-3 rounded-md border border-[#d8dee4] bg-[#f6f8fa] px-3 py-2 dark:border-[#30363d] dark:bg-[#21262d]">
+            <div key={op.job_id} className="flex items-center gap-3 rounded-md border border-border bg-subtle px-3 py-2 dark:border-border dark:bg-subtle">
               <StatusBadge status={op.status === "running" ? "downloading" : op.status === "enqueued" ? "pending" : op.status === "complete" ? "complete" : "failed"} />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium truncate">
@@ -115,10 +115,10 @@ function AdminOperationsSection() {
                    op.operation_type}
                 </div>
                 {op.progress && (
-                  <div className="text-xs text-[#57606a] dark:text-[#8b949e]">{op.progress.label}</div>
+                  <div className="text-xs text-muted">{op.progress.label}</div>
                 )}
               </div>
-              {op.error && <div className="text-xs text-[#cf222e] dark:text-[#f85149] truncate max-w-[200px]">{op.error}</div>}
+              {op.error && <div className="text-xs text-danger dark:text-danger truncate max-w-[200px]">{op.error}</div>}
               <span className="text-[10px] text-[#8c959f] shrink-0">{new Date(op.updated_at * 1000).toLocaleTimeString()}</span>
             </div>
           ))}
@@ -262,7 +262,7 @@ export default function SchedulerPage() {
         )}
       </PageHeader>
 
-      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-[#d8dee4] bg-white p-3 dark:border-[#30363d] dark:bg-[#161b22]">
+      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-border bg-white p-3 dark:border-border dark:bg-surface">
         <input
           value={search}
           onChange={(e) => updateParams({ q: e.target.value || null })}
@@ -275,13 +275,13 @@ export default function SchedulerPage() {
             <button
               key={key}
               onClick={() => updateParams({ filter: key || null })}
-              className={`rounded-md border px-2.5 py-1.5 text-xs font-medium ${filter === key ? "border-[#0969da] bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#58a6ff]" : "border-[#d8dee4] hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]"}`}
+              className={`rounded-md border px-2.5 py-1.5 text-xs font-medium ${filter === key ? "border-accent bg-[#ddf4ff] text-accent dark:border-accent dark:bg-[#1f6feb26] dark:text-accent" : "border-border hover:bg-subtle dark:border-border dark:hover:bg-subtle"}`}
             >
               {label}
             </button>
           ))}
         </div>
-        <div className="ml-auto text-xs text-[#57606a] dark:text-[#8b949e]">
+        <div className="ml-auto text-xs text-muted">
           {t("scheduler.last_updated", { time: lastUpdated ? fmt.time(new Date(lastUpdated).toISOString()) : "—" })}
         </div>
       </div>
@@ -299,10 +299,10 @@ export default function SchedulerPage() {
         <section className="card mb-6 p-4">
           <h2 className="mb-3 text-base font-semibold">{t("scheduler.config_snapshot")}</h2>
           <div className="grid gap-3 text-sm md:grid-cols-4">
-            <div><div className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("scheduler.mode")}</div><div className="mt-1 font-medium">{scheduleModeLabel(t, queue.data.scheduler_mode)}</div></div>
-            <div><div className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("scheduler.timezone")}</div><div className="mt-1 font-medium">{queue.data.scheduler_timezone || "UTC"}</div></div>
-            <div><div className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("scheduler.fixed_times")}</div><div className="mt-1 font-mono text-xs">{queue.data.scheduled_times || "—"}</div></div>
-            <div><div className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("scheduler.scan_interval")}</div><div className="mt-1 font-medium">{t("scheduler.scan_interval_value", { minutes: queue.data.scheduler_scan_interval_minutes || 60 })}</div></div>
+            <div><div className="text-xs text-muted">{t("scheduler.mode")}</div><div className="mt-1 font-medium">{scheduleModeLabel(t, queue.data.scheduler_mode)}</div></div>
+            <div><div className="text-xs text-muted">{t("scheduler.timezone")}</div><div className="mt-1 font-medium">{queue.data.scheduler_timezone || "UTC"}</div></div>
+            <div><div className="text-xs text-muted">{t("scheduler.fixed_times")}</div><div className="mt-1 font-mono text-xs">{queue.data.scheduled_times || "—"}</div></div>
+            <div><div className="text-xs text-muted">{t("scheduler.scan_interval")}</div><div className="mt-1 font-medium">{t("scheduler.scan_interval_value", { minutes: queue.data.scheduler_scan_interval_minutes || 60 })}</div></div>
           </div>
         </section>
       )}
@@ -312,10 +312,10 @@ export default function SchedulerPage() {
           <div className="flex items-center justify-between px-4 py-3">
             <div>
               <h2 className="text-base font-semibold">{t("scheduler.queue_breakdown")}</h2>
-              <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{t("scheduler.queue_breakdown_desc")}</p>
+              <p className="mt-1 text-xs text-muted">{t("scheduler.queue_breakdown_desc")}</p>
             </div>
           </div>
-          <div className="grid grid-cols-[1.1fr_repeat(4,minmax(0,1fr))] gap-3 bg-[#f6f8fa] px-3 py-2 text-xs font-semibold uppercase text-[#57606a] dark:bg-[#21262d] dark:text-[#8b949e]">
+          <div className="grid grid-cols-[1.1fr_repeat(4,minmax(0,1fr))] gap-3 bg-subtle px-3 py-2 text-xs font-semibold uppercase text-muted dark:bg-subtle dark:text-muted">
             <span>{t("scheduler.queue_name")}</span>
             <span>{t("scheduler.queue_queued")}</span>
             <span>{t("scheduler.queue_scheduled_count")}</span>
@@ -324,7 +324,7 @@ export default function SchedulerPage() {
           </div>
           {queueRows.map(([name, stats]) => <QueueRow key={name} name={name} stats={stats} />)}
           {queue.data?.queues && (
-            <div className="flex flex-wrap gap-2 border-t border-[#d8dee4] px-4 py-3 text-xs dark:border-[#30363d]">
+            <div className="flex flex-wrap gap-2 border-t border-border px-4 py-3 text-xs dark:border-border">
               {(["downloads", "imports"] as const).map((name) => {
                 const stats = queue.data?.queues?.[name];
                 if (!stats || (!stats.failed && !stats.scheduled && !stats.started)) return null;
@@ -332,7 +332,7 @@ export default function SchedulerPage() {
                   <Link
                     key={name}
                     href={`/admin/jobs?tab=${name === "imports" ? "imports" : "downloads"}${stats.failed ? "&status=failed" : ""}`}
-                    className="rounded-full border border-[#bf8700]/30 bg-[#fff8c5] px-2 py-1 text-[#9a6700] hover:underline dark:bg-[#bb800926] dark:text-[#d29922]"
+                    className="rounded-full border border-warning/30 bg-[#fff8c5] px-2 py-1 text-warning hover:underline dark:bg-[#bb800926] dark:text-warning"
                   >
                     {t("scheduler.queue_attention", { queue: name, failed: stats.failed, scheduled: stats.scheduled, started: stats.started })}
                   </Link>
@@ -349,7 +349,7 @@ export default function SchedulerPage() {
         <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
           <div>
             <h2 className="text-base font-semibold">{t("scheduler.decision_snapshot")}</h2>
-            <p className="mt-1 text-sm text-[#57606a] dark:text-[#8b949e]">{t("scheduler.decision_desc")}</p>
+            <p className="mt-1 text-sm text-muted">{t("scheduler.decision_desc")}</p>
           </div>
           <div className="flex flex-wrap gap-2 text-xs">
             <span className="badge">{t("scheduler.legend_due", { count: summary.due })}</span>
@@ -361,34 +361,34 @@ export default function SchedulerPage() {
 
         {/* Batch action bar */}
         {selected.size > 0 && (
-          <div className="mb-3 flex items-center gap-2 rounded-md border border-[#bf8700]/30 bg-[#fff8c5] px-4 py-2 dark:bg-[#bb800926]">
-            <span className="text-xs font-medium text-[#9a6700] dark:text-[#d29922]">{t("common.selected_count", { count: selected.size })}</span>
+          <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/30 bg-[#fff8c5] px-4 py-2 dark:bg-[#bb800926]">
+            <span className="text-xs font-medium text-warning dark:text-warning">{t("common.selected_count", { count: selected.size })}</span>
             <button
               onClick={() => handleBatchToggle(false)}
               disabled={batchToggleSources.isPending}
-              className="rounded px-3 py-1 text-xs font-medium bg-[#cf222e] text-white hover:bg-[#a40e26] disabled:opacity-50"
+              className="rounded px-3 py-1 text-xs font-medium bg-danger text-white hover:bg-danger disabled:opacity-50"
             >
               {batchToggleSources.isPending ? "..." : t("scheduler.batch_disable_sync")}
             </button>
             <button
               onClick={() => handleBatchToggle(true)}
               disabled={batchToggleSources.isPending}
-              className="rounded px-3 py-1 text-xs font-medium bg-[#1a7f37] text-white hover:bg-[#116329] disabled:opacity-50"
+              className="rounded px-3 py-1 text-xs font-medium bg-success text-white hover:bg-[#116329] disabled:opacity-50"
             >
               {batchToggleSources.isPending ? "..." : t("scheduler.batch_enable_sync")}
             </button>
-            <button onClick={() => { setSelected(new Set()); setSelectAll(false); }} className="ml-auto text-xs text-[#9a6700] hover:underline dark:text-[#d29922]">{t("common.deselect_all")}</button>
+            <button onClick={() => { setSelected(new Set()); setSelectAll(false); }} className="ml-auto text-xs text-warning hover:underline dark:text-warning">{t("common.deselect_all")}</button>
           </div>
         )}
 
-        {decisions.isLoading && <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-20 animate-pulse rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />)}</div>}
+        {decisions.isLoading && <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-20 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div>}
         {decisions.error && <ErrorState message={(decisions.error as Error).message} onRetry={() => decisions.refetch()} />}
         {decisions.data && filteredItems.length === 0 && <EmptyState title={t("scheduler.no_sources")} description={t("scheduler.no_sources_desc")} />}
         {filteredItems.length > 0 && (
           <div className="table-shell overflow-hidden">
-            <div className="grid grid-cols-[auto_1.2fr_1fr_1fr_1fr_1fr] gap-3 border-b border-[#d8dee4] bg-[#f6f8fa] px-4 py-2 text-xs font-semibold uppercase text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]">
+            <div className="grid grid-cols-[auto_1.2fr_1fr_1fr_1fr_1fr] gap-3 border-b border-border bg-subtle px-4 py-2 text-xs font-semibold uppercase text-muted dark:border-border dark:bg-subtle dark:text-muted">
               <span className="flex items-center">
-                <input type="checkbox" checked={selectAll} onChange={handleSelectAll} className="w-4 h-4 rounded border-gray-300" title={t("common.select_all")} />
+                <input type="checkbox" checked={selectAll} onChange={handleSelectAll} className="w-4 h-4 rounded border-border" title={t("common.select_all")} />
               </span>
               <span>{t("scheduler.col_creator_source")}</span>
               <span>{t("scheduler.col_decision")}</span>
@@ -396,41 +396,41 @@ export default function SchedulerPage() {
               <span>{t("scheduler.col_next_window")}</span>
               <span>{t("scheduler.col_last_state")}</span>
             </div>
-            <div className="divide-y divide-[#d8dee4] dark:divide-[#30363d]">
+            <div className="divide-y divide-border dark:divide-border">
               {filteredItems.map((item) => (
-                <div key={item.source_id} className="grid grid-cols-1 gap-3 px-4 py-3 text-sm hover:bg-[#f6f8fa] dark:hover:bg-[#21262d] lg:grid-cols-[auto_1.2fr_1fr_1fr_1fr_1fr]">
+                <div key={item.source_id} className="grid grid-cols-1 gap-3 px-4 py-3 text-sm hover:bg-subtle dark:hover:bg-subtle lg:grid-cols-[auto_1.2fr_1fr_1fr_1fr_1fr]">
                   <div className="flex items-center">
-                    <input type="checkbox" checked={selected.has(item.source_id)} onChange={() => toggleSelect(item.source_id)} className="w-4 h-4 rounded border-gray-300" onClick={(e) => e.stopPropagation()} />
+                    <input type="checkbox" checked={selected.has(item.source_id)} onChange={() => toggleSelect(item.source_id)} className="w-4 h-4 rounded border-border" onClick={(e) => e.stopPropagation()} />
                   </div>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <SourceBadge source={item.source} />
-                      <Link href={`/admin/creators/${item.creator_id}`} className="truncate font-medium text-[#0969da] hover:underline dark:text-[#58a6ff]">{item.creator_name}</Link>
+                      <Link href={`/admin/creators/${item.creator_id}`} className="truncate font-medium text-accent hover:underline dark:text-accent">{item.creator_name}</Link>
                     </div>
-                    <div className="mt-1 truncate font-mono text-xs text-[#57606a] dark:text-[#8b949e]" title={item.source_url || ""}>{item.source_url || t("scheduler.no_url")}</div>
+                    <div className="mt-1 truncate font-mono text-xs text-muted" title={item.source_url || ""}>{item.source_url || t("scheduler.no_url")}</div>
                   </div>
                   <div>
                     <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${decisionTone(item)}`}>{schedulerDecisionLabel(t, item.reason, item.due)}</span>
-                    <div className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">
+                    <div className="mt-1 text-xs text-muted">
                       {item.auth_healthy ? t("scheduler.auth_ok") : t("scheduler.auth_issue")} · {item.url_valid ? t("scheduler.url_valid") : t("scheduler.url_invalid")}
                     </div>
                   </div>
-                  <div className="text-xs text-[#57606a] dark:text-[#8b949e]">
-                    <div className="font-medium text-[#24292f] dark:text-[#e6edf3]">{scheduleModeLabel(t, item.effective_mode)}</div>
+                  <div className="text-xs text-muted">
+                    <div className="font-medium text-fg">{scheduleModeLabel(t, item.effective_mode)}</div>
                     <div>{item.effective_mode === "fixed_time" ? (item.scheduled_times || "—") : t("scheduler.interval_value", { hours: item.sync_interval_hours })}</div>
                   </div>
-                  <div className="text-xs text-[#57606a] dark:text-[#8b949e]">
+                  <div className="text-xs text-muted">
                     <div>{fmt.dateTime(item.next_due_at)}</div>
                     {item.window_start && <div className="mt-1">{t("scheduler.window", { start: fmt.dateTime(item.window_start), end: fmt.dateTime(item.window_end) })}</div>}
                   </div>
-                  <div className="text-xs text-[#57606a] dark:text-[#8b949e]">
+                  <div className="text-xs text-muted">
                     <div>{t("scheduler.synced_at", { time: fmt.dateTime(item.last_synced_at) })}</div>
                     <div className="mt-1">{t("scheduler.attempted_at", { time: fmt.dateTime(item.last_attempted_at) })}</div>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      <Link href={`/admin/repositories/${item.source_id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("scheduler.open_repository")}</Link>
-                      <Link href={`/admin/jobs?tab=downloads&subscription_source_id=${item.source_id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("scheduler.open_jobs")}</Link>
-                      <Link href={`/admin/subscriptions/${item.subscription_id}`} className="text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("scheduler.manage")}</Link>
-                      <button onClick={() => syncRepo.mutate(item.source_id)} disabled={syncRepo.isPending} className="text-[#0969da] hover:underline disabled:opacity-50 dark:text-[#58a6ff]">{t("scheduler.sync_this_repo")}</button>
+                      <Link href={`/admin/repositories/${item.source_id}`} className="text-accent hover:underline dark:text-accent">{t("scheduler.open_repository")}</Link>
+                      <Link href={`/admin/jobs?tab=downloads&subscription_source_id=${item.source_id}`} className="text-accent hover:underline dark:text-accent">{t("scheduler.open_jobs")}</Link>
+                      <Link href={`/admin/subscriptions/${item.subscription_id}`} className="text-accent hover:underline dark:text-accent">{t("scheduler.manage")}</Link>
+                      <button onClick={() => syncRepo.mutate(item.source_id)} disabled={syncRepo.isPending} className="text-accent hover:underline disabled:opacity-50 dark:text-accent">{t("scheduler.sync_this_repo")}</button>
                     </div>
                   </div>
                 </div>

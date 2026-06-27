@@ -153,7 +153,7 @@ export default function DataManagementPage() {
           }`}>
             <div>
               <h3 className="font-medium text-sm dark:text-white">{a.title}</h3>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{a.desc}</p>
+              <p className="text-xs text-muted mt-1">{a.desc}</p>
             </div>
             <button
               onClick={() => setConfirmAction(a.key)}

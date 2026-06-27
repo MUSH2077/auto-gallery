@@ -106,10 +106,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   };
 
   const toneClasses: Record<ToastType, string> = {
-    success: "border-[#1a7f37]/30 bg-[#dafbe1] text-[#1a7f37] dark:border-[#3fb950]/30 dark:bg-[#2ea04326] dark:text-[#3fb950]",
-    error: "border-[#cf222e]/30 bg-[#ffebe9] text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]",
-    info: "border-[#0969da]/30 bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff]/30 dark:bg-[#1f6feb26] dark:text-[#58a6ff]",
-    warning: "border-[#bf8700]/30 bg-[#fff8c5] text-[#9a6700] dark:border-[#d29922]/30 dark:bg-[#bb800926] dark:text-[#d29922]",
+    success: "border-success/30 bg-[#dafbe1] text-success dark:border-success/30 dark:bg-[#2ea04326] dark:text-success",
+    error: "border-danger/30 bg-[#ffebe9] text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger",
+    info: "border-accent/30 bg-[#ddf4ff] text-accent dark:border-accent/30 dark:bg-[#1f6feb26] dark:text-accent",
+    warning: "border-warning/30 bg-[#fff8c5] text-warning dark:border-warning/30 dark:bg-[#bb800926] dark:text-warning",
   };
 
   const icons: Record<ToastType, string> = {
@@ -117,10 +117,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   };
 
   const progressColors: Record<ToastType, string> = {
-    success: "bg-[#1a7f37] dark:bg-[#3fb950]",
-    error: "bg-[#cf222e] dark:bg-[#f85149]",
-    info: "bg-[#0969da] dark:bg-[#58a6ff]",
-    warning: "bg-[#bf8700] dark:bg-[#d29922]",
+    success: "bg-success dark:bg-success",
+    error: "bg-danger dark:bg-danger",
+    info: "bg-accent dark:bg-accent",
+    warning: "bg-warning dark:bg-warning",
   };
 
   return (

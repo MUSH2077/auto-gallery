@@ -59,7 +59,7 @@ export function BatchByFilter({ onSuccess }: { onSuccess?: () => void }) {
       <select
         value={source}
         onChange={(e) => setSource(e.target.value)}
-        className="text-xs px-2 py-1 rounded border bg-white dark:bg-slate-700 dark:border-slate-600"
+        className="text-xs px-2 py-1 rounded border bg-surface dark:border-border"
       >
         {SOURCES.map((s) => (
           <option key={s.value} value={s.value}>{s.label}</option>
@@ -68,7 +68,7 @@ export function BatchByFilter({ onSuccess }: { onSuccess?: () => void }) {
       <select
         value={status}
         onChange={(e) => setStatus(e.target.value)}
-        className="text-xs px-2 py-1 rounded border bg-white dark:bg-slate-700 dark:border-slate-600"
+        className="text-xs px-2 py-1 rounded border bg-surface dark:border-border"
       >
         {STATUSES.map((s) => (
           <option key={s} value={s}>{s ? statusLabel(t, s) : t("jobs.filter_all_status")}</option>
@@ -77,7 +77,7 @@ export function BatchByFilter({ onSuccess }: { onSuccess?: () => void }) {
       <select
         value={action}
         onChange={(e) => setAction(e.target.value)}
-        className="text-xs px-2 py-1 rounded border bg-white dark:bg-slate-700 dark:border-slate-600"
+        className="text-xs px-2 py-1 rounded border bg-surface dark:border-border"
       >
         <option value="">Action...</option>
         {ACTIONS.map((a) => (
@@ -90,7 +90,7 @@ export function BatchByFilter({ onSuccess }: { onSuccess?: () => void }) {
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder="Reason (optional)"
-          className="text-xs px-2 py-1 rounded border bg-white dark:bg-slate-700 dark:border-slate-600 w-32"
+          className="text-xs px-2 py-1 rounded border bg-surface dark:border-border w-32"
         />
       ) : null}
       <button
@@ -100,7 +100,7 @@ export function BatchByFilter({ onSuccess }: { onSuccess?: () => void }) {
       >
         {running ? "Running..." : "Apply"}
       </button>
-      {result && <span className="text-xs text-gray-500">{result}</span>}
+      {result && <span className="text-xs text-muted">{result}</span>}
     </div>
   );
 }

@@ -31,8 +31,8 @@ export default function DownloadDefaultsPage() {
     return (
       <main className="max-w-4xl mx-auto p-6">
         <div className="animate-pulse space-y-4">
-          <div className="h-8 rounded-md bg-[#eaeef2] dark:bg-[#21262d] w-1/3" />
-          <div className="h-48 rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />
+          <div className="h-8 rounded-md bg-subtle dark:bg-subtle w-1/3" />
+          <div className="h-48 rounded-md bg-subtle dark:bg-subtle" />
         </div>
       </main>
     );
@@ -57,10 +57,10 @@ export default function DownloadDefaultsPage() {
       {!current ? null : (
         <>
           <div className="card p-6 space-y-5 text-sm">
-            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+            <div className="flex items-center justify-between py-3 border-b border-border">
               <div>
                 <span className="font-medium">{t("dldefaults.timeout")}</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.timeout.desc")}</p>
+                <p className="text-xs text-muted mt-1">{t("dldefaults.timeout.desc")}</p>
               </div>
               <input
                 type="number" min={60} max={3600} step={60}
@@ -70,10 +70,10 @@ export default function DownloadDefaultsPage() {
               />
             </div>
 
-            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+            <div className="flex items-center justify-between py-3 border-b border-border">
               <div>
                 <span className="font-medium">{t("dldefaults.stall_timeout")}</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.stall_timeout.desc")}</p>
+                <p className="text-xs text-muted mt-1">{t("dldefaults.stall_timeout.desc")}</p>
               </div>
               <input
                 type="number" min={30} max={600} step={30}
@@ -83,10 +83,10 @@ export default function DownloadDefaultsPage() {
               />
             </div>
 
-            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+            <div className="flex items-center justify-between py-3 border-b border-border">
               <div>
                 <span className="font-medium">{t("dldefaults.retries")}</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.retries.desc")}</p>
+                <p className="text-xs text-muted mt-1">{t("dldefaults.retries.desc")}</p>
               </div>
               <input
                 type="number" min={0} max={10}
@@ -99,7 +99,7 @@ export default function DownloadDefaultsPage() {
             <div className="flex items-center justify-between py-3">
               <div>
                 <span className="font-medium">{t("dldefaults.backoff")}</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.backoff.desc")}</p>
+                <p className="text-xs text-muted mt-1">{t("dldefaults.backoff.desc")}</p>
               </div>
               <input
                 type="number" min={10} max={600} step={10}
@@ -109,10 +109,10 @@ export default function DownloadDefaultsPage() {
               />
             </div>
 
-            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+            <div className="flex items-center justify-between py-3 border-b border-border">
               <div>
                 <span className="font-medium">{t("dldefaults.gallerydl_retries")}</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.gallerydl_retries.desc")}</p>
+                <p className="text-xs text-muted mt-1">{t("dldefaults.gallerydl_retries.desc")}</p>
               </div>
               <input
                 type="number" min={1} max={10}
@@ -122,10 +122,10 @@ export default function DownloadDefaultsPage() {
               />
             </div>
 
-            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+            <div className="flex items-center justify-between py-3 border-b border-border">
               <div>
                 <span className="font-medium">{t("dldefaults.gallerydl_timeout")}</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.gallerydl_timeout.desc")}</p>
+                <p className="text-xs text-muted mt-1">{t("dldefaults.gallerydl_timeout.desc")}</p>
               </div>
               <input
                 type="number" min={10} max={120} step={5}
@@ -138,7 +138,7 @@ export default function DownloadDefaultsPage() {
             <div className="flex items-center justify-between py-3">
               <div>
                 <span className="font-medium">{t("dldefaults.gallerydl_abort")}</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.gallerydl_abort.desc")}</p>
+                <p className="text-xs text-muted mt-1">{t("dldefaults.gallerydl_abort.desc")}</p>
               </div>
               <input
                 type="number" min={1} max={20}
@@ -148,10 +148,10 @@ export default function DownloadDefaultsPage() {
               />
             </div>
 
-            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+            <div className="flex items-center justify-between py-3 border-b border-border">
               <div>
                 <span className="font-medium">{t("dldefaults.concurrency")}</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.concurrency.desc")}</p>
+                <p className="text-xs text-muted mt-1">{t("dldefaults.concurrency.desc")}</p>
               </div>
               <select
                 aria-label={t("dldefaults.concurrency")}
@@ -165,10 +165,10 @@ export default function DownloadDefaultsPage() {
               </select>
             </div>
 
-            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+            <div className="flex items-center justify-between py-3 border-b border-border">
               <div>
                 <span className="font-medium">{t("dldefaults.max_posts")}</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.max_posts.desc")}</p>
+                <p className="text-xs text-muted mt-1">{t("dldefaults.max_posts.desc")}</p>
               </div>
               <input
                 type="number" min={10} max={10000} step={10}
@@ -178,10 +178,10 @@ export default function DownloadDefaultsPage() {
               />
             </div>
 
-            <div className="flex items-center justify-between py-3 border-b dark:border-slate-700">
+            <div className="flex items-center justify-between py-3 border-b border-border">
               <div>
                 <span className="font-medium">{t("dldefaults.skip_ai")}</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t("dldefaults.skip_ai.desc")}</p>
+                <p className="text-xs text-muted mt-1">{t("dldefaults.skip_ai.desc")}</p>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
                 <input type="checkbox" aria-label="Select item"
@@ -189,7 +189,7 @@ export default function DownloadDefaultsPage() {
                   onChange={(e) => { if (current) setLocal({ ...current, skip_ai_generated: e.target.checked }); }}
                   className="sr-only peer"
                 />
-                <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-slate-700 dark:peer-checked:bg-slate-500"></div>
+                <div className="w-9 h-5 bg-subtle peer-focus:outline-none rounded-full peer dark:bg-subtle peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-border after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-border peer-checked:bg-subtle dark:peer-checked:bg-subtle"></div>
               </label>
             </div>
           </div>

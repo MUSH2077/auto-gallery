@@ -21,11 +21,11 @@ export default function DedupPage() {
         </button>
       </PageHeader>
 
-      <div className="mb-6 rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm text-[#9a6700] dark:border-[#d29922]/30 dark:bg-[#d29922]/15 dark:text-[#f2cc60]">
+      <div className="mb-6 rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-[#f2cc60]">
         <strong>{t("dedup_scan.warning")}</strong> {t("dedup_scan.warning_detail")}
       </div>
 
-      {dups.isLoading && <div className="animate-pulse space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-12 rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />)}</div>}
+      {dups.isLoading && <div className="animate-pulse space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-12 rounded-md bg-subtle dark:bg-subtle" />)}</div>}
       {dups.error && <ErrorState message={(dups.error as Error).message} />}
 
       {dups.data && dups.data.duplicates.length === 0 && (
@@ -35,8 +35,8 @@ export default function DedupPage() {
       {dups.data?.duplicates.map((d, i) => (
         <div key={i} className="card mb-2 p-4 text-sm">
           <div className="flex items-center justify-between mb-2">
-            <span className="font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{d.source}:{d.source_work_id}</span>
-            <span className="badge border-[#ffebe9] bg-[#ffebe9] text-[#cf222e] dark:border-[#da3633]/30 dark:bg-[#da3633]/15 dark:text-[#ff7b72]">{d.count} {t("dedup_scan.duplicates")}</span>
+            <span className="font-mono text-xs text-muted">{d.source}:{d.source_work_id}</span>
+            <span className="badge border-[#ffebe9] bg-[#ffebe9] text-danger dark:border-danger/30 dark:bg-danger/15 dark:text-[#ff7b72]">{d.count} {t("dedup_scan.duplicates")}</span>
           </div>
           <div className="flex gap-2 flex-wrap">
             {d.work_ids.map((wid) => (

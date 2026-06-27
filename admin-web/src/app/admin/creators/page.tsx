@@ -52,7 +52,7 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
         <input value={urlInput} onChange={(e) => handleUrlPaste(e.target.value)}
           className="input w-full font-mono"
           placeholder="https://www.pixiv.net/users/123456 或 https://x.com/username" />
-        <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">粘贴 URL 自动提取创作者名。支持 Pixiv / X / Iwara / Danbooru / Weibo / Lofter / Bilibili。</p>
+        <p className="mt-1 text-xs text-muted">粘贴 URL 自动提取创作者名。支持 Pixiv / X / Iwara / Danbooru / Weibo / Lofter / Bilibili。</p>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
@@ -72,7 +72,7 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
           {isPending ? t("creators.creating") : t("creators.create")}
         </button>
       </div>
-      {error && <p className="text-sm text-[#cf222e] dark:text-[#f85149]">{error.message}</p>}
+      {error && <p className="text-sm text-danger dark:text-danger">{error.message}</p>}
     </div>
   );
 }
@@ -253,14 +253,14 @@ function CreatorsContent() {
 
       {/* Select all */}
       {creators.data && creators.data.items.length > 0 && (
-        <label className="mb-2 flex cursor-pointer items-center gap-2 text-xs text-[#57606a] dark:text-[#8b949e]">
+        <label className="mb-2 flex cursor-pointer items-center gap-2 text-xs text-muted">
           <input type="checkbox" aria-label="Select item" checked={selected.size === creators.data.items.length && creators.data.items.length > 0} onChange={selectAll} className="rounded" />
           {t("creators.select_all")}
         </label>
       )}
 
       {/* Content */}
-      {creators.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-[#eaeef2] dark:bg-[#21262d] animate-pulse" />)}</div>}
+      {creators.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-subtle dark:bg-subtle animate-pulse" />)}</div>}
       {creators.error && <ErrorState message={(creators.error as Error).message} onRetry={() => creators.refetch()} />}
       {creators.data && !creators.data.items.length && (
         <EmptyState
@@ -271,21 +271,21 @@ function CreatorsContent() {
       )}
 
       {creators.data && creators.data.items.length > 0 && (
-        <div className="overflow-hidden rounded-md border border-[#d8dee4] bg-white dark:border-[#30363d] dark:bg-[#161b22]">
+        <div className="overflow-hidden rounded-md border border-border bg-white dark:border-border dark:bg-surface">
           {creators.data.items.map((c) => (
-            <div key={c.id} className={`flex cursor-pointer items-center gap-3 border-b border-[#d8dee4] p-4 last:border-b-0 hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d] ${selected.has(c.id) ? "bg-[#ddf4ff] dark:bg-[#1f6feb26]" : ""}`} onClick={() => router.push(`/admin/creators/${c.id}`)}>
+            <div key={c.id} className={`flex cursor-pointer items-center gap-3 border-b border-border p-4 last:border-b-0 hover:bg-subtle dark:border-border dark:hover:bg-subtle ${selected.has(c.id) ? "bg-[#ddf4ff] dark:bg-[#1f6feb26]" : ""}`} onClick={() => router.push(`/admin/creators/${c.id}`)}>
               <input type="checkbox" aria-label="Select item" checked={selected.has(c.id)} onChange={() => toggleSelect(c.id)} className="rounded shrink-0" onClick={(e) => e.stopPropagation()} />
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#d8dee4] bg-[#0969da] text-sm font-semibold text-white dark:border-[#30363d]">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-accent text-sm font-semibold text-white dark:border-border">
                 {(c.display_name || c.name).slice(0, 2).toUpperCase()}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="truncate text-sm font-semibold text-[#0969da] dark:text-[#58a6ff]">{c.display_name || c.name}</span>
-                  {c.display_name && <span className="truncate font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{c.name}</span>}
-                  {c.is_active ? <span className="w-1.5 h-1.5 bg-green-500 rounded-full shrink-0" /> : <span className="w-1.5 h-1.5 bg-gray-300 rounded-full shrink-0" />}
+                  <span className="truncate text-sm font-semibold text-accent">{c.display_name || c.name}</span>
+                  {c.display_name && <span className="truncate font-mono text-xs text-muted">{c.name}</span>}
+                  {c.is_active ? <span className="w-1.5 h-1.5 bg-green-500 rounded-full shrink-0" /> : <span className="w-1.5 h-1.5 bg-subtle rounded-full shrink-0" />}
                 </div>
-                {c.description && <p className="mt-1 line-clamp-1 text-xs text-[#57606a] dark:text-[#8b949e]">{c.description}</p>}
-                <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-[#57606a] dark:text-[#8b949e]">
+                {c.description && <p className="mt-1 line-clamp-1 text-xs text-muted">{c.description}</p>}
+                <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted">
                   <span>{c.repository_count ?? 0} repositories</span>
                   <span>{c.source_count ?? 0} sources</span>
                   <span>{fmtLastSync(c.last_synced_at)}</span>
@@ -293,13 +293,13 @@ function CreatorsContent() {
               </div>
               <div className="flex items-center gap-2 shrink-0 text-xs" onClick={(e) => e.stopPropagation()}>
                 {(c as any).danbooru_artist_id && <span className="rounded-full bg-purple-100 px-2 py-0.5 font-mono text-[10px] text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">D#{String((c as any).danbooru_artist_id)}</span>}
-                {(c.subscription_count ?? 0) > 0 && <span className="rounded-full bg-[#dafbe1] px-2 py-0.5 text-[10px] text-[#1a7f37] dark:bg-[#2ea04326] dark:text-[#3fb950]">{t("creators.sub_badge")}</span>}
+                {(c.subscription_count ?? 0) > 0 && <span className="rounded-full bg-[#dafbe1] px-2 py-0.5 text-[10px] text-success dark:bg-[#2ea04326] dark:text-success">{t("creators.sub_badge")}</span>}
                 <button onClick={(e) => { e.stopPropagation(); toggleFavorite.mutate(c.id); }}
-                  className={`text-lg ${c.is_favorite ? "text-yellow-500" : "text-gray-300 dark:text-gray-600 hover:text-yellow-400"}`}
+                  className={`text-lg ${c.is_favorite ? "text-yellow-500" : "text-muted hover:text-yellow-400"}`}
                   title={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}>
                   {c.is_favorite ? "★" : "☆"}
                 </button>
-                <button onClick={(e) => { e.stopPropagation(); setDeleteId(c.id); }} className="text-[#cf222e] hover:underline dark:text-[#f85149]">{t("creators.del")}</button>
+                <button onClick={(e) => { e.stopPropagation(); setDeleteId(c.id); }} className="text-danger hover:underline dark:text-danger">{t("creators.del")}</button>
               </div>
             </div>
           ))}
@@ -310,7 +310,7 @@ function CreatorsContent() {
       {(creators.data?.items.length || 0) > 0 && (
         <div className="flex gap-2 justify-center mt-4">
           <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)} className="btn-ghost disabled:opacity-30">{t("common.prev")}</button>
-          <span className="px-3 py-1 text-sm text-[#57606a] dark:text-[#8b949e]">{t("common.page").replace("{page}", String(page + 1))}</span>
+          <span className="px-3 py-1 text-sm text-muted">{t("common.page").replace("{page}", String(page + 1))}</span>
           <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!creators.data?.items || creators.data.items.length < limit} className="btn-ghost disabled:opacity-30">{t("common.next")}</button>
         </div>
       )}

@@ -43,23 +43,23 @@ function AddSourceForm({ subId, onClose }: { subId: string; onClose: () => void 
         <select value={source} onChange={(e) => handleSourceChange(e.target.value)} className="select w-full">
           {sources.data?.sources?.filter((s: ProviderInfo) => s.capabilities.can_download || s.capabilities.can_import_local).map((s: ProviderInfo) => <option key={s.source_name} value={s.source_name}>{s.display_name} ({s.source_name})</option>)}
         </select>
-        <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.multi_source_hint")}</p>
+        <p className="mt-1 text-xs text-muted">{t("subscription_detail.multi_source_hint")}</p>
       </div>
       <div>
         <label className="block text-sm font-medium mb-1">{t("subscription_detail.source_creator_id")}</label>
         <input value={sourceCreatorId} onChange={(e) => handleIdChange(e.target.value)} className="input w-full" placeholder={t("subscription_detail.source_creator_id_placeholder")} />
-        <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.source_creator_id_hint")}</p>
+        <p className="mt-1 text-xs text-muted">{t("subscription_detail.source_creator_id_hint")}</p>
       </div>
       <div>
         <label className="block text-sm font-medium mb-1">{t("subscription_detail.source_url_field")}</label>
         <input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} className="input w-full font-mono" placeholder={urlHint} />
-        <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.source_url_hint")} {urlHint}</p>
+        <p className="mt-1 text-xs text-muted">{t("subscription_detail.source_url_hint")} {urlHint}</p>
       </div>
       <div className="flex justify-end gap-3 pt-2">
         <button onClick={onClose} className="btn-ghost">{t("subscription_detail.cancel")}</button>
         <button onClick={() => create.mutate()} disabled={create.isPending} className="btn-primary">{create.isPending ? t("subscription_detail.adding") : t("subscription_detail.add_source_btn")}</button>
       </div>
-      {create.error && <p className="text-sm text-[#cf222e] dark:text-[#f85149]">{(create.error as Error).message}</p>}
+      {create.error && <p className="text-sm text-danger dark:text-danger">{(create.error as Error).message}</p>}
     </div>
   );
 }
@@ -109,7 +109,7 @@ export default function SubscriptionDetailPage() {
     return c ? (c.display_name || c.name) : creatorId.slice(0, 8);
   };
 
-  if (sub.isLoading) return <main className="max-w-4xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 w-1/4 rounded bg-[#eaeef2] dark:bg-[#21262d]" /><div className="h-32 rounded bg-[#eaeef2] dark:bg-[#21262d]" /></div></main>;
+  if (sub.isLoading) return <main className="max-w-4xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 w-1/4 rounded bg-subtle dark:bg-subtle" /><div className="h-32 rounded bg-subtle dark:bg-subtle" /></div></main>;
   if (sub.error) return <main className="max-w-4xl mx-auto p-6"><ErrorState message={(sub.error as Error).message} onRetry={() => sub.refetch()} /></main>;
   if (!sub.data) return null;
   const s = sub.data;
@@ -139,7 +139,7 @@ export default function SubscriptionDetailPage() {
 
   return (
     <main className="max-w-5xl mx-auto p-6">
-      <Link href="/admin/subscriptions" className="inline-flex items-center gap-1 text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">&larr; 返回</Link>
+      <Link href="/admin/subscriptions" className="inline-flex items-center gap-1 text-sm text-accent hover:underline dark:text-accent">&larr; 返回</Link>
       <PageHeader title={s.name || (s.creator_display_name || s.creator_name || getCreatorName(s.creator_id))} description={s.creator_display_name || s.creator_name ? `${t("subscription_detail.creator")} ${s.creator_display_name || s.creator_name}` : undefined}>
         <div className="flex gap-2">
           <button onClick={() => { setEditName(s.name || ""); setEditMode(s.schedule_mode || ""); setEditInterval(s.sync_interval_hours || 24); setEditTimes(s.scheduled_times || ""); setEditing(true); }} className="btn-primary">{t("subscription_detail.edit")}</button>
@@ -151,12 +151,12 @@ export default function SubscriptionDetailPage() {
           <div className="card p-4 mb-4">
             <h3 className="font-medium mb-3">{t("subscription_detail.details")}</h3>
             <dl className="text-sm space-y-2">
-              <div className="flex gap-2"><dt className="w-28 text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.creator")}</dt><dd className="cursor-pointer text-[#0969da] hover:underline dark:text-[#58a6ff]" onClick={() => router.push(`/admin/creators/${s.creator_id}`)}>{s.creator_display_name || s.creator_name || getCreatorName(s.creator_id)}</dd></div>
-              <div className="flex gap-2"><dt className="w-28 text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.status")}</dt><dd><StatusBadge status={s.is_active ? "up" : "down"} /></dd></div>
-              <div className="flex gap-2"><dt className="w-28 text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.auto_sync")}</dt><dd>{s.sync_enabled ? <span className="text-[#1a7f37] dark:text-[#3fb950]">{t("subscription_detail.sync_enabled")}</span> : <span className="text-[#8c959f] dark:text-[#6e7681]">{t("subscription_detail.sync_disabled")}</span>}</dd></div>
-              <div className="flex gap-2"><dt className="w-28 text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.sync_strategy")}</dt><dd className="text-xs">
+              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.creator")}</dt><dd className="cursor-pointer text-accent hover:underline dark:text-accent" onClick={() => router.push(`/admin/creators/${s.creator_id}`)}>{s.creator_display_name || s.creator_name || getCreatorName(s.creator_id)}</dd></div>
+              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.status")}</dt><dd><StatusBadge status={s.is_active ? "up" : "down"} /></dd></div>
+              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.auto_sync")}</dt><dd>{s.sync_enabled ? <span className="text-success dark:text-success">{t("subscription_detail.sync_enabled")}</span> : <span className="text-[#8c959f] dark:text-muted">{t("subscription_detail.sync_disabled")}</span>}</dd></div>
+              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.sync_strategy")}</dt><dd className="text-xs">
                 {!s.schedule_mode || s.schedule_mode === "inherit" ? (
-                  <span className="text-gray-500">{t("subscription_detail.strategy_inherit")}</span>
+                  <span className="text-muted">{t("subscription_detail.strategy_inherit")}</span>
                 ) : s.schedule_mode === "manual" ? (
                   <span className="text-orange-600">{t("subscription_detail.strategy_manual")}</span>
                 ) : s.schedule_mode === "fixed_time" ? (
@@ -165,8 +165,8 @@ export default function SubscriptionDetailPage() {
                   <span className="text-blue-600">{t("subscription_detail.strategy_interval")} · {s.sync_interval_hours}h</span>
                 )}
               </dd></div>
-              <div className="flex gap-2"><dt className="w-28 text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.last_synced")}</dt><dd className="text-xs">{s.last_synced_at ? new Date(s.last_synced_at).toLocaleString() : t("subscription_detail.never_synced")}</dd></div>
-              <div className="flex gap-2"><dt className="w-28 text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.created")}</dt><dd className="text-xs">{new Date(s.created_at).toLocaleString()}</dd></div>
+              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.last_synced")}</dt><dd className="text-xs">{s.last_synced_at ? new Date(s.last_synced_at).toLocaleString() : t("subscription_detail.never_synced")}</dd></div>
+              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.created")}</dt><dd className="text-xs">{new Date(s.created_at).toLocaleString()}</dd></div>
             </dl>
           </div>
 
@@ -195,8 +195,8 @@ export default function SubscriptionDetailPage() {
 
         <div className="card h-fit p-4 text-sm">
           <h4 className="font-medium mb-2">{t("subscription_detail.multi_source_title")}</h4>
-          <p className="text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.multi_source_desc")}</p>
-          <div className="mt-4 space-y-2 border-t border-[#d8dee4] pt-4 text-xs dark:border-[#30363d]">
+          <p className="text-muted">{t("subscription_detail.multi_source_desc")}</p>
+          <div className="mt-4 space-y-2 border-t border-border pt-4 text-xs dark:border-border">
             <div className="flex justify-between"><span>Repositories</span><span className="font-semibold">{sources.data?.length || 0}</span></div>
             <div className="flex justify-between"><span>Enabled</span><span className="font-semibold">{sources.data?.filter((x) => x.is_enabled).length || 0}</span></div>
             <div className="flex justify-between"><span>Last sync</span><span className="font-semibold">{s.last_synced_at ? new Date(s.last_synced_at).toLocaleDateString() : t("subscription_detail.never_synced")}</span></div>
@@ -216,7 +216,7 @@ export default function SubscriptionDetailPage() {
               <option value="fixed_time">{t("subscription_detail.strategy_fixed_time")}</option>
               <option value="manual">{t("subscription_detail.strategy_manual")}</option>
             </select>
-            <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.strategy_desc")}</p>
+            <p className="mt-1 text-xs text-muted">{t("subscription_detail.strategy_desc")}</p>
           </div>
           {editMode === "interval" && (
             <div>
@@ -225,7 +225,7 @@ export default function SubscriptionDetailPage() {
                 <input type="number" min={1} max={168} value={editInterval}
                   onChange={(e) => setEditInterval(parseInt(e.target.value) || 24)}
                   className="input w-16 px-2 py-1.5 text-center font-mono" />
-                <span className="pr-2 text-xs text-[#57606a] dark:text-[#8b949e]">hours</span>
+                <span className="pr-2 text-xs text-muted">hours</span>
               </div>
             </div>
           )}
@@ -235,7 +235,7 @@ export default function SubscriptionDetailPage() {
               <input value={editTimes} onChange={(e) => setEditTimes(e.target.value)}
                 placeholder="03:00, 21:00"
                 className="input w-full font-mono" />
-              <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{t("subdefaults.scheduled_times.example")}</p>
+              <p className="mt-1 text-xs text-muted">{t("subdefaults.scheduled_times.example")}</p>
             </div>
           )}
           <div className="flex justify-end gap-3 pt-2">
@@ -247,7 +247,7 @@ export default function SubscriptionDetailPage() {
               scheduled_times: editMode === "fixed_time" ? (editTimes || null) : undefined,
             })} disabled={update.isPending} className="btn-primary">{t("subscription_detail.save")}</button>
           </div>
-          {update.error && <p className="text-sm text-[#cf222e] dark:text-[#f85149]">{(update.error as Error).message}</p>}
+          {update.error && <p className="text-sm text-danger dark:text-danger">{(update.error as Error).message}</p>}
         </div>
       </Modal>
 

@@ -47,12 +47,12 @@ export default function CreatorDuplicatesPage() {
     <main className="max-w-5xl mx-auto p-6">
       <PageHeader title={t("duplicates.title")} description={t("duplicates.desc")} />
 
-      <div className="mb-6 rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm text-[#9a6700] dark:border-[#d29922]/30 dark:bg-[#d29922]/15 dark:text-[#f2cc60]">
+      <div className="mb-6 rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-[#f2cc60]">
         <strong>{t("duplicates.warning")}</strong> {t("duplicates.warning_detail")}
       </div>
 
       {dups.isLoading && (
-        <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-24 rounded-md bg-[#eaeef2] animate-pulse dark:bg-[#21262d]" />)}</div>
+        <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-24 rounded-md bg-subtle animate-pulse dark:bg-subtle" />)}</div>
       )}
       {dups.error && <ErrorState message={(dups.error as Error).message} onRetry={() => dups.refetch()} />}
       {dups.data && dups.data.duplicates.length === 0 && (
@@ -66,14 +66,14 @@ export default function CreatorDuplicatesPage() {
               <span className="badge font-mono">
                 {group.reason.replace(/_/g, " ")}
               </span>
-              <span className="ml-2 text-sm text-[#57606a] dark:text-[#8b949e]">{group.description}</span>
+              <span className="ml-2 text-sm text-muted">{group.description}</span>
             </div>
-            <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{group.creator_ids.length} {t("duplicates.creators_count")}</span>
+            <span className="text-xs text-muted">{group.creator_ids.length} {t("duplicates.creators_count")}</span>
           </div>
 
           <div className="space-y-2">
             {group.creator_ids.map((cid, i) => (
-              <div key={cid} className="flex items-center gap-3 rounded-md border border-[#d8dee4] p-2 transition-colors hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
+              <div key={cid} className="flex items-center gap-3 rounded-md border border-border p-2 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle">
                 <input type="checkbox" aria-label="Select item"
                   checked={selectedSources.has(cid)}
                   onChange={() => toggleSource(cid, group.creator_ids[0] === cid ? group.creator_ids[1] : group.creator_ids[0])}
@@ -86,9 +86,9 @@ export default function CreatorDuplicatesPage() {
                   >
                     {group.creator_names[i] || cid.slice(0, 8)}
                   </button>
-                  <span className="font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{cid.slice(0, 8)}...</span>
+                  <span className="font-mono text-xs text-muted">{cid.slice(0, 8)}...</span>
                 </div>
-                <span className="shrink-0 text-xs text-[#57606a] dark:text-[#8b949e]">
+                <span className="shrink-0 text-xs text-muted">
                   {cid === group.creator_ids[0] ? t("duplicates.keep_target") : t("duplicates.merge_into")}
                 </span>
               </div>
@@ -99,12 +99,12 @@ export default function CreatorDuplicatesPage() {
 
       {/* Merge action bar */}
       {selectedSources.size > 0 && (
-        <div className="fixed right-0 bottom-0 left-0 z-30 flex items-center justify-between border-t border-[#d8dee4] bg-white p-4 shadow-lg dark:border-[#30363d] dark:bg-[#161b22]">
+        <div className="fixed right-0 bottom-0 left-0 z-30 flex items-center justify-between border-t border-border bg-white p-4 shadow-lg dark:border-border dark:bg-surface">
           <div>
             <span className="text-sm font-medium">
               {t("duplicates.target")} <span className="font-mono text-blue-600">{selectedTarget?.slice(0, 8)}...</span>
             </span>
-            <span className="ml-4 text-sm text-[#57606a] dark:text-[#8b949e]">
+            <span className="ml-4 text-sm text-muted">
               {t("duplicates.source_selected").replace("{count}", String(selectedSources.size))}
             </span>
           </div>

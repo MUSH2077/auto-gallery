@@ -40,12 +40,12 @@ function DecisionPill({ decision }: { decision?: SchedulerDecisionItem }) {
   const warning = ["auth_unhealthy", "url_invalid", "scheduler_disabled"].includes(decision.reason);
   const waiting = ["already_attempted_in_window", "manual_mode", "source_disabled"].includes(decision.reason);
   const cls = decision.due
-    ? "border-[#0969da]/30 bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff]/30 dark:bg-[#1f6feb26] dark:text-[#58a6ff]"
+    ? "border-accent/30 bg-[#ddf4ff] text-accent dark:border-accent/30 dark:bg-[#1f6feb26] dark:text-accent"
     : warning
-      ? "border-[#cf222e]/30 bg-[#ffebe9] text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]"
+      ? "border-danger/30 bg-[#ffebe9] text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger"
       : waiting
-        ? "border-[#bf8700]/30 bg-[#fff8c5] text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]"
-        : "border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]";
+        ? "border-warning/30 bg-[#fff8c5] text-warning dark:bg-[#bb800926] dark:text-warning"
+        : "border-border bg-subtle text-muted dark:border-border dark:bg-subtle dark:text-muted";
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>
       <span className={`h-1.5 w-1.5 rounded-full ${decision.due ? "animate-pulse bg-current" : "bg-current"}`} />
@@ -56,7 +56,7 @@ function DecisionPill({ decision }: { decision?: SchedulerDecisionItem }) {
 
 function JobPill({ job }: { job?: RepositoryLatestJob | null }) {
   const t = useT();
-  if (!job) return <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("repo.no_jobs")}</span>;
+  if (!job) return <span className="text-xs text-muted">{t("repo.no_jobs")}</span>;
   return (
     <Link href={`/admin/jobs`} className="inline-flex">
       <StatusBadge status={job.status} />
@@ -70,11 +70,11 @@ function RepoHealthLine({ repo }: { repo: RepoLike }) {
   return (
     <>
       <span className="inline-flex items-center gap-1.5">
-        <span className={`h-2 w-2 rounded-full ${repo.is_enabled ? "bg-[#1a7f37]" : "bg-[#8c959f]"}`} />
+        <span className={`h-2 w-2 rounded-full ${repo.is_enabled ? "bg-success" : "bg-[#8c959f]"}`} />
         {repo.is_enabled ? t("repo.enabled") : t("repo.disabled")}
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <span className={`h-2 w-2 rounded-full ${repo.auth_healthy ? "bg-[#1a7f37]" : "bg-[#cf222e]"}`} />
+        <span className={`h-2 w-2 rounded-full ${repo.auth_healthy ? "bg-success" : "bg-danger"}`} />
         {repo.auth_healthy ? t("repo.auth_healthy") : t("repo.auth_issue")}
       </span>
       <span>{t("repo.last_sync", { time: fmt.relative(repo.last_synced_at, "repo.never_synced") })}</span>
@@ -125,13 +125,13 @@ export default function RepositoryCard({
       onClick={handleCardClick}
       onKeyDown={handleCardKeyDown}
       aria-label={t("repo.open_details")}
-      className="cursor-pointer rounded-md border border-[#d8dee4] bg-white p-4 transition-colors hover:border-[#0969da]/50 focus:outline-none focus:ring-2 focus:ring-[#0969da]/40 dark:border-[#30363d] dark:bg-[#161b22] dark:hover:border-[#58a6ff]/50 dark:focus:ring-[#58a6ff]/40"
+      className="cursor-pointer rounded-md border border-border bg-white p-4 transition-colors hover:border-accent/50 focus:outline-none focus:ring-2 focus:ring-accent/40 dark:border-border dark:bg-surface dark:hover:border-accent/50 dark:focus:ring-accent/40"
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <SourceBadge source={repo.source} />
-            <h3 className="truncate text-base font-semibold text-[#0969da] dark:text-[#58a6ff]">
+            <h3 className="truncate text-base font-semibold text-accent">
               <button
                 type="button"
                 onClick={openDetail}
@@ -141,29 +141,29 @@ export default function RepositoryCard({
               </button>
             </h3>
             {!legal && (
-              <span className="rounded-full border border-[#bf8700]/30 bg-[#fff8c5] px-2 py-0.5 text-xs text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]">
+              <span className="rounded-full border border-warning/30 bg-[#fff8c5] px-2 py-0.5 text-xs text-warning dark:bg-[#bb800926] dark:text-warning">
                 {t("repo.not_downloadable")}
               </span>
             )}
           </div>
-          <p className="mt-2 truncate font-mono text-xs text-[#57606a] dark:text-[#8b949e]">
+          <p className="mt-2 truncate font-mono text-xs text-muted">
             {repo.source_url || t("repo.no_source_url")}
           </p>
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[#57606a] dark:text-[#8b949e]">
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted">
             <RepoHealthLine repo={repo} />
             <JobPill job={repo.latest_job} />
             <DecisionPill decision={decision} />
           </div>
           {decision && (
-            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#57606a] dark:text-[#8b949e]">
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
               <span>{t("repo.mode", { mode: scheduleModeLabel(t, decision.effective_mode) })}</span>
               <span>{t("repo.next", { time: fmt.dateTime(decision.next_due_at) })}</span>
               {decision.window_start && <span>{t("repo.window", { start: fmt.dateTime(decision.window_start), end: fmt.dateTime(decision.window_end) })}</span>}
             </div>
           )}
-          {disabledReason && <p className="mt-2 text-xs text-[#9a6700] dark:text-[#d29922]">{disabledReason}</p>}
+          {disabledReason && <p className="mt-2 text-xs text-warning dark:text-warning">{disabledReason}</p>}
           {repo.latest_job?.error_log_excerpt && (
-            <p className="mt-2 line-clamp-2 rounded-md bg-[#ffebe9] px-2 py-1 text-xs text-[#cf222e] dark:bg-[#f8514926] dark:text-[#f85149]">
+            <p className="mt-2 line-clamp-2 rounded-md bg-[#ffebe9] px-2 py-1 text-xs text-danger dark:bg-[#f8514926] dark:text-danger">
               {repo.latest_job.error_log_excerpt}
             </p>
           )}
@@ -191,7 +191,7 @@ export default function RepositoryCard({
           )}
           {onDelete && (
             <button onClick={() => onDelete(repo)}
-              className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-sm font-medium text-[#cf222e] hover:bg-[#ffebe9] dark:border-[#30363d] dark:text-[#f85149] dark:hover:bg-[#f8514926]">
+              className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-danger hover:bg-[#ffebe9] dark:border-border dark:text-danger dark:hover:bg-[#f8514926]">
               {t("repo.remove")}
             </button>
           )}

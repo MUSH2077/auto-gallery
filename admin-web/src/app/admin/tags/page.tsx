@@ -128,7 +128,7 @@ export default function TagsPage() {
             const w = 60 + Math.random() * 120;
             const h = 24 + Math.random() * 24;
             return <div key={i} style={{ width: `${w}px`, height: `${h}px` }}
-              className="rounded-full bg-[#eaeef2] animate-pulse dark:bg-[#21262d]" />;
+              className="rounded-full bg-subtle animate-pulse dark:bg-subtle" />;
           })}
         </div>
       )}
@@ -169,8 +169,8 @@ export default function TagsPage() {
               );
             })}
           </div>
-          {search && !filtered.length && <p className="mt-4 text-center text-sm text-[#57606a] dark:text-[#8b949e]">{t("tags.no_match").replace("{query}", search)}</p>}
-          <p className="mt-5 text-center text-xs text-[#57606a] dark:text-[#8b949e]">
+          {search && !filtered.length && <p className="mt-4 text-center text-sm text-muted">{t("tags.no_match").replace("{query}", search)}</p>}
+          <p className="mt-5 text-center text-xs text-muted">
             {search
               ? t("tags.matching").replace("{count}", String(filtered.length))
               : t("tags.total").replace("{count}", String(filtered.length))}
@@ -225,7 +225,7 @@ export default function TagsPage() {
         <div className="flex gap-2 justify-center mt-4">
           <button disabled={page === 0} onClick={() => setPage(page - 1)}
             className="btn-ghost px-3 py-1 text-sm disabled:opacity-30">{t("common.prev")}</button>
-          <span className="px-3 py-1 text-sm text-[#57606a] dark:text-[#8b949e]">{t("common.page").replace("{page}", String(page + 1))}</span>
+          <span className="px-3 py-1 text-sm text-muted">{t("common.page").replace("{page}", String(page + 1))}</span>
           <button onClick={() => setPage(page + 1)} disabled={!tags.data || tags.data.length < limit}
             className="btn-ghost px-3 py-1 text-sm disabled:opacity-30">{t("common.next")}</button>
         </div>

@@ -12,7 +12,7 @@ function CopyButton({ text }: { text: string }) {
   return (
     <button
       onClick={() => { navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}
-      className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-slate-600 hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors inline-flex items-center gap-1"
+      className="text-xs px-2 py-1 rounded border border-border hover:bg-subtle dark:hover:bg-subtle transition-colors inline-flex items-center gap-1"
     >
       {copied ? "✓ Copied" : "📋 Copy"}
     </button>
@@ -79,20 +79,20 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
         <h3 className="font-medium mb-2">{t("danbooru.artist_label").replace("{id}", String(artist.id)).replace("{name}", artist.name)}</h3>
         {artist.other_names.length > 0 && (
           <div className="flex flex-wrap items-center gap-1 mb-1">
-            <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">{t("danbooru.also_known")}</span>
+            <span className="text-xs text-muted shrink-0">{t("danbooru.also_known")}</span>
             {artist.other_names.map((n) => (
               <button key={n} type="button" onClick={() => setImportName(n)}
                 className={`text-xs px-2 py-0.5 rounded-full border transition-colors cursor-pointer
                   ${importName === n
                     ? "bg-blue-600 text-white border-blue-600"
-                    : "bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-300 border-gray-300 hover:bg-blue-50 hover:border-blue-400 dark:hover:bg-blue-900/30"}`}>
+                    : "bg-subtle text-fg border-border hover:bg-blue-50 hover:border-blue-400 dark:hover:bg-blue-900/30"}`}>
                 {n}
               </button>
             ))}
           </div>
         )}
-        {artist.post_count != null && <p className="text-xs text-gray-500 dark:text-gray-400">{t("danbooru.posts_count")} {artist.post_count}</p>}
-        {artist.notes && <p className="text-xs text-gray-600 dark:text-gray-300 mt-2 bg-gray-50 dark:bg-slate-800/50 p-2 rounded">{artist.notes}</p>}
+        {artist.post_count != null && <p className="text-xs text-muted">{t("danbooru.posts_count")} {artist.post_count}</p>}
+        {artist.notes && <p className="text-xs text-fg mt-2 bg-subtle p-2 rounded">{artist.notes}</p>}
       </div>
 
       {/* One-Click Import All & Subscribe */}
@@ -123,7 +123,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
                   className={`text-xs px-2 py-0.5 rounded-full border transition-colors cursor-pointer
                     ${importName === n
                       ? "bg-blue-600 text-white border-blue-600"
-                      : "bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-300 border-gray-300 hover:bg-blue-50 hover:border-blue-400 dark:hover:bg-blue-900/30"}`}>
+                      : "bg-subtle text-fg border-border hover:bg-blue-50 hover:border-blue-400 dark:hover:bg-blue-900/30"}`}>
                   {n}
                 </button>
               ))}
@@ -153,7 +153,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
         {/* Downloadable URLs with Subscribe buttons */}
         {downloadableUrls.length > 0 && (
           <div className="mt-3">
-            <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">{t("danbooru.downloadable_sources").replace("{count}", String(downloadableUrls.length))}</h4>
+            <h4 className="text-xs font-medium text-muted mb-2">{t("danbooru.downloadable_sources").replace("{count}", String(downloadableUrls.length))}</h4>
             <div className="space-y-2">
               {downloadableUrls.map((u, i) => (
                 <div key={i} className="flex items-center justify-between bg-green-50 border border-green-200 rounded p-2 text-xs">
@@ -193,7 +193,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
         {/* Other URLs */}
         {artist.urls.filter(u => !DOWNLOADABLE_SOURCES.includes(classifyUrl(u.normalized_url))).length > 0 && (
           <div className="mt-3">
-            <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">{t("danbooru.other_urls")}</h4>
+            <h4 className="text-xs font-medium text-muted mb-1">{t("danbooru.other_urls")}</h4>
             <div className="space-y-1">
               {artist.urls.filter(u => !DOWNLOADABLE_SOURCES.includes(classifyUrl(u.normalized_url))).map((u, i) => (
                 <div key={i} className="flex items-center gap-2 text-xs">
@@ -207,7 +207,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
         )}
 
         {artist.urls.length === 0 && (
-          <p className="text-xs text-gray-400 dark:text-gray-500 mt-3">{t("danbooru.no_urls")}</p>
+          <p className="text-xs text-muted mt-3">{t("danbooru.no_urls")}</p>
         )}
       </div>
 
@@ -215,14 +215,14 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
       {links.length > 0 && (
         <div className="card p-4">
           <h3 className="font-medium mb-2">{t("danbooru.import_links_count").replace("{count}", String(links.length))}</h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Creates creator_link records for all of this artist's associated URLs in Danbooru.</p>
+          <p className="text-xs text-muted mb-3">Creates creator_link records for all of this artist's associated URLs in Danbooru.</p>
           <div className="space-y-2 mb-4">
             {links.map((l, i) => (
-              <div key={i} className="flex items-center gap-2 text-xs border-b dark:border-slate-700 pb-2">
+              <div key={i} className="flex items-center gap-2 text-xs border-b border-border pb-2">
                 <SourceBadge source={l.link_type} />
                 <a href={l.url} target="_blank" rel="noopener noreferrer"
                   className="text-blue-600 hover:underline truncate max-w-md">{l.url}</a>
-                <span className="text-gray-400 dark:text-gray-500">confidence: {l.confidence.toFixed(1)}</span>
+                <span className="text-muted">confidence: {l.confidence.toFixed(1)}</span>
               </div>
             ))}
           </div>
@@ -457,13 +457,13 @@ export default function DanbooruReferencePage() {
           </button>
         </div>
         {!showUrlBatch && (
-          <p className="text-xs text-gray-500 dark:text-gray-400">
+          <p className="text-xs text-muted">
             Paste multiple creator profile URLs (Pixiv, Twitter/X, Iwara, etc.) to bulk import via Danbooru. Results are shown immediately per URL.
           </p>
         )}
         {showUrlBatch && (
           <div className="space-y-3">
-            <p className="text-xs text-gray-500 dark:text-gray-400">
+            <p className="text-xs text-muted">
               Enter one URL per line. Supported: Pixiv, Twitter/X, Iwara, and other Danbooru-indexed profile URLs.
             </p>
             <textarea
@@ -477,8 +477,8 @@ export default function DanbooruReferencePage() {
 
             {urlPreview && (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-150 dark:border-indigo-900 rounded p-2">
-                <span className="text-gray-600 dark:text-gray-400">{urlPreview.total} input</span>
-                <span className="text-gray-400">→</span>
+                <span className="text-muted">{urlPreview.total} input</span>
+                <span className="text-muted">→</span>
                 <span className="font-medium">{urlPreview.unique_count} unique</span>
                 {urlPreview.duplicates_removed > 0 && (
                   <span className="text-yellow-600">({urlPreview.duplicates_removed} dupe)</span>
@@ -497,7 +497,7 @@ export default function DanbooruReferencePage() {
               >
                 {urlBatchImport.isPending ? t("danbooru.processing") : t("danbooru.url_batch_import")}
               </button>
-              <span className="text-xs text-gray-400">
+              <span className="text-xs text-muted">
                 {urlBatchInput.trim() ? `${urlBatchInput.split("\n").filter((s) => s.trim().startsWith("http")).length} URLs` : ""}
               </span>
               {urlBatchImport.data && (
@@ -524,13 +524,13 @@ export default function DanbooruReferencePage() {
           </button>
         </div>
         {!showBatch && (
-          <p className="text-xs text-gray-500 dark:text-gray-400">
+          <p className="text-xs text-muted">
             Paste multiple Pixiv user IDs to bulk import via Danbooru. High-confidence matches are auto-imported; low-confidence and not-found entries are flagged for manual review.
           </p>
         )}
         {showBatch && (
           <div className="space-y-3">
-            <p className="text-xs text-gray-500 dark:text-gray-400">
+            <p className="text-xs text-muted">
               Enter one Pixiv user ID per line, or comma-separated. Valid IDs are numeric (e.g., 1980643).
             </p>
             <textarea
@@ -545,8 +545,8 @@ export default function DanbooruReferencePage() {
             {/* Preview summary */}
             {pixivPreview && (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs bg-blue-50 dark:bg-blue-900/20 border border-blue-150 dark:border-blue-900 rounded p-2">
-                <span className="text-gray-600 dark:text-gray-400">{pixivPreview.total} input</span>
-                <span className="text-gray-400">→</span>
+                <span className="text-muted">{pixivPreview.total} input</span>
+                <span className="text-muted">→</span>
                 <span className="font-medium">{pixivPreview.unique_count} unique</span>
                 {pixivPreview.duplicates_removed > 0 && (
                   <span className="text-yellow-600">({pixivPreview.duplicates_removed} dupe)</span>
@@ -584,7 +584,7 @@ export default function DanbooruReferencePage() {
               >
                 {enqueueBatch.isPending ? "..." : (!!batchJob?.jobId && !displayBatchResult) ? t("danbooru.processing") : t("danbooru.batch_import")}
               </button>
-              <span className="text-xs text-gray-400">
+              <span className="text-xs text-muted">
                 {batchInput.trim() ? `${batchInput.split(/[\n,]+/).filter((s: string) => /^\d+$/.test(s.trim())).length} ${t("danbooru.valid_ids")}` : ""}
               </span>
               {displayBatchResult && (
@@ -598,11 +598,11 @@ export default function DanbooruReferencePage() {
             {/* Progress bar */}
             {displayBatchProgress && !displayBatchResult && (
               <div className="mt-3">
-                <div className="flex justify-between text-xs text-gray-500 mb-1">
+                <div className="flex justify-between text-xs text-muted mb-1">
                   <span>Processing {displayBatchProgress.current}/{displayBatchProgress.total}</span>
                   <span>{displayBatchProgress.imported} imported, {displayBatchProgress.errors} errors</span>
                 </div>
-                <div className="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-2">
+                <div className="w-full bg-subtle rounded-full h-2">
                   <div className="bg-blue-600 h-2 rounded-full transition-all" style={{ width: `${((displayBatchProgress?.current || 0) / (displayBatchProgress?.total || 1)) * 100}%` }} />
                 </div>
               </div>
@@ -612,9 +612,9 @@ export default function DanbooruReferencePage() {
             {displayBatchResult && (
               <div className="mt-4 space-y-3">
                 {/* Summary bar */}
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs bg-gray-50 dark:bg-slate-800/60 border rounded p-2">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs bg-subtle border rounded p-2">
                   <span className="font-medium">{displayBatchResult.total} total</span>
-                  <span className="text-gray-400">|</span>
+                  <span className="text-muted">|</span>
                   {displayBatchResult.imported_count > 0 && (
                     <span className="text-green-600">🟢 {displayBatchResult.imported_count} imported</span>
                   )}
@@ -633,18 +633,18 @@ export default function DanbooruReferencePage() {
                 {[...displayBatchResult.imported, ...displayBatchResult.low_confidence].map((r: any, i: number) => {
                   const isLowConf = displayBatchResult.low_confidence.includes(r);
                   return (
-                    <details key={i} className="bg-gray-50 dark:bg-slate-800/40 border rounded p-2 text-xs">
+                    <details key={i} className="bg-subtle border rounded p-2 text-xs">
                       <summary className="cursor-pointer flex items-center gap-2">
                         <span>{isLowConf ? "🟡" : "🟢"}</span>
                         <span className="font-mono">Pixiv {r.pixiv_id}</span>
-                        <span className="text-gray-400">→</span>
+                        <span className="text-muted">→</span>
                         <span className="font-medium">{r.artist_name}</span>
-                        <span className="text-gray-400">Danbooru #{r.artist_id}</span>
+                        <span className="text-muted">Danbooru #{r.artist_id}</span>
                         {!isLowConf && (
                           <span className="ml-auto text-green-600">{r.links_imported} links · {r.sources_created} sources</span>
                         )}
                       </summary>
-                      <div className="mt-1 pl-6 text-gray-500 space-y-0.5">
+                      <div className="mt-1 pl-6 text-muted space-y-0.5">
                         {r.downloadable_urls && r.downloadable_urls.length > 0 && (
                           <div>Sources: {r.downloadable_urls.join(", ")}</div>
                         )}
@@ -696,7 +696,7 @@ export default function DanbooruReferencePage() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div className="card p-4">
           <h3 className="font-medium mb-1 text-sm">{t("danbooru.search_url_title")}</h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">{t("danbooru.search_url_desc")}</p>
+          <p className="text-xs text-muted mb-3">{t("danbooru.search_url_desc")}</p>
           <input value={searchUrl} onChange={(e) => setSearchUrl(e.target.value)}
             placeholder={t("danbooru.url_placeholder")}
             className="input mb-2 w-full" />
@@ -708,7 +708,7 @@ export default function DanbooruReferencePage() {
 
         <div className="card p-4">
           <h3 className="font-medium mb-1 text-sm">{t("danbooru.search_pixiv_title")}</h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">{t("danbooru.search_pixiv_desc")}</p>
+          <p className="text-xs text-muted mb-3">{t("danbooru.search_pixiv_desc")}</p>
           <input value={searchPixivId} onChange={(e) => setSearchPixivId(e.target.value)}
             placeholder={t("danbooru.pixiv_id_placeholder")}
             className="input mb-2 w-full" />
@@ -720,7 +720,7 @@ export default function DanbooruReferencePage() {
 
         <div className="card p-4">
           <h3 className="font-medium mb-1 text-sm">{t("danbooru.search_name_title")}</h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">{t("danbooru.search_name_desc")}</p>
+          <p className="text-xs text-muted mb-3">{t("danbooru.search_name_desc")}</p>
           <input value={searchName} onChange={(e) => setSearchName(e.target.value)}
             placeholder={t("danbooru.name_placeholder")}
             className="input mb-2 w-full" />
@@ -731,7 +731,7 @@ export default function DanbooruReferencePage() {
         </div>
       </div>
 
-      {preview.isLoading && <div className="card p-4 animate-pulse"><div className="h-24 rounded-md bg-[#eaeef2] dark:bg-[#21262d]" /></div>}
+      {preview.isLoading && <div className="card p-4 animate-pulse"><div className="h-24 rounded-md bg-subtle dark:bg-subtle" /></div>}
       {preview.error && <ErrorState message={(preview.error as Error).message} />}
       {preview.data && !preview.data.found && (
         <div className="card p-4">

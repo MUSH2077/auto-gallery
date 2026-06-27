@@ -99,11 +99,11 @@ function AssetThumb({ asset, active, index, onClick }: { asset: AssetData; activ
   return (
     <button
       onClick={onClick}
-      className={`h-16 w-16 shrink-0 overflow-hidden rounded-md border-2 ${active ? "border-[#0969da] dark:border-[#58a6ff]" : "border-[#d8dee4] hover:border-[#8c959f] dark:border-[#30363d]"}`}
+      className={`h-16 w-16 shrink-0 overflow-hidden rounded-md border-2 ${active ? "border-accent dark:border-accent" : "border-border hover:border-[#8c959f] dark:border-border"}`}
       title={asset.file_name}
     >
       {archive || mode === "error" ? (
-        <span className="flex h-full w-full items-center justify-center bg-[#f6f8fa] text-[10px] font-medium text-[#57606a] dark:bg-[#21262d] dark:text-[#8b949e]">
+        <span className="flex h-full w-full items-center justify-center bg-subtle text-[10px] font-medium text-muted dark:bg-subtle dark:text-muted">
           {archive ? t("work_detail.archive_short") : t("works.na")}
         </span>
       ) : (
@@ -124,7 +124,7 @@ function AllPages({ workId, sources }: { workId: string; sources: WorkSourceData
   const [activeIndex, setActiveIndex] = useState(0);
   const [fullAsset, setFullAsset] = useState<AssetData | null>(null);
 
-  if (assets.isLoading) return <div className="card p-4 animate-pulse"><div className="h-24 rounded-md bg-[#eaeef2] dark:bg-[#21262d]" /></div>;
+  if (assets.isLoading) return <div className="card p-4 animate-pulse"><div className="h-24 rounded-md bg-subtle dark:bg-subtle" /></div>;
   if (!assets.data || !assets.data.length) return <div className="card p-4"><EmptyState title={t("work_detail.no_assets_title", "No assets")} description={t("work_detail.no_assets")} /></div>;
 
   const current = assets.data[activeIndex] as AssetData;
@@ -138,10 +138,10 @@ function AllPages({ workId, sources }: { workId: string; sources: WorkSourceData
       {current && (
         <div className="mb-3">
           {currentIsArchive ? (
-            <div className="rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-6 text-center dark:border-[#30363d] dark:bg-[#21262d]">
-              <div className="mx-auto mb-2 flex h-16 w-16 items-center justify-center rounded-md border border-[#d8dee4] bg-white font-mono text-sm font-semibold text-[#57606a] dark:border-[#30363d] dark:bg-[#0d1117] dark:text-[#8b949e]">ZIP</div>
-              <div className="text-sm font-medium text-[#24292f] dark:text-[#e6edf3]">{t("work_detail.archive_asset")}</div>
-              <div className="mt-1 truncate text-xs text-[#57606a] dark:text-[#8b949e]">{current.file_name}</div>
+            <div className="rounded-md border border-border bg-subtle p-6 text-center dark:border-border dark:bg-subtle">
+              <div className="mx-auto mb-2 flex h-16 w-16 items-center justify-center rounded-md border border-border bg-white font-mono text-sm font-semibold text-muted dark:border-border dark:bg-canvas dark:text-muted">ZIP</div>
+              <div className="text-sm font-medium text-fg">{t("work_detail.archive_asset")}</div>
+              <div className="mt-1 truncate text-xs text-muted">{current.file_name}</div>
               <a href={current.original_url || ""} className="btn-ghost mt-3 inline-flex text-xs" target="_blank" rel="noopener noreferrer">
                 {t("work_detail.download_original")}
               </a>
@@ -150,7 +150,7 @@ function AllPages({ workId, sources }: { workId: string; sources: WorkSourceData
             <button
               type="button"
               onClick={() => setFullAsset(current)}
-              className="group relative block w-full overflow-hidden rounded-md bg-[#f6f8fa] dark:bg-[#21262d]"
+              className="group relative block w-full overflow-hidden rounded-md bg-subtle"
               title={t("work_detail.view_full", "View full image")}
             >
               <img src={current.preview_url || ""} alt={current.file_name}
@@ -160,7 +160,7 @@ function AllPages({ workId, sources }: { workId: string; sources: WorkSourceData
               </span>
             </button>
           )}
-          <p className="mt-1 text-center text-xs text-[#57606a] dark:text-[#8b949e]">{activeIndex + 1} / {totalPages}</p>
+          <p className="mt-1 text-center text-xs text-muted">{activeIndex + 1} / {totalPages}</p>
         </div>
       )}
       <div className="flex gap-2 overflow-x-auto pb-1">
@@ -171,8 +171,8 @@ function AllPages({ workId, sources }: { workId: string; sources: WorkSourceData
 
       {/* Asset metadata for current page */}
       {current && (
-        <div className="mt-4 space-y-1 border-t border-[#d8dee4] pt-3 text-xs text-[#57606a] dark:border-[#30363d] dark:text-[#8b949e]">
-          <p className="mb-1 font-medium text-[#24292f] dark:text-[#e6edf3]">{t("work_detail.current_page")}</p>
+        <div className="mt-4 space-y-1 border-t border-border pt-3 text-xs text-muted dark:border-border dark:text-muted">
+          <p className="mb-1 font-medium text-fg">{t("work_detail.current_page")}</p>
           <div className="flex justify-between"><span>{t("work_detail.file")}</span><span className="font-mono">{current.file_name}</span></div>
           {current.width && current.height && (
             <div className="flex justify-between"><span>{t("work_detail.dimensions")}</span><span>{current.width} &times; {current.height}</span></div>
@@ -192,19 +192,19 @@ function WorkHistory({ workId }: { workId: string }) {
     queryKey: queryKeys.curation.subject("work", workId),
     queryFn: () => api.listCurationCommits({ subject_type: "work", subject_id: workId, limit: 20 }),
   });
-  if (commits.isLoading) return <div className="card p-4 animate-pulse"><div className="h-20 rounded bg-[#eaeef2] dark:bg-[#21262d]" /></div>;
+  if (commits.isLoading) return <div className="card p-4 animate-pulse"><div className="h-20 rounded bg-subtle dark:bg-subtle" /></div>;
   if (!commits.data?.items.length) return <div className="card p-4"><EmptyState title="No history yet" description="Curation commits touching this work will appear here." /></div>;
   return (
     <div className="card p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">History</h3>
+        <h3 className="text-sm font-medium uppercase tracking-wide text-muted">History</h3>
         <Link href={`/admin/curation?subject_type=work&subject_id=${workId}`} className="text-xs text-blue-600 hover:underline">Open curation</Link>
       </div>
       <div className="space-y-3">
         {commits.data.items.map((commit) => (
-          <div key={commit.id} className="border-l-2 border-[#0969da] pl-3 text-sm dark:border-[#58a6ff]">
+          <div key={commit.id} className="border-l-2 border-accent pl-3 text-sm dark:border-accent">
             <div className="font-medium">{commit.message}</div>
-            <div className="mt-0.5 text-xs text-[#57606a] dark:text-[#8b949e]">
+            <div className="mt-0.5 text-xs text-muted">
               <span className="font-mono">{commit.id.slice(0, 8)}</span>
               <span className="mx-1.5">·</span>
               <span>{commit.trigger}</span>
@@ -213,7 +213,7 @@ function WorkHistory({ workId }: { workId: string }) {
             </div>
             <div className="mt-1 flex flex-wrap gap-1.5">
               {commit.changes.filter((c) => c.subject_id === workId).map((change) => (
-                <span key={change.id} className="rounded-full border border-[#d8dee4] px-2 py-0.5 text-[11px] text-[#57606a] dark:border-[#30363d] dark:text-[#8b949e]">{change.action.replaceAll("_", " ")}</span>
+                <span key={change.id} className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted dark:border-border dark:text-muted">{change.action.replaceAll("_", " ")}</span>
               ))}
             </div>
           </div>
@@ -248,7 +248,7 @@ export default function WorkDetailPage() {
     },
   });
 
-  if (work.isLoading) return <main className="max-w-6xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded bg-[#eaeef2] dark:bg-[#21262d]" /><div className="h-64 rounded bg-[#eaeef2] dark:bg-[#21262d]" /></div></main>;
+  if (work.isLoading) return <main className="max-w-6xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded bg-subtle dark:bg-subtle" /><div className="h-64 rounded bg-subtle dark:bg-subtle" /></div></main>;
   if (work.error) return <main className="max-w-6xl mx-auto p-6"><ErrorState message={(work.error as Error).message} onRetry={() => work.refetch()} /></main>;
   if (!work.data) return null;
   const w = work.data;
@@ -299,11 +299,11 @@ export default function WorkDetailPage() {
                 {!w.creator_name && primaryWs?.source_creator_id && (
                   <span className="text-sm">{t("work_detail.creator_id")} <span className="font-mono">{primaryWs.source_creator_id}</span></span>
                 )}
-                {rating && <span className="badge border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]">{rating}</span>}
+                {rating && <span className="badge border-border bg-subtle text-muted dark:border-border dark:bg-subtle dark:text-muted">{rating}</span>}
                 {illustType && <span className="text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700">{illustType}</span>}
                 {w.is_nsfw && <span className="text-xs px-2 py-0.5 rounded bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400">{t("work_detail.nsfw")}</span>}
                 {isAiGenerated && <span className="text-xs px-2 py-0.5 rounded bg-yellow-100 text-yellow-700">{t("work_detail.ai_generated")}</span>}
-                {visibility !== "visible" && <span className="text-xs px-2 py-0.5 rounded bg-[#cf222e]/10 text-[#cf222e]">{visibility}</span>}
+                {visibility !== "visible" && <span className="text-xs px-2 py-0.5 rounded bg-danger/10 text-danger">{visibility}</span>}
               </span>
             }
           />
@@ -311,18 +311,18 @@ export default function WorkDetailPage() {
         <div className="mt-1 flex shrink-0 gap-2">
           {visibility === "visible" ? (
             <button onClick={() => curateWork.mutate("trash")} disabled={curateWork.isPending}
-              className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-xs font-medium hover:bg-[#f6f8fa] disabled:opacity-50 dark:border-[#30363d] dark:hover:bg-[#21262d]">
+              className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-subtle disabled:opacity-50 dark:border-border dark:hover:bg-subtle">
               Move to Trash
             </button>
           ) : visibility === "trashed" ? (
             <button onClick={() => curateWork.mutate("restore")} disabled={curateWork.isPending}
-              className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-xs font-medium hover:bg-[#f6f8fa] disabled:opacity-50 dark:border-[#30363d] dark:hover:bg-[#21262d]">
+              className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-subtle disabled:opacity-50 dark:border-border dark:hover:bg-subtle">
               Restore
             </button>
           ) : null}
         </div>
         <button onClick={() => toggleFavorite.mutate(id)}
-          className={`text-2xl shrink-0 mt-1 ${work.data?.is_favorite ? "text-yellow-500" : "text-gray-300 hover:text-yellow-400"}`}
+          className={`text-2xl shrink-0 mt-1 ${work.data?.is_favorite ? "text-yellow-500" : "text-muted hover:text-yellow-400"}`}
           title={work.data?.is_favorite ? t("common.unfavorite") : t("common.favorite")}>
           {work.data?.is_favorite ? "★" : "☆"}
         </button>
@@ -333,28 +333,28 @@ export default function WorkDetailPage() {
         <div className="md:col-span-2 space-y-4">
           {/* Summary Card */}
           <div className="card p-4">
-            <h3 className="font-medium mb-3 text-sm uppercase tracking-wide text-gray-400 dark:text-gray-500">{t("work_detail.summary")}</h3>
+            <h3 className="font-medium mb-3 text-sm uppercase tracking-wide text-muted">{t("work_detail.summary")}</h3>
             <dl className="text-sm space-y-2">
-              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t("work_detail.title")}</dt><dd className="font-medium">{w.title || t("work_detail.untitled")}</dd></div>
+              <div className="flex gap-2"><dt className="text-muted w-24 shrink-0">{t("work_detail.title")}</dt><dd className="font-medium">{w.title || t("work_detail.untitled")}</dd></div>
               {primaryWs?.source_work_id && (
-                <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t("work_detail.work_id")}</dt><dd className="font-mono text-xs">{primaryWs.source_work_id}</dd></div>
+                <div className="flex gap-2"><dt className="text-muted w-24 shrink-0">{t("work_detail.work_id")}</dt><dd className="font-mono text-xs">{primaryWs.source_work_id}</dd></div>
               )}
-              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t("work_detail.posted")}</dt><dd>{createDate ? new Date(createDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : t("work_detail.unknown")}</dd></div>
+              <div className="flex gap-2"><dt className="text-muted w-24 shrink-0">{t("work_detail.posted")}</dt><dd>{createDate ? new Date(createDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : t("work_detail.unknown")}</dd></div>
               {rawWidth && rawHeight && (
-                <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t("work_detail.dimensions")}</dt><dd>{rawWidth} &times; {rawHeight}</dd></div>
+                <div className="flex gap-2"><dt className="text-muted w-24 shrink-0">{t("work_detail.dimensions")}</dt><dd>{rawWidth} &times; {rawHeight}</dd></div>
               )}
-              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t("work_detail.pages")}</dt><dd>{pageCount}</dd></div>
+              <div className="flex gap-2"><dt className="text-muted w-24 shrink-0">{t("work_detail.pages")}</dt><dd>{pageCount}</dd></div>
               {illustType && (
-                <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t("work_detail.type")}</dt><dd className="capitalize">{illustType}</dd></div>
+                <div className="flex gap-2"><dt className="text-muted w-24 shrink-0">{t("work_detail.type")}</dt><dd className="capitalize">{illustType}</dd></div>
               )}
-              <div className="flex gap-2"><dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t("work_detail.imported")}</dt><dd className="text-xs">{new Date(w.created_at).toLocaleString()}</dd></div>
+              <div className="flex gap-2"><dt className="text-muted w-24 shrink-0">{t("work_detail.imported")}</dt><dd className="text-xs">{new Date(w.created_at).toLocaleString()}</dd></div>
             </dl>
           </div>
 
           {/* Stats Card */}
           {hasStats && (
             <div className="card p-4">
-              <h3 className="font-medium mb-3 text-sm uppercase tracking-wide text-gray-400 dark:text-gray-500">{t("work_detail.stats")}</h3>
+              <h3 className="font-medium mb-3 text-sm uppercase tracking-wide text-muted">{t("work_detail.stats")}</h3>
               <div className="grid grid-cols-2 gap-4">
                 {totalView !== undefined && (
                   <div className="text-center p-3 bg-blue-50 dark:bg-blue-900/30 rounded-lg">
@@ -375,7 +375,7 @@ export default function WorkDetailPage() {
           {/* Tags */}
           {(rawTags.length > 0 || (workTags.data && workTags.data.length > 0)) && (
             <div className="card p-4">
-              <h3 className="font-medium mb-3 text-sm uppercase tracking-wide text-gray-400 dark:text-gray-500">
+              <h3 className="font-medium mb-3 text-sm uppercase tracking-wide text-muted">
                 {t("work_detail.tags")} ({rawTags.length} {t("work_detail.source_tags")}{workTags.data?.length ? ` · ${workTags.data.length} ${t("work_detail.normalized_tags")}` : ""})
               </h3>
               {/* Normalized (work-level) tags */}
@@ -396,7 +396,7 @@ export default function WorkDetailPage() {
                 <div className="flex flex-wrap gap-2">
                   {rawTags.map((tag, i) => (
                     <span key={i} onClick={() => router.push(`/admin/search?q=${encodeURIComponent(tag)}`)}
-                      className="px-3 py-1 bg-gray-100 dark:bg-slate-700 rounded-full text-sm hover:bg-blue-100 hover:text-blue-700 dark:hover:bg-blue-900/30 dark:hover:text-blue-300 cursor-pointer transition-colors"
+                      className="px-3 py-1 bg-subtle rounded-full text-sm hover:bg-blue-100 hover:text-blue-700 dark:hover:bg-blue-900/30 dark:hover:text-blue-300 cursor-pointer transition-colors"
                       title={`Search source tag: ${tag}`}>
                       {tag}
                     </span>
@@ -409,7 +409,7 @@ export default function WorkDetailPage() {
           {/* Tools */}
           {rawTools.length > 0 && (
             <div className="card p-4">
-              <h3 className="font-medium mb-3 text-sm uppercase tracking-wide text-gray-400 dark:text-gray-500">{t("work_detail.tools")}</h3>
+              <h3 className="font-medium mb-3 text-sm uppercase tracking-wide text-muted">{t("work_detail.tools")}</h3>
               <div className="flex flex-wrap gap-2">
                 {rawTools.map((tool, i) => (
                   <span key={i} className="px-3 py-1 bg-indigo-50 text-indigo-700 rounded-full text-sm">{tool}</span>
@@ -421,14 +421,14 @@ export default function WorkDetailPage() {
           {/* Description */}
           {w.description && (
             <div className="card p-4">
-              <h3 className="font-medium mb-2 text-sm uppercase tracking-wide text-gray-400 dark:text-gray-500">{t("work_detail.description")}</h3>
+              <h3 className="font-medium mb-2 text-sm uppercase tracking-wide text-muted">{t("work_detail.description")}</h3>
               <p className="text-sm whitespace-pre-wrap leading-relaxed">{w.description}</p>
             </div>
           )}
 
           {/* Source Records */}
           <div className="card p-4">
-            <h3 className="font-medium mb-3 text-sm uppercase tracking-wide text-gray-400 dark:text-gray-500">
+            <h3 className="font-medium mb-3 text-sm uppercase tracking-wide text-muted">
               {t("work_detail.source_records").replace("{count}", String(wsList.length))}
             </h3>
             {wsList.length > 0 ? (
@@ -454,7 +454,7 @@ export default function WorkDetailPage() {
           {/* Series info */}
           {series && (
             <div className="card p-4">
-              <h3 className="font-medium mb-2 text-sm text-gray-500 dark:text-gray-400">{t("work_detail.series")}</h3>
+              <h3 className="font-medium mb-2 text-sm text-muted">{t("work_detail.series")}</h3>
               <p className="text-sm">{series}</p>
             </div>
           )}
@@ -462,7 +462,7 @@ export default function WorkDetailPage() {
           {/* Quick links */}
           {primaryWs?.source_url && (
             <div className="card p-4">
-              <h3 className="font-medium mb-2 text-sm text-gray-500 dark:text-gray-400">{t("work_detail.links")}</h3>
+              <h3 className="font-medium mb-2 text-sm text-muted">{t("work_detail.links")}</h3>
               <a href={primaryWs.source_url} target="_blank" rel="noopener noreferrer"
                 className="text-sm text-blue-600 hover:underline break-all">
                 {t("work_detail.view_on").replace("{source}", primaryWs.source)}
@@ -490,11 +490,11 @@ function MoreFromCreator({ creatorId, currentWorkId }: { creatorId: string; curr
       <div className="grid grid-cols-2 gap-2">
         {others.map(w => (
           <Link key={w.id} href={`/admin/works/${w.id}`} className="group">
-            <div className="aspect-[4/3] bg-gray-100 dark:bg-slate-700 rounded overflow-hidden">
+            <div className="aspect-[4/3] bg-subtle rounded overflow-hidden">
               {w.thumbnail_asset_id ? (
                 <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="w-full h-full object-cover" loading="lazy" />
               ) : (
-                <div className="flex h-full items-center justify-center text-xs text-gray-400">{t("works.na")}</div>
+                <div className="flex h-full items-center justify-center text-xs text-muted">{t("works.na")}</div>
               )}
             </div>
             <p className="text-xs mt-1 truncate group-hover:text-blue-600">{w.title || t("works.untitled")}</p>
@@ -515,9 +515,9 @@ function SourceRecord({ source: s }: { source: WorkSourceData }) {
     <div className="border rounded-lg p-3 text-sm">
       <div className="flex items-center gap-2 mb-2">
         <SourceBadge source={s.source} />
-        <span className="font-mono text-xs text-gray-500 dark:text-gray-400">{s.source_work_id}</span>
+        <span className="font-mono text-xs text-muted">{s.source_work_id}</span>
         {s.source_creator_id && (
-          <span className="text-xs text-gray-400 dark:text-gray-500">{t("work_detail.by")} {s.source_creator_id}</span>
+          <span className="text-xs text-muted">{t("work_detail.by")} {s.source_creator_id}</span>
         )}
       </div>
       {s.source_url && (
@@ -527,16 +527,16 @@ function SourceRecord({ source: s }: { source: WorkSourceData }) {
           </a>
         </div>
       )}
-      {s.title && <p className="text-xs text-gray-600 dark:text-gray-300 mt-1">{t("work_detail.source_title")} {s.title}</p>}
-      {s.posted_at && <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{t("work_detail.source_posted")} {s.posted_at}</p>}
+      {s.title && <p className="text-xs text-fg mt-1">{t("work_detail.source_title")} {s.title}</p>}
+      {s.posted_at && <p className="text-xs text-muted mt-1">{t("work_detail.source_posted")} {s.posted_at}</p>}
       {s.raw_metadata && (
         <div className="mt-2">
           <button onClick={() => setShowRaw(!showRaw)}
-            className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:text-gray-300 underline">
+            className="text-xs text-muted hover:text-fg underline">
             {showRaw ? t("work_detail.hide_metadata") : t("work_detail.show_metadata")}
           </button>
           {showRaw && (
-            <pre className="mt-2 text-xs font-mono bg-gray-50 dark:bg-slate-800/50 p-3 rounded max-h-64 overflow-auto">
+            <pre className="mt-2 text-xs font-mono bg-subtle p-3 rounded max-h-64 overflow-auto">
               {JSON.stringify(s.raw_metadata, null, 2)}
             </pre>
           )}

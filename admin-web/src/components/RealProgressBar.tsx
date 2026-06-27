@@ -29,22 +29,22 @@ export function RealProgressBar({ progress }: { progress: ProgressData | null })
   return (
     <div className="flex w-56 shrink-0 flex-col gap-1">
       <div className="flex items-center justify-between gap-2 text-[11px] leading-tight">
-        <span className="min-w-0 truncate font-medium text-[#24292f] dark:text-[#e6edf3]" title={detail}>
+        <span className="min-w-0 truncate font-medium text-fg" title={detail}>
           {detail}
         </span>
-        {pct != null && <span className="shrink-0 font-mono text-[#57606a] dark:text-[#8b949e]">{pct}%</span>}
+        {pct != null && <span className="shrink-0 font-mono text-muted">{pct}%</span>}
       </div>
-      <div className="h-2 w-full overflow-hidden rounded-full bg-[#d8dee4] dark:bg-[#30363d]">
+      <div className="h-2 w-full overflow-hidden rounded-full bg-border dark:bg-border">
         {hasPercent ? (
           <div
-            className="h-full rounded-full bg-[#0969da] transition-all duration-500 ease-out"
+            className="h-full rounded-full bg-accent transition-all duration-500 ease-out"
             style={{ width: `${pct}%` }}
           />
         ) : (
-          <div className="h-full w-3/5 animate-pulse rounded-full bg-[#0969da]" />
+          <div className="h-full w-3/5 animate-pulse rounded-full bg-accent" />
         )}
       </div>
-      <div className="flex items-center justify-between gap-2 text-[10px] text-[#57606a] dark:text-[#8b949e]">
+      <div className="flex items-center justify-between gap-2 text-[10px] text-muted">
         <span className="min-w-0 truncate" title={stageLabel}>{stageLabel}</span>
         {hasCount && (
           <span className="shrink-0 font-mono tabular-nums">
