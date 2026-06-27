@@ -99,7 +99,7 @@ function AssetThumb({ asset, active, index, onClick }: { asset: AssetData; activ
   return (
     <button
       onClick={onClick}
-      className={`h-16 w-16 shrink-0 overflow-hidden rounded-md border-2 ${active ? "border-accent dark:border-accent" : "border-border hover:border-[#8c959f] dark:border-border"}`}
+      className={`h-16 w-16 shrink-0 overflow-hidden rounded-md border-2 ${active ? "border-accent dark:border-accent" : "border-border hover:border-placeholder dark:border-border"}`}
       title={asset.file_name}
     >
       {archive || mode === "error" ? (

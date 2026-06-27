@@ -80,7 +80,7 @@ export default function LoginPage() {
             </div>
 
             {error && (
-              <div className="rounded-md border border-danger/30 bg-[#ffebe9] px-3 py-2 text-sm text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger">
+              <div className="rounded-md border border-danger/30 bg-danger-subtle px-3 py-2 text-sm text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">
                 {error}
               </div>
             )}

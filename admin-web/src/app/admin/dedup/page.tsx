@@ -21,7 +21,7 @@ export default function DedupPage() {
         </button>
       </PageHeader>
 
-      <div className="mb-6 rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-[#f2cc60]">
+      <div className="mb-6 rounded-md border border-warning-subtle bg-warning-subtle p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-warning">
         <strong>{t("dedup_scan.warning")}</strong> {t("dedup_scan.warning_detail")}
       </div>
 
@@ -36,7 +36,7 @@ export default function DedupPage() {
         <div key={i} className="card mb-2 p-4 text-sm">
           <div className="flex items-center justify-between mb-2">
             <span className="font-mono text-xs text-muted">{d.source}:{d.source_work_id}</span>
-            <span className="badge border-[#ffebe9] bg-[#ffebe9] text-danger dark:border-danger/30 dark:bg-danger/15 dark:text-[#ff7b72]">{d.count} {t("dedup_scan.duplicates")}</span>
+            <span className="badge border-danger-subtle bg-danger-subtle text-danger dark:border-danger/30 dark:bg-danger/15 dark:text-danger">{d.count} {t("dedup_scan.duplicates")}</span>
           </div>
           <div className="flex gap-2 flex-wrap">
             {d.work_ids.map((wid) => (

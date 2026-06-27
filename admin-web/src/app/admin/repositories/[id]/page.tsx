@@ -30,18 +30,18 @@ function repoName(repo: CreatorRepository): string {
 function statusClass(status?: string | null) {
   const running = ["pending", "downloading", "downloaded", "importing"].includes(status || "");
   const failed = ["failed", "stale"].includes(status || "");
-  if (running) return "border-accent/30 bg-[#ddf4ff] text-accent dark:border-accent/30 dark:bg-[#1f6feb26] dark:text-accent";
-  if (failed) return "border-danger/30 bg-[#ffebe9] text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger";
-  return "border-success/30 bg-[#dafbe1] text-success dark:border-success/30 dark:bg-[#2ea04326] dark:text-success";
+  if (running) return "border-accent/30 bg-accent-subtle text-accent dark:border-accent/30 dark:bg-accent-subtle dark:text-accent";
+  if (failed) return "border-danger/30 bg-danger-subtle text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger";
+  return "border-success/30 bg-success-subtle text-success dark:border-success/30 dark:bg-success-subtle dark:text-success";
 }
 
 function Pill({ children, tone = "neutral" }: { children: React.ReactNode; tone?: "neutral" | "good" | "warn" | "bad" }) {
   const cls = tone === "good"
-    ? "border-success/30 bg-[#dafbe1] text-success dark:border-success/30 dark:bg-[#2ea04326] dark:text-success"
+    ? "border-success/30 bg-success-subtle text-success dark:border-success/30 dark:bg-success-subtle dark:text-success"
     : tone === "warn"
-      ? "border-warning/30 bg-[#fff8c5] text-warning dark:bg-[#bb800926] dark:text-warning"
+      ? "border-warning/30 bg-warning-subtle text-warning dark:bg-warning-subtle dark:text-warning"
       : tone === "bad"
-        ? "border-danger/30 bg-[#ffebe9] text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger"
+        ? "border-danger/30 bg-danger-subtle text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger"
         : "border-border bg-subtle text-muted dark:border-border dark:bg-subtle dark:text-muted";
   return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>{children}</span>;
 }
@@ -51,7 +51,7 @@ function StatCard({ label, value, hint }: { label: string; value: React.ReactNod
     <div className="rounded-md border border-border bg-white p-3 dark:border-border dark:bg-surface">
       <div className="truncate text-sm font-semibold text-fg">{value}</div>
       <div className="mt-1 text-[11px] font-medium uppercase text-muted">{label}</div>
-      {hint && <div className="mt-0.5 text-xs text-[#8c959f] dark:text-muted">{hint}</div>}
+      {hint && <div className="mt-0.5 text-xs text-placeholder dark:text-muted">{hint}</div>}
     </div>
   );
 }
@@ -122,10 +122,10 @@ function WorksGrid({ works }: { works: RepositoryRecentWork[] }) {
 }
 
 function graphTone(node: RepositoryGraphNode) {
-  if (node.is_baseline) return "border-[#8c959f] bg-subtle";
-  if (node.trigger.includes("purge") || node.trigger.includes("trash")) return "border-danger bg-[#ffebe9] dark:bg-[#da363326]";
-  if (node.trigger.includes("restore") || node.trigger.includes("revert")) return "border-success bg-[#dafbe1] dark:bg-[#23863626]";
-  return "border-accent bg-[#ddf4ff] dark:bg-[#1f6feb26]";
+  if (node.is_baseline) return "border-placeholder bg-subtle";
+  if (node.trigger.includes("purge") || node.trigger.includes("trash")) return "border-danger bg-danger-subtle dark:bg-danger-subtle";
+  if (node.trigger.includes("restore") || node.trigger.includes("revert")) return "border-success bg-success-subtle dark:bg-success-subtle";
+  return "border-accent bg-accent-subtle dark:bg-accent-subtle";
 }
 
 function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
@@ -169,7 +169,7 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
           {t("repo_detail.graph_showing", { shown: graph.data.nodes.length, total: graph.data.total })}
         </div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={() => setIncludeBaseline((value) => !value)} className={`rounded-md border px-2.5 py-1.5 text-xs ${includeBaseline ? "border-border" : "border-accent bg-[#ddf4ff] text-accent dark:border-accent dark:bg-[#1f6feb26] dark:text-accent"}`}>
+          <button onClick={() => setIncludeBaseline((value) => !value)} className={`rounded-md border px-2.5 py-1.5 text-xs ${includeBaseline ? "border-border" : "border-accent bg-accent-subtle text-accent dark:border-accent dark:bg-accent-subtle dark:text-accent"}`}>
             {includeBaseline ? t("repo_detail.hide_baseline") : t("repo_detail.show_baseline")}
           </button>
           <Link href={`/admin/curation?subject_type=repository&subject_id=${repositoryId}`} className="text-sm text-accent hover:underline dark:text-accent">{t("repo_detail.open_full_history")}</Link>
@@ -177,7 +177,7 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
       </div>
       <div className="flex flex-wrap gap-1">
         {graphFilters.map(([key, label]) => (
-          <button key={key} onClick={() => { setTrigger(key); setOffset(0); }} className={`rounded-md border px-2.5 py-1.5 text-xs font-medium ${trigger === key ? "border-accent bg-[#ddf4ff] text-accent dark:border-accent dark:bg-[#1f6feb26] dark:text-accent" : "border-border hover:bg-subtle dark:border-border dark:hover:bg-subtle"}`}>
+          <button key={key} onClick={() => { setTrigger(key); setOffset(0); }} className={`rounded-md border px-2.5 py-1.5 text-xs font-medium ${trigger === key ? "border-accent bg-accent-subtle text-accent dark:border-accent dark:bg-accent-subtle dark:text-accent" : "border-border hover:bg-subtle dark:border-border dark:hover:bg-subtle"}`}>
             {label}
           </button>
         ))}
@@ -380,7 +380,7 @@ export default function RepositoryDetailPage() {
       <nav className="mt-4 flex gap-1 overflow-x-auto border-b border-border" aria-label="Repository sections">
         {tabs.map((item) => (
           <button key={item.key} onClick={() => setTab(item.key)}
-            className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${tab === item.key ? "border-[#fd8c73] font-semibold text-fg" : "border-transparent text-muted hover:text-fg dark:text-muted dark:hover:text-fg"}`}>
+            className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${tab === item.key ? "border-danger font-semibold text-fg" : "border-transparent text-muted hover:text-fg dark:text-muted dark:hover:text-fg"}`}>
             {item.label}{item.count !== undefined && <span className="ml-2 rounded-full bg-subtle px-2 py-0.5 text-xs font-medium text-muted dark:bg-border dark:text-muted">{item.count}</span>}
           </button>
         ))}
@@ -389,7 +389,7 @@ export default function RepositoryDetailPage() {
       <section className="mt-5">
         {tab === "overview" && (
           <div className="space-y-5">
-            <div className={`rounded-md border p-4 text-sm ${hint.tone === "bad" ? "border-danger/30 bg-[#ffebe9] text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger" : hint.tone === "warn" ? "border-warning/30 bg-[#fff8c5] text-warning dark:bg-[#bb800926] dark:text-warning" : "border-border bg-white text-fg dark:border-border dark:bg-surface dark:text-fg"}`}>
+            <div className={`rounded-md border p-4 text-sm ${hint.tone === "bad" ? "border-danger/30 bg-danger-subtle text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger" : hint.tone === "warn" ? "border-warning/30 bg-warning-subtle text-warning dark:bg-warning-subtle dark:text-warning" : "border-border bg-white text-fg dark:border-border dark:bg-surface dark:text-fg"}`}>
               <div className="font-semibold">{t("repo_detail.next_action")}</div>
               <div className="mt-1">{t(hint.text)}</div>
               <div className="mt-3 flex flex-wrap gap-2">
@@ -405,7 +405,7 @@ export default function RepositoryDetailPage() {
               <StatCard label={t("repo_detail.schedule")} value={decision ? schedulerDecisionLabel(t, decision.reason, decision.due) : scheduleModeLabel(t, subscription.schedule_mode)} hint={decision?.next_due_at ? fmt.dateTime(decision.next_due_at) : undefined} />
             </div>
             {repo.latest_job?.error_log_excerpt && (
-              <div className="rounded-md border border-danger/30 bg-[#ffebe9] p-4 text-sm text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger">
+              <div className="rounded-md border border-danger/30 bg-danger-subtle p-4 text-sm text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">
                 {repo.latest_job.error_log_excerpt}
               </div>
             )}

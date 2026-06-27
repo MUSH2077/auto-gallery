@@ -273,7 +273,7 @@ function CreatorsContent() {
       {creators.data && creators.data.items.length > 0 && (
         <div className="overflow-hidden rounded-md border border-border bg-white dark:border-border dark:bg-surface">
           {creators.data.items.map((c) => (
-            <div key={c.id} className={`flex cursor-pointer items-center gap-3 border-b border-border p-4 last:border-b-0 hover:bg-subtle dark:border-border dark:hover:bg-subtle ${selected.has(c.id) ? "bg-[#ddf4ff] dark:bg-[#1f6feb26]" : ""}`} onClick={() => router.push(`/admin/creators/${c.id}`)}>
+            <div key={c.id} className={`flex cursor-pointer items-center gap-3 border-b border-border p-4 last:border-b-0 hover:bg-subtle dark:border-border dark:hover:bg-subtle ${selected.has(c.id) ? "bg-accent-subtle dark:bg-accent-subtle" : ""}`} onClick={() => router.push(`/admin/creators/${c.id}`)}>
               <input type="checkbox" aria-label="Select item" checked={selected.has(c.id)} onChange={() => toggleSelect(c.id)} className="rounded shrink-0" onClick={(e) => e.stopPropagation()} />
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-accent text-sm font-semibold text-white dark:border-border">
                 {(c.display_name || c.name).slice(0, 2).toUpperCase()}
@@ -293,7 +293,7 @@ function CreatorsContent() {
               </div>
               <div className="flex items-center gap-2 shrink-0 text-xs" onClick={(e) => e.stopPropagation()}>
                 {(c as any).danbooru_artist_id && <span className="rounded-full bg-purple-100 px-2 py-0.5 font-mono text-[10px] text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">D#{String((c as any).danbooru_artist_id)}</span>}
-                {(c.subscription_count ?? 0) > 0 && <span className="rounded-full bg-[#dafbe1] px-2 py-0.5 text-[10px] text-success dark:bg-[#2ea04326] dark:text-success">{t("creators.sub_badge")}</span>}
+                {(c.subscription_count ?? 0) > 0 && <span className="rounded-full bg-success-subtle px-2 py-0.5 text-[10px] text-success dark:bg-success-subtle dark:text-success">{t("creators.sub_badge")}</span>}
                 <button onClick={(e) => { e.stopPropagation(); toggleFavorite.mutate(c.id); }}
                   className={`text-lg ${c.is_favorite ? "text-yellow-500" : "text-muted hover:text-yellow-400"}`}
                   title={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}>

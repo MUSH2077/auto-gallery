@@ -85,7 +85,7 @@ export default function MappingPage() {
         </div>
       </PageHeader>
 
-      <div className="mb-6 rounded-md border border-[#ddf4ff] bg-[#ddf4ff] p-4 text-sm text-accent dark:border-accent/30 dark:bg-accent/15 dark:text-accent">
+      <div className="mb-6 rounded-md border border-accent-subtle bg-accent-subtle p-4 text-sm text-accent dark:border-accent/30 dark:bg-accent/15 dark:text-accent">
         {t("mapping.info_banner")}
       </div>
 
@@ -115,12 +115,12 @@ export default function MappingPage() {
           {suggested.map((l: CreatorLinkType) => (
             <div key={l.id} className="card flex items-center justify-between p-3 text-sm">
               <div className="flex items-center gap-3">
-                <span className="badge border-[#fff8c5] bg-[#fff8c5] text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-[#f2cc60]">{l.link_type}</span>
+                <span className="badge border-warning-subtle bg-warning-subtle text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-warning">{l.link_type}</span>
                 <a href={l.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline truncate max-w-sm">{l.url}</a>
                 {l.source && <SourceBadge source={l.source} />}
                 <span className={`text-xs ${l.confidence >= 0.7 ? "text-green-600" : l.confidence >= 0.4 ? "text-yellow-600" : "text-red-600"}`}>{t("mapping.confidence_label")} {l.confidence.toFixed(1)}</span>
               </div>
-              <button onClick={() => setDialog({ action: "verify", linkId: l.id })} className="btn-ghost px-3 py-1 text-xs text-success dark:text-[#56d364]">{t("mapping.approve")}</button>
+              <button onClick={() => setDialog({ action: "verify", linkId: l.id })} className="btn-ghost px-3 py-1 text-xs text-success dark:text-success">{t("mapping.approve")}</button>
             </div>
           ))}
           {!suggested.length && <p className="text-sm text-muted">{t("mapping.no_suggested")}</p>}
@@ -129,7 +129,7 @@ export default function MappingPage() {
 
       <section>
         <h2 className="font-semibold mb-3">{t("mapping.danbooru_section")}</h2>
-        <div className="rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm dark:border-warning/30 dark:bg-warning/15">
+        <div className="rounded-md border border-warning-subtle bg-warning-subtle p-4 text-sm dark:border-warning/30 dark:bg-warning/15">
           <p className="font-medium text-yellow-800 dark:text-yellow-300 mb-2">{t("mapping.danbooru_info")}</p>
           <p className="text-yellow-700 mb-3">{t("mapping.danbooru_desc")}</p>
           <button onClick={() => router.push("/admin/reference/danbooru")} className="btn-primary px-3 py-1.5 text-xs">{t("mapping.open_danbooru")}</button>

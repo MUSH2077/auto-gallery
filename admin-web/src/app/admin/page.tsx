@@ -20,7 +20,7 @@ function StatusDot({ tone }: { tone: "ok" | "warning" | "danger" | "muted" | "in
     ok: "bg-success",
     warning: "bg-warning",
     danger: "bg-danger",
-    muted: "bg-[#8c959f]",
+    muted: "bg-placeholder",
     info: "bg-accent",
   }[tone];
   return <span className={`h-2.5 w-2.5 rounded-full ${cls}`} />;
@@ -46,7 +46,7 @@ function AttentionCard({ title, value, description, href, tone }: { title: strin
       href={href}
       className={`rounded-md border p-4 transition-colors ${
         active
-          ? "border-danger/30 bg-[#fff8f7] hover:border-danger/50 dark:border-danger/30 dark:bg-[#f8514914]"
+          ? "border-danger/30 bg-danger-subtle hover:border-danger/50 dark:border-danger/30 dark:bg-danger-subtle"
           : "border-border bg-white hover:border-accent/40 dark:border-border dark:bg-surface"
       }`}
     >

@@ -456,7 +456,7 @@ export default function DataManagementPage() {
       </div>
 
       {/* ═══ Danger Zone ═══ */}
-      <div className="card border-[#ff8182] p-4 dark:border-danger">
+      <div className="card border-danger p-4 dark:border-danger">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-red-500 text-lg">&#9888;</span>
           <h3 className="font-medium text-sm text-red-700 dark:text-red-400">{t("datamgmt.danger_title")}</h3>
@@ -470,7 +470,7 @@ export default function DataManagementPage() {
             value={dangerConfirm}
             onChange={(e) => setDangerConfirm(e.target.value)}
             placeholder={t("datamgmt.danger_confirm_text")}
-            className="input w-full max-w-sm border-[#ff8182] dark:border-danger"
+            className="input w-full max-w-sm border-danger dark:border-danger"
           />
           <p className="text-xs text-muted mt-1">{t("datamgmt.danger_confirm_hint")}</p>
         </div>

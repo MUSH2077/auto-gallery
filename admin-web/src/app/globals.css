@@ -22,6 +22,7 @@
     --ag-primary: 31 136 61;     --ag-primary-hover: 26 127 55;  --ag-on-primary: 255 255 255;
     --ag-input: 255 255 255;     --ag-placeholder: 140 149 159;
     --ag-nav: 36 41 47;          --ag-nav-fg: 255 255 255;
+    --ag-accent-subtle: 221 244 255;  --ag-danger-subtle: 255 235 233;  --ag-warning-subtle: 255 248 197;  --ag-success-subtle: 218 251 225;
   }
   html.dark, html.dark[data-theme="github"] {
     --ag-bg: 13 17 23;           --ag-surface: 22 27 34;      --ag-subtle: 33 38 45;
@@ -31,6 +32,7 @@
     --ag-primary: 35 134 54;     --ag-primary-hover: 46 160 67;  --ag-on-primary: 255 255 255;
     --ag-input: 13 17 23;        --ag-placeholder: 110 118 129;
     --ag-nav: 1 4 9;             --ag-nav-fg: 255 255 255;
+    --ag-accent-subtle: 16 31 55;  --ag-danger-subtle: 48 27 31;  --ag-warning-subtle: 39 34 21;  --ag-success-subtle: 18 38 30;
   }
 
   /* ── nord (cool arctic blue-grey) ── */
@@ -42,6 +44,7 @@
     --ag-primary: 94 129 172;    --ag-primary-hover: 76 110 148; --ag-on-primary: 255 255 255;
     --ag-input: 255 255 255;     --ag-placeholder: 123 136 161;
     --ag-nav: 46 52 64;          --ag-nav-fg: 236 239 244;
+    --ag-accent-subtle: 221 230 240;  --ag-danger-subtle: 243 223 225;  --ag-warning-subtle: 246 236 213;  --ag-success-subtle: 227 235 218;
   }
   html.dark[data-theme="nord"] {
     --ag-bg: 46 52 64;           --ag-surface: 59 66 82;      --ag-subtle: 67 76 94;
@@ -50,6 +53,7 @@
     --ag-danger: 191 97 106;     --ag-focus: 136 192 208;
     --ag-primary: 129 161 193;   --ag-primary-hover: 143 173 204; --ag-on-primary: 46 52 64;
     --ag-input: 46 52 64;        --ag-placeholder: 107 118 137;
+    --ag-accent-subtle: 54 66 86;  --ag-danger-subtle: 65 56 60;  --ag-warning-subtle: 66 61 48;  --ag-success-subtle: 58 66 56;
   }
 
   /* ── rose (rose-pine: muted mauve/rose) ── */
@@ -61,6 +65,7 @@
     --ag-primary: 40 105 131;    --ag-primary-hover: 31 84 104;  --ag-on-primary: 255 250 243;
     --ag-input: 255 250 243;     --ag-placeholder: 152 147 165;
     --ag-nav: 31 29 46;          --ag-nav-fg: 224 222 244;
+    --ag-accent-subtle: 236 230 240;  --ag-danger-subtle: 245 226 231;  --ag-warning-subtle: 247 236 213;  --ag-success-subtle: 224 236 236;
   }
   html.dark[data-theme="rose"] {
     --ag-bg: 25 23 36;           --ag-surface: 31 29 46;      --ag-subtle: 38 35 58;
@@ -69,6 +74,7 @@
     --ag-danger: 235 111 146;    --ag-focus: 196 167 231;
     --ag-primary: 49 116 143;    --ag-primary-hover: 62 138 168; --ag-on-primary: 224 222 244;
     --ag-input: 25 23 36;        --ag-placeholder: 110 106 138;
+    --ag-accent-subtle: 42 36 64;  --ag-danger-subtle: 58 37 48;  --ag-warning-subtle: 58 51 36;  --ag-success-subtle: 31 51 56;
   }
 
   html { @apply transition-colors duration-300; }

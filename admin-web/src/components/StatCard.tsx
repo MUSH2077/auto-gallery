@@ -27,7 +27,7 @@ export default function StatCard({
     <div className={`card p-4 ${className}`}>
       <div className={`tabular-nums text-2xl font-semibold ${toneClasses[tone]}`}>{value}</div>
       <div className="mt-1 text-xs font-medium uppercase text-muted">{label}</div>
-      {sub && <div className="mt-1 text-xs text-[#8c959f] dark:text-muted">{sub}</div>}
+      {sub && <div className="mt-1 text-xs text-placeholder dark:text-muted">{sub}</div>}
     </div>
   );
 }

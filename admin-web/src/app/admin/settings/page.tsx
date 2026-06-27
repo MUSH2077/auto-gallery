@@ -105,7 +105,7 @@ export default function SettingsPage() {
               {Object.entries(settings.data.dedup || {}).map(([key, value]) => (
                 <div key={key} className="flex justify-between border-b border-border py-1 last:border-0 dark:border-border">
                   <span className="capitalize text-muted">{key.replace(/_/g, " ")}</span>
-                  <span className={`font-mono text-xs ${typeof value === "boolean" ? (value ? "text-success dark:text-success" : "text-[#8c959f] dark:text-muted") : "text-accent"}`}>
+                  <span className={`font-mono text-xs ${typeof value === "boolean" ? (value ? "text-success dark:text-success" : "text-placeholder dark:text-muted") : "text-accent"}`}>
                     {String(value)}
                   </span>
                 </div>
@@ -121,7 +121,7 @@ export default function SettingsPage() {
         <div className="card space-y-2 p-4 text-sm">
           <div className="flex justify-between"><span className="text-muted">{t("settings.backend_api")}</span><span className="font-mono text-xs text-fg">{t("settings.backend_api_val")}</span></div>
           <div className="flex justify-between"><span className="text-muted">{t("settings.admin_web")}</span><span className="text-xs text-fg">{t("settings.admin_web_val")}</span></div>
-          <div className="flex justify-between"><span className="text-muted">{t("settings.auth_mode")}</span><span className="text-xs text-[#8c959f] dark:text-muted">{t("settings.auth_mode_val")}</span></div>
+          <div className="flex justify-between"><span className="text-muted">{t("settings.auth_mode")}</span><span className="text-xs text-placeholder dark:text-muted">{t("settings.auth_mode_val")}</span></div>
         </div>
       </section>
 

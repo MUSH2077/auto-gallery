@@ -33,7 +33,7 @@ export default function AuthStatusPage() {
               <div className="text-2xl font-bold text-green-600">{auth.data.summary.healthy}</div>
               <div className="text-xs text-muted">{t("auth.healthy")}</div>
             </div>
-            <div className={`card p-4 text-center ${auth.data.summary.unhealthy > 0 ? "border-[#ff8182] dark:border-danger" : ""}`}>
+            <div className={`card p-4 text-center ${auth.data.summary.unhealthy > 0 ? "border-danger dark:border-danger" : ""}`}>
               <div className={`text-2xl font-bold ${auth.data.summary.unhealthy > 0 ? "text-red-600" : ""}`}>{auth.data.summary.unhealthy}</div>
               <div className="text-xs text-muted">{t("auth.unhealthy")}</div>
             </div>
@@ -68,7 +68,7 @@ export default function AuthStatusPage() {
             </div>
           ))}
 
-          <div className="mt-6 rounded-md border border-[#ddf4ff] bg-[#ddf4ff] p-4 text-sm text-accent dark:border-accent/30 dark:bg-accent/15 dark:text-accent">
+          <div className="mt-6 rounded-md border border-accent-subtle bg-accent-subtle p-4 text-sm text-accent dark:border-accent/30 dark:bg-accent/15 dark:text-accent">
             {t("auth.how")}
           </div>
         </>

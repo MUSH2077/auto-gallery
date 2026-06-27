@@ -80,7 +80,7 @@ export default function DedupSettingsPage() {
             </div>
           </div>
 
-          <div className="mt-4 rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-[#f2cc60]">
+          <div className="mt-4 rounded-md border border-warning-subtle bg-warning-subtle p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-warning">
             <strong>&#9888; {t("dedup.warning")}</strong>
             {current.auto_merge && <span className="block mt-1 text-red-600 dark:text-red-400 font-medium">{t("dedup.warning_auto")}</span>}
           </div>

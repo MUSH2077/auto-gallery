@@ -240,7 +240,7 @@ function SubscriptionsContent() {
       {subs.data && subs.data.length > 0 && (
         <div className="overflow-hidden rounded-md border border-border bg-white dark:border-border dark:bg-surface">
           {subs.data.map((s: Subscription) => (
-            <div key={s.id} className={`flex cursor-pointer items-center gap-3 border-b border-border p-4 last:border-b-0 hover:bg-subtle dark:border-border dark:hover:bg-subtle ${selected.has(s.id) ? "bg-[#ddf4ff] dark:bg-[#1f6feb26]" : ""}`} onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>
+            <div key={s.id} className={`flex cursor-pointer items-center gap-3 border-b border-border p-4 last:border-b-0 hover:bg-subtle dark:border-border dark:hover:bg-subtle ${selected.has(s.id) ? "bg-accent-subtle dark:bg-accent-subtle" : ""}`} onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>
               <input type="checkbox" aria-label="Select item" checked={selected.has(s.id)} onChange={() => toggleSelect(s.id)} className="rounded shrink-0" onClick={(e) => e.stopPropagation()} />
               <div className="flex-1 min-w-0">
                 <div className="flex flex-wrap items-center gap-2">

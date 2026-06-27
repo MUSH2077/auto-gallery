@@ -106,10 +106,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   };
 
   const toneClasses: Record<ToastType, string> = {
-    success: "border-success/30 bg-[#dafbe1] text-success dark:border-success/30 dark:bg-[#2ea04326] dark:text-success",
-    error: "border-danger/30 bg-[#ffebe9] text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger",
-    info: "border-accent/30 bg-[#ddf4ff] text-accent dark:border-accent/30 dark:bg-[#1f6feb26] dark:text-accent",
-    warning: "border-warning/30 bg-[#fff8c5] text-warning dark:border-warning/30 dark:bg-[#bb800926] dark:text-warning",
+    success: "border-success/30 bg-success-subtle text-success dark:border-success/30 dark:bg-success-subtle dark:text-success",
+    error: "border-danger/30 bg-danger-subtle text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger",
+    info: "border-accent/30 bg-accent-subtle text-accent dark:border-accent/30 dark:bg-accent-subtle dark:text-accent",
+    warning: "border-warning/30 bg-warning-subtle text-warning dark:border-warning/30 dark:bg-warning-subtle dark:text-warning",
   };
 
   const icons: Record<ToastType, string> = {

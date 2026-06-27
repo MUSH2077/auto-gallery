@@ -153,7 +153,7 @@ export default function SubscriptionDetailPage() {
             <dl className="text-sm space-y-2">
               <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.creator")}</dt><dd className="cursor-pointer text-accent hover:underline dark:text-accent" onClick={() => router.push(`/admin/creators/${s.creator_id}`)}>{s.creator_display_name || s.creator_name || getCreatorName(s.creator_id)}</dd></div>
               <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.status")}</dt><dd><StatusBadge status={s.is_active ? "up" : "down"} /></dd></div>
-              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.auto_sync")}</dt><dd>{s.sync_enabled ? <span className="text-success dark:text-success">{t("subscription_detail.sync_enabled")}</span> : <span className="text-[#8c959f] dark:text-muted">{t("subscription_detail.sync_disabled")}</span>}</dd></div>
+              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.auto_sync")}</dt><dd>{s.sync_enabled ? <span className="text-success dark:text-success">{t("subscription_detail.sync_enabled")}</span> : <span className="text-placeholder dark:text-muted">{t("subscription_detail.sync_disabled")}</span>}</dd></div>
               <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.sync_strategy")}</dt><dd className="text-xs">
                 {!s.schedule_mode || s.schedule_mode === "inherit" ? (
                   <span className="text-muted">{t("subscription_detail.strategy_inherit")}</span>

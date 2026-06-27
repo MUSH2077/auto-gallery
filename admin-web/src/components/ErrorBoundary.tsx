@@ -15,7 +15,7 @@ function ErrorFallback({ error }: { error: Error | null }) {
         <p className="mb-4 text-sm text-muted">
           {t("common.unexpected_error")}
         </p>
-        <pre className="mb-4 max-h-32 overflow-auto rounded-md border border-danger/30 bg-[#ffebe9] p-3 text-left text-xs text-danger dark:border-danger/30 dark:bg-[#f8514926] dark:text-danger">
+        <pre className="mb-4 max-h-32 overflow-auto rounded-md border border-danger/30 bg-danger-subtle p-3 text-left text-xs text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">
           {error?.message || t("common.unknown_error")}
         </pre>
         <button

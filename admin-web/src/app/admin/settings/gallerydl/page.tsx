@@ -256,7 +256,7 @@ function NamingReferencePanel({
     <section className="rounded-md border border-border bg-subtle text-sm dark:border-border dark:bg-surface">
       <div className="flex flex-col gap-3 border-b border-border px-4 py-3 dark:border-border md:flex-row md:items-center md:justify-between">
         <div>
-          <h5 className="font-semibold text-fg dark:text-[#f0f6fc]">{reference.title} 命名规范</h5>
+          <h5 className="font-semibold text-fg dark:text-fg">{reference.title} 命名规范</h5>
           <p className="mt-1 text-xs text-muted">常用变量来自本项目已验证的 gallery-dl 配置；点击 token 会追加到当前目标输入框末尾。</p>
         </div>
         <div className="inline-flex h-8 w-fit overflow-hidden rounded-md border border-border bg-white dark:border-border dark:bg-canvas">
@@ -268,7 +268,7 @@ function NamingReferencePanel({
               className={`px-3 text-xs font-medium transition-colors ${
                 target === item
                   ? "bg-accent text-white"
-                  : "text-muted hover:bg-[#f3f4f6] dark:text-muted dark:hover:bg-subtle"
+                  : "text-muted hover:bg-subtle dark:text-muted dark:hover:bg-subtle"
               }`}
             >
               {item === "directory" ? t("gallerydl.directory", "目录") : t("gallerydl.filename", "文件名")}
@@ -309,7 +309,7 @@ function NamingReferencePanel({
                 {t("gallerydl.use_directory_template", "使用目录模板")}
               </button>
             </div>
-            <code className="mt-2 block break-all rounded-md bg-subtle px-2 py-1.5 font-mono text-xs text-fg dark:bg-surface dark:text-[#f0f6fc]">
+            <code className="mt-2 block break-all rounded-md bg-subtle px-2 py-1.5 font-mono text-xs text-fg dark:bg-surface dark:text-fg">
               {reference.defaultDirectory}
             </code>
           </div>
@@ -320,7 +320,7 @@ function NamingReferencePanel({
                 {t("gallerydl.use_filename_template", "使用文件名模板")}
               </button>
             </div>
-            <code className="mt-2 block break-all rounded-md bg-subtle px-2 py-1.5 font-mono text-xs text-fg dark:bg-surface dark:text-[#f0f6fc]">
+            <code className="mt-2 block break-all rounded-md bg-subtle px-2 py-1.5 font-mono text-xs text-fg dark:bg-surface dark:text-fg">
               {reference.defaultFilename}
             </code>
           </div>
@@ -328,11 +328,11 @@ function NamingReferencePanel({
 
         <div>
           <div className="mb-1 text-xs font-semibold uppercase text-muted">{t("gallerydl.file_tree_preview", "文件树预览")}</div>
-          <pre className="overflow-x-auto rounded-md border border-border bg-white px-3 py-2 font-mono text-xs text-fg dark:border-border dark:bg-canvas dark:text-[#f0f6fc]">{reference.treeExample}</pre>
+          <pre className="overflow-x-auto rounded-md border border-border bg-white px-3 py-2 font-mono text-xs text-fg dark:border-border dark:bg-canvas dark:text-fg">{reference.treeExample}</pre>
         </div>
 
         {reference.notes && reference.notes.length > 0 && (
-          <div className="rounded-md border border-warning/40 bg-[#fff8c5] px-3 py-2 text-xs text-warning dark:bg-warning/15 dark:text-[#f2cc60]">
+          <div className="rounded-md border border-warning/40 bg-warning-subtle px-3 py-2 text-xs text-warning dark:bg-warning/15 dark:text-warning">
             {reference.notes.map((note) => <p key={note}>{note}</p>)}
           </div>
         )}
@@ -359,7 +359,7 @@ function NamingReferencePanel({
                       {item.token}
                     </button>
                   </td>
-                  <td className="px-3 py-2 text-xs text-fg dark:text-[#f0f6fc]">{item.description}</td>
+                  <td className="px-3 py-2 text-xs text-fg dark:text-fg">{item.description}</td>
                   <td className="px-3 py-2 font-mono text-xs text-muted">{item.example}</td>
                   <td className="px-3 py-2 text-right">
                     <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => insertToken(item.token)}>
@@ -558,7 +558,7 @@ export default function GalleryDLConfigPage() {
 
       {/* Unsupported banner */}
       {currentMeta && !currentMeta.supported && (
-        <div className="mb-6 rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-[#f2cc60]">
+        <div className="mb-6 rounded-md border border-warning-subtle bg-warning-subtle p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-warning">
           <strong>{currentMeta.name} {t("gallerydl.unsupported")}</strong> {currentMeta.description}
         </div>
       )}

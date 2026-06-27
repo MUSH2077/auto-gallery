@@ -108,9 +108,9 @@ export default function NotificationsPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <h3 className="text-sm font-semibold dark:text-white">{a.title}</h3>
-                    {a.status === "running" && <span className="badge border-[#ddf4ff] bg-[#ddf4ff] text-accent dark:border-accent/30 dark:bg-accent/15 dark:text-accent animate-pulse">{t("notification.running")}</span>}
-                    {a.status === "completed" && <span className="badge border-[#dafbe1] bg-[#dafbe1] text-success dark:border-primary/30 dark:bg-primary/15 dark:text-[#56d364]">{t("notification.completed")}</span>}
-                    {a.status === "error" && <span className="badge border-[#ffebe9] bg-[#ffebe9] text-danger dark:border-danger/30 dark:bg-danger/15 dark:text-[#ff7b72]">{t("notification.error")}</span>}
+                    {a.status === "running" && <span className="badge border-accent-subtle bg-accent-subtle text-accent dark:border-accent/30 dark:bg-accent/15 dark:text-accent animate-pulse">{t("notification.running")}</span>}
+                    {a.status === "completed" && <span className="badge border-success-subtle bg-success-subtle text-success dark:border-primary/30 dark:bg-primary/15 dark:text-success">{t("notification.completed")}</span>}
+                    {a.status === "error" && <span className="badge border-danger-subtle bg-danger-subtle text-danger dark:border-danger/30 dark:bg-danger/15 dark:text-danger">{t("notification.error")}</span>}
                   </div>
                   {a.message && <p className="mt-0.5 text-xs text-muted">{a.message}</p>}
                   <p className="mt-1 text-[10px] text-muted">{new Date(a.timestamp).toLocaleString()}</p>
