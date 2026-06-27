@@ -25,7 +25,10 @@ def _with_db_name(url: str, db_name: str) -> str:
 
 # Capture the ORIGINAL (production) URL before we override it.
 _PROD_DB_URL = os.environ.get(
-    "DATABASE_URL", "postgresql+asyncpg://autogallery:changeme@postgres:5432/autogallery"
+    # Fallback password must NOT be a factory placeholder ("changeme"/"change-me*"),
+    # or config.py refuses to import (it rejects placeholder DB passwords). CI runs
+    # pytest without DATABASE_URL set, so this fallback is what config validates.
+    "DATABASE_URL", "postgresql+asyncpg://autogallery:test-db@postgres:5432/autogallery"
 )
 _PROD_DB_NAME = _db_name(_PROD_DB_URL) or "autogallery"
 _MAIN_TEST_DB = _PROD_DB_NAME if _PROD_DB_NAME.endswith("_test") else f"{_PROD_DB_NAME}_test"
