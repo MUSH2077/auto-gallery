@@ -27,6 +27,8 @@ const config: Config = {
         "on-primary": t("--ag-on-primary"),
         input: t("--ag-input"),
         placeholder: t("--ag-placeholder"),
+        nav: t("--ag-nav"),
+        "nav-fg": t("--ag-nav-fg"),
       },
       boxShadow: {
         overlay:

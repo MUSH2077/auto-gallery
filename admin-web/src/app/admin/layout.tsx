@@ -79,22 +79,22 @@ function AdminNav() {
   const isActive = (href: string) => pathname === href || (href !== "/admin" && pathname.startsWith(href));
 
   return (
-    <nav className="bg-[#24292f] dark:bg-[#010409] text-white px-4 sm:px-6 py-3 border-b border-[#57606a]/30 dark:border-[#30363d]">
+    <nav className="bg-nav text-nav-fg px-4 sm:px-6 py-3 border-b border-nav-fg/15">
       <div className="flex items-center gap-4 text-sm">
         <Link href="/admin" className="font-semibold text-base shrink-0 tracking-tight">auto-gallery</Link>
         {/* Desktop links */}
         <div className="hidden md:flex items-center gap-2 flex-1 flex-wrap">
           {groups.map((group) => (
-            <div key={group.label} className="flex items-center gap-1 rounded-lg bg-white/[0.03] px-1 py-1">
+            <div key={group.label} className="flex items-center gap-1 rounded-lg bg-nav-fg/[0.04] px-1 py-1">
               {group.links.map(([href, label]) => (
                 <Link key={href} href={href}
-                    className={`rounded-md px-2 py-1 transition-colors ${isActive(href) ? "bg-white/10 text-white font-medium shadow-sm" : "text-gray-300 hover:bg-white/10 hover:text-white"}`}>{label}</Link>
+                    className={`rounded-md px-2 py-1 transition-colors ${isActive(href) ? "bg-nav-fg/10 text-nav-fg font-medium shadow-sm" : "text-nav-fg/70 hover:bg-nav-fg/10 hover:text-nav-fg"}`}>{label}</Link>
               ))}
             </div>
           ))}
         </div>
         <div className="flex items-center gap-1 shrink-0 ml-auto">
-          <Link href="/admin/search" className="p-1.5 rounded-md hover:bg-white/10 transition-colors" title={t("nav.search")} aria-label={t("nav.search")}>
+          <Link href="/admin/search" className="p-1.5 rounded-md hover:bg-nav-fg/10 transition-colors" title={t("nav.search")} aria-label={t("nav.search")}>
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="11" cy="11" r="8" />
               <path d="M21 21l-4.3-4.3" />
@@ -106,7 +106,7 @@ function AdminNav() {
           <ThemeToggle />
           <UserMenu />
           {/* Hamburger — mobile only */}
-          <button onClick={() => setOpen(!open)} className="md:hidden p-1.5 rounded-md hover:bg-white/10" aria-label="Toggle navigation menu">
+          <button onClick={() => setOpen(!open)} className="md:hidden p-1.5 rounded-md hover:bg-nav-fg/10" aria-label="Toggle navigation menu">
             <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               {open ? <path d="M18 6L6 18M6 6l12 12" /> : <path d="M4 6h16M4 12h16M4 18h16" />}
             </svg>
@@ -115,18 +115,18 @@ function AdminNav() {
       </div>
       {/* Mobile menu */}
       {open && (
-        <div className="md:hidden mt-3 pt-3 border-t border-[#57606a]/40 flex flex-col gap-1 pb-1">
+        <div className="md:hidden mt-3 pt-3 border-t border-nav-fg/20 flex flex-col gap-1 pb-1">
           {groups.map((group) => (
             <div key={group.label} className="py-1">
-              <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400">{group.label}</div>
+              <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-nav-fg/50">{group.label}</div>
               {group.links.map(([href, label]) => (
                 <Link key={href} href={href} onClick={() => setOpen(false)}
-                  className={`block hover:bg-white/10 hover:text-white rounded-md transition-colors px-2 py-1 text-sm ${isActive(href) ? "bg-white/10 text-white" : ""}`}>{label}</Link>
+                  className={`block hover:bg-nav-fg/10 hover:text-nav-fg rounded-md transition-colors px-2 py-1 text-sm ${isActive(href) ? "bg-nav-fg/10 text-nav-fg" : ""}`}>{label}</Link>
               ))}
             </div>
           ))}
           <Link href="/admin/search" onClick={() => setOpen(false)}
-            className="hover:bg-white/10 hover:text-white rounded-md transition-colors px-2 py-1 text-sm">{t("nav.search")}</Link>
+            className="hover:bg-nav-fg/10 hover:text-nav-fg rounded-md transition-colors px-2 py-1 text-sm">{t("nav.search")}</Link>
         </div>
       )}
     </nav>
@@ -179,7 +179,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     <ErrorBoundary>
       <AuthGuard>
         <div>
-          <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-slate-900 focus:text-white focus:rounded">Skip to content</a>
+          <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-slate-900 focus:text-nav-fg focus:rounded">Skip to content</a>
           <AdminNav />
           <main id="main-content" className="min-h-[calc(100vh-52px)]">{children}</main>
         </div>
