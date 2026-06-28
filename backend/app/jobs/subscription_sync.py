@@ -394,6 +394,18 @@ async def _sync_subscriptions_locked():
     logger.info("Auto-sync scan complete: %d jobs created, %d skipped (enabled=%s, mode=%s, timezone=%s, scan_every=%dm, default_interval=%dh)",
                 jobs_created, skipped_count, config.get("scheduler_enabled", True), mode, config.get("timezone", "UTC"), scan_minutes, default_interval)
 
+    # Self-heal: link any orphaned source_creators to their creator so imported
+    # works always surface on the creator page (cheap; usually 0 rows).
+    try:
+        from app.services.creator_reconcile import reconcile_unlinked_source_creators
+        async with async_session() as relink_db:
+            res = await reconcile_unlinked_source_creators(relink_db)
+            if res["linked"]:
+                await relink_db.commit()
+                logger.info("Auto-sync relinked %d orphaned source_creators", res["linked"])
+    except Exception:
+        logger.debug("source_creator reconcile skipped", exc_info=True)
+
     # Re-schedule for next scan
     try:
         from rq import Queue
