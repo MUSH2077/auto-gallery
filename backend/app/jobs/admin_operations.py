@@ -85,3 +85,40 @@ async def _run_library_rebuild_operation(job_id: str, options: dict) -> dict:
             current = current.decode()
         if current == job_id:
             redis.delete("library:rebuild:active")
+
+
+def run_disk_import_operation(job_id: str, options: dict | None = None) -> dict:
+    """Entry point for RQ workers — import on-disk download files into the DB."""
+    return asyncio.run(_run_disk_import_operation(job_id, options or {}))
+
+
+async def _run_disk_import_operation(job_id: str, options: dict) -> dict:
+    from app.services.disk_import import reconcile_downloads_to_db
+    set_operation_status(job_id, "running", "admin-disk-import",
+        progress={"phase": "running", "label": "Scanning download root..."},
+        meta={"entity": "disk-import", **options})
+    try:
+        def update_progress(progress: dict):
+            set_operation_status(job_id, "running", "admin-disk-import",
+                progress={**progress, "label": f"Imported {progress.get('scanned', 0)} of {progress.get('total', 0)} creators"},
+                meta={"entity": "disk-import", **options})
+
+        async with async_session() as db:
+            result = await reconcile_downloads_to_db(db, options, update_progress)
+        set_operation_status(job_id, "complete", "admin-disk-import",
+            progress={"phase": "complete", "label": f"Queued {result['jobs']} import jobs"},
+            result=result, meta={"entity": "disk-import", **options})
+        return result
+    except Exception as exc:
+        logger.exception("Disk import failed: job_id=%s", job_id)
+        set_operation_status(job_id, "failed", "admin-disk-import",
+            progress={"phase": "failed"}, error=str(exc), meta={"entity": "disk-import", **options})
+        raise
+    finally:
+        from app.services.redis_client import get_redis
+        redis = get_redis()
+        current = redis.get("library:disk-import:active")
+        if isinstance(current, bytes):
+            current = current.decode()
+        if current == job_id:
+            redis.delete("library:disk-import:active")

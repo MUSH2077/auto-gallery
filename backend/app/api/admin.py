@@ -943,6 +943,44 @@ async def rebuild_library(data: RebuildLibraryRequest | None = None):
     return {"status": "enqueued", "job_id": job_id, "message": "Library rebuild queued", "options": options}
 
 
+class ImportFromDiskRequest(BaseModel):
+    source: str | None = None
+
+
+@router.post("/library/import-from-disk")
+async def import_from_disk(data: ImportFromDiskRequest | None = None):
+    """Enqueue an idempotent import of on-disk download files into the DB."""
+    from rq import Queue
+    import uuid
+    from app.services.redis_client import get_redis
+    from app.services.operations import set_operation_status
+
+    options = (data or ImportFromDiskRequest()).model_dump(mode="json")
+    redis = get_redis()
+    job_id = str(uuid.uuid4())
+    active_job = redis.get("library:disk-import:active")
+    if isinstance(active_job, bytes):
+        active_job = active_job.decode()
+    if active_job:
+        active_status = get_operation_status(active_job)
+        if not active_status or active_status.get("status") in {"complete", "failed", "cancelled"}:
+            redis.delete("library:disk-import:active")
+    if not redis.set("library:disk-import:active", job_id, nx=True, ex=604800):
+        active_job = redis.get("library:disk-import:active")
+        if isinstance(active_job, bytes):
+            active_job = active_job.decode()
+        raise HTTPException(status_code=409, detail={"message": "Disk import already running", "job_id": active_job})
+    set_operation_status(job_id, "enqueued", "admin-disk-import",
+        progress={"phase": "enqueued", "label": "Disk import queued"},
+        meta={"entity": "disk-import", **options})
+
+    Queue(name="operations", connection=redis).enqueue(
+        "app.jobs.admin_operations.run_disk_import_operation",
+        job_id, options, job_timeout=14400, result_ttl=604800)
+
+    return {"status": "enqueued", "job_id": job_id, "message": "Disk import queued", "options": options}
+
+
 # ── gallery-dl Config ──
 
 class PixivSourceConfig(BaseModel):
