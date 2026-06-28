@@ -1002,26 +1002,55 @@ function JobsContent() {
         {imports.data?.items && !imports.data?.items.length && <p className="text-sm text-muted">{t("jobs.no_im")}</p>}
         {imports.data?.items && imports.data?.items.length > 0 && (
           <div className="overflow-x-auto pb-2">
-          <div className="min-w-[720px] space-y-1">
+          <div className="min-w-[980px] space-y-1">
             {imports.data?.items?.map((j: any) => {
               const active = isActiveImport(j.status);
               const progress = active
                 ? importProgress[j.id] || (j.progress_data as JobProgress | null) || fallbackProgress(j.progress_stage || j.status)
                 : null;
+              const worksDone = j.progress_works_done;
+              const worksTotal = j.progress_works_total;
               return (
-                <div key={j.id} onClick={() => openImportDetail(j.id)} className={`card flex cursor-pointer items-center gap-3 p-3 text-sm hover:border-accent/50 ${active ? "border-l-2 border-l-[#0969da]" : j.status === "failed" ? "border-l-2 border-l-[#cf222e]" : ""}`}>
-                  <div className="w-28 shrink-0"><StatusBadge status={j.status} /></div>
-                  <span className="font-mono text-xs text-muted w-16 shrink-0">{j.id.slice(0, 8)}</span>
-                  <span className="font-mono text-xs text-muted truncate flex-1">{j.download_job_id?.slice(0, 8) || "-"}</span>
-                  <RealProgressBar progress={progress} />
-                  <Link href={`/admin/jobs?tab=downloads&job=${j.download_job_id}`} onClick={(e) => e.stopPropagation()} className="text-xs text-accent hover:underline dark:text-accent">{t("jobs.open_download")}</Link>
-                  <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
-                  {j.error_log && (
-                    <button onClick={() => setExpandedLog(expandedLog === j.id ? null : j.id)} className="text-xs text-orange-500 hover:underline">{expandedLog === j.id ? "▲" : t("downloads.log")}</button>
-                  )}
-                  {j.status === "failed" && <button onClick={() => { setRetryId(j.id); retryIM.mutate(j.id); }} disabled={retryIM.isPending} className="text-xs text-blue-600 hover:underline">{t("jobs.retry")}</button>}
-                  <button onClick={() => { setDeleteId(j.id); setDeleteType("im"); }} className="text-xs text-red-500 hover:underline">{t("jobs.del")}</button>
+                <div key={j.id}>
+                  <div onClick={() => openImportDetail(j.id)} className={`card flex cursor-pointer items-center gap-3 p-3 text-sm hover:border-accent/50 ${active ? "border-l-2 border-l-accent" : j.status === "failed" ? "border-l-2 border-l-danger" : ""}`}>
+                    <div className="w-28 shrink-0"><StatusBadge status={j.status} /></div>
+                    <span className="w-16 shrink-0 font-mono text-xs text-muted">{shortId(j.id)}</span>
+                    {j.source && <SourceBadge source={j.source} />}
+                    <div className="min-w-[9rem] max-w-[12rem] shrink-0 leading-tight">
+                      {j.subscription_id ? (
+                        <Link href={`/admin/subscriptions/${j.subscription_id}`} onClick={(e) => e.stopPropagation()} className="block truncate text-xs font-medium text-accent hover:underline dark:text-accent" title={j.creator_name || j.subscription_name || undefined}>
+                          {j.creator_name || j.subscription_name || shortId(j.subscription_id)}
+                        </Link>
+                      ) : (
+                        <span className="block truncate text-xs text-muted">—</span>
+                      )}
+                      <span className="block truncate text-[11px] text-muted" title={j.subscription_name || undefined}>
+                        {j.subscription_name || `${t("jobs.import")} · ${shortId(j.download_job_id)}`}
+                      </span>
+                    </div>
+                    <span className="min-w-0 flex-1 truncate text-xs text-muted" title={j.source_url || undefined}>{j.source_url || "-"}</span>
+                    {(worksTotal != null || worksDone != null) && (
+                      <span className="w-14 shrink-0 text-right font-mono text-[11px] text-muted tabular-nums" title={t("jobs.works", "作品")}>{worksDone ?? 0}/{worksTotal ?? "?"}</span>
+                    )}
+                    <RealProgressBar progress={progress} />
+                    {active ? (
+                      <Elapsed since={j.created_at} active />
+                    ) : (
+                      <span className="w-20 shrink-0 text-right text-xs text-muted">{fmt.time(j.created_at)}</span>
+                    )}
+                    <div className="flex shrink-0 gap-2" onClick={(e) => e.stopPropagation()}>
+                      <Link href={`/admin/jobs?tab=downloads&job=${j.download_job_id}`} className="text-xs text-accent hover:underline dark:text-accent">{t("jobs.open_download")}</Link>
+                      {j.error_log && (
+                        <button onClick={() => setExpandedLog(expandedLog === j.id ? null : j.id)} className="text-xs text-orange-500 hover:underline">{expandedLog === j.id ? "▲" : t("downloads.log")}</button>
+                      )}
+                      {(j.status === "failed" || j.status === "stale") && <button onClick={() => { setRetryId(j.id); retryIM.mutate(j.id); }} disabled={retryIM.isPending} className="text-xs text-blue-600 hover:underline">{t("jobs.retry")}</button>}
+                      <button onClick={() => { setDeleteId(j.id); setDeleteType("im"); }} className="text-xs text-red-500 hover:underline">{t("jobs.del")}</button>
+                    </div>
                   </div>
+                  {j.error_log && expandedLog !== j.id && <ErrorExcerpt value={j.error_log} />}
+                  {expandedLog === j.id && j.error_log && (
+                    <pre className="mt-1 max-h-48 overflow-auto rounded-md border border-danger/20 bg-danger-subtle p-3 font-mono text-xs whitespace-pre-wrap text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">{j.error_log}</pre>
+                  )}
                 </div>
               );
             })}

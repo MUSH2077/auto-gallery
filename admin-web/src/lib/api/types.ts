@@ -356,6 +356,13 @@ export interface ImportJob {
   progress_works_done?: number | null;
   progress_works_total?: number | null;
   progress_data?: JobProgress | null;
+  // Parent download-job context (resolved server-side, aligns with download rows)
+  source?: string | null;
+  source_url?: string | null;
+  subscription_id?: string | null;
+  subscription_name?: string | null;
+  creator_id?: string | null;
+  creator_name?: string | null;
 }
 
 export interface RepositoryGraphEdge {

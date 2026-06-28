@@ -7,6 +7,9 @@ from sqlalchemy import select, func, cast, String, or_
 
 from app.database import get_db
 from app.models.import_job import ImportJob
+from app.models.download_job import DownloadJob
+from app.models.subscription import Subscription
+from app.models.creator import Creator
 from app.schemas.import_job import ImportJobRead
 from app.services.job_state import transition_import_job
 from app.services.job_progress import import_progress_from_job
@@ -26,6 +29,53 @@ def _import_job_payload(job: ImportJob) -> dict:
     else:
         payload["progress_data"] = import_progress_from_job(job)
     return payload
+
+
+async def _enrich_import_context(db: AsyncSession, jobs: list[ImportJob]) -> dict:
+    """Resolve parent download-job context (source/url/subscription/creator) for a
+    batch of import jobs so the import list can show the same info as downloads."""
+    dj_ids = {j.download_job_id for j in jobs if j.download_job_id}
+    if not dj_ids:
+        return {}
+    dj_rows = (await db.execute(
+        select(DownloadJob.id, DownloadJob.source, DownloadJob.source_url, DownloadJob.subscription_id)
+        .where(DownloadJob.id.in_(dj_ids))
+    )).all()
+    dj = {r.id: r for r in dj_rows}
+
+    sub_ids = {r.subscription_id for r in dj_rows if r.subscription_id}
+    sub_ctx: dict = {}
+    if sub_ids:
+        sub_rows = (await db.execute(
+            select(Subscription.id, Subscription.name, Subscription.creator_id,
+                   Creator.display_name, Creator.name)
+            .join(Creator, Creator.id == Subscription.creator_id)
+            .where(Subscription.id.in_(sub_ids))
+        )).all()
+        sub_ctx = {
+            sid: {
+                "subscription_name": sname,
+                "creator_id": str(cid) if cid else None,
+                "creator_name": cdisplay or cname,
+            }
+            for sid, sname, cid, cdisplay, cname in sub_rows
+        }
+
+    ctx: dict = {}
+    for j in jobs:
+        d = dj.get(j.download_job_id)
+        if not d:
+            continue
+        s = sub_ctx.get(d.subscription_id, {})
+        ctx[j.id] = {
+            "source": d.source,
+            "source_url": d.source_url,
+            "subscription_id": str(d.subscription_id) if d.subscription_id else None,
+            "subscription_name": s.get("subscription_name"),
+            "creator_id": s.get("creator_id"),
+            "creator_name": s.get("creator_name"),
+        }
+    return ctx
 
 
 @router.post("/scan")
@@ -104,7 +154,13 @@ async def list_import_jobs(
     stmt = stmt.order_by(ImportJob.created_at.desc()).offset(offset).limit(limit)
     result = await db.execute(stmt)
     jobs = list(result.scalars().all())
-    return {"total": total, "items": [_import_job_payload(j) for j in jobs]}
+    ctx = await _enrich_import_context(db, jobs)
+    items = []
+    for j in jobs:
+        payload = _import_job_payload(j)
+        payload.update(ctx.get(j.id, {}))
+        items.append(payload)
+    return {"total": total, "items": items}
 
 
 @router.get("/{job_id}")
