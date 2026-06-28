@@ -38,7 +38,7 @@ ENTITIES = {
         "subscription_sources", "subscriptions",
         "source_creators", "creator_links", "creator_curation_states", "creators",
     ],
-    "jobs": ["import_jobs", "download_jobs"],
+    "jobs": ["task_runs", "import_jobs", "download_jobs"],
     "tags": ["work_source_tags", "work_tags", "tags"],
     "library": [],
     "settings": [],
@@ -57,7 +57,7 @@ async def clear_entity_data(entity: str, db: AsyncSession) -> dict:
             "work_source_tags", "work_tags", "asset_sources",
             "curation_changes", "work_curation_states", "creator_curation_states",
             "asset_storage_states", "curation_commits", "assets", "work_sources",
-            "works", "storage_artifacts", "import_jobs", "download_jobs",
+            "works", "storage_artifacts", "task_runs", "import_jobs", "download_jobs",
             "subscription_sources", "subscriptions", "source_creators",
             "creator_links", "creators", "tags",
         ]
