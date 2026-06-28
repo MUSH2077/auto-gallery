@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, DownloadJob, ImportJob, JobProgress, queryKeys } from "@/lib/api";
+import { api, DownloadJob, ImportJob, JobProgress, queryKeys, TaskRun } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, BatchByFilter, StatusBadge, StatCard } from "@/components";
 import { useJobWebSocket } from "@/lib/useWebSocket";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
@@ -18,13 +18,19 @@ const PAGE_LIMIT = 200;
 
 const STATUS_OPTIONS = ["", "enqueued", "downloading", "paused", "downloaded", "importing", "complete", "failed", "stale", "cancelled"];
 const IMPORT_STATUS_OPTIONS = ["", "enqueued", "running", "complete", "failed", "stale"];
+const TASK_STATUS_OPTIONS = ["", "enqueued", "running", "paused", "recovering", "complete", "failed", "cancelled", "stale"];
 const SOURCE_OPTIONS = ["", "pixiv", "x", "iwara", "danbooru", "pinterest", "lofter", "weibo", "bilibili"];
+type JobsTab = "all" | "downloads" | "imports" | "admin";
 function isActiveDownload(status: string) {
   return ["pending", "enqueued", "downloading", "downloaded", "importing"].includes(status);
 }
 
 function isActiveImport(status: string) {
   return ["pending", "enqueued", "running"].includes(status);
+}
+
+function isActiveTask(status: string) {
+  return ["enqueued", "running", "recovering"].includes(status);
 }
 
 function fallbackProgress(stage: string): JobProgress {
@@ -108,6 +114,98 @@ function DetailRow({ label, value }: { label: string; value?: ReactNode }) {
       <dt className="text-xs font-medium uppercase text-muted">{label}</dt>
       <dd className="min-w-0 break-all">{value || "—"}</dd>
     </div>
+  );
+}
+
+function UnifiedTaskList({
+  tasks,
+  isLoading,
+  error,
+  onRetry,
+  openDownloadDetail,
+  openImportDetail,
+}: {
+  tasks?: { total: number; items: TaskRun[] };
+  isLoading: boolean;
+  error: unknown;
+  onRetry: () => void;
+  openDownloadDetail: (id: string) => void;
+  openImportDetail: (id: string) => void;
+}) {
+  const t = useT();
+  const fmt = useI18nFormat();
+  const rows = tasks?.items || [];
+  const labelForKind = (task: TaskRun) => {
+    if (task.operation_type === "admin-rebuild") return t("scheduler.rebuild_library", "重建索引库");
+    if (task.operation_type === "admin-disk-import") return t("datamgmt.disk_import", "从盘导入");
+    if (task.operation_type === "admin-clear") return t("datamgmt.clear_all", "清理数据");
+    if (task.kind === "download") return t("jobs.download");
+    if (task.kind === "import") return t("jobs.import");
+    return task.operation_type || task.kind;
+  };
+
+  return (
+    <section className="mb-8">
+      <h3 className="mb-2 flex items-center gap-3 text-base font-semibold">
+        {t("jobs.title")}
+        <span className="text-xs font-normal text-muted">{tasks?.total ?? 0} {t("common.items")}</span>
+      </h3>
+      {isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-14 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div>}
+      {Boolean(error) && <ErrorState message={(error as Error).message} onRetry={onRetry} />}
+      {!isLoading && !error && rows.length === 0 && <EmptyState title={t("jobs.no_dl")} description={t("jobs.no_dl_desc")} />}
+      {rows.length > 0 && (
+        <div className="overflow-x-auto pb-2">
+          <div className="min-w-[900px] space-y-1">
+            {rows.map((task) => {
+              const progress = task.progress_data as JobProgress | null
+                || (task.progress_stage ? { stage: task.progress_stage, current: task.progress_current || undefined, total: task.progress_total || undefined } : null);
+              const subjectId = task.subject_id;
+              const clickableDownload = task.subject_type === "download_job" && subjectId;
+              const clickableImport = task.subject_type === "import_job" && subjectId;
+              return (
+                <div
+                  key={task.id}
+                  onClick={() => {
+                    if (clickableDownload) openDownloadDetail(subjectId);
+                    if (clickableImport) openImportDetail(subjectId);
+                  }}
+                  className={`card flex items-center gap-3 p-3 text-sm hover:border-accent/50 ${(clickableDownload || clickableImport) ? "cursor-pointer" : ""}`}
+                >
+                  <div className="w-28 shrink-0"><StatusBadge status={task.status} /></div>
+                  <span className="w-24 shrink-0 truncate text-xs font-medium">{labelForKind(task)}</span>
+                  <span className="w-16 shrink-0 font-mono text-xs text-muted">{shortId(task.id)}</span>
+                  {task.source && <SourceBadge source={task.source} />}
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-xs font-medium" title={task.title || undefined}>{task.title || task.operation_type || task.kind}</div>
+                    <div className="truncate text-[11px] text-muted" title={task.source_url || undefined}>
+                      {task.source_url || task.queue_name || task.rq_job_id || task.subject_type || "-"}
+                    </div>
+                  </div>
+                  <RealProgressBar progress={isActiveTask(task.status) ? progress : null} />
+                  {task.error_log && <span className="max-w-[180px] truncate text-xs text-danger dark:text-danger">{task.error_log}</span>}
+                  {task.result_data?.message && <span className="max-w-[180px] truncate text-xs text-muted">{task.result_data.message}</span>}
+                  {isActiveTask(task.status) && task.created_at ? (
+                    <Elapsed since={task.created_at} active />
+                  ) : (
+                    <span className="w-20 shrink-0 text-right text-xs text-muted">{task.created_at ? fmt.time(task.created_at) : "-"}</span>
+                  )}
+                  {clickableDownload && (
+                    <button onClick={(e) => { e.stopPropagation(); openDownloadDetail(subjectId); }} className="shrink-0 text-xs text-accent hover:underline dark:text-accent">
+                      {t("jobs.open_download")}
+                    </button>
+                  )}
+                  {clickableImport && (
+                    <button onClick={(e) => { e.stopPropagation(); openImportDetail(subjectId); }} className="shrink-0 text-xs text-accent hover:underline dark:text-accent">
+                      {t("jobs.import")}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -300,6 +398,7 @@ function JobsContent() {
     onStatusChange: (msg) => {
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
       qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
       qc.invalidateQueries({ queryKey: ["workbench"] });
       if (msg.task_id && msg.new_status) {
         toast.info(`${msg.task_id.slice(0, 8)}: ${msg.old_status} → ${msg.new_status}`);
@@ -319,7 +418,8 @@ function JobsContent() {
   const pathname = usePathname();
   const sp = useSearchParams();
 
-  const activeTab = (sp.get("tab") === "imports" ? "imports" : "downloads") as "downloads" | "imports";
+  const tabParam = sp.get("tab");
+  const activeTab = (tabParam === "downloads" || tabParam === "imports" || tabParam === "admin" ? tabParam : "all") as JobsTab;
   const status = sp.get("status") || "";
   const dlSource = sp.get("source") || "";
   const subscriptionSourceId = sp.get("subscription_source_id") || "";
@@ -364,6 +464,7 @@ function JobsContent() {
   const downloads = useQuery({
     queryKey: [...queryKeys.downloadJobs.all, dlParams],
     queryFn: () => api.listDownloadJobs(dlParams),
+    enabled: activeTab === "downloads",
     refetchInterval: (!status || isActiveDownload(status)) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
   });
 
@@ -385,7 +486,24 @@ function JobsContent() {
       offset: 0,
       limit: PAGE_LIMIT,
     }),
+    enabled: activeTab === "imports",
     refetchInterval: (!status || isActiveImport(status)) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
+  });
+
+  const taskParams = useMemo(() => ({
+    kind: activeTab === "admin" ? "admin" : undefined,
+    status: status || undefined,
+    source: activeTab === "admin" ? undefined : dlSource || undefined,
+    q: search || undefined,
+    offset: 0,
+    limit: PAGE_LIMIT,
+  }), [activeTab, status, dlSource, search]);
+
+  const tasks = useQuery({
+    queryKey: [...queryKeys.tasks.all, taskParams],
+    queryFn: () => api.listTasks(taskParams),
+    enabled: activeTab === "all" || activeTab === "admin",
+    refetchInterval: (!status || isActiveTask(status)) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
   });
 
   useEffect(() => {
@@ -432,16 +550,17 @@ function JobsContent() {
 
   const activeFilterCount = [
     status,
-    dlSource,
+    activeTab === "admin" ? "" : dlSource,
     subscriptionSourceId,
     downloadJobId,
     search,
-    dlSort !== "created_at" || dlOrder !== "desc",
+    activeTab === "downloads" && (dlSort !== "created_at" || dlOrder !== "desc"),
   ].filter(Boolean).length;
-  const lastUpdated = Math.max(downloads.dataUpdatedAt || 0, imports.dataUpdatedAt || 0, workbench.dataUpdatedAt || 0);
+  const lastUpdated = Math.max(downloads.dataUpdatedAt || 0, imports.dataUpdatedAt || 0, tasks.dataUpdatedAt || 0, workbench.dataUpdatedAt || 0);
   const refreshAll = () => {
     qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
     qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
+    qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
     qc.invalidateQueries({ queryKey: queryKeys.workbench });
   };
   const clearFilters = () => updateParams({
@@ -561,6 +680,12 @@ function JobsContent() {
     if (confirm(t("jobs.delete_all_confirm", { statuses: statuses.map((s) => statusLabel(t, s)).join(", ") }))) clearDL.mutate(statuses);
   };
 
+  const statusOptions = activeTab === "imports"
+    ? IMPORT_STATUS_OPTIONS
+    : activeTab === "downloads"
+      ? STATUS_OPTIONS
+      : TASK_STATUS_OPTIONS;
+
   return (
     <main className="max-w-7xl mx-auto p-6">
       <PageHeader title={t("jobs.title")} description={t("jobs.desc")}>
@@ -598,8 +723,10 @@ function JobsContent() {
       <div className="mb-4 flex flex-col gap-3 rounded-md border border-border bg-white p-3 dark:border-border dark:bg-surface">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex gap-1 rounded-md bg-subtle p-1 dark:bg-subtle">
+            <button onClick={() => updateParams({ tab: null, status: null, job: null, import_job: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "all" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("common.all")}</button>
             <button onClick={() => updateParams({ tab: "downloads", status: null, import_job: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "downloads" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("jobs.download")}</button>
             <button onClick={() => updateParams({ tab: "imports", status: null, job: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "imports" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("jobs.import")}</button>
+            <button onClick={() => updateParams({ tab: "admin", status: null, job: null, import_job: null, source: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "admin" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("scheduler.admin_operations", "管理操作")}</button>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
             {activeFilterCount > 0 && <span className="rounded-full bg-accent-subtle px-2 py-0.5 font-medium text-accent dark:bg-accent-subtle dark:text-accent">{t("jobs.active_filters", { count: activeFilterCount })}</span>}
@@ -613,9 +740,9 @@ function JobsContent() {
           <input value={search} onChange={(e) => updateParams({ q: e.target.value || null })} className="input min-w-[220px] px-3 py-1.5 text-xs" placeholder={t("jobs.search_placeholder")} aria-label={t("jobs.search_placeholder")} />
         <select value={status} onChange={(e) => updateParams({ status: e.target.value || null })} className="select px-2 py-1.5 text-xs">
           <option value="">{t("jobs.filter_all_status")}</option>
-          {(activeTab === "imports" ? IMPORT_STATUS_OPTIONS : STATUS_OPTIONS).filter(Boolean).map(s => <option key={s} value={s}>{statusLabel(t, s)}</option>)}
+          {statusOptions.filter(Boolean).map(s => <option key={s} value={s}>{statusLabel(t, s)}</option>)}
         </select>
-        {activeTab === "downloads" && <select value={dlSource} onChange={(e) => updateParams({ source: e.target.value || null })} className="select px-2 py-1.5 text-xs">
+        {activeTab !== "imports" && activeTab !== "admin" && <select value={dlSource} onChange={(e) => updateParams({ source: e.target.value || null })} className="select px-2 py-1.5 text-xs">
           <option value="">{t("jobs.filter_all_source")}</option>
           {SOURCE_OPTIONS.filter(Boolean).map(s => <option key={s} value={s}>{s}</option>)}
         </select>}
@@ -641,6 +768,17 @@ function JobsContent() {
         )}
         </div>
       </div>
+
+      {(activeTab === "all" || activeTab === "admin") && (
+        <UnifiedTaskList
+          tasks={tasks.data}
+          isLoading={tasks.isLoading}
+          error={tasks.error}
+          onRetry={() => tasks.refetch()}
+          openDownloadDetail={openDownloadDetail}
+          openImportDetail={openImportDetail}
+        />
+      )}
 
       {/* Download Jobs list */}
       {activeTab === "downloads" && <section className="mb-8">

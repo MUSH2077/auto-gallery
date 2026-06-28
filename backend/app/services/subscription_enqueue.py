@@ -208,6 +208,8 @@ async def enqueue_subscription_source_sync(
 
         try:
             from rq import Queue
+            from app.services.tasks import TaskService
+            await TaskService(db).ensure_download_task(job)
 
             queue_name = f"downloads:{job.source}"
             Queue(name=queue_name, connection=get_redis()).enqueue(

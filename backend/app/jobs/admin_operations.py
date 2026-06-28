@@ -18,6 +18,18 @@ def run_clear_operation(entity: str, job_id: str) -> dict:
 
 
 async def _run_clear_operation(entity: str, job_id: str) -> dict:
+    from uuid import UUID
+    from app.services.tasks import TaskService
+    async with async_session() as task_db:
+        svc = TaskService(task_db)
+        task = await svc.get(UUID(job_id))
+        if task:
+            await svc.update_task(
+                task,
+                status="running",
+                progress={"phase": "running", "label": f"Clearing {entity}"},
+            )
+            await task_db.commit()
     set_operation_status(
         job_id,
         "running",
@@ -28,6 +40,17 @@ async def _run_clear_operation(entity: str, job_id: str) -> dict:
     try:
         async with async_session() as db:
             result = await clear_entity_data(entity, db)
+        async with async_session() as task_db:
+            svc = TaskService(task_db)
+            task = await svc.get(UUID(job_id))
+            if task:
+                await svc.update_task(
+                    task,
+                    status="complete",
+                    progress={"phase": "complete", "label": result.get("message", "Complete")},
+                    result=result,
+                )
+                await task_db.commit()
         set_operation_status(
             job_id,
             "complete",
@@ -39,6 +62,12 @@ async def _run_clear_operation(entity: str, job_id: str) -> dict:
         return result
     except Exception as exc:
         logger.exception("Admin clear operation failed: job_id=%s entity=%s", job_id, entity)
+        async with async_session() as task_db:
+            svc = TaskService(task_db)
+            task = await svc.get(UUID(job_id))
+            if task:
+                await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
+                await task_db.commit()
         set_operation_status(
             job_id,
             "failed",
@@ -57,6 +86,18 @@ def run_library_rebuild_operation(job_id: str, options: dict | None = None) -> d
 
 async def _run_library_rebuild_operation(job_id: str, options: dict) -> dict:
     from app.services.admin_data import rebuild_library_index
+    from uuid import UUID
+    from app.services.tasks import TaskService
+    async with async_session() as task_db:
+        svc = TaskService(task_db)
+        task = await svc.get(UUID(job_id))
+        if task:
+            await svc.update_task(
+                task,
+                status="running",
+                progress={"phase": "running", "label": "Rebuilding library index..."},
+            )
+            await task_db.commit()
     set_operation_status(job_id, "running", "admin-rebuild",
         progress={"phase": "running", "label": "Rebuilding library index..."},
         meta={"entity": "library", **options})
@@ -68,12 +109,29 @@ async def _run_library_rebuild_operation(job_id: str, options: dict) -> dict:
 
         async with async_session() as db:
             result = await rebuild_library_index(db, options, update_progress)
+        async with async_session() as task_db:
+            svc = TaskService(task_db)
+            task = await svc.get(UUID(job_id))
+            if task:
+                await svc.update_task(
+                    task,
+                    status="complete",
+                    progress={"phase": "complete", "label": result.get("message", "Complete")},
+                    result=result,
+                )
+                await task_db.commit()
         set_operation_status(job_id, "complete", "admin-rebuild",
             progress={"phase": "complete", "label": result.get("message", "Complete")},
             result=result, meta={"entity": "library", **options})
         return result
     except Exception as exc:
         logger.exception("Library rebuild failed: job_id=%s", job_id)
+        async with async_session() as task_db:
+            svc = TaskService(task_db)
+            task = await svc.get(UUID(job_id))
+            if task:
+                await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
+                await task_db.commit()
         set_operation_status(job_id, "failed", "admin-rebuild",
             progress={"phase": "failed"}, error=str(exc), meta={"entity": "library", **options})
         raise
@@ -94,6 +152,18 @@ def run_disk_import_operation(job_id: str, options: dict | None = None) -> dict:
 
 async def _run_disk_import_operation(job_id: str, options: dict) -> dict:
     from app.services.disk_import import reconcile_downloads_to_db
+    from uuid import UUID
+    from app.services.tasks import TaskService
+    async with async_session() as task_db:
+        svc = TaskService(task_db)
+        task = await svc.get(UUID(job_id))
+        if task:
+            await svc.update_task(
+                task,
+                status="running",
+                progress={"phase": "running", "label": "Scanning download root..."},
+            )
+            await task_db.commit()
     set_operation_status(job_id, "running", "admin-disk-import",
         progress={"phase": "running", "label": "Scanning download root..."},
         meta={"entity": "disk-import", **options})
@@ -104,13 +174,30 @@ async def _run_disk_import_operation(job_id: str, options: dict) -> dict:
                 meta={"entity": "disk-import", **options})
 
         async with async_session() as db:
-            result = await reconcile_downloads_to_db(db, options, update_progress)
+            result = await reconcile_downloads_to_db(db, {**options, "parent_task_id": job_id}, update_progress)
+        async with async_session() as task_db:
+            svc = TaskService(task_db)
+            task = await svc.get(UUID(job_id))
+            if task:
+                await svc.update_task(
+                    task,
+                    status="complete",
+                    progress={"phase": "complete", "label": f"Queued {result['jobs']} import jobs"},
+                    result=result,
+                )
+                await task_db.commit()
         set_operation_status(job_id, "complete", "admin-disk-import",
             progress={"phase": "complete", "label": f"Queued {result['jobs']} import jobs"},
             result=result, meta={"entity": "disk-import", **options})
         return result
     except Exception as exc:
         logger.exception("Disk import failed: job_id=%s", job_id)
+        async with async_session() as task_db:
+            svc = TaskService(task_db)
+            task = await svc.get(UUID(job_id))
+            if task:
+                await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
+                await task_db.commit()
         set_operation_status(job_id, "failed", "admin-disk-import",
             progress={"phase": "failed"}, error=str(exc), meta={"entity": "disk-import", **options})
         raise

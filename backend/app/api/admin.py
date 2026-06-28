@@ -810,7 +810,7 @@ async def clear_entity(entity: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/operations/clear")
-async def start_clear_operation(data: dict):
+async def start_clear_operation(data: dict, db: AsyncSession = Depends(get_db)):
     """Enqueue a data-management clear operation and return immediately."""
     from rq import Queue
 
@@ -822,14 +822,26 @@ async def start_clear_operation(data: dict):
         )
 
     job_id = str(uuid.uuid4())
+    from app.services.tasks import TaskService
+    task = await TaskService(db).create_task(
+        task_id=UUID(job_id),
+        kind="admin",
+        operation_type="admin-clear",
+        title=f"Clear {entity}",
+        status="enqueued",
+        queue_name="operations",
+        meta={"entity": entity},
+        progress={"phase": "enqueued", "label": f"Queued clear for {entity}"},
+    )
+    await db.commit()
     set_operation_status(
         job_id,
-        "queued",
+        "enqueued",
         "admin-clear",
-        progress={"phase": "queued", "label": f"Queued clear for {entity}"},
+        progress={"phase": "enqueued", "label": f"Queued clear for {entity}"},
         meta={"entity": entity},
     )
-    queue = Queue(name="imports", connection=get_redis())
+    queue = Queue(name="operations", connection=get_redis())
     rq_job = queue.enqueue(
         "app.jobs.admin_operations.run_clear_operation",
         entity,
@@ -837,14 +849,38 @@ async def start_clear_operation(data: dict):
         job_timeout=7200,
         result_ttl=7200,
     )
+    async with async_session() as task_db:
+        svc = TaskService(task_db)
+        current = await svc.get(task.id)
+        if current:
+            await svc.update_task(current, rq_job_id=rq_job.id)
+            await task_db.commit()
     logger.info("Enqueued admin clear operation job_id=%s rq_job=%s entity=%s", job_id, rq_job.id, entity)
-    return {"job_id": job_id, "status": "queued"}
+    return {"job_id": job_id, "status": "enqueued"}
 
 
 @router.get("/operations/{job_id}")
 async def get_admin_operation(job_id: str):
     status = get_operation_status(job_id)
     if not status:
+        try:
+            from app.services.tasks import TaskService, task_payload
+            async with async_session() as db:
+                task = await TaskService(db).get(UUID(job_id))
+                if task and task.kind == "admin":
+                    payload = task_payload(task)
+                    return {
+                        "job_id": payload["id"],
+                        "status": payload["status"],
+                        "operation_type": payload["operation_type"],
+                        "progress": payload["progress_data"],
+                        "result": payload["result_data"],
+                        "error": payload["error_log"],
+                        "meta": payload["meta"],
+                        "updated_at": task.updated_at.timestamp() if task.updated_at else None,
+                    }
+        except ValueError:
+            pass
         raise HTTPException(status_code=404, detail="Operation not found")
     return status
 
@@ -862,7 +898,7 @@ async def list_active_operations():
         if raw:
             try:
                 payload = json.loads(raw if isinstance(raw, str) else raw.decode("utf-8"))
-                if payload.get("status") in ("enqueued", "running"):
+                if payload.get("status") in ("queued", "enqueued", "running"):
                     ops.append(payload)
             except Exception:
                 pass
@@ -920,6 +956,7 @@ async def rebuild_library(data: RebuildLibraryRequest | None = None):
     options = (data or RebuildLibraryRequest()).model_dump(mode="json")
     redis = get_redis()
     job_id = str(uuid.uuid4())
+    from app.services.tasks import TaskService
     active_job = redis.get("library:rebuild:active")
     if isinstance(active_job, bytes):
         active_job = active_job.decode()
@@ -932,13 +969,31 @@ async def rebuild_library(data: RebuildLibraryRequest | None = None):
         if isinstance(active_job, bytes):
             active_job = active_job.decode()
         raise HTTPException(status_code=409, detail={"message": "Library rebuild already running", "job_id": active_job})
+    async with async_session() as task_db:
+        task = await TaskService(task_db).create_task(
+            task_id=UUID(job_id),
+            kind="admin",
+            operation_type="admin-rebuild",
+            title="Rebuild library index",
+            status="enqueued",
+            queue_name="operations",
+            progress={"phase": "enqueued", "label": "Library rebuild queued"},
+            meta={"entity": "library", **options},
+        )
+        await task_db.commit()
     set_operation_status(job_id, "enqueued", "admin-rebuild",
         progress={"phase": "enqueued", "label": "Library rebuild queued"},
         meta={"entity": "library", **options})
 
-    Queue(name="operations", connection=redis).enqueue(
+    rq_job = Queue(name="operations", connection=redis).enqueue(
         "app.jobs.admin_operations.run_library_rebuild_operation",
         job_id, options, job_timeout=14400, result_ttl=604800)
+    async with async_session() as task_db:
+        svc = TaskService(task_db)
+        current = await svc.get(task.id)
+        if current:
+            await svc.update_task(current, rq_job_id=rq_job.id)
+            await task_db.commit()
 
     return {"status": "enqueued", "job_id": job_id, "message": "Library rebuild queued", "options": options}
 
@@ -958,6 +1013,7 @@ async def import_from_disk(data: ImportFromDiskRequest | None = None):
     options = (data or ImportFromDiskRequest()).model_dump(mode="json")
     redis = get_redis()
     job_id = str(uuid.uuid4())
+    from app.services.tasks import TaskService
     active_job = redis.get("library:disk-import:active")
     if isinstance(active_job, bytes):
         active_job = active_job.decode()
@@ -970,13 +1026,31 @@ async def import_from_disk(data: ImportFromDiskRequest | None = None):
         if isinstance(active_job, bytes):
             active_job = active_job.decode()
         raise HTTPException(status_code=409, detail={"message": "Disk import already running", "job_id": active_job})
+    async with async_session() as task_db:
+        task = await TaskService(task_db).create_task(
+            task_id=UUID(job_id),
+            kind="admin",
+            operation_type="admin-disk-import",
+            title="Import from disk",
+            status="enqueued",
+            queue_name="operations",
+            progress={"phase": "enqueued", "label": "Disk import queued"},
+            meta={"entity": "disk-import", **options},
+        )
+        await task_db.commit()
     set_operation_status(job_id, "enqueued", "admin-disk-import",
         progress={"phase": "enqueued", "label": "Disk import queued"},
         meta={"entity": "disk-import", **options})
 
-    Queue(name="operations", connection=redis).enqueue(
+    rq_job = Queue(name="operations", connection=redis).enqueue(
         "app.jobs.admin_operations.run_disk_import_operation",
         job_id, options, job_timeout=14400, result_ttl=604800)
+    async with async_session() as task_db:
+        svc = TaskService(task_db)
+        current = await svc.get(task.id)
+        if current:
+            await svc.update_task(current, rq_job_id=rq_job.id)
+            await task_db.commit()
 
     return {"status": "enqueued", "job_id": job_id, "message": "Disk import queued", "options": options}
 

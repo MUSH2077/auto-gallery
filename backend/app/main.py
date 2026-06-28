@@ -101,17 +101,38 @@ async def lifespan(app: FastAPI):
     stale_task = asyncio.create_task(stale_detection_loop())
     logger.info("Stale detection background task started")
 
+    async def import_recovery_loop():
+        while True:
+            await asyncio.sleep(120)
+            try:
+                async with async_session() as db:
+                    from app.services.import_recovery import recover_import_pipeline
+                    from app.services.redis_client import get_redis
+                    result = await recover_import_pipeline(db, redis_client=get_redis())
+                    if result.get("imports_enqueued") or result.get("imports_marked_stale"):
+                        logger.info("Import recovery repaired pipeline gap", **result)
+            except Exception:
+                logger.warning("Import recovery cycle failed", exc_info=True)
+
+    import_recovery_task = asyncio.create_task(import_recovery_loop())
+    logger.info("Import recovery background task started")
+
     yield
 
     # ── Cleanup ──
     ws_task.cancel()
     stale_task.cancel()
+    import_recovery_task.cancel()
     try:
         await ws_task
     except asyncio.CancelledError:
         pass
     try:
         await stale_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await import_recovery_task
     except asyncio.CancelledError:
         pass
     await engine.dispose()

@@ -15,6 +15,7 @@ from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
 from app.models.system_setting import SystemSetting
 from app.models.storage_artifact import StorageArtifact
+from app.models.task_run import TaskEvent, TaskRun
 from app.models.user import User
 from app.models.curation import (
     AssetStorageState,
@@ -43,6 +44,8 @@ __all__ = [
     "ImportJob",
     "SystemSetting",
     "StorageArtifact",
+    "TaskEvent",
+    "TaskRun",
     "User",
     "AssetStorageState",
     "CreatorCurationState",

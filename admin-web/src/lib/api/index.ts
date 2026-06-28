@@ -31,6 +31,33 @@ export const api = {
 
   queueStats: () => request<T.QueueStatsResponse>("/api/v1/system/queue-stats"),
 
+  // Unified task runs
+  listTasks: (params?: { kind?: string; status?: string; operation_type?: string; source?: string; q?: string; offset?: number; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.kind) q.set("kind", params.kind);
+    if (params?.status) q.set("status", params.status);
+    if (params?.operation_type) q.set("operation_type", params.operation_type);
+    if (params?.source) q.set("source", params.source);
+    if (params?.q) q.set("q", params.q);
+    q.set("offset", String(params?.offset || 0));
+    q.set("limit", String(params?.limit || 50));
+    return request<T.TaskRunListResponse>(`/api/v1/tasks?${q.toString()}`);
+  },
+
+  getTask: (id: string) => request<T.TaskRun>(`/api/v1/tasks/${id}`),
+  retryTask: (id: string) => request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/retry`, { method: "POST" }),
+  cancelTask: (id: string, note?: string) =>
+    request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/cancel`, {
+      method: "POST",
+      body: note ? JSON.stringify({ note }) : undefined,
+    }),
+  pauseTask: (id: string, note?: string) =>
+    request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/pause`, {
+      method: "POST",
+      body: note ? JSON.stringify({ note }) : undefined,
+    }),
+  resumeTask: (id: string) => request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/resume`, { method: "POST" }),
+
   // Sources
   sources: () => request<{ sources: T.ProviderInfo[] }>("/api/v1/sources"),
 
@@ -380,7 +407,7 @@ export const api = {
     request<{ operations: { job_id: string; status: string; operation_type: string; progress?: { phase: string; label: string }; error?: string; updated_at: number }[] }>("/api/v1/admin/operations"),
 
   startClearOperation: (entity: string) =>
-    request<{ job_id: string; status: "queued" }>("/api/v1/admin/operations/clear", {
+    request<{ job_id: string; status: "queued" | "enqueued" }>("/api/v1/admin/operations/clear", {
       method: "POST",
       body: JSON.stringify({ entity }),
     }),
@@ -388,7 +415,7 @@ export const api = {
   getAdminOperationStatus: (jobId: string) =>
     request<{
       job_id: string;
-      status: "queued" | "running" | "complete" | "failed";
+      status: "queued" | "enqueued" | "running" | "complete" | "failed";
       operation_type: "admin-clear" | "danbooru-import-all" | string;
       progress?: { phase?: string; label?: string; current?: number; total?: number };
       result?: any;
@@ -533,6 +560,10 @@ export const queryKeys = {
   workbench: ["system", "workbench"] as const,
   schedulerDecisions: ["system", "scheduler-decisions"] as const,
   sources: ["sources"] as const,
+  tasks: {
+    all: ["tasks"] as const,
+    detail: (id: string) => ["tasks", id] as const,
+  },
   creators: {
     all: ["creators"] as const,
     count: ["creators", "count"] as const,

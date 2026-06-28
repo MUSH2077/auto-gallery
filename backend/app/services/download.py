@@ -151,6 +151,8 @@ class DownloadService:
         )
         update_manifest(job, trigger="manual_url", source=source, source_url=normalized_url)
         append_manifest_event(job, "created", trigger="manual_url")
+        from app.services.tasks import TaskService
+        await TaskService(self.db).ensure_download_task(job)
         await self.db.commit()
 
         try:

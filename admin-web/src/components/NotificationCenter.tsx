@@ -31,7 +31,7 @@ export interface BatchJobState {
 
 export interface OperationJobState {
   jobId: string;
-  kind: "admin-clear" | "danbooru-import-all";
+  kind: "admin-clear" | "admin-rebuild" | "admin-disk-import" | "danbooru-import-all" | string;
   title: string;
   startedAt: number;
   status: "running" | "completed" | "error";
@@ -127,6 +127,18 @@ function refreshOperationQueries(
       refetches.push(qc.refetchQueries({ queryKey: queryKeys.subscriptions.sources(subscriptionId), type: "all" }));
     }
     void Promise.all(refetches);
+    return;
+  }
+
+  qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+
+  if (kind === "admin-rebuild" || kind === "admin-disk-import") {
+    qc.invalidateQueries({ queryKey: queryKeys.workbench });
+    qc.invalidateQueries({ queryKey: queryKeys.works.all });
+    qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+    qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
+    qc.invalidateQueries({ queryKey: ["storage-breakdown"] });
+    qc.invalidateQueries({ queryKey: ["system-info"] });
     return;
   }
 
@@ -395,7 +407,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     if (!operationJob || !operationStatusQuery.data) return;
     const data = operationStatusQuery.data;
 
-    if (data.status === "queued" || data.status === "running") {
+    if (data.status === "queued" || data.status === "enqueued" || data.status === "running") {
       setOperationJob((prev) => prev && prev.jobId === operationJob.jobId
         ? { ...prev, progress: data.progress || prev.progress, status: "running" }
         : prev);
@@ -578,7 +590,7 @@ export function NotificationBell() {
                   <div className="cursor-pointer border-b border-border px-4 py-2.5 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle"
                     onClick={() => {
                       setOpen(false);
-                      router.push(operationJob.kind === "danbooru-import-all" ? "/admin/reference/danbooru" : "/admin/data-mgmt");
+                      router.push(operationJob.kind === "danbooru-import-all" ? "/admin/reference/danbooru" : `/admin/jobs?tab=admin&q=${operationJob.jobId}`);
                     }}>
                     <div className="flex items-start gap-2.5">
                       <div className="mt-0.5">{statusIcon(operationJob.status)}</div>

@@ -233,6 +233,14 @@ async def run_import_job(import_job_id: str):
             current=0,
             total=import_job.progress_works_total,
         )
+        from app.services.tasks import TaskService
+        await TaskService(db).ensure_import_task(import_job)
+        await TaskService(db).update_subject(
+            "import_job",
+            import_job.id,
+            status="running",
+            progress=import_job.progress_data,
+        )
         await db.commit()
 
     # ── Start control listener + heartbeat ──
@@ -314,6 +322,14 @@ async def run_import_job(import_job_id: str):
                 if ij:
                     apply_import_progress(ij, "failed", _empty_msg)
                     transition_import_job(ij, "failed", _empty_msg)
+                    from app.services.tasks import TaskService
+                    await TaskService(db).update_subject(
+                        "import_job",
+                        ij.id,
+                        status="failed",
+                        progress=ij.progress_data,
+                        error=_empty_msg,
+                    )
                     # Also fail the parent download_job so an empty parse is not a
                     # silent complete-but-empty (G1).
                     _dj_repo = DownloadJobRepository(db)
@@ -719,6 +735,13 @@ async def run_import_job(import_job_id: str):
                         total=len(groups),
                         assets=stats["assets"],
                     )
+                    from app.services.tasks import TaskService
+                    await TaskService(db).update_subject(
+                        "import_job",
+                        ij.id,
+                        status="paused",
+                        progress=ij.progress_data,
+                    )
                     await db.commit()
             logger.info("Import %s paused after %d works", import_job_id, stats["works"])
             return
@@ -736,6 +759,13 @@ async def run_import_job(import_job_id: str):
                         current=stats["works"],
                         total=len(groups),
                         assets=stats["assets"],
+                    )
+                    from app.services.tasks import TaskService
+                    await TaskService(db).update_subject(
+                        "import_job",
+                        ij.id,
+                        status="cancelled",
+                        progress=ij.progress_data,
                     )
                     await db.commit()
             logger.info("Import %s cancelled after %d works", import_job_id, stats["works"])
@@ -766,6 +796,15 @@ async def run_import_job(import_job_id: str):
                 apply_import_progress(
                     ij, status, message,
                     current=stats["works"], total=total_groups, assets=stats["assets"],
+                )
+                from app.services.tasks import TaskService
+                await TaskService(db).update_subject(
+                    "import_job",
+                    ij.id,
+                    status=status,
+                    progress=ij.progress_data,
+                    result={"stats": stats, "message": message} if status == "complete" else None,
+                    error=message if status == "failed" else None,
                 )
                 if status == "failed":
                     logger.warning("Import %s classified failed: %s", import_job_id, message)
@@ -808,6 +847,14 @@ async def run_import_job(import_job_id: str):
                         "enqueued",
                         f"Retry {retry_count}/{max_retries} queued after import error",
                     )
+                    from app.services.tasks import TaskService
+                    await TaskService(db).update_subject(
+                        "import_job",
+                        ij.id,
+                        status="enqueued",
+                        progress=ij.progress_data,
+                        error=f"RETRY {retry_count}/{max_retries}\n{error_text}",
+                    )
                     await db.commit()
                     # Re-enqueue with backoff (60s * retry_count)
                     try:
@@ -830,6 +877,14 @@ async def run_import_job(import_job_id: str):
                         ij,
                         "failed",
                         "Import failed after all retries",
+                    )
+                    from app.services.tasks import TaskService
+                    await TaskService(db).update_subject(
+                        "import_job",
+                        ij.id,
+                        status="failed",
+                        progress=ij.progress_data,
+                        error=f"Exhausted {max_retries} retries\n{error_text}",
                     )
                     await db.commit()
 

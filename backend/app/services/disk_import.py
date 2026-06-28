@@ -61,7 +61,8 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
                 continue
             sources.append(d.name)
 
-    stats = {"sources": 0, "creators": 0, "jobs": 0, "skipped_done": 0}
+    stats = {"sources": 0, "creators": 0, "jobs": 0, "skipped_done": 0, "import_job_ids": []}
+    parent_task_id = options.get("parent_task_id")
     for source in sources:
         stats["sources"] += 1
         provider = registry.get(source)
@@ -122,7 +123,19 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
             await ArtifactLedger(db).upsert_many(rows)
             await db.commit()
 
-            await _enqueue_import(str(job.id), new_json_paths=new_paths)
+            import_job_id = await _enqueue_import(str(job.id), new_json_paths=new_paths)
+            if import_job_id:
+                stats["import_job_ids"].append(import_job_id)
+                if parent_task_id:
+                    try:
+                        from uuid import UUID
+                        from app.services.tasks import TaskService
+                        task = await TaskService(db).get_by_subject("import_job", UUID(import_job_id))
+                        if task:
+                            await TaskService(db).update_task(task, parent_task_id=UUID(str(parent_task_id)))
+                            await db.commit()
+                    except Exception:
+                        logger.warning("disk_import: could not link child import task %s to %s", import_job_id, parent_task_id, exc_info=True)
             stats["creators"] += 1
             stats["jobs"] += 1
             if progress_callback:

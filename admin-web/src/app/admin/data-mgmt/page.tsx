@@ -72,7 +72,23 @@ export default function DataManagementPage() {
 
   const importFromDisk = useMutation({
     mutationFn: () => api.importFromDisk({}),
-    onSuccess: (d: any) => setResult({ ok: true, msg: d.message }),
+    onSuccess: (d: any) => {
+      const title = t("datamgmt.disk_import");
+      setResult({ ok: true, msg: d.message });
+      notify.startOperationJob(d.job_id, "admin-disk-import", title);
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+    },
+    onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
+  });
+
+  const rebuildLibrary = useMutation({
+    mutationFn: () => api.rebuildLibrary(),
+    onSuccess: (d: any) => {
+      const title = t("datamgmt.cleanup_reindex");
+      setResult({ ok: true, msg: d.message });
+      notify.startOperationJob(d.job_id, "admin-rebuild", title);
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+    },
     onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
   });
 
@@ -410,8 +426,9 @@ export default function DataManagementPage() {
                 <p className="text-sm font-medium">{t("datamgmt.cleanup_reindex")}</p>
                 <p className="text-xs text-muted">{t("datamgmt.cleanup_reindex_desc")}</p>
               </div>
-              <button className="shrink-0 ml-3 px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700">
-                {t("datamgmt.cleanup_reindex_btn")}
+              <button onClick={() => rebuildLibrary.mutate()} disabled={rebuildLibrary.isPending}
+                className="shrink-0 ml-3 px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50">
+                {rebuildLibrary.isPending ? "..." : t("datamgmt.cleanup_reindex_btn")}
               </button>
             </div>
             <div className="flex items-center justify-between p-3 border rounded-lg">

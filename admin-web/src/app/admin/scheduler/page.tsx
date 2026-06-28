@@ -9,6 +9,7 @@ import { useT } from "@/lib/i18n";
 import { scheduleModeLabel, schedulerDecisionLabel, useI18nFormat } from "@/lib/i18n-format";
 import { PageHeader, EmptyState, ErrorState, SourceBadge, StatusBadge } from "@/components";
 import { useToast } from "@/components/Toast";
+import { useNotifications } from "@/components/NotificationCenter";
 
 function decisionTone(item: SchedulerDecisionItem): string {
   if (item.due) return "border-accent/30 bg-accent-subtle text-accent dark:border-accent/30 dark:bg-accent-subtle dark:text-accent";
@@ -69,20 +70,27 @@ function matchesDecisionFilter(item: SchedulerDecisionItem, filter: string): boo
 function AdminOperationsSection() {
   const t = useT();
   const toast = useToast();
+  const qc = useQueryClient();
+  const notify = useNotifications();
 
   const ops = useQuery({
-    queryKey: ["admin-operations"],
-    queryFn: () => api.listAdminOperations(),
+    queryKey: [...queryKeys.tasks.all, "admin", "scheduler"],
+    queryFn: () => api.listTasks({ kind: "admin", limit: 10 }),
     refetchInterval: 2000,
   });
 
   const rebuild = useMutation({
     mutationFn: () => api.rebuildLibrary(),
-    onSuccess: (d) => toast.success(d.message || t("scheduler.rebuild_enqueued")),
+    onSuccess: (d) => {
+      toast.success(d.message || t("scheduler.rebuild_enqueued"));
+      notify.startOperationJob(d.job_id, "admin-rebuild", t("scheduler.rebuild_library"));
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      ops.refetch();
+    },
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const activeOps = ops.data?.operations || [];
+  const activeOps = ops.data?.items || [];
 
   return (
     <section className="card mb-6 p-4">
@@ -106,20 +114,23 @@ function AdminOperationsSection() {
       {activeOps.length > 0 && (
         <div className="space-y-2">
           {activeOps.map((op) => (
-            <div key={op.job_id} className="flex items-center gap-3 rounded-md border border-border bg-subtle px-3 py-2 dark:border-border dark:bg-subtle">
+            <div key={op.id} className="flex items-center gap-3 rounded-md border border-border bg-subtle px-3 py-2 dark:border-border dark:bg-subtle">
               <StatusBadge status={op.status === "running" ? "downloading" : op.status === "enqueued" ? "pending" : op.status === "complete" ? "complete" : "failed"} />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium truncate">
                   {op.operation_type === "admin-rebuild" ? t("scheduler.rebuild_library") :
                    op.operation_type === "admin-clear" ? t("datamgmt.clear_all") :
+                   op.operation_type === "admin-disk-import" ? t("datamgmt.disk_import") :
                    op.operation_type}
                 </div>
-                {op.progress && (
-                  <div className="text-xs text-muted">{op.progress.label}</div>
+                {op.progress_data && (
+                  <div className="text-xs text-muted">{op.progress_data.label || op.progress_stage}</div>
                 )}
               </div>
-              {op.error && <div className="text-xs text-danger dark:text-danger truncate max-w-[200px]">{op.error}</div>}
-              <span className="text-[10px] text-placeholder shrink-0">{new Date(op.updated_at * 1000).toLocaleTimeString()}</span>
+              {op.error_log && <div className="text-xs text-danger dark:text-danger truncate max-w-[200px]">{op.error_log}</div>}
+              <Link href={`/admin/jobs?tab=admin&q=${op.id}`} className="text-xs text-accent hover:underline dark:text-accent">
+                {op.id.slice(0, 8)}
+              </Link>
             </div>
           ))}
         </div>

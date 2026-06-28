@@ -14,6 +14,44 @@ export interface HealthResponse {
   };
 }
 
+export interface TaskRun {
+  id: string;
+  kind: "download" | "import" | "admin" | string;
+  operation_type?: string | null;
+  subject_type?: string | null;
+  subject_id?: string | null;
+  parent_task_id?: string | null;
+  status: string;
+  queue_name?: string | null;
+  rq_job_id?: string | null;
+  title?: string | null;
+  source?: string | null;
+  source_url?: string | null;
+  progress_stage?: string | null;
+  progress_current?: number | null;
+  progress_total?: number | null;
+  progress_data?: Record<string, any> | null;
+  result_data?: Record<string, any> | null;
+  error_log?: string | null;
+  meta?: Record<string, any> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  events?: {
+    id: number;
+    event_type: string;
+    from_status?: string | null;
+    to_status?: string | null;
+    message?: string | null;
+    payload?: Record<string, any> | null;
+    created_at?: string | null;
+  }[];
+}
+
+export interface TaskRunListResponse {
+  total: number;
+  items: TaskRun[];
+}
+
 export interface ProviderInfo {
   source_name: string;
   display_name: string;

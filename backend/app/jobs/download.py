@@ -211,6 +211,13 @@ async def _enqueue_import(download_job_id: str, import_error: str | None = None,
                     import_job_id=str(import_job.id),
                 )
                 append_manifest_event(download_job, "import_job_created", import_job_id=str(import_job.id), reason=import_error)
+            from app.services.tasks import TaskService
+            task_svc = TaskService(db)
+            parent_task = None
+            if download_job:
+                parent_task = await task_svc.ensure_download_task(download_job)
+                await task_svc.update_task(parent_task, status="running", progress=download_job.progress_data)
+            await task_svc.ensure_import_task(import_job, parent_task_id=parent_task.id if parent_task else None)
             await db.commit()
             import_job_id = str(import_job.id)
 

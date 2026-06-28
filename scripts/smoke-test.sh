@@ -32,6 +32,29 @@ else
 fi
 
 H() { curl -sf -H "Authorization: Bearer $TOKEN" "$@"; }
+AUTH_BLOCKED=0
+auth_get() {
+    local label="$1"
+    local path="$2"
+    local tmp code body
+    tmp="$(mktemp)"
+    code="$(curl -s -o "$tmp" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$BASE$path" 2>/dev/null || true)"
+    body="$(cat "$tmp" 2>/dev/null || true)"
+    rm -f "$tmp"
+    case "$code" in
+        2*) pass "$label" ;;
+        403)
+            if echo "$body" | grep -q "Password change required"; then
+                AUTH_BLOCKED=1
+                fail "$label" "403 Password change required — rotate the bootstrap admin password, then rerun smoke"
+            else
+                fail "$label" "HTTP 403 — ${body:-forbidden}"
+            fi
+            ;;
+        000) fail "$label" "request failed" ;;
+        *) fail "$label" "HTTP $code — ${body:-no response body}" ;;
+    esac
+}
 
 # ── Health ──
 echo ""; echo "── Health ──"
@@ -54,13 +77,22 @@ fi
 
 # ── Workbench ──
 echo ""; echo "── Workbench ──"
-H "$BASE/api/v1/system/workbench" >/dev/null 2>&1 && pass "GET /system/workbench" || fail "GET /system/workbench" "500?"
+auth_get "GET /system/workbench" "/api/v1/system/workbench"
 
 # ── Search (all 4 kinds) ──
 echo ""; echo "── Search ──"
 for k in all works creators tags; do
-    H "$BASE/api/v1/search?q=test&kind=$k" >/dev/null 2>&1 && pass "search kind=$k" || fail "search kind=$k" "500?"
+    auth_get "search kind=$k" "/api/v1/search?q=test&kind=$k"
 done
+
+if [ "$AUTH_BLOCKED" -eq 1 ]; then
+    echo ""
+    skip "remaining authenticated checks" "password change required"
+    echo ""; echo "──────────────────────────────────"
+    echo -e "Results: ${GREEN}$PASS passed${NC}, ${RED}$FAIL failed${NC}, ${YELLOW}$SKIP skipped${NC}"
+    echo -e "${RED}SMOKE TEST BLOCKED BY PASSWORD ROTATION${NC}"
+    exit 1
+fi
 
 # ── Works detail ──
 echo ""; echo "── Works ──"
@@ -87,16 +119,15 @@ fi
 
 # ── Creators ──
 echo ""; echo "── Creators ──"
-H "$BASE/api/v1/creators?limit=1" >/dev/null 2>&1 && pass "list creators" || fail "list creators" "500?"
+auth_get "list creators" "/api/v1/creators?limit=1"
 
 # ── Scheduler (no 500) ──
 echo ""; echo "── Scheduler ──"
-SD_CODE=$(H -o /dev/null -w '%{http_code}' "$BASE/api/v1/system/scheduler-decisions" 2>/dev/null)
-[ "$SD_CODE" = "200" ] && pass "scheduler-decisions (200)" || fail "scheduler-decisions" "HTTP $SD_CODE"
+auth_get "scheduler-decisions" "/api/v1/system/scheduler-decisions"
 
 # ── Operations ──
 echo ""; echo "── Operations ──"
-H "$BASE/api/v1/admin/operations" >/dev/null 2>&1 && pass "admin/operations" || fail "admin/operations" "500?"
+auth_get "admin/operations" "/api/v1/admin/operations"
 
 # ── Summary ──
 echo ""; echo "──────────────────────────────────"
