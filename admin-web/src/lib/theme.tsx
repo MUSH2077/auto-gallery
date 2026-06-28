@@ -3,12 +3,12 @@ import { createContext, useContext, useState, useEffect, useCallback, type React
 
 type Theme = "light" | "dark" | "system";
 type ResolvedTheme = "light" | "dark";
-export type Palette = "github" | "nord" | "rose";
+export type Palette = "github" | "nord" | "rose" | "solarized" | "gruvbox" | "catppuccin";
 
 const STORAGE_KEY = "auto-gallery-theme";
 const PALETTE_KEY = "auto-gallery-palette";
-export const PALETTES: Palette[] = ["github", "nord", "rose"];
-export const PALETTE_LABELS: Record<Palette, string> = { github: "GitHub", nord: "Nord", rose: "Rosé" };
+export const PALETTES: Palette[] = ["github", "nord", "rose", "solarized", "gruvbox", "catppuccin"];
+export const PALETTE_LABELS: Record<Palette, string> = { github: "GitHub", nord: "Nord", rose: "Rosé", solarized: "Solarized", gruvbox: "Gruvbox", catppuccin: "Catppuccin" };
 
 interface ThemeContextType {
   theme: Theme;
@@ -179,18 +179,57 @@ function PaletteIcon({ className }: { className?: string }) {
   );
 }
 
+// Representative accent per palette for the dropdown swatch preview.
+const PALETTE_SWATCH: Record<Palette, string> = {
+  github: "#0969da", nord: "#88c0d0", rose: "#c4a7e7",
+  solarized: "#268bd2", gruvbox: "#d79921", catppuccin: "#cba6f7",
+};
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 6L9 17l-5-5" />
+    </svg>
+  );
+}
+
 export function PaletteToggle() {
   const { palette, setPalette } = useTheme();
-  const next = PALETTES[(PALETTES.indexOf(palette) + 1) % PALETTES.length];
+  const [open, setOpen] = useState(false);
+
   return (
-    <button
-      onClick={() => setPalette(next)}
-      className="p-1.5 rounded hover:bg-white/10 transition-colors text-white/80 hover:text-white flex items-center gap-1"
-      title={`Theme: ${PALETTE_LABELS[palette]} — click for ${PALETTE_LABELS[next]}`}
-    >
-      <PaletteIcon className="w-5 h-5" />
-      <span className="hidden sm:inline text-xs font-medium">{PALETTE_LABELS[palette]}</span>
-    </button>
+    <div className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="p-1.5 rounded hover:bg-white/10 transition-colors text-white/80 hover:text-white flex items-center gap-1"
+        title={`Theme: ${PALETTE_LABELS[palette]}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <PaletteIcon className="w-5 h-5" />
+        <span className="hidden sm:inline text-xs font-medium">{PALETTE_LABELS[palette]}</span>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden />
+          <div role="menu" className="popover absolute right-0 mt-1 z-50 min-w-[170px] rounded-md border border-border bg-surface p-1 shadow-overlay">
+            {PALETTES.map((p) => (
+              <button
+                key={p}
+                role="menuitemradio"
+                aria-checked={p === palette}
+                onClick={() => { setPalette(p); setOpen(false); }}
+                className={`flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-sm hover:bg-subtle ${p === palette ? "text-fg font-medium" : "text-muted"}`}
+              >
+                <span className="h-3.5 w-3.5 rounded-full border border-border shrink-0" style={{ background: PALETTE_SWATCH[p] }} aria-hidden />
+                <span className="flex-1 text-left">{PALETTE_LABELS[p]}</span>
+                {p === palette && <CheckIcon className="w-4 h-4 text-accent shrink-0" />}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
