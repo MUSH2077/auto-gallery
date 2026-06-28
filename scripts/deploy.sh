@@ -19,8 +19,13 @@ docker compose build \
     backend admin-web
 echo -e "${GREEN}  Build OK${NC}"
 
-# ── 2. Restart ────────────────────────────────────────────────────────
-echo -e "${YELLOW}[2/4] Restarting containers...${NC}"
+# ── 2. Migrate ────────────────────────────────────────────────────────
+echo -e "${YELLOW}[2/5] Running migrations...${NC}"
+docker compose run --rm -T backend alembic upgrade head
+echo -e "${GREEN}  Migrations OK${NC}"
+
+# ── 3. Restart ────────────────────────────────────────────────────────
+echo -e "${YELLOW}[3/5] Restarting containers...${NC}"
 docker compose up -d --force-recreate \
     backend \
     worker-download \
@@ -30,8 +35,8 @@ docker compose up -d --force-recreate \
     admin-web
 echo -e "${GREEN}  Containers restarted${NC}"
 
-# ── 3. Wait for healthy ───────────────────────────────────────────────
-echo -e "${YELLOW}[3/4] Waiting for healthy...${NC}"
+# ── 4. Wait for healthy ───────────────────────────────────────────────
+echo -e "${YELLOW}[4/5] Waiting for healthy...${NC}"
 MAX_WAIT=90
 for i in $(seq 1 $((MAX_WAIT / 5))); do
     UNHEALTHY=$(docker ps --filter "name=auto-gallery" --filter "health=unhealthy" --format '{{.Names}}' 2>/dev/null | wc -l)
@@ -44,8 +49,8 @@ for i in $(seq 1 $((MAX_WAIT / 5))); do
     sleep 5
 done
 
-# ── 4. Verify ─────────────────────────────────────────────────────────
-echo -e "${YELLOW}[4/4] Health check...${NC}"
+# ── 5. Verify ─────────────────────────────────────────────────────────
+echo -e "${YELLOW}[5/5] Health check...${NC}"
 bash scripts/debug.sh quick
 
 echo ""

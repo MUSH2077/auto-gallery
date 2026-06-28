@@ -12,7 +12,7 @@ set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'
 BOLD='\033[1m'; NC='\033[0m'
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
-CONTAINERS=(backend worker-download worker-import stream-import scheduler admin-web postgres redis meilisearch)
+CONTAINERS=(backend worker-download worker-import worker-operations scheduler admin-web postgres redis meilisearch)
 OK=0; WARN=0; ERR=0
 
 header(){ echo -e "\n${BOLD}${CYAN}═══ $1 ═══${NC}"; }
@@ -27,9 +27,9 @@ header "Container Status"
 for c in "${CONTAINERS[@]}"; do
     name="auto-gallery-${c}-1"
     st=$(docker inspect "$name" --format '{{.State.Status}}' 2>/dev/null || echo "missing")
-    hc=$(docker inspect "$name" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}}' 2>/dev/null)
-    ec=$(docker inspect "$name" --format '{{.State.ExitCode}}' 2>/dev/null)
-    ts=$(docker inspect "$name" --format '{{.State.StartedAt}}' 2>/dev/null | cut -d. -f1 | sed 's/T/ /')
+    hc=$(docker inspect "$name" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}}' 2>/dev/null || echo "-")
+    ec=$(docker inspect "$name" --format '{{.State.ExitCode}}' 2>/dev/null || echo "-")
+    ts=$(docker inspect "$name" --format '{{.State.StartedAt}}' 2>/dev/null | cut -d. -f1 | sed 's/T/ /' || true)
     # Docker returns UTC; convert to local time for display
     if command -v date >/dev/null 2>&1 && [ -n "$ts" ]; then
         ts=$(date -d "$ts UTC" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$ts")
@@ -55,7 +55,7 @@ done
 
 # ═══ 2. Error Logs ═══
 header "Recent Errors (last 5 per container)"
-for c in backend worker-download worker-import stream-import scheduler; do
+for c in backend worker-download worker-import worker-operations scheduler; do
     name="auto-gallery-${c}-1"
     n=$(docker logs "$name" --tail 100 2>&1 | grep -ciE 'error|exception|traceback|timeout|stalled|failed' || true)
     [ "$n" -eq 0 ] && { ok "$c: clean"; continue; }
