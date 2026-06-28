@@ -13,7 +13,7 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.creator import Creator
@@ -132,11 +132,15 @@ async def _ensure_subscription_source(
     existing = (await db.execute(
         select(SubscriptionSource).where(
             SubscriptionSource.subscription_id == subscription.id,
-            SubscriptionSource.source_url == identity.source_url,
+            or_(
+                SubscriptionSource.source_url == identity.source_url,
+                SubscriptionSource.source == identity.source,
+            ),
         )
     )).scalar_one_or_none()
     if existing:
         existing.source_creator_id = existing.source_creator_id or identity.source_creator_id
+        existing.source_url = existing.source_url or identity.source_url
         return existing, False
     ss = SubscriptionSource(
         subscription_id=subscription.id,
@@ -249,9 +253,15 @@ async def _apply_danbooru_artist(db: AsyncSession, identity: MetadataIdentity, a
         sc_id = _extract_source_creator_id(source, raw_url)
         existing_ss = (await db.execute(select(SubscriptionSource).where(
             SubscriptionSource.subscription_id == subscription.id,
-            SubscriptionSource.source_url == raw_url,
+            or_(
+                SubscriptionSource.source_url == raw_url,
+                SubscriptionSource.source == source,
+            ),
         ))).scalar_one_or_none()
-        if not existing_ss:
+        if existing_ss:
+            existing_ss.source_url = existing_ss.source_url or raw_url
+            existing_ss.source_creator_id = existing_ss.source_creator_id or sc_id
+        else:
             db.add(SubscriptionSource(
                 subscription_id=subscription.id,
                 source=source,

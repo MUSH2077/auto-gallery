@@ -210,6 +210,8 @@ async def test_reconcile_downloads_to_db_applies_danbooru_enrichment(tmp_path, m
         "urls": [
             {"url": "https://www.pixiv.net/users/1980643", "normalized_url": "https://www.pixiv.net/users/1980643", "is_active": True},
             {"url": "https://x.com/fixture_artist", "normalized_url": "https://x.com/fixture_artist", "is_active": True},
+            {"url": "https://weibo.com/u/123456", "normalized_url": "https://weibo.com/u/123456", "is_active": True},
+            {"url": "https://weibo.com/n/fixture_artist", "normalized_url": "https://weibo.com/n/fixture_artist", "is_active": True},
         ],
     }
     links = [{
@@ -243,6 +245,7 @@ async def test_reconcile_downloads_to_db_applies_danbooru_enrichment(tmp_path, m
             sources = (await db.execute(select(SubscriptionSource))).scalars().all()
             assert any(ss.source == "pixiv" and ss.is_enabled is False for ss in sources)
             assert any(ss.source == "danbooru" and ss.is_enabled is False for ss in sources)
+            assert sum(1 for ss in sources if ss.source == "weibo") == 1
     finally:
         async with async_session() as db:
             await _clear_pipeline_tables(db)
