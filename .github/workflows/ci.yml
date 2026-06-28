@@ -12,6 +12,29 @@ jobs:
   backend:
     name: Backend checks
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: autogallery
+          POSTGRES_PASSWORD: test-db
+          POSTGRES_DB: autogallery
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,6 +52,9 @@ jobs:
         run: ruff check app tests
       - name: Run tests
         working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://autogallery:test-db@localhost:5432/autogallery
+          REDIS_URL: redis://localhost:6379/0
         run: python -m pytest
 
   admin-web:
