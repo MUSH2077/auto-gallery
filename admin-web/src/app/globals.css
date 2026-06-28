@@ -77,6 +77,72 @@
     --ag-accent-subtle: 42 36 64;  --ag-danger-subtle: 58 37 48;  --ag-warning-subtle: 58 51 36;  --ag-success-subtle: 31 51 56;
   }
 
+  /* ── solarized (ethan schoonover: teal base + amber/blue) ── */
+  [data-theme="solarized"] {
+    --ag-bg: 253 246 227;        --ag-surface: 253 246 227;   --ag-subtle: 238 232 213;
+    --ag-border: 221 214 193;    --ag-muted: 101 123 131;     --ag-text: 88 110 117;
+    --ag-accent: 38 139 210;     --ag-success: 133 153 0;     --ag-warning: 181 137 0;
+    --ag-danger: 220 50 47;      --ag-focus: 38 139 210;
+    --ag-primary: 133 153 0;     --ag-primary-hover: 113 127 0;  --ag-on-primary: 253 246 227;
+    --ag-input: 253 246 227;     --ag-placeholder: 147 161 161;
+    --ag-nav: 7 54 66;           --ag-nav-fg: 238 232 213;
+    --ag-accent-subtle: 214 233 245;  --ag-danger-subtle: 247 218 217;  --ag-warning-subtle: 245 234 208;  --ag-success-subtle: 232 237 208;
+  }
+  html.dark[data-theme="solarized"] {
+    --ag-bg: 0 43 54;            --ag-surface: 7 54 66;       --ag-subtle: 10 65 80;
+    --ag-border: 20 70 84;       --ag-muted: 122 138 140;     --ag-text: 147 161 161;
+    --ag-accent: 38 139 210;     --ag-success: 133 153 0;     --ag-warning: 181 137 0;
+    --ag-danger: 220 50 47;      --ag-focus: 38 139 210;
+    --ag-primary: 133 153 0;     --ag-primary-hover: 154 174 0;  --ag-on-primary: 0 43 54;
+    --ag-input: 0 43 54;         --ag-placeholder: 88 110 117;
+    --ag-nav: 0 33 43;           --ag-nav-fg: 147 161 161;
+    --ag-accent-subtle: 6 48 74;  --ag-danger-subtle: 58 31 36;  --ag-warning-subtle: 51 51 15;  --ag-success-subtle: 31 51 21;
+  }
+
+  /* ── gruvbox (warm retro) ── */
+  [data-theme="gruvbox"] {
+    --ag-bg: 251 241 199;        --ag-surface: 251 241 199;   --ag-subtle: 235 219 178;
+    --ag-border: 213 196 161;    --ag-muted: 124 111 100;     --ag-text: 60 56 54;
+    --ag-accent: 69 133 136;     --ag-success: 152 151 26;    --ag-warning: 181 118 20;
+    --ag-danger: 204 36 29;      --ag-focus: 69 133 136;
+    --ag-primary: 152 151 26;    --ag-primary-hover: 121 116 14; --ag-on-primary: 251 241 199;
+    --ag-input: 251 241 199;     --ag-placeholder: 168 153 132;
+    --ag-nav: 60 56 54;          --ag-nav-fg: 235 219 178;
+    --ag-accent-subtle: 211 224 224;  --ag-danger-subtle: 241 211 204;  --ag-warning-subtle: 240 226 192;  --ag-success-subtle: 227 227 192;
+  }
+  html.dark[data-theme="gruvbox"] {
+    --ag-bg: 40 40 40;           --ag-surface: 50 48 47;      --ag-subtle: 60 56 54;
+    --ag-border: 80 73 69;       --ag-muted: 168 153 132;     --ag-text: 235 219 178;
+    --ag-accent: 131 165 152;    --ag-success: 184 187 38;    --ag-warning: 250 189 47;
+    --ag-danger: 251 73 52;      --ag-focus: 131 165 152;
+    --ag-primary: 184 187 38;    --ag-primary-hover: 152 151 26; --ag-on-primary: 40 40 40;
+    --ag-input: 40 40 40;        --ag-placeholder: 146 131 116;
+    --ag-nav: 29 32 33;          --ag-nav-fg: 235 219 178;
+    --ag-accent-subtle: 40 50 58;  --ag-danger-subtle: 58 36 32;  --ag-warning-subtle: 58 49 32;  --ag-success-subtle: 47 51 32;
+  }
+
+  /* ── catppuccin (latte / mocha pastel) ── */
+  [data-theme="catppuccin"] {
+    --ag-bg: 239 241 245;        --ag-surface: 255 255 255;   --ag-subtle: 230 233 239;
+    --ag-border: 204 208 218;    --ag-muted: 108 111 133;     --ag-text: 76 79 105;
+    --ag-accent: 30 102 245;     --ag-success: 64 160 43;     --ag-warning: 223 142 29;
+    --ag-danger: 210 15 57;      --ag-focus: 30 102 245;
+    --ag-primary: 136 57 239;    --ag-primary-hover: 122 47 216; --ag-on-primary: 255 255 255;
+    --ag-input: 255 255 255;     --ag-placeholder: 156 160 176;
+    --ag-nav: 76 79 105;         --ag-nav-fg: 239 241 245;
+    --ag-accent-subtle: 217 227 253;  --ag-danger-subtle: 246 212 220;  --ag-warning-subtle: 247 230 207;  --ag-success-subtle: 217 236 212;
+  }
+  html.dark[data-theme="catppuccin"] {
+    --ag-bg: 30 30 46;           --ag-surface: 49 50 68;      --ag-subtle: 69 71 90;
+    --ag-border: 88 91 112;      --ag-muted: 166 173 200;     --ag-text: 205 214 244;
+    --ag-accent: 137 180 250;    --ag-success: 166 227 161;   --ag-warning: 249 226 175;
+    --ag-danger: 243 139 168;    --ag-focus: 137 180 250;
+    --ag-primary: 203 166 247;   --ag-primary-hover: 180 142 240; --ag-on-primary: 30 30 46;
+    --ag-input: 30 30 46;        --ag-placeholder: 108 112 134;
+    --ag-nav: 24 24 37;          --ag-nav-fg: 205 214 244;
+    --ag-accent-subtle: 35 42 64;  --ag-danger-subtle: 58 37 50;  --ag-warning-subtle: 58 53 39;  --ag-success-subtle: 36 58 44;
+  }
+
   html { @apply transition-colors duration-300; }
   body {
     background: rgb(var(--ag-bg));
