@@ -24,6 +24,20 @@ def test_download_state_machine_rejects_invalid_transition():
         transition_download_job(job, "downloading")
 
 
+def test_download_can_complete_directly_from_downloaded():
+    """gallery-dl finished but produced no new metadata to import -> the job
+    completes directly (downloaded -> complete), skipping 'importing'.
+
+    Regression: this transition used to raise InvalidJobTransition, so every
+    no-new-content re-sync crashed in the count==0 branch and was stranded in
+    'downloaded' forever (which is a RUNNING status, so the subscription was then
+    skipped as already_running and never re-synced).
+    """
+    job = DummyJob("downloaded")
+    transition_download_job(job, "complete")
+    assert job.status == "complete"
+
+
 def test_import_state_machine_retry_flow():
     job = DummyJob("failed")
     transition_import_job(job, "pending")
