@@ -128,7 +128,7 @@ function AdminOperationsSection() {
                 )}
               </div>
               {op.error_log && <div className="text-xs text-danger dark:text-danger truncate max-w-[200px]">{op.error_log}</div>}
-              <Link href={`/admin/jobs?tab=admin&q=${op.id}`} className="text-xs text-accent hover:underline dark:text-accent">
+              <Link href={`/admin/jobs?tab=admin&task=${op.id}`} className="text-xs text-accent hover:underline dark:text-accent">
                 {op.id.slice(0, 8)}
               </Link>
             </div>

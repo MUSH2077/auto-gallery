@@ -34,6 +34,10 @@ export interface TaskRun {
   result_data?: Record<string, any> | null;
   error_log?: string | null;
   meta?: Record<string, any> | null;
+  enqueued_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  last_heartbeat_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
   events?: {

@@ -163,10 +163,19 @@ class TaskService:
         old_status = task.status
         if status is not None:
             task.status = normalize_task_status(status)
-            if task.status == "running" and not task.started_at:
-                task.started_at = _now()
-            if task.status in TERMINAL_STATUSES and not task.finished_at:
-                task.finished_at = _now()
+            now = _now()
+            if task.status == "enqueued":
+                task.enqueued_at = now
+                task.started_at = None
+                task.finished_at = None
+            elif task.status == "running":
+                if not task.started_at:
+                    task.started_at = now
+                task.finished_at = None
+            elif task.status in {"paused", "recovering"}:
+                task.finished_at = None
+            elif task.status in TERMINAL_STATUSES:
+                task.finished_at = now
         if progress is not None:
             task.progress_data = progress
             task.progress_stage = progress.get("stage") or progress.get("phase")

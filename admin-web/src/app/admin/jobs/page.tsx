@@ -122,6 +122,7 @@ function UnifiedTaskList({
   isLoading,
   error,
   onRetry,
+  openTaskDetail,
   openDownloadDetail,
   openImportDetail,
 }: {
@@ -129,6 +130,7 @@ function UnifiedTaskList({
   isLoading: boolean;
   error: unknown;
   onRetry: () => void;
+  openTaskDetail: (id: string) => void;
   openDownloadDetail: (id: string) => void;
   openImportDetail: (id: string) => void;
 }) {
@@ -165,11 +167,8 @@ function UnifiedTaskList({
               return (
                 <div
                   key={task.id}
-                  onClick={() => {
-                    if (clickableDownload) openDownloadDetail(subjectId);
-                    if (clickableImport) openImportDetail(subjectId);
-                  }}
-                  className={`card flex items-center gap-3 p-3 text-sm hover:border-accent/50 ${(clickableDownload || clickableImport) ? "cursor-pointer" : ""}`}
+                  onClick={() => openTaskDetail(task.id)}
+                  className="card flex cursor-pointer items-center gap-3 p-3 text-sm hover:border-accent/50"
                 >
                   <div className="w-28 shrink-0"><StatusBadge status={task.status} /></div>
                   <span className="w-24 shrink-0 truncate text-xs font-medium">{labelForKind(task)}</span>
@@ -206,6 +205,112 @@ function UnifiedTaskList({
         </div>
       )}
     </section>
+  );
+}
+
+function TaskDetailDrawer({
+  id,
+  onClose,
+  onRetryTask,
+  onOpenDownload,
+  onOpenImport,
+}: {
+  id: string | null;
+  onClose: () => void;
+  onRetryTask: (id: string) => void;
+  onOpenDownload: (id: string) => void;
+  onOpenImport: (id: string) => void;
+}) {
+  const t = useT();
+  const fmt = useI18nFormat();
+  const task = useQuery({
+    queryKey: queryKeys.tasks.detail(id || ""),
+    queryFn: () => api.getTask(id || ""),
+    enabled: !!id,
+  });
+  if (!id) return null;
+  const item = task.data;
+  const retryable = item?.operation_type === "admin-disk-import" || item?.operation_type === "admin-rebuild";
+  const canRetry = retryable && ["failed", "stale", "cancelled"].includes(item?.status || "");
+
+  return (
+    <aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-2xl flex-col border-l border-border bg-white shadow-xl dark:border-border dark:bg-surface" aria-label={t("jobs.task_detail", "任务详情")}>
+      <div className="flex items-center justify-between border-b border-border px-4 py-3 dark:border-border">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold">{item?.title || t("jobs.task_detail", "任务详情")}</div>
+          <div className="font-mono text-xs text-muted">{shortId(id)}</div>
+        </div>
+        <button onClick={onClose} className="btn-icon border-0 text-lg leading-none" aria-label={t("common.close")}>×</button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        {task.isLoading && <div className="h-24 animate-pulse rounded-md bg-subtle dark:bg-subtle" />}
+        {task.error && <ErrorState message={(task.error as Error).message} onRetry={() => task.refetch()} />}
+        {item && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap gap-2">
+              {canRetry && <button onClick={() => onRetryTask(item.id)} className="btn-primary text-xs">{t("jobs.retry")}</button>}
+              {item.subject_type === "download_job" && item.subject_id && (
+                <button onClick={() => onOpenDownload(item.subject_id!)} className="btn-ghost text-xs">{t("jobs.open_download")}</button>
+              )}
+              {item.subject_type === "import_job" && item.subject_id && (
+                <button onClick={() => onOpenImport(item.subject_id!)} className="btn-ghost text-xs">{t("jobs.import_detail")}</button>
+              )}
+            </div>
+            <dl className="rounded-md border border-border px-3 dark:border-border">
+              <DetailRow label={t("jobs.status")} value={<StatusBadge status={item.status} />} />
+              <DetailRow label={t("jobs.kind", "类型")} value={item.kind} />
+              <DetailRow label={t("jobs.operation", "操作")} value={item.operation_type || item.kind} />
+              <DetailRow label={t("jobs.queue", "队列")} value={item.queue_name} />
+              <DetailRow label="RQ" value={item.rq_job_id} />
+              <DetailRow label={t("jobs.subject", "主体")} value={item.subject_type && item.subject_id ? `${item.subject_type}:${item.subject_id}` : undefined} />
+              <DetailRow label={t("jobs.source")} value={item.source ? <span className="inline-flex items-center gap-2"><SourceBadge source={item.source} />{item.source}</span> : undefined} />
+              <DetailRow label={t("jobs.source_url")} value={item.source_url} />
+              <DetailRow label={t("jobs.created")} value={item.created_at ? fmt.dateTime(item.created_at) : undefined} />
+              <DetailRow label={t("jobs.updated")} value={item.updated_at ? fmt.dateTime(item.updated_at) : undefined} />
+              <DetailRow label={t("jobs.started", "开始")} value={item.started_at ? fmt.dateTime(item.started_at) : undefined} />
+              <DetailRow label={t("jobs.finished", "结束")} value={item.finished_at ? fmt.dateTime(item.finished_at) : undefined} />
+            </dl>
+            {item.error_log && (
+              <section>
+                <h3 className="mb-2 text-sm font-semibold">{t("jobs.error_log")}</h3>
+                <pre className="max-h-96 overflow-auto rounded-md border border-danger/20 bg-danger-subtle p-3 font-mono text-xs whitespace-pre-wrap text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">{item.error_log}</pre>
+              </section>
+            )}
+            <section>
+              <h3 className="mb-2 text-sm font-semibold">{t("jobs.progress", "进度")}</h3>
+              <JsonBlock value={item.progress_data || { stage: item.progress_stage, current: item.progress_current, total: item.progress_total }} />
+            </section>
+            <section>
+              <h3 className="mb-2 text-sm font-semibold">{t("jobs.result", "结果")}</h3>
+              <JsonBlock value={item.result_data} />
+            </section>
+            <section>
+              <h3 className="mb-2 text-sm font-semibold">{t("jobs.meta", "元数据")}</h3>
+              <JsonBlock value={item.meta} />
+            </section>
+            <section>
+              <h3 className="mb-2 text-sm font-semibold">{t("jobs.events", "事件")}</h3>
+              {item.events?.length ? (
+                <div className="space-y-1">
+                  {item.events.map((event) => (
+                    <div key={event.id} className="rounded-md border border-border px-3 py-2 text-xs dark:border-border">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="font-medium">{event.event_type}</span>
+                        <span className="text-muted">{event.created_at ? fmt.dateTime(event.created_at) : "—"}</span>
+                      </div>
+                      {(event.from_status || event.to_status || event.message) && (
+                        <div className="mt-1 text-muted">{event.from_status || "—"} → {event.to_status || "—"} {event.message || ""}</div>
+                      )}
+                      {event.payload && <JsonBlock value={event.payload} />}
+                    </div>
+                  ))}
+                </div>
+              ) : <p className="text-xs text-muted">{t("jobs.no_events", "暂无事件")}</p>}
+            </section>
+          </div>
+        )}
+      </div>
+    </aside>
   );
 }
 
@@ -429,6 +534,7 @@ function JobsContent() {
   const dlOrder = sp.get("order") || "desc";
   const selectedDownloadJobId = sp.get("job");
   const selectedImportJobId = sp.get("import_job");
+  const selectedTaskId = sp.get("task");
 
   const [retryId, setRetryId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -447,9 +553,10 @@ function JobsContent() {
     if (replace) router.replace(href, { scroll: false }); else router.push(href, { scroll: false });
   };
 
-  const openDownloadDetail = (id: string) => updateParams({ tab: "downloads", job: id, import_job: null }, false);
-  const openImportDetail = (id: string) => updateParams({ tab: "imports", import_job: id, job: null }, false);
-  const closeDetail = () => updateParams({ job: null, import_job: null });
+  const openTaskDetail = (id: string) => updateParams({ task: id, job: null, import_job: null }, false);
+  const openDownloadDetail = (id: string) => updateParams({ tab: "downloads", job: id, import_job: null, task: null }, false);
+  const openImportDetail = (id: string) => updateParams({ tab: "imports", import_job: id, job: null, task: null }, false);
+  const closeDetail = () => updateParams({ job: null, import_job: null, task: null });
 
   const dlParams = useMemo(() => ({
     status: activeTab === "downloads" ? status || undefined : undefined,
@@ -581,6 +688,16 @@ function JobsContent() {
   const retryIM = useMutation({
     mutationFn: (id: string) => api.retryImportJob(id),
     onSuccess: () => { setRetryId(null); qc.invalidateQueries({ queryKey: queryKeys.importJobs.all }); },
+  });
+  const retryTask = useMutation({
+    mutationFn: (id: string) => api.retryTask(id),
+    onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.detail(id) });
+      qc.invalidateQueries({ queryKey: queryKeys.workbench });
+      toast.info(t("jobs.retry_queued", "任务已重新入队"));
+    },
+    onError: (err) => toast.error((err as Error).message),
   });
   const pauseDL = useMutation({
     mutationFn: (id: string) => api.pauseDownloadJob(id),
@@ -723,10 +840,10 @@ function JobsContent() {
       <div className="mb-4 flex flex-col gap-3 rounded-md border border-border bg-white p-3 dark:border-border dark:bg-surface">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex gap-1 rounded-md bg-subtle p-1 dark:bg-subtle">
-            <button onClick={() => updateParams({ tab: null, status: null, job: null, import_job: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "all" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("common.all")}</button>
-            <button onClick={() => updateParams({ tab: "downloads", status: null, import_job: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "downloads" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("jobs.download")}</button>
-            <button onClick={() => updateParams({ tab: "imports", status: null, job: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "imports" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("jobs.import")}</button>
-            <button onClick={() => updateParams({ tab: "admin", status: null, job: null, import_job: null, source: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "admin" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("scheduler.admin_operations", "管理操作")}</button>
+            <button onClick={() => updateParams({ tab: null, status: null, job: null, import_job: null, task: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "all" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("common.all")}</button>
+            <button onClick={() => updateParams({ tab: "downloads", status: null, import_job: null, task: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "downloads" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("jobs.download")}</button>
+            <button onClick={() => updateParams({ tab: "imports", status: null, job: null, task: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "imports" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("jobs.import")}</button>
+            <button onClick={() => updateParams({ tab: "admin", status: null, job: null, import_job: null, task: null, source: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "admin" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("scheduler.admin_operations", "管理操作")}</button>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
             {activeFilterCount > 0 && <span className="rounded-full bg-accent-subtle px-2 py-0.5 font-medium text-accent dark:bg-accent-subtle dark:text-accent">{t("jobs.active_filters", { count: activeFilterCount })}</span>}
@@ -775,6 +892,7 @@ function JobsContent() {
           isLoading={tasks.isLoading}
           error={tasks.error}
           onRetry={() => tasks.refetch()}
+          openTaskDetail={openTaskDetail}
           openDownloadDetail={openDownloadDetail}
           openImportDetail={openImportDetail}
         />
@@ -912,9 +1030,17 @@ function JobsContent() {
         )}
       </section>}
 
+      <TaskDetailDrawer
+        id={selectedTaskId}
+        onClose={closeDetail}
+        onRetryTask={(id) => retryTask.mutate(id)}
+        onOpenDownload={openDownloadDetail}
+        onOpenImport={openImportDetail}
+      />
+
       <JobDetailDrawer
         kind={selectedImportJobId ? "import" : "download"}
-        id={selectedImportJobId || selectedDownloadJobId}
+        id={selectedTaskId ? null : selectedImportJobId || selectedDownloadJobId}
         onClose={closeDetail}
         onRetryDownload={(id) => retryDL.mutate(id)}
         onPauseDownload={(id) => pauseDL.mutate(id)}

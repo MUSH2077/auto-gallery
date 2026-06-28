@@ -18,28 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.download_job import DownloadJob
 from app.models.storage_artifact import StorageArtifact
-from app.models.subscription_source import SubscriptionSource
 from app.providers import registry
 from app.services.artifact_ledger import ArtifactLedger, artifact_row
+from app.services.disk_identity import extract_metadata_identity, provision_identity_for_disk_import
 
 logger = logging.getLogger(__name__)
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".zip"}
-
-
-async def _match_subscription_source(db: AsyncSession, source: str, source_creator_id: str):
-    """Find the single-creator subscription_source whose URL identity matches."""
-    try:
-        provider = registry.get(source)
-    except KeyError:
-        return None
-    ss_rows = (await db.execute(
-        select(SubscriptionSource).where(SubscriptionSource.source == source)
-    )).scalars().all()
-    for ss in ss_rows:
-        if ss.source_url and str(provider.get_creator_dir_from_url(ss.source_url)) == str(source_creator_id):
-            return ss
-    return None
 
 
 async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_callback=None) -> dict:
@@ -61,11 +46,20 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
                 continue
             sources.append(d.name)
 
-    stats = {"sources": 0, "creators": 0, "jobs": 0, "skipped_done": 0, "import_job_ids": []}
+    stats = {
+        "sources": 0,
+        "creators": 0,
+        "jobs": 0,
+        "skipped_done": 0,
+        "skipped_invalid_metadata": 0,
+        "danbooru_enriched": 0,
+        "metadata_fallback": 0,
+        "subscription_sources_created": 0,
+        "import_job_ids": [],
+    }
     parent_task_id = options.get("parent_task_id")
     for source in sources:
         stats["sources"] += 1
-        provider = registry.get(source)
         scan_root = root / source
 
         done_paths = set((await db.execute(
@@ -87,23 +81,34 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
 
         total = len(groups)
         for i, (creator_dir, jsons) in enumerate(sorted(groups.items())):
-            # Resolve identity from the first JSON to link the recovery job.
-            ss = None
+            provisioned = None
+            identity = None
             try:
                 with open(jsons[0]) as f:
                     first_raw = json.load(f)
-                sc_id = provider.parse_source_creator(first_raw).get("source_creator_id")
-                if sc_id:
-                    ss = await _match_subscription_source(db, source, sc_id)
+                identity = extract_metadata_identity(source, first_raw, creator_dir)
+                provisioned = await provision_identity_for_disk_import(db, identity)
             except Exception:
-                logger.warning("disk_import: could not read identity for %s/%s", source, creator_dir, exc_info=True)
+                logger.warning("disk_import: could not provision identity for %s/%s", source, creator_dir, exc_info=True)
+                await db.rollback()
+                stats["skipped_invalid_metadata"] += 1
+                if progress_callback:
+                    progress_callback({"phase": "running", "scanned": i + 1, "total": total, "source": source})
+                continue
+
+            if provisioned.enrichment_status == "danbooru_found":
+                stats["danbooru_enriched"] += 1
+            else:
+                stats["metadata_fallback"] += 1
+            if provisioned.created_source:
+                stats["subscription_sources_created"] += 1
 
             job = DownloadJob(
                 source=source,
-                source_url=(ss.source_url if ss else f"recovery://{source}/{creator_dir}"),
+                source_url=provisioned.subscription_source.source_url or identity.source_url,
                 status="downloaded",
-                subscription_id=(ss.subscription_id if ss else None),
-                subscription_source_id=(ss.id if ss else None),
+                subscription_id=provisioned.subscription.id,
+                subscription_source_id=provisioned.subscription_source.id,
             )
             db.add(job)
             await db.flush()

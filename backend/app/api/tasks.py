@@ -5,6 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import RequireAdmin, get_admin_key
 from app.database import get_db
+from app.services.operations import get_operation_status, set_operation_status
+from app.services.redis_client import get_redis
 from app.services.task_engine import TaskEngine, TaskEngineError
 from app.services.tasks import TaskService, task_payload
 
@@ -56,6 +58,10 @@ async def _control_task(
     task = await svc.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    if task.kind == "admin":
+        if action != "retry":
+            raise HTTPException(status_code=400, detail="This admin task only supports retry")
+        return await _retry_admin_task(task, svc)
     if not task.subject_id or task.subject_type not in {"download_job", "import_job"}:
         raise HTTPException(status_code=400, detail="This task type does not support direct control yet")
 
@@ -89,6 +95,72 @@ async def _control_task(
         return {"task_id": str(task.id), **result}
     except TaskEngineError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+async def _retry_admin_task(task, svc: TaskService):
+    from rq import Queue
+
+    if task.operation_type not in {"admin-disk-import", "admin-rebuild"}:
+        raise HTTPException(status_code=400, detail="This admin operation cannot be retried")
+    if task.status not in {"failed", "stale", "cancelled"}:
+        raise HTTPException(status_code=409, detail=f"Task is {task.status}; retry is only available after failure")
+
+    redis = get_redis()
+    if task.operation_type == "admin-disk-import":
+        lock_key = "library:disk-import:active"
+        func = "app.jobs.admin_operations.run_disk_import_operation"
+        entity = "disk-import"
+        label = "Disk import queued"
+    else:
+        lock_key = "library:rebuild:active"
+        func = "app.jobs.admin_operations.run_library_rebuild_operation"
+        entity = "library"
+        label = "Library rebuild queued"
+
+    active_job = redis.get(lock_key)
+    if isinstance(active_job, bytes):
+        active_job = active_job.decode()
+    if active_job:
+        active_status = get_operation_status(active_job)
+        if not active_status or active_status.get("status") in {"complete", "failed", "cancelled", "stale"}:
+            redis.delete(lock_key)
+        elif active_job != str(task.id):
+            raise HTTPException(status_code=409, detail={"message": "Operation already running", "job_id": active_job})
+
+    if not redis.set(lock_key, str(task.id), nx=True, ex=604800):
+        active_job = redis.get(lock_key)
+        if isinstance(active_job, bytes):
+            active_job = active_job.decode()
+        raise HTTPException(status_code=409, detail={"message": "Operation already running", "job_id": active_job})
+
+    meta = dict(task.meta or {})
+    options = {k: v for k, v in meta.items() if k != "entity"}
+    progress = {"phase": "enqueued", "label": label}
+    rq_job = Queue(name="operations", connection=redis).enqueue(
+        func,
+        str(task.id),
+        options,
+        job_timeout=14400,
+        result_ttl=604800,
+    )
+    await svc.update_task(
+        task,
+        status="enqueued",
+        progress=progress,
+        result={},
+        error="",
+        meta={"entity": entity, **options},
+        rq_job_id=rq_job.id,
+    )
+    await svc.db.commit()
+    set_operation_status(
+        str(task.id),
+        "enqueued",
+        task.operation_type,
+        progress=progress,
+        meta={"entity": entity, **options},
+    )
+    return {"task_id": str(task.id), "job_id": rq_job.id, "status": "enqueued"}
 
 
 @router.post("/{task_id}/retry")
