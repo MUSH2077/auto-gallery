@@ -41,44 +41,17 @@ APPLY = "--apply" in sys.argv
 
 
 async def relink_source_creators(db) -> tuple[int, int]:
-    """Link unlinked SourceCreators to their subscription's creator by identity."""
-    rows = (await db.execute(
-        select(SourceCreator).where(SourceCreator.creator_id.is_(None))
-    )).scalars().all()
-    linked = skipped = 0
-    for sc in rows:
-        try:
-            provider = registry.get(sc.source)
-        except KeyError:
-            skipped += 1
-            continue
-        # All subscription_sources of this source whose URL identity == this creator.
-        ss_rows = (await db.execute(
-            select(SubscriptionSource).where(SubscriptionSource.source == sc.source)
-        )).scalars().all()
-        candidate_creator_ids = set()
-        for ss in ss_rows:
-            if not ss.source_url:
-                continue
-            url_id = provider.get_creator_dir_from_url(ss.source_url)
-            if url_id is not None and str(url_id) == str(sc.source_creator_id):
-                sub = await db.get(Subscription, ss.subscription_id) if ss.subscription_id else None
-                if sub and sub.creator_id:
-                    candidate_creator_ids.add(sub.creator_id)
-        if len(candidate_creator_ids) == 1:
-            cid = next(iter(candidate_creator_ids))
-            print(f"  RELINK source_creator {sc.source}/{sc.source_creator_id} "
-                  f"({sc.display_name!r}) -> creator {cid}")
-            if APPLY:
-                sc.creator_id = cid
-            linked += 1
-        else:
-            print(f"  SKIP   source_creator {sc.source}/{sc.source_creator_id} "
-                  f"({sc.display_name!r}) -> {len(candidate_creator_ids)} candidate creators (manual review)")
-            skipped += 1
-    if APPLY:
-        await db.flush()
-    return linked, skipped
+    """Relink unlinked SourceCreators via the shared reconcile service."""
+    from app.services.creator_reconcile import reconcile_unlinked_source_creators
+    if not APPLY:
+        # Dry-run: count what WOULD link, then roll back so nothing persists.
+        preview = await reconcile_unlinked_source_creators(db, source=None)
+        await db.rollback()
+        print(f"  would link {preview['linked']}, skip {preview['skipped']} (dry-run)")
+        return preview["linked"], preview["skipped"]
+    res = await reconcile_unlinked_source_creators(db)
+    print(f"  linked {res['linked']}, skipped {res['skipped']}")
+    return res["linked"], res["skipped"]
 
 
 async def unstick_downloaded_jobs(db) -> tuple[int, int]:
