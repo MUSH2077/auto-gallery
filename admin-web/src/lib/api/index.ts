@@ -370,6 +370,12 @@ export const api = {
       body: JSON.stringify(options),
     }),
 
+  importFromDisk: (options: { source?: string } = {}) =>
+    request<{ job_id: string; status: string; message: string }>("/api/v1/admin/library/import-from-disk", {
+      method: "POST",
+      body: JSON.stringify(options),
+    }),
+
   listAdminOperations: () =>
     request<{ operations: { job_id: string; status: string; operation_type: string; progress?: { phase: string; label: string }; error?: string; updated_at: number }[] }>("/api/v1/admin/operations"),
 

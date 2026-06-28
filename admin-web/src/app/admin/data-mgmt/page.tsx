@@ -70,6 +70,12 @@ export default function DataManagementPage() {
     onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
   });
 
+  const importFromDisk = useMutation({
+    mutationFn: () => api.importFromDisk({}),
+    onSuccess: (d: any) => setResult({ ok: true, msg: d.message }),
+    onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
+  });
+
   const createBackupMut = useMutation({
     mutationFn: () => api.createBackup(),
     onSuccess: (d: any) => { setResult({ ok: true, msg: "Backup: " + d.filename + " (" + d.size_mb + " MB)" }); backups.refetch(); },
@@ -406,6 +412,16 @@ export default function DataManagementPage() {
               </div>
               <button className="shrink-0 ml-3 px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700">
                 {t("datamgmt.cleanup_reindex_btn")}
+              </button>
+            </div>
+            <div className="flex items-center justify-between p-3 border rounded-lg">
+              <div>
+                <p className="text-sm font-medium">{t("datamgmt.disk_import")}</p>
+                <p className="text-xs text-muted">{t("datamgmt.disk_import_desc")}</p>
+              </div>
+              <button onClick={() => importFromDisk.mutate()} disabled={importFromDisk.isPending}
+                className="btn-primary shrink-0 ml-3 text-xs">
+                {importFromDisk.isPending ? "..." : t("datamgmt.disk_import_btn")}
               </button>
             </div>
           </div>
