@@ -447,16 +447,41 @@ export function useNotifications(): NotificationCtx {
 }
 
 // ─── Notification Bell ───
+
+// Map a server task_run status onto the bell's visual status set.
+function taskActivityStatus(status?: string | null): ActivityStatus {
+  if (status === "running" || status === "downloading" || status === "importing" || status === "enqueued") return "running";
+  if (status === "complete" || status === "completed") return "completed";
+  if (status === "failed" || status === "cancelled" || status === "stale") return "error";
+  return "pending";
+}
+
+function bellTaskLink(task: { kind?: string; id?: string }): string | null {
+  if ((task.kind === "download" || task.kind === "import") && task.id) {
+    return `/admin/jobs?tab=${task.kind}&task=${task.id}`;
+  }
+  return null;
+}
+
 export function NotificationBell() {
   const t = useT();
   const router = useRouter();
   const {
-    items, removeActivity, clearRecent,
+    clearRecent,
     clearBatchJob, batchJob,
     clearOperationJob, operationJob,
   } = useNotifications();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+
+  // Recent tasks come from the same server feed as /admin/notifications.
+  const recent = useQuery({
+    queryKey: [...queryKeys.tasks.all, "bell-recent"],
+    queryFn: () => api.listTasks({ limit: 10 }),
+    enabled: open,
+    staleTime: 10_000,
+  });
+  const serverItems = recent.data?.items ?? [];
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -468,8 +493,8 @@ export function NotificationBell() {
 
   const activeCount = (batchJob?.status === "running" ? 1 : 0)
     + (operationJob?.status === "running" ? 1 : 0)
-    + items.filter((a) => a.status === "running").length;
-  const hasRecent = items.length > 0 || !!batchJob || !!operationJob;
+    + serverItems.filter((task) => taskActivityStatus(task.status) === "running").length;
+  const hasRecent = serverItems.length > 0 || !!batchJob || !!operationJob;
 
   const statusIcon = (status: ActivityStatus) => {
     if (status === "running") {
@@ -527,7 +552,7 @@ export function NotificationBell() {
                 className="text-xs text-accent hover:text-accent dark:hover:text-accent transition-colors">
                 {t("notifications.title")} →
               </button>
-              {(items.length > 0 || batchJob || operationJob) && (
+              {(batchJob || operationJob) && (
                 <button onClick={() => { clearRecent(); }}
                   className="text-xs text-muted transition-colors hover:text-fg dark:text-muted dark:hover:text-fg">
                   {t("notification.clear_all")}
@@ -631,34 +656,25 @@ export function NotificationBell() {
                     </div>
                   </div>
                 )}
-                {items.map((a) => (
-                  <div key={a.id}
-                    className={`border-b border-border px-4 py-2.5 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle ${a.link ? "cursor-pointer" : "cursor-default"}`}
-                    onClick={() => { if (a.link) { setOpen(false); router.push(a.link); } }}>
-                    <div className="flex items-start gap-2.5">
-                      <div className="mt-0.5">{statusIcon(a.status)}</div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className={`text-sm truncate ${a.status === "running" ? "font-medium" : ""}`}>{a.title}</p>
-                          <span className="shrink-0 text-[10px] text-muted">{timeAgo(a.timestamp)}</span>
-                        </div>
-                        {a.message && <p className="mt-0.5 truncate text-xs text-muted">{a.message}</p>}
-                        {a.status === "running" && a.progress !== undefined && (
-                          <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-subtle dark:bg-border">
-                            <div className="h-full bg-accent rounded-full transition-all duration-500 ease-out"
-                              style={{ width: `${a.progress}%` }} />
+                {serverItems.map((task) => {
+                  const st = taskActivityStatus(task.status);
+                  const link = bellTaskLink(task);
+                  return (
+                    <div key={task.id}
+                      className={`border-b border-border px-4 py-2.5 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle ${link ? "cursor-pointer" : "cursor-default"}`}
+                      onClick={() => { if (link) { setOpen(false); router.push(link); } }}>
+                      <div className="flex items-start gap-2.5">
+                        <div className="mt-0.5">{statusIcon(st)}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className={`text-sm truncate ${st === "running" ? "font-medium" : ""}`}>{task.title || task.operation_type || task.kind}</p>
+                            <span className="shrink-0 text-[10px] text-muted">{task.created_at ? timeAgo(new Date(task.created_at).getTime()) : ""}</span>
                           </div>
-                        )}
+                        </div>
                       </div>
-                      <button onClick={(e) => { e.stopPropagation(); removeActivity(a.id); }}
-                        className="mt-0.5 shrink-0 text-muted hover:text-muted dark:hover:text-fg" aria-label="Dismiss">
-                        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                          <path d="M18 6L6 18M6 6l12 12" />
-                        </svg>
-                      </button>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </>
             )}
           </div>
