@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, ConfirmDialog, PageShell, StatCard, StatusBadge } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
+import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useRouter } from "next/navigation";
 import { getSourceColor } from "@/lib/sourceColors";
@@ -40,6 +41,7 @@ export default function DataManagementPage() {
   const router = useRouter();
   const qc = useQueryClient();
   const notify = useNotifications();
+  const toast = useToast();
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [confirmAction, setConfirmAction] = useState<string | null>(null);
   const [activeAction, setActiveAction] = useState<string | null>(null);
@@ -72,13 +74,18 @@ export default function DataManagementPage() {
 
   const importFromDisk = useMutation({
     mutationFn: () => api.importFromDisk({}),
+    onMutate: () => setResult(null),
     onSuccess: (d: any) => {
       const title = t("datamgmt.disk_import");
-      setResult({ ok: true, msg: d.message });
+      toast.success({
+        title,
+        message: d.message,
+        action: { label: t("jobs.task_detail"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${d.job_id}`) },
+      });
       notify.startOperationJob(d.job_id, "admin-disk-import", title);
       qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
     },
-    onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
+    onError: (e) => toast.error({ title: t("datamgmt.disk_import"), message: (e as Error).message }),
   });
 
   const rebuildLibrary = useMutation({
