@@ -1687,6 +1687,11 @@ const zh: Record<string, string> = {
   "notification.sync_complete": "同步完成 · {count} 个任务",
   "notifications.title": "消息中心",
   "notifications.desc": "所有系统通知和任务活动。",
+  "notifications.filter_all": "全部",
+  "notifications.filter_tasks": "任务",
+  "notifications.filter_account": "账户",
+  "notifications.load_more": "加载更多",
+  "notifications.load_error": "加载通知失败",
 };
 
 const en: Record<string, string> = {};
@@ -3347,6 +3352,11 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "notification.sync_complete": "Sync Complete · {count} jobs",
     "notifications.title": "Notifications",
     "notifications.desc": "All system notifications and task activity.",
+    "notifications.filter_all": "All",
+    "notifications.filter_tasks": "Tasks",
+    "notifications.filter_account": "Account",
+    "notifications.load_more": "Load more",
+    "notifications.load_error": "Failed to load notifications",
   });
   return result;
 }
