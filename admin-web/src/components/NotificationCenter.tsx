@@ -512,7 +512,7 @@ export function NotificationBell() {
           <path d="M10.3 21a1.94 1.94 0 003.4 0" />
         </svg>
         {activeCount > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 bg-danger-subtle0 text-white text-[10px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-0.5 leading-none">
+          <span className="absolute -top-0.5 -right-0.5 bg-danger text-white text-[10px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-0.5 leading-none">
             {activeCount}
           </span>
         )}
@@ -560,7 +560,7 @@ export function NotificationBell() {
                               {batchJob.progress.current}/{batchJob.progress.total} · {batchJob.progress.imported} imported
                             </p>
                             <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-subtle dark:bg-border">
-                              <div className="h-full bg-accent-subtle0 rounded-full transition-all duration-500 ease-out"
+                              <div className="h-full bg-accent rounded-full transition-all duration-500 ease-out"
                                 style={{ width: `${(batchJob.progress.current / batchJob.progress.total) * 100}%` }} />
                             </div>
                           </>
@@ -606,7 +606,7 @@ export function NotificationBell() {
                         )}
                         {operationJob.progress?.total && operationJob.progress.current !== undefined && (
                           <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-subtle dark:bg-border">
-                            <div className="h-full bg-accent-subtle0 rounded-full transition-all duration-500 ease-out"
+                            <div className="h-full bg-accent rounded-full transition-all duration-500 ease-out"
                               style={{ width: `${(operationJob.progress.current / operationJob.progress.total) * 100}%` }} />
                           </div>
                         )}
@@ -645,7 +645,7 @@ export function NotificationBell() {
                         {a.message && <p className="mt-0.5 truncate text-xs text-muted">{a.message}</p>}
                         {a.status === "running" && a.progress !== undefined && (
                           <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-subtle dark:bg-border">
-                            <div className="h-full bg-accent-subtle0 rounded-full transition-all duration-500 ease-out"
+                            <div className="h-full bg-accent rounded-full transition-all duration-500 ease-out"
                               style={{ width: `${a.progress}%` }} />
                           </div>
                         )}

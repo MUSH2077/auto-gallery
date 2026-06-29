@@ -59,8 +59,8 @@ export default function AuthStatusPage() {
                 </div>
                 <div className="flex items-center gap-3 shrink-0">
                   {!s.is_enabled && <span className="badge">{t("auth.disabled")}</span>}
-                  {s.auth_healthy === true && <span className="inline-flex items-center gap-1 text-xs text-success bg-success-subtle px-2 py-0.5 rounded"><span className="w-2 h-2 bg-success-subtle0 rounded-full" /> {t("auth.healthy")}</span>}
-                  {s.auth_healthy === false && <span className="inline-flex items-center gap-1 text-xs text-danger bg-danger-subtle px-2 py-0.5 rounded"><span className="w-2 h-2 bg-danger-subtle0 rounded-full" /> {t("auth.unhealthy")}</span>}
+                  {s.auth_healthy === true && <span className="inline-flex items-center gap-1 text-xs text-success bg-success-subtle px-2 py-0.5 rounded"><span className="w-2 h-2 bg-success rounded-full" /> {t("auth.healthy")}</span>}
+                  {s.auth_healthy === false && <span className="inline-flex items-center gap-1 text-xs text-danger bg-danger-subtle px-2 py-0.5 rounded"><span className="w-2 h-2 bg-danger rounded-full" /> {t("auth.unhealthy")}</span>}
                   {s.auth_healthy === null && <span className="badge inline-flex items-center gap-1"><span className="w-2 h-2 bg-muted rounded-full" /> {t("auth.unknown")}</span>}
                   {s.last_successful_auth && <span className="text-xs text-muted">{t("auth.last_success")} {new Date(s.last_successful_auth).toLocaleString()}</span>}
                 </div>
