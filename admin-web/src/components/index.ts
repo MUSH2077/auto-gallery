@@ -1,6 +1,7 @@
 export { default as StatusBadge } from "./StatusBadge";
 export { getStatusTone } from "./StatusBadge";
 export { default as SourceBadge } from "./SourceBadge";
+export { default as Banner } from "./Banner";
 export { default as PageHeader } from "./PageHeader";
 export { default as PageShell } from "./PageShell";
 export { default as SectionPanel } from "./SectionPanel";
