@@ -2,30 +2,28 @@
 import { useState, FormEvent } from "react";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
+import { useToast } from "@/components/Toast";
 import { authChangePassword } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
 
 export default function ProfilePage() {
   const t = useT();
   const { user, updateAccessToken } = useAuth();
+  const toast = useToast();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    setError("");
-    setSuccess(false);
 
     if (newPassword.length < 6) {
-      setError(t("auth.password_too_short"));
+      toast.error(t("auth.password_too_short"));
       return;
     }
     if (newPassword !== confirmPassword) {
-      setError(t("auth.password_mismatch"));
+      toast.error(t("auth.password_mismatch"));
       return;
     }
 
@@ -33,12 +31,12 @@ export default function ProfilePage() {
     try {
       const refreshed = await authChangePassword(currentPassword, newPassword);
       await updateAccessToken(refreshed.access_token);
-      setSuccess(true);
+      toast.success(t("auth.change_password_success"));
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : t("auth.change_password_failed"));
+      toast.error(err instanceof Error ? err.message : t("auth.change_password_failed"));
     } finally {
       setLoading(false);
     }
@@ -111,17 +109,6 @@ export default function ProfilePage() {
               className="input w-full"
             />
           </div>
-
-          {error && (
-            <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-3 py-2">
-              {error}
-            </div>
-          )}
-          {success && (
-            <div className="text-sm text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg px-3 py-2">
-              {t("auth.change_password_success")}
-            </div>
-          )}
 
           <button
             type="submit"

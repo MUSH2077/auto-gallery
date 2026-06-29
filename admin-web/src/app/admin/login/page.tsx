@@ -3,15 +3,16 @@ import { useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
+import { useToast } from "@/components/Toast";
 import { ThemeToggle, LangToggle } from "@/lib/theme";
 
 export default function LoginPage() {
   const t = useT();
   const { login, isAuthenticated, user } = useAuth();
   const router = useRouter();
+  const toast = useToast();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   if (isAuthenticated) {
@@ -21,13 +22,12 @@ export default function LoginPage() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    setError("");
     setLoading(true);
     try {
       const authUser = await login(username, password);
       router.replace(authUser.must_change_password ? "/admin/settings/profile" : "/admin");
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : t("auth.invalid_credentials"));
+      toast.error(err instanceof Error ? err.message : t("auth.invalid_credentials"));
     } finally {
       setLoading(false);
     }
@@ -78,12 +78,6 @@ export default function LoginPage() {
                 placeholder="••••••••"
               />
             </div>
-
-            {error && (
-              <div className="rounded-md border border-danger/30 bg-danger-subtle px-3 py-2 text-sm text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">
-                {error}
-              </div>
-            )}
 
             <button type="submit" disabled={loading} className="btn-primary w-full">
               {loading ? t("auth.logging_in") : t("auth.login_button")}
