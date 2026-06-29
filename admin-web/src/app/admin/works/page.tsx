@@ -137,19 +137,6 @@ function WorkCard({
         {w.has_ugoira && (
           <span className="absolute bottom-1 right-1 rounded bg-accent px-1.5 py-0.5 text-[10px] font-medium text-on-primary">{t("works.gif_badge")}</span>
         )}
-        {hasMultiple && (
-          <div className="absolute bottom-1 left-1 flex max-w-[calc(100%-0.5rem)] gap-0.5 rounded bg-black/40 px-1 py-1">
-            {assetIds.slice(0, 10).map((_, i) => (
-              <button
-                key={i}
-                type="button"
-                onClick={(e) => { e.stopPropagation(); updatePage(i); }}
-                className={`h-1.5 rounded-full transition-all ${i === pageIdx ? "w-3 bg-white" : "w-1.5 bg-white/45 hover:bg-white/80"}`}
-                aria-label={`Page ${i + 1}`}
-              />
-            ))}
-          </div>
-        )}
         {trashMode && !selectable && (
           <span className="absolute left-1 top-1 rounded bg-danger/90 px-1.5 py-0.5 text-xs font-medium text-white">Trash</span>
         )}
