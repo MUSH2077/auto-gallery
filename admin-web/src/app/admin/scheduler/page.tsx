@@ -6,6 +6,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, QueueBreakdown, SchedulerDecisionItem } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { pollInterval, hasActiveTask } from "@/lib/polling";
 import { scheduleModeLabel, schedulerDecisionLabel, useI18nFormat } from "@/lib/i18n-format";
 import { PageHeader, EmptyState, ErrorState, SourceBadge, StatusBadge } from "@/components";
 import { useToast } from "@/components/Toast";
@@ -76,7 +77,7 @@ function AdminOperationsSection() {
   const ops = useQuery({
     queryKey: [...queryKeys.tasks.all, "admin", "scheduler"],
     queryFn: () => api.listTasks({ kind: "admin", limit: 10 }),
-    refetchInterval: 2000,
+    refetchInterval: (query) => pollInterval(hasActiveTask((query.state.data as { items?: { status?: string | null }[] } | undefined)?.items)),
   });
 
   const rebuild = useMutation({

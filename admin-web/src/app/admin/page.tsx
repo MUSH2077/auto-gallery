@@ -107,7 +107,7 @@ function RecentActivity({ data }: { data: WorkbenchSummary }) {
           {data.recent.works.slice(0, 5).map((work) => (
             <RecentRow key={work.id} href={`/admin/works/${work.id}`}>
               <div className="h-8 w-8 shrink-0 overflow-hidden rounded-md border border-border bg-subtle dark:border-border dark:bg-subtle">
-                {work.thumbnail_asset_id && <img src={api.mediaUrl(work.thumbnail_asset_id, "thumb")} alt="" className="h-full w-full object-cover" loading="lazy" />}
+                {work.thumbnail_asset_id && <img src={api.mediaUrl(work.thumbnail_asset_id, "thumb")} alt="" className="h-full w-full object-cover" loading="lazy" decoding="async" />}
               </div>
               <span className="min-w-0 flex-1 truncate text-sm text-fg">{work.title || t("dashboard.untitled_work")}</span>
               <span className="text-xs text-muted">{fmt.dateTime(work.created_at)}</span>

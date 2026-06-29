@@ -76,7 +76,7 @@ export default function TagDetailPage() {
                   <Link key={w.id} href={`/admin/works/${w.id}`} className="group overflow-hidden rounded-md border border-border bg-white hover:border-blue-300 dark:border-border dark:bg-subtle transition-colors">
                     <div className="aspect-[4/3] bg-subtle">
                       {w.thumbnail_asset_id ? (
-                        <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="h-full w-full object-cover" loading="lazy" />
+                        <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="h-full w-full object-cover" loading="lazy" decoding="async" />
                       ) : (
                         <div className="flex h-full items-center justify-center text-xs text-muted">{t("works.na")}</div>
                       )}

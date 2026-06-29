@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageHeader, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
+import { POLL_ACTIVE_MS } from "@/lib/polling";
 import Link from "next/link";
 
 const LEVEL_COLORS: Record<string, string> = {
@@ -26,7 +27,7 @@ export default function SystemLogsPage() {
       const params = [levelFilter ? `level=${levelFilter}` : "", nameFilter ? `name=${nameFilter}` : ""].filter(Boolean).join("&");
       return api.systemLogs(200, levelFilter || undefined, nameFilter || undefined);
     },
-    refetchInterval: autoRefresh ? 5000 : undefined,
+    refetchInterval: autoRefresh ? POLL_ACTIVE_MS : false,
   });
 
   return (

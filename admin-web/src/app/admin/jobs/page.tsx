@@ -10,10 +10,9 @@ import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealPro
 import { useJobWebSocket } from "@/lib/useWebSocket";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { classifyJob, categoryBorderClass, classifyError, estimatedRetryBackoff } from "@/lib/jobCategory";
+import { POLL_ACTIVE_MS as REFETCH_ACTIVE_MS, POLL_IDLE_MS as REFETCH_IDLE_MS } from "@/lib/polling";
 
 
-const REFETCH_ACTIVE_MS = 8000;
-const REFETCH_IDLE_MS = 30000;
 const PAGE_LIMIT = 200;
 
 const STATUS_OPTIONS = ["", "enqueued", "downloading", "paused", "downloaded", "importing", "complete", "failed", "stale", "cancelled"];

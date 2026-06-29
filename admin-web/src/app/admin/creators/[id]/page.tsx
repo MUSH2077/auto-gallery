@@ -75,7 +75,7 @@ function WorkPreviewCard({ work }: { work: WorkListItem }) {
     <Link href={`/admin/works/${work.id}`} className="group overflow-hidden rounded-md border border-border bg-white transition-colors hover:border-accent/50 dark:border-border dark:bg-surface dark:hover:border-accent/50">
       <div className="aspect-[4/3] bg-subtle">
         {assetId ? (
-          <img src={api.mediaUrl(assetId, "thumb")} alt={work.title || t("creator_detail.untitled")} className="h-full w-full object-cover" loading="lazy" />
+          <img src={api.mediaUrl(assetId, "thumb")} alt={work.title || t("creator_detail.untitled")} className="h-full w-full object-cover" loading="lazy" decoding="async" />
         ) : (
           <div className="flex h-full items-center justify-center text-xs text-muted">{t("works.na")}</div>
         )}

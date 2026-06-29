@@ -110,7 +110,7 @@ function SearchContent() {
                 {worksHits.map((w: any) => (
                   <div key={w.id} className="card-interactive flex cursor-pointer gap-4 p-4" onClick={() => router.push(`/admin/works/${w.id}`)}>
                     {w.thumbnail_asset_id ? (
-                      <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="w-16 h-16 object-cover rounded shrink-0" loading="lazy" />
+                      <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="w-16 h-16 object-cover rounded shrink-0" loading="lazy" decoding="async" />
                     ) : (
                       <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md border border-border bg-subtle text-xs text-muted">{t("search.na")}</div>
                     )}

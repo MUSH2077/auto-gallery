@@ -101,7 +101,7 @@ function WorksGrid({ works }: { works: RepositoryRecentWork[] }) {
           className="group overflow-hidden rounded-md border border-border bg-white transition-colors hover:border-accent/50 dark:border-border dark:bg-surface dark:hover:border-accent/50">
           <div className="aspect-[4/3] bg-subtle">
             {work.thumbnail_asset_id ? (
-              <img src={api.mediaUrl(work.thumbnail_asset_id, "thumb")} alt={work.title || ""} className="h-full w-full object-cover" loading="lazy" />
+              <img src={api.mediaUrl(work.thumbnail_asset_id, "thumb")} alt={work.title || ""} className="h-full w-full object-cover" loading="lazy" decoding="async" />
             ) : (
               <div className="flex h-full items-center justify-center text-xs text-muted">{t("works.na")}</div>
             )}
@@ -215,7 +215,7 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
                 <div className="mt-3 flex gap-2 overflow-x-auto">
                   {node.thumbnails.map((assetId) => (
                     <div key={assetId} className="h-14 w-14 shrink-0 overflow-hidden rounded-md border border-border bg-subtle dark:border-border dark:bg-subtle">
-                      <img src={api.mediaUrl(assetId, "thumb")} alt="" className="h-full w-full object-cover" loading="lazy" />
+                      <img src={api.mediaUrl(assetId, "thumb")} alt="" className="h-full w-full object-cover" loading="lazy" decoding="async" />
                     </div>
                   ))}
                 </div>
