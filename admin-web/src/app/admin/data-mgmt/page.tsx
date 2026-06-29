@@ -19,9 +19,9 @@ function formatSize(mb: number): string {
 function severityBadge(s: string, t: (k: string) => string) {
   const sev: Severity = (["error","warning","info"].includes(s) ? s : "info") as Severity;
   const map: Record<Severity, string> = {
-    error: "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 border-red-200 dark:border-red-800",
-    warning: "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800",
-    info: "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-800",
+    error: "bg-danger-subtle text-danger border-danger/30",
+    warning: "bg-warning-subtle text-warning border-warning/30",
+    info: "bg-accent-subtle text-accent border-accent/30",
   };
   const label: Record<Severity, string> = {
     error: t("datamgmt.severity_error"),
@@ -156,7 +156,7 @@ export default function DataManagementPage() {
       <PageHeader title={t("datamgmt.title")} description={t("datamgmt.desc")} />
 
       {result && (
-        <div className={`mb-4 p-3 rounded-lg text-sm flex items-center justify-between ${result.ok ? "bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400" : "bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400"}`}>
+        <div className={`mb-4 p-3 rounded-lg text-sm flex items-center justify-between ${result.ok ? "bg-success-subtle border border-success/30 text-success" : "bg-danger-subtle border border-danger/30 text-danger"}`}>
           <span>{result.msg}</span>
           <button onClick={() => setResult(null)} className="ml-3 text-xs underline">{t("datamgmt.dismiss")}</button>
         </div>
@@ -165,10 +165,10 @@ export default function DataManagementPage() {
       {clearOperation && (
         <div className={`mb-4 rounded-md border p-3 text-sm ${
           clearOperation.status === "error"
-            ? "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400"
+            ? "border-danger/30 bg-danger-subtle text-danger"
             : clearOperation.status === "completed"
-              ? "border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-900/30 dark:text-green-400"
-              : "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
+              ? "border-success/30 bg-success-subtle text-success"
+              : "border-accent/30 bg-accent-subtle text-accent"
         }`}>
           <div className="flex items-center justify-between gap-3">
             <span className="font-medium">{clearOperation.title}</span>
@@ -270,7 +270,7 @@ export default function DataManagementPage() {
                         title={c.creator_id ? "View creator detail" : ""}>
                       <td className="py-1.5 text-muted">{i + 1}</td>
                       <td className="py-1.5 font-medium truncate max-w-[120px]" title={c.display_name || c.name}>
-                        <span className={c.creator_id ? "text-blue-600 dark:text-blue-400 hover:underline" : ""}>{c.display_name || c.name}</span>
+                        <span className={c.creator_id ? "text-accent hover:underline" : ""}>{c.display_name || c.name}</span>
                       </td>
                       <td className="py-1.5 capitalize">
                         <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: getSourceColor(c.source) }} />
@@ -305,7 +305,7 @@ export default function DataManagementPage() {
         {integrity.data ? (
           <>
             {issues.length === 0 ? (
-              <div className="text-center py-6 text-green-600 dark:text-green-400">
+              <div className="text-center py-6 text-success">
                 <div className="text-lg mb-1">&#10003;</div>
                 <p className="text-sm font-medium">{t("datamgmt.integrity_clean")}</p>
                 <p className="text-xs text-muted mt-1">{t("datamgmt.integrity_clean_desc")}</p>
@@ -314,9 +314,9 @@ export default function DataManagementPage() {
               <div className="space-y-2">
                 {issues.map((issue) => (
                   <div key={issue.type} className={`border rounded-lg p-3 flex items-center justify-between ${
-                    issue.severity === "error" ? "border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-900/10" :
-                    issue.severity === "warning" ? "border-yellow-200 dark:border-yellow-800 bg-yellow-50/50 dark:bg-yellow-900/10" :
-                    "border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-900/10"
+                    issue.severity === "error" ? "border-danger/30 bg-danger-subtle/50" :
+                    issue.severity === "warning" ? "border-warning/30 bg-warning-subtle/50" :
+                    "border-accent/30 bg-accent-subtle/50"
                   }`}>
                     <div className="flex items-center gap-3">
                       {severityBadge(issue.severity, t)}
@@ -335,7 +335,7 @@ export default function DataManagementPage() {
                     {issue.items && issue.items.length > 0 && (
                       <button
                         onClick={() => setIntegrityItems(issue)}
-                        className="shrink-0 text-xs text-blue-600 hover:underline"
+                        className="shrink-0 text-xs text-accent hover:underline"
                       >
                         {t("datamgmt.integrity_view_items")} ({Math.min(issue.items.length, 50)})
                       </button>
@@ -417,7 +417,7 @@ export default function DataManagementPage() {
                 <p className="text-xs text-muted">{t("datamgmt.cleanup_json_desc")}</p>
               </div>
               <button onClick={() => cleanupJSON.mutate()} disabled={cleanupJSON.isPending}
-                className="shrink-0 ml-3 px-3 py-1.5 text-xs bg-yellow-600 text-white rounded hover:bg-yellow-700 disabled:opacity-50">
+                className="shrink-0 ml-3 px-3 py-1.5 text-xs bg-warning text-white rounded hover:bg-warning/90 disabled:opacity-50">
                 {cleanupJSON.isPending ? "..." : t("datamgmt.cleanup_json_btn")}
               </button>
             </div>
@@ -491,10 +491,10 @@ export default function DataManagementPage() {
       {/* ═══ Danger Zone ═══ */}
       <div className="card border-danger p-4 dark:border-danger">
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-red-500 text-lg">&#9888;</span>
-          <h3 className="font-medium text-sm text-red-700 dark:text-red-400">{t("datamgmt.danger_title")}</h3>
+          <span className="text-danger text-lg">&#9888;</span>
+          <h3 className="font-medium text-sm text-danger">{t("datamgmt.danger_title")}</h3>
         </div>
-        <p className="text-xs text-red-500 dark:text-red-400 mb-4">{t("datamgmt.danger_warning")}</p>
+        <p className="text-xs text-danger mb-4">{t("datamgmt.danger_warning")}</p>
 
         {/* Confirmation input */}
         <div className="mb-4">
@@ -527,9 +527,9 @@ export default function DataManagementPage() {
                   onClick={() => setConfirmAction(a.key)}
                   disabled={!dangerUnlocked || isPending}
                   className={`shrink-0 ml-3 px-4 py-1.5 text-xs text-white rounded disabled:opacity-30 transition-opacity ${
-                    a.color === "red" ? "bg-red-600 hover:bg-red-700" :
+                    a.color === "red" ? "bg-danger hover:bg-danger/90" :
                     a.color === "orange" ? "bg-orange-600 hover:bg-orange-700" :
-                    "bg-blue-600 hover:bg-blue-700"
+                    "bg-accent hover:bg-accent/90"
                   }`}
                 >
                   {isPending ? "..." : a.title}

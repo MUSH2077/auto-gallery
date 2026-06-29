@@ -135,12 +135,12 @@ export default function DataManagementPage() {
   return (
     <main className="max-w-4xl mx-auto p-6">
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("datamgmt.back")}</Link>
+        <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("datamgmt.back")}</Link>
       </div>
       <PageHeader title={t("datamgmt.title")} description={t("datamgmt.desc")} />
 
       {result && (
-        <div className={`mb-4 p-3 rounded-lg text-sm ${result.ok ? "bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400" : "bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400"}`}>
+        <div className={`mb-4 p-3 rounded-lg text-sm ${result.ok ? "bg-success-subtle border border-success/30 text-success" : "bg-danger-subtle border border-danger/30 text-danger"}`}>
           {result.msg}
           <button onClick={() => setResult(null)} className="ml-3 text-xs underline">{t("datamgmt.dismiss")}</button>
         </div>
@@ -149,7 +149,7 @@ export default function DataManagementPage() {
       <div className="space-y-3">
         {actions.map((a) => (
           <div key={a.key} className={`card p-4 flex items-center justify-between border-l-4 ${
-            a.color === "red" ? "border-red-500" : a.color === "orange" ? "border-orange-500" : a.color === "yellow" ? "border-yellow-500" : "border-blue-500"
+            a.color === "red" ? "border-danger/30" : a.color === "orange" ? "border-orange-500" : a.color === "yellow" ? "border-warning/30" : "border-accent/30"
           }`}>
             <div>
               <h3 className="font-medium text-sm dark:text-white">{a.title}</h3>
@@ -159,10 +159,10 @@ export default function DataManagementPage() {
               onClick={() => setConfirmAction(a.key)}
               disabled={a.mutation.isPending}
               className={`shrink-0 ml-4 btn-primary ${
-                a.color === "red" ? "bg-red-600 hover:bg-red-700" :
+                a.color === "red" ? "bg-danger hover:bg-danger/90" :
                 a.color === "orange" ? "bg-orange-600 hover:bg-orange-700" :
-                a.color === "yellow" ? "bg-yellow-600 hover:bg-yellow-700" :
-                "bg-blue-600 hover:bg-blue-700"
+                a.color === "yellow" ? "bg-warning hover:bg-warning/90" :
+                "bg-accent hover:bg-accent/90"
               }`}
             >
               {a.mutation.isPending ? t("datamgmt.processing") : a.key === "settings" ? t("datamgmt.reset") : t("datamgmt.clear")}
