@@ -232,7 +232,7 @@ function JobRowShell({
     <div>
       <div
         onClick={onClick}
-        className={`card grid min-w-[1240px] cursor-pointer grid-cols-[28px_112px_118px_76px_110px_minmax(210px,1fr)_minmax(180px,0.8fr)_190px_90px_minmax(220px,max-content)] items-center gap-3 p-3 text-sm hover:border-accent/50 ${className}`}
+        className={`card grid min-h-[72px] w-full min-w-0 cursor-pointer grid-cols-[28px_minmax(78px,0.58fr)_minmax(86px,0.65fr)_64px_minmax(72px,0.5fr)_minmax(150px,1.25fr)_minmax(140px,1fr)_minmax(110px,0.75fr)_72px_minmax(188px,max-content)] items-center gap-2 p-2.5 text-sm hover:border-accent/50 ${className}`}
       >
         <div className="flex items-center justify-center">{select || <span aria-hidden className="h-4 w-4" />}</div>
         <div className="min-w-0"><StatusBadge status={status} /></div>
@@ -248,10 +248,8 @@ function JobRowShell({
         <RowActions>{actions}</RowActions>
       </div>
       {(error || result) && (
-        <div className="mt-1 grid min-w-[1240px] grid-cols-[28px_112px_118px_76px_110px_minmax(210px,1fr)_minmax(180px,0.8fr)_190px_90px_minmax(220px,max-content)] gap-3 px-3">
-          <div className="col-start-6 col-end-11">
-            {error ? <ErrorExcerpt value={error} /> : <div className="line-clamp-1 rounded-md border border-border bg-subtle px-2 py-1 text-xs text-muted">{result}</div>}
-          </div>
+        <div className="mt-1 w-full">
+          {error ? <ErrorExcerpt value={error} /> : <div className="line-clamp-1 rounded-md border border-border bg-subtle px-2 py-1 text-xs text-muted">{result}</div>}
         </div>
       )}
     </div>
@@ -379,8 +377,7 @@ function UnifiedTaskList({
       {Boolean(error) && <ErrorState message={(error as Error).message} onRetry={onRetry} />}
       {!isLoading && !error && rows.length === 0 && <EmptyState title={t("jobs.no_dl")} description={t("jobs.no_dl_desc")} />}
       {rows.length > 0 && (
-        <div className="overflow-x-auto pb-2">
-          <div className="min-w-[900px] space-y-1">
+        <div className="space-y-1">
             {rows.map((task) => {
               const progress = task.progress_data as JobProgress | null
                 || (task.progress_stage ? { stage: task.progress_stage, current: task.progress_current || undefined, total: task.progress_total || undefined } : null);
@@ -412,7 +409,6 @@ function UnifiedTaskList({
                 />
               );
             })}
-          </div>
         </div>
       )}
     </section>
@@ -1096,8 +1092,7 @@ function JobsContent() {
         {downloads.error && <ErrorState message={(downloads.error as Error).message} onRetry={() => downloads.refetch()} />}
         {downloads.data && !downloads.data?.length && <EmptyState title={t("jobs.no_dl")} description={t("jobs.no_dl_desc")} />}
         {downloads.data && downloads.data?.length > 0 && (
-          <div className="overflow-x-auto pb-2">
-          <div className="min-w-[1240px] space-y-1">
+          <div className="space-y-1">
             {downloads.data.map((j: any) => {
               const active = isActiveDownload(j.status);
               const progress = active
@@ -1175,7 +1170,6 @@ function JobsContent() {
               );
             })}
           </div>
-          </div>
         )}
       </section>}
 
@@ -1188,8 +1182,7 @@ function JobsContent() {
         {imports.isLoading && <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-12 rounded-md bg-subtle dark:bg-subtle animate-pulse" />)}</div>}
         {imports.data?.items && !imports.data?.items.length && <p className="text-sm text-muted">{t("jobs.no_im")}</p>}
         {imports.data?.items && imports.data?.items.length > 0 && (
-          <div className="overflow-x-auto pb-2">
-          <div className="min-w-[1240px] space-y-1">
+          <div className="space-y-1">
             {imports.data?.items?.map((j: any) => {
               const active = isActiveImport(j.status);
               const progress = active
@@ -1235,7 +1228,6 @@ function JobsContent() {
                 </div>
               );
             })}
-          </div>
           </div>
         )}
       </section>}
