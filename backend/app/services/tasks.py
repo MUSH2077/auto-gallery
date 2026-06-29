@@ -139,6 +139,33 @@ class TaskService:
         await self.add_event(task, "created", to_status=normalized, message=title)
         return task
 
+    # Account / user-management actions are recorded as instant terminal tasks so
+    # they share the unified task_runs feed (/admin/notifications). subject_id is
+    # left None on purpose — setting (subject_type, subject_id) would deterministically
+    # upsert and collapse repeated logins into a single row, defeating the audit trail.
+    _ACCOUNT_TITLES = {
+        "login": "Signed in",
+        "password-change": "Password changed",
+    }
+
+    async def record_account_event(
+        self,
+        *,
+        action: str,
+        username: str,
+        user_id: int | None = None,
+        ip: str | None = None,
+    ) -> TaskRun:
+        return await self.create_task(
+            kind="account",
+            operation_type=f"account-{action}",
+            title=self._ACCOUNT_TITLES.get(action, action),
+            status="complete",
+            subject_type="user",
+            subject_id=None,
+            meta={"username": username, "user_id": user_id, "ip": ip},
+        )
+
     async def get_by_subject(self, subject_type: str, subject_id: UUID) -> TaskRun | None:
         result = await self.db.execute(
             select(TaskRun).where(TaskRun.subject_type == subject_type, TaskRun.subject_id == subject_id).limit(1)
