@@ -193,6 +193,34 @@ function RowActions({ children }: { children?: ReactNode }) {
   );
 }
 
+function RowButton({
+  children,
+  tone = "ghost",
+  onClick,
+  disabled,
+}: {
+  children: ReactNode;
+  tone?: "ghost" | "primary" | "danger";
+  onClick?: () => void;
+  disabled?: boolean;
+}) {
+  const toneClass = tone === "primary"
+    ? "border-primary bg-primary text-on-primary hover:bg-primary-hover"
+    : tone === "danger"
+      ? "border-danger/40 bg-surface text-danger hover:bg-danger/10"
+      : "border-border bg-surface text-fg hover:bg-subtle";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`inline-flex h-8 min-w-[46px] items-center justify-center rounded-md border px-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 ${toneClass}`}
+    >
+      {children}
+    </button>
+  );
+}
+
 function JobRowShell({
   select,
   status,
@@ -228,11 +256,12 @@ function JobRowShell({
   className?: string;
   onClick: () => void;
 }) {
+  const progressOrTime = progress ? <RealProgressBar progress={progress} /> : activeSince ? <Elapsed since={activeSince} active /> : timestamp;
   return (
     <div>
       <div
         onClick={onClick}
-        className={`card grid min-h-[72px] w-full min-w-0 cursor-pointer grid-cols-[28px_minmax(78px,0.58fr)_minmax(86px,0.65fr)_64px_minmax(72px,0.5fr)_minmax(150px,1.25fr)_minmax(140px,1fr)_minmax(110px,0.75fr)_72px_minmax(188px,max-content)] items-center gap-2 p-2.5 text-sm hover:border-accent/50 ${className}`}
+        className={`card grid min-h-[64px] w-full min-w-0 cursor-pointer grid-cols-[28px_minmax(78px,0.55fr)_minmax(78px,0.55fr)_60px_minmax(68px,0.45fr)_minmax(150px,1fr)_minmax(260px,1.6fr)_minmax(152px,max-content)] items-center gap-2 p-2 text-sm hover:border-accent/50 ${className}`}
       >
         <div className="flex items-center justify-center">{select || <span aria-hidden className="h-4 w-4" />}</div>
         <div className="min-w-0"><StatusBadge status={status} /></div>
@@ -240,10 +269,9 @@ function JobRowShell({
         <span className="font-mono text-xs text-muted">{shortId(id)}</span>
         <div className="min-w-0">{source || <span className="text-xs text-muted">—</span>}</div>
         <RowMeta primary={primary} secondary={secondary} />
-        <div className="min-w-0 truncate text-xs text-muted">{detail || "—"}</div>
-        <RealProgressBar progress={progress || null} />
-        <div className="flex items-center justify-end gap-2">
-          {activeSince ? <Elapsed since={activeSince} active /> : <span className="text-xs text-muted">{timestamp || "—"}</span>}
+        <div className="min-w-0 truncate text-xs text-muted">
+          {detail || "—"}
+          {progressOrTime && <span className="ml-3 inline-flex max-w-[240px] align-middle">{progressOrTime}</span>}
         </div>
         <RowActions>{actions}</RowActions>
       </div>
@@ -297,7 +325,7 @@ function JobsFilterPanel({
 }) {
   const t = useT();
   return (
-    <div className="mb-4 flex flex-col gap-3 rounded-md border border-border bg-surface p-3 dark:border-border dark:bg-surface">
+    <div className="mb-4 flex flex-col gap-2 rounded-md border border-border bg-surface p-2.5 dark:border-border dark:bg-surface">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <JobsTabBar activeTab={activeTab} onChange={onTabChange} />
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
@@ -308,13 +336,13 @@ function JobsFilterPanel({
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <input value={search} onChange={(e) => onUpdateParams({ q: e.target.value || null })} className="input min-w-[220px] px-3 py-1.5 text-xs" placeholder={t("jobs.search_placeholder")} aria-label={t("jobs.search_placeholder")} />
-        <select value={status} onChange={(e) => onUpdateParams({ status: e.target.value || null })} className="select px-2 py-1.5 text-xs">
+        <input value={search} onChange={(e) => onUpdateParams({ q: e.target.value || null })} className="input h-9 min-h-9 min-w-[220px] px-3 py-0 text-xs" placeholder={t("jobs.search_placeholder")} aria-label={t("jobs.search_placeholder")} />
+        <select value={status} onChange={(e) => onUpdateParams({ status: e.target.value || null })} className="select h-9 min-h-9 px-2 py-0 text-xs">
           <option value="">{t("jobs.filter_all_status")}</option>
           {statusOptions.filter(Boolean).map((s) => <option key={s} value={s}>{statusLabel(t, s)}</option>)}
         </select>
         {activeTab !== "imports" && activeTab !== "admin" && (
-          <select value={dlSource} onChange={(e) => onUpdateParams({ source: e.target.value || null })} className="select px-2 py-1.5 text-xs">
+          <select value={dlSource} onChange={(e) => onUpdateParams({ source: e.target.value || null })} className="select h-9 min-h-9 px-2 py-0 text-xs">
             <option value="">{t("jobs.filter_all_source")}</option>
             {SOURCE_OPTIONS.filter(Boolean).map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
@@ -322,14 +350,14 @@ function JobsFilterPanel({
         {subscriptionSourceId && <span className="rounded-md border border-border px-2 py-1 text-xs font-mono dark:border-border">{t("jobs.repository")} {shortId(subscriptionSourceId)}</span>}
         {downloadJobId && <span className="rounded-md border border-border px-2 py-1 text-xs font-mono dark:border-border">{t("jobs.download_job")} {shortId(downloadJobId)}</span>}
         {activeTab === "downloads" && (
-          <select value={`${dlSort}-${dlOrder}`} onChange={(e) => { const [k, o] = e.target.value.split("-"); onUpdateParams({ sort: k === "created_at" && o === "desc" ? null : k, order: o === "desc" ? null : o }); }} className="select px-2 py-1.5 text-xs">
+          <select value={`${dlSort}-${dlOrder}`} onChange={(e) => { const [k, o] = e.target.value.split("-"); onUpdateParams({ sort: k === "created_at" && o === "desc" ? null : k, order: o === "desc" ? null : o }); }} className="select h-9 min-h-9 px-2 py-0 text-xs">
             <option value="created_at-desc">{t("jobs.sort_newest")}</option>
             <option value="created_at-asc">{t("jobs.sort_oldest")}</option>
             <option value="status-asc">{t("jobs.sort_status")}</option>
             <option value="source-asc">{t("jobs.sort_source")}</option>
           </select>
         )}
-        {activeTab === "downloads" && <button onClick={onSelectAll} className="btn-ghost text-xs">{selectAll ? t("common.deselect_all") : t("common.select_all")}</button>}
+        {activeTab === "downloads" && <button onClick={onSelectAll} className="inline-flex h-9 items-center justify-center rounded-md border border-border bg-surface px-3 text-xs font-medium text-fg hover:bg-subtle">{selectAll ? t("common.deselect_all") : t("common.select_all")}</button>}
 
         {activeTab === "downloads" && selectedCount > 0 && (
           <div className="ml-auto flex items-center gap-1 rounded-md border border-warning/30 bg-warning-subtle px-3 py-1.5 dark:bg-warning-subtle">
@@ -399,14 +427,14 @@ function UnifiedTaskList({
                   timestamp={task.created_at ? fmt.time(task.created_at) : "—"}
                   error={task.error_log}
                   result={task.result_data?.message}
-                  onClick={() => openTaskDetail(task.id)}
-                  actions={(
-                    <>
-                      {clickableDownload && <button onClick={() => openDownloadDetail(subjectId)} className="btn-ghost text-xs">{t("jobs.open_download")}</button>}
-                      {clickableImport && <button onClick={() => openImportDetail(subjectId)} className="btn-ghost text-xs">{t("jobs.import_detail")}</button>}
-                    </>
-                  )}
-                />
+                    onClick={() => openTaskDetail(task.id)}
+                    actions={(
+                      <>
+                      {clickableDownload && <RowButton onClick={() => openDownloadDetail(subjectId)}>{t("jobs.open_download")}</RowButton>}
+                      {clickableImport && <RowButton onClick={() => openImportDetail(subjectId)}>{t("jobs.import_detail")}</RowButton>}
+                      </>
+                    )}
+                  />
               );
             })}
         </div>
@@ -1149,17 +1177,17 @@ function JobsContent() {
                     onClick={() => openDownloadDetail(j.id)}
                     actions={(
                       <>
-                        <button onClick={() => setExpandedImports(expandedImports === j.id ? null : j.id)} className="btn-ghost text-xs">{t("jobs.imports")}</button>
+                        <RowButton onClick={() => setExpandedImports(expandedImports === j.id ? null : j.id)}>{t("jobs.imports")}</RowButton>
                         {["enqueued","downloading","downloaded","importing","failed","stale"].includes(j.status) && (
-                          <button onClick={() => pauseDL.mutate(j.id)} disabled={pauseDL.isPending} className="btn-ghost text-xs">{t("jobs.pause")}</button>
+                          <RowButton onClick={() => pauseDL.mutate(j.id)} disabled={pauseDL.isPending}>{t("jobs.pause")}</RowButton>
                         )}
                         {j.status === "paused" && (
-                          <button onClick={() => resumeDL.mutate(j.id)} disabled={resumeDL.isPending} className="btn-ghost text-xs">{t("jobs.resume")}</button>
+                          <RowButton onClick={() => resumeDL.mutate(j.id)} disabled={resumeDL.isPending}>{t("jobs.resume")}</RowButton>
                         )}
                         {(j.status === "failed" || j.status === "stale" || j.status === "complete") && (
-                          <button onClick={() => { setRetryId(j.id); retryDL.mutate(j.id); }} disabled={retryDL.isPending} className="btn-primary text-xs">{t("jobs.retry")}</button>
+                          <RowButton tone="primary" onClick={() => { setRetryId(j.id); retryDL.mutate(j.id); }} disabled={retryDL.isPending}>{t("jobs.retry")}</RowButton>
                         )}
-                        <button onClick={() => { setDeleteId(j.id); setDeleteType("dl"); }} className="btn-danger text-xs">{t("jobs.del")}</button>
+                        <RowButton tone="danger" onClick={() => { setDeleteId(j.id); setDeleteType("dl"); }}>{t("jobs.del")}</RowButton>
                       </>
                     )}
                   />
@@ -1219,9 +1247,9 @@ function JobsContent() {
                     onClick={() => openImportDetail(j.id)}
                     actions={(
                       <>
-                        <Link href={`/admin/jobs?tab=downloads&job=${j.download_job_id}`} className="btn-ghost text-xs">{t("jobs.open_download")}</Link>
-                        {(j.status === "failed" || j.status === "stale") && <button onClick={() => { setRetryId(j.id); retryIM.mutate(j.id); }} disabled={retryIM.isPending} className="btn-primary text-xs">{t("jobs.retry")}</button>}
-                        <button onClick={() => { setDeleteId(j.id); setDeleteType("im"); }} className="btn-danger text-xs">{t("jobs.del")}</button>
+                        <Link href={`/admin/jobs?tab=downloads&job=${j.download_job_id}`} className="inline-flex h-8 min-w-[46px] items-center justify-center rounded-md border border-border bg-surface px-2 text-xs font-medium text-fg hover:bg-subtle">{t("jobs.open_download")}</Link>
+                        {(j.status === "failed" || j.status === "stale") && <RowButton tone="primary" onClick={() => { setRetryId(j.id); retryIM.mutate(j.id); }} disabled={retryIM.isPending}>{t("jobs.retry")}</RowButton>}
+                        <RowButton tone="danger" onClick={() => { setDeleteId(j.id); setDeleteType("im"); }}>{t("jobs.del")}</RowButton>
                       </>
                     )}
                   />
