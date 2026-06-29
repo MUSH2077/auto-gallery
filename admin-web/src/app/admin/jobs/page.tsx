@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Suspense, useState, useEffect, useMemo, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useToast } from "@/components/Toast";
-import { useT } from "@/lib/i18n";
+import { useT, type TFunction } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, DownloadJob, ImportJob, JobProgress, queryKeys, TaskRun } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, BatchByFilter, StatusBadge, StatCard } from "@/components";
@@ -20,6 +20,13 @@ const IMPORT_STATUS_OPTIONS = ["", "enqueued", "running", "complete", "failed", 
 const TASK_STATUS_OPTIONS = ["", "enqueued", "running", "paused", "recovering", "complete", "failed", "cancelled", "stale"];
 const SOURCE_OPTIONS = ["", "pixiv", "x", "iwara", "danbooru", "pinterest", "lofter", "weibo", "bilibili"];
 type JobsTab = "all" | "downloads" | "imports" | "admin";
+const JOBS_TABS: { value: JobsTab; labelKey: string }[] = [
+  { value: "all", labelKey: "jobs.tab_all" },
+  { value: "downloads", labelKey: "jobs.tab_downloads" },
+  { value: "imports", labelKey: "jobs.tab_imports" },
+  { value: "admin", labelKey: "jobs.tab_admin" },
+];
+
 function isActiveDownload(status: string) {
   return ["pending", "enqueued", "downloading", "downloaded", "importing"].includes(status);
 }
@@ -116,6 +123,227 @@ function DetailRow({ label, value }: { label: string; value?: ReactNode }) {
   );
 }
 
+function operationLabel(t: TFunction, operationType?: string | null, kind?: string | null) {
+  if (operationType === "admin-rebuild") return t("jobs.op_admin_rebuild");
+  if (operationType === "admin-disk-import") return t("jobs.op_admin_disk_import");
+  if (operationType === "admin-clear") return t("jobs.op_admin_clear");
+  if (operationType === "subscription-sync-batch") return t("jobs.op_subscription_sync_batch");
+  if (operationType === "library_rebuild") return t("jobs.op_library_rebuild");
+  if (kind === "download") return t("jobs.download");
+  if (kind === "import") return t("jobs.import");
+  return operationType || kind || "—";
+}
+
+function JobsTabBar({
+  activeTab,
+  onChange,
+}: {
+  activeTab: JobsTab;
+  onChange: (tab: JobsTab) => void;
+}) {
+  const t = useT();
+  return (
+    <div className="inline-flex gap-1 rounded-md bg-subtle p-1 dark:bg-subtle" role="tablist" aria-label={t("jobs.tabs_label")}>
+      {JOBS_TABS.map((tab) => {
+        const active = activeTab === tab.value;
+        return (
+          <button
+            key={tab.value}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(tab.value)}
+            className={`rounded px-3 py-1.5 text-xs font-medium transition-colors ${
+              active ? "bg-surface text-fg shadow-sm dark:bg-border" : "text-muted hover:bg-surface/60 hover:text-fg"
+            }`}
+          >
+            {t(tab.labelKey)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function RowMeta({
+  primary,
+  secondary,
+}: {
+  primary: ReactNode;
+  secondary?: ReactNode;
+}) {
+  return (
+    <div className="min-w-0 leading-tight">
+      <div className="truncate text-xs font-medium text-fg">{primary || "—"}</div>
+      {secondary && <div className="mt-0.5 truncate text-[11px] text-muted">{secondary}</div>}
+    </div>
+  );
+}
+
+function RowActions({ children }: { children?: ReactNode }) {
+  if (!children) return <div className="min-w-0" />;
+  return (
+    <div className="flex min-w-0 flex-wrap justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+      {children}
+    </div>
+  );
+}
+
+function JobRowShell({
+  select,
+  status,
+  typeLabel,
+  id,
+  source,
+  primary,
+  secondary,
+  detail,
+  progress,
+  activeSince,
+  timestamp,
+  actions,
+  error,
+  result,
+  className = "",
+  onClick,
+}: {
+  select?: ReactNode;
+  status: string;
+  typeLabel: ReactNode;
+  id: string;
+  source?: ReactNode;
+  primary: ReactNode;
+  secondary?: ReactNode;
+  detail?: ReactNode;
+  progress?: JobProgress | null;
+  activeSince?: string | null;
+  timestamp?: ReactNode;
+  actions?: ReactNode;
+  error?: string | null;
+  result?: ReactNode;
+  className?: string;
+  onClick: () => void;
+}) {
+  return (
+    <div>
+      <div
+        onClick={onClick}
+        className={`card grid min-w-[1180px] cursor-pointer grid-cols-[28px_112px_118px_76px_110px_minmax(210px,1fr)_minmax(180px,0.8fr)_190px_90px_minmax(150px,max-content)] items-center gap-3 p-3 text-sm hover:border-accent/50 ${className}`}
+      >
+        <div className="flex items-center justify-center">{select || <span aria-hidden className="h-4 w-4" />}</div>
+        <div className="min-w-0"><StatusBadge status={status} /></div>
+        <div className="truncate text-xs font-medium text-fg" title={typeof typeLabel === "string" ? typeLabel : undefined}>{typeLabel}</div>
+        <span className="font-mono text-xs text-muted">{shortId(id)}</span>
+        <div className="min-w-0">{source || <span className="text-xs text-muted">—</span>}</div>
+        <RowMeta primary={primary} secondary={secondary} />
+        <div className="min-w-0 truncate text-xs text-muted">{detail || "—"}</div>
+        <RealProgressBar progress={progress || null} />
+        <div className="flex items-center justify-end gap-2">
+          {activeSince ? <Elapsed since={activeSince} active /> : <span className="text-xs text-muted">{timestamp || "—"}</span>}
+        </div>
+        <RowActions>{actions}</RowActions>
+      </div>
+      {(error || result) && (
+        <div className="mt-1 grid min-w-[1180px] grid-cols-[28px_112px_118px_76px_110px_minmax(210px,1fr)_minmax(180px,0.8fr)_190px_90px_minmax(150px,max-content)] gap-3 px-3">
+          <div className="col-start-6 col-end-11">
+            {error ? <ErrorExcerpt value={error} /> : <div className="line-clamp-1 rounded-md border border-border bg-subtle px-2 py-1 text-xs text-muted">{result}</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function JobsFilterPanel({
+  activeTab,
+  activeFilterCount,
+  lastUpdatedLabel,
+  search,
+  status,
+  dlSource,
+  subscriptionSourceId,
+  downloadJobId,
+  dlSort,
+  dlOrder,
+  selectedCount,
+  selectAll,
+  statusOptions,
+  onTabChange,
+  onUpdateParams,
+  onClearFilters,
+  onSelectAll,
+  onBatch,
+}: {
+  activeTab: JobsTab;
+  activeFilterCount: number;
+  lastUpdatedLabel: string;
+  search: string;
+  status: string;
+  dlSource: string;
+  subscriptionSourceId: string;
+  downloadJobId: string;
+  dlSort: string;
+  dlOrder: string;
+  selectedCount: number;
+  selectAll: boolean;
+  statusOptions: string[];
+  onTabChange: (tab: JobsTab) => void;
+  onUpdateParams: (updates: Record<string, string | null>) => void;
+  onClearFilters: () => void;
+  onSelectAll: () => void;
+  onBatch: (action: string) => void;
+}) {
+  const t = useT();
+  return (
+    <div className="mb-4 flex flex-col gap-3 rounded-md border border-border bg-surface p-3 dark:border-border dark:bg-surface">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <JobsTabBar activeTab={activeTab} onChange={onTabChange} />
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+          {activeFilterCount > 0 && <span className="rounded-full bg-accent-subtle px-2 py-0.5 font-medium text-accent dark:bg-accent-subtle dark:text-accent">{t("jobs.active_filters", { count: activeFilterCount })}</span>}
+          <span>{lastUpdatedLabel}</span>
+          {activeFilterCount > 0 && <button onClick={onClearFilters} className="text-accent hover:underline dark:text-accent">{t("jobs.clear_filters")}</button>}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <input value={search} onChange={(e) => onUpdateParams({ q: e.target.value || null })} className="input min-w-[220px] px-3 py-1.5 text-xs" placeholder={t("jobs.search_placeholder")} aria-label={t("jobs.search_placeholder")} />
+        <select value={status} onChange={(e) => onUpdateParams({ status: e.target.value || null })} className="select px-2 py-1.5 text-xs">
+          <option value="">{t("jobs.filter_all_status")}</option>
+          {statusOptions.filter(Boolean).map((s) => <option key={s} value={s}>{statusLabel(t, s)}</option>)}
+        </select>
+        {activeTab !== "imports" && activeTab !== "admin" && (
+          <select value={dlSource} onChange={(e) => onUpdateParams({ source: e.target.value || null })} className="select px-2 py-1.5 text-xs">
+            <option value="">{t("jobs.filter_all_source")}</option>
+            {SOURCE_OPTIONS.filter(Boolean).map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        )}
+        {subscriptionSourceId && <span className="rounded-md border border-border px-2 py-1 text-xs font-mono dark:border-border">{t("jobs.repository")} {shortId(subscriptionSourceId)}</span>}
+        {downloadJobId && <span className="rounded-md border border-border px-2 py-1 text-xs font-mono dark:border-border">{t("jobs.download_job")} {shortId(downloadJobId)}</span>}
+        {activeTab === "downloads" && (
+          <select value={`${dlSort}-${dlOrder}`} onChange={(e) => { const [k, o] = e.target.value.split("-"); onUpdateParams({ sort: k === "created_at" && o === "desc" ? null : k, order: o === "desc" ? null : o }); }} className="select px-2 py-1.5 text-xs">
+            <option value="created_at-desc">{t("jobs.sort_newest")}</option>
+            <option value="created_at-asc">{t("jobs.sort_oldest")}</option>
+            <option value="status-asc">{t("jobs.sort_status")}</option>
+            <option value="source-asc">{t("jobs.sort_source")}</option>
+          </select>
+        )}
+        {activeTab === "downloads" && <button onClick={onSelectAll} className="btn-ghost text-xs">{selectAll ? t("common.deselect_all") : t("common.select_all")}</button>}
+
+        {activeTab === "downloads" && selectedCount > 0 && (
+          <div className="ml-auto flex items-center gap-1 rounded-md border border-warning/30 bg-warning-subtle px-3 py-1.5 dark:bg-warning-subtle">
+            <span className="text-xs text-warning dark:text-warning">{selectedCount} {t("common.selected")}</span>
+            <button onClick={() => onBatch("pause")} className="btn-ghost text-xs">{t("jobs.batch_pause")}</button>
+            <button onClick={() => onBatch("resume")} className="btn-ghost text-xs">{t("jobs.batch_resume")}</button>
+            <button onClick={() => onBatch("retry")} className="btn-primary text-xs">{t("jobs.batch_retry")}</button>
+            <button onClick={() => onBatch("cancel")} className="btn-ghost text-xs">{t("jobs.batch_cancel")}</button>
+            <button onClick={() => onBatch("delete")} className="btn-danger text-xs">{t("jobs.batch_delete")}</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function UnifiedTaskList({
   tasks,
   isLoading,
@@ -136,14 +364,6 @@ function UnifiedTaskList({
   const t = useT();
   const fmt = useI18nFormat();
   const rows = tasks?.items || [];
-  const labelForKind = (task: TaskRun) => {
-    if (task.operation_type === "admin-rebuild") return t("scheduler.rebuild_library", "重建索引库");
-    if (task.operation_type === "admin-disk-import") return t("datamgmt.disk_import", "从盘导入");
-    if (task.operation_type === "admin-clear") return t("datamgmt.clear_all", "清理数据");
-    if (task.kind === "download") return t("jobs.download");
-    if (task.kind === "import") return t("jobs.import");
-    return task.operation_type || task.kind;
-  };
 
   return (
     <section className="mb-8">
@@ -164,40 +384,28 @@ function UnifiedTaskList({
               const clickableDownload = task.subject_type === "download_job" && subjectId;
               const clickableImport = task.subject_type === "import_job" && subjectId;
               return (
-                <div
+                <JobRowShell
                   key={task.id}
+                  id={task.id}
+                  status={task.status}
+                  typeLabel={operationLabel(t, task.operation_type, task.kind)}
+                  source={task.source ? <SourceBadge source={task.source} /> : undefined}
+                  primary={task.title || task.operation_type || task.kind}
+                  secondary={task.subject_type && task.subject_id ? `${task.subject_type} · ${shortId(task.subject_id)}` : task.queue_name || task.rq_job_id}
+                  detail={task.source_url || task.queue_name || task.rq_job_id || task.subject_type}
+                  progress={isActiveTask(task.status) ? progress : null}
+                  activeSince={isActiveTask(task.status) && task.created_at ? task.created_at : null}
+                  timestamp={task.created_at ? fmt.time(task.created_at) : "—"}
+                  error={task.error_log}
+                  result={task.result_data?.message}
                   onClick={() => openTaskDetail(task.id)}
-                  className="card flex cursor-pointer items-center gap-3 p-3 text-sm hover:border-accent/50"
-                >
-                  <div className="w-28 shrink-0"><StatusBadge status={task.status} /></div>
-                  <span className="w-24 shrink-0 truncate text-xs font-medium">{labelForKind(task)}</span>
-                  <span className="w-16 shrink-0 font-mono text-xs text-muted">{shortId(task.id)}</span>
-                  {task.source && <SourceBadge source={task.source} />}
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-xs font-medium" title={task.title || undefined}>{task.title || task.operation_type || task.kind}</div>
-                    <div className="truncate text-[11px] text-muted" title={task.source_url || undefined}>
-                      {task.source_url || task.queue_name || task.rq_job_id || task.subject_type || "-"}
-                    </div>
-                  </div>
-                  <RealProgressBar progress={isActiveTask(task.status) ? progress : null} />
-                  {task.error_log && <span className="max-w-[180px] truncate text-xs text-danger dark:text-danger">{task.error_log}</span>}
-                  {task.result_data?.message && <span className="max-w-[180px] truncate text-xs text-muted">{task.result_data.message}</span>}
-                  {isActiveTask(task.status) && task.created_at ? (
-                    <Elapsed since={task.created_at} active />
-                  ) : (
-                    <span className="w-20 shrink-0 text-right text-xs text-muted">{task.created_at ? fmt.time(task.created_at) : "-"}</span>
+                  actions={(
+                    <>
+                      {clickableDownload && <button onClick={() => openDownloadDetail(subjectId)} className="btn-ghost text-xs">{t("jobs.open_download")}</button>}
+                      {clickableImport && <button onClick={() => openImportDetail(subjectId)} className="btn-ghost text-xs">{t("jobs.import_detail")}</button>}
+                    </>
                   )}
-                  {clickableDownload && (
-                    <button onClick={(e) => { e.stopPropagation(); openDownloadDetail(subjectId); }} className="shrink-0 text-xs text-accent hover:underline dark:text-accent">
-                      {t("jobs.open_download")}
-                    </button>
-                  )}
-                  {clickableImport && (
-                    <button onClick={(e) => { e.stopPropagation(); openImportDetail(subjectId); }} className="shrink-0 text-xs text-accent hover:underline dark:text-accent">
-                      {t("jobs.import")}
-                    </button>
-                  )}
-                </div>
+                />
               );
             })}
           </div>
@@ -233,10 +441,10 @@ function TaskDetailDrawer({
   const canRetry = retryable && ["failed", "stale", "cancelled"].includes(item?.status || "");
 
   return (
-    <aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-2xl flex-col border-l border-border bg-white shadow-xl dark:border-border dark:bg-surface" aria-label={t("jobs.task_detail", "任务详情")}>
+    <aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-2xl flex-col border-l border-border bg-white shadow-xl dark:border-border dark:bg-surface" aria-label={t("jobs.task_detail")}>
       <div className="flex items-center justify-between border-b border-border px-4 py-3 dark:border-border">
         <div className="min-w-0">
-          <div className="text-sm font-semibold">{item?.title || t("jobs.task_detail", "任务详情")}</div>
+          <div className="text-sm font-semibold">{item?.title || t("jobs.task_detail")}</div>
           <div className="font-mono text-xs text-muted">{shortId(id)}</div>
         </div>
         <button onClick={onClose} className="btn-icon border-0 text-lg leading-none" aria-label={t("common.close")}>×</button>
@@ -257,17 +465,17 @@ function TaskDetailDrawer({
             </div>
             <dl className="rounded-md border border-border px-3 dark:border-border">
               <DetailRow label={t("jobs.status")} value={<StatusBadge status={item.status} />} />
-              <DetailRow label={t("jobs.kind", "类型")} value={item.kind} />
-              <DetailRow label={t("jobs.operation", "操作")} value={item.operation_type || item.kind} />
-              <DetailRow label={t("jobs.queue", "队列")} value={item.queue_name} />
+              <DetailRow label={t("jobs.kind")} value={item.kind} />
+              <DetailRow label={t("jobs.operation")} value={item.operation_type || item.kind} />
+              <DetailRow label={t("jobs.queue")} value={item.queue_name} />
               <DetailRow label="RQ" value={item.rq_job_id} />
-              <DetailRow label={t("jobs.subject", "主体")} value={item.subject_type && item.subject_id ? `${item.subject_type}:${item.subject_id}` : undefined} />
+              <DetailRow label={t("jobs.subject")} value={item.subject_type && item.subject_id ? `${item.subject_type}:${item.subject_id}` : undefined} />
               <DetailRow label={t("jobs.source")} value={item.source ? <span className="inline-flex items-center gap-2"><SourceBadge source={item.source} />{item.source}</span> : undefined} />
               <DetailRow label={t("jobs.source_url")} value={item.source_url} />
               <DetailRow label={t("jobs.created")} value={item.created_at ? fmt.dateTime(item.created_at) : undefined} />
               <DetailRow label={t("jobs.updated")} value={item.updated_at ? fmt.dateTime(item.updated_at) : undefined} />
-              <DetailRow label={t("jobs.started", "开始")} value={item.started_at ? fmt.dateTime(item.started_at) : undefined} />
-              <DetailRow label={t("jobs.finished", "结束")} value={item.finished_at ? fmt.dateTime(item.finished_at) : undefined} />
+              <DetailRow label={t("jobs.started")} value={item.started_at ? fmt.dateTime(item.started_at) : undefined} />
+              <DetailRow label={t("jobs.finished")} value={item.finished_at ? fmt.dateTime(item.finished_at) : undefined} />
             </dl>
             {item.error_log && (
               <section>
@@ -276,19 +484,19 @@ function TaskDetailDrawer({
               </section>
             )}
             <section>
-              <h3 className="mb-2 text-sm font-semibold">{t("jobs.progress", "进度")}</h3>
+              <h3 className="mb-2 text-sm font-semibold">{t("jobs.progress")}</h3>
               <JsonBlock value={item.progress_data || { stage: item.progress_stage, current: item.progress_current, total: item.progress_total }} />
             </section>
             <section>
-              <h3 className="mb-2 text-sm font-semibold">{t("jobs.result", "结果")}</h3>
+              <h3 className="mb-2 text-sm font-semibold">{t("jobs.result")}</h3>
               <JsonBlock value={item.result_data} />
             </section>
             <section>
-              <h3 className="mb-2 text-sm font-semibold">{t("jobs.meta", "元数据")}</h3>
+              <h3 className="mb-2 text-sm font-semibold">{t("jobs.meta")}</h3>
               <JsonBlock value={item.meta} />
             </section>
             <section>
-              <h3 className="mb-2 text-sm font-semibold">{t("jobs.events", "事件")}</h3>
+              <h3 className="mb-2 text-sm font-semibold">{t("jobs.events")}</h3>
               {item.events?.length ? (
                 <div className="space-y-1">
                   {item.events.map((event) => (
@@ -304,7 +512,7 @@ function TaskDetailDrawer({
                     </div>
                   ))}
                 </div>
-              ) : <p className="text-xs text-muted">{t("jobs.no_events", "暂无事件")}</p>}
+              ) : <p className="text-xs text-muted">{t("jobs.no_events")}</p>}
             </section>
           </div>
         )}
@@ -393,7 +601,7 @@ function JobDetailDrawer({
                   <span className="text-xs">
                     {fmt.relative(dl.last_heartbeat_at)}
                     {dl.status === "stale" && (
-                      <span className="ml-2 text-orange-500 font-medium">
+                      <span className="ml-2 font-medium text-warning">
                         {t("jobs.stale_lost_heartbeat", { time: fmt.relative(dl.last_heartbeat_at) || "—" })}
                       </span>
                     )}
@@ -538,7 +746,6 @@ function JobsContent() {
   const [retryId, setRetryId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteType, setDeleteType] = useState<"dl" | "im">("dl");
-  const [expandedLog, setExpandedLog] = useState<string | null>(null);
   const [expandedImports, setExpandedImports] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectAll, setSelectAll] = useState(false);
@@ -556,6 +763,12 @@ function JobsContent() {
   const openDownloadDetail = (id: string) => updateParams({ tab: "downloads", job: id, import_job: null, task: null }, false);
   const openImportDetail = (id: string) => updateParams({ tab: "imports", import_job: id, job: null, task: null }, false);
   const closeDetail = () => updateParams({ job: null, import_job: null, task: null });
+  const handleTabChange = (tab: JobsTab) => {
+    if (tab === "all") updateParams({ tab: null, status: null, job: null, import_job: null, task: null });
+    if (tab === "downloads") updateParams({ tab: "downloads", status: null, import_job: null, task: null });
+    if (tab === "imports") updateParams({ tab: "imports", status: null, job: null, task: null, source: null });
+    if (tab === "admin") updateParams({ tab: "admin", status: null, job: null, import_job: null, task: null, source: null });
+  };
 
   const dlParams = useMemo(() => ({
     status: activeTab === "downloads" ? status || undefined : undefined,
@@ -694,7 +907,7 @@ function JobsContent() {
       qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
       qc.invalidateQueries({ queryKey: queryKeys.tasks.detail(id) });
       qc.invalidateQueries({ queryKey: queryKeys.workbench });
-      toast.info(t("jobs.retry_queued", "任务已重新入队"));
+      toast.info(t("jobs.retry_queued"));
     },
     onError: (err) => toast.error((err as Error).message),
   });
@@ -836,54 +1049,26 @@ function JobsContent() {
         </div>
       )}
 
-      <div className="mb-4 flex flex-col gap-3 rounded-md border border-border bg-white p-3 dark:border-border dark:bg-surface">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex gap-1 rounded-md bg-subtle p-1 dark:bg-subtle">
-            <button onClick={() => updateParams({ tab: null, status: null, job: null, import_job: null, task: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "all" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("common.all")}</button>
-            <button onClick={() => updateParams({ tab: "downloads", status: null, import_job: null, task: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "downloads" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("jobs.download")}</button>
-            <button onClick={() => updateParams({ tab: "imports", status: null, job: null, task: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "imports" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("jobs.import")}</button>
-            <button onClick={() => updateParams({ tab: "admin", status: null, job: null, import_job: null, task: null, source: null })} className={`rounded px-3 py-1.5 text-xs font-medium ${activeTab === "admin" ? "bg-white shadow-sm dark:bg-border" : "text-muted"}`}>{t("scheduler.admin_operations", "管理操作")}</button>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-            {activeFilterCount > 0 && <span className="rounded-full bg-accent-subtle px-2 py-0.5 font-medium text-accent dark:bg-accent-subtle dark:text-accent">{t("jobs.active_filters", { count: activeFilterCount })}</span>}
-            <span>{t("jobs.last_refreshed", { time: lastUpdated ? fmt.time(new Date(lastUpdated).toISOString()) : "—" })}</span>
-            {activeFilterCount > 0 && <button onClick={clearFilters} className="text-accent hover:underline dark:text-accent">{t("jobs.clear_filters")}</button>}
-          </div>
-        </div>
-
-      {/* Filters */}
-        <div className="flex flex-wrap items-center gap-2">
-          <input value={search} onChange={(e) => updateParams({ q: e.target.value || null })} className="input min-w-[220px] px-3 py-1.5 text-xs" placeholder={t("jobs.search_placeholder")} aria-label={t("jobs.search_placeholder")} />
-        <select value={status} onChange={(e) => updateParams({ status: e.target.value || null })} className="select px-2 py-1.5 text-xs">
-          <option value="">{t("jobs.filter_all_status")}</option>
-          {statusOptions.filter(Boolean).map(s => <option key={s} value={s}>{statusLabel(t, s)}</option>)}
-        </select>
-        {activeTab !== "imports" && activeTab !== "admin" && <select value={dlSource} onChange={(e) => updateParams({ source: e.target.value || null })} className="select px-2 py-1.5 text-xs">
-          <option value="">{t("jobs.filter_all_source")}</option>
-          {SOURCE_OPTIONS.filter(Boolean).map(s => <option key={s} value={s}>{s}</option>)}
-        </select>}
-        {subscriptionSourceId && <span className="rounded-md border border-border px-2 py-1 text-xs font-mono dark:border-border">{t("jobs.repository")} {shortId(subscriptionSourceId)}</span>}
-        {downloadJobId && <span className="rounded-md border border-border px-2 py-1 text-xs font-mono dark:border-border">{t("jobs.download_job")} {shortId(downloadJobId)}</span>}
-        {activeTab === "downloads" && <select value={`${dlSort}-${dlOrder}`} onChange={(e) => { const [k, o] = e.target.value.split("-"); updateParams({ sort: k === "created_at" && o === "desc" ? null : k, order: o === "desc" ? null : o }); }} className="select px-2 py-1.5 text-xs">
-          <option value="created_at-desc">{t("jobs.sort_newest")}</option>
-          <option value="created_at-asc">{t("jobs.sort_oldest")}</option>
-          <option value="status-asc">{t("jobs.sort_status")}</option>
-          <option value="source-asc">{t("jobs.sort_source")}</option>
-        </select>}
-        {activeTab === "downloads" && <button onClick={handleSelectAll} className="btn-ghost text-xs">{selectAll ? t("common.deselect_all") : t("common.select_all")}</button>}
-
-        {selected.size > 0 && (
-          <div className="ml-auto flex items-center gap-1 rounded-md border border-warning/30 bg-warning-subtle px-3 py-1.5 dark:bg-warning-subtle">
-            <span className="text-xs text-warning dark:text-warning">{selected.size} {t("common.selected")}</span>
-            <button onClick={() => handleBatch("pause")} className="px-2 py-0.5 text-xs bg-warning-subtle0 text-white rounded hover:bg-warning/90">{t("jobs.batch_pause")}</button>
-            <button onClick={() => handleBatch("resume")} className="px-2 py-0.5 text-xs bg-success-subtle0 text-white rounded hover:bg-success/90">{t("jobs.batch_resume")}</button>
-            <button onClick={() => handleBatch("retry")} className="px-2 py-0.5 text-xs bg-accent-subtle0 text-white rounded hover:bg-accent/90">{t("jobs.batch_retry")}</button>
-            <button onClick={() => handleBatch("cancel")} className="px-2 py-0.5 text-xs bg-subtle text-white rounded hover:bg-subtle">{t("jobs.batch_cancel")}</button>
-            <button onClick={() => handleBatch("delete")} className="px-2 py-0.5 text-xs bg-danger-subtle0 text-white rounded hover:bg-danger/90">{t("jobs.batch_delete")}</button>
-          </div>
-        )}
-        </div>
-      </div>
+      <JobsFilterPanel
+        activeTab={activeTab}
+        activeFilterCount={activeFilterCount}
+        lastUpdatedLabel={t("jobs.last_refreshed", { time: lastUpdated ? fmt.time(new Date(lastUpdated).toISOString()) : "—" })}
+        search={search}
+        status={status}
+        dlSource={dlSource}
+        subscriptionSourceId={subscriptionSourceId}
+        downloadJobId={downloadJobId}
+        dlSort={dlSort}
+        dlOrder={dlOrder}
+        selectedCount={selected.size}
+        selectAll={selectAll}
+        statusOptions={statusOptions}
+        onTabChange={handleTabChange}
+        onUpdateParams={updateParams}
+        onClearFilters={clearFilters}
+        onSelectAll={handleSelectAll}
+        onBatch={handleBatch}
+      />
 
       {(activeTab === "all" || activeTab === "admin") && (
         <UnifiedTaskList
@@ -910,76 +1095,71 @@ function JobsContent() {
               const progress = active
                 ? downloadProgress[j.id] || (j.progress_data as JobProgress | null) || fallbackProgress(j.pipeline_stage || j.status)
                 : null;
+              const subscriptionLabel = j.creator_name || j.subscription_name || shortId(j.subscription_id);
+              const subscriptionSecondary = j.subscription_name || (j.subscription_id ? `${t("jobs.subscription")} ${shortId(j.subscription_id)}` : t("jobs.subscription"));
               return (
                 <div key={j.id}>
-                  <div onClick={() => openDownloadDetail(j.id)} className={`card flex cursor-pointer items-center gap-3 p-3 text-sm hover:border-accent/50 ${(() => { const cat = classifyJob(j.status, j.retry_count, 3); const cls = categoryBorderClass(cat); return cls ? `border-l-2 ${cls}` : ""; })()}`}>
-                    <input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="w-4 h-4 rounded border-border shrink-0" />
-                    <div className="w-28 shrink-0"><StatusBadge status={j.status} /></div>
-                    {j.operation_type && j.operation_type !== "download" && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 shrink-0">
-                        {t(`jobs.op_${j.operation_type}`, j.operation_type)}
-                      </span>
-                    )}
-                    <span className="w-16 shrink-0 font-mono text-xs text-muted">{j.id.slice(0, 8)}</span>
-                    {j.source && <SourceBadge source={j.source} />}
-                    <div className="min-w-[9rem] max-w-[12rem] shrink-0 leading-tight">
+                  <JobRowShell
+                    id={j.id}
+                    status={j.status}
+                    typeLabel={operationLabel(t, j.operation_type, "download")}
+                    select={<input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="h-4 w-4 shrink-0 rounded border-border" aria-label={t("jobs.select_download", { id: shortId(j.id) })} />}
+                    source={j.source ? <SourceBadge source={j.source} /> : undefined}
+                    primary={j.subscription_id ? (
                       <Link
                         href={`/admin/subscriptions/${j.subscription_id}`}
                         onClick={(e) => e.stopPropagation()}
-                        className="block truncate text-xs font-medium text-accent hover:underline dark:text-accent"
+                        className="text-accent hover:underline dark:text-accent"
                         title={j.creator_name || j.subscription_name || j.subscription_id}
                       >
-                        {j.creator_name || j.subscription_name || j.subscription_id.slice(0, 8)}
+                        {subscriptionLabel}
                       </Link>
+                    ) : subscriptionLabel}
+                    secondary={j.subscription_id ? (
                       <Link
                         href={`/admin/subscriptions/${j.subscription_id}`}
                         onClick={(e) => e.stopPropagation()}
-                        className="block truncate text-[11px] text-muted hover:underline dark:text-muted"
+                        className="text-muted hover:underline dark:text-muted"
                         title={j.subscription_name || j.subscription_id}
                       >
-                        {j.subscription_name || `${t("jobs.subscription")} ${j.subscription_id.slice(0, 8)}`}
+                        {subscriptionSecondary}
                       </Link>
-                    </div>
-                    <span className="min-w-0 flex-1 truncate text-xs text-muted" title={j.source_url}>{j.source_url}</span>
-                    <RealProgressBar progress={progress} />
-                    {active ? (
-                      <Elapsed since={j.created_at} active={true} />
-                    ) : classifyJob(j.status, j.retry_count, 3) === "retrying" ? (
-                      <span className="text-xs text-accent shrink-0 w-22 text-right font-medium">
+                    ) : subscriptionSecondary}
+                    detail={j.source_url}
+                    progress={progress}
+                    activeSince={active ? j.created_at : null}
+                    timestamp={classifyJob(j.status, j.retry_count, 3) === "retrying" ? (
+                      <span className="text-accent">
                         ↻ {t("jobs.recovery_retry", { current: String(j.retry_count), max: "3" })}
                         {estimatedRetryBackoff(j.retry_count, 60) != null && (
-                          <span className="block text-[10px] text-muted">
-                            {t("jobs.recovery_waiting", { seconds: String(estimatedRetryBackoff(j.retry_count, 60)) })}
-                          </span>
+                          <span className="block text-[10px] text-muted">{t("jobs.recovery_waiting", { seconds: String(estimatedRetryBackoff(j.retry_count, 60)) })}</span>
                         )}
                       </span>
                     ) : (
-                      <span className="text-xs text-muted shrink-0 w-20 text-right">
+                      <>
                         {j.retry_count > 0 && <span className="mr-1">↻{j.retry_count}</span>}
                         {fmt.time(j.created_at)}
-                      </span>
+                      </>
                     )}
-                    <div className="flex gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-                      {j.error_log && (
-                        <button onClick={() => setExpandedLog(expandedLog === j.id ? null : j.id)} className="text-xs text-orange-500 hover:underline">{expandedLog === j.id ? "▲" : t("downloads.log")}</button>
-                      )}
-                      <button onClick={() => setExpandedImports(expandedImports === j.id ? null : j.id)} className="text-xs text-purple-500 hover:underline">{t("jobs.imports")}</button>
-                      {["enqueued","downloading","downloaded","importing","failed","stale"].includes(j.status) && (
-                        <button onClick={() => pauseDL.mutate(j.id)} disabled={pauseDL.isPending} className="text-xs text-warning hover:underline">{t("jobs.pause")}</button>
-                      )}
-                      {j.status === "paused" && (
-                        <button onClick={() => resumeDL.mutate(j.id)} disabled={resumeDL.isPending} className="text-xs text-success hover:underline">{t("jobs.resume")}</button>
-                      )}
-                      {(j.status === "failed" || j.status === "stale" || j.status === "complete") && (
-                        <button onClick={() => { setRetryId(j.id); retryDL.mutate(j.id); }} disabled={retryDL.isPending} className="text-xs text-accent hover:underline">{t("jobs.retry")}</button>
-                      )}
-                      <button onClick={() => { setDeleteId(j.id); setDeleteType("dl"); }} className="text-xs text-danger hover:underline">{t("jobs.del")}</button>
-                    </div>
-                  </div>
-                  {j.error_log && expandedLog !== j.id && <ErrorExcerpt value={j.error_log} />}
-                  {expandedLog === j.id && j.error_log && (
-                    <pre className="mt-1 max-h-48 overflow-auto rounded-md border border-danger/20 bg-danger-subtle p-3 font-mono text-xs whitespace-pre-wrap text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">{j.error_log}</pre>
-                  )}
+                    error={j.error_log}
+                    className={(() => { const cls = categoryBorderClass(classifyJob(j.status, j.retry_count, 3)); return cls ? `border-l-2 ${cls}` : ""; })()}
+                    onClick={() => openDownloadDetail(j.id)}
+                    actions={(
+                      <>
+                        <button onClick={() => setExpandedImports(expandedImports === j.id ? null : j.id)} className="btn-ghost text-xs">{t("jobs.imports")}</button>
+                        {["enqueued","downloading","downloaded","importing","failed","stale"].includes(j.status) && (
+                          <button onClick={() => pauseDL.mutate(j.id)} disabled={pauseDL.isPending} className="btn-ghost text-xs">{t("jobs.pause")}</button>
+                        )}
+                        {j.status === "paused" && (
+                          <button onClick={() => resumeDL.mutate(j.id)} disabled={resumeDL.isPending} className="btn-ghost text-xs">{t("jobs.resume")}</button>
+                        )}
+                        {(j.status === "failed" || j.status === "stale" || j.status === "complete") && (
+                          <button onClick={() => { setRetryId(j.id); retryDL.mutate(j.id); }} disabled={retryDL.isPending} className="btn-primary text-xs">{t("jobs.retry")}</button>
+                        )}
+                        <button onClick={() => { setDeleteId(j.id); setDeleteType("dl"); }} className="btn-danger text-xs">{t("jobs.del")}</button>
+                      </>
+                    )}
+                  />
                   {expandedImports === j.id && (
                     <ImportJobsList downloadJobId={j.id} />
                   )}
@@ -1011,45 +1191,39 @@ function JobsContent() {
               const worksTotal = j.progress_works_total;
               return (
                 <div key={j.id}>
-                  <div onClick={() => openImportDetail(j.id)} className={`card flex cursor-pointer items-center gap-3 p-3 text-sm hover:border-accent/50 ${active ? "border-l-2 border-l-accent" : j.status === "failed" ? "border-l-2 border-l-danger" : ""}`}>
-                    <div className="w-28 shrink-0"><StatusBadge status={j.status} /></div>
-                    <span className="w-16 shrink-0 font-mono text-xs text-muted">{shortId(j.id)}</span>
-                    {j.source && <SourceBadge source={j.source} />}
-                    <div className="min-w-[9rem] max-w-[12rem] shrink-0 leading-tight">
-                      {j.subscription_id ? (
-                        <Link href={`/admin/subscriptions/${j.subscription_id}`} onClick={(e) => e.stopPropagation()} className="block truncate text-xs font-medium text-accent hover:underline dark:text-accent" title={j.creator_name || j.subscription_name || undefined}>
-                          {j.creator_name || j.subscription_name || shortId(j.subscription_id)}
-                        </Link>
-                      ) : (
-                        <span className="block truncate text-xs text-muted">—</span>
-                      )}
-                      <span className="block truncate text-[11px] text-muted" title={j.subscription_name || undefined}>
-                        {j.subscription_name || `${t("jobs.import")} · ${shortId(j.download_job_id)}`}
+                  <JobRowShell
+                    id={j.id}
+                    status={j.status}
+                    typeLabel={operationLabel(t, j.operation_type, "import")}
+                    source={j.source ? <SourceBadge source={j.source} /> : undefined}
+                    primary={j.subscription_id ? (
+                      <Link href={`/admin/subscriptions/${j.subscription_id}`} onClick={(e) => e.stopPropagation()} className="text-accent hover:underline dark:text-accent" title={j.creator_name || j.subscription_name || undefined}>
+                        {j.creator_name || j.subscription_name || shortId(j.subscription_id)}
+                      </Link>
+                    ) : "—"}
+                    secondary={j.subscription_name || `${t("jobs.import")} · ${shortId(j.download_job_id)}`}
+                    detail={(
+                      <span title={j.source_url || undefined}>
+                        {j.source_url || "-"}
+                        {(worksTotal != null || worksDone != null) && (
+                          <span className="ml-2 font-mono text-[11px] tabular-nums" title={t("jobs.works")}>{worksDone ?? 0}/{worksTotal ?? "?"}</span>
+                        )}
                       </span>
-                    </div>
-                    <span className="min-w-0 flex-1 truncate text-xs text-muted" title={j.source_url || undefined}>{j.source_url || "-"}</span>
-                    {(worksTotal != null || worksDone != null) && (
-                      <span className="w-14 shrink-0 text-right font-mono text-[11px] text-muted tabular-nums" title={t("jobs.works", "作品")}>{worksDone ?? 0}/{worksTotal ?? "?"}</span>
                     )}
-                    <RealProgressBar progress={progress} />
-                    {active ? (
-                      <Elapsed since={j.created_at} active />
-                    ) : (
-                      <span className="w-20 shrink-0 text-right text-xs text-muted">{fmt.time(j.created_at)}</span>
+                    progress={progress}
+                    activeSince={active ? j.created_at : null}
+                    timestamp={fmt.time(j.created_at)}
+                    error={j.error_log}
+                    className={active ? "border-l-2 border-l-accent" : j.status === "failed" ? "border-l-2 border-l-danger" : ""}
+                    onClick={() => openImportDetail(j.id)}
+                    actions={(
+                      <>
+                        <Link href={`/admin/jobs?tab=downloads&job=${j.download_job_id}`} className="btn-ghost text-xs">{t("jobs.open_download")}</Link>
+                        {(j.status === "failed" || j.status === "stale") && <button onClick={() => { setRetryId(j.id); retryIM.mutate(j.id); }} disabled={retryIM.isPending} className="btn-primary text-xs">{t("jobs.retry")}</button>}
+                        <button onClick={() => { setDeleteId(j.id); setDeleteType("im"); }} className="btn-danger text-xs">{t("jobs.del")}</button>
+                      </>
                     )}
-                    <div className="flex shrink-0 gap-2" onClick={(e) => e.stopPropagation()}>
-                      <Link href={`/admin/jobs?tab=downloads&job=${j.download_job_id}`} className="text-xs text-accent hover:underline dark:text-accent">{t("jobs.open_download")}</Link>
-                      {j.error_log && (
-                        <button onClick={() => setExpandedLog(expandedLog === j.id ? null : j.id)} className="text-xs text-orange-500 hover:underline">{expandedLog === j.id ? "▲" : t("downloads.log")}</button>
-                      )}
-                      {(j.status === "failed" || j.status === "stale") && <button onClick={() => { setRetryId(j.id); retryIM.mutate(j.id); }} disabled={retryIM.isPending} className="text-xs text-accent hover:underline">{t("jobs.retry")}</button>}
-                      <button onClick={() => { setDeleteId(j.id); setDeleteType("im"); }} className="text-xs text-danger hover:underline">{t("jobs.del")}</button>
-                    </div>
-                  </div>
-                  {j.error_log && expandedLog !== j.id && <ErrorExcerpt value={j.error_log} />}
-                  {expandedLog === j.id && j.error_log && (
-                    <pre className="mt-1 max-h-48 overflow-auto rounded-md border border-danger/20 bg-danger-subtle p-3 font-mono text-xs whitespace-pre-wrap text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">{j.error_log}</pre>
-                  )}
+                  />
                 </div>
               );
             })}
@@ -1103,7 +1277,7 @@ function ImportJobsList({ downloadJobId }: { downloadJobId: string }) {
         <div key={imp.id} className="flex items-center gap-2 text-xs bg-subtle rounded px-2 py-1">
           <span className="font-mono text-muted">{imp.id.slice(0, 8)}</span>
           <StatusBadge status={imp.status} className="px-2 py-0 text-[10px]" />
-          {imp.error_log && <span className="text-orange-500 truncate max-w-xs">{imp.error_log.slice(0, 100)}</span>}
+          {imp.error_log && <span className="max-w-xs truncate text-warning">{imp.error_log.slice(0, 100)}</span>}
         </div>
       ))}
     </div>

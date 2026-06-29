@@ -70,10 +70,10 @@ function AdminNav() {
   const [open, setOpen] = useState(false);
   const groups = [
     { label: t("nav.dashboard"), links: [["/admin", t("nav.dashboard")]] },
-    { label: t("nav.library", "图库"), links: [["/admin/works", t("nav.works")], ["/admin/tags", t("nav.tags")], ["/admin/curation", t("nav.curation", "Curation")], ["/admin/dedup", t("nav.dedup", "作品查重")], ["/admin/merge-candidates", t("nav.merge", "合并候选")]] },
+    { label: t("nav.library"), links: [["/admin/works", t("nav.works")], ["/admin/tags", t("nav.tags")], ["/admin/curation", t("nav.curation")], ["/admin/dedup", t("nav.dedup")], ["/admin/merge-candidates", t("nav.merge")]] },
     { label: t("nav.sources"), links: [["/admin/sources", t("nav.sources")], ["/admin/creators", t("nav.creators")], ["/admin/subscriptions", t("nav.subscriptions")], ["/admin/reference/danbooru", t("nav.danbooru")]] },
-    { label: t("nav.operations", "任务"), links: [["/admin/jobs", t("nav.jobs")], ["/admin/scheduler", t("nav.scheduler")], ["/admin/notifications", t("notifications.title")]] },
-    { label: t("nav.admin", "管理"), links: [["/admin/data-mgmt", t("nav.datamgmt")], ["/admin/system", t("nav.system", "系统状态")], ["/admin/settings", t("nav.settings")]] },
+    { label: t("nav.operations"), links: [["/admin/jobs", t("nav.jobs")], ["/admin/scheduler", t("nav.scheduler")], ["/admin/notifications", t("notifications.title")]] },
+    { label: t("nav.admin"), links: [["/admin/data-mgmt", t("nav.datamgmt")], ["/admin/system", t("nav.system")], ["/admin/settings", t("nav.settings")]] },
   ];
   const links = groups.flatMap((group) => group.links);
   const isActive = (href: string) => pathname === href || (href !== "/admin" && pathname.startsWith(href));
