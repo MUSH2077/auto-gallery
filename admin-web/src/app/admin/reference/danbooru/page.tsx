@@ -84,8 +84,8 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
               <button key={n} type="button" onClick={() => setImportName(n)}
                 className={`text-xs px-2 py-0.5 rounded-full border transition-colors cursor-pointer
                   ${importName === n
-                    ? "bg-blue-600 text-white border-blue-600"
-                    : "bg-subtle text-fg border-border hover:bg-blue-50 hover:border-blue-400 dark:hover:bg-blue-900/30"}`}>
+                    ? "bg-accent text-white border-accent/30"
+                    : "bg-subtle text-fg border-border hover:bg-accent/90 hover:border-accent/30 dark:hover:bg-accent/90"}`}>
                 {n}
               </button>
             ))}
@@ -96,13 +96,13 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
       </div>
 
       {/* One-Click Import All & Subscribe */}
-      <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-        <p className="text-sm text-blue-800 dark:text-blue-300 font-medium mb-1">{t("danbooru.one_click_import")}</p>
-        <p className="text-xs text-blue-600 mb-3">Creates Creator + Subscription + Sources + Links in one step.</p>
+      <div className="bg-accent-subtle border border-accent/30 rounded-lg p-4">
+        <p className="text-sm text-accent font-medium mb-1">{t("danbooru.one_click_import")}</p>
+        <p className="text-xs text-accent mb-3">Creates Creator + Subscription + Sources + Links in one step.</p>
         <div className="mb-3">
-          <label className="block text-xs font-medium text-blue-800 dark:text-blue-300 mb-1">
+          <label className="block text-xs font-medium text-accent mb-1">
             创建者名称
-            <span className="font-normal text-blue-600 dark:text-blue-400 ml-1">（留空则自动使用 Danbooru 标签名）</span>
+            <span className="font-normal text-accent ml-1">（留空则自动使用 Danbooru 标签名）</span>
           </label>
           {/* Clickable name chips: Pixiv display name + Danbooru aliases */}
           {(artist.pixiv_display_name || artist.other_names.length > 0) && (
@@ -112,8 +112,8 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
                   title="Pixiv 用户名"
                   className={`text-xs px-2 py-0.5 rounded-full border transition-colors cursor-pointer flex items-center gap-1
                     ${importName === artist.pixiv_display_name
-                      ? "bg-blue-600 text-white border-blue-600"
-                      : "bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 border-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800/50"}`}>
+                      ? "bg-accent text-white border-accent/30"
+                      : "bg-accent-subtle text-accent border-accent/30 hover:bg-accent/90 dark:hover:bg-accent/90"}`}>
                   <span className="opacity-70">P</span>{artist.pixiv_display_name}
                 </button>
               )}
@@ -122,8 +122,8 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
                   title="Danbooru 别名"
                   className={`text-xs px-2 py-0.5 rounded-full border transition-colors cursor-pointer
                     ${importName === n
-                      ? "bg-blue-600 text-white border-blue-600"
-                      : "bg-subtle text-fg border-border hover:bg-blue-50 hover:border-blue-400 dark:hover:bg-blue-900/30"}`}>
+                      ? "bg-accent text-white border-accent/30"
+                      : "bg-subtle text-fg border-border hover:bg-accent/90 hover:border-accent/30 dark:hover:bg-accent/90"}`}>
                   {n}
                 </button>
               ))}
@@ -135,18 +135,18 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => onImportAll(importName)} disabled={importAllPending}
-            className="flex-1 px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50">
+            className="flex-1 px-4 py-1.5 bg-accent text-white rounded text-sm hover:bg-accent/90 disabled:opacity-50">
             {importAllPending ? t("danbooru.importing") : t("danbooru.import_all_subscribe")}
           </button>
         </div>
         {importAllPending && (
           <div className="mt-2">
-            <div className="w-full bg-blue-200 dark:bg-blue-800 rounded-full h-1.5 overflow-hidden">
-              <div className="bg-blue-600 h-1.5 rounded-full animate-pulse" style={{ width: "100%" }} />
+            <div className="w-full bg-accent-subtle rounded-full h-1.5 overflow-hidden">
+              <div className="bg-accent h-1.5 rounded-full animate-pulse" style={{ width: "100%" }} />
             </div>
           </div>
         )}
-        {importAllError && <p className="text-red-600 text-xs mt-2">{importAllError}</p>}
+        {importAllError && <p className="text-danger text-xs mt-2">{importAllError}</p>}
       </div>
 
       <div className="card p-4">
@@ -156,11 +156,11 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
             <h4 className="text-xs font-medium text-muted mb-2">{t("danbooru.downloadable_sources").replace("{count}", String(downloadableUrls.length))}</h4>
             <div className="space-y-2">
               {downloadableUrls.map((u, i) => (
-                <div key={i} className="flex items-center justify-between bg-green-50 border border-green-200 rounded p-2 text-xs">
+                <div key={i} className="flex items-center justify-between bg-success-subtle border border-success/30 rounded p-2 text-xs">
                   <div className="flex items-center gap-2">
                     <SourceBadge source={classifyUrl(u.normalized_url)} />
                     <a href={u.normalized_url} target="_blank" rel="noopener noreferrer"
-                      className="text-blue-600 hover:underline truncate max-w-md">{u.normalized_url}</a>
+                      className="text-accent hover:underline truncate max-w-md">{u.normalized_url}</a>
                   </div>
                   <div className="flex items-center gap-2">
                     <select value={selectedCreator} onChange={(e) => setSelectedCreator(e.target.value)}
@@ -180,7 +180,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
                         subscribe.mutate({ creatorId: selectedCreator, url: u.normalized_url, source: src, sourceCreatorId: srcCreatorId });
                       }}
                       disabled={!selectedCreator || subscribe.isPending}
-                      className="px-2 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700 disabled:opacity-50 shrink-0">
+                      className="px-2 py-1 bg-success text-white rounded text-xs hover:bg-success/90 disabled:opacity-50 shrink-0">
                       {subscribingUrl === u.normalized_url && subscribe.isPending ? "..." : t("danbooru.subscribe")}
                     </button>
                   </div>
@@ -197,9 +197,9 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
             <div className="space-y-1">
               {artist.urls.filter(u => !DOWNLOADABLE_SOURCES.includes(classifyUrl(u.normalized_url))).map((u, i) => (
                 <div key={i} className="flex items-center gap-2 text-xs">
-                  {!u.is_active && <span className="text-yellow-500">[inactive]</span>}
+                  {!u.is_active && <span className="text-warning">[inactive]</span>}
                   <a href={u.normalized_url} target="_blank" rel="noopener noreferrer"
-                    className="text-blue-600 hover:underline truncate max-w-lg">{u.normalized_url}</a>
+                    className="text-accent hover:underline truncate max-w-lg">{u.normalized_url}</a>
                 </div>
               ))}
             </div>
@@ -221,7 +221,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
               <div key={i} className="flex items-center gap-2 text-xs border-b border-border pb-2">
                 <SourceBadge source={l.link_type} />
                 <a href={l.url} target="_blank" rel="noopener noreferrer"
-                  className="text-blue-600 hover:underline truncate max-w-md">{l.url}</a>
+                  className="text-accent hover:underline truncate max-w-md">{l.url}</a>
                 <span className="text-muted">confidence: {l.confidence.toFixed(1)}</span>
               </div>
             ))}
@@ -443,16 +443,16 @@ export default function DanbooruReferencePage() {
     <main className="max-w-5xl mx-auto p-6">
       <PageHeader title={t("danbooru.title")} description={t("danbooru.desc")} />
 
-      <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 text-sm mb-6">
-        <p className="font-medium text-blue-800 dark:text-blue-300 mb-1">{t("danbooru.search_info")}</p>
-        <p className="text-blue-700 dark:text-blue-300">Danbooru artists map source profiles (Pixiv, Twitter, Iwara, etc.) to a canonical name. Use any of the three methods below to find the matching Danbooru artist record.</p>
+      <div className="bg-accent-subtle border border-accent/30 rounded-lg p-4 text-sm mb-6">
+        <p className="font-medium text-accent mb-1">{t("danbooru.search_info")}</p>
+        <p className="text-accent">Danbooru artists map source profiles (Pixiv, Twitter, Iwara, etc.) to a canonical name. Use any of the three methods below to find the matching Danbooru artist record.</p>
       </div>
 
       {/* URL Batch Import */}
       <div className="card p-4 mb-6">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-medium text-sm">{t("danbooru.url_batch_title")}</h3>
-          <button onClick={() => setShowUrlBatch(!showUrlBatch)} className="text-xs text-blue-600 hover:underline">
+          <button onClick={() => setShowUrlBatch(!showUrlBatch)} className="text-xs text-accent hover:underline">
             {showUrlBatch ? t("danbooru.batch_collapse") : t("danbooru.batch_expand")}
           </button>
         </div>
@@ -481,7 +481,7 @@ export default function DanbooruReferencePage() {
                 <span className="text-muted">→</span>
                 <span className="font-medium">{urlPreview.unique_count} unique</span>
                 {urlPreview.duplicates_removed > 0 && (
-                  <span className="text-yellow-600">({urlPreview.duplicates_removed} dupe)</span>
+                  <span className="text-warning">({urlPreview.duplicates_removed} dupe)</span>
                 )}
                 <span className="ml-auto font-semibold text-indigo-700 dark:text-indigo-300">
                   {urlPreview.unique_count} ready to import
@@ -501,14 +501,14 @@ export default function DanbooruReferencePage() {
                 {urlBatchInput.trim() ? `${urlBatchInput.split("\n").filter((s) => s.trim().startsWith("http")).length} URLs` : ""}
               </span>
               {urlBatchImport.data && (
-                <button onClick={() => { urlBatchImport.reset(); setUrlBatchInput(""); }} className="text-xs text-blue-600 hover:underline">{t("common.close")}</button>
+                <button onClick={() => { urlBatchImport.reset(); setUrlBatchInput(""); }} className="text-xs text-accent hover:underline">{t("common.close")}</button>
               )}
             </div>
             {urlBatchImport.error && (
-              <p className="text-red-600 text-sm">{(urlBatchImport.error as Error).message}</p>
+              <p className="text-danger text-sm">{(urlBatchImport.error as Error).message}</p>
             )}
             {urlBatchImport.isSuccess && !displayBatchResult && (
-              <p className="mt-2 text-xs text-blue-600 dark:text-blue-400">{t("danbooru.job_enqueued", "任务已入队，可在下方查看进度。")}</p>
+              <p className="mt-2 text-xs text-accent">{t("danbooru.job_enqueued", "任务已入队，可在下方查看进度。")}</p>
             )}
           </div>
         )}
@@ -519,7 +519,7 @@ export default function DanbooruReferencePage() {
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-medium text-sm">{t("danbooru.batch_title")}</h3>
           <button onClick={() => setShowBatch(!showBatch)}
-            className="text-xs text-blue-600 hover:underline">
+            className="text-xs text-accent hover:underline">
             {showBatch ? t("danbooru.batch_collapse") : t("danbooru.batch_expand")}
           </button>
         </div>
@@ -544,17 +544,17 @@ export default function DanbooruReferencePage() {
 
             {/* Preview summary */}
             {pixivPreview && (
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs bg-blue-50 dark:bg-blue-900/20 border border-blue-150 dark:border-blue-900 rounded p-2">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs bg-accent-subtle border border-accent/30 rounded p-2">
                 <span className="text-muted">{pixivPreview.total} input</span>
                 <span className="text-muted">→</span>
                 <span className="font-medium">{pixivPreview.unique_count} unique</span>
                 {pixivPreview.duplicates_removed > 0 && (
-                  <span className="text-yellow-600">({pixivPreview.duplicates_removed} dupe)</span>
+                  <span className="text-warning">({pixivPreview.duplicates_removed} dupe)</span>
                 )}
                 {pixivPreview.already_exists.length > 0 && (
-                  <span className="text-amber-600">({pixivPreview.already_exists.length} already exist)</span>
+                  <span className="text-warning">({pixivPreview.already_exists.length} already exist)</span>
                 )}
-                <span className="ml-auto font-semibold text-blue-700 dark:text-blue-300">
+                <span className="ml-auto font-semibold text-accent">
                   {pixivPreview.new_count} ready to import
                 </span>
               </div>
@@ -563,12 +563,12 @@ export default function DanbooruReferencePage() {
             {/* Already-exists detail */}
             {pixivPreview?.already_exists && pixivPreview.already_exists.length > 0 && (
               <details className="text-xs">
-                <summary className="cursor-pointer text-amber-600 hover:text-amber-700">
+                <summary className="cursor-pointer text-warning hover:text-warning">
                   {pixivPreview.already_exists.length} ID(s) already have local creators
                 </summary>
                 <div className="mt-1 space-y-0.5 pl-4 max-h-24 overflow-y-auto">
                   {pixivPreview.already_exists.map((e) => (
-                    <div key={e.pixiv_id} className="text-amber-700 dark:text-amber-400">
+                    <div key={e.pixiv_id} className="text-warning">
                       <span className="font-mono">Pixiv {e.pixiv_id}</span> → {e.creator_name}
                     </div>
                   ))}
@@ -580,7 +580,7 @@ export default function DanbooruReferencePage() {
               <button
                 onClick={handleBatchSubmit}
                 disabled={enqueueBatch.isPending || (!!batchJob?.jobId && !displayBatchResult) || !batchInput.trim()}
-                className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+                className="px-4 py-2 bg-accent text-white rounded text-sm hover:bg-accent/90 disabled:opacity-50"
               >
                 {enqueueBatch.isPending ? "..." : (!!batchJob?.jobId && !displayBatchResult) ? t("danbooru.processing") : t("danbooru.batch_import")}
               </button>
@@ -588,11 +588,11 @@ export default function DanbooruReferencePage() {
                 {batchInput.trim() ? `${batchInput.split(/[\n,]+/).filter((s: string) => /^\d+$/.test(s.trim())).length} ${t("danbooru.valid_ids")}` : ""}
               </span>
               {displayBatchResult && (
-                <button onClick={() => { notify.clearBatchJob(); }} className="text-xs text-blue-600 hover:underline">{t("common.close")}</button>
+                <button onClick={() => { notify.clearBatchJob(); }} className="text-xs text-accent hover:underline">{t("common.close")}</button>
               )}
             </div>
             {enqueueBatch.error && (
-              <p className="text-red-600 text-sm">{(enqueueBatch.error as Error).message}</p>
+              <p className="text-danger text-sm">{(enqueueBatch.error as Error).message}</p>
             )}
 
             {/* Progress bar */}
@@ -603,7 +603,7 @@ export default function DanbooruReferencePage() {
                   <span>{displayBatchProgress.imported} imported, {displayBatchProgress.errors} errors</span>
                 </div>
                 <div className="w-full bg-subtle rounded-full h-2">
-                  <div className="bg-blue-600 h-2 rounded-full transition-all" style={{ width: `${((displayBatchProgress?.current || 0) / (displayBatchProgress?.total || 1)) * 100}%` }} />
+                  <div className="bg-accent h-2 rounded-full transition-all" style={{ width: `${((displayBatchProgress?.current || 0) / (displayBatchProgress?.total || 1)) * 100}%` }} />
                 </div>
               </div>
             )}
@@ -616,16 +616,16 @@ export default function DanbooruReferencePage() {
                   <span className="font-medium">{displayBatchResult.total} total</span>
                   <span className="text-muted">|</span>
                   {displayBatchResult.imported_count > 0 && (
-                    <span className="text-green-600">🟢 {displayBatchResult.imported_count} imported</span>
+                    <span className="text-success">🟢 {displayBatchResult.imported_count} imported</span>
                   )}
                   {displayBatchResult.low_confidence_count > 0 && (
-                    <span className="text-yellow-600">🟡 {displayBatchResult.low_confidence_count} low confidence</span>
+                    <span className="text-warning">🟡 {displayBatchResult.low_confidence_count} low confidence</span>
                   )}
                   {displayBatchResult.not_found_count > 0 && (
-                    <span className="text-red-600">🔴 {displayBatchResult.not_found_count} not found</span>
+                    <span className="text-danger">🔴 {displayBatchResult.not_found_count} not found</span>
                   )}
                   {displayBatchResult.error_count > 0 && (
-                    <span className="text-red-700">💥 {displayBatchResult.error_count} errors</span>
+                    <span className="text-danger">💥 {displayBatchResult.error_count} errors</span>
                   )}
                 </div>
 
@@ -641,14 +641,14 @@ export default function DanbooruReferencePage() {
                         <span className="font-medium">{r.artist_name}</span>
                         <span className="text-muted">Danbooru #{r.artist_id}</span>
                         {!isLowConf && (
-                          <span className="ml-auto text-green-600">{r.links_imported} links · {r.sources_created} sources</span>
+                          <span className="ml-auto text-success">{r.links_imported} links · {r.sources_created} sources</span>
                         )}
                       </summary>
                       <div className="mt-1 pl-6 text-muted space-y-0.5">
                         {r.downloadable_urls && r.downloadable_urls.length > 0 && (
                           <div>Sources: {r.downloadable_urls.join(", ")}</div>
                         )}
-                        {isLowConf && r.message && <div className="text-yellow-600">{r.message}</div>}
+                        {isLowConf && r.message && <div className="text-warning">{r.message}</div>}
                       </div>
                     </details>
                   );
@@ -656,11 +656,11 @@ export default function DanbooruReferencePage() {
 
                 {/* Not found — list with copy */}
                 {displayBatchResult.not_found.length > 0 && (
-                  <details className="bg-red-50 dark:bg-red-900/15 border border-red-200 dark:border-red-800 rounded p-2 text-xs">
-                    <summary className="cursor-pointer font-medium text-red-700 dark:text-red-400 flex items-center gap-2">
+                  <details className="bg-danger-subtle border border-danger/30 rounded p-2 text-xs">
+                    <summary className="cursor-pointer font-medium text-danger flex items-center gap-2">
                       🔴 Not found ({displayBatchResult.not_found.length})
                     </summary>
-                    <div className="mt-2 space-y-1 pl-4 max-h-36 overflow-y-auto font-mono text-red-600">
+                    <div className="mt-2 space-y-1 pl-4 max-h-36 overflow-y-auto font-mono text-danger">
                       {displayBatchResult.not_found.map((r: any, i: number) => (
                         <div key={i}>Pixiv {r.pixiv_id}{r.message ? ` — ${r.message}` : ""}</div>
                       ))}
@@ -673,11 +673,11 @@ export default function DanbooruReferencePage() {
 
                 {/* Errors — list with copy */}
                 {displayBatchResult.errors && displayBatchResult.errors.length > 0 && (
-                  <details className="bg-red-50 dark:bg-red-900/15 border border-red-200 dark:border-red-800 rounded p-2 text-xs">
-                    <summary className="cursor-pointer font-medium text-red-700 dark:text-red-400 flex items-center gap-2">
+                  <details className="bg-danger-subtle border border-danger/30 rounded p-2 text-xs">
+                    <summary className="cursor-pointer font-medium text-danger flex items-center gap-2">
                       💥 Errors ({displayBatchResult.errors.length})
                     </summary>
-                    <div className="mt-2 space-y-1 pl-4 max-h-36 overflow-y-auto font-mono text-red-600">
+                    <div className="mt-2 space-y-1 pl-4 max-h-36 overflow-y-auto font-mono text-danger">
                       {displayBatchResult.errors.map((r: any, i: number) => (
                         <div key={i}>Pixiv {r.pixiv_id}{r.error ? ` — ${r.error}` : ""}</div>
                       ))}
