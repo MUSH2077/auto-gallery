@@ -94,8 +94,12 @@ function JobLifecycle({ status }: { status: string }) {
 function ErrorExcerpt({ value }: { value?: string | null }) {
   if (!value) return null;
   const firstLine = value.split("\n").find(Boolean) || value;
+  const isNoNewContent = /no new content since last sync|already archived or empty/i.test(firstLine);
+  const className = isNoNewContent
+    ? "line-clamp-1 rounded-md border border-border bg-subtle px-2 py-1 text-xs text-muted dark:border-border dark:bg-subtle dark:text-muted"
+    : "line-clamp-1 rounded-md border border-danger/20 bg-danger-subtle px-2 py-1 text-xs text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger";
   return (
-    <div className="mt-1 line-clamp-1 rounded-md border border-danger/20 bg-danger-subtle px-2 py-1 text-xs text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">
+    <div className={className}>
       {firstLine.slice(0, 180)}
     </div>
   );
@@ -183,7 +187,7 @@ function RowMeta({
 function RowActions({ children }: { children?: ReactNode }) {
   if (!children) return <div className="min-w-0" />;
   return (
-    <div className="flex min-w-0 flex-wrap justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+    <div className="flex min-w-0 flex-nowrap items-center justify-end gap-1 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
       {children}
     </div>
   );
@@ -228,7 +232,7 @@ function JobRowShell({
     <div>
       <div
         onClick={onClick}
-        className={`card grid min-w-[1180px] cursor-pointer grid-cols-[28px_112px_118px_76px_110px_minmax(210px,1fr)_minmax(180px,0.8fr)_190px_90px_minmax(150px,max-content)] items-center gap-3 p-3 text-sm hover:border-accent/50 ${className}`}
+        className={`card grid min-w-[1240px] cursor-pointer grid-cols-[28px_112px_118px_76px_110px_minmax(210px,1fr)_minmax(180px,0.8fr)_190px_90px_minmax(220px,max-content)] items-center gap-3 p-3 text-sm hover:border-accent/50 ${className}`}
       >
         <div className="flex items-center justify-center">{select || <span aria-hidden className="h-4 w-4" />}</div>
         <div className="min-w-0"><StatusBadge status={status} /></div>
@@ -244,7 +248,7 @@ function JobRowShell({
         <RowActions>{actions}</RowActions>
       </div>
       {(error || result) && (
-        <div className="mt-1 grid min-w-[1180px] grid-cols-[28px_112px_118px_76px_110px_minmax(210px,1fr)_minmax(180px,0.8fr)_190px_90px_minmax(150px,max-content)] gap-3 px-3">
+        <div className="mt-1 grid min-w-[1240px] grid-cols-[28px_112px_118px_76px_110px_minmax(210px,1fr)_minmax(180px,0.8fr)_190px_90px_minmax(220px,max-content)] gap-3 px-3">
           <div className="col-start-6 col-end-11">
             {error ? <ErrorExcerpt value={error} /> : <div className="line-clamp-1 rounded-md border border-border bg-subtle px-2 py-1 text-xs text-muted">{result}</div>}
           </div>
@@ -1084,12 +1088,16 @@ function JobsContent() {
 
       {/* Download Jobs list */}
       {activeTab === "downloads" && <section className="mb-8">
+        <h3 className="mb-2 flex items-center gap-3 text-base font-semibold">
+          {t("jobs.download")}
+          <span className="text-xs font-normal text-muted">{downloads.data?.length ?? 0} {t("common.items")}</span>
+        </h3>
         {downloads.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-14 rounded-md bg-subtle dark:bg-subtle animate-pulse" />)}</div>}
         {downloads.error && <ErrorState message={(downloads.error as Error).message} onRetry={() => downloads.refetch()} />}
         {downloads.data && !downloads.data?.length && <EmptyState title={t("jobs.no_dl")} description={t("jobs.no_dl_desc")} />}
         {downloads.data && downloads.data?.length > 0 && (
           <div className="overflow-x-auto pb-2">
-          <div className="min-w-[980px] space-y-1">
+          <div className="min-w-[1240px] space-y-1">
             {downloads.data.map((j: any) => {
               const active = isActiveDownload(j.status);
               const progress = active
@@ -1181,7 +1189,7 @@ function JobsContent() {
         {imports.data?.items && !imports.data?.items.length && <p className="text-sm text-muted">{t("jobs.no_im")}</p>}
         {imports.data?.items && imports.data?.items.length > 0 && (
           <div className="overflow-x-auto pb-2">
-          <div className="min-w-[980px] space-y-1">
+          <div className="min-w-[1240px] space-y-1">
             {imports.data?.items?.map((j: any) => {
               const active = isActiveImport(j.status);
               const progress = active
