@@ -12,7 +12,7 @@ export default function AuthStatusPage() {
   return (
     <main className="max-w-5xl mx-auto p-6">
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("auth.back")}</Link>
+        <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("auth.back")}</Link>
       </div>
       <PageHeader title={t("auth.title")} description={t("auth.desc")} />
 
@@ -30,11 +30,11 @@ export default function AuthStatusPage() {
               <div className="text-xs text-muted">{t("auth.total")}</div>
             </div>
             <div className="card p-4 text-center">
-              <div className="text-2xl font-bold text-green-600">{auth.data.summary.healthy}</div>
+              <div className="text-2xl font-bold text-success">{auth.data.summary.healthy}</div>
               <div className="text-xs text-muted">{t("auth.healthy")}</div>
             </div>
             <div className={`card p-4 text-center ${auth.data.summary.unhealthy > 0 ? "border-danger dark:border-danger" : ""}`}>
-              <div className={`text-2xl font-bold ${auth.data.summary.unhealthy > 0 ? "text-red-600" : ""}`}>{auth.data.summary.unhealthy}</div>
+              <div className={`text-2xl font-bold ${auth.data.summary.unhealthy > 0 ? "text-danger" : ""}`}>{auth.data.summary.unhealthy}</div>
               <div className="text-xs text-muted">{t("auth.unhealthy")}</div>
             </div>
             <div className="card p-4 text-center">
@@ -59,8 +59,8 @@ export default function AuthStatusPage() {
                 </div>
                 <div className="flex items-center gap-3 shrink-0">
                   {!s.is_enabled && <span className="badge">{t("auth.disabled")}</span>}
-                  {s.auth_healthy === true && <span className="inline-flex items-center gap-1 text-xs text-green-700 dark:text-green-400 bg-green-100 dark:bg-green-900/30 px-2 py-0.5 rounded"><span className="w-2 h-2 bg-green-500 rounded-full" /> {t("auth.healthy")}</span>}
-                  {s.auth_healthy === false && <span className="inline-flex items-center gap-1 text-xs text-red-700 dark:text-red-400 bg-red-100 dark:bg-red-900/30 px-2 py-0.5 rounded"><span className="w-2 h-2 bg-red-500 rounded-full" /> {t("auth.unhealthy")}</span>}
+                  {s.auth_healthy === true && <span className="inline-flex items-center gap-1 text-xs text-success bg-success-subtle px-2 py-0.5 rounded"><span className="w-2 h-2 bg-success-subtle0 rounded-full" /> {t("auth.healthy")}</span>}
+                  {s.auth_healthy === false && <span className="inline-flex items-center gap-1 text-xs text-danger bg-danger-subtle px-2 py-0.5 rounded"><span className="w-2 h-2 bg-danger-subtle0 rounded-full" /> {t("auth.unhealthy")}</span>}
                   {s.auth_healthy === null && <span className="badge inline-flex items-center gap-1"><span className="w-2 h-2 bg-muted rounded-full" /> {t("auth.unknown")}</span>}
                   {s.last_successful_auth && <span className="text-xs text-muted">{t("auth.last_success")} {new Date(s.last_successful_auth).toLocaleString()}</span>}
                 </div>

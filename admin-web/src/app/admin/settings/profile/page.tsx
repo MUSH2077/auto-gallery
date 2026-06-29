@@ -5,6 +5,7 @@ import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import { authChangePassword } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
+import Banner from "@/components/Banner";
 
 export default function ProfilePage() {
   const t = useT();
@@ -50,7 +51,7 @@ export default function ProfilePage() {
       <div className="card p-5 mb-6">
         <h2 className="text-sm font-medium text-muted mb-3">{t("auth.account_info")}</h2>
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-700 dark:text-blue-300 font-bold text-lg">
+          <div className="w-10 h-10 rounded-full bg-accent-subtle flex items-center justify-center text-accent font-bold text-lg">
             {(user?.display_name || user?.username || "?")[0].toUpperCase()}
           </div>
           <div>
@@ -63,10 +64,9 @@ export default function ProfilePage() {
       {/* Change Password */}
       <div className="card p-5">
         {user?.must_change_password && (
-          <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
-            <div className="font-medium">{t("auth.force_change_title")}</div>
-            <div>{t("auth.force_change_message")}</div>
-          </div>
+          <Banner tone="warning" title={t("auth.force_change_title")} className="mb-4">
+            {t("auth.force_change_message")}
+          </Banner>
         )}
         <h2 className="text-sm font-medium text-muted mb-4">{t("auth.change_password")}</h2>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -113,7 +113,7 @@ export default function ProfilePage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-medium rounded-lg transition-colors text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full py-2 px-4 bg-accent hover:bg-accent/90 disabled:bg-accent text-white font-medium rounded-lg transition-colors text-sm focus:outline-none focus:ring-2 focus:ring-accent"
           >
             {loading ? t("common.saving") : t("auth.change_password")}
           </button>

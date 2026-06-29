@@ -168,7 +168,7 @@ function ToggleField({ label, desc, value, onChange }: {
       <button
         onClick={() => onChange(!value)}
         className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${
-          value ? "bg-green-600" : "bg-subtle"
+          value ? "bg-success" : "bg-subtle"
         }`}
       >
         <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
@@ -540,7 +540,7 @@ export default function GalleryDLConfigPage() {
   return (
     <PageShell size="normal">
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("gallerydl.back")}</Link>
+        <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("gallerydl.back")}</Link>
       </div>
       <PageHeader title={t("gallerydl.title")} description={t("gallerydl.desc")} />
 
@@ -580,19 +580,19 @@ export default function GalleryDLConfigPage() {
             {save.isPending ? t("common.saving") : saved === activeTab ? t("common.saved") : `${t("gallerydl.save")} (${tabs.find(tab => tab.key === activeTab)?.label})`}
           </button>
         </div>
-        {save.error && <p className="text-red-600 text-sm mt-2">{(save.error as Error).message}</p>}
+        {save.error && <p className="text-danger text-sm mt-2">{(save.error as Error).message}</p>}
 
         {/* Test Connection */}
         <div className="flex items-center gap-3 pt-2 border-t mt-4">
           <button
             onClick={() => testConn.mutate(activeTab)}
             disabled={testConn.isPending}
-            className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+            className="px-3 py-1.5 text-xs bg-accent text-white rounded hover:bg-accent/90 disabled:opacity-50"
           >
             {testConn.isPending ? t("gallerydl.testing") : t("gallerydl.test_connection")}
           </button>
           {testResult && (
-            <span className={`text-xs ${testResult.success ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
+            <span className={`text-xs ${testResult.success ? "text-success" : "text-danger"}`}>
               {testResult.success ? "✓" : "✗"} {testResult.message}
             </span>
           )}

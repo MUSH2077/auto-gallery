@@ -50,7 +50,7 @@ export default function DownloadDefaultsPage() {
   return (
     <main className="max-w-4xl mx-auto p-6">
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("dldefaults.back")}</Link>
+        <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("dldefaults.back")}</Link>
       </div>
       <PageHeader title={t("dldefaults.title")} description={t("dldefaults.desc")} />
 
@@ -194,7 +194,7 @@ export default function DownloadDefaultsPage() {
             </div>
           </div>
 
-          <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg text-sm text-blue-800 dark:text-blue-300">
+          <div className="mt-4 p-4 bg-accent-subtle border border-accent/30 rounded-lg text-sm text-accent">
             <strong>{t("dldefaults.schedule")}:</strong>{" "}
             {t("dldefaults.schedule.desc").replace("{base}", String(current.retry_backoff_base_seconds)).replace("{double}", String(current.retry_backoff_base_seconds * 2)).replace("{max}", String(current.max_retries))}
           </div>
@@ -208,8 +208,8 @@ export default function DownloadDefaultsPage() {
               {save.isPending ? t("common.saving") : t("dldefaults.save")}
             </button>
           </div>
-          {save.isSuccess && <p className="text-green-600 text-sm mt-2">{t("dldefaults.saved")}</p>}
-          {save.error && <p className="text-red-600 text-sm mt-2">{(save.error as Error).message}</p>}
+          {save.isSuccess && <p className="text-success text-sm mt-2">{t("dldefaults.saved")}</p>}
+          {save.error && <p className="text-danger text-sm mt-2">{(save.error as Error).message}</p>}
         </>
       )}
     </main>

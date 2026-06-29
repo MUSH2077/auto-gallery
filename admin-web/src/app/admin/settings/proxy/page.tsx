@@ -45,12 +45,12 @@ function TestResults({ data, proxyEnabled }: { data: any | null; proxyEnabled: b
                 </td>
                 <td className="text-center px-4 py-3">
                   {r.direct_ok
-                    ? <span className="text-green-600 dark:text-green-400 text-xs font-medium">{r.direct_ms}ms {t("proxy.ok")}</span>
-                    : <span className="text-red-500 text-xs font-medium">{t("proxy.fail")}</span>}
+                    ? <span className="text-success text-xs font-medium">{r.direct_ms}ms {t("proxy.ok")}</span>
+                    : <span className="text-danger text-xs font-medium">{t("proxy.fail")}</span>}
                 </td>
                 <td className="px-3 py-3">
                   {r.direct_error
-                    ? <span className="text-xs text-red-500 dark:text-red-400 font-mono" title={r.direct_error}>{r.direct_error.slice(0, 60)}</span>
+                    ? <span className="text-xs text-danger font-mono" title={r.direct_error}>{r.direct_error.slice(0, 60)}</span>
                     : r.direct_ok ? <span className="text-xs text-muted">—</span> : <span className="text-xs text-muted">{t("proxy.unknown_error")}</span>}
                 </td>
                 {proxyEnabled && (
@@ -58,14 +58,14 @@ function TestResults({ data, proxyEnabled }: { data: any | null; proxyEnabled: b
                     {r.proxy_ok === null
                       ? <span className="text-xs text-muted">—</span>
                       : r.proxy_ok
-                        ? <span className="text-green-600 dark:text-green-400 text-xs font-medium">{r.proxy_ms}ms {t("proxy.ok")}</span>
-                        : <span className="text-red-500 text-xs font-medium">{t("proxy.fail")}</span>}
+                        ? <span className="text-success text-xs font-medium">{r.proxy_ms}ms {t("proxy.ok")}</span>
+                        : <span className="text-danger text-xs font-medium">{t("proxy.fail")}</span>}
                   </td>
                 )}
                 {proxyEnabled && (
                   <td className="px-3 py-3">
                     {r.proxy_error
-                      ? <span className="text-xs text-red-500 dark:text-red-400 font-mono" title={r.proxy_error}>{r.proxy_error.slice(0, 60)}</span>
+                      ? <span className="text-xs text-danger font-mono" title={r.proxy_error}>{r.proxy_error.slice(0, 60)}</span>
                       : r.proxy_ok ? <span className="text-xs text-muted">—</span> : <span className="text-xs text-muted">{t("proxy.unknown_error")}</span>}
                   </td>
                 )}
@@ -102,7 +102,7 @@ export default function ProxySettingsPage() {
   return (
     <main className="max-w-4xl mx-auto p-6">
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("proxy.back")}</Link>
+        <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("proxy.back")}</Link>
       </div>
       <PageHeader title={t("proxy.title")} description={t("proxy.desc")} />
 
@@ -115,7 +115,7 @@ export default function ProxySettingsPage() {
                 <p className="text-xs text-muted mt-0.5">{t("proxy.enable.desc")}</p>
               </div>
               <button onClick={() => setLocal({ ...current, enabled: !current.enabled })}
-                className={"relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 " + (current.enabled ? "bg-green-600" : "bg-subtle")}>
+                className={"relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 " + (current.enabled ? "bg-success" : "bg-subtle")}>
                 <span className={"inline-block h-4 w-4 transform rounded-full bg-white transition-transform " + (current.enabled ? "translate-x-6" : "translate-x-1")} />
               </button>
             </div>
@@ -153,11 +153,11 @@ export default function ProxySettingsPage() {
                 <p className="text-xs text-muted mt-0.5">{t("proxy.connectivity_test.desc")}</p>
               </div>
               <button onClick={() => testProxy.mutate()} disabled={testProxy.isPending}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 shrink-0 transition-colors">
+                className="px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 disabled:opacity-50 shrink-0 transition-colors">
                 {testProxy.isPending ? t("proxy.testing") : t("proxy.test_now")}
               </button>
             </div>
-            {testProxy.error && <p className="text-red-600 text-xs mt-2">{(testProxy.error as Error).message}</p>}
+            {testProxy.error && <p className="text-danger text-xs mt-2">{(testProxy.error as Error).message}</p>}
             {testProxy.data && <TestResults data={testProxy.data} proxyEnabled={testProxy.data.proxy_enabled} />}
           </div>
 

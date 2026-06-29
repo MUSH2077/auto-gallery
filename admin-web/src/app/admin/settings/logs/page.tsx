@@ -9,10 +9,10 @@ import Link from "next/link";
 
 const LEVEL_COLORS: Record<string, string> = {
   DEBUG: "text-muted",
-  INFO: "text-green-600 dark:text-green-400",
-  WARNING: "text-yellow-600 dark:text-yellow-400",
-  ERROR: "text-red-600 dark:text-red-400",
-  CRITICAL: "text-red-700 dark:text-red-500 font-bold",
+  INFO: "text-success",
+  WARNING: "text-warning",
+  ERROR: "text-danger",
+  CRITICAL: "text-danger font-bold",
 };
 
 export default function SystemLogsPage() {
@@ -33,7 +33,7 @@ export default function SystemLogsPage() {
   return (
     <main className="max-w-6xl mx-auto p-6">
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("logs.back")}</Link>
+        <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("logs.back")}</Link>
       </div>
       <PageHeader title={t("logs.title")} description={t("logs.desc")} />
 
@@ -60,7 +60,7 @@ export default function SystemLogsPage() {
       {logs.error && <ErrorState message={(logs.error as Error).message} />}
 
       {logs.data && (
-        <div className="bg-subtle text-green-400 rounded-lg shadow p-4 font-mono text-xs leading-relaxed overflow-auto max-h-[70vh]">
+        <div className="bg-subtle text-success rounded-lg shadow p-4 font-mono text-xs leading-relaxed overflow-auto max-h-[70vh]">
           {logs.data.entries.length === 0 && <span className="text-muted">{t("logs.no_entries")}</span>}
           {logs.data.entries.map((e, i) => (
             <div key={i} className="flex gap-3 hover:bg-subtle px-1 -mx-1 rounded">

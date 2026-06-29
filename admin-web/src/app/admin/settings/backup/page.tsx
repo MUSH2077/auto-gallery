@@ -24,10 +24,10 @@ function fmtKB(kb: number): string {
 
 function contentBadgeColor(content: string): string {
   const colors: Record<string, string> = {
-    database: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+    database: "bg-accent-subtle text-accent",
     "gallerydl-config": "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
-    "app-config": "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
-    "download-archives": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+    "app-config": "bg-success-subtle text-success",
+    "download-archives": "bg-warning-subtle text-warning",
     "library-metadata": "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400",
   };
   return colors[content] || "bg-subtle text-fg";
@@ -114,12 +114,12 @@ export default function BackupPage() {
   return (
     <main className="max-w-4xl mx-auto p-6">
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("common.back")}</Link>
+        <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("common.back")}</Link>
       </div>
       <PageHeader title={t("backup.title")} description={t("backup.desc")} />
 
       {result && (
-        <div className={`mb-4 p-3 rounded-lg text-sm flex items-center justify-between ${result.ok ? "bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400" : "bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400"}`}>
+        <div className={`mb-4 p-3 rounded-lg text-sm flex items-center justify-between ${result.ok ? "bg-success-subtle border border-success/30 text-success" : "bg-danger-subtle border border-danger/30 text-danger"}`}>
           <span>{result.msg}</span>
           <button onClick={() => setResult(null)} className="ml-3 text-xs underline">{t("common.close")}</button>
         </div>
