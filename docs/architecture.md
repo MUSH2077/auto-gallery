@@ -16,17 +16,20 @@ auto-gallery is a layered Docker Compose application that downloads media from m
 ┌──────────────────▼──────────────────────────────┐
 │  Backend (FastAPI)                               │
 │  Routes → Services → Repositories → SQLAlchemy   │
-│  Providers: Pixiv, Iwara, X, Danbooru,          │
-│             Pinterest, LOFTER, local, manual     │
+│  Providers: Pixiv · X · Iwara · Danbooru ·      │
+│   Weibo · Bilibili · Pinterest · LOFTER          │
+│   (+ Danbooru reference; local/manual planned)   │
 │  Port 8818 (host) ← 8000 (container)             │
 │  JWT auth (access + refresh tokens)              │
 └──────┬────────────┬──────────────┬──────────────┘
        │            │              │
-       │   ┌────────▼────────┐     │
-       │   │  Worker (RQ)    │     │
-       │   │  gallery-dl     │     │
-       │   │  Import pipeline│     │
-       │   └────────┬────────┘     │
+       │   ┌────────▼────────────┐ │
+       │   │  Workers (RQ)       │ │
+       │   │  worker-download    │ │  gallery-dl subprocess
+       │   │  worker-import      │ │  metadata → DB pipeline
+       │   │  worker-operations  │ │  backup / reindex / disk-import
+       │   │  scheduler          │ │  subscription sync loop
+       │   └────────┬────────────┘ │
        │            │              │
 ┌──────▼────────────▼──────────────▼──────────────┐
 │  Data Layer                                      │
@@ -57,6 +60,10 @@ user ──< subscription ──< subscription_source
 user ──< album ──< album_work ── work
 user ──< download_job
 import_job (inherits scope via subscription)
+
+(operational / cross-cutting)
+task_run ──< task_event        # unified task envelope — see "Unified Task System"
+storage_artifact               # download → import ledger — see "Job Queue"
 ```
 
 ### Key relationships
@@ -104,9 +111,19 @@ auto-gallery uses RQ (Redis Queue) for downloads and batch imports, plus Redis S
 - **Per-source download queues**: Each source has its own RQ queue (`downloads:pixiv`, `downloads:danbooru`, etc.) for isolation — one slow source never blocks another. The `worker-download` container listens on all source queues.
 - **Durable RQ imports**: Download artifacts are recorded in PostgreSQL and a single RQ import pipeline claims work with leases, enabling restart-safe recovery without competing consumers.
 - **Job timeout**: `job_timeout=7200` (2 hours) on all enqueue calls to prevent RQ from killing long-running downloads (default is 180s).
-- **State machine**: `pending → downloading → downloaded → importing → complete | failed | stale | paused`. Paused jobs skip execution. Stale detection uses Redis heartbeat keys (`task:{job_id}:heartbeat_ts` with 90s TTL) — if the key is absent and the job is past its retry grace period, it's marked stale. Partial import recovery on timeout/failure.
+- **State machine** (canonical source: `backend/app/models/task_state.py`): `enqueued → downloading → downloaded → importing → complete`, with `paused`, `cancelled`, `failed`, and `stale` reachable from the non-terminal states. Old status strings (`pending` → `enqueued`) are accepted via a backward-compat map. A `downloaded → complete` short-circuit exists for jobs whose download produced no new metadata (all content already in the archive), so they never get stuck waiting on an import. Paused jobs skip execution; `cancelled` is terminal but keeps the DB record for audit. Stale detection uses Redis heartbeat keys (`task:{job_id}:heartbeat_ts` with 90s TTL) — if the key is absent and the job is past its retry grace period, it's marked stale. Partial import recovery on timeout/failure. `TaskEngine` (`services/task_engine.py`) is the single authority that validates every transition.
 - **Adaptive timeouts**: Retry count increments the stall and deadline timeouts (1.0x → 1.5x → 2.0x) to give later attempts more headroom.
 - **Proxy pre-flight**: Before launching gallery-dl, the worker runs DNS resolution + proxy connectivity checks (non-blocking diagnostics).
+
+## Unified Task System (`task_runs`)
+
+Downloads, imports, and admin operations (backup, reindex, disk import) are all surfaced through one user-facing task envelope so the admin **Tasks** page (`/admin/jobs`) has a single queue/progress/history view.
+
+- **`task_run`** (`models/task_run.py`): one row per trackable unit of work. `kind` (`download` / `import` / `admin`) and `subject_type` + `subject_id` loosely reference the authoritative domain row (`download_job`, `import_job`, …) — there is no FK, so a task can outlive or precede its domain record. Carries display fields (`title`, `source`, `source_url`), a progress snapshot (`progress_current`/`progress_total`/`progress_data`), `priority`, `attempts`, and `last_heartbeat_at` for stale detection. `parent_task_id` groups batch/child runs.
+- **`task_event`**: append-only audit trail of status transitions for a run; cascade-deleted with its parent (`ON DELETE CASCADE`).
+- **`TaskService`** (`services/tasks.py`): the write path — creates runs, records events, normalizes statuses, and merges download/import domain rows into the unified list.
+- **`TaskEngine`** (`services/task_engine.py`): the single authority for valid state transitions (pause / resume / cancel / retry / priority / batch-by-filter), publishing changes over Redis pub/sub for live WebSocket updates.
+- **Authoritative payloads stay in domain tables**: `task_run` is the envelope; `download_jobs` / `import_jobs` remain the source of truth for their own fields. Clearing tasks (Data Management) deletes `task_runs` **and** the domain job tables together.
 
 ## Data Flow
 
@@ -173,6 +190,15 @@ Admin triggers Danbooru artist import
   → Create creator_link suggestions (status=pending)
   → Admin reviews: approve → bind to creator, reject → discard
 ```
+
+## Reliability & Recovery
+
+Because gallery-dl writes directly to disk and the download → import handoff spans two queues, several recovery paths keep the database in sync with what is actually on disk. All are idempotent and never delete or re-download.
+
+- **Import from disk** (`services/disk_import.py`, `POST /api/v1/admin/library/import-from-disk`): scans `DOWNLOAD_ROOT/{source}/` and imports files that exist on disk but were never recorded (ledger state ≠ `done`), under a synthetic `recovery` download_job. `services/disk_identity.py` first provisions a real `creator → subscription → subscription_source → source_creator` chain from local metadata (Danbooru enrichment is best-effort, with a metadata-only fallback) so recovered works attach to the right creator. Runs on the `operations` queue; a Redis lock (`library:disk-import:active`) prevents concurrent runs.
+- **Import pipeline recovery** (`services/import_recovery.py`): conservative auto-repair of safe gaps — e.g. re-enqueues an import for `downloaded` jobs that already have pending metadata. Read-only health is reported by `services/pipeline_health.py`.
+- **Creator auto-relink** (`services/creator_reconcile.py`): each subscription-sync scan links orphaned `source_creators` (`creator_id IS NULL`) to their subscription's creator by identity match. It mirrors `import_runner`'s auto-link rules, so an ambiguous bookmark/repost feed is never mislinked.
+- **Worker startup orphan reconciliation**: on startup, jobs stuck in `downloading`/`importing` are marked `stale`, and on-disk directories with no matching job are picked up for import.
 
 ## Authentication
 
@@ -320,7 +346,8 @@ Endpoints include:
 - `GET /import-progress` — real-time import progress polling
 - `POST /proxy/test` — test proxy connectivity with gallery-dl
 - `POST /scheduler/sync-now` — trigger immediate subscription sync
-- `POST /clear/{entity}` — clear all records of a given entity type
+- `POST /library/import-from-disk` — idempotently import on-disk download files into the DB without re-downloading (operations queue)
+- `POST /clear/{entity}` — clear all records of a given entity type (`jobs`/`all` also clear `task_runs`)
 - `GET /dedup` / `PUT /dedup` — deduplication settings
 - `GET /merge-candidates` — list works flagged for potential merge
 - `POST /reindex` — trigger full Meilisearch reindex
@@ -375,14 +402,23 @@ Endpoints include:
 - `POST /{id}/pause` — pause a job
 - `POST /{id}/resume` — resume a paused job
 - `POST /{id}/retry` — retry a specific failed job
+- `POST /{id}/cancel` — cancel a job (terminal, keeps record) — TaskEngine
+- `POST /{id}/priority` — change queue priority — TaskEngine
+- `POST /batch-by-filter` — apply an action to all jobs matching a filter — TaskEngine
+- `GET /{id}/progress` — live progress snapshot
+- `GET /{id}/pipeline` — per-stage pipeline view
 
 ### `/api/v1/import-jobs`
-Import job queue and post-import scanning.
+Import job queue and post-import scanning. List entries are enriched with parent download-job context (source, url, subscription/creator) so they align with the download list.
 
 Endpoints include:
-- `GET /` — list import jobs
+- `GET /` — list import jobs (enriched with source/subscription/creator)
 - `GET /{id}` — import job detail with errors
 - `POST /{id}/retry` — retry a failed import
+- `POST /{id}/cancel` — cancel an import — TaskEngine
+- `POST /{id}/priority` — change queue priority — TaskEngine
+- `POST /batch-by-filter` — apply an action to all imports matching a filter — TaskEngine
+- `GET /{id}/progress` — live progress snapshot
 - `POST /scan` — scan for unimported downloads and create import jobs
 
 ### `/api/v1/works`

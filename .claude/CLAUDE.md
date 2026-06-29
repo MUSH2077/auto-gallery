@@ -30,9 +30,10 @@ Backend API: `8818`, Admin Web: `13000`.
 | Service | Role |
 |---------|------|
 | `backend` | FastAPI API server |
-| `worker-download` | RQ worker — gallery-dl subprocess (queue: `downloads`) |
+| `worker-download` | RQ worker — gallery-dl subprocess (per-source queues: `downloads:{source}`) |
 | `worker-import` | RQ worker — metadata import, batch import (queue: `imports`) |
-| `scheduler` | RQ scheduler — subscription sync loop |
+| `worker-operations` | RQ worker — admin operations: backup, reindex, disk import (queue: `operations`) |
+| `scheduler` | RQ scheduler — subscription sync loop + creator auto-relink |
 | `admin-web` | Next.js admin interface |
 | `postgres`, `redis`, `meilisearch` | Data services |
 

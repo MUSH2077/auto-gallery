@@ -134,9 +134,16 @@ gallery-dl writes files according to the naming template's `directory` config (s
 - Jobs stuck in `downloading` for > 2x timeout are marked `stale` by the scheduler
 - Partial import recovery: if metadata JSONs exist but the job failed, a partial import is attempted
 
-## Job state machines (canonical)
+## Job state machines
 
-Two separate lifecycles — `download_job` and `import_job`. This is the single source of truth.
+Two separate lifecycles — `download_job` and `import_job`. **Canonical source of truth:
+`backend/app/models/task_state.py`** (status constants + `ALLOWED_*_TRANSITIONS`); the
+diagrams below are the conceptual overview.
+
+> Status renames in `task_state.py`: `pending` → `enqueued` (old strings still accepted via
+> a backward-compat map), plus added states `importing`, `cancelled` (terminal, audit-kept),
+> and `stale`. A `downloaded → complete` short-circuit exists for downloads that produce no
+> new metadata. `TaskEngine` (`services/task_engine.py`) validates every transition.
 
 ### download_job
 
