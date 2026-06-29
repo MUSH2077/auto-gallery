@@ -1,25 +1,22 @@
 "use client";
-import { useState, useMemo, useEffect, Suspense } from "react";
+import { useState, useMemo, useEffect, useRef, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
 import { api, queryKeys, WorkListItem } from "@/lib/api";
-import { PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar } from "@/components";
+import { AssetImage, PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, WorkPreviewOverlay } from "@/components";
 
-function Img({ assetId, alt, className }: { assetId: string | undefined; alt: string; className?: string }) {
-  const t = useT();
-  const [err, setErr] = useState(false);
-  if (!assetId || err) {
-    return <div className={`${className || ""} flex items-center justify-center text-muted text-xs bg-subtle`}>{t("works.na")}</div>;
-  }
-  return (
-    <img src={api.mediaUrl(assetId, "thumb")} alt={alt} className={className} loading="lazy"
-      onError={() => setErr(true)} />
-  );
-}
+type Density = "compact" | "comfortable";
 
-function GridCard({
+type PreviewState = {
+  work: WorkListItem;
+  anchor: DOMRect;
+  assetIds: string[];
+  pageIndex: number;
+};
+
+function WorkCard({
   w,
   onToggleFavorite,
   trashMode,
@@ -29,6 +26,12 @@ function GridCard({
   selected,
   onToggleSelect,
   index,
+  density,
+  previewEnabled,
+  onOpenPreview,
+  onScheduleClosePreview,
+  onCancelClosePreview,
+  onPreviewPage,
 }: {
   w: WorkListItem;
   onToggleFavorite: (id: string) => void;
@@ -39,25 +42,74 @@ function GridCard({
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
   index?: number;
+  density: Density;
+  previewEnabled: boolean;
+  onOpenPreview: (preview: PreviewState) => void;
+  onScheduleClosePreview: () => void;
+  onCancelClosePreview: () => void;
+  onPreviewPage: (workId: string, pageIndex: number) => void;
 }) {
   const t = useT();
   const router = useRouter();
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const hoverTimer = useRef<number | null>(null);
+  const wheelDelta = useRef(0);
   const [pageIdx, setPageIdx] = useState(0);
   const assetIds = w.preview_asset_ids?.length ? w.preview_asset_ids : (w.thumbnail_asset_id ? [w.thumbnail_asset_id] : []);
   const hasMultiple = assetIds.length > 1;
   const currentId = assetIds[pageIdx] || assetIds[0];
 
-  const prevPage = (e: React.MouseEvent) => { e.stopPropagation(); setPageIdx((pageIdx - 1 + assetIds.length) % assetIds.length); };
-  const nextPage = (e: React.MouseEvent) => { e.stopPropagation(); setPageIdx((pageIdx + 1) % assetIds.length); };
+  const updatePage = (next: number) => {
+    if (!assetIds.length) return;
+    const normalized = (next + assetIds.length) % assetIds.length;
+    setPageIdx(normalized);
+    onPreviewPage(w.id, normalized);
+  };
+
+  const openPreview = () => {
+    if (!previewEnabled || !cardRef.current || !assetIds.length || window.matchMedia("(pointer: coarse)").matches) return;
+    onOpenPreview({ work: w, anchor: cardRef.current.getBoundingClientRect(), assetIds, pageIndex: pageIdx });
+    [pageIdx, pageIdx - 1, pageIdx + 1].forEach((idx) => {
+      const id = assetIds[(idx + assetIds.length) % assetIds.length];
+      if (!id) return;
+      const img = new Image();
+      img.src = api.mediaUrl(id, "preview");
+    });
+  };
+
+  const clearHoverTimer = () => {
+    if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
+    hoverTimer.current = null;
+  };
+
+  const mediaHeight = density === "comfortable" ? "h-44" : "h-32";
 
   return (
     <div
-      className={`card-interactive page-item overflow-hidden cursor-pointer group ${selected ? "ring-2 ring-accent dark:ring-accent" : ""}`}
+      ref={cardRef}
+      className={`card-interactive page-item overflow-hidden cursor-pointer group ${selected ? "ring-2 ring-accent" : ""}`}
       style={{ "--delay": `${Math.min((index ?? 0) * 30, 300)}ms` } as React.CSSProperties}
       onClick={() => router.push(`/admin/works/${w.id}`)}
+      onMouseEnter={() => {
+        onCancelClosePreview();
+        clearHoverTimer();
+        hoverTimer.current = window.setTimeout(openPreview, 250);
+      }}
+      onMouseLeave={() => {
+        clearHoverTimer();
+        onScheduleClosePreview();
+      }}
+      onWheel={(event) => {
+        if (!hasMultiple) return;
+        wheelDelta.current += event.deltaY;
+        if (Math.abs(wheelDelta.current) < 70) return;
+        event.preventDefault();
+        updatePage(pageIdx + (wheelDelta.current > 0 ? 1 : -1));
+        wheelDelta.current = 0;
+      }}
     >
-      <div className="h-32 bg-subtle flex items-center justify-center text-muted text-xs overflow-hidden relative">
-        <Img assetId={currentId} alt={w.title || ""} className="w-full h-full object-cover" />
+      <div className={`${mediaHeight} relative flex items-center justify-center overflow-hidden bg-subtle text-xs text-muted`}>
+        <AssetImage assetId={currentId} alt={w.title || ""} className="h-full w-full object-cover" fallback={t("works.na")} />
         {selectable && (
           <label className="absolute left-1 top-1 z-20 flex h-7 w-7 items-center justify-center rounded bg-black/60 text-white shadow-sm">
             <span className="sr-only">{t("works.select_work")}</span>
@@ -71,7 +123,7 @@ function GridCard({
           </label>
         )}
         <button onClick={(e) => { e.stopPropagation(); onToggleFavorite(w.id); }}
-          className={`absolute top-1 right-1 text-base z-10 ${w.is_favorite ? "text-yellow-400" : "text-white/60 hover:text-yellow-300"} drop-shadow`}
+          className={`absolute top-1 right-1 z-10 text-base ${w.is_favorite ? "text-warning" : "text-white/60 hover:text-warning"} drop-shadow`}
           title={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}
           aria-label={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}>
           {w.is_favorite ? "★" : "☆"}
@@ -80,21 +132,21 @@ function GridCard({
           <span className="absolute bottom-1 left-1 bg-black/70 text-white text-xs px-1.5 py-0.5 rounded font-medium">{w.asset_count}p</span>
         )}
         {w.is_ai_generated && (
-          <span className="absolute top-1 left-1 bg-yellow-500 text-white text-xs px-1.5 py-0.5 rounded">{t("works.ai_badge")}</span>
+          <span className="absolute top-1 left-1 rounded bg-warning px-1.5 py-0.5 text-xs text-on-primary">{t("works.ai_badge")}</span>
         )}
         {w.has_ugoira && (
-          <span className="absolute bottom-1 right-1 bg-purple-600/90 text-white text-[10px] px-1.5 py-0.5 rounded font-medium">{t("works.gif_badge")}</span>
+          <span className="absolute bottom-1 right-1 rounded bg-accent px-1.5 py-0.5 text-[10px] font-medium text-on-primary">{t("works.gif_badge")}</span>
         )}
         {hasMultiple && (
-          <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-between px-0.5">
-            <button onClick={prevPage} className="bg-black/60 hover:bg-black/80 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs leading-none transition-colors">&#9664;</button>
-            <button onClick={nextPage} className="bg-black/60 hover:bg-black/80 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs leading-none transition-colors">&#9654;</button>
-          </div>
-        )}
-        {hasMultiple && (
-          <div className="absolute bottom-1 left-1 flex gap-0.5">
+          <div className="absolute bottom-1 left-1 flex max-w-[calc(100%-0.5rem)] gap-0.5 rounded bg-black/40 px-1 py-1">
             {assetIds.slice(0, 10).map((_, i) => (
-              <span key={i} className={`w-1 h-1 rounded-full ${i === pageIdx ? "bg-white" : "bg-white/40"}`} />
+              <button
+                key={i}
+                type="button"
+                onClick={(e) => { e.stopPropagation(); updatePage(i); }}
+                className={`h-1.5 rounded-full transition-all ${i === pageIdx ? "w-3 bg-white" : "w-1.5 bg-white/45 hover:bg-white/80"}`}
+                aria-label={`Page ${i + 1}`}
+              />
             ))}
           </div>
         )}
@@ -103,13 +155,13 @@ function GridCard({
         )}
       </div>
       <div className="p-3">
-        <div className="text-sm font-medium truncate dark:text-white">{w.title || t("works.untitled")}</div>
+        <div className="text-sm font-medium truncate text-fg">{w.title || t("works.untitled")}</div>
         <div className="flex items-center gap-1.5 mt-1">
           {w.source && <SourceBadge source={w.source} href={`/admin/works?source=${w.source}`} />}
-          {w.has_ugoira && <span className="text-[10px] bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 px-1 rounded">{t("works.gif_badge")}</span>}
+          {w.has_ugoira && <span className="rounded bg-accent-subtle px-1 text-[10px] text-accent">{t("works.gif_badge")}</span>}
           {w.creator_name && w.creator_id && (
   <Link href={`/admin/creators/${w.creator_id}`}
-    className="text-xs text-blue-600 hover:underline truncate"
+    className="text-xs text-accent hover:underline truncate"
     onClick={(e) => e.stopPropagation()}>
     {w.creator_name}
   </Link>
@@ -140,6 +192,12 @@ function WorksContent() {
   const pathname = usePathname();
   const [selectedWorkIds, setSelectedWorkIds] = useState<Set<string>>(new Set());
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [preview, setPreview] = useState<PreviewState | null>(null);
+  const closePreviewTimer = useRef<number | null>(null);
+  const [previewEnabled, setPreviewEnabled] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return localStorage.getItem("auto-gallery-work-preview") !== "off";
+  });
 
   const SORT_OPTIONS: { key: SortKey; label: string }[] = [
     { key: "created_at", label: t("works.sort_imported") },
@@ -175,6 +233,7 @@ function WorksContent() {
   const aiFilter = (sp.get("ai") as "all" | "human" | "ai") ?? "all";
   const curationVisibility = sp.get("curation") === "trashed" ? "trashed" : "visible";
   const viewMode = (sp.get("view") as ViewMode) ?? "grid";
+  const density = ((sp.get("density") === "comfortable" ? "comfortable" : "compact") as Density);
   const limit = 25;
 
   // Local input for search field — debounced 300ms before writing to URL
@@ -207,6 +266,22 @@ function WorksContent() {
     router.replace(p.toString() ? `${pathname}?${p.toString()}` : pathname, { scroll: false });
   }
 
+  const scheduleClosePreview = () => {
+    if (closePreviewTimer.current) window.clearTimeout(closePreviewTimer.current);
+    closePreviewTimer.current = window.setTimeout(() => setPreview(null), 140);
+  };
+
+  const cancelClosePreview = () => {
+    if (closePreviewTimer.current) window.clearTimeout(closePreviewTimer.current);
+    closePreviewTimer.current = null;
+  };
+
+  const setPreviewPreference = (enabled: boolean) => {
+    setPreviewEnabled(enabled);
+    try { localStorage.setItem("auto-gallery-work-preview", enabled ? "on" : "off"); } catch {}
+    if (!enabled) setPreview(null);
+  };
+
   const filters = useMemo(() => ({
     search: search || undefined,
     source: sourceFilter || undefined,
@@ -227,6 +302,7 @@ function WorksContent() {
     isFavoriteFilter,
     aiFilter !== "all",
     sortBy !== "created_at" || sortOrder !== "desc",
+    density !== "compact",
   ].filter(Boolean).length;
 
   const useSearchPageLogic = !!search
@@ -338,7 +414,7 @@ function WorksContent() {
         )}
       </div>
 
-      <div id="works-filter-panel" className={`${filtersOpen ? "flex" : "hidden"} mb-4 flex-col gap-2 rounded-md border border-border bg-white p-3 dark:border-border dark:bg-subtle md:flex md:flex-row md:flex-wrap md:items-center md:border-0 md:bg-transparent md:p-0 md:dark:bg-transparent`}>
+      <div id="works-filter-panel" className={`${filtersOpen ? "flex" : "hidden"} mb-4 flex-col gap-2 rounded-md border border-border bg-surface p-3 md:flex md:flex-row md:flex-wrap md:items-center md:border-0 md:bg-transparent md:p-0`}>
         <div className="flex gap-0.5 bg-subtle rounded p-0.5">
           <button onClick={() => updateParams({ curation: null })}
             aria-label={t("works.gallery")}
@@ -354,12 +430,12 @@ function WorksContent() {
 
         <input value={inputVal} onChange={(e) => setInputVal(e.target.value)}
           aria-label={t("works.search_title")}
-          placeholder={t("works.search_title")} className="border rounded px-3 py-1.5 text-sm w-48 dark:bg-subtle dark:text-white dark:border-border" />
+          placeholder={t("works.search_title")} className="input w-48 py-1.5 text-sm" />
 
         {/* Source filter — dropdown */}
         <select value={sourceFilter} onChange={(e) => updateParams({ source: e.target.value || null })}
           aria-label={t("works.filter_source")}
-          className="border rounded px-2 py-1.5 text-xs dark:bg-subtle dark:text-white dark:border-border">
+          className="select px-2 py-1.5 text-xs">
           {SOURCE_FILTERS.map((f) => (
             <option key={f.key} value={f.key}>{f.label}</option>
           ))}
@@ -369,7 +445,7 @@ function WorksContent() {
         {(creators.data?.items.length || 0) > 0 && (
           <select value={creatorFilter} onChange={(e) => updateParams({ creator: e.target.value || null })}
             aria-label={t("works.filter_creator")}
-            className="border rounded px-2 py-1.5 text-xs dark:bg-subtle dark:text-white dark:border-border">
+            className="select px-2 py-1.5 text-xs">
             <option value="">{t("works.filter_all_creators")}</option>
             {creators.data?.items.map((c) => (
               <option key={c.id} value={c.id}>{c.display_name || c.name}</option>
@@ -391,7 +467,7 @@ function WorksContent() {
         {/* Favorites filter */}
         <button onClick={() => updateParams({ fav: isFavoriteFilter ? null : "1" })}
           aria-label={t("works.filter_favorites")}
-          className={`px-2.5 py-1 text-xs rounded transition-colors ${isFavoriteFilter ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 font-medium" : "text-muted hover:text-fg"}`}>
+          className={`px-2.5 py-1 text-xs rounded transition-colors ${isFavoriteFilter ? "bg-warning-subtle text-warning font-medium" : "text-muted hover:text-fg"}`}>
           {"★"} {t("works.filter_favorites")}
         </button>
 
@@ -451,6 +527,28 @@ function WorksContent() {
             {t("works.view_list")}
           </button>
         </div>
+
+        {viewMode === "grid" && (
+          <div className="flex gap-0.5 bg-subtle rounded p-0.5">
+            <button onClick={() => updateParams({ density: null }, false)}
+              className={`px-2.5 py-1 rounded text-xs ${density === "compact" ? "bg-surface shadow-sm" : "text-muted"}`}>
+              {t("works.density_compact", "Compact")}
+            </button>
+            <button onClick={() => updateParams({ density: "comfortable" }, false)}
+              className={`px-2.5 py-1 rounded text-xs ${density === "comfortable" ? "bg-surface shadow-sm" : "text-muted"}`}>
+              {t("works.density_comfortable", "Comfort")}
+            </button>
+          </div>
+        )}
+
+        {viewMode === "grid" && (
+          <button
+            onClick={() => setPreviewPreference(!previewEnabled)}
+            className={`rounded-md border border-border px-2.5 py-1.5 text-xs transition-colors ${previewEnabled ? "bg-accent-subtle text-accent" : "bg-surface text-muted hover:bg-subtle"}`}
+          >
+            {previewEnabled ? t("works.preview_on", "Preview on") : t("works.preview_off", "Preview off")}
+          </button>
+        )}
       </div>
 
       {works.data && works.data.items?.length > 0 && curationVisibility === "visible" && (
@@ -469,7 +567,7 @@ function WorksContent() {
             </button>
           </SelectionBar>
         ) : (
-          <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-border bg-white px-3 py-2 dark:border-border dark:bg-surface" aria-live="polite">
+          <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface px-3 py-2" aria-live="polite">
             <button onClick={toggleSelectPage} className="btn-ghost text-xs">
               {pageAllSelected ? t("works.deselect_page") : t("works.select_page")}
             </button>
@@ -479,10 +577,10 @@ function WorksContent() {
 
       {/* Loading */}
       {works.isLoading && viewMode === "grid" && (
-        <div className="overflow-x-auto grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+        <div className={`overflow-x-auto grid gap-4 ${density === "comfortable" ? "grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4" : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6"}`}>
           {Array.from({ length: 10 }).map((_, i) => (
-            <div key={i} className="bg-surface rounded-lg shadow p-3 animate-pulse">
-              <div className="h-32 bg-subtle rounded mb-2" />
+            <div key={i} className="rounded-md bg-surface p-3 shadow-sm animate-pulse">
+              <div className={`${density === "comfortable" ? "h-44" : "h-32"} bg-subtle rounded mb-2`} />
               <div className="h-3 bg-subtle rounded w-3/4" />
             </div>
           ))}
@@ -502,12 +600,18 @@ function WorksContent() {
 
       {/* Grid View */}
       {works.data && works.data.items?.length > 0 && viewMode === "grid" && (
-        <div className="overflow-x-auto grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 mb-6">
+        <div className={`overflow-x-auto grid gap-4 mb-6 ${density === "comfortable" ? "grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4" : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6"}`}>
           {works.data.items.map((w: WorkListItem, i: number) => (
-            <GridCard
+            <WorkCard
               key={w.id}
               index={i}
               w={w}
+              density={density}
+              previewEnabled={previewEnabled}
+              onOpenPreview={setPreview}
+              onScheduleClosePreview={scheduleClosePreview}
+              onCancelClosePreview={cancelClosePreview}
+              onPreviewPage={(workId, pageIndex) => setPreview((current) => current?.work.id === workId ? { ...current, pageIndex } : current)}
               trashMode={curationVisibility === "trashed"}
               selectable={curationVisibility === "visible"}
               selected={selectedWorkIds.has(w.id)}
@@ -526,7 +630,7 @@ function WorksContent() {
       {works.data && works.data.items?.length > 0 && viewMode === "list" && (
         <div className="space-y-1 mb-6">
           {works.data.items.map((w: WorkListItem) => (
-            <div key={w.id} className={`bg-surface rounded-lg shadow-sm p-3 flex items-center gap-3 cursor-pointer hover:shadow-md transition-shadow ${selectedWorkIds.has(w.id) ? "ring-2 ring-accent dark:ring-accent" : ""}`} onClick={() => router.push(`/admin/works/${w.id}`)}>
+            <div key={w.id} className={`flex cursor-pointer items-center gap-3 rounded-md border border-border bg-surface p-3 shadow-sm transition-shadow hover:shadow-md ${selectedWorkIds.has(w.id) ? "ring-2 ring-accent" : ""}`} onClick={() => router.push(`/admin/works/${w.id}`)}>
               {curationVisibility === "visible" && (
                 <input
                   type="checkbox"
@@ -538,25 +642,25 @@ function WorksContent() {
                 />
               )}
               <div className="w-12 h-12 bg-subtle rounded overflow-hidden shrink-0">
-                <Img assetId={w.thumbnail_asset_id} alt={w.title || ""} className="w-full h-full object-cover" />
+                <AssetImage assetId={w.thumbnail_asset_id} alt={w.title || ""} className="w-full h-full object-cover" fallback={t("works.na")} />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium dark:text-white truncate">{w.title || t("works.untitled")}</span>
-                  {w.is_nsfw && <span className="text-xs bg-red-100 dark:bg-red-900/30 text-red-600 px-1 rounded">{t("works.nsfw_badge")}</span>}
+                  <span className="text-sm font-medium text-fg truncate">{w.title || t("works.untitled")}</span>
+                  {w.is_nsfw && <span className="rounded bg-danger-subtle px-1 text-xs text-danger">{t("works.nsfw_badge")}</span>}
                   {w.asset_count > 1 && <span className="text-xs text-muted">{w.asset_count}p</span>}
-                  {w.has_ugoira && <span className="text-xs bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 px-1 rounded">{t("works.gif_badge")}</span>}
+                  {w.has_ugoira && <span className="rounded bg-accent-subtle px-1 text-xs text-accent">{t("works.gif_badge")}</span>}
                 </div>
                 <div className="flex items-center gap-2 text-xs text-muted mt-0.5">
                   {w.source && <SourceBadge source={w.source} href={`/admin/works?source=${w.source}`} />}
                   {w.creator_name && w.creator_id && (
-  <Link href={`/admin/creators/${w.creator_id}`} onClick={(e) => e.stopPropagation()} className="text-blue-600 hover:underline">{w.creator_name}</Link>
+  <Link href={`/admin/creators/${w.creator_id}`} onClick={(e) => e.stopPropagation()} className="text-accent hover:underline">{w.creator_name}</Link>
 )}
                   <span>{w.posted_at ? new Date(w.posted_at).toLocaleDateString() : "—"}</span>
                 </div>
               </div>
               <button onClick={(e) => { e.stopPropagation(); toggleFavorite.mutate(w.id); }}
-                className={`text-lg shrink-0 ${w.is_favorite ? "text-yellow-500" : "text-muted hover:text-yellow-400"}`}
+                className={`text-lg shrink-0 ${w.is_favorite ? "text-warning" : "text-muted hover:text-warning"}`}
                 title={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}
                 aria-label={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}>
                 {w.is_favorite ? "★" : "☆"}
@@ -570,6 +674,28 @@ function WorksContent() {
             </div>
           ))}
         </div>
+      )}
+
+      {preview && previewEnabled && (
+        <WorkPreviewOverlay
+          anchor={preview.anchor}
+          title={preview.work.title}
+          creatorName={preview.work.creator_name}
+          source={preview.work.source}
+          assetIds={preview.assetIds}
+          pageIndex={preview.pageIndex}
+          assetCount={preview.work.asset_count}
+          onMouseEnter={cancelClosePreview}
+          onMouseLeave={scheduleClosePreview}
+          onWheelPage={(delta) => {
+            if (preview.assetIds.length <= 1) return;
+            setPreview((current) => {
+              if (!current) return current;
+              const next = (current.pageIndex + delta + current.assetIds.length) % current.assetIds.length;
+              return { ...current, pageIndex: next };
+            });
+          }}
+        />
       )}
 
       {/* Pagination */}

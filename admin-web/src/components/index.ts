@@ -22,5 +22,7 @@ export { ToastProvider, useToast } from "./Toast";
 export { NotificationProvider, NotificationBell, useNotifications } from "./NotificationCenter";
 export { RealProgressBar } from "./RealProgressBar";
 export { BatchByFilter } from "./BatchByFilter";
+export { AssetFilmstrip, AssetImage, WorkPreviewOverlay, isArchiveAsset } from "./work-interactions";
+export type { MediaAsset } from "./work-interactions";
 
 export { default as PageLayout } from "./PageLayout";
