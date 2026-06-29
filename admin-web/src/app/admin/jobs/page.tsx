@@ -60,6 +60,10 @@ function isActiveTask(status: string) {
   return ["enqueued", "running", "recovering"].includes(status);
 }
 
+function isAttentionStatus(status: string) {
+  return ["enqueued", "running", "recovering", "downloading", "downloaded", "importing", "failed", "stale"].includes(status);
+}
+
 function fallbackProgress(stage: string): JobProgress {
   return { stage };
 }
@@ -282,7 +286,7 @@ function JobRowShell({
     <div>
       <div
         onClick={onClick}
-        className={`card grid min-h-[64px] w-full min-w-0 cursor-pointer grid-cols-[28px_minmax(78px,0.55fr)_minmax(78px,0.55fr)_60px_minmax(68px,0.45fr)_minmax(150px,1fr)_minmax(260px,1.6fr)_minmax(152px,max-content)] items-center gap-2 p-2 text-sm hover:border-accent/50 ${className}`}
+        className={`card grid min-h-[64px] w-full min-w-0 cursor-pointer grid-cols-[28px_minmax(78px,0.55fr)_minmax(78px,0.55fr)_60px_minmax(68px,0.45fr)_minmax(150px,1fr)_minmax(220px,1.25fr)_minmax(220px,0.9fr)_minmax(152px,max-content)] items-center gap-2 p-2 text-sm hover:border-accent/50 ${className}`}
       >
         <div className="flex items-center justify-center">{select || <span aria-hidden className="h-4 w-4" />}</div>
         <div className="min-w-0"><StatusBadge status={status} /></div>
@@ -290,10 +294,8 @@ function JobRowShell({
         <span className="font-mono text-xs text-muted">{shortId(id)}</span>
         <div className="min-w-0">{source || <span className="text-xs text-muted">—</span>}</div>
         <RowMeta primary={primary} secondary={secondary} />
-        <div className="min-w-0 truncate text-xs text-muted">
-          {detail || "—"}
-          {progressOrTime && <span className="ml-3 inline-flex max-w-[240px] align-middle">{progressOrTime}</span>}
-        </div>
+        <div className="min-w-0 truncate text-xs text-muted" title={typeof detail === "string" ? detail : undefined}>{detail || "—"}</div>
+        <div className="flex min-w-0 justify-start text-xs text-muted">{progressOrTime || "—"}</div>
         <RowActions>{actions}</RowActions>
       </div>
       {(error || result) && (
@@ -476,6 +478,124 @@ function JobsBatchToolbar({
   );
 }
 
+type TaskNode = {
+  task: TaskRun;
+  children: TaskNode[];
+};
+
+function taskRunProgress(task: TaskRun): JobProgress | null {
+  const progress = task.progress_data as JobProgress | null;
+  if (progress) return progress;
+  if (!task.progress_stage) return null;
+  return {
+    stage: task.progress_stage,
+    current: task.progress_current || undefined,
+    total: task.progress_total || undefined,
+  };
+}
+
+function flattenTaskNode(node: TaskNode): TaskRun[] {
+  return [node.task, ...node.children.flatMap(flattenTaskNode)];
+}
+
+function buildTaskTree(tasks: TaskRun[]): TaskNode[] {
+  const nodes = new Map<string, TaskNode>();
+  for (const task of tasks) nodes.set(task.id, { task, children: [] });
+  const roots: TaskNode[] = [];
+  for (const task of tasks) {
+    const node = nodes.get(task.id)!;
+    const parent = task.parent_task_id ? nodes.get(task.parent_task_id) : null;
+    if (parent && parent.task.id !== task.id) parent.children.push(node);
+    else roots.push(node);
+  }
+  return roots;
+}
+
+function aggregateTaskGroup(node: TaskNode): { status: string; progress: JobProgress | null; active: number; failed: number; complete: number; total: number } {
+  const tasks = flattenTaskNode(node).filter((task) => task.id !== node.task.id);
+  if (!tasks.length) {
+    return {
+      status: node.task.status,
+      progress: taskRunProgress(node.task),
+      active: 0,
+      failed: 0,
+      complete: node.task.status === "complete" ? 1 : 0,
+      total: 1,
+    };
+  }
+  const failed = tasks.filter((task) => ["failed", "stale", "cancelled"].includes(task.status)).length;
+  const active = tasks.filter((task) => isAttentionStatus(task.status) && !["failed", "stale", "cancelled"].includes(task.status)).length;
+  const complete = tasks.filter((task) => task.status === "complete").length;
+  const total = tasks.length;
+  const status = failed > 0 ? "failed" : active > 0 ? "running" : complete === total ? "complete" : node.task.status;
+  return {
+    status,
+    progress: {
+      stage: status,
+      current: complete,
+      total,
+      percent: total ? (complete / total) * 100 : undefined,
+      message: `${complete}/${total}`,
+    },
+    active,
+    failed,
+    complete,
+    total,
+  };
+}
+
+function TaskRunRow({
+  task,
+  selected,
+  onToggleSelect,
+  openTaskDetail,
+  openDownloadDetail,
+  openImportDetail,
+  indent = 0,
+}: {
+  task: TaskRun;
+  selected: Set<string>;
+  onToggleSelect: (id: string) => void;
+  openTaskDetail: (id: string) => void;
+  openDownloadDetail: (id: string) => void;
+  openImportDetail: (id: string) => void;
+  indent?: number;
+}) {
+  const t = useT();
+  const fmt = useI18nFormat();
+  const progress = taskRunProgress(task);
+  const subjectId = task.subject_id;
+  const clickableDownload = task.subject_type === "download_job" && subjectId;
+  const clickableImport = task.subject_type === "import_job" && subjectId;
+  const isActive = isActiveTask(task.status);
+  return (
+    <div className={indent ? "pl-6" : undefined}>
+      <JobRowShell
+        id={task.id}
+        status={task.status}
+        typeLabel={operationLabel(t, task.operation_type, task.kind)}
+        select={<input type="checkbox" checked={selected.has(task.id)} onClick={(e) => e.stopPropagation()} onChange={() => onToggleSelect(task.id)} className="h-4 w-4 shrink-0 rounded border-border" aria-label={t("jobs.select_task", { id: shortId(task.id) })} />}
+        source={task.source ? <SourceBadge source={task.source} /> : undefined}
+        primary={task.title || task.operation_type || task.kind}
+        secondary={task.subject_type && task.subject_id ? `${task.subject_type} · ${shortId(task.subject_id)}` : task.queue_name || task.rq_job_id}
+        detail={task.source_url || task.queue_name || task.rq_job_id || task.subject_type}
+        progress={isActive ? progress || fallbackProgress(task.progress_stage || task.status) : progress}
+        activeSince={isActive && !progress && task.created_at ? task.created_at : null}
+        timestamp={task.created_at ? fmt.time(task.created_at) : "—"}
+        error={task.error_log}
+        result={task.result_data?.message}
+        onClick={() => openTaskDetail(task.id)}
+        actions={(
+          <>
+            {clickableDownload && <RowButton onClick={() => openDownloadDetail(subjectId)}>{t("jobs.open_download")}</RowButton>}
+            {clickableImport && <RowButton onClick={() => openImportDetail(subjectId)}>{t("jobs.import_detail")}</RowButton>}
+          </>
+        )}
+      />
+    </div>
+  );
+}
+
 function UnifiedTaskList({
   tasks,
   isLoading,
@@ -498,7 +618,6 @@ function UnifiedTaskList({
   openImportDetail: (id: string) => void;
 }) {
   const t = useT();
-  const fmt = useI18nFormat();
   const rows = tasks?.items || [];
 
   return (
@@ -512,38 +631,195 @@ function UnifiedTaskList({
       {!isLoading && !error && rows.length === 0 && <EmptyState title={t("jobs.no_dl")} description={t("jobs.no_dl_desc")} />}
       {rows.length > 0 && (
         <div className="space-y-1">
-            {rows.map((task) => {
-              const progress = task.progress_data as JobProgress | null
-                || (task.progress_stage ? { stage: task.progress_stage, current: task.progress_current || undefined, total: task.progress_total || undefined } : null);
-              const subjectId = task.subject_id;
-              const clickableDownload = task.subject_type === "download_job" && subjectId;
-              const clickableImport = task.subject_type === "import_job" && subjectId;
+          {rows.map((task) => (
+            <TaskRunRow
+              key={task.id}
+              task={task}
+              selected={selected}
+              onToggleSelect={onToggleSelect}
+              openTaskDetail={openTaskDetail}
+              openDownloadDetail={openDownloadDetail}
+              openImportDetail={openImportDetail}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function TaskTreeChildren({
+  nodes,
+  selected,
+  onToggleSelect,
+  openTaskDetail,
+  openDownloadDetail,
+  openImportDetail,
+  indent,
+}: {
+  nodes: TaskNode[];
+  selected: Set<string>;
+  onToggleSelect: (id: string) => void;
+  openTaskDetail: (id: string) => void;
+  openDownloadDetail: (id: string) => void;
+  openImportDetail: (id: string) => void;
+  indent: number;
+}) {
+  return (
+    <div className="space-y-1">
+      {nodes.map((node) => (
+        <div key={node.task.id} className="space-y-1">
+          <TaskRunRow
+            task={node.task}
+            selected={selected}
+            onToggleSelect={onToggleSelect}
+            openTaskDetail={openTaskDetail}
+            openDownloadDetail={openDownloadDetail}
+            openImportDetail={openImportDetail}
+            indent={indent}
+          />
+          {node.children.length > 0 && (
+            <TaskTreeChildren
+              nodes={node.children}
+              selected={selected}
+              onToggleSelect={onToggleSelect}
+              openTaskDetail={openTaskDetail}
+              openDownloadDetail={openDownloadDetail}
+              openImportDetail={openImportDetail}
+              indent={indent + 1}
+            />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function GroupedTaskList({
+  tasks,
+  isLoading,
+  error,
+  selected,
+  onRetry,
+  onToggleSelect,
+  openTaskDetail,
+  openDownloadDetail,
+  openImportDetail,
+}: {
+  tasks?: { total: number; items: TaskRun[] };
+  isLoading: boolean;
+  error: unknown;
+  selected: Set<string>;
+  onRetry: () => void;
+  onToggleSelect: (id: string) => void;
+  openTaskDetail: (id: string) => void;
+  openDownloadDetail: (id: string) => void;
+  openImportDetail: (id: string) => void;
+}) {
+  const t = useT();
+  const fmt = useI18nFormat();
+  const rows = useMemo(() => tasks?.items ?? [], [tasks?.items]);
+  const roots = useMemo(() => buildTaskTree(rows), [rows]);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const node of roots) {
+        if (node.children.length > 0 && isAttentionStatus(aggregateTaskGroup(node).status)) {
+          if (!next.has(node.task.id)) changed = true;
+          next.add(node.task.id);
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [roots]);
+
+  const toggleExpanded = (id: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  return (
+    <section className="mb-8">
+      <h3 className="mb-2 flex items-center gap-3 text-base font-semibold">
+        {t("jobs.title")}
+        <span className="text-xs font-normal text-muted">{tasks?.total ?? 0} {t("common.items")}</span>
+      </h3>
+      {isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-14 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div>}
+      {Boolean(error) && <ErrorState message={(error as Error).message} onRetry={onRetry} />}
+      {!isLoading && !error && roots.length === 0 && <EmptyState title={t("jobs.no_dl")} description={t("jobs.no_dl_desc")} />}
+      {roots.length > 0 && (
+        <div className="space-y-2">
+          {roots.map((node) => {
+            if (node.children.length === 0) {
               return (
-                <JobRowShell
-                  key={task.id}
-                  id={task.id}
-                  status={task.status}
-                  typeLabel={operationLabel(t, task.operation_type, task.kind)}
-                  select={<input type="checkbox" checked={selected.has(task.id)} onClick={(e) => e.stopPropagation()} onChange={() => onToggleSelect(task.id)} className="h-4 w-4 shrink-0 rounded border-border" aria-label={t("jobs.select_task", { id: shortId(task.id) })} />}
-                  source={task.source ? <SourceBadge source={task.source} /> : undefined}
-                  primary={task.title || task.operation_type || task.kind}
-                  secondary={task.subject_type && task.subject_id ? `${task.subject_type} · ${shortId(task.subject_id)}` : task.queue_name || task.rq_job_id}
-                  detail={task.source_url || task.queue_name || task.rq_job_id || task.subject_type}
-                  progress={isActiveTask(task.status) ? progress : null}
-                  activeSince={isActiveTask(task.status) && task.created_at ? task.created_at : null}
-                  timestamp={task.created_at ? fmt.time(task.created_at) : "—"}
-                  error={task.error_log}
-                  result={task.result_data?.message}
-                    onClick={() => openTaskDetail(task.id)}
-                    actions={(
-                      <>
-                      {clickableDownload && <RowButton onClick={() => openDownloadDetail(subjectId)}>{t("jobs.open_download")}</RowButton>}
-                      {clickableImport && <RowButton onClick={() => openImportDetail(subjectId)}>{t("jobs.import_detail")}</RowButton>}
-                      </>
-                    )}
-                  />
+                <TaskRunRow
+                  key={node.task.id}
+                  task={node.task}
+                  selected={selected}
+                  onToggleSelect={onToggleSelect}
+                  openTaskDetail={openTaskDetail}
+                  openDownloadDetail={openDownloadDetail}
+                  openImportDetail={openImportDetail}
+                />
               );
-            })}
+            }
+            const aggregate = aggregateTaskGroup(node);
+            const isOpen = expanded.has(node.task.id);
+            const childCount = flattenTaskNode(node).length - 1;
+            const source = node.task.source || flattenTaskNode(node).find((task) => task.source)?.source;
+            const summary = t("jobs.group_summary", {
+              active: aggregate.active,
+              failed: aggregate.failed,
+              complete: aggregate.complete,
+              total: aggregate.total,
+            });
+            return (
+              <div key={node.task.id} className="space-y-1">
+                <JobRowShell
+                  id={node.task.id}
+                  status={aggregate.status}
+                  typeLabel={operationLabel(t, node.task.operation_type, node.task.kind)}
+                  select={(
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); toggleExpanded(node.task.id); }}
+                      className="flex h-6 w-6 items-center justify-center rounded border border-border text-xs text-muted hover:bg-subtle"
+                      aria-label={isOpen ? t("jobs.collapse_group") : t("jobs.expand_group")}
+                    >
+                      {isOpen ? "▾" : "▸"}
+                    </button>
+                  )}
+                  source={source ? <SourceBadge source={source} /> : undefined}
+                  primary={node.task.title || operationLabel(t, node.task.operation_type, node.task.kind)}
+                  secondary={t("jobs.group_children", { count: childCount })}
+                  detail={node.task.source_url || node.task.queue_name || summary}
+                  progress={aggregate.progress}
+                  timestamp={node.task.updated_at ? fmt.time(node.task.updated_at) : node.task.created_at ? fmt.time(node.task.created_at) : "—"}
+                  result={summary}
+                  onClick={() => openTaskDetail(node.task.id)}
+                  actions={<RowButton onClick={() => openTaskDetail(node.task.id)}>{t("jobs.task_detail")}</RowButton>}
+                />
+                {isOpen && (
+                  <TaskTreeChildren
+                    nodes={node.children}
+                    selected={selected}
+                    onToggleSelect={onToggleSelect}
+                    openTaskDetail={openTaskDetail}
+                    openDownloadDetail={openDownloadDetail}
+                    openImportDetail={openImportDetail}
+                    indent={1}
+                  />
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </section>
@@ -1250,7 +1526,21 @@ function JobsContent() {
         onSelectAll={handleSelectAll}
       />
 
-      {(activeTab === "all" || activeTab === "admin") && (
+      {activeTab === "all" && (
+        <GroupedTaskList
+          tasks={tasks.data}
+          isLoading={tasks.isLoading}
+          error={tasks.error}
+          selected={selected}
+          onRetry={() => tasks.refetch()}
+          onToggleSelect={toggleSelect}
+          openTaskDetail={openTaskDetail}
+          openDownloadDetail={openDownloadDetail}
+          openImportDetail={openImportDetail}
+        />
+      )}
+
+      {activeTab === "admin" && (
         <UnifiedTaskList
           tasks={tasks.data}
           isLoading={tasks.isLoading}
