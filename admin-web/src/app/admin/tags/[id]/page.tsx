@@ -42,7 +42,7 @@ export default function TagDetailPage() {
         <aside className="space-y-4">
           <div className="card p-4">
             <h1 className="text-2xl font-bold text-fg dark:text-white">#{td.normalized_name}</h1>
-            {td.category && <span className="inline-block mt-2 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">{td.category}</span>}
+            {td.category && <span className="inline-block mt-2 px-2.5 py-0.5 rounded-full text-xs font-medium bg-accent-subtle text-accent">{td.category}</span>}
             <dl className="mt-4 space-y-2 text-sm">
               <div className="flex justify-between"><dt className="text-muted">{t("tag_detail.work_count")}</dt><dd className="font-semibold">{td.usage_count}</dd></div>
               <div className="flex justify-between"><dt className="text-muted">{t("tag_detail.created")}</dt><dd className="text-xs">{new Date(td.created_at).toLocaleDateString()}</dd></div>
@@ -56,7 +56,7 @@ export default function TagDetailPage() {
                 {td.top_creators.map((c: any) => (
                   <Link key={c.creator_id} href={`/admin/creators/${c.creator_id}`}
                     className="flex items-center justify-between rounded-md px-2 py-1.5 hover:bg-subtle dark:hover:bg-subtle transition-colors">
-                    <span className="text-sm text-blue-600 hover:underline truncate">{c.creator_name}</span>
+                    <span className="text-sm text-accent hover:underline truncate">{c.creator_name}</span>
                     <span className="text-xs text-muted ml-2 shrink-0">{c.work_count}</span>
                   </Link>
                 ))}
@@ -73,7 +73,7 @@ export default function TagDetailPage() {
             <>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 {works.data.items.map((w: any) => (
-                  <Link key={w.id} href={`/admin/works/${w.id}`} className="group overflow-hidden rounded-md border border-border bg-white hover:border-blue-300 dark:border-border dark:bg-subtle transition-colors">
+                  <Link key={w.id} href={`/admin/works/${w.id}`} className="group overflow-hidden rounded-md border border-border bg-white hover:border-accent/30 dark:border-border dark:bg-subtle transition-colors">
                     <div className="aspect-[4/3] bg-subtle">
                       {w.thumbnail_asset_id ? (
                         <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="h-full w-full object-cover" loading="lazy" decoding="async" />
@@ -82,7 +82,7 @@ export default function TagDetailPage() {
                       )}
                     </div>
                     <div className="p-3">
-                      <div className="truncate text-sm font-medium group-hover:text-blue-600 dark:group-hover:text-blue-400">{w.title || t("works.untitled")}</div>
+                      <div className="truncate text-sm font-medium group-hover:text-accent dark:group-hover:text-accent">{w.title || t("works.untitled")}</div>
                       {w.creator_name && <div className="text-xs text-muted mt-1">{w.creator_name}</div>}
                     </div>
                   </Link>

@@ -76,7 +76,7 @@ function SearchContent() {
           <div className="flex gap-1 mb-4 border-b border-border">
             {tabs.map(tab => (
               <button key={tab.key} onClick={() => setKind(tab.key)}
-                className={`px-4 py-2 text-sm border-b-2 -mb-px transition-colors ${kind === tab.key ? "border-blue-500 text-blue-600 font-medium" : "border-transparent text-muted hover:text-fg"}`}>
+                className={`px-4 py-2 text-sm border-b-2 -mb-px transition-colors ${kind === tab.key ? "border-accent/30 text-accent font-medium" : "border-transparent text-muted hover:text-fg"}`}>
                 {tab.label} <span className="ml-1.5 text-xs bg-subtle rounded-full px-1.5 py-0.5">{tab.count}</span>
               </button>
             ))}
@@ -89,7 +89,7 @@ function SearchContent() {
                 {creatorsHits.map((c: any) => (
                   <Link key={c.id} href={`/admin/creators/${c.id}`}
                     className="card-interactive flex items-center gap-4 p-4 cursor-pointer">
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-purple-600 text-white font-semibold text-lg">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-accent to-purple-600 text-white font-semibold text-lg">
                       {(c.display_name || c.name).trim().slice(0, 2).toUpperCase()}
                     </div>
                     <div className="flex-1 min-w-0">
@@ -117,13 +117,13 @@ function SearchContent() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="truncate text-sm font-medium">{w.title || t("search.untitled")}</span>
-                        {w.is_nsfw && <span className="badge bg-red-100 text-red-700 text-xs">{t("search.nsfw")}</span>}
+                        {w.is_nsfw && <span className="badge bg-danger-subtle text-danger text-xs">{t("search.nsfw")}</span>}
                       </div>
                       <div className="mt-1 flex items-center gap-2 text-xs text-muted">
                         {w.source && <SourceBadge source={w.source} href={`/admin/works?source=${w.source}`} />}
                         {w.creator_name && (
                           <Link href={`/admin/creators/${w.creator_id || w.id}`} onClick={(e) => e.stopPropagation()}
-                            className="text-blue-600 hover:underline">{w.creator_name}</Link>
+                            className="text-accent hover:underline">{w.creator_name}</Link>
                         )}
                         {w.posted_at && <span>{new Date(w.posted_at).toLocaleDateString()}</span>}
                       </div>
@@ -131,7 +131,7 @@ function SearchContent() {
                         <div className="flex gap-1 mt-1.5 flex-wrap">
                           {w.tags.slice(0, 8).map((tag: string) => (
                             <span key={tag} onClick={(e) => { e.stopPropagation(); router.push(`/admin/search?q=${encodeURIComponent(tag)}`); }}
-                              className="badge cursor-pointer text-[10px] hover:border-blue-500 hover:text-blue-600">{tag}</span>
+                              className="badge cursor-pointer text-[10px] hover:border-accent/30 hover:text-accent">{tag}</span>
                           ))}
                         </div>
                       )}
@@ -148,7 +148,7 @@ function SearchContent() {
               <div className="flex flex-wrap gap-2">
                 {tagsHits.map((tag: any) => (
                   <Link key={tag.id} href={`/admin/tags/${tag.id}`}
-                    className="px-3 py-1.5 bg-subtle rounded-full text-sm hover:bg-blue-100 hover:text-blue-700 dark:hover:bg-blue-900/30 dark:hover:text-blue-300 transition-colors">
+                    className="px-3 py-1.5 bg-subtle rounded-full text-sm hover:bg-accent/90 hover:text-accent dark:hover:bg-accent/90 dark:hover:text-accent transition-colors">
                     #{tag.normalized_name}
                     {tag.category && <span className="text-xs text-muted ml-1">({tag.category})</span>}
                   </Link>
