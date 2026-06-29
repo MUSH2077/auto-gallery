@@ -305,7 +305,8 @@ export default function RepositoryDetailPage() {
       qc.invalidateQueries({ queryKey: queryKeys.repositories.detail(id) });
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
       qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
-      toast.success(result.message || result.reason || t("repo_detail.sync_queued"));
+      const reason = typeof result.reason === "object" ? result.reason?.message : result.reason;
+      toast.success(result.message || reason || t("repo_detail.sync_queued"));
     },
     onError: (e: Error) => toast.error(e.message),
   });

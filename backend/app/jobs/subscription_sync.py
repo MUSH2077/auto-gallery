@@ -235,21 +235,22 @@ def schedule_decision_snapshot(
 
 
 def sync_subscriptions():
-    asyncio.run(sync_subscriptions_async())
+    return asyncio.run(sync_subscriptions_async())
 
 
-async def sync_subscriptions_async():
+async def sync_subscriptions_async(parent_task_id=None):
     async with redis_lock("lock:subscription-sync-scan", ttl_seconds=300) as acquired:
         if not acquired:
             logger.info("Subscription auto-sync scan already running; skipping")
-            return
-        await _sync_subscriptions_locked()
+            return {"created": 0, "skipped": 1, "errors": 0, "rescheduled_at": None, "status": "skipped", "reason": "lock_busy"}
+        return await _sync_subscriptions_locked(parent_task_id=parent_task_id)
 
 
-async def _sync_subscriptions_locked():
+async def _sync_subscriptions_locked(parent_task_id=None):
     logger.info("Starting subscription auto-sync scan")
     jobs_created = 0
     skipped_count = 0
+    error_count = 0
 
     async with async_session() as db:
         config = await get_scheduler_config(db)
@@ -306,13 +307,15 @@ async def _sync_subscriptions_locked():
                     logger.debug("Auto-sync skipped source: not due", extra={**log_context, **decision})
                     continue
 
-                result = await enqueue_subscription_source_sync(db, ss.id, trigger="scheduler")
+                result = await enqueue_subscription_source_sync(db, ss.id, trigger="scheduler", parent_task_id=parent_task_id)
                 if result["status"] == "enqueued":
                     jobs_created += 1
                     logger.info("Auto-sync created download job",
                                 extra={**log_context, **decision, "job_id": result["job_id"], "source_url": result.get("source_url")})
                 else:
                     skipped_count += 1
+                    if result.get("status") == "error":
+                        error_count += 1
                     logger.debug("Auto-sync skipped source after enqueue check",
                                  extra={**log_context, **decision, "skip_reason": result.get("skip_reason") or result})
 
@@ -333,24 +336,22 @@ async def _sync_subscriptions_locked():
             )
             candidates = result.scalars().all()
 
-            if not candidates:
-                return
-
             # Check Redis heartbeat keys for each candidate
             r = get_redis()
             stale_jobs = []
-            for job in candidates:
-                hb_key = f"task:{str(job.id)}:heartbeat_ts"
-                try:
-                    if r.exists(hb_key):
-                        continue  # heartbeat key exists → worker is alive
-                except Exception:
-                    pass  # Redis error → fall through to created_at check
+            if candidates:
+                for job in candidates:
+                    hb_key = f"task:{str(job.id)}:heartbeat_ts"
+                    try:
+                        if r.exists(hb_key):
+                            continue  # heartbeat key exists → worker is alive
+                    except Exception:
+                        pass  # Redis error → fall through to created_at check
 
-                # No heartbeat key → check created_at fallback
-                created = job.created_at
-                if created is not None and created < created_at_fallback_cutoff:
-                    stale_jobs.append(job)
+                    # No heartbeat key → check created_at fallback
+                    created = job.created_at
+                    if created is not None and created < created_at_fallback_cutoff:
+                        stale_jobs.append(job)
 
             if stale_jobs:
                 stale_repo = DownloadJobRepository(stale_db)
@@ -409,9 +410,21 @@ async def _sync_subscriptions_locked():
     # Re-schedule for next scan
     try:
         from rq import Queue
+        next_scan_at = datetime.now(timezone.utc) + timedelta(minutes=max(scan_minutes, 5))
         Queue(name="scheduled", connection=get_redis()).enqueue_in(
             timedelta(minutes=max(scan_minutes, 5)),
             sync_subscriptions,
         )
+        rescheduled_at = next_scan_at.isoformat()
     except Exception as e:
         logger.error("Failed to re-schedule auto-sync: %s", e)
+        error_count += 1
+        rescheduled_at = None
+
+    return {
+        "created": jobs_created,
+        "skipped": skipped_count,
+        "errors": error_count,
+        "rescheduled_at": rescheduled_at,
+        "status": "ok" if error_count == 0 else "partial_error",
+    }

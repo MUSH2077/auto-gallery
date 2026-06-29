@@ -121,6 +121,7 @@ function AdminOperationsSection() {
                   {op.operation_type === "admin-rebuild" ? t("scheduler.rebuild_library") :
                    op.operation_type === "admin-clear" ? t("datamgmt.clear_all") :
                    op.operation_type === "admin-disk-import" ? t("datamgmt.disk_import") :
+                   op.operation_type === "subscription-sync-batch" ? t("scheduler.subscription_sync_batch", "Subscription sync batch") :
                    op.operation_type}
                 </div>
                 {op.progress_data && (
@@ -165,11 +166,31 @@ export default function SchedulerPage() {
   const decisions = useQuery({ queryKey: queryKeys.schedulerDecisions, queryFn: api.schedulerDecisions, refetchInterval: 15000 });
 
   const syncNow = useMutation({
-    mutationFn: () => api.triggerSyncNow(),
-    onSuccess: () => {
+    mutationFn: () => api.triggerSyncNow("force_eligible"),
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["queue-stats"] });
       qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+      toast.success({
+        message: t("scheduler.sync_batch_result", { enqueued: data.enqueued_count, skipped: data.skipped_count }),
+        action: { label: t("jobs.open_task", "View task"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${data.task_id}`) },
+      });
     },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const runDueScan = useMutation({
+    mutationFn: () => api.triggerSyncNow("due_scan"),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["queue-stats"] });
+      qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      toast.info({
+        message: t("scheduler.scan_result", { enqueued: data.enqueued_count, skipped: data.skipped_count }),
+        action: { label: t("jobs.open_task", "View task"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${data.task_id}`) },
+      });
+    },
+    onError: (e: Error) => toast.error(e.message),
   });
   const clearFailed = useMutation({
     mutationFn: () => api.clearFailedJobs(),
@@ -177,11 +198,19 @@ export default function SchedulerPage() {
   });
   const syncRepo = useMutation({
     mutationFn: (id: string) => api.syncRepository(id),
-    onSuccess: () => {
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["queue-stats"] });
       qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      if (data.status === "enqueued") {
+        toast.success(data.message || t("repo_detail.sync_queued", "Sync queued"));
+      } else {
+        const reason = typeof data.reason === "object" ? data.reason?.message : data.reason;
+        toast.warning(reason || data.message || t("subscriptions.sync_no_jobs"));
+      }
     },
+    onError: (e: Error) => toast.error(e.message),
   });
 
   // Batch enable/disable sources
@@ -263,8 +292,11 @@ export default function SchedulerPage() {
         <button onClick={refreshAll} className="btn-ghost px-5 py-2.5">
           {t("scheduler.refresh")}
         </button>
+        <button onClick={() => runDueScan.mutate()} disabled={runDueScan.isPending} className="btn-ghost px-5 py-2.5">
+          {runDueScan.isPending ? t("scheduler.scanning", "Scanning...") : t("scheduler.run_due_scan", "Run scheduler scan")}
+        </button>
         <button onClick={() => syncNow.mutate()} disabled={syncNow.isPending} className="btn-primary px-5 py-2.5">
-          {syncNow.isPending ? t("scheduler.syncing") : t("scheduler.sync_now")}
+          {syncNow.isPending ? t("scheduler.syncing") : t("scheduler.sync_eligible_now", "Sync eligible now")}
         </button>
         {queue.data && queue.data.failed_jobs > 0 && (
           <button onClick={() => clearFailed.mutate()} disabled={clearFailed.isPending} className="btn-danger px-5 py-2.5">

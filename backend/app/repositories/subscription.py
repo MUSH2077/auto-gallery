@@ -57,9 +57,50 @@ class SubscriptionRepository:
             .correlate(Subscription)
             .scalar_subquery()
         )
+        latest_job_id = (
+            select(DownloadJob.id)
+            .where(DownloadJob.subscription_id == Subscription.id)
+            .order_by(DownloadJob.created_at.desc())
+            .limit(1)
+            .correlate(Subscription)
+            .scalar_subquery()
+        )
+        latest_job_created_at = (
+            select(DownloadJob.created_at)
+            .where(DownloadJob.subscription_id == Subscription.id)
+            .order_by(DownloadJob.created_at.desc())
+            .limit(1)
+            .correlate(Subscription)
+            .scalar_subquery()
+        )
+        running_job_count = (
+            select(func.count(DownloadJob.id))
+            .where(DownloadJob.subscription_id == Subscription.id)
+            .where(DownloadJob.status.in_(("enqueued", "downloading", "downloaded", "importing")))
+            .correlate(Subscription)
+            .scalar_subquery()
+        )
+        failed_job_count = (
+            select(func.count(DownloadJob.id))
+            .where(DownloadJob.subscription_id == Subscription.id)
+            .where(DownloadJob.status.in_(("failed", "stale")))
+            .correlate(Subscription)
+            .scalar_subquery()
+        )
 
         stmt = (
-            select(Subscription, Creator.name, Creator.display_name, source_count, enabled_source_count, latest_job_status)
+            select(
+                Subscription,
+                Creator.name,
+                Creator.display_name,
+                source_count,
+                enabled_source_count,
+                latest_job_status,
+                latest_job_id,
+                latest_job_created_at,
+                running_job_count,
+                failed_job_count,
+            )
             .join(Creator, Creator.id == Subscription.creator_id)
             .offset(offset).limit(limit)
             .order_by(Subscription.created_at.desc())
@@ -80,6 +121,10 @@ class SubscriptionRepository:
             sub.source_count = row[3] or 0
             sub.enabled_source_count = row[4] or 0
             sub.latest_job_status = row[5]
+            sub.latest_job_id = row[6]
+            sub.latest_job_created_at = row[7]
+            sub.running_job_count = row[8] or 0
+            sub.failed_job_count = row[9] or 0
             subs.append(sub)
         return subs
 

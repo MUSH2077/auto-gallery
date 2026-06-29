@@ -173,7 +173,11 @@ export const api = {
       "/api/v1/subscriptions/batch-toggle-sync", { method: "POST", body: JSON.stringify({ ids, sync_enabled: syncEnabled }) }),
 
   syncNowSubscription: (id: string) =>
-    request<{ status: string; message: string; job_ids: string[] }>(`/api/v1/subscriptions/${id}/sync-now`, { method: "POST" }),
+    request<{
+      status: string; message: string; task_id?: string; job_ids: string[]; task_ids?: string[];
+      enqueued_count?: number; skipped_count?: number; error_count?: number;
+      skipped?: unknown[]; errors?: unknown[];
+    }>(`/api/v1/subscriptions/${id}/sync-now`, { method: "POST" }),
 
   listSubscriptionSources: (subId: string) =>
     request<T.SubscriptionSource[]>(`/api/v1/subscriptions/${subId}/sources`),
@@ -258,7 +262,7 @@ export const api = {
     request<T.RepositoryDetailResponse>(`/api/v1/repositories/${id}`),
 
   syncRepository: (id: string) =>
-    request<{ status: string; message?: string; job_id?: string; reason?: string }>(`/api/v1/repositories/${id}/sync-now`, { method: "POST" }),
+    request<{ status: string; message?: string; job_id?: string; task_id?: string; reason?: string | { code?: string; message?: string } }>(`/api/v1/repositories/${id}/sync-now`, { method: "POST" }),
 
   getRepositoryCurationGraph: (id: string, offset = 0, limit = 100, params?: { trigger?: string; include_baseline?: boolean }) => {
     const q = new URLSearchParams({ offset: String(offset), limit: String(limit) });
@@ -427,8 +431,12 @@ export const api = {
   resetSettings: () =>
     request<{ status: string; message: string }>("/api/v1/admin/reset-settings", { method: "POST" }),
 
-  triggerSyncNow: () =>
-    request<{ status: string; message: string; job_id: string }>("/api/v1/admin/scheduler/sync-now", { method: "POST" }),
+  triggerSyncNow: (mode: "force_eligible" | "due_scan" = "force_eligible") =>
+    request<{
+      status: string; message: string; task_id: string; mode: "force_eligible" | "due_scan";
+      enqueued_count: number; skipped_count: number; error_count?: number;
+      skipped_reasons?: Record<string, number>; job_ids: string[]; task_ids?: string[];
+    }>("/api/v1/admin/scheduler/sync-now", { method: "POST", body: JSON.stringify({ mode }) }),
 
   clearFailedJobs: () =>
     request<{ status: string; message: string }>("/api/v1/system/clear-failed-jobs", { method: "POST" }),

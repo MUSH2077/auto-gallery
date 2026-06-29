@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, Suspense } from "react";
+import { useMemo, useState, useEffect, Suspense } from "react";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
@@ -7,6 +7,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, Subscription } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, ConfirmDialog, Modal, SourceBadge, StatusBadge, FilterBar, SelectionBar, PageShell } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
+import { scheduleModeLabel, useI18nFormat } from "@/lib/i18n-format";
 
 type FilterMode = "all" | "active" | "inactive" | "sync_on" | "sync_off" | "never_synced";
 
@@ -57,6 +58,7 @@ function buildFilters(filter: FilterMode, search: string) {
 function SubscriptionsContent() {
   const router = useRouter();
   const t = useT();
+  const fmt = useI18nFormat();
   const toast = useToast();
   const qc = useQueryClient();
   const notify = useNotifications();
@@ -70,6 +72,7 @@ function SubscriptionsContent() {
   const limit = 25;
   const [showCreate, setShowCreate] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [syncingSubId, setSyncingSubId] = useState<string | null>(null);
 
   // Local input for search field — debounced 300ms before writing to URL
   const [inputVal, setInputVal] = useState(search);
@@ -127,7 +130,23 @@ function SubscriptionsContent() {
     queryKey: queryKeys.admin.settings,
     queryFn: api.getAdminSettings,
   });
+  const decisions = useQuery({
+    queryKey: queryKeys.schedulerDecisions,
+    queryFn: api.schedulerDecisions,
+    refetchInterval: 15000,
+  });
   const sysDefaults = systemSettings.data?.subscription_defaults;
+  const decisionBySub = useMemo(() => {
+    const grouped = new Map<string, { due: number; blocked: number; nextDueAt?: string | null }>();
+    for (const item of decisions.data?.items || []) {
+      const current = grouped.get(item.subscription_id) || { due: 0, blocked: 0, nextDueAt: null };
+      if (item.due) current.due += 1;
+      if (["auth_unhealthy", "url_invalid", "unknown_provider", "provider_not_downloadable"].includes(item.reason)) current.blocked += 1;
+      if (item.next_due_at && (!current.nextDueAt || item.next_due_at < current.nextDueAt)) current.nextDueAt = item.next_due_at;
+      grouped.set(item.subscription_id, current);
+    }
+    return grouped;
+  }, [decisions.data?.items]);
 
   const refreshSubscriptionViews = () => {
     qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
@@ -149,16 +168,26 @@ function SubscriptionsContent() {
 
   const syncNow = useMutation({
     mutationFn: (id: string) => api.syncNowSubscription(id),
+    onMutate: (id) => setSyncingSubId(id),
     onSuccess: (data) => {
       subs.refetch();
       refreshSubscriptionViews();
+      qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
       if (data.status === "error" || data.status === "partial_error") {
         toast.warning({ message: (data as any).message || "Sync partially failed" });
       } else if (data.job_ids.length === 0) {
         toast.warning({ message: t("subscriptions.sync_no_jobs") });
+      } else {
+        toast.success({
+          message: t("subscriptions.sync_result", { count: data.job_ids.length, skipped: data.skipped_count ?? 0 }),
+          action: data.task_id ? { label: t("jobs.open_task", "View task"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${data.task_id}`) } : undefined,
+        });
       }
     },
     onError: (e: Error) => toast.error({ message: e.message }),
+    onSettled: () => setSyncingSubId(null),
   });
 
   const batchDel = useMutation({
@@ -238,11 +267,19 @@ function SubscriptionsContent() {
       {subs.data && !subs.data.length && <EmptyState title={t("subscriptions.no_subs")} description={t("subscriptions.no_subs_desc")} action={<button onClick={() => setShowCreate(true)} className="btn-primary">{t("subscriptions.create_sub")}</button>} />}
 
       {subs.data && subs.data.length > 0 && (
-        <div className="overflow-hidden rounded-md border border-border bg-white dark:border-border dark:bg-surface">
+        <div className="overflow-hidden rounded-md border border-border bg-surface dark:border-border dark:bg-surface">
+          <div className="hidden grid-cols-[minmax(0,1.45fr)_minmax(120px,0.8fr)_minmax(140px,0.9fr)_minmax(150px,1fr)_minmax(170px,1fr)] gap-3 border-b border-border bg-subtle px-4 py-2 text-xs font-medium uppercase text-muted lg:grid">
+            <span>{t("subscriptions.col_group", "Sync group")}</span>
+            <span>{t("subscriptions.col_sources", "Sources")}</span>
+            <span>{t("subscriptions.col_health", "Health")}</span>
+            <span>{t("subscriptions.col_schedule", "Schedule")}</span>
+            <span>{t("subscriptions.col_actions", "Actions")}</span>
+          </div>
           {subs.data.map((s: Subscription) => (
-            <div key={s.id} className={`flex cursor-pointer items-center gap-3 border-b border-border p-4 last:border-b-0 hover:bg-subtle dark:border-border dark:hover:bg-subtle ${selected.has(s.id) ? "bg-accent-subtle dark:bg-accent-subtle" : ""}`} onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>
-              <input type="checkbox" aria-label="Select item" checked={selected.has(s.id)} onChange={() => toggleSelect(s.id)} className="rounded shrink-0" onClick={(e) => e.stopPropagation()} />
-              <div className="flex-1 min-w-0">
+            <div key={s.id} className={`grid cursor-pointer grid-cols-1 gap-3 border-b border-border p-4 last:border-b-0 hover:bg-subtle dark:border-border dark:hover:bg-subtle lg:grid-cols-[minmax(0,1.45fr)_minmax(120px,0.8fr)_minmax(140px,0.9fr)_minmax(150px,1fr)_minmax(170px,1fr)] ${selected.has(s.id) ? "bg-accent-subtle dark:bg-accent-subtle" : ""}`} onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>
+              <div className="flex min-w-0 gap-3">
+                <input type="checkbox" aria-label="Select item" checked={selected.has(s.id)} onChange={() => toggleSelect(s.id)} className="mt-1 shrink-0 rounded" onClick={(e) => e.stopPropagation()} />
+                <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="truncate text-sm font-semibold text-accent">{s.name || s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8)}</span>
                   {s.is_active ? <span className="w-1.5 h-1.5 bg-green-500 rounded-full shrink-0" /> : <span className="w-1.5 h-1.5 bg-subtle rounded-full shrink-0" />}
@@ -254,27 +291,43 @@ function SubscriptionsContent() {
                     {s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8)}
                   </span>
                 </div>
-                <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted">
-                  <span>{s.source_count ?? 0} repositories</span>
-                  <span>{s.enabled_source_count ?? 0} enabled</span>
-                  <span>{s.last_synced_at ? `last sync ${new Date(s.last_synced_at).toLocaleDateString()}` : t("subscriptions.never")}</span>
+                <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted">
+                  <span>{t("subscriptions.last_success", { time: fmt.relative(s.last_synced_at, "subscriptions.never") })}</span>
+                  {s.latest_job_id && <span className="font-mono">{s.latest_job_id.slice(0, 8)}</span>}
+                </div>
                 </div>
               </div>
-              <div className="flex items-center gap-3 shrink-0 text-xs" onClick={(e) => e.stopPropagation()}>
-                {s.sync_enabled ? <span className="text-green-600 dark:text-green-400">{t("subscriptions.auto_sync")}</span> : <span className="text-muted">{t("subscriptions.manual")}</span>}
-                <span className="text-muted">{
-  s.schedule_mode === "fixed_time" ? (s.scheduled_times || t("scheduler.fixed_time")) :
-  s.schedule_mode === "manual" ? t("subscriptions.manual") :
-  s.schedule_mode === "interval" ? `${s.sync_interval_hours}h` :
-  // Inherit from system
-  sysDefaults?.schedule_mode === "fixed_time" ? t("scheduler.fixed_time") :
-  sysDefaults?.schedule_mode === "interval" ? `${s.sync_interval_hours || sysDefaults?.default_sync_interval_hours}h` :
-  `${s.sync_interval_hours}h`
-}</span>
+              <div className="text-xs text-muted">
+                <div className="font-semibold text-fg">{t("subscriptions.sources_summary", { enabled: s.enabled_source_count ?? 0, total: s.source_count ?? 0 })}</div>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {s.sync_enabled ? <span className="text-success">{t("subscriptions.auto_sync")}</span> : <span>{t("subscriptions.manual")}</span>}
+                  {(decisionBySub.get(s.id)?.due || 0) > 0 && <span className="text-accent">{t("subscriptions.due_sources", { count: decisionBySub.get(s.id)?.due || 0 })}</span>}
+                </div>
+              </div>
+              <div className="text-xs text-muted">
+                <div className={`font-semibold ${(s.failed_job_count || 0) > 0 || (decisionBySub.get(s.id)?.blocked || 0) > 0 ? "text-danger" : (s.running_job_count || 0) > 0 ? "text-accent" : "text-fg"}`}>
+                  {(s.running_job_count || 0) > 0 ? t("subscriptions.running_jobs", { count: s.running_job_count || 0 }) : (s.failed_job_count || 0) > 0 ? t("subscriptions.failed_jobs", { count: s.failed_job_count || 0 }) : t("subscriptions.healthy", "Healthy")}
+                </div>
+                <div className="mt-1">{t("subscriptions.blocked_sources", { count: decisionBySub.get(s.id)?.blocked || 0 })}</div>
+              </div>
+              <div className="text-xs text-muted">
+                <div className="font-semibold text-fg">{scheduleModeLabel(t, s.schedule_mode || sysDefaults?.schedule_mode || "interval")}</div>
+                <div className="mt-1">{
+                  s.schedule_mode === "fixed_time" ? (s.scheduled_times || t("scheduler.fixed_time")) :
+                  s.schedule_mode === "manual" ? t("subscriptions.manual") :
+                  s.schedule_mode === "interval" ? `${s.sync_interval_hours}h` :
+                  sysDefaults?.schedule_mode === "fixed_time" ? t("scheduler.fixed_time") :
+                  sysDefaults?.schedule_mode === "interval" ? `${s.sync_interval_hours || sysDefaults?.default_sync_interval_hours}h` :
+                  `${s.sync_interval_hours}h`
+                }</div>
+                <div className="mt-1">{t("subscriptions.next_due", { time: fmt.dateTime(decisionBySub.get(s.id)?.nextDueAt) })}</div>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 text-xs" onClick={(e) => e.stopPropagation()}>
                 <button onClick={(e) => { e.stopPropagation(); syncNow.mutate(s.id); }} disabled={syncNow.isPending}
                   className="text-accent hover:underline disabled:opacity-50 dark:text-accent">
-                  {syncNow.isPending ? t("subscriptions.syncing") : t("subscriptions.sync")}
+                  {syncingSubId === s.id ? t("subscriptions.syncing") : t("subscriptions.sync_all", "Sync all")}
                 </button>
+                <button onClick={(e) => { e.stopPropagation(); router.push(`/admin/jobs?tab=downloads&subscription_id=${s.id}`); }} className="text-accent hover:underline dark:text-accent">{t("scheduler.open_jobs")}</button>
                 <button onClick={(e) => { e.stopPropagation(); setDeleteId(s.id); }} className="text-danger hover:underline dark:text-danger">{t("subscriptions.del")}</button>
               </div>
             </div>

@@ -17,6 +17,15 @@ def test_scheduler_uses_source_enqueue_and_does_not_mark_success_on_enqueue():
     assert 'Queue(name="scheduled", connection=r).enqueue(' not in locked_src
 
 
+def test_scheduler_scan_does_not_return_before_reschedule_when_no_stale_candidates():
+    from app.jobs import subscription_sync
+
+    locked_src = inspect.getsource(subscription_sync._sync_subscriptions_locked)
+    assert "if not candidates:\n                return" not in locked_src
+    assert ".enqueue_in(" in locked_src
+    assert "rescheduled_at" in locked_src
+
+
 def test_seed_sync_checks_scheduled_registry():
     from pathlib import Path
 

@@ -1,11 +1,13 @@
 "use client";
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorRepository, queryKeys, SubscriptionSource as SS, ProviderInfo } from "@/lib/api";
 import { PageHeader, StatusBadge, Modal, ConfirmDialog, ErrorState, EmptyState, RepositoryCard } from "@/components";
+import { useToast } from "@/components/Toast";
+import { useI18nFormat } from "@/lib/i18n-format";
 
 function AddSourceForm({ subId, onClose }: { subId: string; onClose: () => void }) {
   const [source, setSource] = useState("pixiv"); const [sourceUrl, setSourceUrl] = useState(""); const [sourceCreatorId, setSourceCreatorId] = useState("");
@@ -67,10 +69,14 @@ function AddSourceForm({ subId, onClose }: { subId: string; onClose: () => void 
 export default function SubscriptionDetailPage() {
   const params = useParams(); const router = useRouter(); const qc = useQueryClient();
   const t = useT();
+  const toast = useToast();
+  const fmt = useI18nFormat();
   const id = params.id as string;
 
   const sub = useQuery({ queryKey: queryKeys.subscriptions.detail(id), queryFn: () => api.getSubscription(id) });
   const sources = useQuery({ queryKey: queryKeys.subscriptions.sources(id), queryFn: () => api.listSubscriptionSources(id) });
+  const jobs = useQuery({ queryKey: [...queryKeys.downloadJobs.all, "subscription", id], queryFn: () => api.listDownloadJobs({ subscription_id: id, limit: 50 }), refetchInterval: 12000 });
+  const decisions = useQuery({ queryKey: [...queryKeys.schedulerDecisions, "subscription", id], queryFn: api.schedulerDecisions, refetchInterval: 15000 });
   const providerInfos = useQuery({ queryKey: queryKeys.sources, queryFn: api.sources });
   const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
   const [showAddSource, setShowAddSource] = useState(false);
@@ -94,15 +100,39 @@ export default function SubscriptionDetailPage() {
   });
   const startSync = useMutation({
     mutationFn: (ssId: string) => {
-      const ss = sources.data?.find((s: SS) => s.id === ssId);
-      if (!ss) throw new Error(t("subscription_detail.source_not_found"));
-      return api.createDownloadJob({ subscription_id: id, subscription_source_id: ssId, source: ss.source, source_url: ss.source_url || "" });
+      return api.syncRepository(ssId);
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
       qc.invalidateQueries({ queryKey: queryKeys.subscriptions.sources(id) });
+      qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
+      if (result.status === "enqueued") toast.success(result.message || t("repo_detail.sync_queued", "Sync queued"));
+      else {
+        const reason = typeof result.reason === "object" ? result.reason?.message : result.reason;
+        toast.warning(reason || result.message || t("subscriptions.sync_no_jobs"));
+      }
     },
+    onError: (e: Error) => toast.error(e.message),
   });
+  const decisionBySource = useMemo(
+    () => new Map((decisions.data?.items || []).filter((item) => item.subscription_id === id).map((item) => [item.source_id, item])),
+    [decisions.data?.items, id],
+  );
+  const detailStats = useMemo(() => {
+    const sourceRows = sources.data || [];
+    const decisionRows = [...decisionBySource.values()];
+    const jobRows = jobs.data || [];
+    return {
+      total: sourceRows.length,
+      enabled: sourceRows.filter((item) => item.is_enabled).length,
+      due: decisionRows.filter((item) => item.due).length,
+      blocked: decisionRows.filter((item) => ["auth_unhealthy", "url_invalid", "unknown_provider", "provider_not_downloadable"].includes(item.reason)).length,
+      running: jobRows.filter((job) => ["enqueued", "pending", "downloading", "downloaded", "importing"].includes(job.status)).length,
+      failed: jobRows.filter((job) => ["failed", "stale"].includes(job.status)).length,
+      nextDueAt: decisionRows.map((item) => item.next_due_at).filter(Boolean).sort()[0] || null,
+    };
+  }, [decisionBySource, jobs.data, sources.data]);
 
   const getCreatorName = (creatorId: string) => {
     const c = creators.data?.items.find((c) => c.id === creatorId);
@@ -146,6 +176,15 @@ export default function SubscriptionDetailPage() {
         </div>
       </PageHeader>
 
+      <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
+        <div className="card p-3"><div className="text-lg font-semibold text-fg">{detailStats.enabled}/{detailStats.total}</div><div className="text-xs uppercase text-muted">{t("subscriptions.col_sources", "Sources")}</div></div>
+        <div className="card p-3"><div className="text-lg font-semibold text-accent">{detailStats.due}</div><div className="text-xs uppercase text-muted">{t("scheduler.filter_due")}</div></div>
+        <div className="card p-3"><div className={`text-lg font-semibold ${detailStats.blocked ? "text-danger" : "text-fg"}`}>{detailStats.blocked}</div><div className="text-xs uppercase text-muted">{t("scheduler.filter_blocked")}</div></div>
+        <div className="card p-3"><div className="text-lg font-semibold text-fg">{detailStats.running}</div><div className="text-xs uppercase text-muted">{t("subscriptions.running", "Running")}</div></div>
+        <div className="card p-3"><div className={`text-lg font-semibold ${detailStats.failed ? "text-danger" : "text-fg"}`}>{detailStats.failed}</div><div className="text-xs uppercase text-muted">{t("subscriptions.failed", "Failed")}</div></div>
+        <div className="card p-3"><div className="truncate text-sm font-semibold text-fg">{fmt.dateTime(detailStats.nextDueAt)}</div><div className="text-xs uppercase text-muted">{t("subscriptions.next_due_short", "Next due")}</div></div>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div className="col-span-2">
           <div className="card p-4 mb-4">
@@ -183,7 +222,8 @@ export default function SubscriptionDetailPage() {
                     onToggle={() => setToggleId(ss.id)}
                     onDelete={() => setDeleteSsId(ss.id)}
                     syncPending={startSync.isPending}
-                    togglePending={toggleSource.isPending} />
+                    togglePending={toggleSource.isPending}
+                    decision={decisionBySource.get(ss.id)} />
                 ))}
               </div>
             ) : (

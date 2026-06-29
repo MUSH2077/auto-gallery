@@ -91,6 +91,8 @@ async def enqueue_subscription_source_sync(
     subscription_source_id: UUID,
     trigger: str = "manual",
     force: bool = False,
+    parent_task_id: UUID | None = None,
+    force_reason: str | None = None,
 ) -> dict:
     now = datetime.now(timezone.utc)
     ss = await db.get(SubscriptionSource, subscription_source_id)
@@ -183,6 +185,7 @@ async def enqueue_subscription_source_sync(
         )
         update_manifest(job,
             trigger=trigger,
+            force_reason=force_reason,
             subscription_source_id=str(ss.id),
             subscription_id=str(sub.id),
             source=ss.source,
@@ -209,7 +212,7 @@ async def enqueue_subscription_source_sync(
         try:
             from rq import Queue
             from app.services.tasks import TaskService
-            await TaskService(db).ensure_download_task(job)
+            task = await TaskService(db).ensure_download_task(job, parent_task_id=parent_task_id)
 
             queue_name = f"downloads:{job.source}"
             Queue(name=queue_name, connection=get_redis()).enqueue(
@@ -241,5 +244,6 @@ async def enqueue_subscription_source_sync(
             "status": "enqueued",
             "source_id": str(ss.id),
             "job_id": str(job.id),
+            "task_id": str(task.id),
             "source_url": normalized_url,
         }

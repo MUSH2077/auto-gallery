@@ -200,7 +200,7 @@ async def get_repository(source_id: UUID, db: AsyncSession = Depends(get_db)):
 @router.post("/{source_id}/sync-now")
 async def sync_repository(source_id: UUID, db: AsyncSession = Depends(get_db)):
     await _get_source_context(db, source_id)
-    return await enqueue_subscription_source_sync(db, source_id, trigger="manual_repository", force=True)
+    return await enqueue_subscription_source_sync(db, source_id, trigger="manual_repository", force=False)
 
 
 @router.get("/{source_id}/curation-graph", response_model=RepositoryGraphResponse)

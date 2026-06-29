@@ -130,7 +130,11 @@ export interface Subscription {
   last_synced_at?: string;
   source_count?: number;
   enabled_source_count?: number;
+  running_job_count?: number;
+  failed_job_count?: number;
+  latest_job_id?: string;
   latest_job_status?: string;
+  latest_job_created_at?: string;
   created_at: string;
   updated_at: string;
 }

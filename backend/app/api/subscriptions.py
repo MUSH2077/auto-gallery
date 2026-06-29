@@ -13,6 +13,7 @@ from app.schemas.subscription import SubscriptionCreate, SubscriptionRead, Subsc
 from app.schemas.subscription_source import SubscriptionSourceCreate, SubscriptionSourceRead, SubscriptionSourceUpdate
 from app.services.subscription_enqueue import enqueue_subscription_source_sync
 from app.services.subscription import SubscriptionService
+from app.services.tasks import TaskService
 from app.services.cache import (
     cache_get,
     cache_set,
@@ -112,26 +113,66 @@ async def trigger_subscription_sync(subscription_id: UUID, db: AsyncSession = De
     if not sub_sources:
         return {"status": "ok", "message": "No enabled sources", "job_ids": []}
 
+    task_service = TaskService(db)
+    parent_task = await task_service.create_task(
+        kind="admin",
+        operation_type="subscription-sync-batch",
+        title=f"Sync subscription {subscription_id}",
+        status="running",
+        queue_name="downloads",
+        progress={"phase": "scanning", "label": "Checking subscription sources", "current": 0, "total": len(sub_sources)},
+        meta={"subscription_id": str(subscription_id), "scope": "subscription"},
+    )
+
     job_ids = []
+    task_ids = []
     skipped = []
     errors = []
 
-    for ss in sub_sources:
-        result = await enqueue_subscription_source_sync(db, ss.id, trigger="manual_subscription", force=True)
+    for index, ss in enumerate(sub_sources, start=1):
+        result = await enqueue_subscription_source_sync(
+            db,
+            ss.id,
+            trigger="manual_subscription",
+            force=False,
+            parent_task_id=parent_task.id,
+            force_reason="subscription_sync_now",
+        )
         if result["status"] == "enqueued":
             job_ids.append(result["job_id"])
+            if result.get("task_id"):
+                task_ids.append(result["task_id"])
         elif result["status"] == "error":
             errors.append(result)
         else:
             skipped.append(result)
+        await task_service.update_task(
+            parent_task,
+            progress={"phase": "enqueuing", "label": "Enqueuing source downloads", "current": index, "total": len(sub_sources)},
+        )
 
+    summary = {
+        "enqueued_count": len(job_ids),
+        "skipped_count": len(skipped),
+        "error_count": len(errors),
+        "job_ids": job_ids,
+        "task_ids": task_ids,
+        "skipped": skipped,
+        "errors": errors,
+    }
     if errors and not job_ids:
-        return {"status": "error", "message": "All enqueue attempts failed", "job_ids": [], "skipped": skipped, "errors": errors}
+        await task_service.update_task(parent_task, status="failed", result=summary, error="All enqueue attempts failed")
+        await db.commit()
+        return {"status": "error", "message": "All enqueue attempts failed", "task_id": str(parent_task.id), **summary}
     if errors:
         invalidate_api_caches("subscriptions", "creators")
-        return {"status": "partial_error", "message": f"Enqueued {len(job_ids)} jobs, {len(errors)} failed", "job_ids": job_ids, "skipped": skipped, "errors": errors}
+        await task_service.update_task(parent_task, status="complete", result=summary, progress={"phase": "complete", "label": "Subscription sync enqueued", "current": len(sub_sources), "total": len(sub_sources)})
+        await db.commit()
+        return {"status": "partial_error", "message": f"Enqueued {len(job_ids)} jobs, {len(errors)} failed", "task_id": str(parent_task.id), **summary}
     invalidate_api_caches("subscriptions", "creators")
-    return {"status": "ok", "message": f"Enqueued {len(job_ids)} download jobs", "job_ids": job_ids, "skipped": skipped}
+    await task_service.update_task(parent_task, status="complete", result=summary, progress={"phase": "complete", "label": "Subscription sync enqueued", "current": len(sub_sources), "total": len(sub_sources)})
+    await db.commit()
+    return {"status": "ok", "message": f"Enqueued {len(job_ids)} download jobs", "task_id": str(parent_task.id), **summary}
 
 
 @router.get("/{subscription_id}", response_model=SubscriptionRead)
