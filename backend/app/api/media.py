@@ -62,8 +62,14 @@ async def _serve(asset_id: str, size: str):
 
 @router.get("/media/thumb/{asset_id}")
 async def thumb(asset_id: str):
-    """Serve thumbnail — no auth needed (embedded in <img> tags on admin-web)."""
-    return await _serve(asset_id, "thumb")
+    """Serve thumbnail — no auth needed (embedded in <img> tags on admin-web).
+
+    Thumbnails are content-addressed by asset id and never change, so they are
+    safe to cache in the browser. preview/original stay uncached (auth-gated).
+    """
+    resp = await _serve(asset_id, "thumb")
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
 
 
 @router.get("/media/preview/{asset_id}")
