@@ -6,7 +6,7 @@ import { useToast } from "@/components/Toast";
 import { useT, type TFunction } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, DownloadJob, ImportJob, JobProgress, queryKeys, TaskRun } from "@/lib/api";
-import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, BatchByFilter, StatusBadge, StatCard } from "@/components";
+import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, StatCard } from "@/components";
 import { useJobWebSocket } from "@/lib/useWebSocket";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { classifyJob, categoryBorderClass, classifyError, estimatedRetryBackoff } from "@/lib/jobCategory";
@@ -20,12 +20,33 @@ const IMPORT_STATUS_OPTIONS = ["", "enqueued", "running", "complete", "failed", 
 const TASK_STATUS_OPTIONS = ["", "enqueued", "running", "paused", "recovering", "complete", "failed", "cancelled", "stale"];
 const SOURCE_OPTIONS = ["", "pixiv", "x", "iwara", "danbooru", "pinterest", "lofter", "weibo", "bilibili"];
 type JobsTab = "all" | "downloads" | "imports" | "admin";
+type BatchAction = "retry" | "pause" | "resume" | "cancel" | "delete";
 const JOBS_TABS: { value: JobsTab; labelKey: string }[] = [
   { value: "all", labelKey: "jobs.tab_all" },
   { value: "downloads", labelKey: "jobs.tab_downloads" },
   { value: "imports", labelKey: "jobs.tab_imports" },
   { value: "admin", labelKey: "jobs.tab_admin" },
 ];
+const BATCH_ACTIONS_BY_TAB: Record<JobsTab, BatchAction[]> = {
+  all: ["retry", "pause", "resume", "cancel"],
+  downloads: ["retry", "pause", "resume", "cancel", "delete"],
+  imports: ["retry", "cancel", "delete"],
+  admin: ["retry"],
+};
+const DOWNLOAD_BATCH_ALLOWED: Record<BatchAction, string[]> = {
+  retry: ["failed", "stale", "downloading", "complete"],
+  pause: ["enqueued", "downloading", "downloaded", "importing", "failed", "stale"],
+  resume: ["paused"],
+  cancel: ["enqueued", "downloading", "downloaded", "importing", "failed", "stale", "paused"],
+  delete: ["enqueued", "downloading", "downloaded", "failed", "stale", "complete", "paused", "cancelled"],
+};
+const IMPORT_BATCH_ALLOWED: Record<BatchAction, string[]> = {
+  retry: ["failed", "stale"],
+  pause: [],
+  resume: [],
+  cancel: ["enqueued", "running", "failed", "stale"],
+  delete: ["enqueued", "running", "complete", "failed", "stale", "cancelled"],
+};
 
 function isActiveDownload(status: string) {
   return ["pending", "enqueued", "downloading", "downloaded", "importing"].includes(status);
@@ -295,14 +316,12 @@ function JobsFilterPanel({
   downloadJobId,
   dlSort,
   dlOrder,
-  selectedCount,
   selectAll,
   statusOptions,
   onTabChange,
   onUpdateParams,
   onClearFilters,
   onSelectAll,
-  onBatch,
 }: {
   activeTab: JobsTab;
   activeFilterCount: number;
@@ -314,14 +333,12 @@ function JobsFilterPanel({
   downloadJobId: string;
   dlSort: string;
   dlOrder: string;
-  selectedCount: number;
   selectAll: boolean;
   statusOptions: string[];
   onTabChange: (tab: JobsTab) => void;
   onUpdateParams: (updates: Record<string, string | null>) => void;
   onClearFilters: () => void;
   onSelectAll: () => void;
-  onBatch: (action: string) => void;
 }) {
   const t = useT();
   return (
@@ -357,19 +374,104 @@ function JobsFilterPanel({
             <option value="source-asc">{t("jobs.sort_source")}</option>
           </select>
         )}
-        {activeTab === "downloads" && <button onClick={onSelectAll} className="inline-flex h-9 items-center justify-center rounded-md border border-border bg-surface px-3 text-xs font-medium text-fg hover:bg-subtle">{selectAll ? t("common.deselect_all") : t("common.select_all")}</button>}
-
-        {activeTab === "downloads" && selectedCount > 0 && (
-          <div className="ml-auto flex items-center gap-1 rounded-md border border-warning/30 bg-warning-subtle px-3 py-1.5 dark:bg-warning-subtle">
-            <span className="text-xs text-warning dark:text-warning">{selectedCount} {t("common.selected")}</span>
-            <button onClick={() => onBatch("pause")} className="btn-ghost text-xs">{t("jobs.batch_pause")}</button>
-            <button onClick={() => onBatch("resume")} className="btn-ghost text-xs">{t("jobs.batch_resume")}</button>
-            <button onClick={() => onBatch("retry")} className="btn-primary text-xs">{t("jobs.batch_retry")}</button>
-            <button onClick={() => onBatch("cancel")} className="btn-ghost text-xs">{t("jobs.batch_cancel")}</button>
-            <button onClick={() => onBatch("delete")} className="btn-danger text-xs">{t("jobs.batch_delete")}</button>
-          </div>
-        )}
+        <button onClick={onSelectAll} className="inline-flex h-9 items-center justify-center rounded-md border border-border bg-surface px-3 text-xs font-medium text-fg hover:bg-subtle">{selectAll ? t("common.deselect_all") : t("common.select_all")}</button>
       </div>
+    </div>
+  );
+}
+
+function JobsBatchToolbar({
+  activeTab,
+  selectedCount,
+  onRefresh,
+  onApply,
+  onClear,
+  onKillStuck,
+  onRetryAllFailed,
+  connected,
+  wsStatus,
+  isApplying,
+  isClearing,
+  isKillingStuck,
+  isRetryingAll,
+}: {
+  activeTab: JobsTab;
+  selectedCount: number;
+  onRefresh: () => void;
+  onApply: (action: BatchAction, filters: { source?: string; status?: string }) => void;
+  onClear: (statuses: string[]) => void;
+  onKillStuck: () => void;
+  onRetryAllFailed: () => void;
+  connected: boolean;
+  wsStatus: string;
+  isApplying: boolean;
+  isClearing: boolean;
+  isKillingStuck: boolean;
+  isRetryingAll: boolean;
+}) {
+  const t = useT();
+  const [source, setSource] = useState("");
+  const [status, setStatus] = useState("");
+  const [action, setAction] = useState<BatchAction | "">("");
+  const actions = BATCH_ACTIONS_BY_TAB[activeTab];
+  const statusOptions = activeTab === "imports" ? IMPORT_STATUS_OPTIONS : activeTab === "downloads" ? STATUS_OPTIONS : TASK_STATUS_OPTIONS;
+  const canFilterBatch = activeTab === "downloads" || activeTab === "imports";
+  const hasSourceFilter = activeTab === "downloads";
+
+  useEffect(() => {
+    setSource("");
+    setStatus("");
+    setAction((current) => current && !BATCH_ACTIONS_BY_TAB[activeTab].includes(current) ? "" : current);
+  }, [activeTab]);
+
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      <button onClick={onRefresh} className="btn-ghost text-xs">{t("jobs.refresh")}</button>
+      {selectedCount > 0 && (
+        <span className="inline-flex h-9 items-center rounded-md border border-border bg-subtle px-3 text-xs font-medium text-fg">
+          {t("common.selected_count", { count: selectedCount })}
+        </span>
+      )}
+      {hasSourceFilter && (
+        <select value={source} onChange={(e) => setSource(e.target.value)} className="select h-9 min-h-9 px-2 py-0 text-xs" aria-label={t("jobs.filter_all_source")}>
+          <option value="">{t("jobs.filter_all_source")}</option>
+          {SOURCE_OPTIONS.filter(Boolean).map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      )}
+      {canFilterBatch && (
+        <select value={status} onChange={(e) => setStatus(e.target.value)} className="select h-9 min-h-9 px-2 py-0 text-xs" aria-label={t("jobs.filter_all_status")}>
+          <option value="">{t("jobs.filter_all_status")}</option>
+          {statusOptions.filter(Boolean).map((s) => <option key={s} value={s}>{statusLabel(t, s)}</option>)}
+        </select>
+      )}
+      <select value={action} onChange={(e) => setAction(e.target.value as BatchAction | "")} className="select h-9 min-h-9 px-2 py-0 text-xs" aria-label={t("jobs.batch_action")}>
+        <option value="">{t("jobs.batch_action_placeholder")}</option>
+        {actions.map((item) => (
+          <option key={item} value={item}>{t(`jobs.batch_action_${item}`)}</option>
+        ))}
+      </select>
+      <button onClick={() => action && onApply(action, { source, status })} disabled={!action || isApplying} className="btn-primary text-xs">
+        {isApplying ? t("jobs.batch_running") : t("jobs.batch_apply")}
+      </button>
+      {activeTab === "downloads" && (
+        <>
+          <button onClick={() => onClear(["failed", "stale"])} disabled={isClearing} className="btn-danger text-xs">{t("jobs.clear_failed")}</button>
+          <button onClick={() => onClear(["complete"])} disabled={isClearing} className="btn-ghost text-xs">{t("jobs.clear_complete")}</button>
+          <button onClick={onKillStuck} disabled={isKillingStuck} className="btn-ghost text-xs">{t("jobs.kill_stuck")}</button>
+          <button onClick={onRetryAllFailed} disabled={isRetryingAll} className="btn-primary text-xs">{t("jobs.retry_all_failed")}</button>
+        </>
+      )}
+      <span
+        className={`inline-flex h-9 items-center gap-1 rounded-full border px-3 text-xs ${
+          connected
+            ? "border-success/30 bg-success-subtle text-success dark:border-success/30 dark:bg-success-subtle dark:text-success"
+            : "border-border bg-subtle text-muted dark:border-border dark:bg-subtle dark:text-muted"
+        }`}
+        title={connected ? t("jobs.live_connected") : t("jobs.live_polling_title")}
+      >
+        <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-current" : "animate-pulse bg-current"}`} />
+        {connected ? t("jobs.live_connected") : wsStatus === "connecting" ? t("jobs.live_connecting") : t("jobs.live_polling")}
+      </span>
     </div>
   );
 }
@@ -378,7 +480,9 @@ function UnifiedTaskList({
   tasks,
   isLoading,
   error,
+  selected,
   onRetry,
+  onToggleSelect,
   openTaskDetail,
   openDownloadDetail,
   openImportDetail,
@@ -386,7 +490,9 @@ function UnifiedTaskList({
   tasks?: { total: number; items: TaskRun[] };
   isLoading: boolean;
   error: unknown;
+  selected: Set<string>;
   onRetry: () => void;
+  onToggleSelect: (id: string) => void;
   openTaskDetail: (id: string) => void;
   openDownloadDetail: (id: string) => void;
   openImportDetail: (id: string) => void;
@@ -418,6 +524,7 @@ function UnifiedTaskList({
                   id={task.id}
                   status={task.status}
                   typeLabel={operationLabel(t, task.operation_type, task.kind)}
+                  select={<input type="checkbox" checked={selected.has(task.id)} onClick={(e) => e.stopPropagation()} onChange={() => onToggleSelect(task.id)} className="h-4 w-4 shrink-0 rounded border-border" aria-label={t("jobs.select_task", { id: shortId(task.id) })} />}
                   source={task.source ? <SourceBadge source={task.source} /> : undefined}
                   primary={task.title || task.operation_type || task.kind}
                   secondary={task.subject_type && task.subject_id ? `${task.subject_type} · ${shortId(task.subject_id)}` : task.queue_name || task.rq_job_id}
@@ -776,7 +883,6 @@ function JobsContent() {
   const [deleteType, setDeleteType] = useState<"dl" | "im">("dl");
   const [expandedImports, setExpandedImports] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [selectAll, setSelectAll] = useState(false);
 
   const updateParams = (updates: Record<string, string | null>, replace = true) => {
     const next = new URLSearchParams(sp.toString());
@@ -792,6 +898,7 @@ function JobsContent() {
   const openImportDetail = (id: string) => updateParams({ tab: "imports", import_job: id, job: null, task: null }, false);
   const closeDetail = () => updateParams({ job: null, import_job: null, task: null });
   const handleTabChange = (tab: JobsTab) => {
+    setSelected(new Set());
     if (tab === "all") updateParams({ tab: null, status: null, job: null, import_job: null, task: null });
     if (tab === "downloads") updateParams({ tab: "downloads", status: null, import_job: null, task: null });
     if (tab === "imports") updateParams({ tab: "imports", status: null, job: null, task: null, source: null });
@@ -904,6 +1011,27 @@ function JobsContent() {
     activeTab === "downloads" && (dlSort !== "created_at" || dlOrder !== "desc"),
   ].filter(Boolean).length;
   const lastUpdated = Math.max(downloads.dataUpdatedAt || 0, imports.dataUpdatedAt || 0, tasks.dataUpdatedAt || 0, workbench.dataUpdatedAt || 0);
+  const currentRows = useMemo(() => {
+    if (activeTab === "downloads") return downloads.data ?? [];
+    if (activeTab === "imports") return imports.data?.items ?? [];
+    return tasks.data?.items ?? [];
+  }, [activeTab, downloads.data, imports.data?.items, tasks.data?.items]);
+  const currentPageIds = useMemo(() => currentRows.map((row: { id: string }) => row.id), [currentRows]);
+  const pageAllSelected = currentPageIds.length > 0 && currentPageIds.every((id) => selected.has(id));
+
+  useEffect(() => {
+    const visible = new Set(currentPageIds);
+    setSelected((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (visible.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [currentPageIds]);
+
   const refreshAll = () => {
     qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
     qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
@@ -981,55 +1109,85 @@ function JobsContent() {
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }),
   });
 
-  // Batch
-  const batchDL = useMutation({
-    mutationFn: ({ ids, action }: { ids: string[]; action: string }) => api.batchDownloadJobs(ids, action),
-    onSuccess: (data: any) => {
-      toast.info(t("jobs.batch_result", { succeeded: data.succeeded, failed: data.failed }));
-      setSelected(new Set()); setSelectAll(false);
-      qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+  const runSelectedTaskBatch = async (ids: string[], action: BatchAction) => {
+    const actionMap = {
+      retry: api.retryTask,
+      pause: api.pauseTask,
+      resume: api.resumeTask,
+      cancel: api.cancelTask,
+      delete: null,
+    } satisfies Record<BatchAction, ((id: string) => Promise<unknown>) | null>;
+    const runner = actionMap[action];
+    if (!runner) return { succeeded: 0, failed: ids.length };
+    const settled = await Promise.allSettled(ids.map((id) => runner(id)));
+    return {
+      succeeded: settled.filter((item) => item.status === "fulfilled").length,
+      failed: settled.filter((item) => item.status === "rejected").length,
+    };
+  };
+
+  const batchJobs = useMutation({
+    mutationFn: async ({ action, filters }: { action: BatchAction; filters: { source?: string; status?: string } }) => {
+      if (selected.size > 0) {
+        const selectedRows = currentRows.filter((row: { id: string }) => selected.has(row.id)) as Array<{ id: string; status?: string }>;
+        if (activeTab === "downloads") {
+          const allowed = DOWNLOAD_BATCH_ALLOWED[action] || [];
+          const ids = selectedRows.filter((row) => allowed.includes(row.status || "")).map((row) => row.id);
+          if (!ids.length) return { succeeded: 0, failed: selected.size, total_matched: selected.size };
+          if (ids.length < selected.size && !confirm(t("common.partial_selected"))) return { succeeded: 0, failed: 0, total_matched: selected.size };
+          return api.batchDownloadJobs(ids, action);
+        }
+        if (activeTab === "imports") {
+          const allowed = IMPORT_BATCH_ALLOWED[action] || [];
+          const ids = selectedRows.filter((row) => allowed.includes(row.status || "")).map((row) => row.id);
+          if (!ids.length) return { succeeded: 0, failed: selected.size, total_matched: selected.size };
+          if (ids.length < selected.size && !confirm(t("common.partial_selected"))) return { succeeded: 0, failed: 0, total_matched: selected.size };
+          return api.batchImportJobsByFilter({ ids }, action);
+        }
+        return runSelectedTaskBatch(selectedRows.map((row) => row.id), action);
+      }
+
+      if (activeTab === "downloads") {
+        const batchFilters: Record<string, string> = {};
+        if (filters.source) batchFilters.source = filters.source;
+        if (filters.status) batchFilters.status = filters.status;
+        return api.batchDownloadJobsByFilter(batchFilters, action);
+      }
+      if (activeTab === "imports") {
+        const batchFilters: Record<string, string> = {};
+        if (filters.status) batchFilters.status = filters.status;
+        return api.batchImportJobsByFilter(batchFilters, action);
+      }
+      toast.warning({ message: t("jobs.select_rows_first") });
+      return { succeeded: 0, failed: 0, total_matched: 0 };
     },
+    onSuccess: (data: any) => {
+      toast.info(t("jobs.batch_result", { succeeded: data.succeeded ?? 0, failed: data.failed ?? 0 }));
+      setSelected(new Set());
+      qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+      qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      qc.invalidateQueries({ queryKey: queryKeys.workbench });
+    },
+    onError: (err) => toast.error((err as Error).message),
   });
 
-  // Select all toggle
   const handleSelectAll = () => {
-    if (selectAll) { setSelected(new Set()); setSelectAll(false); return; }
-    if (!downloads.data) return;
-    setSelected(new Set(downloads.data.map((j: any) => j.id)));
-    setSelectAll(true);
+    if (pageAllSelected) {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        currentPageIds.forEach((id) => next.delete(id));
+        return next;
+      });
+      return;
+    }
+    setSelected((prev) => new Set([...prev, ...currentPageIds]));
   };
 
   const toggleSelect = (id: string) => {
     const next = new Set(selected);
-    if (next.has(id)) { next.delete(id); setSelectAll(false); } else next.add(id);
+    if (next.has(id)) next.delete(id); else next.add(id);
     setSelected(next);
-  };
-
-  const getEligibleIds = (action: string): string[] => {
-    if (!downloads.data) return [];
-    const allowed: Record<string, string[]> = {
-      retry: ["failed", "stale", "downloading", "complete"],
-      pause: ["enqueued", "downloading", "downloaded", "importing", "failed", "stale"],
-      resume: ["paused"],
-      delete: ["enqueued", "downloading", "downloaded", "failed", "stale", "complete", "paused", "cancelled"],
-      cancel: ["enqueued", "downloading", "downloaded", "importing", "failed", "stale", "paused"],
-    };
-    const ok = allowed[action] || [];
-    return downloads.data.filter((j: any) => selected.has(j.id) && ok.includes(j.status)).map((j: any) => j.id);
-  };
-
-  const handleBatch = (action: string) => {
-    const eligible = getEligibleIds(action);
-    if (eligible.length === 0) { toast.warning({ message: t("common.no_eligible") }); return; }
-    if (eligible.length < selected.size && !confirm(t("common.partial_selected"))) return;
-    if (action === "cancel") {
-      // Cancel each job individually (different API)
-      Promise.all(eligible.map((id: string) => api.cancelDownloadJob(id).catch(() => null)))
-        .then(() => { qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); toast.info(t("jobs.batch_result", { succeeded: eligible.length, failed: 0 })); });
-      setSelected(new Set()); setSelectAll(false);
-      return;
-    }
-    batchDL.mutate({ ids: eligible, action });
   };
 
   // Clear helpers
@@ -1046,25 +1204,21 @@ function JobsContent() {
   return (
     <main className="max-w-7xl mx-auto p-6">
       <PageHeader title={t("jobs.title")} description={t("jobs.desc")}>
-        <div className="flex flex-wrap gap-2">
-          <button onClick={refreshAll} className="btn-ghost text-xs">{t("jobs.refresh")}</button>
-          <BatchByFilter onSuccess={() => { qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); }} />
-          <button onClick={() => handleClear(["failed", "stale"])} className="btn-danger text-xs">{t("jobs.clear_failed")}</button>
-          <button onClick={() => handleClear(["complete"])} className="btn-ghost text-xs">{t("jobs.clear_complete")}</button>
-          <button onClick={() => killStuck.mutate()} disabled={killStuck.isPending} className="btn-ghost text-xs">{t("jobs.kill_stuck")}</button>
-          <button onClick={() => retryAllFailed.mutate()} disabled={retryAllFailed.isPending} className="btn-primary text-xs">{t("jobs.retry_all_failed")}</button>
-          <span
-            className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs ${
-              connected
-                ? "border-success/30 bg-success-subtle text-success dark:border-success/30 dark:bg-success-subtle dark:text-success"
-                : "border-border bg-subtle text-muted dark:border-border dark:bg-subtle dark:text-muted"
-            }`}
-            title={connected ? t("jobs.live_connected") : t("jobs.live_polling_title")}
-          >
-            <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-current" : "animate-pulse bg-current"}`} />
-            {connected ? t("jobs.live_connected") : wsStatus === "connecting" ? t("jobs.live_connecting") : t("jobs.live_polling")}
-          </span>
-        </div>
+        <JobsBatchToolbar
+          activeTab={activeTab}
+          selectedCount={selected.size}
+          onRefresh={refreshAll}
+          onApply={(action, filters) => batchJobs.mutate({ action, filters })}
+          onClear={handleClear}
+          onKillStuck={() => killStuck.mutate()}
+          onRetryAllFailed={() => retryAllFailed.mutate()}
+          connected={connected}
+          wsStatus={wsStatus}
+          isApplying={batchJobs.isPending}
+          isClearing={clearDL.isPending}
+          isKillingStuck={killStuck.isPending}
+          isRetryingAll={retryAllFailed.isPending}
+        />
       </PageHeader>
 
       {workbench.data && (
@@ -1088,14 +1242,12 @@ function JobsContent() {
         downloadJobId={downloadJobId}
         dlSort={dlSort}
         dlOrder={dlOrder}
-        selectedCount={selected.size}
-        selectAll={selectAll}
+        selectAll={pageAllSelected}
         statusOptions={statusOptions}
         onTabChange={handleTabChange}
         onUpdateParams={updateParams}
         onClearFilters={clearFilters}
         onSelectAll={handleSelectAll}
-        onBatch={handleBatch}
       />
 
       {(activeTab === "all" || activeTab === "admin") && (
@@ -1103,7 +1255,9 @@ function JobsContent() {
           tasks={tasks.data}
           isLoading={tasks.isLoading}
           error={tasks.error}
+          selected={selected}
           onRetry={() => tasks.refetch()}
+          onToggleSelect={toggleSelect}
           openTaskDetail={openTaskDetail}
           openDownloadDetail={openDownloadDetail}
           openImportDetail={openImportDetail}
@@ -1224,6 +1378,7 @@ function JobsContent() {
                     id={j.id}
                     status={j.status}
                     typeLabel={operationLabel(t, j.operation_type, "import")}
+                    select={<input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="h-4 w-4 shrink-0 rounded border-border" aria-label={t("jobs.select_import", { id: shortId(j.id) })} />}
                     source={j.source ? <SourceBadge source={j.source} /> : undefined}
                     primary={j.subscription_id ? (
                       <Link href={`/admin/subscriptions/${j.subscription_id}`} onClick={(e) => e.stopPropagation()} className="text-accent hover:underline dark:text-accent" title={j.creator_name || j.subscription_name || undefined}>

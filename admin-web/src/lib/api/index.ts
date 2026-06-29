@@ -349,6 +349,21 @@ export const api = {
   retryImportJob: (id: string) =>
     request<{ status: string; message: string }>(`/api/v1/import-jobs/${id}/retry`, { method: "POST" }),
 
+  cancelImportJob: (id: string, note?: string) =>
+    request<{ job_id: string; status: string }>(`/api/v1/import-jobs/${id}/cancel`, {
+      method: "POST",
+      body: note ? JSON.stringify({ note }) : undefined,
+    }),
+
+  batchImportJobsByFilter: (filters: Record<string, string | string[]>, action: string, note?: string) =>
+    request<{ total_matched: number; succeeded: number; failed: number; errors?: { id: string; error: string }[] }>(
+      `/api/v1/import-jobs/batch-by-filter`,
+      {
+        method: "POST",
+        body: JSON.stringify({ filters, action, note }),
+      },
+    ),
+
   deleteDownloadJob: (id: string) =>
     request<{ status: string }>(`/api/v1/download-jobs/${id}`, { method: "DELETE" }),
 
