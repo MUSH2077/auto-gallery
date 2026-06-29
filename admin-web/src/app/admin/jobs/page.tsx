@@ -44,9 +44,9 @@ function Elapsed({ since, active }: { since: string; active: boolean }) {
     return () => clearInterval(iv);
   }, [active]);
   const seconds = Math.floor((now - new Date(since).getTime()) / 1000);
-  if (seconds < 60) return <span className="text-xs text-blue-500 font-mono">{seconds}s</span>;
-  if (seconds < 3600) return <span className="text-xs text-blue-500 font-mono">{Math.floor(seconds / 60)}m {seconds % 60}s</span>;
-  return <span className="text-xs text-blue-500 font-mono">{Math.floor(seconds / 3600)}h {Math.floor((seconds % 3600) / 60)}m</span>;
+  if (seconds < 60) return <span className="text-xs text-accent font-mono">{seconds}s</span>;
+  if (seconds < 3600) return <span className="text-xs text-accent font-mono">{Math.floor(seconds / 60)}m {seconds % 60}s</span>;
+  return <span className="text-xs text-accent font-mono">{Math.floor(seconds / 3600)}h {Math.floor((seconds % 3600) / 60)}m</span>;
 }
 
 // ProgressBar replaced by RealProgressBar from components — data-driven with actual percent/current/total
@@ -402,7 +402,7 @@ function JobDetailDrawer({
               )}
               {dl.retry_count > 0 && (
                 <DetailRow label={t("jobs.recovery_retry", { current: String(dl.retry_count), max: "3" })} value={
-                  <span className="text-xs text-blue-600 dark:text-blue-400 font-medium">{dl.retry_count} / 3</span>
+                  <span className="text-xs text-accent font-medium">{dl.retry_count} / 3</span>
                 } />
               )}
             </dl>
@@ -415,24 +415,24 @@ function JobDetailDrawer({
                   {t("jobs.error_log")}
                   {errInfo.type !== "unknown" && (
                     <span className={`text-xs px-2 py-0.5 rounded-full ${
-                      errInfo.type === "auth" ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" :
-                      errInfo.type === "timeout" || errInfo.type === "stall" ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400" :
+                      errInfo.type === "auth" ? "bg-danger-subtle text-danger" :
+                      errInfo.type === "timeout" || errInfo.type === "stall" ? "bg-warning-subtle text-warning" :
                       "bg-subtle text-muted dark:bg-subtle dark:text-muted"
                     }`}>{t(hintKey)}</span>
                   )}
                 </h3>
                 {errInfo.type === "auth" && (
-                  <p className="text-xs text-red-600 dark:text-red-400 mb-2">
+                  <p className="text-xs text-danger mb-2">
                     {t("auth.desc")}: <Link href="/admin/settings/auth-status" className="underline">{t("settings.auth")} →</Link>
                   </p>
                 )}
                 {errInfo.type === "timeout" && (
-                  <p className="text-xs text-yellow-600 dark:text-yellow-400 mb-2">
+                  <p className="text-xs text-warning mb-2">
                     {t("dldefaults.timeout.desc")}: <Link href="/admin/settings/download-defaults" className="underline">{t("dldefaults.title")} →</Link>
                   </p>
                 )}
                 {errInfo.type === "stall" && (
-                  <p className="text-xs text-yellow-600 dark:text-yellow-400 mb-2">
+                  <p className="text-xs text-warning mb-2">
                     {t("dldefaults.stall_timeout.desc")}: <Link href="/admin/settings/download-defaults" className="underline">{t("dldefaults.title")} →</Link>
                   </p>
                 )}
@@ -875,11 +875,11 @@ function JobsContent() {
         {selected.size > 0 && (
           <div className="ml-auto flex items-center gap-1 rounded-md border border-warning/30 bg-warning-subtle px-3 py-1.5 dark:bg-warning-subtle">
             <span className="text-xs text-warning dark:text-warning">{selected.size} {t("common.selected")}</span>
-            <button onClick={() => handleBatch("pause")} className="px-2 py-0.5 text-xs bg-yellow-500 text-white rounded hover:bg-yellow-600">{t("jobs.batch_pause")}</button>
-            <button onClick={() => handleBatch("resume")} className="px-2 py-0.5 text-xs bg-green-500 text-white rounded hover:bg-green-600">{t("jobs.batch_resume")}</button>
-            <button onClick={() => handleBatch("retry")} className="px-2 py-0.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600">{t("jobs.batch_retry")}</button>
+            <button onClick={() => handleBatch("pause")} className="px-2 py-0.5 text-xs bg-warning-subtle0 text-white rounded hover:bg-warning/90">{t("jobs.batch_pause")}</button>
+            <button onClick={() => handleBatch("resume")} className="px-2 py-0.5 text-xs bg-success-subtle0 text-white rounded hover:bg-success/90">{t("jobs.batch_resume")}</button>
+            <button onClick={() => handleBatch("retry")} className="px-2 py-0.5 text-xs bg-accent-subtle0 text-white rounded hover:bg-accent/90">{t("jobs.batch_retry")}</button>
             <button onClick={() => handleBatch("cancel")} className="px-2 py-0.5 text-xs bg-subtle text-white rounded hover:bg-subtle">{t("jobs.batch_cancel")}</button>
-            <button onClick={() => handleBatch("delete")} className="px-2 py-0.5 text-xs bg-red-500 text-white rounded hover:bg-red-600">{t("jobs.batch_delete")}</button>
+            <button onClick={() => handleBatch("delete")} className="px-2 py-0.5 text-xs bg-danger-subtle0 text-white rounded hover:bg-danger/90">{t("jobs.batch_delete")}</button>
           </div>
         )}
         </div>
@@ -945,7 +945,7 @@ function JobsContent() {
                     {active ? (
                       <Elapsed since={j.created_at} active={true} />
                     ) : classifyJob(j.status, j.retry_count, 3) === "retrying" ? (
-                      <span className="text-xs text-blue-500 shrink-0 w-22 text-right font-medium">
+                      <span className="text-xs text-accent shrink-0 w-22 text-right font-medium">
                         ↻ {t("jobs.recovery_retry", { current: String(j.retry_count), max: "3" })}
                         {estimatedRetryBackoff(j.retry_count, 60) != null && (
                           <span className="block text-[10px] text-muted">
@@ -965,15 +965,15 @@ function JobsContent() {
                       )}
                       <button onClick={() => setExpandedImports(expandedImports === j.id ? null : j.id)} className="text-xs text-purple-500 hover:underline">{t("jobs.imports")}</button>
                       {["enqueued","downloading","downloaded","importing","failed","stale"].includes(j.status) && (
-                        <button onClick={() => pauseDL.mutate(j.id)} disabled={pauseDL.isPending} className="text-xs text-yellow-600 hover:underline">{t("jobs.pause")}</button>
+                        <button onClick={() => pauseDL.mutate(j.id)} disabled={pauseDL.isPending} className="text-xs text-warning hover:underline">{t("jobs.pause")}</button>
                       )}
                       {j.status === "paused" && (
-                        <button onClick={() => resumeDL.mutate(j.id)} disabled={resumeDL.isPending} className="text-xs text-green-600 hover:underline">{t("jobs.resume")}</button>
+                        <button onClick={() => resumeDL.mutate(j.id)} disabled={resumeDL.isPending} className="text-xs text-success hover:underline">{t("jobs.resume")}</button>
                       )}
                       {(j.status === "failed" || j.status === "stale" || j.status === "complete") && (
-                        <button onClick={() => { setRetryId(j.id); retryDL.mutate(j.id); }} disabled={retryDL.isPending} className="text-xs text-blue-600 hover:underline">{t("jobs.retry")}</button>
+                        <button onClick={() => { setRetryId(j.id); retryDL.mutate(j.id); }} disabled={retryDL.isPending} className="text-xs text-accent hover:underline">{t("jobs.retry")}</button>
                       )}
-                      <button onClick={() => { setDeleteId(j.id); setDeleteType("dl"); }} className="text-xs text-red-500 hover:underline">{t("jobs.del")}</button>
+                      <button onClick={() => { setDeleteId(j.id); setDeleteType("dl"); }} className="text-xs text-danger hover:underline">{t("jobs.del")}</button>
                     </div>
                   </div>
                   {j.error_log && expandedLog !== j.id && <ErrorExcerpt value={j.error_log} />}
@@ -1042,8 +1042,8 @@ function JobsContent() {
                       {j.error_log && (
                         <button onClick={() => setExpandedLog(expandedLog === j.id ? null : j.id)} className="text-xs text-orange-500 hover:underline">{expandedLog === j.id ? "▲" : t("downloads.log")}</button>
                       )}
-                      {(j.status === "failed" || j.status === "stale") && <button onClick={() => { setRetryId(j.id); retryIM.mutate(j.id); }} disabled={retryIM.isPending} className="text-xs text-blue-600 hover:underline">{t("jobs.retry")}</button>}
-                      <button onClick={() => { setDeleteId(j.id); setDeleteType("im"); }} className="text-xs text-red-500 hover:underline">{t("jobs.del")}</button>
+                      {(j.status === "failed" || j.status === "stale") && <button onClick={() => { setRetryId(j.id); retryIM.mutate(j.id); }} disabled={retryIM.isPending} className="text-xs text-accent hover:underline">{t("jobs.retry")}</button>}
+                      <button onClick={() => { setDeleteId(j.id); setDeleteType("im"); }} className="text-xs text-danger hover:underline">{t("jobs.del")}</button>
                     </div>
                   </div>
                   {j.error_log && expandedLog !== j.id && <ErrorExcerpt value={j.error_log} />}
