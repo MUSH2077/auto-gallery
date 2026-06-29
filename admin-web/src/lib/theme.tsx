@@ -1,7 +1,7 @@
 "use client";
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
 
-type Theme = "light" | "dark" | "system";
+export type Theme = "light" | "dark" | "system";
 type ResolvedTheme = "light" | "dark";
 export type Palette = "github" | "nord" | "rose" | "solarized" | "gruvbox" | "catppuccin";
 
@@ -180,7 +180,7 @@ function PaletteIcon({ className }: { className?: string }) {
 }
 
 // Representative accent per palette for the dropdown swatch preview.
-const PALETTE_SWATCH: Record<Palette, string> = {
+export const PALETTE_SWATCH: Record<Palette, string> = {
   github: "#0969da", nord: "#88c0d0", rose: "#c4a7e7",
   solarized: "#268bd2", gruvbox: "#d79921", catppuccin: "#cba6f7",
 };

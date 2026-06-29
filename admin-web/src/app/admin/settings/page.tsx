@@ -21,6 +21,7 @@ export default function SettingsPage() {
   const [confirmReindex, setConfirmReindex] = useState(false);
 
   const cards = [
+    { href: "/admin/settings/appearance", title: t("settings.appearance", "外观"), desc: t("settings.appearance.desc", "主题、调色板、作品预览与浏览密度。") },
     { href: "/admin/settings/gallerydl", title: t("settings.gallerydl"), desc: t("settings.gallerydl.desc") },
     { href: "/admin/settings/scheduler-defaults", title: t("settings.scheduler_defaults"), desc: t("settings.scheduler_defaults.desc") },
     { href: "/admin/settings/subscription-defaults", title: t("settings.subscription_defaults", "订阅默认值"), desc: t("settings.subscription_defaults.desc", "默认同步间隔与调度器行为") },

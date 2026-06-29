@@ -5,6 +5,8 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
 import { api, queryKeys, WorkListItem } from "@/lib/api";
+import type { WorkAsset } from "@/lib/api/endpoints/works";
+import { useAppearanceSettings } from "@/lib/appearance";
 import { AssetImage, PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, WorkPreviewOverlay } from "@/components";
 
 type Density = "compact" | "comfortable";
@@ -28,6 +30,8 @@ function WorkCard({
   index,
   density,
   previewEnabled,
+  previewDelayMs,
+  wheelThreshold,
   onOpenPreview,
   onScheduleClosePreview,
   onCancelClosePreview,
@@ -44,6 +48,8 @@ function WorkCard({
   index?: number;
   density: Density;
   previewEnabled: boolean;
+  previewDelayMs: number;
+  wheelThreshold: number;
   onOpenPreview: (preview: PreviewState) => void;
   onScheduleClosePreview: () => void;
   onCancelClosePreview: () => void;
@@ -69,12 +75,6 @@ function WorkCard({
   const openPreview = () => {
     if (!previewEnabled || !cardRef.current || !assetIds.length || window.matchMedia("(pointer: coarse)").matches) return;
     onOpenPreview({ work: w, anchor: cardRef.current.getBoundingClientRect(), assetIds, pageIndex: pageIdx });
-    [pageIdx, pageIdx - 1, pageIdx + 1].forEach((idx) => {
-      const id = assetIds[(idx + assetIds.length) % assetIds.length];
-      if (!id) return;
-      const img = new Image();
-      img.src = api.mediaUrl(id, "preview");
-    });
   };
 
   const clearHoverTimer = () => {
@@ -93,7 +93,7 @@ function WorkCard({
       onMouseEnter={() => {
         onCancelClosePreview();
         clearHoverTimer();
-        hoverTimer.current = window.setTimeout(openPreview, 250);
+        hoverTimer.current = window.setTimeout(openPreview, previewDelayMs);
       }}
       onMouseLeave={() => {
         clearHoverTimer();
@@ -102,7 +102,7 @@ function WorkCard({
       onWheel={(event) => {
         if (!hasMultiple) return;
         wheelDelta.current += event.deltaY;
-        if (Math.abs(wheelDelta.current) < 70) return;
+        if (Math.abs(wheelDelta.current) < wheelThreshold) return;
         event.preventDefault();
         updatePage(pageIdx + (wheelDelta.current > 0 ? 1 : -1));
         wheelDelta.current = 0;
@@ -190,14 +190,13 @@ function WorksContent() {
   const qc = useQueryClient();
   const sp = useSearchParams();
   const pathname = usePathname();
+  const { settings: appearance, updateSettings } = useAppearanceSettings();
   const [selectedWorkIds, setSelectedWorkIds] = useState<Set<string>>(new Set());
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const closePreviewTimer = useRef<number | null>(null);
-  const [previewEnabled, setPreviewEnabled] = useState(() => {
-    if (typeof window === "undefined") return true;
-    return localStorage.getItem("auto-gallery-work-preview") !== "off";
-  });
+  const previewEnabled = appearance.workPreviewEnabled;
+  const wheelThreshold = appearance.workPreviewWheelSensitivity === "relaxed" ? 120 : 70;
 
   const SORT_OPTIONS: { key: SortKey; label: string }[] = [
     { key: "created_at", label: t("works.sort_imported") },
@@ -233,7 +232,8 @@ function WorksContent() {
   const aiFilter = (sp.get("ai") as "all" | "human" | "ai") ?? "all";
   const curationVisibility = sp.get("curation") === "trashed" ? "trashed" : "visible";
   const viewMode = (sp.get("view") as ViewMode) ?? "grid";
-  const density = ((sp.get("density") === "comfortable" ? "comfortable" : "compact") as Density);
+  const densityParam = sp.get("density");
+  const density = (densityParam === "comfortable" || densityParam === "compact" ? densityParam : appearance.workGridDensity) as Density;
   const limit = 25;
 
   // Local input for search field — debounced 300ms before writing to URL
@@ -277,9 +277,12 @@ function WorksContent() {
   };
 
   const setPreviewPreference = (enabled: boolean) => {
-    setPreviewEnabled(enabled);
-    try { localStorage.setItem("auto-gallery-work-preview", enabled ? "on" : "off"); } catch {}
+    updateSettings({ workPreviewEnabled: enabled });
     if (!enabled) setPreview(null);
+  };
+
+  const setDensityPreference = (next: Density) => {
+    updateParams({ density: next === appearance.workGridDensity ? null : next }, false);
   };
 
   const filters = useMemo(() => ({
@@ -302,7 +305,7 @@ function WorksContent() {
     isFavoriteFilter,
     aiFilter !== "all",
     sortBy !== "created_at" || sortOrder !== "desc",
-    density !== "compact",
+    densityParam !== null,
   ].filter(Boolean).length;
 
   const useSearchPageLogic = !!search
@@ -325,6 +328,25 @@ function WorksContent() {
       return api.listWorks(page * limit, limit, filters);
     },
   });
+
+  const previewAssets = useQuery({
+    queryKey: ["works", preview?.work.id, "assets"],
+    queryFn: () => api.getWorkAssets(preview!.work.id),
+    enabled: !!preview && previewEnabled,
+    staleTime: 60000,
+  });
+
+  useEffect(() => {
+    if (!preview || !previewAssets.data?.length || !preview.assetIds.length) return;
+    const byId = new Map<string, WorkAsset>(previewAssets.data.map((asset) => [asset.id, asset]));
+    [preview.pageIndex, preview.pageIndex - 1, preview.pageIndex + 1].forEach((idx) => {
+      const id = preview.assetIds[(idx + preview.assetIds.length) % preview.assetIds.length];
+      const src = (id ? byId.get(id) : undefined)?.original_url;
+      if (!src) return;
+      const img = new Image();
+      img.src = src;
+    });
+  }, [preview, previewAssets.data]);
 
   useEffect(() => {
     setSelectedWorkIds(new Set());
@@ -530,11 +552,11 @@ function WorksContent() {
 
         {viewMode === "grid" && (
           <div className="flex gap-0.5 bg-subtle rounded p-0.5">
-            <button onClick={() => updateParams({ density: null }, false)}
+            <button onClick={() => setDensityPreference("compact")}
               className={`px-2.5 py-1 rounded text-xs ${density === "compact" ? "bg-surface shadow-sm" : "text-muted"}`}>
               {t("works.density_compact", "Compact")}
             </button>
-            <button onClick={() => updateParams({ density: "comfortable" }, false)}
+            <button onClick={() => setDensityPreference("comfortable")}
               className={`px-2.5 py-1 rounded text-xs ${density === "comfortable" ? "bg-surface shadow-sm" : "text-muted"}`}>
               {t("works.density_comfortable", "Comfort")}
             </button>
@@ -608,6 +630,8 @@ function WorksContent() {
               w={w}
               density={density}
               previewEnabled={previewEnabled}
+              previewDelayMs={appearance.workPreviewDelayMs}
+              wheelThreshold={wheelThreshold}
               onOpenPreview={setPreview}
               onScheduleClosePreview={scheduleClosePreview}
               onCancelClosePreview={cancelClosePreview}
@@ -683,6 +707,10 @@ function WorksContent() {
           creatorName={preview.work.creator_name}
           source={preview.work.source}
           assetIds={preview.assetIds}
+          assets={previewAssets.data}
+          isLoading={previewAssets.isLoading || (previewAssets.isFetching && !previewAssets.data)}
+          isError={previewAssets.isError}
+          previewSize={appearance.workPreviewSize}
           pageIndex={preview.pageIndex}
           assetCount={preview.work.asset_count}
           onMouseEnter={cancelClosePreview}
@@ -695,6 +723,7 @@ function WorksContent() {
               return { ...current, pageIndex: next };
             });
           }}
+          onRefreshAssets={() => previewAssets.refetch()}
         />
       )}
 

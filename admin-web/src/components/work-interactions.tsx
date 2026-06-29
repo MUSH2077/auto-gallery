@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import type { WorkPreviewSize } from "@/lib/appearance";
 import SourceBadge from "./SourceBadge";
 
 export interface MediaAsset {
@@ -27,6 +28,8 @@ export function AssetImage({
   size = "thumb",
   className = "",
   fallback,
+  onLoad,
+  onError,
 }: {
   assetId?: string | null;
   src?: string | null;
@@ -34,8 +37,16 @@ export function AssetImage({
   size?: "thumb" | "preview" | "original";
   className?: string;
   fallback?: string;
+  onLoad?: (event: React.SyntheticEvent<HTMLImageElement>) => void;
+  onError?: () => void;
 }) {
   const [failed, setFailed] = useState(false);
+  const resolvedSrc = src || (assetId ? api.mediaUrl(assetId, size) : "");
+
+  useEffect(() => {
+    setFailed(false);
+  }, [resolvedSrc]);
+
   if ((!assetId && !src) || failed) {
     return (
       <div className={`${className} flex items-center justify-center bg-subtle text-xs text-muted`}>
@@ -45,12 +56,16 @@ export function AssetImage({
   }
   return (
     <img
-      src={src || api.mediaUrl(assetId || "", size)}
+      src={resolvedSrc}
       alt={alt}
       className={className}
       loading="lazy"
       decoding="async"
-      onError={() => setFailed(true)}
+      onLoad={onLoad}
+      onError={() => {
+        setFailed(true);
+        onError?.();
+      }}
     />
   );
 }
@@ -59,15 +74,53 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function previewPosition(anchor: DOMRect | null) {
+function previewBounds(size: WorkPreviewSize) {
+  if (typeof window === "undefined") return { maxWidth: 520, maxHeight: 520 };
+  if (size === "medium") {
+    return {
+      maxWidth: Math.min(600, Math.max(320, window.innerWidth * 0.38)),
+      maxHeight: Math.max(300, window.innerHeight * 0.68),
+    };
+  }
+  if (size === "fit") {
+    return {
+      maxWidth: Math.min(980, Math.max(320, window.innerWidth - 28)),
+      maxHeight: Math.max(340, window.innerHeight * 0.88),
+    };
+  }
+  return {
+    maxWidth: Math.min(760, Math.max(340, window.innerWidth * 0.48)),
+    maxHeight: Math.max(340, window.innerHeight * 0.82),
+  };
+}
+
+function fitPreviewFrame(ratio: number, size: WorkPreviewSize) {
+  const footerHeight = 74;
+  const bounds = previewBounds(size);
+  const imageMaxHeight = Math.max(220, bounds.maxHeight - footerHeight);
+  let frameWidth = bounds.maxWidth;
+  let frameHeight = frameWidth / ratio;
+  if (frameHeight > imageMaxHeight) {
+    frameHeight = imageMaxHeight;
+    frameWidth = frameHeight * ratio;
+  }
+  const viewportWidth = typeof window === "undefined" ? 1024 : window.innerWidth;
+  frameWidth = clamp(frameWidth, Math.min(300, viewportWidth - 28), bounds.maxWidth);
+  frameHeight = Math.min(frameHeight, imageMaxHeight);
+  return { width: Math.round(frameWidth), imageHeight: Math.round(frameHeight), totalHeight: Math.round(frameHeight + footerHeight) };
+}
+
+function previewPosition(anchor: DOMRect | null, ratio: number, size: WorkPreviewSize) {
   if (typeof window === "undefined" || !anchor) return { top: 96, left: 96, width: 420 };
   const gutter = 14;
-  const width = Math.min(460, Math.max(320, window.innerWidth * 0.34));
-  const height = Math.min(560, window.innerHeight - gutter * 2);
+  const frame = fitPreviewFrame(ratio, size);
+  const width = Math.min(frame.width, window.innerWidth - gutter * 2);
+  const height = Math.min(frame.totalHeight, window.innerHeight - gutter * 2);
   const preferRight = anchor.right + gutter + width <= window.innerWidth;
-  const left = preferRight ? anchor.right + gutter : Math.max(gutter, anchor.left - width - gutter);
+  const leftCandidate = preferRight ? anchor.right + gutter : anchor.left - width - gutter;
+  const left = clamp(leftCandidate, gutter, window.innerWidth - width - gutter);
   const top = clamp(anchor.top + anchor.height / 2 - height / 2, gutter, window.innerHeight - height - gutter);
-  return { top, left, width };
+  return { top, left, width, "--preview-image-height": `${Math.max(180, height - 74)}px` } as React.CSSProperties;
 }
 
 export function WorkPreviewOverlay({
@@ -76,26 +129,49 @@ export function WorkPreviewOverlay({
   creatorName,
   source,
   assetIds,
+  assets,
+  isLoading = false,
+  isError = false,
+  previewSize,
   pageIndex,
   assetCount,
   onMouseEnter,
   onMouseLeave,
   onWheelPage,
+  onRefreshAssets,
 }: {
   anchor: DOMRect | null;
   title?: string | null;
   creatorName?: string | null;
   source?: string | null;
   assetIds: string[];
+  assets?: MediaAsset[];
+  isLoading?: boolean;
+  isError?: boolean;
+  previewSize: WorkPreviewSize;
   pageIndex: number;
   assetCount: number;
   onMouseEnter: () => void;
   onMouseLeave: () => void;
   onWheelPage: (delta: number) => void;
+  onRefreshAssets?: () => void;
 }) {
-  const style = useMemo(() => previewPosition(anchor), [anchor]);
+  const [naturalRatio, setNaturalRatio] = useState<number | null>(null);
+  const retriedSources = useRef<Set<string>>(new Set());
+  const assetById = useMemo(() => new Map((assets || []).map((asset) => [asset.id, asset])), [assets]);
   const currentId = assetIds[pageIndex] || assetIds[0];
-  const canPage = assetIds.length > 1;
+  const currentAsset = assetById.get(currentId) || assets?.[pageIndex] || assets?.[0];
+  const currentSrc = currentAsset?.original_url || null;
+  const footerText = currentAsset?.file_name
+    ? `${currentAsset.file_name}${creatorName ? ` · ${creatorName}` : ""}`
+    : creatorName || "Unknown creator";
+  const ratio = naturalRatio || ((currentAsset?.width || 0) > 0 && (currentAsset?.height || 0) > 0 ? (currentAsset!.width! / currentAsset!.height!) : 4 / 3);
+  const style = useMemo(() => previewPosition(anchor, ratio, previewSize), [anchor, ratio, previewSize]);
+  const canPage = Math.max(assetIds.length, assets?.length || 0) > 1;
+
+  useEffect(() => {
+    setNaturalRatio(null);
+  }, [currentSrc, currentId]);
 
   return (
     <div
@@ -109,8 +185,32 @@ export function WorkPreviewOverlay({
         onWheelPage(event.deltaY > 0 ? 1 : -1);
       }}
     >
-      <div className="relative flex aspect-[4/3] max-h-[520px] items-center justify-center bg-canvas">
-        <AssetImage assetId={currentId} size="preview" alt={title || ""} className="h-full w-full object-contain no-outline" />
+      <div className="relative flex items-center justify-center bg-canvas" style={{ height: "var(--preview-image-height)" }}>
+        {isLoading ? (
+          <div className="h-full w-full animate-pulse bg-subtle" />
+        ) : isError ? (
+          <div className="flex h-full w-full items-center justify-center px-4 text-center text-xs text-muted">Preview failed</div>
+        ) : currentSrc ? (
+          <AssetImage
+            src={currentSrc}
+            alt={title || currentAsset?.file_name || ""}
+            className="h-full w-full object-contain no-outline"
+            fallback="Original unavailable"
+            onLoad={(event) => {
+              const image = event.currentTarget;
+              if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+                setNaturalRatio(image.naturalWidth / image.naturalHeight);
+              }
+            }}
+            onError={() => {
+              if (!currentSrc || retriedSources.current.has(currentSrc)) return;
+              retriedSources.current.add(currentSrc);
+              onRefreshAssets?.();
+            }}
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center px-4 text-center text-xs text-muted">Original unavailable</div>
+        )}
         {canPage && (
           <div className="absolute bottom-2 left-2 rounded-md bg-black/70 px-2 py-1 text-xs font-medium text-white">
             {pageIndex + 1} / {assetCount}
@@ -123,7 +223,7 @@ export function WorkPreviewOverlay({
           <div className="min-w-0 flex-1 truncate text-sm font-medium">{title || "Untitled"}</div>
         </div>
         <div className="mt-1 flex items-center justify-between gap-3 text-xs text-muted">
-          <span className="truncate">{creatorName || "Unknown creator"}</span>
+          <span className="truncate">{footerText}</span>
           {canPage && <span className="shrink-0">Scroll to page</span>}
         </div>
       </div>
