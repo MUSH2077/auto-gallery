@@ -178,6 +178,37 @@ Worker 取走 import_job
 - **创作者自动重链**（`services/creator_reconcile.py`）：每次订阅同步扫描时，按身份匹配把孤立的 `source_creators`（`creator_id IS NULL`）链接到其订阅的创作者。它沿用 `import_runner` 的自动链接规则，因此身份模糊的收藏/转发源绝不会被错链。
 - **Worker 启动孤儿对账**：启动时把卡在 `downloading`/`importing` 的任务标记为 `stale`，并把磁盘上无对应任务的目录重新拾取导入。
 
+## Gitllery —— 磁盘上的策展历史
+
+一个单向、与 git 同构的投影，把权威的策展 DAG（`curation_commits` + `curation_changes`，以及各 `*_curation_state` 表）按每个 source-creator 投影到磁盘。**PostgreSQL 始终是权威数据源**——磁盘仓库只是一个面向读取优化的镜像，绝不是回写数据库的路径。每次策展提交（如 `purge`、`revert`、`curate_creator`）之后，以尽力而为（best-effort）、同步的方式写入；失败会被吞掉并记录日志（`project_commit_safe`），因此磁盘写入的偶发故障绝不会破坏策展 API 的响应。追赶投影（catch-up）和校验机制负责补齐任何缺口。
+
+- **目录结构**：`LIBRARY_ROOT/{source}/{creator_dir}/.gitllery/` —— 与该创作者既有的 library 文件同级，绝不是 library 根目录本身（路径包含关系通过 `Path.relative_to` 校验，与 `LIBRARY_ROOT` 下其他规则一致）。包含：
+  - `HEAD` —— 符号引用，固定为 `ref: refs/heads/main`
+  - `refs/heads/main` —— 当前提交哈希
+  - `objects/{aa}/{rest}` —— 内容寻址对象库，采用 git 风格的 2 字符分片前缀
+  - `logs/HEAD` —— 追加写入的引用日志（reflog，每次 `set_head` 写一行 JSON：旧/新哈希、actor、时间戳、message）
+  - `index.json` —— 物化的工作区状态，用于快速状态检查（`head`、`tree`、`tree_entries`、`entities`）
+  - `config.json` —— 仓库元数据（`schema_version`、`repository_id`、`source`、`creator_id`、`source_creator_id`、`creator_dir`、哈希/压缩算法）
+  - `description` —— 初始化时写入的可读标签
+
+- **对象模型**：每个对象都是规范化 JSON（按 key 排序、紧凑分隔符）经 zlib 压缩后存储，以**未压缩**规范字节的 sha256 寻址。
+  - **blob** —— 单个实体状态快照（`subject_type`、`subject_id`、`state`）
+  - **tree** —— 工作区清单：`{subject_type}/{subject_id}` → blob 哈希 的映射
+  - **commit** —— 一次被投影的策展提交：`tree` 哈希、仓库本地的 `parent` 哈希（链表结构，并非数据库提交的 parent）、`db_commit_id`（关联回 `curation_commits.id`）、actor/message/trigger/dedupe_key/reverts/occurred_at/stats，以及本次应用的完整变更列表
+
+- **操作**（`GitlleryService`，`backend/app/services/gitllery/`）：
+  - **`status`** —— 每个仓库的 `behind`（尚未投影的待处理 DB 提交数）、`object_integrity_ok`（从 HEAD 经 tree 到 blob 的哈希链校验）、`drift`（磁盘快照与当前 `*_curation_state` 不一致的实体，例如 `visibility`/`storage_state` 在投影之外被修改）
+  - **`reconcile`** —— 对缺失的提交运行追赶投影（`project_pending`），然后返回刷新后的 `status`
+  - **`backfill`** —— 确保每个 source-creator 仓库存在，然后从头投影整个策展 DAG（用于首次同步 / 历史数据回填）
+  - 同一仓库的写入通过 Redis 锁（`gitllery:{repository_id}`）串行化，避免并发投影在同一个 `.gitllery` 目录上产生竞态
+
+- **API**：所有端点都挂在策展路由下（需要 `RequireAdmin`），路径为 `/api/v1/curation/gitllery/...`：
+  - `GET /gitllery/status`、`GET /repositories/{repository_id}/gitllery/status`
+  - `POST /gitllery/reconcile`、`POST /gitllery/backfill`
+  - `GET /repositories/{repository_id}/gitllery/log`
+
+  管理端的 **GitlleryPanel** 组件展示干净/落后状态，并提供一键 reconcile 操作。
+
 ## 认证
 
 管理端和后端 API 使用基于 JWT 的认证：

@@ -200,6 +200,37 @@ Because gallery-dl writes directly to disk and the download → import handoff s
 - **Creator auto-relink** (`services/creator_reconcile.py`): each subscription-sync scan links orphaned `source_creators` (`creator_id IS NULL`) to their subscription's creator by identity match. It mirrors `import_runner`'s auto-link rules, so an ambiguous bookmark/repost feed is never mislinked.
 - **Worker startup orphan reconciliation**: on startup, jobs stuck in `downloading`/`importing` are marked `stale`, and on-disk directories with no matching job are picked up for import.
 
+## Gitllery — On-Disk Curation History
+
+A one-way, git-isomorphic projection of the authoritative curation DAG (`curation_commits` + `curation_changes`, plus the `*_curation_state` tables) onto disk, per source-creator. **PostgreSQL stays authoritative** — the on-disk repo is a read-optimized mirror, never a write path back into the DB. Written best-effort, synchronously, after each curation commit (e.g. `purge`, `revert`, `curate_creator`); failures are swallowed and logged (`project_commit_safe`) so a disk-write hiccup never breaks the curation API response. Catch-up and verification close any gap.
+
+- **Layout**: `LIBRARY_ROOT/{source}/{creator_dir}/.gitllery/` — sibling of that creator's existing library files, never the library root itself (path containment via `Path.relative_to`, same rule as the rest of `LIBRARY_ROOT`). Contains:
+  - `HEAD` — symbolic ref, always `ref: refs/heads/main`
+  - `refs/heads/main` — current commit hash
+  - `objects/{aa}/{rest}` — content-addressed object store, git-style 2-char shard prefix
+  - `logs/HEAD` — append-only reflog (one JSON line per `set_head`: old/new hash, actor, timestamp, message)
+  - `index.json` — materialized worktree state for fast status checks (`head`, `tree`, `tree_entries`, `entities`)
+  - `config.json` — repo metadata (`schema_version`, `repository_id`, `source`, `creator_id`, `source_creator_id`, `creator_dir`, hash/compression algorithm)
+  - `description` — human-readable label written at init
+
+- **Object model**: every object is canonical JSON (sorted keys, compact separators) compressed with zlib, addressed by the sha256 of the *uncompressed* canonical bytes.
+  - **blob** — one entity-state snapshot (`subject_type`, `subject_id`, `state`)
+  - **tree** — worktree manifest: map of `{subject_type}/{subject_id}` → blob hash
+  - **commit** — one projected curation commit: `tree` hash, repo-local `parent` hash (linked list, not the DB commit's parent), `db_commit_id` (links back to `curation_commits.id`), actor/message/trigger/dedupe_key/reverts/occurred_at/stats, and the full list of changes applied
+
+- **Operations** (`GitlleryService`, `backend/app/services/gitllery/`):
+  - **`status`** — per-repository `behind` (pending DB commits not yet projected), `object_integrity_ok` (hash-chain verification from HEAD through tree and blobs), and `drift` (entity states where the on-disk snapshot disagrees with current `*_curation_state`, e.g. a `visibility`/`storage_state` changed outside the projection)
+  - **`reconcile`** — runs catch-up projection (`project_pending`) for missing commits, then returns the refreshed `status`
+  - **`backfill`** — ensures every source-creator repo exists, then projects the entire curation DAG from scratch (used for first-sync / historical seeding)
+  - Per-repository writes are serialized with a Redis lock (`gitllery:{repository_id}`) so concurrent projection attempts never race on the same `.gitllery` directory
+
+- **API**: all endpoints live under the curation router (`RequireAdmin`), at `/api/v1/curation/gitllery/...`:
+  - `GET /gitllery/status`, `GET /repositories/{repository_id}/gitllery/status`
+  - `POST /gitllery/reconcile`, `POST /gitllery/backfill`
+  - `GET /repositories/{repository_id}/gitllery/log`
+
+  The admin-web **GitlleryPanel** surfaces clean/behind state and a one-click reconcile action.
+
 ## Authentication
 
 Admin Web and backend API use JWT-based authentication:
