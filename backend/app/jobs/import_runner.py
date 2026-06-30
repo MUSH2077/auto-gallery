@@ -34,6 +34,7 @@ from app.services.settings import get_download_defaults
 from app.services.redis_client import get_redis
 from app.services.subscription_enqueue import mark_source_sync_success
 from app.services.curation import CurationService
+from app.services.gitllery import project_commit_safe
 from app.services.work_import import WorkImportService
 
 logger = logging.getLogger(__name__)
@@ -633,7 +634,7 @@ async def run_import_job(import_job_id: str):
                     logger.warning("Failed to write metadata.json for %s/%s", provider.source_name, src_work_id, exc_info=True)
 
                 curation = CurationService(db)
-                _, curation_visibility = await curation.record_imported_work(
+                curation_commit, curation_visibility = await curation.record_imported_work(
                     work,
                     creator_id=linked_creator_id,
                     repository_id=dj.subscription_source_id,
@@ -662,6 +663,8 @@ async def run_import_job(import_job_id: str):
 
                 # Commit work and batch Meilisearch periodically
                 await db.commit()
+                if curation_commit is not None:
+                    await project_commit_safe(db, curation_commit.id)
                 batch_count += 1
                 if batch_count >= BATCH_SIZE and meili_docs:
                     try:

@@ -20,7 +20,7 @@ from app.schemas.gitllery import (
     GitlleryLogResponse, GitlleryReconcileResponse, GitlleryStatusResponse,
 )
 from app.services.curation import CurationService
-from app.services.gitllery import GitlleryService
+from app.services.gitllery import GitlleryService, project_commit_safe
 
 router = APIRouter(dependencies=[RequireAdmin])
 
@@ -67,7 +67,10 @@ async def get_curation_commit(commit_id: UUID, db: AsyncSession = Depends(get_db
 @router.post("/commits/{commit_id}/revert", response_model=CurationRevertResponse)
 async def revert_curation_commit(commit_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = CurationService(db)
-    return await svc.revert_commit(commit_id)
+    result = await svc.revert_commit(commit_id)
+    if result.get("commit") is not None:
+        await project_commit_safe(db, result["commit"].id)
+    return result
 
 
 @router.post("/purge/preview", response_model=PurgePreviewResponse)
@@ -80,6 +83,7 @@ async def preview_purge(data: PurgePreviewRequest, db: AsyncSession = Depends(ge
 async def purge_trashed_works(data: PurgeRequest, db: AsyncSession = Depends(get_db)):
     svc = CurationService(db)
     commit = await svc.purge(data.work_ids, message=data.message)
+    await project_commit_safe(db, commit.id)
     return await svc.commit_payload(commit.id)
 
 

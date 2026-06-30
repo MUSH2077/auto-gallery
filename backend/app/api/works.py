@@ -20,6 +20,7 @@ from app.models.tag import Tag
 from app.models.work_tag import WorkTag
 from app.services.media_signing import signed_media_url
 from app.services.curation import CurationService
+from app.services.gitllery import project_commit_safe
 
 router = APIRouter(dependencies=[RequireAdmin])
 
@@ -86,6 +87,7 @@ async def toggle_work_favorite(work_id: UUID, db: AsyncSession = Depends(get_db)
     commit = await svc.record_work_favorite(work, before, bool(work.is_favorite))
     commit.stats = {"work_count": 1}
     await db.commit()
+    await project_commit_safe(db, commit.id)
     await db.refresh(work)
     work.curation_state = svc.work_state_payload(await svc.work_state(work_id))
     return work
@@ -134,7 +136,8 @@ async def delete_work(work_id: UUID, db: AsyncSession = Depends(get_db)):
     if not work:
         raise HTTPException(status_code=404, detail="Work not found")
     svc = CurationService(db)
-    await svc.trash_works([work_id], message=f"Move work to trash: {work.title or work_id}")
+    commit = await svc.trash_works([work_id], message=f"Move work to trash: {work.title or work_id}")
+    await project_commit_safe(db, commit.id)
     cache_delete_pattern("works:*")
 
 
@@ -146,6 +149,7 @@ async def batch_delete_works(data: dict, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail="ids list is required")
     svc = CurationService(db)
     commit = await svc.trash_works([UUID(wid) for wid in ids], message=f"Move {len(ids)} works to trash")
+    await project_commit_safe(db, commit.id)
     cache_delete_pattern("works:*")
     return {
         "status": "ok",
@@ -164,6 +168,7 @@ async def batch_curate_works(data: BatchCurateRequest, db: AsyncSession = Depend
         commit = await svc.restore_works(data.ids, reason=data.reason, message=data.message)
     else:
         raise HTTPException(status_code=400, detail="action must be trash or restore")
+    await project_commit_safe(db, commit.id)
     cache_delete_pattern("works:*")
     return await svc.commit_payload(commit.id)
 

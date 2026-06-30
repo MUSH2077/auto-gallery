@@ -21,6 +21,7 @@ from app.services.cache import (
     invalidate_creator_subscription_caches,
 )
 from app.services.curation import CurationService
+from app.services.gitllery import project_commit_safe
 
 router = APIRouter(dependencies=[RequireAdmin])
 
@@ -407,6 +408,7 @@ async def curate_creator(creator_id: UUID, data: CreatorCurationRequest, db: Asy
         reason=data.reason,
         message=data.message,
     )
+    await project_commit_safe(db, commit.id)
     invalidate_api_caches("creators", "works")
     return await svc.commit_payload(commit.id)
 

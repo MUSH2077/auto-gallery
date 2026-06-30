@@ -146,3 +146,38 @@ async def test_status_clean_after_projection_and_behind_before(tmp_path, monkeyp
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_projection_failure_does_not_break_caller(tmp_path, monkeypatch):
+    from app.database import async_session, engine
+    from app.services.curation import CurationService
+    from app.services.gitllery import service as gsvc
+    from app.services.gitllery.service import project_commit_safe, GitlleryService
+
+    monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+
+    async def _boom(self, commit_id):
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(GitlleryService, "project_commit", _boom)
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator, work = await _seed_work(db)
+            commit = await CurationService(db).trash_works([work.id], message="trash 1")
+            await db.commit()
+            # Best-effort wrapper must swallow the failure (no raise).
+            await project_commit_safe(db, commit.id)
+
+        # Recovery: real projector + catch-up makes status clean.
+        monkeypatch.undo()
+        monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+        async with async_session() as db:
+            await GitlleryService(db).reconcile()
+            assert (await GitlleryService(db).status())["behind_total"] == 0
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
