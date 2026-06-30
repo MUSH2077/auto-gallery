@@ -274,6 +274,36 @@ class GitlleryService:
         projected = await self.project_pending(repository_id)
         return {"projected": projected, "status": await self.status(repository_id)}
 
+    async def log(self, repository_id: str, limit: int = 50) -> dict:
+        resolver = RepoResolver(self.db)
+        desc = next((d for d in await resolver.all_repositories() if d.key() == repository_id), None)
+        if desc is None:
+            return {"repository_id": repository_id, "entries": [], "total": 0}
+        repo = self._repo_for(desc)
+        entries = []
+        cur = repo.head_commit()
+        total = 0
+        guard = 0
+        while cur and guard < 1_000_000:
+            guard += 1
+            try:
+                obj = repo.objects.read(cur)
+            except OSError:
+                break
+            total += 1
+            if len(entries) < limit:
+                entries.append({
+                    "commit": cur,
+                    "db_commit_id": obj.get("db_commit_id"),
+                    "message": obj.get("message", ""),
+                    "trigger": obj.get("trigger"),
+                    "actor": obj.get("actor_id") or obj.get("actor_type"),
+                    "occurred_at": obj.get("occurred_at"),
+                    "change_count": len(obj.get("changes") or []),
+                })
+            cur = obj.get("parent")
+        return {"repository_id": repository_id, "entries": entries, "total": total}
+
 
 async def project_commit_safe(db: AsyncSession, commit_id) -> None:
     """Best-effort projection: never raises into the caller's request/job."""
