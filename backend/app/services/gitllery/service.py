@@ -109,6 +109,46 @@ class GitlleryService:
         repo.write_index(index)
         return commit_hash
 
+    async def _ordered_commits(self) -> list[CurationCommit]:
+        rows = await self.db.execute(
+            select(CurationCommit).order_by(
+                CurationCommit.occurred_at, CurationCommit.created_at, CurationCommit.id))
+        return list(rows.scalars().all())
+
+    async def project_pending(self, repository_id: str | None = None) -> dict[str, int]:
+        resolver = RepoResolver(self.db)
+        counts: dict[str, int] = {}
+        # repo_id -> (GitlleryRepo, RepoDescriptor, projected db_commit_id set)
+        repo_cache: dict[str, tuple[GitlleryRepo, RepoDescriptor, set[str]]] = {}
+        for commit in await self._ordered_commits():
+            changes = await self._changes_for_commit(commit.id)
+            sliced = await resolver.slice_changes(changes)
+            for rid, (desc, repo_changes) in sliced.items():
+                if repository_id is not None and rid != repository_id:
+                    continue
+                if rid not in repo_cache:
+                    repo = self._repo_for(desc)
+                    self._ensure_init(repo, desc)
+                    repo_cache[rid] = (repo, desc, repo.projected_db_commit_ids())
+                repo, desc_cached, projected = repo_cache[rid]
+                if str(commit.id) in projected:
+                    continue
+                async with redis_lock(f"gitllery:{rid}", ttl_seconds=60) as acquired:
+                    if not acquired:
+                        continue
+                    new_hash = self._apply_commit_to_repo(repo, desc_cached, commit, repo_changes)
+                if new_hash is not None:
+                    projected.add(str(commit.id))
+                    counts[rid] = counts.get(rid, 0) + 1
+        return counts
+
+    async def backfill(self) -> dict[str, int]:
+        # Ensure every source-creator repo exists, then project all commits.
+        resolver = RepoResolver(self.db)
+        for desc in await resolver.all_repositories():
+            self._ensure_init(self._repo_for(desc), desc)
+        return await self.project_pending()
+
     async def project_commit(self, commit_id: UUID) -> list[str]:
         commit = await self.db.get(CurationCommit, commit_id)
         if commit is None:

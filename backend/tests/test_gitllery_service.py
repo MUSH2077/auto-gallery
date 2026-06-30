@@ -32,7 +32,7 @@ async def _seed_work(db):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_project_commit_writes_objects_refs_index(tmp_path, monkeypatch):
-    from app.database import async_session
+    from app.database import async_session, engine
     from app.services.curation import CurationService
     from app.services.gitllery import service as gsvc
     from app.services.gitllery.service import GitlleryService
@@ -71,3 +71,43 @@ async def test_project_commit_writes_objects_refs_index(tmp_path, monkeypatch):
     finally:
         async with async_session() as db:
             await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_project_pending_catches_up_missed_commit(tmp_path, monkeypatch):
+    from app.database import async_session, engine
+    from app.services.curation import CurationService
+    from app.services.gitllery import service as gsvc
+    from app.services.gitllery.service import GitlleryService
+    from app.services.gitllery.repo import GitlleryRepo
+
+    monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+    # Isolate creator_dir resolution from any real gallery-dl config mounted in
+    # this environment (matches test_project_commit_writes_objects_refs_index);
+    # otherwise an on-disk config.json with a stale directory template can change
+    # which folder name resolve_creator_directory() produces.
+    monkeypatch.setenv("GALLERYDL_CONFIG_ROOT", str(tmp_path / "gallerydl-config"))
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator, work = await _seed_work(db)
+            c1 = await CurationService(db).trash_works([work.id], message="trash 1")
+            await db.commit()
+            c2 = await CurationService(db).restore_works([work.id], message="restore 1")
+            await db.commit()
+            # Simulate a missed projection: only project the SECOND commit.
+            await GitlleryService(db).project_commit(c2.id)
+
+            repo = GitlleryRepo(tmp_path, "pixiv", "七诗")
+            assert str(c1.id) not in repo.projected_db_commit_ids()
+
+            result = await GitlleryService(db).project_pending()
+            assert sum(result.values()) >= 1
+            ids = repo.projected_db_commit_ids()
+            assert {str(c1.id), str(c2.id)} <= ids
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
