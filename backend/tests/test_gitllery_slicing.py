@@ -1,0 +1,82 @@
+import uuid
+
+import pytest
+from sqlalchemy import text
+
+
+async def _clear(db):
+    await db.execute(text(
+        "TRUNCATE curation_changes, curation_commits, asset_sources, assets, "
+        "work_sources, works, source_creators, subscription_sources, subscriptions, "
+        "creators RESTART IDENTITY CASCADE"))
+    await db.commit()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_slice_work_change_to_single_repo():
+    from app.database import async_session, engine
+    from app.models import (Creator, SourceCreator, Work, WorkSource,
+                             CurationChange)
+    from app.services.gitllery.slicing import RepoResolver
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator = Creator(name="七诗")
+            db.add(creator)
+            await db.flush()
+            db.add(SourceCreator(creator_id=creator.id, source="pixiv",
+                                 source_creator_id="123", display_name="七诗"))
+            work = Work(title="w")
+            db.add(work)
+            await db.flush()
+            db.add(WorkSource(work_id=work.id, source="pixiv", source_work_id="9001",
+                              source_creator_id="123", raw_metadata={"user": {"name": "七诗"}}))
+            await db.commit()
+
+            change = CurationChange(commit_id=uuid.uuid4(), subject_type="work",
+                                    subject_id=str(work.id), action="work_trashed",
+                                    before_state=None, after_state={"visibility": "trashed"})
+            sliced = await RepoResolver(db).slice_changes([change])
+            assert len(sliced) == 1
+            desc, changes = next(iter(sliced.values()))
+            assert desc.source == "pixiv"
+            assert desc.source_creator_id == "123"
+            assert desc.creator_id == str(creator.id)
+            assert len(changes) == 1
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_slice_creator_change_fans_out_to_all_source_repos():
+    from app.database import async_session, engine
+    from app.models import Creator, SourceCreator, CurationChange
+    from app.services.gitllery.slicing import RepoResolver
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator = Creator(name="七诗")
+            db.add(creator)
+            await db.flush()
+            db.add(SourceCreator(creator_id=creator.id, source="pixiv",
+                                 source_creator_id="123", display_name="七诗"))
+            db.add(SourceCreator(creator_id=creator.id, source="x",
+                                 source_creator_id="abc", display_name="七诗"))
+            await db.commit()
+
+            change = CurationChange(commit_id=uuid.uuid4(), subject_type="creator",
+                                    subject_id=str(creator.id), action="creator_archived",
+                                    before_state=None, after_state={"visibility": "archived"})
+            sliced = await RepoResolver(db).slice_changes([change])
+            sources = sorted(desc.source for desc, _ in sliced.values())
+            assert sources == ["pixiv", "x"]
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
