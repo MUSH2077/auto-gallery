@@ -304,6 +304,19 @@ export const api = {
   runCurationBackfill: () =>
     request<T.CurationBackfillRunResponse>("/api/v1/curation/backfill", { method: "POST" }),
 
+  // Gitllery (on-disk curation history projection)
+  gitlleryStatus: () =>
+    request<T.GitlleryStatus>("/api/v1/curation/gitllery/status"),
+
+  gitlleryReconcile: (repositoryId?: string) =>
+    request<T.GitlleryReconcileResponse>(
+      `/api/v1/curation/gitllery/reconcile${repositoryId ? `?repository_id=${encodeURIComponent(repositoryId)}` : ""}`,
+      { method: "POST" },
+    ),
+
+  gitlleryLog: (repositoryId: string) =>
+    request<T.GitlleryLogResponse>(`/api/v1/curation/repositories/${encodeURIComponent(repositoryId)}/gitllery/log`),
+
   // Works
   ...worksApi,
 
@@ -612,6 +625,10 @@ export const queryKeys = {
     subject: (type: string, id: string) => ["curation", "subject", type, id] as const,
     suggestions: ["curation", "rule-suggestions"] as const,
     backfillStatus: ["curation", "backfill", "status"] as const,
+  },
+  gitllery: {
+    status: ["gitllery", "status"] as const,
+    log: (repositoryId: string) => ["gitllery", "log", repositoryId] as const,
   },
   downloadJobs: {
     all: ["download-jobs"] as const,

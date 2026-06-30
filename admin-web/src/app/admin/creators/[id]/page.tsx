@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
-import { Modal, RepositoryCard, SourceBadge, StatusBadge, WorkGrid } from "@/components";
+import { GitlleryPanel, Modal, RepositoryCard, SourceBadge, StatusBadge, WorkGrid } from "@/components";
 import { Breadcrumb } from "@/components/Breadcrumb";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
@@ -412,6 +412,8 @@ export default function CreatorDetailPage() {
               </div>
             ) : <p className="text-sm text-muted">No curation commits yet.</p>}
           </section>
+
+          <GitlleryPanel />
 
           <section className="card p-4">
             <div className="mb-3 flex items-center justify-between">

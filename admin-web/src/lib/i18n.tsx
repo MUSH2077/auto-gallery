@@ -1759,6 +1759,15 @@ const zh: Record<string, string> = {
   "curation.purge_confirm": "清理所有符合条件的回收站作品？原始文件可能会被删除。",
   "curation.rule_suggestions": "规则建议",
   "curation.no_suggestions": "还没有强模式。继续整理后，这里会出现建议。",
+
+  // Gitllery (on-disk curation history)
+  "gitllery.title": "策展历史",
+  "gitllery.clean": "已同步",
+  "gitllery.behind": "落后 {count} 个提交",
+  "gitllery.repos": "{count} 个 repository",
+  "gitllery.missing": "{count} 个缺失",
+  "gitllery.reconcile": "重新同步",
+  "gitllery.reconciled": "已重新同步",
   "workgrid.work_count": "{count} 个作品",
   "workgrid.day_source_count": "{source}: {count} 个作品",
 
@@ -3523,6 +3532,15 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "curation.purge_confirm": "Purge all eligible trashed works? Original files may be deleted.",
     "curation.rule_suggestions": "Rule Suggestions",
     "curation.no_suggestions": "No strong pattern yet. Keep curating and suggestions will appear here.",
+
+    "gitllery.title": "Curation History",
+    "gitllery.clean": "Clean",
+    "gitllery.behind": "Behind {count}",
+    "gitllery.repos": "{count} repositories",
+    "gitllery.missing": "{count} missing",
+    "gitllery.reconcile": "Reconcile",
+    "gitllery.reconciled": "Reconciled",
+
     "workgrid.work_count": "{count} works",
     "workgrid.day_source_count": "{source}: {count} works",
 

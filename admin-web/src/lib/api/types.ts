@@ -864,6 +864,45 @@ export interface AuthStatusResponse {
   };
 }
 
+// Gitllery (on-disk curation history projection)
+export interface GitlleryRepoStatus {
+  repository_id: string;
+  source: string;
+  creator_dir: string;
+  exists: boolean;
+  behind: number;
+  object_integrity_ok: boolean;
+  drift: string[];
+  clean: boolean;
+}
+
+export interface GitlleryStatus {
+  repositories: GitlleryRepoStatus[];
+  missing_repos: number;
+  behind_total: number;
+}
+
+export interface GitlleryReconcileResponse {
+  projected: Record<string, number>;
+  status: GitlleryStatus;
+}
+
+export interface GitlleryLogEntry {
+  commit: string;
+  db_commit_id?: string | null;
+  message: string;
+  trigger?: string | null;
+  actor?: string | null;
+  occurred_at?: string | null;
+  change_count: number;
+}
+
+export interface GitlleryLogResponse {
+  repository_id: string;
+  entries: GitlleryLogEntry[];
+  total: number;
+}
+
 export type GeneratedWork = components["schemas"]["WorkRead"];
 export type GeneratedWorkList = components["schemas"]["WorkList"];
 export type GeneratedAsset = components["schemas"]["AssetRead"];
