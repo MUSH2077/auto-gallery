@@ -67,6 +67,11 @@ class GitlleryService:
     ) -> str | None:
         """Write blobs+tree+commit for one repo. Returns new commit hash, or None if already projected."""
         self._ensure_init(repo, desc)
+        # Authoritative idempotency guard: this re-reads HEAD's chain under the
+        # caller's per-repo redis_lock, so even if the lock expired mid-pass or a
+        # concurrent projector advanced HEAD, an already-projected commit is never
+        # re-appended. Any pre-lock cached check (e.g. in project_pending) is only
+        # an optimization; this is the check that actually prevents duplication.
         if str(commit.id) in repo.projected_db_commit_ids():
             return None
 
@@ -133,7 +138,12 @@ class GitlleryService:
                 repo, desc_cached, projected = repo_cache[rid]
                 if str(commit.id) in projected:
                     continue
-                async with redis_lock(f"gitllery:{rid}", ttl_seconds=60) as acquired:
+                # Bulk path (reconcile/backfill): a single commit can fan out to
+                # thousands of blob writes, so allow a longer hold than the
+                # single-commit project_commit (60s). Lock expiry is still safe —
+                # the object store is content-addressed and the under-lock HEAD
+                # re-check in _apply_commit_to_repo prevents any duplication.
+                async with redis_lock(f"gitllery:{rid}", ttl_seconds=300) as acquired:
                     if not acquired:
                         continue
                     new_hash = self._apply_commit_to_repo(repo, desc_cached, commit, repo_changes)
