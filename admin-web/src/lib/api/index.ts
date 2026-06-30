@@ -627,6 +627,7 @@ export const queryKeys = {
     backfillStatus: ["curation", "backfill", "status"] as const,
   },
   gitllery: {
+    all: ["gitllery"] as const,
     status: ["gitllery", "status"] as const,
     log: (repositoryId: string) => ["gitllery", "log", repositoryId] as const,
   },

@@ -26,7 +26,7 @@ export default function GitlleryPanel() {
     mutationFn: () => api.gitlleryReconcile(),
     onSuccess: () => {
       toast.success(t("gitllery.reconciled"));
-      qc.invalidateQueries({ queryKey: ["gitllery"] });
+      qc.invalidateQueries({ queryKey: queryKeys.gitllery.all });
     },
     onError: (e: Error) => toast.error(e.message),
   });
