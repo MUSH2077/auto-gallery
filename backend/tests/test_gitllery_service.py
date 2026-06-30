@@ -111,3 +111,38 @@ async def test_project_pending_catches_up_missed_commit(tmp_path, monkeypatch):
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_status_clean_after_projection_and_behind_before(tmp_path, monkeypatch):
+    from app.database import async_session, engine
+    from app.services.curation import CurationService
+    from app.services.gitllery import service as gsvc
+    from app.services.gitllery.service import GitlleryService
+
+    monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+    # Isolate creator_dir resolution from any real gallery-dl config mounted in
+    # this environment (matches the other tests in this file); otherwise an
+    # on-disk config.json with a stale directory template can change which
+    # folder name resolve_creator_directory() produces.
+    monkeypatch.setenv("GALLERYDL_CONFIG_ROOT", str(tmp_path / "gallerydl-config"))
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator, work = await _seed_work(db)
+            commit = await CurationService(db).trash_works([work.id], message="trash 1")
+            await db.commit()
+
+            before = await GitlleryService(db).status()
+            assert before["behind_total"] >= 1
+
+            await GitlleryService(db).reconcile()
+            after = await GitlleryService(db).status()
+            assert after["behind_total"] == 0
+            assert all(r["clean"] for r in after["repositories"])
+            assert all(r["object_integrity_ok"] for r in after["repositories"])
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()

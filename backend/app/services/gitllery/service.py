@@ -167,6 +167,113 @@ class GitlleryService:
                     affected.append(repository_id)
         return affected
 
+    async def _pending_count_by_repo(self, repository_id: str | None) -> tuple[dict[str, int], dict[str, RepoDescriptor]]:
+        resolver = RepoResolver(self.db)
+        projected_cache: dict[str, set[str]] = {}
+        repo_desc: dict[str, RepoDescriptor] = {}
+        pending: dict[str, int] = {}
+        for commit in await self._ordered_commits():
+            changes = await self._changes_for_commit(commit.id)
+            sliced = await resolver.slice_changes(changes)
+            for rid, (desc, _changes) in sliced.items():
+                if repository_id is not None and rid != repository_id:
+                    continue
+                repo_desc[rid] = desc
+                if rid not in projected_cache:
+                    repo = self._repo_for(desc)
+                    projected_cache[rid] = repo.projected_db_commit_ids() if repo.exists() else set()
+                if str(commit.id) not in projected_cache[rid]:
+                    pending[rid] = pending.get(rid, 0) + 1
+        for rid in repo_desc:
+            pending.setdefault(rid, 0)
+        return pending, repo_desc
+
+    def _integrity_ok(self, repo: GitlleryRepo) -> bool:
+        head = repo.head_commit()
+        if head is None:
+            return True
+        if not repo.objects.verify(head):
+            return False
+        commit_obj = repo.objects.read(head)
+        tree_hash = commit_obj.get("tree")
+        if not tree_hash or not repo.objects.verify(tree_hash):
+            return False
+        for blob_hash in (repo.objects.read(tree_hash).get("entries") or {}).values():
+            if not repo.objects.exists(blob_hash):
+                return False
+        return True
+
+    async def _live_state(self, subject_type: str, subject_id: str) -> dict | None:
+        from app.models import AssetStorageState, CreatorCurationState, WorkCurationState
+        try:
+            sid = UUID(subject_id)
+        except (ValueError, TypeError):
+            return None
+        if subject_type == "work":
+            row = await self.db.execute(
+                select(WorkCurationState).where(WorkCurationState.work_id == sid))
+            st = row.scalar_one_or_none()
+            return {"visibility": st.visibility if st else "visible"}
+        if subject_type == "creator":
+            row = await self.db.execute(
+                select(CreatorCurationState).where(CreatorCurationState.creator_id == sid))
+            st = row.scalar_one_or_none()
+            return {"visibility": st.visibility if st else "visible"}
+        if subject_type == "asset":
+            row = await self.db.execute(
+                select(AssetStorageState).where(AssetStorageState.asset_id == sid))
+            st = row.scalar_one_or_none()
+            return {"storage_state": st.storage_state if st else "available"}
+        return None
+
+    async def _drift_keys(self, repo: GitlleryRepo) -> list[str]:
+        index_entities = repo.read_index().get("entities", {}) if repo.exists() else {}
+        drift: list[str] = []
+        for entity_key, disk_state in index_entities.items():
+            subject_type, _, subject_id = entity_key.partition("/")
+            live = await self._live_state(subject_type, subject_id)
+            if live is None:
+                continue
+            for field in ("visibility", "storage_state"):
+                if field in live and disk_state.get(field) != live.get(field):
+                    drift.append(entity_key)
+                    break
+        return drift
+
+    async def status(self, repository_id: str | None = None) -> dict:
+        pending, repo_desc = await self._pending_count_by_repo(repository_id)
+        # Include repos that exist on disk / in DB even with zero history.
+        for desc in await RepoResolver(self.db).all_repositories():
+            if repository_id is None or desc.key() == repository_id:
+                repo_desc.setdefault(desc.key(), desc)
+        repos_out = []
+        missing = 0
+        behind_total = 0
+        for rid, desc in repo_desc.items():
+            repo = self._repo_for(desc)
+            exists = repo.exists()
+            if not exists:
+                missing += 1
+            behind = pending.get(rid, 0)
+            behind_total += behind
+            integrity = self._integrity_ok(repo) if exists else True
+            drift = await self._drift_keys(repo) if exists else []
+            repos_out.append({
+                "repository_id": rid,
+                "source": desc.source,
+                "creator_dir": desc.creator_dir,
+                "exists": exists,
+                "behind": behind,
+                "object_integrity_ok": integrity,
+                "drift": drift,
+                "clean": exists and behind == 0 and integrity and not drift,
+            })
+        return {"repositories": repos_out, "missing_repos": missing, "behind_total": behind_total}
+
+    async def reconcile(self, repository_id: str | None = None) -> dict:
+        projected = await self.project_pending(repository_id)
+        return {"projected": projected, "status": await self.status(repository_id)}
+
 
 async def project_commit_safe(db: AsyncSession, commit_id) -> None:
     """Best-effort projection: never raises into the caller's request/job."""
