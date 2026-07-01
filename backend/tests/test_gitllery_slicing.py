@@ -118,3 +118,54 @@ async def test_slice_repository_change_skips_source_without_downloads():
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_repos_for_change_is_cached_per_subject():
+    """The same (subject_type, subject_id) is resolved against the DB once, even
+    across many changes — kills O(commits x changes) query amplification."""
+    from app.database import async_session, engine
+    from app.models import Creator, SourceCreator, Work, WorkSource, CurationChange
+    from app.services.gitllery.slicing import RepoResolver
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator = Creator(name="七诗")
+            db.add(creator)
+            await db.flush()
+            db.add(SourceCreator(creator_id=creator.id, source="pixiv",
+                                 source_creator_id="123", display_name="七诗"))
+            work = Work(title="w")
+            db.add(work)
+            await db.flush()
+            db.add(WorkSource(work_id=work.id, source="pixiv", source_work_id="9001",
+                              source_creator_id="123", raw_metadata={"user": {"name": "七诗"}}))
+            await db.commit()
+
+            resolver = RepoResolver(db)
+            calls = {"n": 0}
+            original = resolver._resolve_repos_for_change
+
+            async def counting(change):
+                calls["n"] += 1
+                return await original(change)
+            resolver._resolve_repos_for_change = counting
+
+            changes = [
+                CurationChange(commit_id=uuid.uuid4(), subject_type="work",
+                               subject_id=str(work.id), action=a,
+                               before_state=None, after_state={"visibility": v})
+                for a, v in [("work_trashed", "trashed"), ("work_restored", "visible"),
+                             ("work_favorited", "visible")]
+            ]
+            sliced = await resolver.slice_changes(changes)
+            assert calls["n"] == 1
+            assert len(sliced) == 1
+            desc, _ = next(iter(sliced.values()))
+            assert desc.source == "pixiv"
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()

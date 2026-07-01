@@ -37,6 +37,7 @@ class RepoResolver:
         self._repo_lookup: dict[tuple[str, str], SubscriptionSource] | None = None
         self._creator_by_subscription: dict[UUID, str | None] = {}
         self._creator_by_source_creator: dict[tuple[str, str], str | None] = {}
+        self._change_repos_cache: dict[tuple[str, str], list[RepoDescriptor]] = {}
 
     async def _ensure_repo_lookup(self) -> dict[tuple[str, str], SubscriptionSource]:
         if self._repo_lookup is None:
@@ -149,6 +150,18 @@ class RepoResolver:
                                creator_id=creator_id, creator_dir=creator_dir)]
 
     async def _repos_for_change(self, change: CurationChange) -> list[RepoDescriptor]:
+        # Cache per (subject_type, subject_id): an entity's repo membership does
+        # not change within one projection/status pass, so repeated changes on the
+        # same subject (trash→restore→favorite) resolve against the DB only once.
+        key = (change.subject_type, change.subject_id)
+        cached = self._change_repos_cache.get(key)
+        if cached is not None:
+            return cached
+        result = await self._resolve_repos_for_change(change)
+        self._change_repos_cache[key] = result
+        return result
+
+    async def _resolve_repos_for_change(self, change: CurationChange) -> list[RepoDescriptor]:
         st, sid = change.subject_type, change.subject_id
         if st == "work":
             rows = await self.db.execute(
