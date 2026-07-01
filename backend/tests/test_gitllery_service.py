@@ -181,3 +181,71 @@ async def test_projection_failure_does_not_break_caller(tmp_path, monkeypatch):
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_integrity_detects_corrupt_blob(tmp_path, monkeypatch):
+    from app.database import async_session, engine
+    from app.services.curation import CurationService
+    from app.services.gitllery import service as gsvc
+    from app.services.gitllery.service import GitlleryService
+    from app.services.gitllery.slicing import RepoResolver
+
+    monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator, work = await _seed_work(db)
+            commit = await CurationService(db).trash_works([work.id], message="trash 1")
+            await db.commit()
+            await GitlleryService(db).project_commit(commit.id)
+
+            svc = GitlleryService(db)
+            repos = await RepoResolver(db).all_repositories()
+            assert len(repos) == 1
+            repo = svc._repo_for(repos[0])
+            assert svc._integrity_ok(repo) is True
+
+            # Corrupt one tree-referenced blob's stored bytes.
+            head = repo.head_commit()
+            tree_hash = repo.objects.read(head)["tree"]
+            blob_hash = next(iter(repo.objects.read(tree_hash)["entries"].values()))
+            (repo.root / "objects" / blob_hash[:2] / blob_hash[2:]).write_bytes(b"corrupt-not-zlib")
+
+            assert svc._integrity_ok(repo) is False
+            s = await GitlleryService(db).status()
+            assert any(r["object_integrity_ok"] is False for r in s["repositories"])
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_status_and_log_404_for_unknown_repository(tmp_path, monkeypatch):
+    import uuid as _uuid
+    from fastapi import HTTPException
+    from app.database import async_session, engine
+    from app.services.gitllery import service as gsvc
+    from app.services.gitllery.service import GitlleryService
+
+    monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            unknown = str(_uuid.uuid4())
+            with pytest.raises(HTTPException) as ei:
+                await GitlleryService(db).status(unknown)
+            assert ei.value.status_code == 404
+            with pytest.raises(HTTPException) as ei2:
+                await GitlleryService(db).log(unknown)
+            assert ei2.value.status_code == 404
+            # Library-wide status (no id) must NOT 404.
+            s = await GitlleryService(db).status()
+            assert "repositories" in s
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()

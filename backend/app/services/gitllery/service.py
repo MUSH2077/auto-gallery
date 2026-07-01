@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -209,7 +210,7 @@ class GitlleryService:
         if not tree_hash or not repo.objects.verify(tree_hash):
             return False
         for blob_hash in (repo.objects.read(tree_hash).get("entries") or {}).values():
-            if not repo.objects.exists(blob_hash):
+            if not repo.objects.verify(blob_hash):
                 return False
         return True
 
@@ -251,6 +252,10 @@ class GitlleryService:
         return drift
 
     async def status(self, repository_id: str | None = None) -> dict:
+        if repository_id is not None:
+            known = {d.key() for d in await RepoResolver(self.db).all_repositories()}
+            if repository_id not in known:
+                raise HTTPException(status_code=404, detail="repository not found")
         pending, repo_desc = await self._pending_count_by_repo(repository_id)
         # Include repos that exist on disk / in DB even with zero history.
         for desc in await RepoResolver(self.db).all_repositories():
@@ -288,7 +293,7 @@ class GitlleryService:
         resolver = RepoResolver(self.db)
         desc = next((d for d in await resolver.all_repositories() if d.key() == repository_id), None)
         if desc is None:
-            return {"repository_id": repository_id, "entries": [], "total": 0}
+            raise HTTPException(status_code=404, detail="repository not found")
         repo = self._repo_for(desc)
         entries = []
         cur = repo.head_commit()
