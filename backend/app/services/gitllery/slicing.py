@@ -134,9 +134,15 @@ class RepoResolver:
                 WorkSource.source == repo.source,
                 WorkSource.source_creator_id == repo.source_creator_id).limit(1))
         ws = ws_row.scalar_one_or_none()
+        if ws is None:
+            # No downloaded work for this subscription source → no on-disk
+            # library directory to project into. Skip (e.g. reference-only or
+            # not-yet-downloaded cross-platform subscription sources), otherwise
+            # creator_dir falls back to "unknown" and unrelated sources collapse
+            # into a single bogus {source}/unknown/.gitllery.
+            return []
         creator_dir = resolve_creator_directory(
-            repo.source, ws.raw_metadata if ws else {},
-            ws.source_work_id if ws else (repo.source_creator_id or ""))
+            repo.source, ws.raw_metadata, ws.source_work_id)
         creator_id = await self._creator_for_subscription(repo.subscription_id)
         return [RepoDescriptor(repository_id=str(repo.id), source=repo.source,
                                source_creator_id=repo.source_creator_id,
