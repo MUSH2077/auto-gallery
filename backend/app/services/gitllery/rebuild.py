@@ -6,6 +6,7 @@ The ONE gitllery path that writes the DB. Insert-only + set-state, idempotent
 from __future__ import annotations
 
 import logging
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -59,7 +60,7 @@ class GitlleryRebuilder:
                 guard += 1
                 try:
                     obj = repo.objects.read(cur)
-                except OSError:
+                except (OSError, ValueError, zlib.error):
                     break
                 db_cid = obj.get("db_commit_id")
                 if db_cid:
@@ -71,7 +72,10 @@ class GitlleryRebuilder:
                             actor_type=obj.get("actor_type"), actor_id=obj.get("actor_id"),
                             stats=obj.get("stats") or {}, reverts=obj.get("reverts"))
                         merged[db_cid] = mc
-                    tree = repo.objects.read(obj["tree"]) if obj.get("tree") else {"entries": {}}
+                    try:
+                        tree = repo.objects.read(obj["tree"]) if obj.get("tree") else {"entries": {}}
+                    except (OSError, ValueError, zlib.error):
+                        tree = {"entries": {}}
                     entries = tree.get("entries") or {}
                     for ch in obj.get("changes", []):
                         st, sid, action = ch.get("subject_type"), ch.get("subject_id"), ch.get("action")
@@ -84,7 +88,7 @@ class GitlleryRebuilder:
                         if blob_hash:
                             try:
                                 after_state = repo.objects.read(blob_hash).get("state")
-                            except OSError:
+                            except (OSError, ValueError, zlib.error):
                                 after_state = None
                         mc.changes.append({
                             "subject_type": st, "subject_id": sid, "action": action,
