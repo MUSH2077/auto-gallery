@@ -59,3 +59,43 @@ async def test_collect_merges_commits_by_db_commit_id(tmp_path, monkeypatch):
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_build_maps_remaps_work_and_creator(tmp_path, monkeypatch):
+    from app.database import async_session, engine
+    from app.services.gitllery import service as gsvc
+    from app.services.gitllery import rebuild as rb
+    from app.services.gitllery.rebuild import MergedCommit
+    from app.models import Creator, SourceCreator, Work, WorkSource
+
+    monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+    monkeypatch.setattr(rb.settings, "library_root", str(tmp_path))
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator = Creator(name="七诗"); db.add(creator); await db.flush()
+            db.add(SourceCreator(creator_id=creator.id, source="pixiv",
+                                 source_creator_id="123", display_name="七诗"))
+            work = Work(title="w"); db.add(work); await db.flush()
+            db.add(WorkSource(work_id=work.id, source="pixiv", source_work_id="9001",
+                              source_creator_id="123", raw_metadata={}))
+            await db.commit()
+
+            old_work = str(uuid.uuid4()); old_creator = str(uuid.uuid4())
+            cfg = {"creator_id": old_creator, "source": "pixiv", "source_creator_id": "123",
+                   "repository_id": str(uuid.uuid4())}
+            merged = [MergedCommit(
+                db_commit_id=str(uuid.uuid4()), occurred_at=None, message="", trigger="work_trash",
+                actor_type=None, actor_id=None, stats={}, reverts=None,
+                changes=[{"subject_type": "work", "subject_id": old_work, "action": "work_trashed",
+                          "diff": {}, "impact": {},
+                          "after_state": {"source": "pixiv", "source_work_id": "9001"}}])]
+            maps = await rb.GitlleryRebuilder(db)._build_maps([(None, cfg)], merged)
+            assert maps["work"][old_work] == str(work.id)
+            assert maps["creator"][old_creator] == str(creator.id)
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()

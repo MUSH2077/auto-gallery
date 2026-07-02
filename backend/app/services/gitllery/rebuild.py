@@ -97,3 +97,48 @@ class GitlleryRebuilder:
                         })
                 cur = obj.get("parent")
         return sorted(merged.values(), key=lambda m: (m.occurred_at or "", m.db_commit_id))
+
+    async def _build_maps(self, repos, merged) -> dict:
+        from sqlalchemy import select
+        from app.models import WorkSource, SourceCreator, SubscriptionSource
+
+        work_nat: dict[str, tuple[str, str]] = {}
+        for mc in merged:
+            for ch in mc.changes:
+                st, sid, after = ch["subject_type"], ch["subject_id"], (ch.get("after_state") or {})
+                if st == "work" and after.get("source") and after.get("source_work_id"):
+                    work_nat.setdefault(sid, (after["source"], str(after["source_work_id"])))
+                if after.get("work_id") and after.get("source") and after.get("source_work_id"):
+                    work_nat.setdefault(str(after["work_id"]),
+                                        (after["source"], str(after["source_work_id"])))
+
+        work_map: dict[str, str] = {}
+        for old_uuid, (source, swid) in work_nat.items():
+            row = await self.db.execute(select(WorkSource.work_id).where(
+                WorkSource.source == source, WorkSource.source_work_id == swid))
+            wid = row.scalar_one_or_none()
+            if wid:
+                work_map[old_uuid] = str(wid)
+
+        creator_map: dict[str, str] = {}
+        repo_map: dict[str, str] = {}
+        for _repo, cfg in repos:
+            cfg = cfg or {}
+            source, scid = cfg.get("source"), cfg.get("source_creator_id")
+            if not (source and scid):
+                continue
+            old_creator = cfg.get("creator_id")
+            if old_creator and old_creator not in creator_map:
+                row = await self.db.execute(select(SourceCreator.creator_id).where(
+                    SourceCreator.source == source, SourceCreator.source_creator_id == scid))
+                cid = row.scalar_one_or_none()
+                if cid:
+                    creator_map[old_creator] = str(cid)
+            old_repo = cfg.get("repository_id")
+            if old_repo and old_repo not in repo_map:
+                row = await self.db.execute(select(SubscriptionSource.id).where(
+                    SubscriptionSource.source == source, SubscriptionSource.source_creator_id == scid))
+                rid = row.scalar_one_or_none()
+                if rid:
+                    repo_map[old_repo] = str(rid)
+        return {"work": work_map, "creator": creator_map, "repository": repo_map}
