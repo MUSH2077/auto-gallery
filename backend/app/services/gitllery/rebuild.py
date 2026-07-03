@@ -240,11 +240,20 @@ class GitlleryRebuilder:
             head = repo.head_commit()
             if not head:
                 continue
-            head_obj = repo.objects.read(head)
-            tree = repo.objects.read(head_obj["tree"]) if head_obj.get("tree") else {"entries": {}}
+            # Same corrupt-object tolerance as the collector: this is a disaster-
+            # recovery path, so one corrupt repo/blob must not abort the whole
+            # rebuild (skip the repo / the entry instead).
+            try:
+                head_obj = repo.objects.read(head)
+                tree = repo.objects.read(head_obj["tree"]) if head_obj.get("tree") else {"entries": {}}
+            except (OSError, ValueError, zlib.error):
+                continue
             for key, blob_hash in (tree.get("entries") or {}).items():
                 st, _, old_sid = key.partition("/")
-                state = (repo.objects.read(blob_hash).get("state") or {})
+                try:
+                    state = (repo.objects.read(blob_hash).get("state") or {})
+                except (OSError, ValueError, zlib.error):
+                    continue
                 if st == "work":
                     new_id = maps["work"].get(old_sid)
                     if not new_id:
