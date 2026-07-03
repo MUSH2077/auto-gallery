@@ -136,8 +136,13 @@ class GitlleryRebuilder:
                     creator_map[old_creator] = str(cid)
             old_repo = cfg.get("repository_id")
             if old_repo and old_repo not in repo_map:
+                # subscription_sources has NO unique (source, source_creator_id)
+                # constraint (unlike work_sources / source_creators), so duplicates
+                # across subscriptions are possible — limit(1) avoids
+                # MultipleResultsFound and keeps "unmappable → drop, not error".
                 row = await self.db.execute(select(SubscriptionSource.id).where(
-                    SubscriptionSource.source == source, SubscriptionSource.source_creator_id == scid))
+                    SubscriptionSource.source == source,
+                    SubscriptionSource.source_creator_id == scid).limit(1))
                 rid = row.scalar_one_or_none()
                 if rid:
                     repo_map[old_repo] = str(rid)

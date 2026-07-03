@@ -99,3 +99,41 @@ async def test_build_maps_remaps_work_and_creator(tmp_path, monkeypatch):
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_build_maps_repository_map_survives_duplicate_subscription_sources(tmp_path, monkeypatch):
+    """subscription_sources has no unique (source, source_creator_id) constraint,
+    so two rows can share it (different subscriptions). The repository map must
+    not crash with MultipleResultsFound — it maps to one of them."""
+    from app.database import async_session, engine
+    from app.services.gitllery import service as gsvc
+    from app.services.gitllery import rebuild as rb
+    from app.models import Creator, Subscription, SubscriptionSource
+
+    monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+    monkeypatch.setattr(rb.settings, "library_root", str(tmp_path))
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            ss_ids = []
+            for i in range(2):
+                c = Creator(name="七诗"); db.add(c); await db.flush()
+                sub = Subscription(creator_id=c.id, name="七诗"); db.add(sub); await db.flush()
+                ss = SubscriptionSource(subscription_id=sub.id, source="pixiv",
+                                        source_creator_id="123",
+                                        source_url=f"https://www.pixiv.net/users/123?s={i}")
+                db.add(ss); await db.flush()
+                ss_ids.append(str(ss.id))
+            await db.commit()
+
+            old_repo = str(uuid.uuid4())
+            cfg = {"creator_id": str(uuid.uuid4()), "source": "pixiv",
+                   "source_creator_id": "123", "repository_id": old_repo}
+            maps = await rb.GitlleryRebuilder(db)._build_maps([(None, cfg)], [])
+            assert maps["repository"][old_repo] in ss_ids
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
