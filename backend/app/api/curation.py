@@ -1,10 +1,10 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import RequireAdmin
-from app.database import get_db
+from app.database import async_session, get_db
 from app.schemas.curation import (
     CurationBackfillRunResponse,
     CurationBackfillStatusResponse,
@@ -17,7 +17,7 @@ from app.schemas.curation import (
     RuleSuggestionRead,
 )
 from app.schemas.gitllery import (
-    GitlleryLogResponse, GitlleryReconcileResponse, GitlleryStatusResponse,
+    GitlleryLogResponse, GitlleryReconcileResponse, GitlleryRebuildResponse, GitlleryStatusResponse,
 )
 from app.services.curation import CurationService
 from app.services.gitllery import GitlleryService, project_commit_safe
@@ -119,3 +119,70 @@ async def gitllery_backfill(db: AsyncSession = Depends(get_db)):
 async def gitllery_log(repository_id: str, limit: int = Query(50, ge=1, le=200),
                        db: AsyncSession = Depends(get_db)):
     return await GitlleryService(db).log(repository_id, limit)
+
+
+@router.post("/gitllery/rebuild", response_model=GitlleryRebuildResponse)
+async def gitllery_rebuild(
+    dry_run: bool = Query(True),
+    repository_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Restore manual curation history from on-disk .gitllery repos into the DB.
+
+    dry_run (default) runs inline and reports what WOULD happen without writing.
+    dry_run=false enqueues the real rebuild as an operations job (mirrors
+    import_from_disk in admin.py) since it may touch a large history.
+    """
+    if dry_run:
+        report = await GitlleryService(db).rebuild_db_from_disk(repository_id, dry_run=True)
+        return report
+
+    from rq import Queue
+    import uuid
+    from app.services.redis_client import get_redis
+    from app.services.operations import get_operation_status, set_operation_status
+    from app.services.tasks import TaskService
+
+    options = {"repository_id": repository_id}
+    redis = get_redis()
+    job_id = str(uuid.uuid4())
+    active_job = redis.get("library:gitllery-rebuild:active")
+    if isinstance(active_job, bytes):
+        active_job = active_job.decode()
+    if active_job:
+        active_status = get_operation_status(active_job)
+        if not active_status or active_status.get("status") in {"complete", "failed", "cancelled"}:
+            redis.delete("library:gitllery-rebuild:active")
+    if not redis.set("library:gitllery-rebuild:active", job_id, nx=True, ex=604800):
+        active_job = redis.get("library:gitllery-rebuild:active")
+        if isinstance(active_job, bytes):
+            active_job = active_job.decode()
+        raise HTTPException(status_code=409, detail={"message": "Gitllery rebuild already running", "job_id": active_job})
+
+    async with async_session() as task_db:
+        task = await TaskService(task_db).create_task(
+            task_id=UUID(job_id),
+            kind="admin",
+            operation_type="admin-gitllery-rebuild",
+            title="Rebuild curation from disk",
+            status="enqueued",
+            queue_name="operations",
+            progress={"phase": "enqueued", "label": "Gitllery rebuild queued"},
+            meta={"entity": "gitllery-rebuild", "repository_id": repository_id},
+        )
+        await task_db.commit()
+    set_operation_status(job_id, "enqueued", "admin-gitllery-rebuild",
+        progress={"phase": "enqueued", "label": "Gitllery rebuild queued"},
+        meta={"entity": "gitllery-rebuild", "repository_id": repository_id})
+
+    rq_job = Queue(name="operations", connection=redis).enqueue(
+        "app.jobs.admin_operations.run_gitllery_rebuild_operation",
+        job_id, options, job_timeout=14400, result_ttl=604800)
+    async with async_session() as task_db:
+        svc = TaskService(task_db)
+        current = await svc.get(task.id)
+        if current:
+            await svc.update_task(current, rq_job_id=rq_job.id)
+            await task_db.commit()
+
+    return {"status": "enqueued", "job_id": job_id, "dry_run": False}

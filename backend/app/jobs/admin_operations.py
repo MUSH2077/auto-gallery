@@ -209,3 +209,65 @@ async def _run_disk_import_operation(job_id: str, options: dict) -> dict:
             current = current.decode()
         if current == job_id:
             redis.delete("library:disk-import:active")
+
+
+def run_gitllery_rebuild_operation(job_id: str, options: dict | None = None) -> dict:
+    """Entry point for RQ workers — restore manual curation from .gitllery into the DB."""
+    return asyncio.run(_run_gitllery_rebuild_operation(job_id, options or {}))
+
+
+async def _run_gitllery_rebuild_operation(job_id: str, options: dict) -> dict:
+    from app.services.gitllery import GitlleryService
+    from uuid import UUID
+    from app.services.tasks import TaskService
+    async with async_session() as task_db:
+        svc = TaskService(task_db)
+        task = await svc.get(UUID(job_id))
+        if task:
+            await svc.update_task(
+                task,
+                status="running",
+                progress={"phase": "running", "label": "Restoring curation from disk..."},
+            )
+            await task_db.commit()
+    set_operation_status(job_id, "running", "admin-gitllery-rebuild",
+        progress={"phase": "running", "label": "Restoring curation from disk..."},
+        meta={"entity": "gitllery-rebuild", **options})
+    try:
+        async with async_session() as db:
+            result = await GitlleryService(db).rebuild_db_from_disk(options.get("repository_id"), dry_run=False)
+        label = f"Restored {result['commits_restored']} commits, {result['states_applied']} states"
+        async with async_session() as task_db:
+            svc = TaskService(task_db)
+            task = await svc.get(UUID(job_id))
+            if task:
+                await svc.update_task(
+                    task,
+                    status="complete",
+                    progress={"phase": "complete", "label": label},
+                    result=result,
+                )
+                await task_db.commit()
+        set_operation_status(job_id, "complete", "admin-gitllery-rebuild",
+            progress={"phase": "complete", "label": label},
+            result=result, meta={"entity": "gitllery-rebuild", **options})
+        return result
+    except Exception as exc:
+        logger.exception("Gitllery rebuild failed: job_id=%s", job_id)
+        async with async_session() as task_db:
+            svc = TaskService(task_db)
+            task = await svc.get(UUID(job_id))
+            if task:
+                await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
+                await task_db.commit()
+        set_operation_status(job_id, "failed", "admin-gitllery-rebuild",
+            progress={"phase": "failed"}, error=str(exc), meta={"entity": "gitllery-rebuild", **options})
+        raise
+    finally:
+        from app.services.redis_client import get_redis
+        redis = get_redis()
+        current = redis.get("library:gitllery-rebuild:active")
+        if isinstance(current, bytes):
+            current = current.decode()
+        if current == job_id:
+            redis.delete("library:gitllery-rebuild:active")

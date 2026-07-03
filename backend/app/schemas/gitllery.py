@@ -37,3 +37,14 @@ class GitlleryLogResponse(BaseModel):
     repository_id: str
     entries: list[GitlleryLogEntry]
     total: int
+
+
+class GitlleryRebuildResponse(BaseModel):
+    commits_restored: int = 0
+    commits_skipped_auto: int = 0
+    commits_deduped: int = 0
+    changes_unmapped: int = 0
+    states_applied: int = 0
+    dry_run: bool = False
+    job_id: str | None = None
+    status: str | None = None
