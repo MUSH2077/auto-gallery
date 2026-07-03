@@ -13,8 +13,7 @@ from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.services.gitllery.repo import GitlleryRepo
-from app.services.gitllery.slicing import RepoResolver
+from app.services.gitllery.repo import GITLLERY_DIRNAME, GitlleryRepo
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +42,24 @@ class GitlleryRebuilder:
         self.db = db
 
     async def _iter_repos(self) -> list[tuple[GitlleryRepo, dict]]:
+        """Discover .gitllery repos by scanning LIBRARY_ROOT directly.
+
+        Rebuild is a recovery path: the DISK is the source of truth, so repo
+        discovery must not depend on DB-derived creator_dir resolution — after a
+        disk-import the DB's raw_metadata may be missing/different and would
+        resolve to the wrong directory. Each repo is self-describing via its
+        config.json, so a filesystem scan is both simpler and correct.
+        """
+        root = Path(settings.library_root)
         out: list[tuple[GitlleryRepo, dict]] = []
-        for desc in await RepoResolver(self.db).all_repositories():
-            repo = GitlleryRepo(Path(settings.library_root), desc.source, desc.creator_dir)
+        if not root.is_dir():
+            return out
+        for gitllery_dir in sorted(root.glob(f"*/*/{GITLLERY_DIRNAME}")):
+            creator_root = gitllery_dir.parent
+            try:
+                repo = GitlleryRepo(root, creator_root.parent.name, creator_root.name)
+            except ValueError:
+                continue  # path containment violation — skip
             if repo.exists():
                 out.append((repo, repo.read_config()))
         return out
@@ -147,3 +161,112 @@ class GitlleryRebuilder:
                 if rid:
                     repo_map[old_repo] = str(rid)
         return {"work": work_map, "creator": creator_map, "repository": repo_map}
+
+    async def rebuild(self, repository_id: str | None = None, dry_run: bool = False) -> dict:
+        from datetime import datetime
+        from uuid import UUID
+        from app.services.curation import CurationService
+
+        repos = await self._iter_repos()
+        if repository_id is not None:
+            repos = [(r, c) for (r, c) in repos if (c or {}).get("repository_id") == repository_id]
+        merged = self._collect_merged_commits(repos)
+        maps = await self._build_maps(repos, merged)
+        cur = CurationService(self.db)
+        report = {"commits_restored": 0, "commits_skipped_auto": 0, "commits_deduped": 0,
+                  "changes_unmapped": 0, "states_applied": 0, "dry_run": dry_run}
+        old_to_new_commit: dict[str, str] = {}
+
+        for mc in merged:
+            if not mc.is_manual:
+                report["commits_skipped_auto"] += 1
+                continue
+            remapped = []
+            for ch in mc.changes:
+                new_sid = maps.get(ch["subject_type"], {}).get(ch["subject_id"])
+                if new_sid is None:
+                    report["changes_unmapped"] += 1
+                    continue
+                remapped.append({**ch, "subject_id": new_sid})
+            if not remapped:
+                continue
+            if dry_run:
+                report["commits_restored"] += 1
+                continue
+            occurred = None
+            if mc.occurred_at:
+                try:
+                    occurred = datetime.fromisoformat(mc.occurred_at.replace("Z", "+00:00"))
+                except ValueError:
+                    occurred = None
+            reverts_new = old_to_new_commit.get(mc.reverts) if mc.reverts else None
+            commit = await cur._create_commit(
+                message=mc.message, trigger=mc.trigger,
+                actor_type=mc.actor_type or "system", actor_id=mc.actor_id,
+                reverts_commit_id=UUID(reverts_new) if reverts_new else None,
+                metadata={"rebuilt_from": mc.db_commit_id}, occurred_at=occurred,
+                dedupe_key=f"rebuild:{mc.db_commit_id}")
+            old_to_new_commit[mc.db_commit_id] = str(commit.id)
+            if await self._commit_already_had_changes(commit.id):
+                report["commits_deduped"] += 1
+                continue
+            for ch in remapped:
+                await cur._add_change(
+                    commit, subject_type=ch["subject_type"], subject_id=ch["subject_id"],
+                    action=ch["action"], before_state=None, after_state=ch.get("after_state"),
+                    impact=ch.get("impact"))
+            commit.stats = mc.stats
+            report["commits_restored"] += 1
+
+        report["states_applied"] = await self._apply_final_state(repos, maps, dry_run)
+        if not dry_run:
+            await self.db.commit()
+        return report
+
+    async def _commit_already_had_changes(self, commit_id) -> bool:
+        from sqlalchemy import select, func
+        from app.models import CurationChange
+        n = (await self.db.execute(select(func.count(CurationChange.id)).where(
+            CurationChange.commit_id == commit_id))).scalar()
+        return bool(n)
+
+    async def _apply_final_state(self, repos, maps, dry_run) -> int:
+        from uuid import UUID
+        from app.services.curation import CurationService, VISIBLE
+        from app.models import Work
+        cur = CurationService(self.db)
+        applied = 0
+        for repo, _cfg in repos:
+            head = repo.head_commit()
+            if not head:
+                continue
+            head_obj = repo.objects.read(head)
+            tree = repo.objects.read(head_obj["tree"]) if head_obj.get("tree") else {"entries": {}}
+            for key, blob_hash in (tree.get("entries") or {}).items():
+                st, _, old_sid = key.partition("/")
+                state = (repo.objects.read(blob_hash).get("state") or {})
+                if st == "work":
+                    new_id = maps["work"].get(old_sid)
+                    if not new_id:
+                        continue
+                    if dry_run:
+                        applied += 1; continue
+                    ws = await cur._ensure_work_state(UUID(new_id))
+                    ws.visibility = state.get("visibility", VISIBLE)
+                    ws.reason = state.get("reason")
+                    work = await self.db.get(Work, UUID(new_id))
+                    if work is not None:
+                        work.is_favorite = bool(state.get("is_favorite", False))
+                    applied += 1
+                elif st == "creator":
+                    new_id = maps["creator"].get(old_sid)
+                    if not new_id:
+                        continue
+                    if dry_run:
+                        applied += 1; continue
+                    cs = await cur._ensure_creator_state(UUID(new_id))
+                    cs.visibility = state.get("visibility", VISIBLE)
+                    cs.reason = state.get("reason")
+                    applied += 1
+                # asset: best-effort skip (no natural key)
+        return applied

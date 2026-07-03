@@ -137,3 +137,80 @@ async def test_build_maps_repository_map_survives_duplicate_subscription_sources
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_rebuild_restores_state_and_manual_commits_idempotently(tmp_path, monkeypatch):
+    from app.database import async_session, engine
+    from app.services.curation import CurationService
+    from app.services.gitllery import service as gsvc
+    from app.services.gitllery import rebuild as rb
+    from app.services.gitllery.service import GitlleryService
+    from app.models import Creator, SourceCreator, Subscription, SubscriptionSource, Work, WorkSource
+    from app.models import CurationCommit, WorkCurationState
+    from sqlalchemy import select, func
+
+    monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+    monkeypatch.setattr(rb.settings, "library_root", str(tmp_path))
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator = Creator(name="七诗"); db.add(creator); await db.flush()
+            db.add(SourceCreator(creator_id=creator.id, source="pixiv",
+                                 source_creator_id="123", display_name="七诗"))
+            sub = Subscription(creator_id=creator.id, name="七诗"); db.add(sub); await db.flush()
+            ss = SubscriptionSource(subscription_id=sub.id, source="pixiv",
+                                    source_creator_id="123",
+                                    source_url="https://www.pixiv.net/users/123")
+            db.add(ss); await db.flush()
+            work = Work(title="w"); db.add(work); await db.flush()
+            db.add(WorkSource(work_id=work.id, source="pixiv", source_work_id="9001",
+                              source_creator_id="123", raw_metadata={"user": {"name": "七诗"}}))
+            await db.commit()
+            # Mirror the real pipeline: the work enters via an import commit
+            # (source_synced) whose repository change carries the
+            # (work_id, source, source_work_id) anchor _build_maps needs,
+            # then the operator manually trashes it.
+            svc = CurationService(db)
+            import_commit, _vis = await svc.record_imported_work(
+                work, creator_id=creator.id, repository_id=ss.id,
+                source="pixiv", source_work_id="9001")
+            await db.commit()
+            await GitlleryService(db).project_commit(import_commit.id)
+            commit = await svc.trash_works([work.id], message="trash 1")
+            await db.commit()
+            await GitlleryService(db).project_commit(commit.id)
+
+        async with async_session() as db:
+            await _clear(db)
+            creator2 = Creator(name="七诗"); db.add(creator2); await db.flush()
+            db.add(SourceCreator(creator_id=creator2.id, source="pixiv",
+                                 source_creator_id="123", display_name="七诗"))
+            work2 = Work(title="w"); db.add(work2); await db.flush()
+            db.add(WorkSource(work_id=work2.id, source="pixiv", source_work_id="9001",
+                              source_creator_id="123", raw_metadata={}))
+            await db.commit()
+            new_work_id = work2.id
+
+        async with async_session() as db:
+            report = await GitlleryService(db).rebuild_db_from_disk()
+            assert report["commits_restored"] >= 1
+        async with async_session() as db:
+            st = (await db.execute(select(WorkCurationState).where(
+                WorkCurationState.work_id == new_work_id))).scalar_one_or_none()
+            assert st is not None and st.visibility == "trashed"
+            manual = (await db.execute(select(func.count(CurationCommit.id)).where(
+                CurationCommit.trigger == "work_trash"))).scalar()
+            assert manual >= 1
+
+        async with async_session() as db:
+            await GitlleryService(db).rebuild_db_from_disk()
+        async with async_session() as db:
+            manual2 = (await db.execute(select(func.count(CurationCommit.id)).where(
+                CurationCommit.trigger == "work_trash"))).scalar()
+            assert manual2 == manual
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()

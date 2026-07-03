@@ -289,6 +289,10 @@ class GitlleryService:
         projected = await self.project_pending(repository_id)
         return {"projected": projected, "status": await self.status(repository_id)}
 
+    async def rebuild_db_from_disk(self, repository_id: str | None = None, dry_run: bool = False) -> dict:
+        from app.services.gitllery.rebuild import GitlleryRebuilder
+        return await GitlleryRebuilder(self.db).rebuild(repository_id, dry_run)
+
     async def log(self, repository_id: str, limit: int = 50) -> dict:
         resolver = RepoResolver(self.db)
         desc = next((d for d in await resolver.all_repositories() if d.key() == repository_id), None)
