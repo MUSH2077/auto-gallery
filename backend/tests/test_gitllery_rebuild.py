@@ -298,3 +298,160 @@ async def test_rebuild_remaps_reverts_chain(tmp_path, monkeypatch):
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_collector_skips_previously_rebuilt_commits(tmp_path, monkeypatch):
+    """On-disk commits whose dedupe_key starts with 'rebuild:' (projected back
+    to disk after a previous rebuild) must NOT be re-ingested — otherwise every
+    rebuild→project→rebuild cycle doubles the manual history."""
+    from app.database import async_session, engine
+    from app.services.gitllery import service as gsvc
+    from app.services.gitllery import rebuild as rb
+    from app.services.gitllery.repo import GitlleryRepo
+
+    monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+    monkeypatch.setattr(rb.settings, "library_root", str(tmp_path))
+    try:
+        repo = GitlleryRepo(tmp_path, "pixiv", "alice")
+        repo.init({"schema_version": 1, "source": "pixiv", "creator_dir": "alice",
+                   "creator_id": str(uuid.uuid4()), "source_creator_id": "alice",
+                   "repository_id": str(uuid.uuid4())}, "pixiv/alice")
+        blob = repo.objects.write({"type": "blob", "subject_type": "work",
+                                   "subject_id": "w-1", "state": {"visibility": "trashed"}})
+        tree = repo.objects.write({"type": "tree", "entries": {"work/w-1": blob}})
+        original = repo.objects.write({
+            "type": "commit", "tree": tree, "parent": None,
+            "db_commit_id": str(uuid.uuid4()), "actor_type": "admin", "actor_id": None,
+            "message": "trash 1", "trigger": "work_trash", "dedupe_key": None,
+            "reverts": None, "occurred_at": "2026-06-30T10:00:00+00:00", "stats": {},
+            "changes": [{"subject_type": "work", "subject_id": "w-1",
+                         "action": "work_trashed", "diff": {}, "impact": {}}]})
+        rebuilt = repo.objects.write({
+            "type": "commit", "tree": tree, "parent": original,
+            "db_commit_id": str(uuid.uuid4()), "actor_type": "system", "actor_id": None,
+            "message": "trash 1", "trigger": "work_trash",
+            "dedupe_key": f"rebuild:{uuid.uuid4()}",
+            "reverts": None, "occurred_at": "2026-07-01T10:00:00+00:00", "stats": {},
+            "changes": [{"subject_type": "work", "subject_id": "w-1",
+                         "action": "work_trashed", "diff": {}, "impact": {}}]})
+        repo.set_head(rebuilt, actor="system", message="rebuilt")
+
+        async with async_session() as db:
+            await _clear(db)
+            merged = rb.GitlleryRebuilder(db)._collect_merged_commits([(repo, {})])
+            assert len(merged) == 1
+            assert merged[0].trigger == "work_trash"
+            assert merged[0].occurred_at == "2026-06-30T10:00:00+00:00"
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_rebuild_refuses_on_live_manual_curation(tmp_path, monkeypatch):
+    """A real rebuild against a DB that already holds LIVE manual curation
+    (non-auto, non-rebuild commits) must refuse with 409; dry_run stays allowed."""
+    import pytest as _pytest
+    from fastapi import HTTPException
+    from app.database import async_session, engine
+    from app.services.curation import CurationService
+    from app.services.gitllery import service as gsvc
+    from app.services.gitllery import rebuild as rb
+    from app.services.gitllery.service import GitlleryService
+    from app.models import Creator, SourceCreator, Work, WorkSource
+
+    monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+    monkeypatch.setattr(rb.settings, "library_root", str(tmp_path))
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator = Creator(name="七诗"); db.add(creator); await db.flush()
+            db.add(SourceCreator(creator_id=creator.id, source="pixiv",
+                                 source_creator_id="123", display_name="七诗"))
+            work = Work(title="w"); db.add(work); await db.flush()
+            db.add(WorkSource(work_id=work.id, source="pixiv", source_work_id="9001",
+                              source_creator_id="123", raw_metadata={}))
+            await db.commit()
+            # LIVE manual curation in the current DB (not from a rebuild).
+            await CurationService(db).trash_works([work.id], message="live trash")
+            await db.commit()
+
+            with _pytest.raises(HTTPException) as ei:
+                await GitlleryService(db).rebuild_db_from_disk()
+            assert ei.value.status_code == 409
+            # dry_run is read-only and not gated.
+            report = await GitlleryService(db).rebuild_db_from_disk(dry_run=True)
+            assert report["dry_run"] is True
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_rebuild_repository_id_filter_matches_current_id(tmp_path, monkeypatch):
+    """rebuild(repository_id=<CURRENT subscription_source id>) resolves via
+    (source, source_creator_id) and matches the on-disk repo whose config holds
+    the OLD id."""
+    from app.database import async_session, engine
+    from app.services.curation import CurationService
+    from app.services.gitllery import service as gsvc
+    from app.services.gitllery import rebuild as rb
+    from app.services.gitllery.service import GitlleryService
+    from app.models import Creator, SourceCreator, Subscription, SubscriptionSource, Work, WorkSource
+
+    monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+    monkeypatch.setattr(rb.settings, "library_root", str(tmp_path))
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator = Creator(name="七诗"); db.add(creator); await db.flush()
+            db.add(SourceCreator(creator_id=creator.id, source="pixiv",
+                                 source_creator_id="123", display_name="七诗"))
+            sub = Subscription(creator_id=creator.id, name="七诗"); db.add(sub); await db.flush()
+            ss = SubscriptionSource(subscription_id=sub.id, source="pixiv",
+                                    source_creator_id="123",
+                                    source_url="https://www.pixiv.net/users/123")
+            db.add(ss); await db.flush()
+            work = Work(title="w"); db.add(work); await db.flush()
+            db.add(WorkSource(work_id=work.id, source="pixiv", source_work_id="9001",
+                              source_creator_id="123", raw_metadata={"user": {"name": "七诗"}}))
+            await db.commit()
+            svc = CurationService(db)
+            import_commit, _vis = await svc.record_imported_work(
+                work, creator_id=creator.id, repository_id=ss.id,
+                source="pixiv", source_work_id="9001")
+            await db.commit()
+            await GitlleryService(db).project_commit(import_commit.id)
+            commit = await svc.trash_works([work.id], message="trash 1")
+            await db.commit()
+            await GitlleryService(db).project_commit(commit.id)
+
+        async with async_session() as db:
+            await _clear(db)
+            creator2 = Creator(name="七诗"); db.add(creator2); await db.flush()
+            db.add(SourceCreator(creator_id=creator2.id, source="pixiv",
+                                 source_creator_id="123", display_name="七诗"))
+            sub2 = Subscription(creator_id=creator2.id, name="七诗"); db.add(sub2); await db.flush()
+            ss2 = SubscriptionSource(subscription_id=sub2.id, source="pixiv",
+                                     source_creator_id="123",
+                                     source_url="https://www.pixiv.net/users/123")
+            db.add(ss2); await db.flush()
+            work2 = Work(title="w"); db.add(work2); await db.flush()
+            db.add(WorkSource(work_id=work2.id, source="pixiv", source_work_id="9001",
+                              source_creator_id="123", raw_metadata={}))
+            await db.commit()
+            new_repo_id = str(ss2.id)
+
+        async with async_session() as db:
+            report = await GitlleryService(db).rebuild_db_from_disk(repository_id=new_repo_id)
+            assert report["commits_restored"] >= 1
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()

@@ -5,7 +5,6 @@ The ONE gitllery path that writes the DB. Insert-only + set-state, idempotent
 """
 from __future__ import annotations
 
-import logging
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,8 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.services.gitllery.repo import GITLLERY_DIRNAME, GitlleryRepo
-
-logger = logging.getLogger(__name__)
 
 AUTO_TRIGGERS = {"baseline_backfill", "source_synced"}
 
@@ -76,6 +73,14 @@ class GitlleryRebuilder:
                     obj = repo.objects.read(cur)
                 except (OSError, ValueError, zlib.error):
                     break
+                # Skip commits that were themselves inserted by a previous
+                # rebuild (later projected back to disk under a NEW
+                # db_commit_id) — re-ingesting them would duplicate manual
+                # history on every rebuild→project→rebuild cycle. The original
+                # commit is still in the chain, so nothing is lost.
+                if (obj.get("dedupe_key") or "").startswith("rebuild:"):
+                    cur = obj.get("parent")
+                    continue
                 db_cid = obj.get("db_commit_id")
                 if db_cid:
                     mc = merged.get(db_cid)
@@ -167,9 +172,11 @@ class GitlleryRebuilder:
         from uuid import UUID
         from app.services.curation import CurationService
 
+        if not dry_run:
+            await self._assert_recovery_context()
         repos = await self._iter_repos()
         if repository_id is not None:
-            repos = [(r, c) for (r, c) in repos if (c or {}).get("repository_id") == repository_id]
+            repos = await self._filter_repos(repos, repository_id)
         merged = self._collect_merged_commits(repos)
         maps = await self._build_maps(repos, merged)
         cur = CurationService(self.db)
@@ -222,6 +229,58 @@ class GitlleryRebuilder:
         if not dry_run:
             await self.db.commit()
         return report
+
+    async def _assert_recovery_context(self) -> None:
+        """Refuse a real rebuild when the DB already holds LIVE manual curation.
+
+        rebuild is a post-disaster tool (scenario A1: disk-import onto a fresh
+        database first, then rebuild). Running it against a healthy DB whose
+        disk is merely behind would silently regress state tables to older
+        on-disk state. Commits from a previous rebuild (dedupe_key
+        "rebuild:...") are expected and ignored, so idempotent re-runs stay
+        allowed. dry_run is read-only and is not gated.
+        """
+        from fastapi import HTTPException
+        from sqlalchemy import func, or_, select
+        from app.models import CurationCommit
+        n = (await self.db.execute(
+            select(func.count(CurationCommit.id)).where(
+                CurationCommit.trigger.notin_(AUTO_TRIGGERS),
+                or_(CurationCommit.dedupe_key.is_(None),
+                    ~CurationCommit.dedupe_key.like("rebuild:%")),
+            ))).scalar()
+        if n:
+            raise HTTPException(
+                status_code=409,
+                detail="database already contains live manual curation; "
+                       "rebuild_db_from_disk is a post-disaster recovery tool "
+                       "(run disk-import on a fresh database first)")
+
+    async def _filter_repos(self, repos, repository_id: str):
+        """Filter repos by repository id: match the config's (old, pre-loss)
+        repository_id directly, OR resolve a CURRENT subscription_source id to
+        its (source, source_creator_id) and match the config on that — callers
+        normally only know current ids."""
+        from uuid import UUID
+        from sqlalchemy import select
+        from app.models import SubscriptionSource
+        current = None
+        try:
+            row = await self.db.execute(select(SubscriptionSource).where(
+                SubscriptionSource.id == UUID(repository_id)))
+            current = row.scalar_one_or_none()
+        except (ValueError, TypeError):
+            current = None
+        out = []
+        for r, c in repos:
+            cfg = c or {}
+            if cfg.get("repository_id") == repository_id:
+                out.append((r, c))
+            elif (current is not None
+                  and cfg.get("source") == current.source
+                  and cfg.get("source_creator_id") == current.source_creator_id):
+                out.append((r, c))
+        return out
 
     async def _commit_already_had_changes(self, commit_id) -> bool:
         from sqlalchemy import select, func
