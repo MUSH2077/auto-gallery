@@ -317,6 +317,12 @@ export const api = {
   gitlleryLog: (repositoryId: string) =>
     request<T.GitlleryLogResponse>(`/api/v1/curation/repositories/${encodeURIComponent(repositoryId)}/gitllery/log`),
 
+  gitlleryRebuild: (dryRun: boolean, repositoryId?: string) =>
+    request<T.GitlleryRebuildReport>(
+      `/api/v1/curation/gitllery/rebuild?dry_run=${dryRun}${repositoryId ? `&repository_id=${encodeURIComponent(repositoryId)}` : ""}`,
+      { method: "POST" },
+    ),
+
   // Works
   ...worksApi,
 

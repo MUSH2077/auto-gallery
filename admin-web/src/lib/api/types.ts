@@ -903,6 +903,17 @@ export interface GitlleryLogResponse {
   total: number;
 }
 
+export interface GitlleryRebuildReport {
+  commits_restored: number;
+  commits_skipped_auto: number;
+  commits_deduped: number;
+  changes_unmapped: number;
+  states_applied: number;
+  dry_run: boolean;
+  job_id?: string | null;
+  status?: string | null;
+}
+
 export type GeneratedWork = components["schemas"]["WorkRead"];
 export type GeneratedWorkList = components["schemas"]["WorkList"];
 export type GeneratedAsset = components["schemas"]["AssetRead"];

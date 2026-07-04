@@ -1768,6 +1768,9 @@ const zh: Record<string, string> = {
   "gitllery.missing": "{count} 个缺失",
   "gitllery.reconcile": "重新同步",
   "gitllery.reconciled": "已重新同步",
+  "gitllery.rebuild": "从磁盘重建",
+  "gitllery.rebuild_confirm": "将恢复 {commits} 个提交和 {states} 个状态（{unmapped} 个未匹配）。是否继续？",
+  "gitllery.rebuild_started": "重建任务已入队",
   "workgrid.work_count": "{count} 个作品",
   "workgrid.day_source_count": "{source}: {count} 个作品",
 
@@ -3540,6 +3543,9 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "gitllery.missing": "{count} missing",
     "gitllery.reconcile": "Reconcile",
     "gitllery.reconciled": "Reconciled",
+    "gitllery.rebuild": "Rebuild from disk",
+    "gitllery.rebuild_confirm": "Will restore {commits} commits and {states} states ({unmapped} unmapped). Proceed?",
+    "gitllery.rebuild_started": "Rebuild queued",
 
     "workgrid.work_count": "{count} works",
     "workgrid.day_source_count": "{source}: {count} works",
