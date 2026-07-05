@@ -29,6 +29,13 @@ async def _seed_work(db):
     return creator, work
 
 
+@pytest.fixture(autouse=True)
+def _clear_gitllery_status_cache():
+    from app.services.cache import cache_delete_pattern
+    cache_delete_pattern("gitllery:status:*")
+    yield
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_project_commit_writes_objects_refs_index(tmp_path, monkeypatch):
@@ -289,6 +296,51 @@ async def test_status_and_log_404_for_unknown_repository(tmp_path, monkeypatch):
             # Library-wide status (no id) must NOT 404.
             s = await GitlleryService(db).status()
             assert "repositories" in s
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_status_cached_and_invalidated_on_projection(tmp_path, monkeypatch):
+    """status() is cached (TTL) and the cache is invalidated by projection."""
+    from app.database import async_session, engine
+    from app.services.curation import CurationService
+    from app.services.gitllery import service as gsvc
+    from app.services.gitllery.service import GitlleryService
+
+    monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator, work = await _seed_work(db)
+            svc_cur = CurationService(db)
+            commit = await svc_cur.trash_works([work.id], message="trash 1")
+            await db.commit()
+            await GitlleryService(db).project_commit(commit.id)
+
+            calls = {"n": 0}
+            original = GitlleryService._pending_count_by_repo
+
+            async def counting(self, repository_id):
+                calls["n"] += 1
+                return await original(self, repository_id)
+            monkeypatch.setattr(GitlleryService, "_pending_count_by_repo", counting)
+
+            first = await GitlleryService(db).status()
+            second = await GitlleryService(db).status()
+            assert calls["n"] == 1          # second call served from cache
+            assert second == first
+
+            # A new projection invalidates the cache → third call recomputes.
+            commit2 = await svc_cur.restore_works([work.id], message="restore 1")
+            await db.commit()
+            await GitlleryService(db).project_commit(commit2.id)
+            third = await GitlleryService(db).status()
+            assert calls["n"] == 2
+            assert third["behind_total"] == 0
     finally:
         async with async_session() as db:
             await _clear(db)

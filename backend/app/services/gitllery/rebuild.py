@@ -228,6 +228,8 @@ class GitlleryRebuilder:
         report["states_applied"] = await self._apply_final_state(repos, maps, dry_run)
         if not dry_run:
             await self.db.commit()
+            from app.services.gitllery.service import _invalidate_status_cache
+            _invalidate_status_cache()
         return report
 
     async def _assert_recovery_context(self) -> None:

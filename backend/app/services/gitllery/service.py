@@ -154,6 +154,8 @@ class GitlleryService:
                 if new_hash is not None:
                     projected.add(str(commit.id))
                     counts[rid] = counts.get(rid, 0) + 1
+        if counts:
+            _invalidate_status_cache()
         return counts
 
     async def backfill(self) -> dict[str, int]:
@@ -179,6 +181,8 @@ class GitlleryService:
                 repo = self._repo_for(desc)
                 if self._apply_commit_to_repo(repo, desc, commit, repo_changes) is not None:
                     affected.append(repository_id)
+        if affected:
+            _invalidate_status_cache()
         return affected
 
     async def _all_changes_by_commit(self) -> dict[UUID, list[CurationChange]]:
@@ -286,6 +290,11 @@ class GitlleryService:
             known = {d.key() for d in await RepoResolver(self.db).all_repositories()}
             if repository_id not in known:
                 raise HTTPException(status_code=404, detail="repository not found")
+        from app.services.cache import TTL, cache_get, cache_key, cache_set
+        key = cache_key("gitllery:status", repository_id=repository_id, deep=deep)
+        cached = cache_get(key)
+        if cached is not None:
+            return cached
         pending, repo_desc = await self._pending_count_by_repo(repository_id)
         # Include repos that exist on disk / in DB even with zero history.
         for desc in await RepoResolver(self.db).all_repositories():
@@ -315,8 +324,10 @@ class GitlleryService:
                 "drift": drift,
                 "clean": exists and behind == 0 and integrity and not drift,
             })
-        return {"repositories": repos_out, "missing_repos": missing,
-                "behind_total": behind_total, "deep": deep}
+        result = {"repositories": repos_out, "missing_repos": missing,
+                  "behind_total": behind_total, "deep": deep}
+        cache_set(key, result, TTL["gitllery:status"])
+        return result
 
     async def reconcile(self, repository_id: str | None = None) -> dict:
         projected = await self.project_pending(repository_id)
@@ -355,6 +366,12 @@ class GitlleryService:
                 })
             cur = obj.get("parent")
         return {"repository_id": repository_id, "entries": entries, "total": total}
+
+
+def _invalidate_status_cache() -> None:
+    """Drop all cached gitllery status payloads (any repo/deep combination)."""
+    from app.services.cache import cache_delete_pattern
+    cache_delete_pattern("gitllery:status:*")
 
 
 async def project_commit_safe(db: AsyncSession, commit_id) -> None:

@@ -12,6 +12,13 @@ async def _clear(db):
     await db.commit()
 
 
+@pytest.fixture(autouse=True)
+def _clear_gitllery_status_cache():
+    from app.services.cache import cache_delete_pattern
+    cache_delete_pattern("gitllery:status:*")
+    yield
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_collect_merges_commits_by_db_commit_id(tmp_path, monkeypatch):
