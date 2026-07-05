@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
 import { GitlleryPanel, Modal, RepositoryCard, SourceBadge, StatusBadge, WorkGrid } from "@/components";
+import { POLL_IDLE_MS } from "@/lib/polling";
 import { Breadcrumb } from "@/components/Breadcrumb";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
@@ -200,8 +201,8 @@ export default function CreatorDetailPage() {
 
   const creator = useQuery({ queryKey: queryKeys.creators.detail(id), queryFn: () => api.getCreator(id) });
   const links = useQuery({ queryKey: queryKeys.creators.links(id), queryFn: () => api.listCreatorLinks(id) });
-  const timeline = useQuery({ queryKey: ["creator-timeline", id], queryFn: () => api.getCreatorTimeline(id), refetchInterval: 15000 });
-  const stats = useQuery({ queryKey: ["creator-stats", id], queryFn: () => api.getCreatorStats(id), refetchInterval: 15000 });
+  const timeline = useQuery({ queryKey: ["creator-timeline", id], queryFn: () => api.getCreatorTimeline(id), refetchInterval: POLL_IDLE_MS, staleTime: POLL_IDLE_MS });
+  const stats = useQuery({ queryKey: ["creator-stats", id], queryFn: () => api.getCreatorStats(id), refetchInterval: POLL_IDLE_MS, staleTime: POLL_IDLE_MS });
   const works = useQuery({
     queryKey: ["creator-latest-works", id],
     queryFn: () => api.listWorks(0, 6, { creator_id: id, sort_by: "posted_at", sort_order: "desc" }),

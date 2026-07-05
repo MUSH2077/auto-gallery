@@ -22,6 +22,10 @@ export default function GitlleryPanel() {
   const status = useQuery({
     queryKey: queryKeys.gitllery.status,
     queryFn: () => api.gitlleryStatus(),
+    // status is server-cached (30s) and invalidated by reconcile/rebuild —
+    // don't refire it on every mount/focus.
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const reconcile = useMutation({
