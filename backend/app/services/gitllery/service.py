@@ -125,6 +125,7 @@ class GitlleryService:
 
     async def project_pending(self, repository_id: str | None = None) -> dict[str, int]:
         resolver = RepoResolver(self.db)
+        await resolver.preload_work_sources()
         counts: dict[str, int] = {}
         # repo_id -> (GitlleryRepo, RepoDescriptor, projected db_commit_id set)
         repo_cache: dict[str, tuple[GitlleryRepo, RepoDescriptor, set[str]]] = {}
@@ -197,6 +198,7 @@ class GitlleryService:
 
     async def _pending_count_by_repo(self, repository_id: str | None) -> tuple[dict[str, int], dict[str, RepoDescriptor]]:
         resolver = RepoResolver(self.db)
+        await resolver.preload_work_sources()
         projected_cache: dict[str, set[str]] = {}
         repo_desc: dict[str, RepoDescriptor] = {}
         pending: dict[str, int] = {}

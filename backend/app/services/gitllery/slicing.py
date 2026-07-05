@@ -38,6 +38,17 @@ class RepoResolver:
         self._creator_by_subscription: dict[UUID, str | None] = {}
         self._creator_by_source_creator: dict[tuple[str, str], str | None] = {}
         self._change_repos_cache: dict[tuple[str, str], list[RepoDescriptor]] = {}
+        self._work_sources_by_work: dict[str, list[WorkSource]] | None = None
+
+    async def preload_work_sources(self) -> None:
+        """Bulk-load every WorkSource once (one query) so per-change work
+        resolution in bulk walks (status / project_pending) does zero extra
+        DB round-trips — the walk visits every work anyway."""
+        rows = await self.db.execute(select(WorkSource))
+        grouped: dict[str, list[WorkSource]] = {}
+        for ws in rows.scalars().all():
+            grouped.setdefault(str(ws.work_id), []).append(ws)
+        self._work_sources_by_work = grouped
 
     async def _ensure_repo_lookup(self) -> dict[tuple[str, str], SubscriptionSource]:
         if self._repo_lookup is None:
@@ -164,10 +175,14 @@ class RepoResolver:
     async def _resolve_repos_for_change(self, change: CurationChange) -> list[RepoDescriptor]:
         st, sid = change.subject_type, change.subject_id
         if st == "work":
-            rows = await self.db.execute(
-                select(WorkSource).where(WorkSource.work_id == UUID(sid)))
+            if self._work_sources_by_work is not None:
+                ws_list = self._work_sources_by_work.get(str(sid), [])
+            else:
+                rows = await self.db.execute(
+                    select(WorkSource).where(WorkSource.work_id == UUID(sid)))
+                ws_list = list(rows.scalars().all())
             out = []
-            for ws in rows.scalars().all():
+            for ws in ws_list:
                 desc = await self._descriptor_for_work_source(ws)
                 if desc:
                     out.append(desc)
