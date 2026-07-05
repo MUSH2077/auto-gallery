@@ -94,13 +94,14 @@ async def curation_rule_suggestions(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/gitllery/status", response_model=GitlleryStatusResponse)
-async def gitllery_status(db: AsyncSession = Depends(get_db)):
-    return await GitlleryService(db).status()
+async def gitllery_status(deep: bool = Query(False), db: AsyncSession = Depends(get_db)):
+    return await GitlleryService(db).status(deep=deep)
 
 
 @router.get("/repositories/{repository_id}/gitllery/status", response_model=GitlleryStatusResponse)
-async def gitllery_repo_status(repository_id: str, db: AsyncSession = Depends(get_db)):
-    return await GitlleryService(db).status(repository_id)
+async def gitllery_repo_status(repository_id: str, deep: bool = Query(False),
+                               db: AsyncSession = Depends(get_db)):
+    return await GitlleryService(db).status(repository_id, deep=deep)
 
 
 @router.post("/gitllery/reconcile", response_model=GitlleryReconcileResponse)

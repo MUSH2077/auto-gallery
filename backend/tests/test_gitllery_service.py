@@ -214,8 +214,52 @@ async def test_integrity_detects_corrupt_blob(tmp_path, monkeypatch):
             (repo.root / "objects" / blob_hash[:2] / blob_hash[2:]).write_bytes(b"corrupt-not-zlib")
 
             assert svc._integrity_ok(repo) is False
-            s = await GitlleryService(db).status()
+            # Light (default) status only probes the HEAD commit object — the
+            # corrupt blob is invisible to it, so the repo still reports OK.
+            light = await GitlleryService(db).status()
+            assert light["deep"] is False
+            assert all(r["object_integrity_ok"] for r in light["repositories"])
+            # Deep verify catches the corrupt blob.
+            s = await GitlleryService(db).status(deep=True)
+            assert s["deep"] is True
             assert any(r["object_integrity_ok"] is False for r in s["repositories"])
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_status_uses_batched_changes_loader(tmp_path, monkeypatch):
+    """status() must use the single-query batched loader, never the per-commit
+    _changes_for_commit N+1 (711 sequential queries at current library size)."""
+    from app.database import async_session, engine
+    from app.services.curation import CurationService
+    from app.services.gitllery import service as gsvc
+    from app.services.gitllery.service import GitlleryService
+
+    monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator, work = await _seed_work(db)
+            commit = await CurationService(db).trash_works([work.id], message="trash 1")
+            await db.commit()
+            await GitlleryService(db).project_commit(commit.id)
+
+            calls = {"n": 0}
+            original = GitlleryService._changes_for_commit
+
+            async def counting(self, commit_id):
+                calls["n"] += 1
+                return await original(self, commit_id)
+            monkeypatch.setattr(GitlleryService, "_changes_for_commit", counting)
+
+            s = await GitlleryService(db).status()
+            assert calls["n"] == 0
+            assert s["deep"] is False
+            assert s["behind_total"] == 0
     finally:
         async with async_session() as db:
             await _clear(db)

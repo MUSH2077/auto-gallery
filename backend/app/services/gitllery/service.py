@@ -5,7 +5,9 @@ idempotent: re-projecting a commit is a no-op, a missed projection is caught up.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import zlib
 from pathlib import Path
 from uuid import UUID
 
@@ -126,8 +128,9 @@ class GitlleryService:
         counts: dict[str, int] = {}
         # repo_id -> (GitlleryRepo, RepoDescriptor, projected db_commit_id set)
         repo_cache: dict[str, tuple[GitlleryRepo, RepoDescriptor, set[str]]] = {}
+        changes_by_commit = await self._all_changes_by_commit()
         for commit in await self._ordered_commits():
-            changes = await self._changes_for_commit(commit.id)
+            changes = changes_by_commit.get(commit.id, [])
             sliced = await resolver.slice_changes(changes)
             for rid, (desc, repo_changes) in sliced.items():
                 if repository_id is not None and rid != repository_id:
@@ -178,13 +181,24 @@ class GitlleryService:
                     affected.append(repository_id)
         return affected
 
+    async def _all_changes_by_commit(self) -> dict[UUID, list[CurationChange]]:
+        """One query for ALL changes grouped by commit — replaces the per-commit
+        _changes_for_commit N+1 in bulk walks (status / project_pending)."""
+        rows = await self.db.execute(
+            select(CurationChange).order_by(CurationChange.created_at, CurationChange.id))
+        grouped: dict[UUID, list[CurationChange]] = {}
+        for ch in rows.scalars().all():
+            grouped.setdefault(ch.commit_id, []).append(ch)
+        return grouped
+
     async def _pending_count_by_repo(self, repository_id: str | None) -> tuple[dict[str, int], dict[str, RepoDescriptor]]:
         resolver = RepoResolver(self.db)
         projected_cache: dict[str, set[str]] = {}
         repo_desc: dict[str, RepoDescriptor] = {}
         pending: dict[str, int] = {}
+        changes_by_commit = await self._all_changes_by_commit()
         for commit in await self._ordered_commits():
-            changes = await self._changes_for_commit(commit.id)
+            changes = changes_by_commit.get(commit.id, [])
             sliced = await resolver.slice_changes(changes)
             for rid, (desc, _changes) in sliced.items():
                 if repository_id is not None and rid != repository_id:
@@ -192,12 +206,28 @@ class GitlleryService:
                 repo_desc[rid] = desc
                 if rid not in projected_cache:
                     repo = self._repo_for(desc)
-                    projected_cache[rid] = repo.projected_db_commit_ids() if repo.exists() else set()
+                    # Disk chain walk (zlib per object) — keep it off the event loop.
+                    projected_cache[rid] = (
+                        await asyncio.to_thread(repo.projected_db_commit_ids)
+                        if repo.exists() else set())
                 if str(commit.id) not in projected_cache[rid]:
                     pending[rid] = pending.get(rid, 0) + 1
         for rid in repo_desc:
             pending.setdefault(rid, 0)
         return pending, repo_desc
+
+    def _integrity_probe(self, repo: GitlleryRepo) -> bool:
+        """Light-mode check: HEAD resolves and its commit object loads.
+
+        The deep three-level verify (commit → tree → every blob re-hashed) costs
+        O(entities) zlib inflations per repo; the probe is one object read."""
+        head = repo.head_commit()
+        if head is None:
+            return True
+        try:
+            return repo.objects.read(head).get("type") == "commit"
+        except (OSError, ValueError, zlib.error):
+            return False
 
     def _integrity_ok(self, repo: GitlleryRepo) -> bool:
         head = repo.head_commit()
@@ -251,7 +281,7 @@ class GitlleryService:
                     break
         return drift
 
-    async def status(self, repository_id: str | None = None) -> dict:
+    async def status(self, repository_id: str | None = None, deep: bool = False) -> dict:
         if repository_id is not None:
             known = {d.key() for d in await RepoResolver(self.db).all_repositories()}
             if repository_id not in known:
@@ -271,8 +301,10 @@ class GitlleryService:
                 missing += 1
             behind = pending.get(rid, 0)
             behind_total += behind
-            integrity = self._integrity_ok(repo) if exists else True
-            drift = await self._drift_keys(repo) if exists else []
+            integrity = (
+                await asyncio.to_thread(self._integrity_ok if deep else self._integrity_probe, repo)
+                if exists else True)
+            drift = (await self._drift_keys(repo)) if (deep and exists) else []
             repos_out.append({
                 "repository_id": rid,
                 "source": desc.source,
@@ -283,7 +315,8 @@ class GitlleryService:
                 "drift": drift,
                 "clean": exists and behind == 0 and integrity and not drift,
             })
-        return {"repositories": repos_out, "missing_repos": missing, "behind_total": behind_total}
+        return {"repositories": repos_out, "missing_repos": missing,
+                "behind_total": behind_total, "deep": deep}
 
     async def reconcile(self, repository_id: str | None = None) -> dict:
         projected = await self.project_pending(repository_id)

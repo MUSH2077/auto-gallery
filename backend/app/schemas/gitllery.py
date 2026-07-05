@@ -16,6 +16,7 @@ class GitlleryStatusResponse(BaseModel):
     repositories: list[GitlleryRepoStatus]
     missing_repos: int
     behind_total: int
+    deep: bool = False
 
 
 class GitlleryReconcileResponse(BaseModel):
