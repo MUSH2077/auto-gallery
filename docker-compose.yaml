@@ -18,7 +18,10 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD} --maxmemory 64mb --maxmemory-policy allkeys-lru
+    # noeviction: this redis also backs RQ job queues — evicting keys under
+    # memory pressure would silently drop queued jobs. Overflow must error
+    # loudly instead. 96mb keeps headroom under the 128M container limit.
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD} --maxmemory 96mb --maxmemory-policy noeviction
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
     volumes:
