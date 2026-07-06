@@ -74,13 +74,14 @@ transactions and are additionally covered by the 5s clamp. `reconcile` /
 `project_pending` need no special handling (they only project; the next status
 verifies and advances P).
 
-### Side fix in scope
+### Side fix in scope (scoped preload)
 
-`RepoResolver.all_repositories()` currently issues one `WorkSource` query per
-distinct `(source, source_creator_id)` pair. When `preload_work_sources()` has
-run, derive the repo list from the preloaded map instead (zero extra queries).
-status's fast path calls preload only when the tail is non-empty; the
-tail-empty path uses `all_repositories()` with preload.
+`preload_work_sources()` currently loads **every** WorkSource — itself
+O(library) and unacceptable on the status fast path at 50k works. It gains an
+optional `work_ids` filter: the status tail path preloads only the works
+referenced by tail changes (`WHERE work_id IN (...)`); `project_pending` keeps
+the full preload (completeness is its job). `all_repositories()` stays as-is —
+its per-pair queries are O(#repos), consistent with the goal.
 
 ## What does NOT change
 
