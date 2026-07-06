@@ -197,6 +197,82 @@ class GitlleryService:
             grouped.setdefault(ch.commit_id, []).append(ch)
         return grouped
 
+    async def _tail_commits(self, checkpoint: tuple[datetime, str]) -> list[CurationCommit]:
+        """Commits strictly after the checkpoint position (created_at, id)."""
+        from sqlalchemy import and_, or_
+        ts, cid = checkpoint
+        rows = await self.db.execute(
+            select(CurationCommit).where(
+                or_(CurationCommit.created_at > ts,
+                    and_(CurationCommit.created_at == ts, CurationCommit.id > UUID(cid))))
+            .order_by(CurationCommit.created_at, CurationCommit.id))
+        return list(rows.scalars().all())
+
+    async def _changes_for_commits(self, commit_ids: list[UUID]) -> dict[UUID, list[CurationChange]]:
+        if not commit_ids:
+            return {}
+        rows = await self.db.execute(
+            select(CurationChange).where(CurationChange.commit_id.in_(commit_ids))
+            .order_by(CurationChange.created_at, CurationChange.id))
+        grouped: dict[UUID, list[CurationChange]] = {}
+        for ch in rows.scalars().all():
+            grouped.setdefault(ch.commit_id, []).append(ch)
+        return grouped
+
+    @staticmethod
+    def _projected_tail_ids(repo: GitlleryRepo, tail_ids: set[str]) -> set[str]:
+        """Walk from HEAD, stopping at the first db_commit_id outside the tail
+        set — exact under the checkpoint invariant: everything ≤ P is already
+        in the chains, post-P projections are all tail ids, and chains are
+        append-only, so the HEAD side is a contiguous run of tail ids."""
+        seen: set[str] = set()
+        cur = repo.head_commit()
+        guard = 0
+        while cur and guard < 1_000_000:
+            guard += 1
+            try:
+                obj = repo.objects.read(cur)
+            except (OSError, ValueError, zlib.error):
+                break
+            db_id = obj.get("db_commit_id")
+            if db_id:
+                if db_id not in tail_ids:
+                    break
+                seen.add(db_id)
+            cur = obj.get("parent")
+        return seen
+
+    async def _pending_count_tail(
+        self, repository_id: str | None, tail: list[CurationCommit],
+    ) -> tuple[dict[str, int], dict[str, RepoDescriptor], tuple | None]:
+        """Tail-only variant of _pending_count_by_repo — O(tail), not O(history)."""
+        resolver = RepoResolver(self.db)
+        changes_by_commit = await self._changes_for_commits([c.id for c in tail])
+        work_ids = sorted({ch.subject_id for chs in changes_by_commit.values()
+                           for ch in chs if ch.subject_type == "work"})
+        await resolver.preload_work_sources(work_ids=work_ids)
+        tail_ids = {str(c.id) for c in tail}
+        projected_cache: dict[str, set[str]] = {}
+        repo_desc: dict[str, RepoDescriptor] = {}
+        pending: dict[str, int] = {}
+        for commit in tail:
+            sliced = await resolver.slice_changes(changes_by_commit.get(commit.id, []))
+            for rid, (desc, _chs) in sliced.items():
+                if repository_id is not None and rid != repository_id:
+                    continue
+                repo_desc[rid] = desc
+                if rid not in projected_cache:
+                    repo = self._repo_for(desc)
+                    projected_cache[rid] = (
+                        await asyncio.to_thread(self._projected_tail_ids, repo, tail_ids)
+                        if repo.exists() else set())
+                if str(commit.id) not in projected_cache[rid]:
+                    pending[rid] = pending.get(rid, 0) + 1
+        for rid in repo_desc:
+            pending.setdefault(rid, 0)
+        max_pos = (tail[-1].created_at, tail[-1].id) if tail else None
+        return pending, repo_desc, max_pos
+
     async def _pending_count_by_repo(self, repository_id: str | None) -> tuple[dict[str, int], dict[str, RepoDescriptor]]:
         resolver = RepoResolver(self.db)
         await resolver.preload_work_sources()
@@ -298,7 +374,20 @@ class GitlleryService:
         cached = cache_get(key)
         if cached is not None:
             return cached
-        pending, repo_desc = await self._pending_count_by_repo(repository_id)
+        # Checkpoint fast path: only look at commits after P (verified-projected
+        # position). deep is the ground-truth path and never reads P.
+        checkpoint = None if deep else _read_checkpoint()
+        max_pos: tuple | None = None
+        if checkpoint is not None:
+            tail = await self._tail_commits(checkpoint)
+            pending, repo_desc, max_pos = await self._pending_count_tail(repository_id, tail)
+        else:
+            pending, repo_desc = await self._pending_count_by_repo(repository_id)
+            last = (await self.db.execute(
+                select(CurationCommit.created_at, CurationCommit.id)
+                .order_by(CurationCommit.created_at.desc(), CurationCommit.id.desc())
+                .limit(1))).first()
+            max_pos = (last[0], last[1]) if last else None
         # Include repos that exist on disk / in DB even with zero history.
         for desc in await RepoResolver(self.db).all_repositories():
             if repository_id is None or desc.key() == repository_id:
@@ -327,6 +416,10 @@ class GitlleryService:
                 "drift": drift,
                 "clean": exists and behind == 0 and integrity and not drift,
             })
+        # Only a LIBRARY-WIDE clean result verifies the invariant for every
+        # repo — per-repo status must never advance P.
+        if repository_id is None and behind_total == 0 and max_pos is not None:
+            _advance_checkpoint(max_pos[0], max_pos[1])
         result = {"repositories": repos_out, "missing_repos": missing,
                   "behind_total": behind_total, "deep": deep}
         cache_set(key, result, TTL["gitllery:status"])

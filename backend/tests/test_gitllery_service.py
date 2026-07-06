@@ -369,3 +369,159 @@ async def test_checkpoint_helpers_clamp_and_roundtrip():
     assert got[0] == ts
     gsvc._reset_checkpoint()
     assert gsvc._read_checkpoint() is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_status_checkpoint_fastpath_and_deep_bypass(tmp_path, monkeypatch):
+    """After a clean full walk sets P, the next status runs tail-only (never
+    touching the full batched loader) and advances P; deep bypasses P."""
+    from app.database import async_session, engine
+    from app.services.cache import cache_delete_pattern
+    from app.services.curation import CurationService
+    from app.services.gitllery import service as gsvc
+    from app.services.gitllery.service import GitlleryService
+
+    monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+    monkeypatch.setattr(gsvc, "_CHECKPOINT_CLAMP_SECONDS", 0)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator, work = await _seed_work(db)
+            svc_cur = CurationService(db)
+            c1 = await svc_cur.trash_works([work.id], message="trash 1")
+            await db.commit()
+            await GitlleryService(db).project_commit(c1.id)
+
+            s = await GitlleryService(db).status()
+            assert s["behind_total"] == 0
+            p1 = gsvc._read_checkpoint()
+            assert p1 is not None
+
+            c2 = await svc_cur.restore_works([work.id], message="restore 1")
+            await db.commit()
+            await GitlleryService(db).project_commit(c2.id)
+            cache_delete_pattern("gitllery:status:*")
+
+            calls = {"full": 0}
+            original = GitlleryService._all_changes_by_commit
+
+            async def counting(self):
+                calls["full"] += 1
+                return await original(self)
+            monkeypatch.setattr(GitlleryService, "_all_changes_by_commit", counting)
+
+            s2 = await GitlleryService(db).status()
+            assert calls["full"] == 0          # tail path, not the full loader
+            assert s2["behind_total"] == 0
+            p2 = gsvc._read_checkpoint()
+            assert p2 is not None and p2 != p1 and p2[0] >= p1[0]
+
+            cache_delete_pattern("gitllery:status:*")
+            s3 = await GitlleryService(db).status(deep=True)
+            assert calls["full"] == 1          # deep bypasses the checkpoint
+            assert s3["behind_total"] == 0
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_status_checkpoint_blocks_on_missed_projection(tmp_path, monkeypatch):
+    """A missed projection keeps behind>0 and blocks P; a per-repo status never
+    advances P even when clean."""
+    from app.database import async_session, engine
+    from app.services.cache import cache_delete_pattern
+    from app.services.curation import CurationService
+    from app.services.gitllery import service as gsvc
+    from app.services.gitllery.service import GitlleryService
+    from app.services.gitllery.slicing import RepoResolver
+
+    monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+    monkeypatch.setattr(gsvc, "_CHECKPOINT_CLAMP_SECONDS", 0)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator, work = await _seed_work(db)
+            svc_cur = CurationService(db)
+            c1 = await svc_cur.trash_works([work.id], message="trash 1")
+            await db.commit()
+            await GitlleryService(db).project_commit(c1.id)
+            assert (await GitlleryService(db).status())["behind_total"] == 0
+            p1 = gsvc._read_checkpoint()
+            assert p1 is not None
+
+            # Missed projection: new commit, NOT projected.
+            c2 = await svc_cur.restore_works([work.id], message="restore 1")
+            await db.commit()
+            cache_delete_pattern("gitllery:status:*")
+            s2 = await GitlleryService(db).status()
+            assert s2["behind_total"] == 1
+            assert gsvc._read_checkpoint() == p1   # blocked
+
+            # Catch up, then a PER-REPO clean status must still not advance P.
+            await GitlleryService(db).project_commit(c2.id)
+            repos = await RepoResolver(db).all_repositories()
+            cache_delete_pattern("gitllery:status:*")
+            sr = await GitlleryService(db).status(repos[0].key())
+            assert sr["behind_total"] == 0
+            assert gsvc._read_checkpoint() == p1   # per-repo never advances
+
+            # Library-wide clean status advances.
+            cache_delete_pattern("gitllery:status:*")
+            assert (await GitlleryService(db).status())["behind_total"] == 0
+            assert gsvc._read_checkpoint() != p1
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_status_checkpoint_catchup_ordering(tmp_path, monkeypatch):
+    """Catch-up appends an old missed commit after newer ones in the chain —
+    the bounded HEAD-backwards walk must still account for both tail commits."""
+    from app.database import async_session, engine
+    from app.services.cache import cache_delete_pattern
+    from app.services.curation import CurationService
+    from app.services.gitllery import service as gsvc
+    from app.services.gitllery.service import GitlleryService
+
+    monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+    monkeypatch.setattr(gsvc, "_CHECKPOINT_CLAMP_SECONDS", 0)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator, work = await _seed_work(db)
+            svc_cur = CurationService(db)
+            c0 = await svc_cur.trash_works([work.id], message="trash 0")
+            await db.commit()
+            await GitlleryService(db).project_commit(c0.id)
+            assert (await GitlleryService(db).status())["behind_total"] == 0
+            p0 = gsvc._read_checkpoint()
+            assert p0 is not None
+
+            c1 = await svc_cur.restore_works([work.id], message="restore 1")
+            await db.commit()
+            c2 = await svc_cur.trash_works([work.id], message="trash 2")
+            await db.commit()
+            # Project ONLY c2 — chain HEAD-side becomes [c2, c0, ...].
+            await GitlleryService(db).project_commit(c2.id)
+            cache_delete_pattern("gitllery:status:*")
+            s = await GitlleryService(db).status()
+            assert s["behind_total"] == 1        # c1 missing
+            assert gsvc._read_checkpoint() == p0
+
+            # Catch-up appends c1 AFTER c2 in the chain (documented ordering).
+            await GitlleryService(db).project_pending()
+            cache_delete_pattern("gitllery:status:*")
+            s2 = await GitlleryService(db).status()
+            assert s2["behind_total"] == 0
+            assert gsvc._read_checkpoint() != p0
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
