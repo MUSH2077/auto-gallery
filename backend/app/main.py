@@ -16,6 +16,7 @@ from app.api import api_router
 from app.api.media import router as media_router
 from app.config import settings
 from app.database import async_session, engine
+from app.services.danbooru import DanbooruUnavailableError
 
 # Configure stdlib logging from settings
 # File-based log persistence with rotation
@@ -170,6 +171,16 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     logger.error("Validation error on %s %s: %s | body: %s",
                  request.method, request.url.path, exc.errors(), safe_body)
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
+
+
+@app.exception_handler(DanbooruUnavailableError)
+async def danbooru_unavailable_handler(request: Request, exc: DanbooruUnavailableError):
+    logger.warning("Danbooru unavailable during %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Danbooru API is unreachable; try again later.",
+                 "error_code": "danbooru_unavailable"},
+    )
 
 app.include_router(api_router)
 app.include_router(media_router)

@@ -185,5 +185,8 @@ class CreatorService:
                 await self.db.commit()
             return created
         except Exception as e:
+            from app.services.danbooru import DanbooruUnavailableError
+            if isinstance(e, DanbooruUnavailableError):
+                raise  # let the API layer report 503 instead of a silent zero
             logger.warning("Danbooru enrichment failed: %s", e)
             return 0
