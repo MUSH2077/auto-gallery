@@ -169,3 +169,43 @@ async def test_repos_for_change_is_cached_per_subject():
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_preload_work_sources_scoped(tmp_path, monkeypatch):
+    """preload_work_sources(work_ids=...) loads only the requested works —
+    the status tail path must stay O(tail), not O(library)."""
+    from app.database import async_session, engine
+    from app.models import Creator, SourceCreator, Work, WorkSource, CurationChange
+    from app.services.gitllery.slicing import RepoResolver
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator = Creator(name="七诗"); db.add(creator); await db.flush()
+            db.add(SourceCreator(creator_id=creator.id, source="pixiv",
+                                 source_creator_id="123", display_name="七诗"))
+            w1 = Work(title="w1"); db.add(w1); await db.flush()
+            db.add(WorkSource(work_id=w1.id, source="pixiv", source_work_id="9001",
+                              source_creator_id="123", raw_metadata={}))
+            w2 = Work(title="w2"); db.add(w2); await db.flush()
+            db.add(WorkSource(work_id=w2.id, source="pixiv", source_work_id="9002",
+                              source_creator_id="123", raw_metadata={}))
+            await db.commit()
+
+            def change(work_id):
+                return CurationChange(commit_id=uuid.uuid4(), subject_type="work",
+                                      subject_id=str(work_id), action="work_trashed",
+                                      before_state=None, after_state={"visibility": "trashed"})
+
+            r = RepoResolver(db)
+            await r.preload_work_sources(work_ids=[str(w1.id)])
+            assert len(await r.slice_changes([change(w1.id)])) == 1
+            r2 = RepoResolver(db)
+            await r2.preload_work_sources(work_ids=[])
+            assert await r2.slice_changes([change(w1.id)]) == {}
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()

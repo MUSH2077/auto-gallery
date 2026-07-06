@@ -32,7 +32,9 @@ async def _seed_work(db):
 @pytest.fixture(autouse=True)
 def _clear_gitllery_status_cache():
     from app.services.cache import cache_delete_pattern
+    from app.services.gitllery.service import _reset_checkpoint
     cache_delete_pattern("gitllery:status:*")
+    _reset_checkpoint()
     yield
 
 
@@ -345,3 +347,25 @@ async def test_status_cached_and_invalidated_on_projection(tmp_path, monkeypatch
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_checkpoint_helpers_clamp_and_roundtrip():
+    import uuid as _uuid
+    from datetime import datetime, timedelta, timezone
+    from app.services.gitllery import service as gsvc
+
+    now = datetime.now(timezone.utc)
+    cid = _uuid.uuid4()
+    # Too fresh: refused by the in-flight-tx clamp.
+    assert gsvc._advance_checkpoint(now, cid) is False
+    assert gsvc._read_checkpoint() is None
+    # Old enough: accepted and round-trips.
+    ts = now - timedelta(seconds=10)
+    assert gsvc._advance_checkpoint(ts, cid) is True
+    got = gsvc._read_checkpoint()
+    assert got is not None and got[1] == str(cid)
+    assert got[0] == ts
+    gsvc._reset_checkpoint()
+    assert gsvc._read_checkpoint() is None

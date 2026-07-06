@@ -15,7 +15,9 @@ async def _clear(db):
 @pytest.fixture(autouse=True)
 def _clear_gitllery_status_cache():
     from app.services.cache import cache_delete_pattern
+    from app.services.gitllery.service import _reset_checkpoint
     cache_delete_pattern("gitllery:status:*")
+    _reset_checkpoint()
     yield
 
 

@@ -40,11 +40,29 @@ class RepoResolver:
         self._change_repos_cache: dict[tuple[str, str], list[RepoDescriptor]] = {}
         self._work_sources_by_work: dict[str, list[WorkSource]] | None = None
 
-    async def preload_work_sources(self) -> None:
-        """Bulk-load every WorkSource once (one query) so per-change work
-        resolution in bulk walks (status / project_pending) does zero extra
-        DB round-trips — the walk visits every work anyway."""
-        rows = await self.db.execute(select(WorkSource))
+    async def preload_work_sources(self, work_ids: list[str] | None = None) -> None:
+        """Bulk-load WorkSource rows (one query) so per-change work resolution
+        in bulk walks does zero extra DB round-trips.
+
+        work_ids=None loads the whole library (project_pending — completeness
+        is its job); a list scopes the load to those works (status tail path —
+        O(tail), not O(library))."""
+        if work_ids is not None and not work_ids:
+            self._work_sources_by_work = {}
+            return
+        stmt = select(WorkSource)
+        if work_ids is not None:
+            valid: list[UUID] = []
+            for w in work_ids:
+                try:
+                    valid.append(UUID(w))
+                except (ValueError, TypeError):
+                    continue
+            if not valid:
+                self._work_sources_by_work = {}
+                return
+            stmt = stmt.where(WorkSource.work_id.in_(valid))
+        rows = await self.db.execute(stmt)
         grouped: dict[str, list[WorkSource]] = {}
         for ws in rows.scalars().all():
             grouped.setdefault(str(ws.work_id), []).append(ws)

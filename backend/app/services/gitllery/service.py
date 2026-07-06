@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import zlib
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -368,6 +369,53 @@ class GitlleryService:
                 })
             cur = obj.get("parent")
         return {"repository_id": repository_id, "entries": entries, "total": total}
+
+
+_CHECKPOINT_KEY = "gitllery:checkpoint"
+_CHECKPOINT_CLAMP_SECONDS = 5
+
+
+def _read_checkpoint() -> tuple[datetime, str] | None:
+    """Verified-projected checkpoint P=(created_at, id). Best-effort.
+
+    Invariant: every curation_commit at position <= P has been verified present
+    in the on-disk chain of every repo it affects."""
+    try:
+        import json
+        from app.services.redis_client import get_redis
+        raw = get_redis().get(_CHECKPOINT_KEY)
+        if not raw:
+            return None
+        data = json.loads(raw)
+        return datetime.fromisoformat(data["created_at"]), str(data["id"])
+    except Exception:
+        logger.debug("gitllery checkpoint read failed", exc_info=True)
+        return None
+
+
+def _advance_checkpoint(created_at: datetime, commit_id) -> bool:
+    """Advance P — refuse positions younger than the in-flight-tx clamp window."""
+    try:
+        now = datetime.now(timezone.utc)
+        ts = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+        if ts > now - timedelta(seconds=_CHECKPOINT_CLAMP_SECONDS):
+            return False
+        import json
+        from app.services.redis_client import get_redis
+        get_redis().set(_CHECKPOINT_KEY, json.dumps(
+            {"created_at": ts.isoformat(), "id": str(commit_id)}))
+        return True
+    except Exception:
+        logger.debug("gitllery checkpoint write failed", exc_info=True)
+        return False
+
+
+def _reset_checkpoint() -> None:
+    try:
+        from app.services.redis_client import get_redis
+        get_redis().delete(_CHECKPOINT_KEY)
+    except Exception:
+        logger.debug("gitllery checkpoint reset failed", exc_info=True)
 
 
 def _invalidate_status_cache() -> None:
