@@ -42,6 +42,10 @@ class CreatorService:
 
     async def create_creator(self, data: dict):
         creator = await self.repo.create(data)
+        # Danbooru-first: every creation path tries to establish the identity
+        # mapping. Never blocks creation — misses/outages come back as status.
+        from app.services.creator_enrichment import enrich_creator_from_danbooru
+        await enrich_creator_from_danbooru(self.db, creator)
         await self.db.commit()
         return creator
 

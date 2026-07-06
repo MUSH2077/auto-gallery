@@ -203,6 +203,55 @@ async def test_enrich_creator_by_id_manual_creator_searches_by_name(monkeypatch)
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_create_creator_attempts_danbooru_mapping(monkeypatch):
+    from app.database import async_session, engine
+    from app.services import creator_enrichment as ce
+    from app.services.creator import CreatorService
+
+    monkeypatch.setattr(
+        ce.danbooru_svc, "search_and_extract",
+        lambda **kwargs: (FAKE_ARTIST, _fake_links()))
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator = await CreatorService(db).create_creator(
+                {"name": "yosei_bin", "display_name": "よせえ"})
+            assert creator.danbooru_artist_id == 240355
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_create_creator_survives_danbooru_outage(monkeypatch):
+    from app.database import async_session, engine
+    from app.services import creator_enrichment as ce
+    from app.services.creator import CreatorService
+    from app.services.danbooru import DanbooruUnavailableError
+
+    def _raise(**kwargs):
+        raise DanbooruUnavailableError("net down")
+
+    monkeypatch.setattr(ce.danbooru_svc, "search_and_extract", _raise)
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator = await CreatorService(db).create_creator(
+                {"name": "offline_creator", "display_name": "离线画师"})
+            assert creator.id is not None
+            assert creator.danbooru_artist_id is None
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_enrich_creator_by_id_missing_creator_raises():
     from app.database import async_session, engine
     from app.services import creator_enrichment as ce
