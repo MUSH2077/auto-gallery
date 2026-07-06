@@ -464,3 +464,35 @@ async def test_rebuild_repository_id_filter_matches_current_id(tmp_path, monkeyp
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_rebuild_resets_checkpoint(tmp_path, monkeypatch):
+    """A real rebuild inserts commits whose created_at can predate its own
+    commit instant (one long transaction) — it must reset the status
+    checkpoint so they can never be skipped."""
+    import uuid as _uuid
+    from datetime import datetime, timedelta, timezone
+    from app.database import async_session, engine
+    from app.services.gitllery import service as gsvc
+    from app.services.gitllery import rebuild as rb
+    from app.services.gitllery.rebuild import GitlleryRebuilder
+
+    monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+    monkeypatch.setattr(rb.settings, "library_root", str(tmp_path))
+    monkeypatch.setattr(gsvc, "_CHECKPOINT_CLAMP_SECONDS", 0)
+    try:
+        assert gsvc._advance_checkpoint(
+            datetime.now(timezone.utc) - timedelta(seconds=10), _uuid.uuid4()) is True
+        assert gsvc._read_checkpoint() is not None
+
+        async with async_session() as db:
+            await _clear(db)
+            # Empty library_root → no repos; empty DB passes the recovery gate.
+            await GitlleryRebuilder(db).rebuild()
+        assert gsvc._read_checkpoint() is None
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()

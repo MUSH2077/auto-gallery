@@ -228,8 +228,11 @@ class GitlleryRebuilder:
         report["states_applied"] = await self._apply_final_state(repos, maps, dry_run)
         if not dry_run:
             await self.db.commit()
-            from app.services.gitllery.service import _invalidate_status_cache
+            from app.services.gitllery.service import _invalidate_status_cache, _reset_checkpoint
             _invalidate_status_cache()
+            # Rebuilt rows' created_at can predate this transaction's commit
+            # instant — reset the checkpoint so status can never skip them.
+            _reset_checkpoint()
         return report
 
     async def _assert_recovery_context(self) -> None:
