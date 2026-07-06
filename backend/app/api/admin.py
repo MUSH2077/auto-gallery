@@ -1172,6 +1172,59 @@ async def import_from_disk(data: ImportFromDiskRequest | None = None):
     return {"status": "enqueued", "job_id": job_id, "message": "Disk import queued", "options": options}
 
 
+@router.post("/creators/re-enrich")
+async def reenrich_creators():
+    """Enqueue a Danbooru re-enrichment sweep for creators flagged needs_enrichment."""
+    from rq import Queue
+    import uuid
+    from app.services.redis_client import get_redis
+    from app.services.operations import set_operation_status
+    from app.services.tasks import TaskService
+
+    redis = get_redis()
+    job_id = str(uuid.uuid4())
+    active_job = redis.get("library:creator-reenrich:active")
+    if isinstance(active_job, bytes):
+        active_job = active_job.decode()
+    if active_job:
+        active_status = get_operation_status(active_job)
+        if not active_status or active_status.get("status") in {"complete", "failed", "cancelled"}:
+            redis.delete("library:creator-reenrich:active")
+    if not redis.set("library:creator-reenrich:active", job_id, nx=True, ex=86400):
+        active_job = redis.get("library:creator-reenrich:active")
+        if isinstance(active_job, bytes):
+            active_job = active_job.decode()
+        raise HTTPException(status_code=409, detail={
+            "message": "Creator re-enrichment already running", "job_id": active_job})
+    async with async_session() as task_db:
+        task = await TaskService(task_db).create_task(
+            task_id=UUID(job_id),
+            kind="admin",
+            operation_type="admin-creator-reenrich",
+            title="Re-enrich creators from Danbooru",
+            status="enqueued",
+            queue_name="operations",
+            progress={"phase": "enqueued", "label": "Creator re-enrichment queued"},
+            meta={"entity": "creator-reenrich"},
+        )
+        await task_db.commit()
+    set_operation_status(job_id, "enqueued", "admin-creator-reenrich",
+        progress={"phase": "enqueued", "label": "Creator re-enrichment queued"},
+        meta={"entity": "creator-reenrich"})
+
+    rq_job = Queue(name="operations", connection=redis).enqueue(
+        "app.jobs.admin_operations.run_creator_reenrich_operation",
+        job_id, {}, job_timeout=7200, result_ttl=604800)
+    async with async_session() as task_db:
+        svc = TaskService(task_db)
+        current = await svc.get(task.id)
+        if current:
+            await svc.update_task(current, rq_job_id=rq_job.id)
+            await task_db.commit()
+
+    return {"status": "enqueued", "job_id": job_id, "message": "Creator re-enrichment queued"}
+
+
 # ── gallery-dl Config ──
 
 class PixivSourceConfig(BaseModel):

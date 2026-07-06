@@ -100,7 +100,7 @@ async def _control_task(
 async def _retry_admin_task(task, svc: TaskService):
     from rq import Queue
 
-    if task.operation_type not in {"admin-disk-import", "admin-rebuild"}:
+    if task.operation_type not in {"admin-disk-import", "admin-rebuild", "admin-creator-reenrich"}:
         raise HTTPException(status_code=400, detail="This admin operation cannot be retried")
     if task.status not in {"failed", "stale", "cancelled"}:
         raise HTTPException(status_code=409, detail=f"Task is {task.status}; retry is only available after failure")
@@ -111,6 +111,11 @@ async def _retry_admin_task(task, svc: TaskService):
         func = "app.jobs.admin_operations.run_disk_import_operation"
         entity = "disk-import"
         label = "Disk import queued"
+    elif task.operation_type == "admin-creator-reenrich":
+        lock_key = "library:creator-reenrich:active"
+        func = "app.jobs.admin_operations.run_creator_reenrich_operation"
+        entity = "creator-reenrich"
+        label = "Creator re-enrichment queued"
     else:
         lock_key = "library:rebuild:active"
         func = "app.jobs.admin_operations.run_library_rebuild_operation"

@@ -399,6 +399,19 @@ async def toggle_creator_favorite(creator_id: UUID, db: AsyncSession = Depends(g
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.post("/{creator_id}/enrich")
+async def enrich_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
+    """Try to establish the Danbooru identity mapping for one creator."""
+    from app.services.creator_enrichment import enrich_creator_by_id
+    try:
+        result = await enrich_creator_by_id(db, creator_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    invalidate_api_caches("creators")
+    invalidate_creator_subscription_caches()
+    return result
+
+
 @router.post("/{creator_id}/curation", response_model=CurationCommitRead)
 async def curate_creator(creator_id: UUID, data: CreatorCurationRequest, db: AsyncSession = Depends(get_db)):
     svc = CurationService(db)

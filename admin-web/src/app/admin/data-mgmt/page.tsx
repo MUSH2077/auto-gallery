@@ -88,6 +88,22 @@ export default function DataManagementPage() {
     onError: (e) => toast.error({ title: t("datamgmt.disk_import"), message: (e as Error).message }),
   });
 
+  const reenrichCreators = useMutation({
+    mutationFn: () => api.reenrichCreators(),
+    onMutate: () => setResult(null),
+    onSuccess: (d: any) => {
+      const title = t("datamgmt.reenrich");
+      toast.success({
+        title,
+        message: d.message,
+        action: { label: t("jobs.task_detail"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${d.job_id}`) },
+      });
+      notify.startOperationJob(d.job_id, "admin-creator-reenrich", title);
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+    },
+    onError: (e) => toast.error({ title: t("datamgmt.reenrich"), message: (e as Error).message }),
+  });
+
   const rebuildLibrary = useMutation({
     mutationFn: () => api.rebuildLibrary(),
     onSuccess: (d: any) => {
@@ -446,6 +462,16 @@ export default function DataManagementPage() {
               <button onClick={() => importFromDisk.mutate()} disabled={importFromDisk.isPending}
                 className="btn-primary shrink-0 ml-3 text-xs">
                 {importFromDisk.isPending ? "..." : t("datamgmt.disk_import_btn")}
+              </button>
+            </div>
+            <div className="flex items-center justify-between p-3 border rounded-lg">
+              <div>
+                <p className="text-sm font-medium">{t("datamgmt.reenrich")}</p>
+                <p className="text-xs text-muted">{t("datamgmt.reenrich_desc")}</p>
+              </div>
+              <button onClick={() => reenrichCreators.mutate()} disabled={reenrichCreators.isPending}
+                className="btn-primary shrink-0 ml-3 text-xs">
+                {reenrichCreators.isPending ? "..." : t("datamgmt.reenrich_btn")}
               </button>
             </div>
           </div>

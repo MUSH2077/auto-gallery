@@ -441,6 +441,16 @@ export const api = {
       body: JSON.stringify(options),
     }),
 
+  reenrichCreators: () =>
+    request<{ job_id: string; status: string; message: string }>("/api/v1/admin/creators/re-enrich", {
+      method: "POST",
+    }),
+
+  enrichCreator: (creatorId: string) =>
+    request<{ status: string; artist_id?: number; artist_name?: string }>(`/api/v1/creators/${creatorId}/enrich`, {
+      method: "POST",
+    }),
+
   listAdminOperations: () =>
     request<{ operations: { job_id: string; status: string; operation_type: string; progress?: { phase: string; label: string }; error?: string; updated_at: number }[] }>("/api/v1/admin/operations"),
 

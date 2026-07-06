@@ -196,14 +196,24 @@ async def _ensure_source_creator(
     return sc
 
 
-async def _apply_danbooru_artist(db: AsyncSession, identity: MetadataIdentity, artist: dict[str, Any], links: list[dict[str, Any]]) -> Creator:
-    existing = await find_existing_creator(
-        db,
-        danbooru_artist_id=artist.get("id"),
-        source=identity.source,
-        source_creator_id=identity.source_creator_id,
-        source_url=identity.source_url,
-    ) or await _find_creator_from_subscription_source(db, identity)
+async def _apply_danbooru_artist(
+    db: AsyncSession,
+    identity: MetadataIdentity,
+    artist: dict[str, Any],
+    links: list[dict[str, Any]],
+    creator: Creator | None = None,
+) -> Creator:
+    # An explicitly passed creator wins — re-enrichment must wire the mapping
+    # onto THAT creator, never onto whatever identity resolution turns up.
+    existing = creator
+    if existing is None:
+        existing = await find_existing_creator(
+            db,
+            danbooru_artist_id=artist.get("id"),
+            source=identity.source,
+            source_creator_id=identity.source_creator_id,
+            source_url=identity.source_url,
+        ) or await _find_creator_from_subscription_source(db, identity)
     if existing:
         creator = existing
         if identity.display_name and not creator.display_name:
