@@ -50,6 +50,8 @@ services:
       retries: 5
       start_period: 20s
     restart: unless-stopped
+    # 8GB-NAS-conservative cap; a small library doesn't need more.
+    mem_limit: 256M
 
   backend:
     build:
@@ -97,7 +99,7 @@ services:
       retries: 3
       start_period: 30s
     restart: unless-stopped
-    mem_limit: 1024M
+    mem_limit: 768M
 
   worker-download:
     image: auto-gallery-backend:latest
@@ -135,12 +137,14 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-    mem_limit: 768M
+    mem_limit: 512M
 
   worker-import:
     image: auto-gallery-backend:latest
     pull_policy: never
-    command: python worker_entrypoint.py imports 2 --with-scheduler
+    # Single import worker: pyvips thumbnail bursts are the biggest memory
+    # spike — keep the ceiling NAS-safe (8GB box) at the cost of throughput.
+    command: python worker_entrypoint.py imports 1 --with-scheduler
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -173,8 +177,7 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-    mem_limit: 2g
-    mem_reservation: 1g
+    mem_limit: 1g
 
   worker-operations:
     image: auto-gallery-backend:latest

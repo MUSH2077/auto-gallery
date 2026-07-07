@@ -1,45 +1,52 @@
-# Deployment Profiles · 部署配置档
+# Deployment Profile · 部署配置
 
-## 8GB NAS profile · 8GB 内存 NAS 档
+There is a single compose file: `docker-compose.yaml`. Its resource limits are
+sized conservatively for an ~8GB-RAM NAS, so the same command works everywhere
+(dev box and NAS alike):
 
-**When to use · 适用场景**
-
-Use this profile when the NAS has ~8GB RAM (or less headroom after the NAS OS).
-It caps burst memory — import thumbnailing (pyvips) and Meilisearch are the two
-biggest spikes — so heavy tasks can't push the machine into swap, which is what
-makes *everything* (including the frontend) crawl on spinning disks.
-
-当 NAS 只有约 8GB 内存（扣除系统后余量有限）时使用。该档压低突发内存上限——导入缩略图
-（pyvips）与 Meilisearch 是两个最大的内存尖峰——避免重任务把机器压进交换区；机械盘上的
-交换正是"一跑任务整个前端都变慢"的元凶。
-
-**Usage · 用法**
+只有一份 compose 文件：`docker-compose.yaml`。其资源上限按约 8GB 内存的 NAS 保守设定，
+开发机与 NAS 使用同一条命令：
 
 ```bash
-docker compose -f docker-compose.yaml -f docker-compose.nas8g.yaml up -d
+docker compose up -d
 ```
 
-(All other compose commands take the same pair of `-f` flags, e.g. `build`,
-`logs`. 其余 compose 命令同样带这两个 `-f` 参数。)
+## Why conservative limits · 为什么取保守上限
 
-**What it changes · 改了什么**
+Import thumbnailing (pyvips) and Meilisearch are the two biggest memory
+spikes. Capping them keeps heavy tasks from pushing a small box into swap —
+swap on spinning disks is what makes *everything* (including the frontend)
+crawl.
 
-| Service · 服务 | Base · 基础档 | nas8g |
+导入缩略图（pyvips）与 Meilisearch 是两个最大的内存尖峰。压低上限可避免重任务把小内存
+机器压进交换区；机械盘上的交换正是"一跑任务整个前端都变慢"的元凶。
+
+## Current limits · 当前上限
+
+| Service · 服务 | mem_limit | Notes · 说明 |
 |---|---|---|
-| backend | 1024M | 768M |
-| worker-download | 768M | 512M |
-| worker-import | 2g / `imports 2` | **1g / `imports 1`**（单并发） |
-| meilisearch | unlimited · 无限制 | **256M** |
+| backend | 768M | |
+| worker-download | 512M | |
+| worker-import | 1g | single worker (`imports 1`) — pyvips burst ceiling · 单并发，压 pyvips 尖峰 |
+| worker-operations | 512M | |
+| scheduler | 256M | |
+| admin-web | 256M | `NODE_OPTIONS --max-old-space-size=256` |
+| meilisearch | 256M | plenty for a small library · 小型库足够 |
+| postgres | 384M | |
+| redis | 128M | `--maxmemory 96mb --maxmemory-policy noeviction` |
 
-App-service ceilings sum to ≈3.3G, leaving room for postgres (384M), redis
-(128M), admin-web (256M), scheduler (256M) and the NAS OS.
-应用服务上限合计约 3.3G，给 postgres/redis/admin-web/scheduler 与 NAS 系统留出余量。
+Totals at limits ≈ 4.9G, leaving headroom for the NAS OS on an 8GB machine.
+If a service is OOM-killed on a larger box, raise its `mem_limit` in
+`docker-compose.yaml` directly.
 
-**Related base-file change · 相关基础档变更**
+上限合计约 4.9G，8GB 机器上为系统留出余量。更大内存的机器如遇 OOM，直接在
+`docker-compose.yaml` 中调高对应服务的 `mem_limit` 即可。
 
-The base compose now runs redis with `--maxmemory-policy noeviction` (was
-`allkeys-lru`): this redis also backs the RQ job queues, and LRU eviction under
-memory pressure would silently delete queued jobs. With noeviction, overflow
-fails loudly instead.
-基础 compose 的 redis 改为 `noeviction`（原 `allkeys-lru`）：该 Redis 同时承载 RQ 任务
-队列，内存吃紧时 LRU 会静默删除排队任务；noeviction 让溢出变成显式报错。
+## Redis eviction policy · Redis 淘汰策略
+
+Redis backs both the API cache **and** RQ job queues. `noeviction` is
+required: evicting keys under memory pressure would silently drop queued
+jobs — overflow must error loudly instead.
+
+Redis 同时承载 API 缓存**和** RQ 任务队列。必须使用 `noeviction`：内存压力下淘汰键会
+静默丢失排队任务——溢出必须显式报错。
