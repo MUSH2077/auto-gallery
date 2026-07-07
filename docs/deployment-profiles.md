@@ -24,14 +24,14 @@ crawl.
 ## Current limits · 当前上限
 
 | Service · 服务 | mem_limit | Notes · 说明 |
-|---|---|---|
+| --- | --- | --- |
 | backend | 768M | |
 | worker-download | 512M | |
 | worker-import | 1g | single worker (`imports 1`) — pyvips burst ceiling · 单并发，压 pyvips 尖峰 |
 | worker-operations | 512M | |
 | scheduler | 256M | |
 | admin-web | 256M | `NODE_OPTIONS --max-old-space-size=256` |
-| meilisearch | 256M | plenty for a small library · 小型库足够 |
+| meilisearch | 512M | + `MEILI_MAX_INDEXING_MEMORY=256Mb`, 2 indexing threads — 256M got OOM-killed during bulk reindex · 256M 批量重建索引时会被 OOM，512M+自我节流为可用下限 |
 | postgres | 384M | |
 | redis | 128M | `--maxmemory 96mb --maxmemory-policy noeviction` |
 

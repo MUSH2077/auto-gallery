@@ -41,6 +41,10 @@ services:
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
       MEILI_ENV: ${MEILI_ENV:-production}
       MEILI_HTTP_ADDR: ${MEILI_HTTP_ADDR:-meilisearch:7700}
+      # Self-throttle indexing instead of getting OOM-killed: bulk reindex
+      # at 256M container limit died with exit 137 (2026-07-07).
+      MEILI_MAX_INDEXING_MEMORY: ${MEILI_MAX_INDEXING_MEMORY:-256Mb}
+      MEILI_MAX_INDEXING_THREADS: ${MEILI_MAX_INDEXING_THREADS:-2}
     volumes:
       - ${HOST_MEILISEARCH:-./data/docker/meilisearch}:/meili_data
     healthcheck:
@@ -50,8 +54,9 @@ services:
       retries: 5
       start_period: 20s
     restart: unless-stopped
-    # 8GB-NAS-conservative cap; a small library doesn't need more.
-    mem_limit: 256M
+    # 8GB-NAS-conservative cap. 256M OOM-killed bulk indexing; 512M plus the
+    # MEILI_MAX_INDEXING_* throttles above is the working floor.
+    mem_limit: 512M
 
   backend:
     build:

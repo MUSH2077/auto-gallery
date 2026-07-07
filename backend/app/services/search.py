@@ -41,7 +41,16 @@ def _client() -> MeiliClient:
 def _ensure_indexes(client: MeiliClient):
     for uid, config in INDEX_SETTINGS.items():
         try:
-            client.create_index(uid, {"primaryKey": "id"})
+            client.create_index(uid, primary_key="id")
+        except Exception:
+            pass
+        try:
+            # A rebuilt index can exist without a primary key (docs like works
+            # carry both id and creator_id, so Meilisearch refuses to guess —
+            # index_primary_key_multiple_candidates_found). Pin it explicitly.
+            index = client.get_index(uid)
+            if index.primary_key is None:
+                index.update(primary_key="id")
         except Exception:
             pass
         try:
