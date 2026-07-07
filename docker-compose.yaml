@@ -83,6 +83,10 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       TIMEZONE: ${TIMEZONE:-UTC}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:13000}
+      # Backend serves concurrent HTTP — larger pool than the worker default
+      # (2+3). 10+10 = 20 max; 7 processes stay well under pg max_connections 100.
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
     volumes:
       - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
       - ${HOST_LIBRARY:-./data/library}:/library

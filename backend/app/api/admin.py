@@ -201,12 +201,17 @@ async def schedule_backup(data: dict):
     return {"status": "ok", "message": "Auto-backup disabled"}
 
 
-@router.get("/system-info")
-async def system_info():
-    """Return system-level info: disk usage, archive sizes, version."""
-    import os, shutil
+_system_info_cache: dict | None = None
+_system_info_cache_ts: float = 0.0
+_SYSTEM_INFO_CACHE_TTL = 60.0
+_system_info_lock = asyncio.Lock()
+
+
+def _gather_system_info() -> dict:
+    """Blocking: disk_usage + recursive directory-size walks. Runs in a thread
+    (never on the event loop) — an rglob over a multi-hundred-GB library takes
+    seconds to minutes and would freeze all concurrent requests otherwise."""
     info = {"version": "0.1.0", "python": "3.12"}
-    # Disk usage
     for label, path in [("downloads", settings.download_root), ("library", settings.library_root)]:
         try:
             usage = shutil.disk_usage(path)
@@ -215,7 +220,6 @@ async def system_info():
             info[f"{label}_free_gb"] = round(usage.free / (1024**3), 1)
         except Exception:
             pass
-    # Archive sizes
     try:
         dl_root = Path(settings.download_root)
         archives = {}
@@ -224,18 +228,44 @@ async def system_info():
         info["archives_kb"] = archives
     except Exception:
         pass
-    # Directory sizes
     try:
         for label, path in [("downloads", settings.download_root), ("library", settings.library_root)]:
             total = 0
             for f in Path(path).rglob("*"):
                 if f.is_file():
-                    try: total += f.stat().st_size
-                    except: pass
+                    try:
+                        total += f.stat().st_size
+                    except Exception:
+                        pass
             info[f"{label}_size_mb"] = round(total / (1024**2), 1)
     except Exception:
         pass
     return info
+
+
+@router.get("/system-info")
+async def system_info():
+    """Return system-level info: disk usage, archive sizes, version.
+
+    Cached (this endpoint is polled by the dashboard) and computed off the
+    event loop — the directory-size walk is O(files) over the whole library.
+    A single in-flight walk is serialized by a lock so a burst of polls can't
+    spawn concurrent multi-GB walks; stale cache is served meanwhile.
+    """
+    global _system_info_cache, _system_info_cache_ts
+    now_mono = time.monotonic()
+    if _system_info_cache is not None and (now_mono - _system_info_cache_ts) < _SYSTEM_INFO_CACHE_TTL:
+        return _system_info_cache
+    if _system_info_lock.locked() and _system_info_cache is not None:
+        return _system_info_cache  # another walk in progress — serve stale
+    async with _system_info_lock:
+        now_mono = time.monotonic()
+        if _system_info_cache is not None and (now_mono - _system_info_cache_ts) < _SYSTEM_INFO_CACHE_TTL:
+            return _system_info_cache
+        info = await asyncio.to_thread(_gather_system_info)
+        _system_info_cache = info
+        _system_info_cache_ts = time.monotonic()
+        return info
 
 
 _storage_breakdown_cache: dict | None = None
@@ -256,75 +286,92 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     dl_root = Path(settings.download_root)
     lib_root = Path(settings.library_root)
 
-    def _safe_file_size(path: Path) -> int:
-        try:
-            return path.stat().st_size if path.is_file() else 0
-        except Exception:
-            return 0
-
-    def _safe_dir_size(path: Path) -> int:
-        total = 0
-        try:
-            if not path.exists():
+    def _compute_fs_sizes() -> dict:
+        """Blocking: recursive size walks over the whole library. Offloaded to a
+        thread so these rglob("*") passes never run on the event loop."""
+        def _safe_file_size(path: Path) -> int:
+            try:
+                return path.stat().st_size if path.is_file() else 0
+            except Exception:
                 return 0
-            for f in path.rglob("*"):
-                if f.is_file():
-                    total += _safe_file_size(f)
-        except Exception:
+
+        def _safe_dir_size(path: Path) -> int:
+            total = 0
+            try:
+                if not path.exists():
+                    return 0
+                for f in path.rglob("*"):
+                    if f.is_file():
+                        total += _safe_file_size(f)
+            except Exception:
+                return total
             return total
-        return total
 
-    archive_bytes = 0
-    try:
-        archive_bytes = sum(_safe_file_size(af) for af in dl_root.glob("archive-*.sqlite3"))
-    except Exception:
-        pass
+        archive_bytes = 0
+        try:
+            archive_bytes = sum(_safe_file_size(af) for af in dl_root.glob("archive-*.sqlite3"))
+        except Exception:
+            pass
 
-    backup_bytes = 0
-    for backup_root in (dl_root / ".backups", Path(settings.app_config_root) / "backups"):
-        backup_bytes += _safe_dir_size(backup_root)
+        backup_bytes = 0
+        for backup_root in (dl_root / ".backups", Path(settings.app_config_root) / "backups"):
+            backup_bytes += _safe_dir_size(backup_root)
 
-    original_media_bytes = 0
-    try:
-        for source_dir in dl_root.iterdir():
-            if source_dir.is_dir() and source_dir.name != ".backups":
-                original_media_bytes += _safe_dir_size(source_dir)
-    except Exception:
-        original_media_bytes = _safe_dir_size(dl_root) - archive_bytes - backup_bytes
+        original_media_bytes = 0
+        try:
+            for source_dir in dl_root.iterdir():
+                if source_dir.is_dir() and source_dir.name != ".backups":
+                    original_media_bytes += _safe_dir_size(source_dir)
+        except Exception:
+            original_media_bytes = _safe_dir_size(dl_root) - archive_bytes - backup_bytes
 
-    library_index_bytes = _safe_dir_size(lib_root)
+        library_index_bytes = _safe_dir_size(lib_root)
 
-    # Per-source breakdown
-    sources = {}
-    try:
-        for source_dir in dl_root.iterdir():
-            if not source_dir.is_dir():
-                continue
-            source_name = source_dir.name
-            total_size = 0
-            creator_count = 0
-            work_count = 0
-            for creator_dir in source_dir.iterdir():
-                if not creator_dir.is_dir():
+        sources: dict = {}
+        try:
+            for source_dir in dl_root.iterdir():
+                if not source_dir.is_dir():
                     continue
-                creator_count += 1
-                for work_dir in creator_dir.iterdir():
-                    if not work_dir.is_dir():
+                source_name = source_dir.name
+                total_size = 0
+                creator_count = 0
+                work_count = 0
+                for creator_dir in source_dir.iterdir():
+                    if not creator_dir.is_dir():
                         continue
-                    work_count += 1
-                    for f in work_dir.rglob("*"):
-                        if f.is_file():
-                            try:
-                                total_size += f.stat().st_size
-                            except Exception:
-                                pass
-            sources[source_name] = {
-                "size_mb": round(total_size / (1024 ** 2), 1),
-                "creator_count": creator_count,
-                "work_count": work_count,
-            }
-    except Exception:
-        pass
+                    creator_count += 1
+                    for work_dir in creator_dir.iterdir():
+                        if not work_dir.is_dir():
+                            continue
+                        work_count += 1
+                        for f in work_dir.rglob("*"):
+                            if f.is_file():
+                                try:
+                                    total_size += f.stat().st_size
+                                except Exception:
+                                    pass
+                sources[source_name] = {
+                    "size_mb": round(total_size / (1024 ** 2), 1),
+                    "creator_count": creator_count,
+                    "work_count": work_count,
+                }
+        except Exception:
+            pass
+
+        return {
+            "archive_bytes": archive_bytes,
+            "backup_bytes": backup_bytes,
+            "original_media_bytes": original_media_bytes,
+            "library_index_bytes": library_index_bytes,
+            "sources": sources,
+        }
+
+    _fs = await asyncio.to_thread(_compute_fs_sizes)
+    archive_bytes = _fs["archive_bytes"]
+    backup_bytes = _fs["backup_bytes"]
+    original_media_bytes = _fs["original_media_bytes"]
+    library_index_bytes = _fs["library_index_bytes"]
+    sources = _fs["sources"]
 
     # ── Resolve creator display names from the database ──
     # The filesystem uses gallery-dl-derived directory names which may
@@ -404,31 +451,40 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
         pass
 
     # Per-creator top breakdown (by storage)
+    def _compute_creator_sizes() -> list:
+        """Blocking per-creator size walk — offloaded off the event loop so this
+        second full-library rglob pass doesn't freeze concurrent requests."""
+        rows: list[tuple[str, str, str, int, int]] = []  # (name, display, source, size, work_count)
+        try:
+            for source_dir in dl_root.iterdir():
+                if not source_dir.is_dir():
+                    continue
+                src = source_dir.name
+                for creator_dir in source_dir.iterdir():
+                    if not creator_dir.is_dir():
+                        continue
+                    cname = creator_dir.name
+                    csize = 0
+                    wc = 0
+                    for work_dir in creator_dir.iterdir():
+                        if not work_dir.is_dir():
+                            continue
+                        wc += 1
+                        for f in work_dir.rglob("*"):
+                            if f.is_file():
+                                try:
+                                    csize += f.stat().st_size
+                                except Exception:
+                                    pass
+                    display = creator_display.get((src, cname), cname)
+                    rows.append((cname, display, src, csize, wc))
+        except Exception:
+            pass
+        return rows
+
     creators = []
     try:
-        creator_sizes: list[tuple[str, str, str, int, int]] = []  # (name, display, source, size, work_count)
-        for source_dir in dl_root.iterdir():
-            if not source_dir.is_dir():
-                continue
-            src = source_dir.name
-            for creator_dir in source_dir.iterdir():
-                if not creator_dir.is_dir():
-                    continue
-                cname = creator_dir.name
-                csize = 0
-                wc = 0
-                for work_dir in creator_dir.iterdir():
-                    if not work_dir.is_dir():
-                        continue
-                    wc += 1
-                    for f in work_dir.rglob("*"):
-                        if f.is_file():
-                            try:
-                                csize += f.stat().st_size
-                            except Exception:
-                                pass
-                display = creator_display.get((src, cname), cname)
-                creator_sizes.append((cname, display, src, csize, wc))
+        creator_sizes = await asyncio.to_thread(_compute_creator_sizes)
         # Sort by size descending, top 20
         creator_sizes.sort(key=lambda x: x[3], reverse=True)
         for cname, display, src, sz, wc in creator_sizes[:20]:
@@ -2179,8 +2235,13 @@ def _estimate_component_sizes() -> dict[str, int]:
 
 @router.get("/backup/estimate")
 async def estimate_backup_sizes():
-    """Return estimated sizes for each backup component."""
-    return {"components": {k: round(v / 1024, 1) for k, v in _estimate_component_sizes().items()}}
+    """Return estimated sizes for each backup component.
+
+    Offloaded to a thread — _estimate_component_sizes walks lib_root for
+    metadata.json files, a full-tree traversal that must not block the loop.
+    """
+    sizes = await asyncio.to_thread(_estimate_component_sizes)
+    return {"components": {k: round(v / 1024, 1) for k, v in sizes.items()}}
 
 
 @router.post("/backup")

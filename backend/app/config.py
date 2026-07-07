@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     min_download_free_gb: float = 5.0
     max_pending_artifacts: int = 50000
 
+    # DB connection pool, per Python process. Defaults are worker-sized (a worker
+    # handles one job at a time). The backend serves concurrent HTTP and overrides
+    # these via env (DB_POOL_SIZE / DB_MAX_OVERFLOW) — the old 2+2 ceiling caused
+    # QueuePool timeouts under normal dashboard fan-out. Worst-case connections =
+    # (pool + overflow) x processes, kept well under postgres max_connections (100).
+    db_pool_size: int = 2
+    db_max_overflow: int = 3
+    db_pool_timeout: int = 10
+
     model_config = {"env_prefix": "", "case_sensitive": False}
 
     def __init__(self, **kwargs):
