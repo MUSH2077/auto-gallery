@@ -251,7 +251,7 @@ class SearchService:
                     "tags": work_tags.get(wid) or [],
                     "thumbnail_asset_id": str(w.thumbnail_asset_id) if w.thumbnail_asset_id else None,
                     "asset_count": getattr(w, "asset_count", 1),
-                    "posted_at": w.posted_at,
+                    "posted_at": w.posted_at.isoformat() if w.posted_at else None,
                     "created_at": w.created_at.isoformat() if w.created_at else None,
                 })
                 stats["works"] += 1
