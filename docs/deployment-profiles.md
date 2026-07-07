@@ -25,22 +25,30 @@ crawl.
 
 | Service · 服务 | mem_limit | Notes · 说明 |
 | --- | --- | --- |
-| backend | 768M | |
+| backend | 1g | raised from 768M (2026-07-07) — never actually OOM-killed, but felt tight under load · 从 768M 调高，未实际被 OOM 但负载下偏紧 |
 | worker-download | 512M | |
 | worker-import | 1g | single worker (`imports 1`) — pyvips burst ceiling · 单并发，压 pyvips 尖峰 |
 | worker-operations | 512M | |
 | scheduler | 256M | |
 | admin-web | 256M | `NODE_OPTIONS --max-old-space-size=256` |
-| meilisearch | 512M | + `MEILI_MAX_INDEXING_MEMORY=256Mb`, 2 indexing threads — 256M got OOM-killed during bulk reindex · 256M 批量重建索引时会被 OOM，512M+自我节流为可用下限 |
+| meilisearch | 768M | + `MEILI_MAX_INDEXING_MEMORY=256Mb`, 2 indexing threads — raised from 512M after it ran at 76% RSS on only a 711-doc library · 从 512M 调高，711 篇作品的小库已跑到 76% |
 | postgres | 384M | |
 | redis | 128M | `--maxmemory 96mb --maxmemory-policy noeviction` |
 
-Totals at limits ≈ 4.9G, leaving headroom for the NAS OS on an 8GB machine.
-If a service is OOM-killed on a larger box, raise its `mem_limit` in
-`docker-compose.yaml` directly.
+Totals at limits ≈ 4.75G, leaving ~3.25G headroom for the NAS OS on an 8GB
+machine. Diagnose with real evidence before raising further — check
+`docker inspect <container> --format '{{.State.OOMKilled}}'` and
+`dmesg | grep -i oom-kill` for which service actually hit its ceiling; don't
+raise limits on a hunch. Removing limits entirely is deliberately avoided:
+a memcg OOM kill is an isolated, auto-restarted failure (`restart:
+unless-stopped`), while an unbounded runaway container on an 8GB box can
+exhaust host RAM and take down every other service (postgres, redis) at once.
 
-上限合计约 4.9G，8GB 机器上为系统留出余量。更大内存的机器如遇 OOM，直接在
-`docker-compose.yaml` 中调高对应服务的 `mem_limit` 即可。
+上限合计约 4.75G，8GB 机器上为系统留出约 3.25G 余量。调高限额前先找证据——用
+`docker inspect <container> --format '{{.State.OOMKilled}}'` 和
+`dmesg | grep -i oom-kill` 确认到底是哪个服务真被打满，不要凭感觉调。刻意不去掉
+限额：memcg OOM kill 是隔离的、可自动重启的故障（`restart: unless-stopped`），而
+8GB 机器上失控的无上限容器会耗尽整机内存，把 postgres/redis 等所有服务一起拖垮。
 
 ## Redis eviction policy · Redis 淘汰策略
 

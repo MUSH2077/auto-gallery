@@ -54,9 +54,9 @@ services:
       retries: 5
       start_period: 20s
     restart: unless-stopped
-    # 8GB-NAS-conservative cap. 256M OOM-killed bulk indexing; 512M plus the
-    # MEILI_MAX_INDEXING_* throttles above is the working floor.
-    mem_limit: 512M
+    # 8GB-NAS cap. 256M OOM-killed bulk indexing (2026-07-07); 512M still ran
+    # at 76% RSS on a 711-doc library — raised for headroom as the library grows.
+    mem_limit: 768M
 
   backend:
     build:
@@ -104,7 +104,10 @@ services:
       retries: 3
       start_period: 30s
     restart: unless-stopped
-    mem_limit: 768M
+    # Never actually OOM-killed here (checked dmesg/RestartCount 2026-07-07),
+    # but 768M felt tight under load — 1G gives real headroom without
+    # blowing the 8GB-NAS budget (postgres/redis/OS still need ~3G).
+    mem_limit: 1g
 
   worker-download:
     image: auto-gallery-backend:latest
