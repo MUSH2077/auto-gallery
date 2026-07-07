@@ -152,16 +152,8 @@ class CreatorService:
             if creator and artist:
                 if creator.danbooru_artist_id is None:
                     creator.danbooru_artist_id = artist.get("id")
-                if not creator.description:
-                    parts = []
-                    other_names = artist.get("other_names", [])
-                    if other_names:
-                        parts.append(f"Danbooru aliases: {', '.join(other_names)}")
-                    notes = artist.get("notes")
-                    if notes:
-                        parts.append(notes)
-                    if parts:
-                        creator.description = "\n".join(parts)
+                # description is left for the admin to write — keep creator
+                # pages identical regardless of which import path created them.
                 await self.db.flush()
 
             created = 0

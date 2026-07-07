@@ -86,7 +86,8 @@ async def test_reenrich_pending_applies_mapping_when_found(monkeypatch):
             await db.refresh(creator)
             await db.refresh(sc)
             assert creator.danbooru_artist_id == 240355
-            assert "Enrichment: danbooru_found" in creator.description
+            # enrichment never rewrites the admin-owned description
+            assert "Enrichment: danbooru_not_found" in creator.description
             marker = sc.raw_metadata["_disk_import"]
             assert marker["needs_enrichment"] is False
             assert marker["enrichment_status"] == ce.STATUS_FOUND

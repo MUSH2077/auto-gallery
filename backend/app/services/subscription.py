@@ -177,17 +177,8 @@ class SubscriptionService:
             if c and artist:
                 if c.danbooru_artist_id is None:
                     c.danbooru_artist_id = artist.get("id")
-                # Populate description with aliases if empty
-                if not c.description:
-                    parts = []
-                    other_names = artist.get("other_names", [])
-                    if other_names:
-                        parts.append(f"Danbooru aliases: {', '.join(other_names)}")
-                    notes = artist.get("notes")
-                    if notes:
-                        parts.append(notes)
-                    if parts:
-                        c.description = "\n".join(parts)
+                # description is left for the admin to write — keep creator
+                # pages identical regardless of which import path created them.
                 await self.db.flush()
 
             created = 0

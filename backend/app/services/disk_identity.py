@@ -226,14 +226,8 @@ async def _apply_danbooru_artist(
 
     if creator.danbooru_artist_id is None:
         creator.danbooru_artist_id = artist.get("id")
-    if not creator.description:
-        parts = []
-        if artist.get("other_names"):
-            parts.append("Danbooru aliases: " + ", ".join(artist.get("other_names") or []))
-        if artist.get("notes"):
-            parts.append(str(artist["notes"]))
-        if parts:
-            creator.description = "\n".join(parts)
+    # description is left for the admin to write — auto-generated text made
+    # creator pages differ by import path (aliases blurb vs disk-import blurb).
 
     for link_data in links:
         if not link_data.get("url"):
@@ -354,15 +348,11 @@ async def provision_identity_for_disk_import(
         else:
             created_creator = True
             name = _slug(identity.display_name or identity.source_creator_id, f"{identity.source}_{identity.source_creator_id}")
+            # No auto description — provenance and enrichment status live in
+            # the source_creator's _disk_import marker, not in user-facing text.
             creator = Creator(
                 name=name,
                 display_name=identity.display_name,
-                description=(
-                    "Imported from disk metadata.\n"
-                    f"Source: {identity.source}\n"
-                    f"Source creator ID: {identity.source_creator_id}\n"
-                    f"Enrichment: {enrichment_status}"
-                ),
             )
             db.add(creator)
             await db.flush()

@@ -163,7 +163,8 @@ async def test_reconcile_downloads_to_db_provisions_metadata_creator_without_pla
             creator = (await db.execute(select(Creator))).scalar_one()
             assert creator.display_name == "Fixture Artist"
             assert creator.name != "recovered"
-            assert "Imported from disk metadata" in (creator.description or "")
+            # description is never auto-generated; it belongs to the admin
+            assert creator.description is None
 
             sub = (await db.execute(select(Subscription))).scalar_one()
             assert sub.creator_id == creator.id

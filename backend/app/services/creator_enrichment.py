@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from datetime import datetime, timezone
 from typing import Any, Callable
 from uuid import UUID
@@ -56,11 +55,6 @@ def _mark_attempt(sc: SourceCreator, status: str) -> None:
     }
     # Reassign instead of mutating: SQLAlchemy does not track in-place JSONB edits.
     sc.raw_metadata = {**raw, "_disk_import": marker}
-
-
-def _update_description_status(creator: Creator, status: str) -> None:
-    if creator.description and creator.description.startswith("Imported from disk metadata."):
-        creator.description = re.sub(r"Enrichment: \S+", f"Enrichment: {status}", creator.description)
 
 
 async def enrich_creator_from_danbooru(
@@ -113,13 +107,11 @@ async def enrich_creator_from_danbooru(
     if not artist:
         if source_creator is not None:
             _mark_attempt(source_creator, STATUS_NOT_FOUND)
-        _update_description_status(creator, STATUS_NOT_FOUND)
         return {"status": STATUS_NOT_FOUND}
 
     await _apply_danbooru_artist(db, identity, artist, links, creator=creator)
     if source_creator is not None:
         _mark_attempt(source_creator, STATUS_FOUND)
-    _update_description_status(creator, STATUS_FOUND)
     return {
         "status": STATUS_FOUND,
         "artist_id": artist.get("id"),
