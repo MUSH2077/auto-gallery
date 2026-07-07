@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-export type WorkGridDensity = "compact" | "comfortable";
 export type WorkPreviewDelayMs = 150 | 250 | 400;
 export type WorkPreviewSize = "medium" | "large" | "fit";
 export type WorkPreviewWheelSensitivity = "normal" | "relaxed";
@@ -12,7 +11,6 @@ export interface AppearanceSettings {
   workPreviewDelayMs: WorkPreviewDelayMs;
   workPreviewSize: WorkPreviewSize;
   workPreviewWheelSensitivity: WorkPreviewWheelSensitivity;
-  workGridDensity: WorkGridDensity;
 }
 
 export const APPEARANCE_STORAGE_KEY = "auto-gallery-appearance-v1";
@@ -24,7 +22,6 @@ export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   workPreviewDelayMs: 250,
   workPreviewSize: "large",
   workPreviewWheelSensitivity: "normal",
-  workGridDensity: "compact",
 };
 
 function isPreviewDelay(value: unknown): value is WorkPreviewDelayMs {
@@ -39,10 +36,6 @@ function isWheelSensitivity(value: unknown): value is WorkPreviewWheelSensitivit
   return value === "normal" || value === "relaxed";
 }
 
-function isGridDensity(value: unknown): value is WorkGridDensity {
-  return value === "compact" || value === "comfortable";
-}
-
 function sanitizeAppearanceSettings(value: unknown): AppearanceSettings {
   if (!value || typeof value !== "object") return DEFAULT_APPEARANCE_SETTINGS;
   const raw = value as Partial<AppearanceSettings>;
@@ -53,7 +46,6 @@ function sanitizeAppearanceSettings(value: unknown): AppearanceSettings {
     workPreviewWheelSensitivity: isWheelSensitivity(raw.workPreviewWheelSensitivity)
       ? raw.workPreviewWheelSensitivity
       : DEFAULT_APPEARANCE_SETTINGS.workPreviewWheelSensitivity,
-    workGridDensity: isGridDensity(raw.workGridDensity) ? raw.workGridDensity : DEFAULT_APPEARANCE_SETTINGS.workGridDensity,
   };
 }
 

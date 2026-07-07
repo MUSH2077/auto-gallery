@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { PageHeader } from "@/components";
 import {
-  type WorkGridDensity,
   type WorkPreviewDelayMs,
   type WorkPreviewSize,
   type WorkPreviewWheelSensitivity,
@@ -74,10 +73,6 @@ export default function AppearanceSettingsPage() {
   const sensitivityOptions: { value: WorkPreviewWheelSensitivity; label: string }[] = [
     { value: "normal", label: t("appearance.wheel_normal", "Normal") },
     { value: "relaxed", label: t("appearance.wheel_relaxed", "Relaxed") },
-  ];
-  const densityOptions: { value: WorkGridDensity; label: string }[] = [
-    { value: "compact", label: t("works.density_compact", "Compact") },
-    { value: "comfortable", label: t("works.density_comfortable", "Comfort") },
   ];
 
   return (
@@ -156,15 +151,6 @@ export default function AppearanceSettingsPage() {
           <div className="segmented-control">
             {sensitivityOptions.map((option) => (
               <OptionButton key={option.value} value={option.value} activeValue={settings.workPreviewWheelSensitivity} onSelect={(value) => updateSettings({ workPreviewWheelSensitivity: value })}>
-                {option.label}
-              </OptionButton>
-            ))}
-          </div>
-        </SettingRow>
-        <SettingRow title={t("appearance.grid_density", "Grid density")} description={t("appearance.grid_density_desc", "Default density for the works grid when the URL does not override it.")}>
-          <div className="segmented-control">
-            {densityOptions.map((option) => (
-              <OptionButton key={option.value} value={option.value} activeValue={settings.workGridDensity} onSelect={(value) => updateSettings({ workGridDensity: value })}>
                 {option.label}
               </OptionButton>
             ))}

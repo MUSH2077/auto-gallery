@@ -985,7 +985,7 @@ const zh: Record<string, string> = {
   // Settings main
   "settings.title": "设置",
   "settings.appearance": "外观",
-  "settings.appearance.desc": "主题、调色板、作品预览与浏览密度。",
+  "settings.appearance.desc": "主题、调色板与作品预览。",
   "settings.gallerydl": "gallery-dl 配置",
   "settings.gallerydl.desc": "Pixiv、Twitter/X、Iwara 提取器设置、认证令牌、文件组织、速率限制。",
   "settings.dedup": "去重",
@@ -1050,8 +1050,6 @@ const zh: Record<string, string> = {
   "appearance.wheel_sensitivity_desc": "切换多图页需要的滚轮移动量。",
   "appearance.wheel_normal": "标准",
   "appearance.wheel_relaxed": "宽松",
-  "appearance.grid_density": "网格密度",
-  "appearance.grid_density_desc": "当 URL 未指定时，作品网格使用的默认密度。",
   "appearance.reset": "重置外观",
   "appearance.reset_desc": "恢复作品浏览交互偏好的默认值。",
 
@@ -2772,7 +2770,7 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
 
     "settings.title": "Settings",
     "settings.appearance": "Appearance",
-    "settings.appearance.desc": "Theme, palette, work previews, and browsing density.",
+    "settings.appearance.desc": "Theme, palette, and work previews.",
     "settings.gallerydl": "gallery-dl Config",
     "settings.gallerydl.desc": "Pixiv, Twitter/X, Iwara extractor settings, auth tokens, file organization, rate limiting.",
     "settings.dedup": "Deduplication",
@@ -2836,8 +2834,6 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "appearance.wheel_sensitivity_desc": "How much wheel movement is needed to switch pages.",
     "appearance.wheel_normal": "Normal",
     "appearance.wheel_relaxed": "Relaxed",
-    "appearance.grid_density": "Grid density",
-    "appearance.grid_density_desc": "Default density for the works grid when the URL does not override it.",
     "appearance.reset": "Reset appearance",
     "appearance.reset_desc": "Restore works browsing interaction preferences to defaults.",
 

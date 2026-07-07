@@ -9,8 +9,6 @@ import type { WorkAsset } from "@/lib/api/endpoints/works";
 import { useAppearanceSettings } from "@/lib/appearance";
 import { AssetImage, PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, WorkPreviewOverlay } from "@/components";
 
-type Density = "compact" | "comfortable";
-
 type PreviewState = {
   work: WorkListItem;
   anchor: DOMRect;
@@ -28,7 +26,6 @@ function WorkCard({
   selected,
   onToggleSelect,
   index,
-  density,
   previewEnabled,
   previewDelayMs,
   wheelThreshold,
@@ -46,7 +43,6 @@ function WorkCard({
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
   index?: number;
-  density: Density;
   previewEnabled: boolean;
   previewDelayMs: number;
   wheelThreshold: number;
@@ -82,8 +78,6 @@ function WorkCard({
     hoverTimer.current = null;
   };
 
-  const mediaHeight = density === "comfortable" ? "h-44" : "h-32";
-
   return (
     <div
       ref={cardRef}
@@ -108,7 +102,7 @@ function WorkCard({
         wheelDelta.current = 0;
       }}
     >
-      <div className={`${mediaHeight} relative flex items-center justify-center overflow-hidden bg-subtle text-xs text-muted`}>
+      <div className="h-32 relative flex items-center justify-center overflow-hidden bg-subtle text-xs text-muted">
         <AssetImage assetId={currentId} alt={w.title || ""} className="h-full w-full object-cover" fallback={t("works.na")} />
         {selectable && (
           <label className="absolute left-1 top-1 z-20 flex h-7 w-7 items-center justify-center rounded bg-black/60 text-white shadow-sm">
@@ -219,9 +213,7 @@ function WorksContent() {
   const aiFilter = (sp.get("ai") as "all" | "human" | "ai") ?? "all";
   const curationVisibility = sp.get("curation") === "trashed" ? "trashed" : "visible";
   const viewMode = (sp.get("view") as ViewMode) ?? "grid";
-  const densityParam = sp.get("density");
-  const density = (densityParam === "comfortable" || densityParam === "compact" ? densityParam : appearance.workGridDensity) as Density;
-  const limit = 25;
+  const limit = 30;
 
   // Local input for search field — debounced 300ms before writing to URL
   const [inputVal, setInputVal] = useState(search);
@@ -268,10 +260,6 @@ function WorksContent() {
     if (!enabled) setPreview(null);
   };
 
-  const setDensityPreference = (next: Density) => {
-    updateParams({ density: next === appearance.workGridDensity ? null : next }, false);
-  };
-
   const filters = useMemo(() => ({
     search: search || undefined,
     source: sourceFilter || undefined,
@@ -292,7 +280,6 @@ function WorksContent() {
     isFavoriteFilter,
     aiFilter !== "all",
     sortBy !== "created_at" || sortOrder !== "desc",
-    densityParam !== null,
   ].filter(Boolean).length;
 
   const useSearchPageLogic = !!search
@@ -538,19 +525,6 @@ function WorksContent() {
         </div>
 
         {viewMode === "grid" && (
-          <div className="flex gap-0.5 bg-subtle rounded p-0.5">
-            <button onClick={() => setDensityPreference("compact")}
-              className={`px-2.5 py-1 rounded text-xs ${density === "compact" ? "bg-surface shadow-sm" : "text-muted"}`}>
-              {t("works.density_compact", "Compact")}
-            </button>
-            <button onClick={() => setDensityPreference("comfortable")}
-              className={`px-2.5 py-1 rounded text-xs ${density === "comfortable" ? "bg-surface shadow-sm" : "text-muted"}`}>
-              {t("works.density_comfortable", "Comfort")}
-            </button>
-          </div>
-        )}
-
-        {viewMode === "grid" && (
           <button
             onClick={() => setPreviewPreference(!previewEnabled)}
             className={`rounded-md border border-border px-2.5 py-1.5 text-xs transition-colors ${previewEnabled ? "bg-accent-subtle text-accent" : "bg-surface text-muted hover:bg-subtle"}`}
@@ -586,10 +560,10 @@ function WorksContent() {
 
       {/* Loading */}
       {works.isLoading && viewMode === "grid" && (
-        <div className={`overflow-x-auto grid gap-4 ${density === "comfortable" ? "grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4" : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6"}`}>
+        <div className="overflow-x-auto grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
           {Array.from({ length: 10 }).map((_, i) => (
             <div key={i} className="rounded-md bg-surface p-3 shadow-sm animate-pulse">
-              <div className={`${density === "comfortable" ? "h-44" : "h-32"} bg-subtle rounded mb-2`} />
+              <div className="h-32 bg-subtle rounded mb-2" />
               <div className="h-3 bg-subtle rounded w-3/4" />
             </div>
           ))}
@@ -609,13 +583,12 @@ function WorksContent() {
 
       {/* Grid View */}
       {works.data && works.data.items?.length > 0 && viewMode === "grid" && (
-        <div className={`overflow-x-auto grid gap-4 mb-6 ${density === "comfortable" ? "grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4" : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6"}`}>
+        <div className="overflow-x-auto grid gap-4 mb-6 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
           {works.data.items.map((w: WorkListItem, i: number) => (
             <WorkCard
               key={w.id}
               index={i}
               w={w}
-              density={density}
               previewEnabled={previewEnabled}
               previewDelayMs={appearance.workPreviewDelayMs}
               wheelThreshold={wheelThreshold}
