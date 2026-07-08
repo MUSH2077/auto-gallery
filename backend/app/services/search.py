@@ -199,6 +199,44 @@ class SearchService:
         except Exception as e:
             logger.warning("Batch index failed: %s", e)
 
+    async def _reindex_batch_meta(self, work_ids: list):
+        """Tags + source/creator for one batch of works. Scoped to work_ids so
+        reindex memory is O(batch), not O(library)."""
+        work_tags: dict[str, list[str]] = {}
+        work_source: dict[str, str] = {}
+        work_creator: dict[str, str] = {}
+        work_creator_id: dict[str, str] = {}
+        if not work_ids:
+            return work_tags, work_source, work_creator, work_creator_id
+
+        tags_rows = await self.db.execute(
+            select(WorkTag.work_id, Tag.normalized_name)
+            .join(Tag, Tag.id == WorkTag.tag_id)
+            .where(WorkTag.work_id.in_(work_ids))
+        )
+        for wid, tname in tags_rows.all():
+            work_tags.setdefault(str(wid), []).append(tname)
+
+        sc_rows = await self.db.execute(
+            select(WorkSource.work_id, WorkSource.source, SourceCreator.display_name,
+                   SourceCreator.creator_id)
+            .outerjoin(
+                SourceCreator,
+                (SourceCreator.source_creator_id == WorkSource.source_creator_id)
+                & (SourceCreator.source == WorkSource.source),
+            )
+            .where(WorkSource.work_id.in_(work_ids))
+        )
+        for wid, src, cname, cid in sc_rows.all():
+            key = str(wid)
+            if key not in work_source:
+                work_source[key] = src
+                if cname:
+                    work_creator[key] = cname
+                if cid:
+                    work_creator_id[key] = str(cid)
+        return work_tags, work_source, work_creator, work_creator_id
+
     async def reindex(self) -> dict:
         BATCH_SIZE = 500
         stats = {"works": 0, "creators": 0, "tags": 0}
@@ -208,33 +246,9 @@ class SearchService:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-        # ── Bulk pre-fetch ───────────────────────────────────────────────
-        tags_rows = await self.db.execute(
-            select(WorkTag.work_id, Tag.normalized_name).join(Tag, Tag.id == WorkTag.tag_id)
-        )
-        work_tags: dict[str, list[str]] = {}
-        for wid, tname in tags_rows.all():
-            work_tags.setdefault(str(wid), []).append(tname)
-
-        sc_rows = await self.db.execute(
-            select(WorkSource.work_id, WorkSource.source, SourceCreator.display_name,
-                   SourceCreator.creator_id).outerjoin(
-                SourceCreator,
-                (SourceCreator.source_creator_id == WorkSource.source_creator_id)
-                & (SourceCreator.source == WorkSource.source),
-            )
-        )
-        work_source: dict[str, str] = {}
-        work_creator: dict[str, str] = {}
-        work_creator_id: dict[str, str] = {}
-        for wid, src, cname, cid in sc_rows.all():
-            key = str(wid)
-            if key not in work_source:
-                work_source[key] = src
-                if cname:
-                    work_creator[key] = cname
-                if cid:
-                    work_creator_id[key] = str(cid)
+        # Tag/source lookups are fetched per batch (see _reindex_batch_meta),
+        # not pre-loaded for the whole library — the old full-library dicts were
+        # O(works) resident memory and could OOM the worker on a large DB.
 
         # Clear existing indexes before reindex. reindex is called inline from
         # the admin endpoint, so every synchronous meili call is offloaded to a
@@ -261,6 +275,9 @@ class SearchService:
             batch = rows.scalars().all()
             if not batch:
                 break
+            batch_ids = [w.id for w in batch]
+            work_tags, work_source, work_creator, work_creator_id = \
+                await self._reindex_batch_meta(batch_ids)
             work_docs = []
             for w in batch:
                 wid = str(w.id)

@@ -482,7 +482,8 @@ class CurationService:
         return list(rows.scalars().all())
 
     async def backfill_status(self) -> dict:
-        expected_groups = await self._baseline_work_groups()
+        # count_only: we only need the number of groups here, not their works.
+        expected_groups = await self._baseline_work_groups(count_only=True)
         expected = {
             "creators": await self._count_rows(Creator),
             "repositories": await self._count_rows(SubscriptionSource),
@@ -653,16 +654,20 @@ class CurationService:
                 lookup.setdefault((repo.source, repo.source_creator_id), repo)
         return lookup
 
-    async def _baseline_work_groups(self) -> list[dict]:
+    async def _baseline_work_groups(self, count_only: bool = False) -> list[dict]:
+        # Streamed with a server-side cursor and, for count_only callers
+        # (backfill_status), the per-group work lists are not retained — the
+        # old .all() materialized every Work+WorkSource ORM object at once,
+        # O(library) resident memory on the event loop.
         repo_lookup = await self._repository_lookup()
-        rows = await self.db.execute(
+        result = await self.db.stream(
             select(Work, WorkSource)
             .join(WorkSource, WorkSource.work_id == Work.id)
             .order_by(Work.created_at, WorkSource.created_at)
         )
         groups: dict[str, dict] = {}
         seen_works: set[UUID] = set()
-        for work, work_source in rows.all():
+        async for work, work_source in result:
             if work.id in seen_works:
                 continue
             seen_works.add(work.id)
@@ -691,7 +696,8 @@ class CurationService:
             })
             if occurred_at < group["occurred_at"]:
                 group["occurred_at"] = occurred_at
-            group["works"].append({"work": work, "work_source": work_source})
+            if not count_only:
+                group["works"].append({"work": work, "work_source": work_source})
         return sorted(groups.values(), key=lambda g: (g["occurred_at"], g["dedupe_key"]))
 
     async def purge_preview(self, work_ids: list[UUID] | None = None) -> dict:
