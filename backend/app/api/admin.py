@@ -553,26 +553,32 @@ async def integrity_check(db: AsyncSession = Depends(get_db)):
         dl_root = Path(settings.download_root)
         result = await db.execute(text("SELECT source, source_work_id FROM work_sources"))
         db_work_ids = {(row[0], row[1]) for row in result.fetchall()}
-        orphaned_files = []
-        for source_dir in dl_root.iterdir():
-            if not source_dir.is_dir():
-                continue
-            src = source_dir.name
-            for creator_dir in source_dir.iterdir():
-                if not creator_dir.is_dir():
+
+        def _scan_orphans() -> list:
+            """Blocking full-library walk — offloaded off the event loop."""
+            found = []
+            for source_dir in dl_root.iterdir():
+                if not source_dir.is_dir():
                     continue
-                for work_dir in creator_dir.iterdir():
-                    if not work_dir.is_dir():
+                src = source_dir.name
+                for creator_dir in source_dir.iterdir():
+                    if not creator_dir.is_dir():
                         continue
-                    swid = work_dir.name
-                    if (src, swid) not in db_work_ids:
-                        file_count = sum(1 for _ in work_dir.rglob("*") if _.is_file())
-                        orphaned_files.append({
-                            "path": str(work_dir.relative_to(dl_root)),
-                            "source": src,
-                            "source_work_id": swid,
-                            "file_count": file_count,
-                        })
+                    for work_dir in creator_dir.iterdir():
+                        if not work_dir.is_dir():
+                            continue
+                        swid = work_dir.name
+                        if (src, swid) not in db_work_ids:
+                            file_count = sum(1 for _ in work_dir.rglob("*") if _.is_file())
+                            found.append({
+                                "path": str(work_dir.relative_to(dl_root)),
+                                "source": src,
+                                "source_work_id": swid,
+                                "file_count": file_count,
+                            })
+            return found
+
+        orphaned_files = await asyncio.to_thread(_scan_orphans)
         if orphaned_files:
             issues.append({
                 "type": "orphaned_download_files",
@@ -655,15 +661,22 @@ async def integrity_check(db: AsyncSession = Depends(get_db)):
         result = await db.execute(text(
             "SELECT a.id, a.file_path, a.file_name FROM assets a WHERE a.file_path IS NOT NULL"
         ))
-        dead_links = []
-        for row in result.fetchall():
-            fpath = row[1]
-            if fpath and not os.path.exists(fpath):
-                dead_links.append({
-                    "asset_id": str(row[0]),
-                    "file_path": fpath,
-                    "file_name": row[2],
-                })
+        asset_rows = result.fetchall()
+
+        def _check_dead() -> list:
+            """One os.path.exists per asset — O(assets) stat calls, offloaded."""
+            found = []
+            for row in asset_rows:
+                fpath = row[1]
+                if fpath and not os.path.exists(fpath):
+                    found.append({
+                        "asset_id": str(row[0]),
+                        "file_path": fpath,
+                        "file_name": row[2],
+                    })
+            return found
+
+        dead_links = await asyncio.to_thread(_check_dead)
         if dead_links:
             issues.append({
                 "type": "dead_links",
@@ -831,8 +844,13 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
     import concurrent.futures
     logger.info("Proxy test starting: enabled=%s proxy=%s targets=%d", enabled,
                 config.get("http_proxy", "not set"), len(targets))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=9) as executor:
-        results = list(executor.map(_test_one, targets))
+
+    def _run_all():
+        # list(executor.map(...)) blocks until all probes finish (~TEST_TIMEOUT)
+        # — offloaded so the event loop isn't held for the duration.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=9) as executor:
+            return list(executor.map(_test_one, targets))
+    results = await asyncio.to_thread(_run_all)
     ok = sum(1 for r in results if r["proxy_ok"])
     fail = sum(1 for r in results if r["proxy_ok"] is False)
     logger.info("Proxy test complete: %d OK, %d FAIL, %d total (reachable=%s)",
@@ -1729,7 +1747,10 @@ async def test_source_connection(data: dict):
             logger.warning("Failed to apply proxy env for gallery-dl test", exc_info=True)
 
         logger.info("Testing %s connectivity: %s (proxy=%s)", source, " ".join(cmd), proxy_enabled)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
+        # gallery-dl can run up to 120s — off the event loop so a connection
+        # test doesn't freeze the whole backend for other users.
+        result = await asyncio.to_thread(
+            lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env))
         stderr = result.stderr or ""
         stdout = result.stdout or ""
         combined = stdout + stderr
@@ -2250,7 +2271,14 @@ async def create_backup(data: dict | None = None):
 
     Body (optional): {contents: ["database", "gallerydl-config", ...]}
     Defaults to all components if not specified.
+
+    The whole body is blocking (pg_dump, copytree, rglob, tar.gz) and is run
+    off the event loop so a backup doesn't freeze the gallery for everyone.
     """
+    return await asyncio.to_thread(_create_backup_sync, data)
+
+
+def _create_backup_sync(data: dict | None = None):
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     filename = f"auto-gallery-backup_{ts}.tar.gz"
@@ -2433,6 +2461,67 @@ def _safe_extract_tar(tar_path: str, dest_dir: str) -> None:
                     dst.write(src.read())
 
 
+def _do_restore(upload_path: str, tmpdir: str) -> dict:
+    """Blocking restore work (tar extract, psql subprocesses, config copy).
+    Runs in a thread so a restore doesn't freeze the event loop."""
+    extract_dir = os.path.join(tmpdir, "extracted")
+    os.makedirs(extract_dir, exist_ok=True)
+    _safe_extract_tar(upload_path, extract_dir)
+
+    manifest_path = os.path.join(extract_dir, "manifest.json")
+    if not os.path.exists(manifest_path):
+        return {"status": "error", "message": "Invalid backup: no manifest.json found"}
+
+    results = []
+
+    # 1. Restore database
+    dump_path = os.path.join(extract_dir, "database.sql")
+    if os.path.exists(dump_path):
+        db = _parse_db_url(settings.database_url)
+        env = _pg_env_with_passfile(tmpdir, db)
+        result = subprocess.run(
+            ["psql", "-h", db["host"], "-p", db["port"], "-U", db["user"], "-d", db["dbname"],
+             "-c", "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"],
+            capture_output=True, text=True, env=env, timeout=30,
+        )
+        if result.returncode != 0:
+            logger.error("Schema reset failed: %s", result.stderr)
+            results.append({"item": "database", "status": "error", "error": result.stderr[:200]})
+        else:
+            result = subprocess.run(
+                ["psql", "-h", db["host"], "-p", db["port"], "-U", db["user"], "-d", db["dbname"],
+                 "-f", dump_path],
+                capture_output=True, text=True, env=env, timeout=120,
+            )
+            if result.returncode == 0:
+                results.append({"item": "database", "status": "restored"})
+                logger.info("Database restored from backup")
+            else:
+                logger.error("DB restore failed: %s", result.stderr)
+                results.append({"item": "database", "status": "error", "error": result.stderr[:200]})
+
+    # 2. Restore config files
+    for src_name, dst_env in [("gallerydl-config", "GALLERYDL_CONFIG_ROOT"),
+                               ("app-config", "APP_CONFIG_ROOT")]:
+        src = os.path.join(extract_dir, src_name)
+        if os.path.exists(src):
+            dst = os.environ.get(dst_env, f"/{src_name}")
+            if os.path.exists(dst):
+                shutil.rmtree(dst, ignore_errors=True)
+            shutil.copytree(src, dst, symlinks=False, ignore_dangling_symlinks=True)
+            results.append({"item": src_name, "status": "restored"})
+
+    # 3. Restore download archives
+    archives_src = os.path.join(extract_dir, "download-archives")
+    if os.path.exists(archives_src):
+        dl_root = str(settings.download_root)
+        for af in os.listdir(archives_src):
+            shutil.copy2(os.path.join(archives_src, af), os.path.join(dl_root, af))
+        results.append({"item": "download-archives", "status": "restored"})
+
+    return {"status": "ok", "results": results}
+
+
 @router.post("/backup/restore")
 async def restore_backup(file: UploadFile = File(...), confirm: str = ""):
     """Restore system from a backup file. THIS IS DESTRUCTIVE — replaces current data.
@@ -2454,65 +2543,9 @@ async def restore_backup(file: UploadFile = File(...), confirm: str = ""):
             content = await file.read()
             f.write(content)
 
-        # Extract with path validation
-        extract_dir = os.path.join(tmpdir, "extracted")
-        os.makedirs(extract_dir, exist_ok=True)
-        _safe_extract_tar(upload_path, extract_dir)
-
-        # Verify manifest
-        manifest_path = os.path.join(extract_dir, "manifest.json")
-        if not os.path.exists(manifest_path):
-            return {"status": "error", "message": "Invalid backup: no manifest.json found"}
-
-        results = []
-
-        # 1. Restore database
-        dump_path = os.path.join(extract_dir, "database.sql")
-        if os.path.exists(dump_path):
-            db = _parse_db_url(settings.database_url)
-            env = _pg_env_with_passfile(tmpdir, db)
-            # Drop and recreate
-            result = subprocess.run(
-                ["psql", "-h", db["host"], "-p", db["port"], "-U", db["user"], "-d", db["dbname"],
-                 "-c", "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"],
-                capture_output=True, text=True, env=env, timeout=30,
-            )
-            if result.returncode != 0:
-                logger.error("Schema reset failed: %s", result.stderr)
-                results.append({"item": "database", "status": "error", "error": result.stderr[:200]})
-            else:
-                result = subprocess.run(
-                    ["psql", "-h", db["host"], "-p", db["port"], "-U", db["user"], "-d", db["dbname"],
-                     "-f", dump_path],
-                    capture_output=True, text=True, env=env, timeout=120,
-                )
-                if result.returncode == 0:
-                    results.append({"item": "database", "status": "restored"})
-                    logger.info("Database restored from backup")
-                else:
-                    logger.error("DB restore failed: %s", result.stderr)
-                    results.append({"item": "database", "status": "error", "error": result.stderr[:200]})
-
-        # 2. Restore config files
-        for src_name, dst_env in [("gallerydl-config", "GALLERYDL_CONFIG_ROOT"),
-                                   ("app-config", "APP_CONFIG_ROOT")]:
-            src = os.path.join(extract_dir, src_name)
-            if os.path.exists(src):
-                dst = os.environ.get(dst_env, f"/{src_name}")
-                if os.path.exists(dst):
-                    shutil.rmtree(dst, ignore_errors=True)
-                shutil.copytree(src, dst, symlinks=False, ignore_dangling_symlinks=True)
-                results.append({"item": src_name, "status": "restored"})
-
-        # 3. Restore download archives
-        archives_src = os.path.join(extract_dir, "download-archives")
-        if os.path.exists(archives_src):
-            dl_root = str(settings.download_root)
-            for af in os.listdir(archives_src):
-                shutil.copy2(os.path.join(archives_src, af), os.path.join(dl_root, af))
-            results.append({"item": "download-archives", "status": "restored"})
-
-        return {"status": "ok", "results": results}
+        # Extract + DB restore + config copy are all blocking (tar, psql
+        # subprocesses, copytree) — run off the event loop.
+        return await asyncio.to_thread(_do_restore, upload_path, tmpdir)
 
     except Exception as e:
         logger.exception("Restore failed")
