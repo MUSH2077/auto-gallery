@@ -49,6 +49,15 @@ async def list_works(
     cached = cache_get(ck)
     if cached is not None:
         return cached
+    # The total count is a full scan of the filtered set and is identical across
+    # pages of the same filter — cache it separately (filters only, no offset/
+    # sort) so deep paging doesn't re-run the COUNT for every page.
+    count_ck = cache_key("works:count",
+                         search=search, source=source, creator_id=creator_id, tag=tag,
+                         is_nsfw=is_nsfw, is_favorite=is_favorite,
+                         is_ai_generated=is_ai_generated,
+                         curation_visibility=curation_visibility)
+    cached_total = cache_get(count_ck)
     repo = WorkRepository(db)
     works, total = await repo.list_all(
         offset=offset, limit=limit,
@@ -57,7 +66,10 @@ async def list_works(
         is_ai_generated=is_ai_generated,
         curation_visibility=curation_visibility,
         sort_by=sort_by, sort_order=sort_order,
+        precomputed_total=cached_total,
     )
+    if cached_total is None:
+        cache_set(count_ck, total, 300)
     items = [WorkList.model_validate(w, from_attributes=True) for w in works]
     data = {"total": total, "items": items}
     cache_set(ck, data, 300)

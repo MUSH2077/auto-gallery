@@ -20,7 +20,8 @@ class WorkRepository:
                        is_ai_generated: bool | None = None,
                        curation_visibility: str = "visible",
                        sort_by: str = "created_at",
-                       sort_order: str = "desc") -> tuple[list[Work], int]:
+                       sort_order: str = "desc",
+                       precomputed_total: int | None = None) -> tuple[list[Work], int]:
         # ── Pre-aggregated derived tables (run once, not per-row) ──
         ws_agg = (
             select(
@@ -118,12 +119,17 @@ class WorkRepository:
         if conditions:
             stmt = stmt.where(and_(*conditions))
 
-        # Count query (same filters, no limit/offset)
-        count_stmt = select(func.count(Work.id)).outerjoin(WorkCurationState, WorkCurationState.work_id == Work.id)
-        if conditions:
-            count_stmt = count_stmt.where(and_(*conditions))
-        count_result = await self.session.execute(count_stmt)
-        total = count_result.scalar_one()
+        # Count query (same filters, no limit/offset). COUNT is a full scan of
+        # the filtered set — O(rows) — so callers can pass a cached total
+        # (keyed by filters, not by page) to skip it entirely on deep paging.
+        if precomputed_total is not None:
+            total = precomputed_total
+        else:
+            count_stmt = select(func.count(Work.id)).outerjoin(WorkCurationState, WorkCurationState.work_id == Work.id)
+            if conditions:
+                count_stmt = count_stmt.where(and_(*conditions))
+            count_result = await self.session.execute(count_stmt)
+            total = count_result.scalar_one()
 
         # Sort
         sort_col = getattr(Work, sort_by, Work.created_at)
