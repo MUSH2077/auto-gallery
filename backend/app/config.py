@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     db_max_overflow: int = 3
     db_pool_timeout: int = 10
 
+    # Memory monitor: log backend RSS every N seconds, WARN past the threshold.
+    # Set memory_warn_mb below the container mem_limit so the logs capture the
+    # climb (and the last activity) BEFORE the OOM killer fires.
+    memory_warn_mb: int = 700
+    memory_log_interval_seconds: int = 60
+
     model_config = {"env_prefix": "", "case_sensitive": False}
 
     def __init__(self, **kwargs):

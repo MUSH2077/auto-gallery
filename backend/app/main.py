@@ -18,22 +18,43 @@ from app.config import settings
 from app.database import async_session, engine
 from app.services.danbooru import DanbooruUnavailableError
 
-# Configure stdlib logging from settings
-# File-based log persistence with rotation
-import logging.handlers, os as _os
-_log_dir = _os.path.join(settings.app_config_root, "logs")
+# Configure stdlib logging from settings.
+# NOTE: do NOT use logging.basicConfig() here — it is a no-op once the root
+# logger already has a handler, which silently left the root level at WARNING
+# (dropping every INFO log) and added no stdout handler (so `docker compose
+# logs backend` showed nothing from the app). We configure the root logger
+# explicitly instead.
+import logging.handlers, os as _os, sys as _sys
+
+_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+_log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
+_root_logger = logging.getLogger()
+_root_logger.setLevel(_log_level)
+
+# 1. stdout — this is what `docker compose logs backend` captures. Primary
+#    place to read/copy logs.
+_stream_handler = logging.StreamHandler(_sys.stdout)
+_stream_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+_root_logger.addHandler(_stream_handler)
+
+# 2. rotating file for persistence across restarts (under APP_CONFIG_ROOT/logs).
 try:
+    _log_dir = _os.path.join(settings.app_config_root, "logs")
     _os.makedirs(_log_dir, exist_ok=True)
     _file_handler = logging.handlers.RotatingFileHandler(
         _os.path.join(_log_dir, "backend.log"), maxBytes=10 * 1024 * 1024, backupCount=5
     )
-    _file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-    logging.getLogger().addHandler(_file_handler)
+    _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    _root_logger.addHandler(_file_handler)
 except OSError:
     pass
 
-logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO),
-                    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+# 3. Route uvicorn's own loggers through the root handlers so access/error
+#    lines land in the same stream + file at the same level.
+for _uv_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    _uv_logger = logging.getLogger(_uv_name)
+    _uv_logger.handlers = []
+    _uv_logger.propagate = True
 
 # Install in-memory ring buffer for log API
 from app.services.log_buffer import install as install_log_buffer
@@ -118,12 +139,41 @@ async def lifespan(app: FastAPI):
     import_recovery_task = asyncio.create_task(import_recovery_loop())
     logger.info("Import recovery background task started")
 
+    # ── Memory monitor — logs RSS so an OOM leaves a visible climb in the
+    #    logs + the last thing that was happening. WARNs past a threshold. ──
+    async def memory_monitor_loop():
+        warned = False
+        while True:
+            await asyncio.sleep(settings.memory_log_interval_seconds)
+            try:
+                rss = _process_rss_mb()
+                if rss is None:
+                    continue
+                if rss >= settings.memory_warn_mb:
+                    logger.warning(
+                        "High backend memory: RSS=%.0fMB (warn threshold=%dMB). "
+                        "GET /api/v1/admin/memory for a top-object census.",
+                        rss, settings.memory_warn_mb)
+                    warned = True
+                else:
+                    if warned:
+                        logger.info("Backend memory back to normal: RSS=%.0fMB", rss)
+                        warned = False
+                    logger.info("Backend memory: RSS=%.0fMB", rss)
+            except Exception:
+                logger.warning("Memory monitor cycle failed", exc_info=True)
+
+    memory_task = asyncio.create_task(memory_monitor_loop())
+    logger.info("Memory monitor background task started (warn>=%dMB, every %ds)",
+                settings.memory_warn_mb, settings.memory_log_interval_seconds)
+
     yield
 
     # ── Cleanup ──
     ws_task.cancel()
     stale_task.cancel()
     import_recovery_task.cancel()
+    memory_task.cancel()
     try:
         await ws_task
     except asyncio.CancelledError:
@@ -136,8 +186,31 @@ async def lifespan(app: FastAPI):
         await import_recovery_task
     except asyncio.CancelledError:
         pass
+    try:
+        await memory_task
+    except asyncio.CancelledError:
+        pass
     await engine.dispose()
     logger.info("backend stopped")
+
+
+def _process_rss_mb() -> float | None:
+    """Current resident set size of this process in MB, or None if unavailable.
+    Reads /proc/self/status (Linux/containers); this is what the OOM killer
+    weighs against the container memory limit."""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024  # kB -> MB
+    except Exception:
+        pass
+    try:
+        import resource
+        # ru_maxrss is peak, in kB on Linux — fallback only.
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    except Exception:
+        return None
 
 
 app = FastAPI(title="auto-gallery", version="0.1.0", lifespan=lifespan)

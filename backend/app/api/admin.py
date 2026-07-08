@@ -268,6 +268,56 @@ async def system_info():
         return info
 
 
+def _current_rss_mb() -> float | None:
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return round(int(line.split()[1]) / 1024, 1)  # kB -> MB
+    except Exception:
+        pass
+    return None
+
+
+@router.get("/memory")
+async def memory_diagnostics(top: int = 25):
+    """Memory snapshot for OOM diagnosis: process RSS + a census of the most
+    common live Python object types. A runaway type count (e.g. millions of
+    Work/Row/dict) points straight at what is filling RAM. Cheap — no
+    always-on tracemalloc."""
+    import gc
+    import sys
+    from collections import Counter
+
+    def _snapshot() -> dict:
+        gc.collect()
+        counts: Counter = Counter()
+        sizes: Counter = Counter()
+        for obj in gc.get_objects():
+            try:
+                tn = type(obj).__name__
+                counts[tn] += 1
+                sizes[tn] += sys.getsizeof(obj)
+            except Exception:
+                continue
+        top_by_count = [
+            {"type": t, "count": c, "approx_kb": round(sizes[t] / 1024, 1)}
+            for t, c in counts.most_common(max(1, min(top, 100)))
+        ]
+        return {
+            "total_tracked_objects": sum(counts.values()),
+            "gc_counts": gc.get_count(),
+            "top_types": top_by_count,
+        }
+
+    snap = await asyncio.to_thread(_snapshot)
+    return {
+        "rss_mb": _current_rss_mb(),
+        "pool": {"size": settings.db_pool_size, "max_overflow": settings.db_max_overflow},
+        **snap,
+    }
+
+
 _storage_breakdown_cache: dict | None = None
 _storage_breakdown_cache_ts: float = 0.0
 _STORAGE_BREAKDOWN_CACHE_TTL = 60.0
