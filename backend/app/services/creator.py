@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.creator import CreatorRepository
 from app.models import Creator, CreatorLink, SourceCreator, Subscription, SubscriptionSource, DownloadJob, ImportJob
+from app.models.storage_artifact import StorageArtifact
 from app.schemas.creator import CreatorRead
 
 
@@ -73,6 +74,13 @@ class CreatorService:
             for dj in djs.scalars().all():
                 await self.db.execute(
                     sql_delete(ImportJob).where(ImportJob.download_job_id == dj.id)
+                )
+                # Purge the storage ledger for this job too. Otherwise its rows
+                # keep state='done' (the FK only SET NULLs on job delete), and a
+                # later disk-import skips those files as already-imported — so a
+                # deleted creator can never be recovered from disk.
+                await self.db.execute(
+                    sql_delete(StorageArtifact).where(StorageArtifact.download_job_id == dj.id)
                 )
                 await self.db.delete(dj)
             # Delete subscription_sources (no more FK from download_jobs)

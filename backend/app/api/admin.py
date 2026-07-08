@@ -1241,6 +1241,10 @@ async def rebuild_library(data: RebuildLibraryRequest | None = None):
 
 class ImportFromDiskRequest(BaseModel):
     source: str | None = None
+    # Reprocess every on-disk file even if the ledger marks it 'done'. Use this
+    # to recover creators/works after they were deleted from the DB (the ledger
+    # is not reset by deletion, so a normal disk-import skips them as 'done').
+    reset_ledger: bool = False
 
 
 @router.post("/library/import-from-disk")

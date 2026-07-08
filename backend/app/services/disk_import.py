@@ -58,14 +58,23 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
         "import_job_ids": [],
     }
     parent_task_id = options.get("parent_task_id")
+    # Recovery hammer: when the DB was cleared (e.g. creators deleted) but the
+    # StorageArtifact ledger still marks files 'done', the normal 'done' guard
+    # skips them and they never get re-imported. reset_ledger ignores the guard
+    # and reprocesses everything (idempotent: import-side claim_work dedups).
+    reset_ledger = bool(options.get("reset_ledger") or options.get("force"))
+    stats["reset_ledger"] = reset_ledger
     for source in sources:
         stats["sources"] += 1
         scan_root = root / source
 
-        done_paths = set((await db.execute(
-            select(StorageArtifact.file_path).where(
-                StorageArtifact.source == source, StorageArtifact.state == "done")
-        )).scalars())
+        if reset_ledger:
+            done_paths = set()
+        else:
+            done_paths = set((await db.execute(
+                select(StorageArtifact.file_path).where(
+                    StorageArtifact.source == source, StorageArtifact.state == "done")
+            )).scalars())
 
         groups: dict[str, list[Path]] = defaultdict(list)
         for jf in scan_root.rglob("*.json"):

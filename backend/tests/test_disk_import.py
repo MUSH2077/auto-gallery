@@ -116,6 +116,16 @@ async def test_reconcile_downloads_to_db_registers_and_enqueues_idempotently(tmp
             assert second["import_job_ids"] == []
             assert len(enqueued) == 1
             assert (await db.execute(select(func.count(DownloadJob.id)))).scalar_one() == 1
+
+            # reset_ledger recovery: reprocess even 'done' files. This is the
+            # path for recovering creators deleted from the DB while the ledger
+            # still marks their files 'done'.
+            third = await reconcile_downloads_to_db(db, {"source": "pixiv", "reset_ledger": True})
+            assert third["reset_ledger"] is True
+            assert third["skipped_done"] == 0
+            assert third["creators"] == 1
+            assert third["jobs"] == 1
+            assert len(enqueued) == 2
     finally:
         async with async_session() as db:
             await _clear_pipeline_tables(db)
