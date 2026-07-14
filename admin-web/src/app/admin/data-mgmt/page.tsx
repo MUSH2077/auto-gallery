@@ -43,6 +43,7 @@ export default function DataManagementPage() {
   const notify = useNotifications();
   const toast = useToast();
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [resetLedger, setResetLedger] = useState(false);
   const [confirmAction, setConfirmAction] = useState<string | null>(null);
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [integrityItems, setIntegrityItems] = useState<{ type: string; description: string; count: number; items: any[] } | null>(null);
@@ -73,7 +74,7 @@ export default function DataManagementPage() {
   });
 
   const importFromDisk = useMutation({
-    mutationFn: () => api.importFromDisk({}),
+    mutationFn: () => api.importFromDisk(resetLedger ? { reset_ledger: true } : {}),
     onMutate: () => setResult(null),
     onSuccess: (d: any) => {
       const title = t("datamgmt.disk_import");
@@ -458,6 +459,11 @@ export default function DataManagementPage() {
               <div>
                 <p className="text-sm font-medium">{t("datamgmt.disk_import")}</p>
                 <p className="text-xs text-muted">{t("datamgmt.disk_import_desc")}</p>
+                <label className="mt-1.5 flex items-center gap-1.5 text-xs text-muted cursor-pointer">
+                  <input type="checkbox" checked={resetLedger} onChange={(e) => setResetLedger(e.target.checked)}
+                    className="h-3.5 w-3.5 rounded border-border" />
+                  {t("datamgmt.disk_import_reset_ledger")}
+                </label>
               </div>
               <button onClick={() => importFromDisk.mutate()} disabled={importFromDisk.isPending}
                 className="btn-primary shrink-0 ml-3 text-xs">
