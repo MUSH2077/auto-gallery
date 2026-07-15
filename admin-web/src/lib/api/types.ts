@@ -880,11 +880,14 @@ export interface GitlleryStatus {
   repositories: GitlleryRepoStatus[];
   missing_repos: number;
   behind_total: number;
+  // Checkpoint absent — pending counts unknown until the queued sync job runs.
+  needs_reconcile?: boolean;
 }
 
+// reconcile/backfill are queued operations now.
 export interface GitlleryReconcileResponse {
-  projected: Record<string, number>;
-  status: GitlleryStatus;
+  status: string;
+  job_id: string;
 }
 
 export interface GitlleryLogEntry {

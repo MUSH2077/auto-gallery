@@ -302,7 +302,7 @@ export const api = {
     request<T.CurationBackfillStatus>("/api/v1/curation/backfill/status"),
 
   runCurationBackfill: () =>
-    request<T.CurationBackfillRunResponse>("/api/v1/curation/backfill", { method: "POST" }),
+    request<{ status: string; job_id: string }>("/api/v1/curation/backfill", { method: "POST" }),
 
   // Gitllery (on-disk curation history projection)
   gitlleryStatus: () =>
@@ -400,7 +400,7 @@ export const api = {
   }) =>
     request<{ status: string; message: string }>("/api/v1/admin/settings", { method: "PUT", body: JSON.stringify(data) }),
 
-  reindexSearch: () => request<{ status: string; message: string }>("/api/v1/admin/search/reindex", { method: "POST" }),
+  reindexSearch: () => request<{ status: string; job_id: string; message?: string }>("/api/v1/admin/search/reindex", { method: "POST" }),
 
   getAuthStatus: () => request<T.AuthStatusResponse>("/api/v1/admin/auth-status"),
 

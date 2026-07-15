@@ -5,17 +5,20 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
+import { useNotifications } from "@/components/NotificationCenter";
 
 // Static lookup map — Tailwind's content scanner can't see template-constructed
 // class names (e.g. `bg-${tone}-subtle`), so the literal classes must appear in source.
-const TONE: Record<"clean" | "behind", string> = {
+const TONE: Record<"clean" | "behind" | "sync", string> = {
   clean: "bg-success-subtle text-success",
   behind: "bg-warning-subtle text-warning",
+  sync: "bg-accent-subtle text-accent",
 };
 
 export default function GitlleryPanel() {
   const t = useT();
   const toast = useToast();
+  const notify = useNotifications();
   const qc = useQueryClient();
   const [isChecking, setIsChecking] = useState(false);
 
@@ -30,9 +33,12 @@ export default function GitlleryPanel() {
 
   const reconcile = useMutation({
     mutationFn: () => api.gitlleryReconcile(),
-    onSuccess: () => {
-      toast.success(t("gitllery.reconciled"));
+    onSuccess: (d) => {
+      // Queued: the projection walk runs in worker-operations, not inline.
+      toast.success(t("gitllery.sync_queued"));
+      notify.startOperationJob(d.job_id, "admin-gitllery-sync", t("gitllery.reconcile"));
       qc.invalidateQueries({ queryKey: queryKeys.gitllery.all });
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -78,14 +84,17 @@ export default function GitlleryPanel() {
 
   const s = status.data!;
   const behind = s.behind_total;
-  const tone: "clean" | "behind" = behind === 0 ? "clean" : "behind";
+  const needsSync = !!s.needs_reconcile;
+  const tone: "clean" | "behind" | "sync" = needsSync ? "sync" : behind === 0 ? "clean" : "behind";
 
   return (
     <section className="card p-4">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold">{t("gitllery.title")}</h2>
         <span className={`badge ${TONE[tone]}`}>
-          {behind === 0 ? t("gitllery.clean") : t("gitllery.behind", { count: behind })}
+          {needsSync
+            ? t("gitllery.needs_reconcile")
+            : behind === 0 ? t("gitllery.clean") : t("gitllery.behind", { count: behind })}
         </span>
       </div>
       <div className="mt-2 text-xs text-muted">

@@ -167,10 +167,12 @@ function CurationContent() {
   const backfill = useMutation({
     mutationFn: api.runCurationBackfill,
     onSuccess: () => {
+      // Queued: the replay runs in worker-operations; progress in task center.
       qc.invalidateQueries({ queryKey: queryKeys.curation.all });
       qc.invalidateQueries({ queryKey: queryKeys.curation.backfillStatus });
       qc.invalidateQueries({ queryKey: ["repositories"] });
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
     },
   });
 
