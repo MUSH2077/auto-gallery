@@ -6,10 +6,15 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
+import { staggerDelay } from "@/lib/motion";
 import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
 import { Breadcrumb } from "@/components/Breadcrumb";
 
 type Kind = "all" | "works" | "creators" | "tags";
+
+// Sliding tab indicator: transform-only (translateX + scaleX on a fixed
+// 100px base) so the accent line glides between tabs without layout work.
+const INDICATOR_BASE_PX = 100;
 
 function SearchContent() {
   const t = useT();
@@ -21,6 +26,8 @@ function SearchContent() {
   const [debounced, setDebounced] = useState("");
   const [kind, setKind] = useState<Kind>("all");
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tabRefs = useRef<Partial<Record<Kind, HTMLButtonElement | null>>>({});
+  const [indicator, setIndicator] = useState<{ left: number; width: number } | null>(null);
 
   useEffect(() => {
     const q = searchParams.get("q");
@@ -40,6 +47,13 @@ function SearchContent() {
   });
 
   const data = results.data;
+
+  // Re-measure whenever the active tab or the counts inside labels change.
+  useEffect(() => {
+    const el = tabRefs.current[kind];
+    if (!el) return;
+    setIndicator({ left: el.offsetLeft, width: el.offsetWidth });
+  }, [kind, data]);
   const worksHits = data?.results || [];
   const creatorsHits = (data?.creators || []) as any[];
   const tagsHits = (data?.tags || []) as any[];
@@ -73,22 +87,34 @@ function SearchContent() {
 
       {data && debounced && !results.isError && (
         <>
-          <div className="flex gap-1 mb-4 border-b border-border">
+          <div className="relative flex gap-1 mb-4 border-b border-border">
             {tabs.map(tab => (
               <button key={tab.key} onClick={() => setKind(tab.key)}
-                className={`px-4 py-2 text-sm border-b-2 -mb-px transition-colors ${kind === tab.key ? "border-accent/30 text-accent font-medium" : "border-transparent text-muted hover:text-fg"}`}>
+                ref={(el) => { tabRefs.current[tab.key] = el; }}
+                className={`px-4 py-2 text-sm transition-colors ${kind === tab.key ? "text-accent font-medium" : "text-muted hover:text-fg"}`}>
                 {tab.label} <span className="ml-1.5 text-xs bg-subtle rounded-full px-1.5 py-0.5">{tab.count}</span>
               </button>
             ))}
+            {indicator && (
+              <span
+                aria-hidden
+                className="absolute bottom-0 left-0 h-0.5 bg-accent transition-transform duration-slow ease-expo"
+                style={{
+                  width: INDICATOR_BASE_PX,
+                  transform: `translateX(${indicator.left}px) scaleX(${indicator.width / INDICATOR_BASE_PX})`,
+                  transformOrigin: "left",
+                }}
+              />
+            )}
           </div>
 
           {(kind === "all" || kind === "creators") && creatorsHits.length > 0 && (
-            <div className="mb-6">
+            <div className="mb-6 page-item" style={{ "--delay": staggerDelay(0) } as React.CSSProperties}>
               {kind === "all" && <h3 className="text-sm font-medium text-muted mb-2">{t("search.creators_section")}</h3>}
               <div className="space-y-2">
                 {creatorsHits.map((c: any) => (
                   <Link key={c.id} href={`/admin/creators/${c.id}`}
-                    className="card-interactive flex items-center gap-4 p-4 cursor-pointer">
+                    className="card-interactive fade-in flex items-center gap-4 p-4 cursor-pointer">
                     <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-accent to-purple-600 text-white font-semibold text-lg">
                       {(c.display_name || c.name).trim().slice(0, 2).toUpperCase()}
                     </div>
@@ -104,11 +130,11 @@ function SearchContent() {
           )}
 
           {(kind === "all" || kind === "works") && worksHits.length > 0 && (
-            <div className="mb-6">
+            <div className="mb-6 page-item" style={{ "--delay": staggerDelay(2) } as React.CSSProperties}>
               {kind === "all" && <h3 className="text-sm font-medium text-muted mb-2">{t("search.works_section")}</h3>}
               <div className="space-y-2">
                 {worksHits.map((w: any) => (
-                  <div key={w.id} className="card-interactive flex cursor-pointer gap-4 p-4" onClick={() => router.push(`/admin/works/${w.id}`)}>
+                  <div key={w.id} className="card-interactive fade-in flex cursor-pointer gap-4 p-4" onClick={() => router.push(`/admin/works/${w.id}`)}>
                     {w.thumbnail_asset_id ? (
                       <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="w-16 h-16 object-cover rounded shrink-0" loading="lazy" decoding="async" />
                     ) : (
@@ -143,12 +169,12 @@ function SearchContent() {
           )}
 
           {(kind === "all" || kind === "tags") && tagsHits.length > 0 && (
-            <div>
+            <div className="page-item" style={{ "--delay": staggerDelay(4) } as React.CSSProperties}>
               {kind === "all" && <h3 className="text-sm font-medium text-muted mb-2">{t("search.tags_section")}</h3>}
               <div className="flex flex-wrap gap-2">
                 {tagsHits.map((tag: any) => (
                   <Link key={tag.id} href={`/admin/tags/${tag.id}`}
-                    className="px-3 py-1.5 bg-subtle rounded-full text-sm hover:bg-accent/90 hover:text-accent dark:hover:bg-accent/90 dark:hover:text-accent transition-colors">
+                    className="fade-in px-3 py-1.5 bg-subtle rounded-full text-sm hover:bg-accent/90 hover:text-accent dark:hover:bg-accent/90 dark:hover:text-accent transition-colors">
                     #{tag.normalized_name}
                     {tag.category && <span className="text-xs text-muted ml-1">({tag.category})</span>}
                   </Link>

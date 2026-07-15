@@ -1,9 +1,10 @@
 "use client";
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { api, queryKeys, Tag } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { staggerDelay } from "@/lib/motion";
 import { useToast } from "@/components/Toast";
 import { PageHeader, EmptyState, ErrorState, Modal, ConfirmDialog } from "@/components";
 
@@ -79,6 +80,13 @@ export default function TagsPage() {
     queryFn: () => api.listTags(page * limit, limit),
   });
 
+  // Cloud staggers in once on first data; pagination and the local filter
+  // render instantly (same enter-once rule as the works grid).
+  const cloudEntered = useRef(false);
+  useEffect(() => {
+    if (tags.data?.length) cloudEntered.current = true;
+  }, [tags.data]);
+
   const create = useMutation({
     mutationFn: () => api.createTag({ normalized_name: formName.trim().toLowerCase(), category: formCat || undefined }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.tags.all }); setShowCreate(false); setFormName(""); setFormCat("general"); },
@@ -138,19 +146,21 @@ export default function TagsPage() {
       {tags.data && tags.data.length > 0 && (
         <div className="card p-6">
           <div className="flex flex-wrap gap-2 items-center justify-center">
-            {filtered.map((tag) => {
+            {filtered.map((tag, i) => {
               const light = bubbleStyle(tag, minCount, maxCount);
               const dark = bubbleStyleDark(tag, minCount, maxCount);
+              const enterAnimate = !cloudEntered.current;
               return (
                 <div key={tag.id}
-                  className="group inline-flex items-center gap-1 rounded-full border cursor-pointer hover:shadow-md transition-shadow"
+                  className={`group inline-flex items-center gap-1 rounded-full border cursor-pointer hover:shadow-md transition-shadow ${enterAnimate ? "page-item" : ""}`}
                   style={{
                     fontSize: light.fontSize,
                     padding: light.padding,
                     backgroundColor: light.backgroundColor,
                     color: light.color,
                     borderColor: light.borderColor,
-                  }}
+                    ...(enterAnimate ? { "--delay": staggerDelay(i) } : {}),
+                  } as React.CSSProperties}
                   onClick={() => router.push(`/admin/tags/${tag.id}`)}>
                   <span className="font-semibold truncate max-w-[16rem]">{tag.normalized_name}</span>
                   {tag.category && (

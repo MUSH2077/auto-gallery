@@ -334,7 +334,7 @@ export default function CreatorDetailPage() {
   if (!c) return null;
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+    <main className="page-transition mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
       <Breadcrumb items={[
         { label: t("creators.title"), href: "/admin/creators" },
         { label: c.display_name || c.name },

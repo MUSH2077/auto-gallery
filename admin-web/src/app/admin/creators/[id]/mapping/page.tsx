@@ -77,7 +77,7 @@ export default function MappingPage() {
   if (creator.isLoading) return <main className="max-w-4xl mx-auto p-6"><div className="animate-pulse"><div className="mb-4 h-8 w-1/4 rounded-md bg-subtle dark:bg-subtle" /><div className="h-32 rounded-md bg-subtle dark:bg-subtle" /></div></main>;
 
   return (
-    <main className="max-w-4xl mx-auto p-6">
+    <main className="page-transition max-w-4xl mx-auto p-6">
       <PageHeader title={t("mapping.title").replace("{name}", creator.data?.display_name || creator.data?.name || "Creator")} description={t("mapping.desc")}>
         <div className="flex gap-2">
           <button onClick={() => router.push(`/admin/creators/${id}`)} className="btn-ghost">{t("mapping.back_to_creator")}</button>

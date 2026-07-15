@@ -1,7 +1,8 @@
 "use client";
-import { useState, useMemo, useEffect, Suspense } from "react";
+import { useState, useMemo, useEffect, useRef, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
+import { staggerDelay } from "@/lib/motion";
 import { PageHeader, EmptyState, ErrorState, ConfirmDialog, Modal, FilterBar, SelectionBar, PageShell } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
@@ -153,6 +154,13 @@ function CreatorsContent() {
     placeholderData: (previousData) => previousData,
   });
 
+  // Rows stagger in once on first data; page flips (placeholderData swap),
+  // filter changes and refetches render instantly.
+  const listEntered = useRef(false);
+  useEffect(() => {
+    if (creators.data?.items?.length) listEntered.current = true;
+  }, [creators.data]);
+
   useEffect(() => {
     if (notify.operationJob?.kind !== "danbooru-import-all" || notify.operationJob.status !== "completed") return;
     creators.refetch();
@@ -272,8 +280,11 @@ function CreatorsContent() {
 
       {creators.data && creators.data.items.length > 0 && (
         <div className="overflow-hidden rounded-md border border-border bg-white dark:border-border dark:bg-surface">
-          {creators.data.items.map((c) => (
-            <div key={c.id} className={`flex cursor-pointer items-center gap-3 border-b border-border p-4 last:border-b-0 hover:bg-subtle dark:border-border dark:hover:bg-subtle ${selected.has(c.id) ? "bg-accent-subtle dark:bg-accent-subtle" : ""}`} onClick={() => router.push(`/admin/creators/${c.id}`)}>
+          {creators.data.items.map((c, i) => (
+            <div key={c.id}
+              className={`${!listEntered.current ? "page-item" : ""} flex cursor-pointer items-center gap-3 border-b border-border p-4 last:border-b-0 hover:bg-subtle dark:border-border dark:hover:bg-subtle ${selected.has(c.id) ? "bg-accent-subtle dark:bg-accent-subtle" : ""}`}
+              style={!listEntered.current ? ({ "--delay": staggerDelay(i) } as React.CSSProperties) : undefined}
+              onClick={() => router.push(`/admin/creators/${c.id}`)}>
               <input type="checkbox" aria-label="Select item" checked={selected.has(c.id)} onChange={() => toggleSelect(c.id)} className="rounded shrink-0" onClick={(e) => e.stopPropagation()} />
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-accent text-sm font-semibold text-white dark:border-border">
                 {(c.display_name || c.name).slice(0, 2).toUpperCase()}
