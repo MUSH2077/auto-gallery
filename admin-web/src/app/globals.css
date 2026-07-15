@@ -328,20 +328,47 @@
     animation: fadeUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     animation-delay: var(--delay, 0ms);
   }
+  /* Bar entrance — transform-only (scaleX, never width: layout is banned from
+     animation). Durations/easings mirror src/lib/motion/tokens.ts. */
   @keyframes barGrow {
-    from { width: 0% !important; }
+    from { transform: scaleX(0); }
   }
   .animate-bar-grow {
-    animation: barGrow 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+    animation: barGrow 400ms cubic-bezier(0.16, 1, 0.3, 1);
+    transform-origin: left;
   }
-  /* Overlay enter (P3): dropdowns / menus / popovers fade + scale in instead
-     of popping. Exit stays instant for now (the quieter half — follow-up). */
+  /* Overlay enter/exit: dropdowns / menus / popovers fade + scale. Exit needs
+     usePresence (src/lib/motion/hooks.ts) to keep the node mounted 120ms. */
   @keyframes popIn {
     from { opacity: 0; transform: translateY(-4px) scale(0.98); }
     to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes popOut {
+    from { opacity: 1; transform: translateY(0) scale(1); }
+    to   { opacity: 0; transform: translateY(-4px) scale(0.98); }
   }
   .popover {
     animation: popIn 120ms cubic-bezier(0.16, 1, 0.3, 1);
     transform-origin: top;
   }
+  .popover-exit {
+    animation: popOut 120ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    pointer-events: none;
+  }
+  /* Centered dialogs (Modal / ConfirmDialog): backdrop fades, panel lands
+     softly. Exit phases are driven by usePresence like .popover-exit. */
+  @keyframes overlayFadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes overlayFadeOut { from { opacity: 1; } to { opacity: 0; } }
+  @keyframes dialogIn {
+    from { opacity: 0; transform: translateY(8px) scale(0.98); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes dialogOut {
+    from { opacity: 1; transform: translateY(0) scale(1); }
+    to   { opacity: 0; transform: translateY(4px) scale(0.98); }
+  }
+  .overlay-backdrop { animation: overlayFadeIn 150ms ease-out; }
+  .overlay-backdrop-exit { animation: overlayFadeOut 120ms ease-out forwards; pointer-events: none; }
+  .overlay-panel { animation: dialogIn 240ms cubic-bezier(0.16, 1, 0.3, 1); }
+  .overlay-panel-exit { animation: dialogOut 120ms cubic-bezier(0.16, 1, 0.3, 1) forwards; pointer-events: none; }
 }

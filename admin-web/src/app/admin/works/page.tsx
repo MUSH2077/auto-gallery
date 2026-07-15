@@ -7,6 +7,7 @@ import { useT } from "@/lib/i18n";
 import { api, queryKeys, WorkListItem } from "@/lib/api";
 import type { WorkAsset } from "@/lib/api/endpoints/works";
 import { useAppearanceSettings } from "@/lib/appearance";
+import { staggerDelay } from "@/lib/motion";
 import { AssetImage, PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, WorkPreviewOverlay } from "@/components";
 
 type PreviewState = {
@@ -82,7 +83,7 @@ function WorkCard({
     <div
       ref={cardRef}
       className={`card-interactive page-item overflow-hidden cursor-pointer group ${selected ? "ring-2 ring-accent" : ""}`}
-      style={{ "--delay": `${Math.min((index ?? 0) * 30, 300)}ms` } as React.CSSProperties}
+      style={{ "--delay": staggerDelay(index ?? 0) } as React.CSSProperties}
       onClick={() => router.push(`/admin/works/${w.id}`)}
       onMouseEnter={() => {
         onCancelClosePreview();

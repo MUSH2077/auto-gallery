@@ -1,11 +1,13 @@
 "use client";
 import { ReactNode, useEffect, useRef } from "react";
+import { usePresence } from "@/lib/motion";
 
 export default function Modal({ open, onClose, title, children }: {
   open: boolean; onClose: () => void; title: string; children: ReactNode;
 }) {
   const modalRef = useRef<HTMLDivElement>(null);
   const prevFocus = useRef<HTMLElement | null>(null);
+  const { mounted, closing } = usePresence(open);
 
   useEffect(() => {
     if (!open || !modalRef.current) return;
@@ -29,11 +31,11 @@ export default function Modal({ open, onClose, title, children }: {
     return () => { document.removeEventListener("keydown", trap); prevFocus.current?.focus(); };
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!mounted) return null;
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 px-4 pt-16"
+    <div className={`fixed inset-0 bg-black/50 flex items-start justify-center z-50 px-4 pt-16 ${closing ? "overlay-backdrop-exit" : "overlay-backdrop"}`}
       onClick={onClose} role="dialog" aria-modal="true" aria-label={title}>
-      <div ref={modalRef} className="w-full max-w-lg max-h-[82vh] overflow-y-auto rounded-md border border-border bg-white shadow-xl dark:border-border dark:bg-surface"
+      <div ref={modalRef} className={`w-full max-w-lg max-h-[82vh] overflow-y-auto rounded-md border border-border bg-white shadow-xl dark:border-border dark:bg-surface ${closing ? "overlay-panel-exit" : "overlay-panel"}`}
         onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-border px-4 py-3 dark:border-border">
           <h2 className="text-base font-semibold text-fg">{title}</h2>

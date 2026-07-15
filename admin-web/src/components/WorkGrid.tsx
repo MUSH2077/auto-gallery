@@ -1,8 +1,9 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
+import { enterHeatmap } from "@/lib/motion";
 
 interface DayData {
   date: string;
@@ -34,6 +35,16 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
   const fmt = useI18nFormat();
   const [selectedDay, setSelectedDay] = useState<DayData | null>(null);
   const [yearOffset, setYearOffset] = useState(0);
+  const svgRef = useRef<SVGSVGElement>(null);
+  // Enter-once guard: the heatmap staggers in on first data render only —
+  // never again on refetch/year-switch re-renders (motion red-line #1).
+  const enterPlayed = useRef(false);
+
+  useEffect(() => {
+    if (enterPlayed.current || loading || !data?.days?.length || !svgRef.current) return;
+    enterPlayed.current = true;
+    enterHeatmap(svgRef.current.querySelectorAll("rect"));
+  }, [data, loading]);
 
   const { weeks, months, dayMap } = useMemo(() => {
     if (!data?.days?.length) return { weeks: [], months: [], dayMap: new Map<string, DayData>() };
@@ -85,7 +96,7 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
       </div>
 
       <div className="overflow-x-auto">
-        <svg width={weeks.length * step + 40} height={7 * step + 20} className="text-xs">
+        <svg ref={svgRef} width={weeks.length * step + 40} height={7 * step + 20} className="text-xs">
           {months.map((m, i) => (
             <text key={i} x={m.col * step + 10} y={10} className="fill-muted dark:fill-muted" fontSize="9">{m.label}</text>
           ))}

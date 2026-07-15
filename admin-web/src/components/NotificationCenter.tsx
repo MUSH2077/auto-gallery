@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
 import { api, queryKeys } from "@/lib/api";
+import { usePresence } from "@/lib/motion";
 
 type ActivityStatus = "running" | "completed" | "error" | "pending";
 
@@ -472,6 +473,7 @@ export function NotificationBell() {
     clearOperationJob, operationJob,
   } = useNotifications();
   const [open, setOpen] = useState(false);
+  const { mounted, closing } = usePresence(open);
   const ref = useRef<HTMLDivElement>(null);
 
   // Recent tasks come from the same server feed as /admin/notifications.
@@ -543,8 +545,8 @@ export function NotificationBell() {
         )}
       </button>
 
-      {open && (
-        <div className="popover absolute right-0 z-50 mt-2 max-h-[480px] w-80 overflow-hidden rounded-md border border-border bg-white text-fg shadow-overlay dark:shadow-overlay-dark dark:border-border dark:bg-surface dark:text-fg">
+      {mounted && (
+        <div className={`popover ${closing ? "popover-exit" : ""} absolute right-0 z-50 mt-2 max-h-[480px] w-80 overflow-hidden rounded-md border border-border bg-white text-fg shadow-overlay dark:shadow-overlay-dark dark:border-border dark:bg-surface dark:text-fg`}>
           <div className="flex items-center justify-between border-b border-border px-4 py-2.5 dark:border-border">
             <span className="text-sm font-semibold">{t("notification.recent")}</span>
             <div className="flex items-center gap-3">

@@ -1,5 +1,6 @@
 "use client";
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import { usePresence } from "@/lib/motion";
 
 export type Theme = "light" | "dark" | "system";
 type ResolvedTheme = "light" | "dark";
@@ -196,6 +197,7 @@ function CheckIcon({ className }: { className?: string }) {
 export function PaletteToggle() {
   const { palette, setPalette } = useTheme();
   const [open, setOpen] = useState(false);
+  const { mounted, closing } = usePresence(open);
 
   return (
     <div className="relative">
@@ -209,10 +211,10 @@ export function PaletteToggle() {
         <PaletteIcon className="w-5 h-5" />
         <span className="hidden sm:inline text-xs font-medium">{PALETTE_LABELS[palette]}</span>
       </button>
-      {open && (
+      {mounted && (
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden />
-          <div role="menu" className="popover absolute right-0 mt-1 z-50 min-w-[170px] rounded-md border border-border bg-surface p-1 shadow-overlay">
+          {open && <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden />}
+          <div role="menu" className={`popover ${closing ? "popover-exit" : ""} absolute right-0 mt-1 z-50 min-w-[170px] rounded-md border border-border bg-surface p-1 shadow-overlay`}>
             {PALETTES.map((p) => (
               <button
                 key={p}

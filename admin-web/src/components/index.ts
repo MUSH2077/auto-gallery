@@ -23,6 +23,7 @@ export { Breadcrumb, type Crumb } from "./Breadcrumb";
 export { ToastProvider, useToast } from "./Toast";
 export { NotificationProvider, NotificationBell, useNotifications } from "./NotificationCenter";
 export { RealProgressBar } from "./RealProgressBar";
+export { default as MotionNumber } from "./MotionNumber";
 export { BatchByFilter } from "./BatchByFilter";
 export { AssetFilmstrip, AssetImage, WorkPreviewOverlay, isArchiveAsset } from "./work-interactions";
 export type { MediaAsset } from "./work-interactions";

@@ -4,7 +4,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys, WorkbenchSummary } from "@/lib/api";
-import { EmptyState, ErrorState, SourceBadge, StatusBadge, PageHeader, PageShell } from "@/components";
+import { EmptyState, ErrorState, SourceBadge, StatusBadge, PageHeader, PageShell, MotionNumber } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 
@@ -33,7 +33,9 @@ function MetricCard({ label, value, sub, tone = "muted" }: { label: string; valu
         <div className="text-xs font-medium uppercase text-muted">{label}</div>
         <StatusDot tone={tone} />
       </div>
-      <div className="mt-2 tabular text-2xl font-semibold tracking-tight text-fg">{value}</div>
+      <div className="mt-2 tabular text-2xl font-semibold tracking-tight text-fg">
+        {typeof value === "number" ? <MotionNumber value={value} /> : value}
+      </div>
       {sub && <div className="mt-1 truncate text-xs text-muted">{sub}</div>}
     </div>
   );
@@ -69,9 +71,18 @@ function RecentRow({ children, href }: { children: ReactNode; href: string }) {
 }
 
 function MiniBar({ value, max, tone }: { value: number; max: number; tone: "info" | "danger" | "warning" | "ok" }) {
-  const width = max <= 0 ? 0 : Math.min(100, Math.max(4, (value / max) * 100));
+  const pct = max <= 0 ? 0 : Math.min(100, Math.max(4, (value / max) * 100));
   const color = tone === "danger" ? "bg-danger" : tone === "warning" ? "bg-warning" : tone === "ok" ? "bg-success" : "bg-accent";
-  return <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-subtle dark:bg-border"><div className={`h-full rounded-full ${color}`} style={{ width: `${width}%` }} /></div>;
+  // scaleX (not width): transform-only per motion red-lines. animate-bar-grow
+  // plays once on mount; the transition smooths later poll-driven changes.
+  return (
+    <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-subtle dark:bg-border">
+      <div
+        className={`h-full w-full ${color} animate-bar-grow transition-transform duration-slow ease-expo`}
+        style={{ transform: `scaleX(${pct / 100})`, transformOrigin: "left" }}
+      />
+    </div>
+  );
 }
 
 function RecentActivity({ data }: { data: WorkbenchSummary }) {

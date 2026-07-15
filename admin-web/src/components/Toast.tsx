@@ -1,5 +1,6 @@
 "use client";
 import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
+import { motionConfig, motionTokens } from "@/lib/motion";
 
 type ToastType = "success" | "error" | "info" | "warning";
 
@@ -56,9 +57,12 @@ function resolveOptions(input: ToastOptions | string): ToastOptions {
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
+  // List-owned presence: the provider keeps each toast mounted through its
+  // exit transition (same contract as usePresence, but the list owns removal).
   const dismiss = useCallback((id: number) => {
     setToasts((prev) => prev.map((t) => (t.id === id ? { ...t, exiting: true } : t)));
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 300);
+    const exitMs = motionConfig.prefersReduced() ? 0 : motionTokens.duration.slow;
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), exitMs);
   }, []);
 
   const add = useCallback((type: ToastType, input: ToastOptions | string) => {
@@ -130,7 +134,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {toasts.map((t) => (
           <div
             key={t.id}
-            className={`${toneClasses[t.type]} flex flex-col gap-1 rounded-md border px-4 py-3 text-sm shadow-lg transition-all duration-300 ${
+            className={`${toneClasses[t.type]} flex flex-col gap-1 rounded-md border px-4 py-3 text-sm shadow-lg transition-all duration-slow ease-expo ${
               t.entering ? "opacity-0 translate-x-4" : t.exiting ? "opacity-0 -translate-x-4" : "opacity-100 translate-x-0"
             }`}
             role="status"
@@ -162,7 +166,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             {t.progress !== undefined && (
               <div className="h-1 w-full overflow-hidden rounded-full bg-current/15">
                 <div
-                  className={`h-full ${progressColors[t.type]} rounded-full transition-all duration-300 ease-out`}
+                  className={`h-full ${progressColors[t.type]} rounded-full transition-all duration-slow ease-out`}
                   style={{ width: `${t.progress}%` }}
                 />
               </div>

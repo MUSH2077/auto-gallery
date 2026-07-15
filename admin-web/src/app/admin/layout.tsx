@@ -5,6 +5,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { useT } from "@/lib/i18n";
 import { ThemeToggle, LangToggle, PaletteToggle } from "@/lib/theme";
 import { useAuth } from "@/lib/auth";
+import { usePresence } from "@/lib/motion";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { NotificationBell } from "@/components/NotificationCenter";
 
@@ -14,6 +15,7 @@ function UserMenu() {
   const t = useT();
   const { user, logout } = useAuth();
   const [open, setOpen] = useState(false);
+  const { mounted, closing } = usePresence(open);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -37,8 +39,8 @@ function UserMenu() {
         </svg>
         <span className="hidden sm:inline max-w-[100px] truncate">{user?.display_name || user?.username}</span>
       </button>
-      {open && (
-        <div className="popover absolute right-0 mt-1 w-44 bg-surface border border-border rounded-md shadow-overlay dark:shadow-overlay-dark z-50 text-fg text-sm overflow-hidden">
+      {mounted && (
+        <div className={`popover ${closing ? "popover-exit" : ""} absolute right-0 mt-1 w-44 bg-surface border border-border rounded-md shadow-overlay dark:shadow-overlay-dark z-50 text-fg text-sm overflow-hidden`}>
           <Link
             href="/admin/settings/profile"
             onClick={() => setOpen(false)}
@@ -68,6 +70,7 @@ function AdminNav() {
   const t = useT();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const { mounted: menuMounted, closing: menuClosing } = usePresence(open);
   const groups = [
     { label: t("nav.dashboard"), links: [["/admin", t("nav.dashboard")]] },
     { label: t("nav.library"), links: [["/admin/works", t("nav.works")], ["/admin/tags", t("nav.tags")], ["/admin/curation", t("nav.curation")], ["/admin/dedup", t("nav.dedup")], ["/admin/merge-candidates", t("nav.merge")]] },
@@ -114,8 +117,8 @@ function AdminNav() {
         </div>
       </div>
       {/* Mobile menu */}
-      {open && (
-        <div className="md:hidden mt-3 pt-3 border-t border-nav-fg/20 flex flex-col gap-1 pb-1">
+      {menuMounted && (
+        <div className={`popover ${menuClosing ? "popover-exit" : ""} md:hidden mt-3 pt-3 border-t border-nav-fg/20 flex flex-col gap-1 pb-1`}>
           {groups.map((group) => (
             <div key={group.label} className="py-1">
               <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-nav-fg/50">{group.label}</div>

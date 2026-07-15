@@ -1,5 +1,6 @@
 "use client";
 import { useT } from "@/lib/i18n";
+import { usePresence } from "@/lib/motion";
 
 export default function ConfirmDialog({ open, title, message, onConfirm, onCancel, isPending, error }: {
   open: boolean;
@@ -11,10 +12,11 @@ export default function ConfirmDialog({ open, title, message, onConfirm, onCance
   error?: string | null;
 }) {
   const t = useT();
-  if (!open) return null;
+  const { mounted, closing } = usePresence(open);
+  if (!mounted) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
-      <div className="w-full max-w-md rounded-md border border-border bg-white shadow-xl dark:border-border dark:bg-surface">
+    <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 ${closing ? "overlay-backdrop-exit" : "overlay-backdrop"}`}>
+      <div className={`w-full max-w-md rounded-md border border-border bg-white shadow-xl dark:border-border dark:bg-surface ${closing ? "overlay-panel-exit" : "overlay-panel"}`}>
         <div className="border-b border-border px-4 py-3 dark:border-border">
           <h3 className="text-base font-semibold text-fg">{title}</h3>
         </div>
