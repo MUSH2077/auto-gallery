@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
+import { motionConfig, motionTokens, staggerDelay } from "@/lib/motion";
 import { PageHeader, EmptyState, ErrorState, ConfirmDialog } from "@/components";
 import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
@@ -14,16 +15,31 @@ export default function CreatorDuplicatesPage() {
   const [selectedTarget, setSelectedTarget] = useState<string | null>(null);
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
   const [confirmMerge, setConfirmMerge] = useState(false);
+  // Merge feedback: the merged group collapses briefly before the refetch
+  // removes it (state confirmation → essential, survives low-end gate).
+  const [collapsingGroup, setCollapsingGroup] = useState<number | null>(null);
 
   const merge = useMutation({
     mutationFn: (params: { targetId: string; sourceIds: string[] }) =>
       api.mergeCreators(params.targetId, params.sourceIds),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["creator-duplicates"] });
-      qc.invalidateQueries({ queryKey: queryKeys.creators.all });
-      setSelectedTarget(null);
-      setSelectedSources(new Set());
       setConfirmMerge(false);
+      const finish = () => {
+        qc.invalidateQueries({ queryKey: ["creator-duplicates"] });
+        qc.invalidateQueries({ queryKey: queryKeys.creators.all });
+        setSelectedTarget(null);
+        setSelectedSources(new Set());
+        setCollapsingGroup(null);
+      };
+      const gi = dups.data?.duplicates.findIndex(
+        (group) => !!selectedTarget && group.creator_ids.includes(selectedTarget),
+      ) ?? -1;
+      if (gi >= 0 && motionConfig.shouldAnimate({ essential: true })) {
+        setCollapsingGroup(gi);
+        window.setTimeout(finish, motionTokens.duration.slow);
+      } else {
+        finish();
+      }
     },
   });
 
@@ -60,7 +76,9 @@ export default function CreatorDuplicatesPage() {
       )}
 
       {dups.data?.duplicates.map((group, gi) => (
-        <div key={gi} className="card mb-4 p-4">
+        <div key={gi}
+          className={`card mb-4 p-4 page-item ${collapsingGroup === gi ? "merge-collapse" : ""}`}
+          style={{ "--delay": staggerDelay(gi) } as React.CSSProperties}>
           <div className="flex items-center justify-between mb-3">
             <div>
               <span className="badge font-mono">

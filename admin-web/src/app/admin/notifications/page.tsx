@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
 import { api, queryKeys } from "@/lib/api";
 import type { TaskRun } from "@/lib/api/types";
+import { useEnterOnce } from "@/lib/motion";
 import { PageHeader, EmptyState, ErrorState, StatusBadge, SourceBadge } from "@/components";
 
 type Filter = "all" | "tasks" | "account";
@@ -50,6 +51,7 @@ export default function NotificationsPage() {
     if (filter === "tasks") return all.filter((task) => TASK_KINDS.includes(task.kind));
     return all;
   }, [query.data, filter]);
+  const isNewItem = useEnterOnce(items.map((task) => task.id));
 
   const filters: { key: Filter; label: string }[] = [
     { key: "all", label: t("notifications.filter_all", "全部") },
@@ -98,7 +100,7 @@ export default function NotificationsPage() {
             return (
               <div
                 key={task.id}
-                className={`card p-4 ${link ? "cursor-pointer hover:border-accent/50" : ""}`}
+                className={`card p-4 ${isNewItem(task.id) ? "fade-in" : ""} ${link ? "cursor-pointer hover:border-accent/50" : ""}`}
                 onClick={() => link && router.push(link)}
               >
                 <div className="flex items-start gap-3">

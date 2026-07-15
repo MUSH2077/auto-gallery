@@ -1,6 +1,7 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
+import { staggerDelay } from "@/lib/motion";
 import { PageHeader, EmptyState, ErrorState } from "@/components";
 import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
@@ -33,7 +34,7 @@ export default function DedupPage() {
       )}
 
       {dups.data?.duplicates.map((d, i) => (
-        <div key={i} className="card mb-2 p-4 text-sm">
+        <div key={i} className="card page-item mb-2 p-4 text-sm" style={{ "--delay": staggerDelay(i) } as React.CSSProperties}>
           <div className="flex items-center justify-between mb-2">
             <span className="font-mono text-xs text-muted">{d.source}:{d.source_work_id}</span>
             <span className="badge border-danger-subtle bg-danger-subtle text-danger dark:border-danger/30 dark:bg-danger/15 dark:text-danger">{d.count} {t("dedup_scan.duplicates")}</span>

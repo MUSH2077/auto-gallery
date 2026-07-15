@@ -1,6 +1,7 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
+import { staggerDelay } from "@/lib/motion";
 import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
 import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
@@ -26,7 +27,7 @@ export default function MergeCandidatesPage() {
       )}
 
       {mc.data?.candidates.map((c, i) => (
-        <div key={i} className="card mb-2 p-4 text-sm">
+        <div key={i} className="card page-item mb-2 p-4 text-sm" style={{ "--delay": staggerDelay(i) } as React.CSSProperties}>
           <div className="font-medium mb-2">{c.title}</div>
           <div className="flex items-center gap-2 mb-2">
             {c.sources.map((s) => <SourceBadge key={s} source={s} />)}

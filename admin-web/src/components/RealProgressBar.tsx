@@ -36,9 +36,11 @@ export function RealProgressBar({ progress }: { progress: ProgressData | null })
       </div>
       <div className="h-2 w-full overflow-hidden rounded-full bg-border dark:bg-border">
         {hasPercent ? (
+          // scaleX (not width): transform-only smoothing; the track's
+          // overflow-hidden clips the rounded fill cleanly.
           <div
-            className="h-full rounded-full bg-accent transition-all duration-500 ease-out"
-            style={{ width: `${pct}%` }}
+            className="h-full w-full rounded-full bg-accent transition-transform duration-slow ease-out"
+            style={{ transform: `scaleX(${(pct ?? 0) / 100})`, transformOrigin: "left" }}
           />
         ) : (
           <div className="h-full w-3/5 animate-pulse rounded-full bg-accent" />

@@ -51,20 +51,23 @@ export function usePresence(
 }
 
 /**
- * Returns a predicate that is true only the FIRST time a key is seen in this
- * component instance. Use it to play entrance animations once per item and
- * never again on refetch/poll re-renders:
+ * Marks list keys as "seen" after each commit and returns a predicate that is
+ * true only for keys not yet committed — i.e. items entering for the first
+ * time. Poll/refetch re-renders of already-seen items never re-animate.
+ * Render-phase pure (seen is only mutated in the effect), so StrictMode
+ * double renders stay consistent.
  *
  * ```tsx
- * const isNew = useEnterOnce();
- * items.map((it) => <Row key={it.id} animate={isNew(it.id)} />)
+ * const isNew = useEnterOnce(items.map((it) => it.id));
+ * items.map((it) => <Row key={it.id} className={isNew(it.id) ? "fade-in" : ""} />)
  * ```
  */
-export function useEnterOnce(): (key: string | number) => boolean {
+export function useEnterOnce(
+  keys: ReadonlyArray<string | number>,
+): (key: string | number) => boolean {
   const seen = useRef<Set<string | number>>(new Set());
-  return useCallback((key: string | number) => {
-    if (seen.current.has(key)) return false;
-    seen.current.add(key);
-    return true;
-  }, []);
+  useEffect(() => {
+    for (const key of keys) seen.current.add(key);
+  });
+  return useCallback((key: string | number) => !seen.current.has(key), []);
 }

@@ -373,4 +373,28 @@
   .overlay-backdrop-exit { animation: overlayFadeOut 120ms ease-out forwards; pointer-events: none; }
   .overlay-panel { animation: dialogIn 240ms cubic-bezier(0.16, 1, 0.3, 1); }
   .overlay-panel-exit { animation: dialogOut 120ms cubic-bezier(0.16, 1, 0.3, 1) forwards; pointer-events: none; }
+  /* Right-edge slide-over drawers (task/job detail). Exit driven by
+     usePresence, same contract as .popover-exit. */
+  @keyframes drawerIn {
+    from { transform: translateX(100%); }
+    to   { transform: translateX(0); }
+  }
+  @keyframes drawerOut {
+    from { transform: translateX(0); }
+    to   { transform: translateX(100%); }
+  }
+  .drawer-panel { animation: drawerIn 240ms cubic-bezier(0.16, 1, 0.3, 1); }
+  .drawer-panel-exit { animation: drawerOut 150ms cubic-bezier(0.4, 0, 0.2, 1) forwards; pointer-events: none; }
+  /* One-shot state-change confirmation on job rows (WS status_change).
+     Background-only on a single row — cheap paint, strong feedback. */
+  @keyframes rowFlash {
+    from { background-color: rgb(var(--ag-accent-subtle)); }
+    to   { background-color: transparent; }
+  }
+  .row-flash { animation: rowFlash 1s ease-out; }
+  /* Merge feedback: the merged group collapses before the list refetches. */
+  @keyframes mergeCollapse {
+    to { opacity: 0; transform: scale(0.95); }
+  }
+  .merge-collapse { animation: mergeCollapse 240ms cubic-bezier(0.16, 1, 0.3, 1) forwards; pointer-events: none; }
 }

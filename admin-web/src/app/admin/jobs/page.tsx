@@ -1,9 +1,10 @@
 "use client";
 import Link from "next/link";
-import { Suspense, useState, useEffect, useMemo, type ReactNode } from "react";
+import { Suspense, useState, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { useT, type TFunction } from "@/lib/i18n";
+import { usePresence, motionTokens } from "@/lib/motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, DownloadJob, ImportJob, JobProgress, queryKeys, TaskRun } from "@/lib/api";
 import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, StatCard } from "@/components";
@@ -104,11 +105,11 @@ function JobLifecycle({ status }: { status: string }) {
           <div key={`${step}-${index}`} className="flex min-w-0 flex-1 items-center gap-1">
             <span
               title={t(`jobs.lifecycle_${step}`, step)}
-              className={`h-2 w-2 shrink-0 rounded-full ${
+              className={`h-2 w-2 shrink-0 rounded-full transition-colors duration-slow ${
                 danger ? "bg-danger" : active ? "animate-pulse bg-accent" : done ? "bg-success" : "bg-border dark:bg-border"
               }`}
             />
-            {index < steps.length - 1 && <span className={`h-px flex-1 ${done ? "bg-success" : "bg-border dark:bg-border"}`} />}
+            {index < steps.length - 1 && <span className={`h-px flex-1 transition-colors duration-slow ${done ? "bg-success" : "bg-border dark:bg-border"}`} />}
           </div>
         );
       })}
@@ -841,22 +842,29 @@ function TaskDetailDrawer({
 }) {
   const t = useT();
   const fmt = useI18nFormat();
+  const { mounted, closing } = usePresence(!!id, motionTokens.duration.base);
+  // Hold the last id through the slide-out so content doesn't blank mid-exit.
+  const lastId = useRef<string | null>(null);
+  if (id) lastId.current = id;
+  const heldId = id ?? lastId.current;
   const task = useQuery({
-    queryKey: queryKeys.tasks.detail(id || ""),
-    queryFn: () => api.getTask(id || ""),
+    queryKey: queryKeys.tasks.detail(heldId || ""),
+    queryFn: () => api.getTask(heldId || ""),
     enabled: !!id,
   });
-  if (!id) return null;
+  if (!mounted || !heldId) return null;
   const item = task.data;
   const retryable = item?.operation_type === "admin-disk-import" || item?.operation_type === "admin-rebuild";
   const canRetry = retryable && ["failed", "stale", "cancelled"].includes(item?.status || "");
 
   return (
-    <aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-2xl flex-col border-l border-border bg-white shadow-xl dark:border-border dark:bg-surface" aria-label={t("jobs.task_detail")}>
+    <>
+    <div className={`fixed inset-0 z-[49] bg-black/30 ${closing ? "overlay-backdrop-exit" : "overlay-backdrop"}`} onClick={onClose} aria-hidden />
+    <aside className={`fixed inset-y-0 right-0 z-50 flex w-full max-w-2xl flex-col border-l border-border bg-white shadow-xl dark:border-border dark:bg-surface ${closing ? "drawer-panel-exit" : "drawer-panel"}`} aria-label={t("jobs.task_detail")}>
       <div className="flex items-center justify-between border-b border-border px-4 py-3 dark:border-border">
         <div className="min-w-0">
           <div className="text-sm font-semibold">{item?.title || t("jobs.task_detail")}</div>
-          <div className="font-mono text-xs text-muted">{shortId(id)}</div>
+          <div className="font-mono text-xs text-muted">{shortId(heldId)}</div>
         </div>
         <button onClick={onClose} className="btn-icon border-0 text-lg leading-none" aria-label={t("common.close")}>×</button>
       </div>
@@ -929,6 +937,7 @@ function TaskDetailDrawer({
         )}
       </div>
     </aside>
+    </>
   );
 }
 
@@ -955,34 +964,40 @@ function JobDetailDrawer({
 }) {
   const t = useT();
   const fmt = useI18nFormat();
+  const { mounted, closing } = usePresence(!!id, motionTokens.duration.base);
+  const lastId = useRef<string | null>(null);
+  if (id) lastId.current = id;
+  const heldId = id ?? lastId.current;
   const download = useQuery({
-    queryKey: queryKeys.downloadJobs.detail(id || ""),
-    queryFn: () => api.getDownloadJob(id || ""),
+    queryKey: queryKeys.downloadJobs.detail(heldId || ""),
+    queryFn: () => api.getDownloadJob(heldId || ""),
     enabled: !!id && kind === "download",
   });
   const imports = useQuery({
-    queryKey: queryKeys.downloadJobs.imports(id || ""),
-    queryFn: () => api.getDownloadJobImports(id || ""),
+    queryKey: queryKeys.downloadJobs.imports(heldId || ""),
+    queryFn: () => api.getDownloadJobImports(heldId || ""),
     enabled: !!id && kind === "download",
   });
   const importJob = useQuery({
-    queryKey: [...queryKeys.importJobs.all, "detail", id],
-    queryFn: () => api.getImportJob(id || ""),
+    queryKey: [...queryKeys.importJobs.all, "detail", heldId],
+    queryFn: () => api.getImportJob(heldId || ""),
     enabled: !!id && kind === "import",
   });
 
-  if (!id) return null;
+  if (!mounted || !heldId) return null;
   const dl = download.data as DownloadJob | undefined;
   const im = importJob.data as ImportJob | undefined;
   const loading = kind === "download" ? download.isLoading : importJob.isLoading;
   const error = kind === "download" ? download.error : importJob.error;
 
   return (
-    <aside className="fixed inset-y-0 right-0 z-40 flex w-full max-w-xl flex-col border-l border-border bg-white shadow-xl dark:border-border dark:bg-surface" aria-label={t("jobs.detail_title")}>
+    <>
+    <div className={`fixed inset-0 z-[39] bg-black/30 ${closing ? "overlay-backdrop-exit" : "overlay-backdrop"}`} onClick={onClose} aria-hidden />
+    <aside className={`fixed inset-y-0 right-0 z-40 flex w-full max-w-xl flex-col border-l border-border bg-white shadow-xl dark:border-border dark:bg-surface ${closing ? "drawer-panel-exit" : "drawer-panel"}`} aria-label={t("jobs.detail_title")}>
       <div className="flex items-center justify-between border-b border-border px-4 py-3 dark:border-border">
         <div className="min-w-0">
           <div className="text-sm font-semibold">{kind === "download" ? t("jobs.download_detail") : t("jobs.import_detail")}</div>
-          <div className="font-mono text-xs text-muted">{shortId(id)}</div>
+          <div className="font-mono text-xs text-muted">{shortId(heldId)}</div>
         </div>
         <button onClick={onClose} className="btn-icon border-0 text-lg leading-none" aria-label={t("common.close")}>×</button>
       </div>
@@ -1105,6 +1120,7 @@ function JobDetailDrawer({
         )}
       </div>
     </aside>
+    </>
   );
 }
 
@@ -1116,6 +1132,24 @@ function JobsContent() {
   const [downloadProgress, setDownloadProgress] = useState<Record<string, JobProgress>>({});
   const [importProgress, setImportProgress] = useState<Record<string, JobProgress>>({});
 
+  // One-shot row flash on WS status changes — visual confirmation of which
+  // job just transitioned. Set clears itself after the animation window.
+  const [flashIds, setFlashIds] = useState<Set<string>>(new Set());
+  const flashTimers = useRef<Map<string, number>>(new Map());
+  const triggerFlash = (jobId: string) => {
+    setFlashIds((prev) => new Set(prev).add(jobId));
+    const existing = flashTimers.current.get(jobId);
+    if (existing) window.clearTimeout(existing);
+    flashTimers.current.set(jobId, window.setTimeout(() => {
+      setFlashIds((prev) => { const next = new Set(prev); next.delete(jobId); return next; });
+      flashTimers.current.delete(jobId);
+    }, 1200));
+  };
+  useEffect(() => {
+    const timers = flashTimers.current;
+    return () => { timers.forEach((timer) => window.clearTimeout(timer)); };
+  }, []);
+
   // WebSocket: invalidate queries on status change, update progress on progress events
   const { connected, status: wsStatus } = useJobWebSocket({
     onStatusChange: (msg) => {
@@ -1124,6 +1158,7 @@ function JobsContent() {
       qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
       qc.invalidateQueries({ queryKey: ["workbench"] });
       if (msg.task_id && msg.new_status) {
+        triggerFlash(msg.task_id);
         toast.info(`${msg.task_id.slice(0, 8)}: ${msg.old_status} → ${msg.new_status}`);
       }
     },
@@ -1617,7 +1652,7 @@ function JobsContent() {
                       </>
                     )}
                     error={j.error_log}
-                    className={(() => { const cls = categoryBorderClass(classifyJob(j.status, j.retry_count, 3)); return cls ? `border-l-2 ${cls}` : ""; })()}
+                    className={(() => { const cls = categoryBorderClass(classifyJob(j.status, j.retry_count, 3)); return `${cls ? `border-l-2 ${cls}` : ""} ${flashIds.has(j.id) ? "row-flash" : ""}`.trim(); })()}
                     onClick={() => openDownloadDetail(j.id)}
                     actions={(
                       <>
@@ -1688,7 +1723,7 @@ function JobsContent() {
                     activeSince={active ? j.created_at : null}
                     timestamp={fmt.time(j.created_at)}
                     error={j.error_log}
-                    className={active ? "border-l-2 border-l-accent" : j.status === "failed" ? "border-l-2 border-l-danger" : ""}
+                    className={`${active ? "border-l-2 border-l-accent" : j.status === "failed" ? "border-l-2 border-l-danger" : ""} ${flashIds.has(j.id) ? "row-flash" : ""}`.trim()}
                     onClick={() => openImportDetail(j.id)}
                     actions={(
                       <>

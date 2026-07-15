@@ -91,7 +91,7 @@ export default function GitlleryPanel() {
     <section className="card p-4">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold">{t("gitllery.title")}</h2>
-        <span className={`badge ${TONE[tone]}`}>
+        <span className={`badge transition-colors duration-slow ${TONE[tone]}`}>
           {needsSync
             ? t("gitllery.needs_reconcile")
             : behind === 0 ? t("gitllery.clean") : t("gitllery.behind", { count: behind })}
