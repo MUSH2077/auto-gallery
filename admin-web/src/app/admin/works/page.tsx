@@ -34,6 +34,7 @@ function WorkCard({
   onScheduleClosePreview,
   onCancelClosePreview,
   onPreviewPage,
+  enterAnimate = true,
 }: {
   w: WorkListItem;
   onToggleFavorite: (id: string) => void;
@@ -44,6 +45,7 @@ function WorkCard({
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
   index?: number;
+  enterAnimate?: boolean;
   previewEnabled: boolean;
   previewDelayMs: number;
   wheelThreshold: number;
@@ -82,8 +84,8 @@ function WorkCard({
   return (
     <div
       ref={cardRef}
-      className={`card-interactive page-item overflow-hidden cursor-pointer group ${selected ? "ring-2 ring-accent" : ""}`}
-      style={{ "--delay": staggerDelay(index ?? 0) } as React.CSSProperties}
+      className={`card-interactive ${enterAnimate ? "page-item" : ""} overflow-hidden cursor-pointer group ${selected ? "ring-2 ring-accent" : ""}`}
+      style={enterAnimate ? ({ "--delay": staggerDelay(index ?? 0) } as React.CSSProperties) : undefined}
       onClick={() => router.push(`/admin/works/${w.id}`)}
       onMouseEnter={() => {
         onCancelClosePreview();
@@ -303,6 +305,14 @@ function WorksContent() {
       return api.listWorks(page * limit, limit, filters);
     },
   });
+
+  // Stagger only the FIRST grid the visitor sees. Page flips, filter changes
+  // and refetches render instantly — browsing speed beats entrance flair
+  // (motion principle #1), and poll-driven re-renders must never replay.
+  const gridEntered = useRef(false);
+  useEffect(() => {
+    if (works.data?.items?.length) gridEntered.current = true;
+  }, [works.data]);
 
   const previewAssets = useQuery({
     queryKey: ["works", preview?.work.id, "assets"],
@@ -589,6 +599,7 @@ function WorksContent() {
             <WorkCard
               key={w.id}
               index={i}
+              enterAnimate={!gridEntered.current}
               w={w}
               previewEnabled={previewEnabled}
               previewDelayMs={appearance.workPreviewDelayMs}

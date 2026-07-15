@@ -367,6 +367,8 @@
     from { opacity: 1; transform: translateY(0) scale(1); }
     to   { opacity: 0; transform: translateY(4px) scale(0.98); }
   }
+  /* Opacity-only entrance for swapped-in content (keyed images etc.). */
+  .fade-in { animation: overlayFadeIn 150ms ease-out; }
   .overlay-backdrop { animation: overlayFadeIn 150ms ease-out; }
   .overlay-backdrop-exit { animation: overlayFadeOut 120ms ease-out forwards; pointer-events: none; }
   .overlay-panel { animation: dialogIn 240ms cubic-bezier(0.16, 1, 0.3, 1); }

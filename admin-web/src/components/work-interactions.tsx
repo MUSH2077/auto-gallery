@@ -175,7 +175,7 @@ export function WorkPreviewOverlay({
 
   return (
     <div
-      className="fixed z-50 overflow-hidden rounded-md border border-border bg-surface shadow-overlay"
+      className="popover fixed z-50 overflow-hidden rounded-md border border-border bg-surface shadow-overlay"
       style={style}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}

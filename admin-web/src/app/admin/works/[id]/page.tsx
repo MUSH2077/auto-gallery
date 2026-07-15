@@ -6,6 +6,7 @@ import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
+import { usePresence } from "@/lib/motion";
 import { AssetFilmstrip, AssetImage, PageHeader, SourceBadge, ErrorState, EmptyState, isArchiveAsset } from "@/components";
 import { Breadcrumb } from "@/components/Breadcrumb";
 
@@ -37,6 +38,14 @@ interface AssetData {
 
 function FullImageLightbox({ asset, onClose }: { asset: AssetData | null; onClose: () => void }) {
   const t = useT();
+  const open = !!asset && !isArchiveAsset(asset);
+  const { mounted, closing } = usePresence(open);
+  // Keep the last asset around through the exit fade — `asset` is already
+  // null while the overlay is animating out.
+  const lastAsset = useRef<AssetData | null>(null);
+  if (open) lastAsset.current = asset;
+  const shown = open ? asset : lastAsset.current;
+
   useEffect(() => {
     if (!asset) return;
     const onKey = (event: KeyboardEvent) => {
@@ -46,24 +55,24 @@ function FullImageLightbox({ asset, onClose }: { asset: AssetData | null; onClos
     return () => document.removeEventListener("keydown", onKey);
   }, [asset, onClose]);
 
-  if (!asset || isArchiveAsset(asset)) return null;
+  if (!mounted || !shown) return null;
 
   return (
     <div
-      className="fixed inset-0 z-50 flex flex-col bg-black/95"
+      className={`fixed inset-0 z-50 flex flex-col bg-black/95 ${closing ? "overlay-backdrop-exit" : "overlay-backdrop"}`}
       role="dialog"
       aria-modal="true"
-      aria-label={asset.file_name}
+      aria-label={shown.file_name}
       onClick={onClose}
     >
       <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3 text-white">
         <div className="min-w-0">
-          <div className="truncate text-sm font-medium">{asset.file_name}</div>
-          {asset.width && asset.height && <div className="text-xs text-white/60">{asset.width} &times; {asset.height}</div>}
+          <div className="truncate text-sm font-medium">{shown.file_name}</div>
+          {shown.width && shown.height && <div className="text-xs text-white/60">{shown.width} &times; {shown.height}</div>}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <a
-            href={asset.original_url || ""}
+            href={shown.original_url || ""}
             target="_blank"
             rel="noopener noreferrer"
             className="rounded-md border border-white/20 px-3 py-1.5 text-sm text-white hover:bg-white/10"
@@ -78,9 +87,9 @@ function FullImageLightbox({ asset, onClose }: { asset: AssetData | null; onClos
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-4" onClick={(e) => e.stopPropagation()}>
         <img
-          src={asset.original_url || ""}
-          alt={asset.file_name}
-          className="mx-auto h-auto max-h-none max-w-full object-contain"
+          src={shown.original_url || ""}
+          alt={shown.file_name}
+          className={`mx-auto h-auto max-h-none max-w-full object-contain ${closing ? "overlay-panel-exit" : "overlay-panel"}`}
         />
       </div>
     </div>
@@ -114,9 +123,13 @@ function DisclosurePanel({
     const stored = localStorage.getItem(storageKey);
     return stored === null ? defaultOpen : stored === "open";
   });
+  // Lazy mount preserved: children (some run queries, e.g. History) only mount
+  // on first open, then stay mounted so the collapse can animate.
+  const [everOpen, setEverOpen] = useState(open);
   const toggle = () => {
     const next = !open;
     setOpen(next);
+    if (next) setEverOpen(true);
     try { localStorage.setItem(storageKey, next ? "open" : "closed"); } catch {}
   };
   return (
@@ -128,7 +141,13 @@ function DisclosurePanel({
         </span>
         <span className="sr-only">{open ? t("common.close") : t("common.open", "Open")}</span>
       </button>
-      {open && <div className="border-t border-border px-4 py-3">{children}</div>}
+      {/* grid-template-rows 0fr→1fr: animatable collapse without touching
+          height (layout-anim red line); content clips via overflow-hidden. */}
+      <div className={`grid transition-[grid-template-rows] duration-slow ease-expo ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
+        <div className="overflow-hidden">
+          {everOpen && <div className="border-t border-border px-4 py-3">{children}</div>}
+        </div>
+      </div>
     </section>
   );
 }
@@ -192,11 +211,12 @@ function WorkViewerShell({ workId }: { workId: string }) {
             title={t("work_detail.view_full", "View full image")}
           >
             <AssetImage
+              key={current.id}
               src={current.preview_url}
               assetId={current.id}
               size="preview"
               alt={current.file_name}
-              className="max-h-[72vh] max-w-full object-contain no-outline transition-transform duration-150 group-hover:scale-[1.005]"
+              className="fade-in max-h-[72vh] max-w-full object-contain no-outline transition-transform duration-150 group-hover:scale-[1.005]"
             />
           </button>
         )}
