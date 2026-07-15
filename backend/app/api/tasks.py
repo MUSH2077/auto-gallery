@@ -97,30 +97,60 @@ async def _control_task(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+# operation_type → (lock_key, func, entity, label). Retry re-enqueues the same
+# job function with the task's stored options (meta minus "entity"), so every
+# entry here must keep its options round-trippable through task.meta.
+_RETRYABLE_ADMIN_OPERATIONS = {
+    "admin-disk-import": (
+        "library:disk-import:active",
+        "app.jobs.admin_operations.run_disk_import_operation",
+        "disk-import",
+        "Disk import queued",
+    ),
+    "admin-creator-reenrich": (
+        "library:creator-reenrich:active",
+        "app.jobs.admin_operations.run_creator_reenrich_operation",
+        "creator-reenrich",
+        "Creator re-enrichment queued",
+    ),
+    "admin-rebuild": (
+        "library:rebuild:active",
+        "app.jobs.admin_operations.run_library_rebuild_operation",
+        "library",
+        "Library rebuild queued",
+    ),
+    "admin-gitllery-sync": (
+        "library:gitllery-sync:active",
+        "app.jobs.admin_operations.run_gitllery_sync_operation",
+        "gitllery-sync",
+        "Gitllery sync queued",
+    ),
+    "admin-search-reindex": (
+        "library:search-reindex:active",
+        "app.jobs.admin_operations.run_search_reindex_operation",
+        "search-reindex",
+        "Search reindex queued",
+    ),
+    "admin-curation-backfill": (
+        "library:curation-backfill:active",
+        "app.jobs.admin_operations.run_curation_backfill_operation",
+        "curation-backfill",
+        "Curation baseline backfill queued",
+    ),
+}
+
+
 async def _retry_admin_task(task, svc: TaskService):
     from rq import Queue
 
-    if task.operation_type not in {"admin-disk-import", "admin-rebuild", "admin-creator-reenrich"}:
+    spec = _RETRYABLE_ADMIN_OPERATIONS.get(task.operation_type)
+    if spec is None:
         raise HTTPException(status_code=400, detail="This admin operation cannot be retried")
     if task.status not in {"failed", "stale", "cancelled"}:
         raise HTTPException(status_code=409, detail=f"Task is {task.status}; retry is only available after failure")
 
     redis = get_redis()
-    if task.operation_type == "admin-disk-import":
-        lock_key = "library:disk-import:active"
-        func = "app.jobs.admin_operations.run_disk_import_operation"
-        entity = "disk-import"
-        label = "Disk import queued"
-    elif task.operation_type == "admin-creator-reenrich":
-        lock_key = "library:creator-reenrich:active"
-        func = "app.jobs.admin_operations.run_creator_reenrich_operation"
-        entity = "creator-reenrich"
-        label = "Creator re-enrichment queued"
-    else:
-        lock_key = "library:rebuild:active"
-        func = "app.jobs.admin_operations.run_library_rebuild_operation"
-        entity = "library"
-        label = "Library rebuild queued"
+    lock_key, func, entity, label = spec
 
     active_job = redis.get(lock_key)
     if isinstance(active_job, bytes):

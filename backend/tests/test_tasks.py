@@ -196,3 +196,73 @@ async def test_retry_admin_disk_import_task_requeues_same_task(monkeypatch):
         async with async_session() as db:
             await _clear_task_test_tables(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_retry_admin_gitllery_sync_task_requeues_with_options(monkeypatch):
+    from app.api import tasks as tasks_api
+    from app.database import async_session, engine
+    from app.services.tasks import TaskService
+
+    class FakeRedis:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value, nx=False, ex=None):
+            if nx and key in self.values:
+                return False
+            self.values[key] = value
+            return True
+
+        def delete(self, key):
+            self.values.pop(key, None)
+
+    class FakeQueue:
+        def __init__(self, name, connection):
+            self.name = name
+            self.connection = connection
+
+        def enqueue(self, func, job_id, options, job_timeout=None, result_ttl=None):
+            assert self.name == "operations"
+            assert func == "app.jobs.admin_operations.run_gitllery_sync_operation"
+            assert options == {"mode": "reconcile", "repository_id": None}
+
+            class Job:
+                id = "rq-gitllery-retry"
+
+            return Job()
+
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(tasks_api, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(tasks_api, "get_operation_status", lambda job_id: None)
+    monkeypatch.setattr(tasks_api, "set_operation_status", lambda *args, **kwargs: None)
+    monkeypatch.setattr("rq.Queue", FakeQueue)
+
+    try:
+        async with async_session() as db:
+            await _clear_task_test_tables(db)
+            svc = TaskService(db)
+            task = await svc.create_task(
+                kind="admin",
+                operation_type="admin-gitllery-sync",
+                title="Gitllery sync",
+                status="failed",
+                queue_name="operations",
+                error="worker crashed",
+                meta={"entity": "gitllery-sync", "mode": "reconcile", "repository_id": None},
+            )
+            await db.commit()
+
+            result = await tasks_api._retry_admin_task(task, svc)
+
+            assert result == {"task_id": str(task.id), "job_id": "rq-gitllery-retry", "status": "enqueued"}
+            assert task.status == "enqueued"
+            assert fake_redis.get("library:gitllery-sync:active") == str(task.id)
+    finally:
+        async with async_session() as db:
+            await _clear_task_test_tables(db)
+        await engine.dispose()
