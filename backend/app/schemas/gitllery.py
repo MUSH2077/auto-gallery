@@ -17,6 +17,10 @@ class GitlleryStatusResponse(BaseModel):
     missing_repos: int
     behind_total: int
     deep: bool = False
+    # True when the projection checkpoint is absent (fresh redis, post-rebuild):
+    # pending counts are unknown and the queued reconcile job must run. status
+    # deliberately has no inline full-history fallback (OOM vector).
+    needs_reconcile: bool = False
 
 
 class GitlleryReconcileResponse(BaseModel):

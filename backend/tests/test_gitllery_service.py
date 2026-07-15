@@ -131,6 +131,7 @@ async def test_status_clean_after_projection_and_behind_before(tmp_path, monkeyp
     from app.services.gitllery.service import GitlleryService
 
     monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+    monkeypatch.setattr(gsvc, "_CHECKPOINT_CLAMP_SECONDS", 0)
     # Isolate creator_dir resolution from any real gallery-dl config mounted in
     # this environment (matches the other tests in this file); otherwise an
     # on-disk config.json with a stale directory template can change which
@@ -143,11 +144,18 @@ async def test_status_clean_after_projection_and_behind_before(tmp_path, monkeyp
             commit = await CurationService(db).trash_works([work.id], message="trash 1")
             await db.commit()
 
+            # No checkpoint yet: status must NOT walk the full history inline —
+            # it reports needs_reconcile instead (queued job recomputes truth).
             before = await GitlleryService(db).status()
-            assert before["behind_total"] >= 1
+            assert before["needs_reconcile"] is True
 
+            # What the queued sync job does: project everything + rebuild P.
             await GitlleryService(db).reconcile()
+            assert await gsvc.rebuild_checkpoint(db) is True
+            from app.services.cache import cache_delete_pattern
+            cache_delete_pattern("gitllery:status:*")
             after = await GitlleryService(db).status()
+            assert after["needs_reconcile"] is False
             assert after["behind_total"] == 0
             assert all(r["clean"] for r in after["repositories"])
             assert all(r["object_integrity_ok"] for r in after["repositories"])
@@ -314,6 +322,7 @@ async def test_status_cached_and_invalidated_on_projection(tmp_path, monkeypatch
     from app.services.gitllery.service import GitlleryService
 
     monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
+    monkeypatch.setattr(gsvc, "_CHECKPOINT_CLAMP_SECONDS", 0)
     try:
         async with async_session() as db:
             await _clear(db)
@@ -322,14 +331,15 @@ async def test_status_cached_and_invalidated_on_projection(tmp_path, monkeypatch
             commit = await svc_cur.trash_works([work.id], message="trash 1")
             await db.commit()
             await GitlleryService(db).project_commit(commit.id)
+            assert await gsvc.rebuild_checkpoint(db) is True
 
             calls = {"n": 0}
-            original = GitlleryService._pending_count_by_repo
+            original = GitlleryService._pending_count_tail
 
-            async def counting(self, repository_id):
+            async def counting(self, repository_id, tail):
                 calls["n"] += 1
-                return await original(self, repository_id)
-            monkeypatch.setattr(GitlleryService, "_pending_count_by_repo", counting)
+                return await original(self, repository_id, tail)
+            monkeypatch.setattr(GitlleryService, "_pending_count_tail", counting)
 
             first = await GitlleryService(db).status()
             second = await GitlleryService(db).status()
@@ -374,8 +384,9 @@ async def test_checkpoint_helpers_clamp_and_roundtrip():
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_status_checkpoint_fastpath_and_deep_bypass(tmp_path, monkeypatch):
-    """After a clean full walk sets P, the next status runs tail-only (never
-    touching the full batched loader) and advances P; deep bypasses P."""
+    """status never walks full history inline: without P it reports
+    needs_reconcile; with P it runs tail-only and advances P; deep performs
+    the full object verification on the same tail-bounded pending counts."""
     from app.database import async_session, engine
     from app.services.cache import cache_delete_pattern
     from app.services.curation import CurationService
@@ -393,8 +404,13 @@ async def test_status_checkpoint_fastpath_and_deep_bypass(tmp_path, monkeypatch)
             await db.commit()
             await GitlleryService(db).project_commit(c1.id)
 
+            # No P → needs_reconcile, no inline full walk, P not created.
             s = await GitlleryService(db).status()
-            assert s["behind_total"] == 0
+            assert s["needs_reconcile"] is True
+            assert gsvc._read_checkpoint() is None
+
+            # The queued sync job re-establishes P.
+            assert await gsvc.rebuild_checkpoint(db) is True
             p1 = gsvc._read_checkpoint()
             assert p1 is not None
 
@@ -403,24 +419,17 @@ async def test_status_checkpoint_fastpath_and_deep_bypass(tmp_path, monkeypatch)
             await GitlleryService(db).project_commit(c2.id)
             cache_delete_pattern("gitllery:status:*")
 
-            calls = {"full": 0}
-            original = GitlleryService._all_changes_by_commit
-
-            async def counting(self):
-                calls["full"] += 1
-                return await original(self)
-            monkeypatch.setattr(GitlleryService, "_all_changes_by_commit", counting)
-
             s2 = await GitlleryService(db).status()
-            assert calls["full"] == 0          # tail path, not the full loader
-            assert s2["behind_total"] == 0
+            assert s2["needs_reconcile"] is False
+            assert s2["behind_total"] == 0      # tail path found c2 projected
             p2 = gsvc._read_checkpoint()
             assert p2 is not None and p2 != p1 and p2[0] >= p1[0]
 
             cache_delete_pattern("gitllery:status:*")
             s3 = await GitlleryService(db).status(deep=True)
-            assert calls["full"] == 1          # deep bypasses the checkpoint
+            assert s3["deep"] is True
             assert s3["behind_total"] == 0
+            assert all(r["object_integrity_ok"] for r in s3["repositories"])
     finally:
         async with async_session() as db:
             await _clear(db)
@@ -449,6 +458,7 @@ async def test_status_checkpoint_blocks_on_missed_projection(tmp_path, monkeypat
             c1 = await svc_cur.trash_works([work.id], message="trash 1")
             await db.commit()
             await GitlleryService(db).project_commit(c1.id)
+            assert await gsvc.rebuild_checkpoint(db) is True  # queued-job step
             assert (await GitlleryService(db).status())["behind_total"] == 0
             p1 = gsvc._read_checkpoint()
             assert p1 is not None
@@ -500,6 +510,7 @@ async def test_status_checkpoint_catchup_ordering(tmp_path, monkeypatch):
             c0 = await svc_cur.trash_works([work.id], message="trash 0")
             await db.commit()
             await GitlleryService(db).project_commit(c0.id)
+            assert await gsvc.rebuild_checkpoint(db) is True  # queued-job step
             assert (await GitlleryService(db).status())["behind_total"] == 0
             p0 = gsvc._read_checkpoint()
             assert p0 is not None

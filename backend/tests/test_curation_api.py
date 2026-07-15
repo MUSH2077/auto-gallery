@@ -157,18 +157,21 @@ def test_backfill_status_and_run_use_curation_service(monkeypatch):
             calls.append("status")
             return {"is_complete": False, "expected": {}, "existing": {}, "missing": {}}
 
-        async def run_backfill(self):
-            calls.append("run")
-            return {"status": "ok", "created": {}, "skipped": {}, "expected": {}}
-
     monkeypatch.setattr(curation, "CurationService", FakeCurationService)
 
+    # run_backfill is queued work now — the endpoint only enqueues.
+    async def fake_enqueue(**kwargs):
+        calls.append(("enqueue", kwargs["operation_type"]))
+        return {"status": "enqueued", "job_id": "job-1"}
+
+    monkeypatch.setattr("app.services.operations.enqueue_admin_operation", fake_enqueue)
+
     status = asyncio.run(curation.curation_backfill_status(db=object()))
-    run = asyncio.run(curation.run_curation_backfill(db=object()))
+    run = asyncio.run(curation.run_curation_backfill())
 
     assert status["is_complete"] is False
-    assert run["status"] == "ok"
-    assert calls == ["status", "run"]
+    assert run["status"] == "enqueued"
+    assert calls == ["status", ("enqueue", "admin-curation-backfill")]
 
 
 def test_revert_rejects_baseline_commit():

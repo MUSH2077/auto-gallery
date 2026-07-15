@@ -52,10 +52,18 @@ async def curation_backfill_status(db: AsyncSession = Depends(get_db)):
     return await svc.backfill_status()
 
 
-@router.post("/backfill", response_model=CurationBackfillRunResponse)
-async def run_curation_backfill(db: AsyncSession = Depends(get_db)):
-    svc = CurationService(db)
-    return await svc.run_backfill()
+@router.post("/backfill")
+async def run_curation_backfill():
+    """Enqueue the baseline backfill — it replays the whole library and must
+    run in a worker, never inline in the backend process."""
+    from app.services.operations import enqueue_admin_operation
+    return await enqueue_admin_operation(
+        lock_key="library:curation-backfill:active",
+        operation_type="admin-curation-backfill",
+        title="Curation baseline backfill",
+        entity="curation-backfill",
+        func="app.jobs.admin_operations.run_curation_backfill_operation",
+    )
 
 
 @router.get("/commits/{commit_id}", response_model=CurationCommitRead)
@@ -104,16 +112,34 @@ async def gitllery_repo_status(repository_id: str, deep: bool = Query(False),
     return await GitlleryService(db).status(repository_id, deep=deep)
 
 
-@router.post("/gitllery/reconcile", response_model=GitlleryReconcileResponse)
-async def gitllery_reconcile(repository_id: str | None = None, db: AsyncSession = Depends(get_db)):
-    return await GitlleryService(db).reconcile(repository_id)
+@router.post("/gitllery/reconcile")
+async def gitllery_reconcile(repository_id: str | None = None):
+    """Enqueue projection of pending commits (and checkpoint rebuild when
+    library-wide). The walk is O(history) and runs in a worker by design —
+    status() has no inline full-history fallback anymore."""
+    from app.services.operations import enqueue_admin_operation
+    return await enqueue_admin_operation(
+        lock_key="library:gitllery-sync:active",
+        operation_type="admin-gitllery-sync",
+        title="Gitllery sync",
+        entity="gitllery-sync",
+        func="app.jobs.admin_operations.run_gitllery_sync_operation",
+        options={"mode": "reconcile", "repository_id": repository_id},
+    )
 
 
-@router.post("/gitllery/backfill", response_model=GitlleryReconcileResponse)
-async def gitllery_backfill(db: AsyncSession = Depends(get_db)):
-    svc = GitlleryService(db)
-    projected = await svc.backfill()
-    return {"projected": projected, "status": await svc.status()}
+@router.post("/gitllery/backfill")
+async def gitllery_backfill():
+    """Enqueue repo initialization + full projection (first-sync path)."""
+    from app.services.operations import enqueue_admin_operation
+    return await enqueue_admin_operation(
+        lock_key="library:gitllery-sync:active",
+        operation_type="admin-gitllery-sync",
+        title="Gitllery sync",
+        entity="gitllery-sync",
+        func="app.jobs.admin_operations.run_gitllery_sync_operation",
+        options={"mode": "backfill", "repository_id": None},
+    )
 
 
 @router.get("/repositories/{repository_id}/gitllery/log", response_model=GitlleryLogResponse)

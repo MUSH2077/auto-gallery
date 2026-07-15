@@ -588,24 +588,22 @@ class CurationService:
                 },
             )
             for item in works:
-                work = item["work"]
-                work_source = item["work_source"]
                 await self._add_change(
                     commit,
                     subject_type="work",
-                    subject_id=str(work.id),
+                    subject_id=item["work_id"],
                     action="work_added",
                     before_state=None,
                     after_state={
-                        **self._work_snapshot(work, None),
-                        "source": work_source.source,
-                        "source_work_id": work_source.source_work_id,
-                        "source_creator_id": work_source.source_creator_id,
+                        **item["snapshot"],
+                        "source": item["source"],
+                        "source_work_id": item["source_work_id"],
+                        "source_creator_id": item["source_creator_id"],
                     },
                     impact={
                         "repository_id": str(group["repository_id"]) if group["repository_id"] else None,
-                        "source": work_source.source,
-                        "source_work_id": work_source.source_work_id,
+                        "source": item["source"],
+                        "source_work_id": item["source_work_id"],
                     },
                 )
             if group["repository_id"]:
@@ -697,7 +695,16 @@ class CurationService:
             if occurred_at < group["occurred_at"]:
                 group["occurred_at"] = occurred_at
             if not count_only:
-                group["works"].append({"work": work, "work_source": work_source})
+                # Lightweight dict, not ORM objects: holding every Work +
+                # WorkSource instance made the group list O(library) resident
+                # memory. The snapshot is computed here while the row is in hand.
+                group["works"].append({
+                    "work_id": str(work.id),
+                    "snapshot": self._work_snapshot(work, None),
+                    "source": work_source.source,
+                    "source_work_id": work_source.source_work_id,
+                    "source_creator_id": work_source.source_creator_id,
+                })
         return sorted(groups.values(), key=lambda g: (g["occurred_at"], g["dedupe_key"]))
 
     async def purge_preview(self, work_ids: list[UUID] | None = None) -> dict:

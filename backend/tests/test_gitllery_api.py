@@ -47,13 +47,31 @@ async def test_status_and_reconcile_endpoints(tmp_path, monkeypatch):
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # No checkpoint → pending unknown; the API must not full-walk inline.
             r = await client.get("/api/v1/curation/gitllery/status")
             assert r.status_code == 200
-            assert r.json()["behind_total"] >= 1
+            assert r.json()["needs_reconcile"] is True
 
+            # reconcile is queued work now.
             r = await client.post("/api/v1/curation/gitllery/reconcile")
             assert r.status_code == 200
-            assert r.json()["status"]["behind_total"] == 0
+            body = r.json()
+            assert body["status"] == "enqueued" and body["job_id"]
+
+        # Run the queued job inline (what worker-operations would do) and
+        # verify it projects + re-establishes the checkpoint.
+        monkeypatch.setattr(gsvc, "_CHECKPOINT_CLAMP_SECONDS", 0)
+        from app.jobs.admin_operations import _run_gitllery_sync_operation
+        result = await _run_gitllery_sync_operation(
+            body["job_id"], {"mode": "reconcile", "repository_id": None})
+        assert result["projected_commits"] >= 1
+        assert result["checkpoint_rebuilt"] is True
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/curation/gitllery/status")
+            assert r.status_code == 200
+            assert r.json()["needs_reconcile"] is False
+            assert r.json()["behind_total"] == 0
     finally:
         app.dependency_overrides.pop(get_admin_key, None)
         async with async_session() as db:

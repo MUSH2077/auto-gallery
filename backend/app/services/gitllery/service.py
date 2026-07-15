@@ -13,7 +13,7 @@ from pathlib import Path
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -118,44 +118,68 @@ class GitlleryService:
         repo.write_index(index)
         return commit_hash
 
-    async def _ordered_commits(self) -> list[CurationCommit]:
-        rows = await self.db.execute(
-            select(CurationCommit).order_by(
-                CurationCommit.occurred_at, CurationCommit.created_at, CurationCommit.id))
-        return list(rows.scalars().all())
+    _BULK_BATCH = 500
+
+    async def _commit_batches(self):
+        """Yield ordered commits in keyset-paged batches of _BULK_BATCH.
+
+        Bulk walks (reconcile/backfill jobs) must never materialize the whole
+        commit history as ORM objects — on a large library that is hundreds of
+        MB and the reason these walks now run in a queue worker, not backend.
+        """
+        last: tuple | None = None
+        while True:
+            stmt = select(CurationCommit).order_by(
+                CurationCommit.occurred_at, CurationCommit.created_at, CurationCommit.id
+            ).limit(self._BULK_BATCH)
+            if last is not None:
+                stmt = stmt.where(
+                    tuple_(CurationCommit.occurred_at, CurationCommit.created_at, CurationCommit.id)
+                    > tuple_(*last))
+            batch = list((await self.db.execute(stmt)).scalars().all())
+            if not batch:
+                return
+            yield batch
+            last = (batch[-1].occurred_at, batch[-1].created_at, batch[-1].id)
 
     async def project_pending(self, repository_id: str | None = None) -> dict[str, int]:
+        """Project every not-yet-projected commit. O(batch) memory: commits,
+        changes, and work_source lookups are all fetched per batch. Runs from
+        the operations queue (run_gitllery_sync_operation), not inline."""
         resolver = RepoResolver(self.db)
-        await resolver.preload_work_sources()
         counts: dict[str, int] = {}
         # repo_id -> (GitlleryRepo, RepoDescriptor, projected db_commit_id set)
         repo_cache: dict[str, tuple[GitlleryRepo, RepoDescriptor, set[str]]] = {}
-        changes_by_commit = await self._all_changes_by_commit()
-        for commit in await self._ordered_commits():
-            changes = changes_by_commit.get(commit.id, [])
-            sliced = await resolver.slice_changes(changes)
-            for rid, (desc, repo_changes) in sliced.items():
-                if repository_id is not None and rid != repository_id:
-                    continue
-                if rid not in repo_cache:
-                    repo = self._repo_for(desc)
-                    self._ensure_init(repo, desc)
-                    repo_cache[rid] = (repo, desc, repo.projected_db_commit_ids())
-                repo, desc_cached, projected = repo_cache[rid]
-                if str(commit.id) in projected:
-                    continue
-                # Bulk path (reconcile/backfill): a single commit can fan out to
-                # thousands of blob writes, so allow a longer hold than the
-                # single-commit project_commit (60s). Lock expiry is still safe —
-                # the object store is content-addressed and the under-lock HEAD
-                # re-check in _apply_commit_to_repo prevents any duplication.
-                async with redis_lock(f"gitllery:{rid}", ttl_seconds=300) as acquired:
-                    if not acquired:
+        async for batch in self._commit_batches():
+            changes_by_commit = await self._changes_for_commits([c.id for c in batch])
+            work_ids = sorted({ch.subject_id for chs in changes_by_commit.values()
+                               for ch in chs if ch.subject_type == "work"})
+            await resolver.preload_work_sources(work_ids=work_ids)
+            for commit in batch:
+                changes = changes_by_commit.get(commit.id, [])
+                sliced = await resolver.slice_changes(changes)
+                for rid, (desc, repo_changes) in sliced.items():
+                    if repository_id is not None and rid != repository_id:
                         continue
-                    new_hash = self._apply_commit_to_repo(repo, desc_cached, commit, repo_changes)
-                if new_hash is not None:
-                    projected.add(str(commit.id))
-                    counts[rid] = counts.get(rid, 0) + 1
+                    if rid not in repo_cache:
+                        repo = self._repo_for(desc)
+                        self._ensure_init(repo, desc)
+                        repo_cache[rid] = (repo, desc, repo.projected_db_commit_ids())
+                    repo, desc_cached, projected = repo_cache[rid]
+                    if str(commit.id) in projected:
+                        continue
+                    # Bulk path (reconcile/backfill): a single commit can fan out to
+                    # thousands of blob writes, so allow a longer hold than the
+                    # single-commit project_commit (60s). Lock expiry is still safe —
+                    # the object store is content-addressed and the under-lock HEAD
+                    # re-check in _apply_commit_to_repo prevents any duplication.
+                    async with redis_lock(f"gitllery:{rid}", ttl_seconds=300) as acquired:
+                        if not acquired:
+                            continue
+                        new_hash = self._apply_commit_to_repo(repo, desc_cached, commit, repo_changes)
+                    if new_hash is not None:
+                        projected.add(str(commit.id))
+                        counts[rid] = counts.get(rid, 0) + 1
         if counts:
             _invalidate_status_cache()
         return counts
@@ -186,16 +210,6 @@ class GitlleryService:
         if affected:
             _invalidate_status_cache()
         return affected
-
-    async def _all_changes_by_commit(self) -> dict[UUID, list[CurationChange]]:
-        """One query for ALL changes grouped by commit — replaces the per-commit
-        _changes_for_commit N+1 in bulk walks (status / project_pending)."""
-        rows = await self.db.execute(
-            select(CurationChange).order_by(CurationChange.created_at, CurationChange.id))
-        grouped: dict[UUID, list[CurationChange]] = {}
-        for ch in rows.scalars().all():
-            grouped.setdefault(ch.commit_id, []).append(ch)
-        return grouped
 
     async def _tail_commits(self, checkpoint: tuple[datetime, str]) -> list[CurationCommit]:
         """Commits strictly after the checkpoint position (created_at, id)."""
@@ -273,32 +287,6 @@ class GitlleryService:
         max_pos = (tail[-1].created_at, tail[-1].id) if tail else None
         return pending, repo_desc, max_pos
 
-    async def _pending_count_by_repo(self, repository_id: str | None) -> tuple[dict[str, int], dict[str, RepoDescriptor]]:
-        resolver = RepoResolver(self.db)
-        await resolver.preload_work_sources()
-        projected_cache: dict[str, set[str]] = {}
-        repo_desc: dict[str, RepoDescriptor] = {}
-        pending: dict[str, int] = {}
-        changes_by_commit = await self._all_changes_by_commit()
-        for commit in await self._ordered_commits():
-            changes = changes_by_commit.get(commit.id, [])
-            sliced = await resolver.slice_changes(changes)
-            for rid, (desc, _changes) in sliced.items():
-                if repository_id is not None and rid != repository_id:
-                    continue
-                repo_desc[rid] = desc
-                if rid not in projected_cache:
-                    repo = self._repo_for(desc)
-                    # Disk chain walk (zlib per object) — keep it off the event loop.
-                    projected_cache[rid] = (
-                        await asyncio.to_thread(repo.projected_db_commit_ids)
-                        if repo.exists() else set())
-                if str(commit.id) not in projected_cache[rid]:
-                    pending[rid] = pending.get(rid, 0) + 1
-        for rid in repo_desc:
-            pending.setdefault(rid, 0)
-        return pending, repo_desc
-
     def _integrity_probe(self, repo: GitlleryRepo) -> bool:
         """Light-mode check: HEAD resolves and its commit object loads.
 
@@ -375,19 +363,20 @@ class GitlleryService:
         if cached is not None:
             return cached
         # Checkpoint fast path: only look at commits after P (verified-projected
-        # position). deep is the ground-truth path and never reads P.
-        checkpoint = None if deep else _read_checkpoint()
+        # position). There is deliberately NO full-history fallback here — that
+        # walk loaded every commit/change/work_source into the backend process
+        # (an OOM vector on a large library). When the checkpoint is absent
+        # (fresh redis, post-rebuild), pending counts are unknown and the caller
+        # must run the queued reconcile job, which recomputes ground truth in a
+        # worker and re-establishes the checkpoint.
+        checkpoint = _read_checkpoint()
+        needs_reconcile = checkpoint is None
         max_pos: tuple | None = None
         if checkpoint is not None:
             tail = await self._tail_commits(checkpoint)
             pending, repo_desc, max_pos = await self._pending_count_tail(repository_id, tail)
         else:
-            pending, repo_desc = await self._pending_count_by_repo(repository_id)
-            last = (await self.db.execute(
-                select(CurationCommit.created_at, CurationCommit.id)
-                .order_by(CurationCommit.created_at.desc(), CurationCommit.id.desc())
-                .limit(1))).first()
-            max_pos = (last[0], last[1]) if last else None
+            pending, repo_desc = {}, {}
         # Include repos that exist on disk / in DB even with zero history.
         for desc in await RepoResolver(self.db).all_repositories():
             if repository_id is None or desc.key() == repository_id:
@@ -414,14 +403,15 @@ class GitlleryService:
                 "behind": behind,
                 "object_integrity_ok": integrity,
                 "drift": drift,
-                "clean": exists and behind == 0 and integrity and not drift,
+                "clean": exists and behind == 0 and integrity and not drift and not needs_reconcile,
             })
         # Only a LIBRARY-WIDE clean result verifies the invariant for every
         # repo — per-repo status must never advance P.
-        if repository_id is None and behind_total == 0 and max_pos is not None:
+        if repository_id is None and not needs_reconcile and behind_total == 0 and max_pos is not None:
             _advance_checkpoint(max_pos[0], max_pos[1])
         result = {"repositories": repos_out, "missing_repos": missing,
-                  "behind_total": behind_total, "deep": deep}
+                  "behind_total": behind_total, "deep": deep,
+                  "needs_reconcile": needs_reconcile}
         cache_set(key, result, TTL["gitllery:status"])
         return result
 
@@ -515,6 +505,24 @@ def _invalidate_status_cache() -> None:
     """Drop all cached gitllery status payloads (any repo/deep combination)."""
     from app.services.cache import cache_delete_pattern
     cache_delete_pattern("gitllery:status:*")
+
+
+async def rebuild_checkpoint(db: AsyncSession) -> bool:
+    """Set the checkpoint to the newest commit position.
+
+    Only valid right after a full successful project_pending (the library is
+    fully projected at that instant). Called from the queued reconcile job so
+    status() never needs a full-history walk to re-establish P. May return
+    False when the newest commit is younger than the in-flight-tx clamp —
+    harmless: the next reconcile (or a later clean status) will set it.
+    """
+    last = (await db.execute(
+        select(CurationCommit.created_at, CurationCommit.id)
+        .order_by(CurationCommit.created_at.desc(), CurationCommit.id.desc())
+        .limit(1))).first()
+    if last is None:
+        return False
+    return _advance_checkpoint(last[0], last[1])
 
 
 async def project_commit_safe(db: AsyncSession, commit_id) -> None:

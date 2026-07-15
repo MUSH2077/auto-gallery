@@ -708,30 +708,47 @@ async def integrity_check(db: AsyncSession = Depends(get_db)):
 
     # 5. Dead links (asset records where file doesn't exist on disk)
     try:
-        result = await db.execute(text(
-            "SELECT a.id, a.file_path, a.file_name FROM assets a WHERE a.file_path IS NOT NULL"
-        ))
-        asset_rows = result.fetchall()
+        # Keyset-paged: fetchall over assets is O(rows) resident memory — an
+        # OOM vector on a large library. Batches keep memory O(batch).
+        dead_links: list[dict] = []
+        _DEAD_LINK_BATCH = 5000
+        _DEAD_LINK_MAX_ITEMS = 500  # cap the payload; count keeps going
+        dead_total = 0
+        last_id = None
+        while True:
+            q = ("SELECT a.id, a.file_path, a.file_name FROM assets a "
+                 "WHERE a.file_path IS NOT NULL ")
+            params: dict = {"lim": _DEAD_LINK_BATCH}
+            if last_id is not None:
+                q += "AND a.id > :last_id "
+                params["last_id"] = last_id
+            q += "ORDER BY a.id LIMIT :lim"
+            batch = (await db.execute(text(q), params)).fetchall()
+            if not batch:
+                break
+            last_id = batch[-1][0]
 
-        def _check_dead() -> list:
-            """One os.path.exists per asset — O(assets) stat calls, offloaded."""
-            found = []
-            for row in asset_rows:
-                fpath = row[1]
-                if fpath and not os.path.exists(fpath):
-                    found.append({
-                        "asset_id": str(row[0]),
-                        "file_path": fpath,
-                        "file_name": row[2],
-                    })
-            return found
+            def _check_batch(rows=batch) -> list:
+                found = []
+                for row in rows:
+                    fpath = row[1]
+                    if fpath and not os.path.exists(fpath):
+                        found.append({
+                            "asset_id": str(row[0]),
+                            "file_path": fpath,
+                            "file_name": row[2],
+                        })
+                return found
 
-        dead_links = await asyncio.to_thread(_check_dead)
-        if dead_links:
+            batch_dead = await asyncio.to_thread(_check_batch)
+            dead_total += len(batch_dead)
+            if len(dead_links) < _DEAD_LINK_MAX_ITEMS:
+                dead_links.extend(batch_dead[: _DEAD_LINK_MAX_ITEMS - len(dead_links)])
+        if dead_total:
             issues.append({
                 "type": "dead_links",
                 "severity": "error",
-                "count": len(dead_links),
+                "count": dead_total,
                 "description": "数据库记录指向不存在文件的死链",
                 "items": dead_links[:50],
             })
@@ -1170,10 +1187,17 @@ async def trigger_sync_now(data: SchedulerSyncNowRequest | None = None, db: Asyn
 # ── Search ──
 
 @router.post("/search/reindex")
-async def reindex_search(db: AsyncSession = Depends(get_db)):
-    from app.services.search import SearchService
-    svc = SearchService(db)
-    return await svc.reindex()
+async def reindex_search():
+    """Enqueue a full Meilisearch reindex — a whole-library walk that belongs
+    in a worker, not inline in the backend process."""
+    from app.services.operations import enqueue_admin_operation
+    return await enqueue_admin_operation(
+        lock_key="library:search-reindex:active",
+        operation_type="admin-search-reindex",
+        title="Search reindex",
+        entity="search-reindex",
+        func="app.jobs.admin_operations.run_search_reindex_operation",
+    )
 
 
 # ── Library ──
