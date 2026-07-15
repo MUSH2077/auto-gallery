@@ -115,8 +115,8 @@ export default function NotificationsPage() {
                     {pct !== null && task.status !== "complete" && (
                       <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-subtle dark:bg-border">
                         <div
-                          className="h-full rounded-full bg-accent transition-all duration-500"
-                          style={{ width: `${pct}%` }}
+                          className="h-full w-full rounded-full bg-accent transition-transform duration-slow"
+                          style={{ transform: `scaleX(${pct / 100})`, transformOrigin: "left" }}
                         />
                       </div>
                     )}

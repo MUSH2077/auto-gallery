@@ -588,8 +588,8 @@ export function NotificationBell() {
                               {batchJob.progress.current}/{batchJob.progress.total} · {batchJob.progress.imported} imported
                             </p>
                             <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-subtle dark:bg-border">
-                              <div className="h-full bg-accent rounded-full transition-all duration-500 ease-out"
-                                style={{ width: `${(batchJob.progress.current / batchJob.progress.total) * 100}%` }} />
+                              <div className="h-full w-full bg-accent rounded-full transition-transform duration-slow ease-out"
+                                style={{ transform: `scaleX(${batchJob.progress.current / batchJob.progress.total})`, transformOrigin: "left" }} />
                             </div>
                           </>
                         )}
@@ -634,8 +634,8 @@ export function NotificationBell() {
                         )}
                         {operationJob.progress?.total && operationJob.progress.current !== undefined && (
                           <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-subtle dark:bg-border">
-                            <div className="h-full bg-accent rounded-full transition-all duration-500 ease-out"
-                              style={{ width: `${(operationJob.progress.current / operationJob.progress.total) * 100}%` }} />
+                            <div className="h-full w-full bg-accent rounded-full transition-transform duration-slow ease-out"
+                              style={{ transform: `scaleX(${operationJob.progress.current / operationJob.progress.total})`, transformOrigin: "left" }} />
                           </div>
                         )}
                         {operationJob.result && (

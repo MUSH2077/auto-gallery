@@ -314,15 +314,8 @@
     from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: translateY(0); }
   }
-  @keyframes shimmer {
-    0% { background-position: -200% 0; }
-    100% { background-position: 200% 0; }
-  }
-  .skeleton {
-    background: linear-gradient(90deg, transparent 0%, rgb(var(--ag-muted) / 0.10) 50%, transparent 100%);
-    background-size: 200% 100%;
-    animation: shimmer 1.5s infinite;
-  }
+  /* Skeletons: Tailwind animate-pulse is the single skeleton treatment
+     (the old .skeleton/shimmer pair had zero consumers and was removed). */
   .page-item {
     opacity: 0;
     animation: fadeUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;

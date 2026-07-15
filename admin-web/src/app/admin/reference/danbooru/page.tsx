@@ -602,8 +602,8 @@ export default function DanbooruReferencePage() {
                   <span>Processing {displayBatchProgress.current}/{displayBatchProgress.total}</span>
                   <span>{displayBatchProgress.imported} imported, {displayBatchProgress.errors} errors</span>
                 </div>
-                <div className="w-full bg-subtle rounded-full h-2">
-                  <div className="bg-accent h-2 rounded-full transition-all" style={{ width: `${((displayBatchProgress?.current || 0) / (displayBatchProgress?.total || 1)) * 100}%` }} />
+                <div className="w-full overflow-hidden bg-subtle rounded-full h-2">
+                  <div className="bg-accent h-2 w-full rounded-full transition-transform duration-slow" style={{ transform: `scaleX(${(displayBatchProgress?.current || 0) / (displayBatchProgress?.total || 1)})`, transformOrigin: "left" }} />
                 </div>
               </div>
             )}

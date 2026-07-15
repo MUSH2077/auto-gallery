@@ -166,8 +166,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             {t.progress !== undefined && (
               <div className="h-1 w-full overflow-hidden rounded-full bg-current/15">
                 <div
-                  className={`h-full ${progressColors[t.type]} rounded-full transition-all duration-slow ease-out`}
-                  style={{ width: `${t.progress}%` }}
+                  className={`h-full w-full ${progressColors[t.type]} rounded-full transition-transform duration-slow ease-out`}
+                  style={{ transform: `scaleX(${(t.progress ?? 0) / 100})`, transformOrigin: "left" }}
                 />
               </div>
             )}

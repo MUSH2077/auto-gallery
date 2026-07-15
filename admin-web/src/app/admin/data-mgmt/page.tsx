@@ -257,7 +257,7 @@ export default function DataManagementPage() {
                         </span>
                       </div>
                       <div className="w-full h-3 bg-subtle rounded-full overflow-hidden">
-                        <div className="h-full rounded-full transition-all duration-500" style={{ width: `${Math.max(pct, 2)}%`, backgroundColor: color }} />
+                        <div className="h-full w-full rounded-full transition-transform duration-slow" style={{ transform: `scaleX(${Math.max(pct, 2) / 100})`, transformOrigin: "left", backgroundColor: color }} />
                       </div>
                     </div>
                   );
