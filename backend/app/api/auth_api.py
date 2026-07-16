@@ -19,7 +19,7 @@ from app.auth import (
 from app.database import get_db
 from app.models.user import User
 from app.permissions import PERMISSION_MODULES
-from app.schemas.users import MeOut, PreferencesIn
+from app.schemas.users import MeOut, PreferencesIn, PreferencesOut
 from app.services.rate_limiter import RateLimiter
 from app.services.tasks import TaskService
 from app.services.ws_tickets import issue_ws_ticket
@@ -135,7 +135,7 @@ async def me(current_user: User = Depends(get_current_user)):
     )
 
 
-@router.put("/me/preferences")
+@router.put("/me/preferences", response_model=PreferencesOut)
 async def update_my_preferences(
     body: PreferencesIn,
     current_user: User = Depends(get_current_user),
@@ -151,7 +151,7 @@ async def update_my_preferences(
     # Re-fetch in this session to avoid detached instance
     result = await session.execute(select(User).where(User.id == current_user.id))
     user = result.scalars().first()
-    user.preferences = {**(user.preferences or {}), **body.preferences}
+    user.preferences = dict(body.preferences)
     await session.commit()
     return {"preferences": user.preferences}
 

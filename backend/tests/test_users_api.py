@@ -208,3 +208,84 @@ async def test_reset_password_round_trip_logs_in_with_new_password():
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_put_preferences_whole_replace():
+    """Test that PUT /me/preferences performs whole-replace, not merge."""
+    from app.database import async_session, engine
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            user = await _seed_user(db, f"{PREFIX}pref_test")
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = _headers(user.username)
+
+            # PUT with theme + lang
+            r = await client.put(
+                "/api/v1/auth/me/preferences",
+                json={"preferences": {"theme": "dark", "lang": "zh"}},
+                headers=headers,
+            )
+            assert r.status_code == 200
+            assert r.json() == {"preferences": {"theme": "dark", "lang": "zh"}}
+
+            # Verify via GET /me
+            r = await client.get("/api/v1/auth/me", headers=headers)
+            assert r.status_code == 200
+            assert r.json()["preferences"] == {"theme": "dark", "lang": "zh"}
+
+            # PUT with only theme (whole-replace: lang should be gone)
+            r = await client.put(
+                "/api/v1/auth/me/preferences",
+                json={"preferences": {"theme": "light"}},
+                headers=headers,
+            )
+            assert r.status_code == 200
+            assert r.json() == {"preferences": {"theme": "light"}}
+
+            # Verify via GET /me
+            r = await client.get("/api/v1/auth/me", headers=headers)
+            assert r.status_code == 200
+            prefs = r.json()["preferences"]
+            assert prefs == {"theme": "light"}
+            assert "lang" not in prefs, "lang should not exist after whole-replace"
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_put_preferences_rejects_invalid_keys():
+    """Test that PUT /me/preferences rejects invalid preference keys."""
+    from app.database import async_session, engine
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            user = await _seed_user(db, f"{PREFIX}pref_invalid")
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = _headers(user.username)
+
+            # Try to set an invalid key
+            r = await client.put(
+                "/api/v1/auth/me/preferences",
+                json={"preferences": {"evil_key": 1}},
+                headers=headers,
+            )
+            assert r.status_code == 400
+            assert "invalid preference key" in r.json()["detail"]
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()

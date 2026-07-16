@@ -61,3 +61,7 @@ class MeOut(BaseModel):
 
 class PreferencesIn(BaseModel):
     preferences: dict
+
+
+class PreferencesOut(BaseModel):
+    preferences: dict
