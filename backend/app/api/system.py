@@ -30,6 +30,9 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[RequirePermission("system")])
+# Scheduler/queue operations belong to the `tasks` module per spec §A2
+# (jobs/scheduler/notifications/tasks -> tasks), not `system`.
+tasks_ops_router = APIRouter(dependencies=[RequirePermission("tasks")])
 
 DOWNLOAD_RUNNING_STATUSES = {"enqueued", "downloading", "downloaded", "importing"}
 IMPORT_RUNNING_STATUSES = {"enqueued", "running"}
@@ -236,7 +239,7 @@ async def storage_stats():
     return result
 
 
-@router.get("/system/queue-stats")
+@tasks_ops_router.get("/system/queue-stats")
 async def queue_stats():
     try:
         from app.database import async_session
@@ -453,7 +456,7 @@ async def workbench_summary(db: AsyncSession = Depends(get_db)):
     }
 
 
-@router.get("/system/scheduler-decisions")
+@tasks_ops_router.get("/system/scheduler-decisions")
 async def scheduler_decisions(db: AsyncSession = Depends(get_db)):
     """Explain current scheduler decisions at subscription-source granularity.
 
@@ -556,7 +559,7 @@ async def get_logs(limit: int = 200, level: str | None = None, name: str | None 
     return {"entries": entries, "total": len(entries), "levels": levels}
 
 
-@router.post("/system/clear-failed-jobs")
+@tasks_ops_router.post("/system/clear-failed-jobs")
 async def clear_failed_jobs():
     """Remove all failed jobs from Redis registries."""
     import redis as redis_lib

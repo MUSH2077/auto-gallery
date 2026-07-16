@@ -11,6 +11,7 @@ import { scheduleModeLabel, schedulerDecisionLabel, useI18nFormat } from "@/lib/
 import { PageHeader, EmptyState, ErrorState, SourceBadge, StatusBadge, PermissionGuard } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useNotifications } from "@/components/NotificationCenter";
+import { usePermissions } from "@/lib/usePermissions";
 
 function decisionTone(item: SchedulerDecisionItem): string {
   if (item.due) return "border-accent/30 bg-accent-subtle text-accent dark:border-accent/30 dark:bg-accent-subtle dark:text-accent";
@@ -73,6 +74,7 @@ function AdminOperationsSection() {
   const toast = useToast();
   const qc = useQueryClient();
   const notify = useNotifications();
+  const { has } = usePermissions();
 
   const ops = useQuery({
     queryKey: [...queryKeys.tasks.all, "admin", "scheduler"],
@@ -98,10 +100,12 @@ function AdminOperationsSection() {
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-base font-semibold">{t("scheduler.admin_operations")}</h2>
         <div className="flex gap-2">
-          <button onClick={() => rebuild.mutate()} disabled={rebuild.isPending}
-            className="btn-ghost px-3 py-1.5 text-xs">
-            {rebuild.isPending ? t("scheduler.rebuilding") : t("scheduler.rebuild_library")}
-          </button>
+          {has("system") && (
+            <button onClick={() => rebuild.mutate()} disabled={rebuild.isPending}
+              className="btn-ghost px-3 py-1.5 text-xs">
+              {rebuild.isPending ? t("scheduler.rebuilding") : t("scheduler.rebuild_library")}
+            </button>
+          )}
           <button onClick={() => ops.refetch()} className="btn-ghost px-2 py-1 text-xs">
             {t("scheduler.refresh")}
           </button>
@@ -146,6 +150,7 @@ export default function SchedulerPage() {
   const fmt = useI18nFormat();
   const toast = useToast();
   const qc = useQueryClient();
+  const { has } = usePermissions();
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
@@ -408,20 +413,24 @@ export default function SchedulerPage() {
         {selected.size > 0 && (
           <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/30 bg-warning-subtle px-4 py-2 dark:bg-warning-subtle">
             <span className="text-xs font-medium text-warning dark:text-warning">{t("common.selected_count", { count: selected.size })}</span>
-            <button
-              onClick={() => handleBatchToggle(false)}
-              disabled={batchToggleSources.isPending}
-              className="rounded px-3 py-1 text-xs font-medium bg-danger text-white hover:bg-danger disabled:opacity-50"
-            >
-              {batchToggleSources.isPending ? "..." : t("scheduler.batch_disable_sync")}
-            </button>
-            <button
-              onClick={() => handleBatchToggle(true)}
-              disabled={batchToggleSources.isPending}
-              className="rounded px-3 py-1 text-xs font-medium bg-success text-white hover:bg-[#116329] disabled:opacity-50"
-            >
-              {batchToggleSources.isPending ? "..." : t("scheduler.batch_enable_sync")}
-            </button>
+            {has("subscriptions") && (
+              <>
+                <button
+                  onClick={() => handleBatchToggle(false)}
+                  disabled={batchToggleSources.isPending}
+                  className="rounded px-3 py-1 text-xs font-medium bg-danger text-white hover:bg-danger disabled:opacity-50"
+                >
+                  {batchToggleSources.isPending ? "..." : t("scheduler.batch_disable_sync")}
+                </button>
+                <button
+                  onClick={() => handleBatchToggle(true)}
+                  disabled={batchToggleSources.isPending}
+                  className="rounded px-3 py-1 text-xs font-medium bg-success text-white hover:bg-[#116329] disabled:opacity-50"
+                >
+                  {batchToggleSources.isPending ? "..." : t("scheduler.batch_enable_sync")}
+                </button>
+              </>
+            )}
             <button onClick={() => { setSelected(new Set()); setSelectAll(false); }} className="ml-auto text-xs text-warning hover:underline dark:text-warning">{t("common.deselect_all")}</button>
           </div>
         )}
@@ -475,7 +484,9 @@ export default function SchedulerPage() {
                       <Link href={`/admin/repositories/${item.source_id}`} className="text-accent hover:underline dark:text-accent">{t("scheduler.open_repository")}</Link>
                       <Link href={`/admin/jobs?tab=downloads&subscription_source_id=${item.source_id}`} className="text-accent hover:underline dark:text-accent">{t("scheduler.open_jobs")}</Link>
                       <Link href={`/admin/subscriptions/${item.subscription_id}`} className="text-accent hover:underline dark:text-accent">{t("scheduler.manage")}</Link>
-                      <button onClick={() => syncRepo.mutate(item.source_id)} disabled={syncRepo.isPending} className="text-accent hover:underline disabled:opacity-50 dark:text-accent">{t("scheduler.sync_this_repo")}</button>
+                      {has("library") && (
+                        <button onClick={() => syncRepo.mutate(item.source_id)} disabled={syncRepo.isPending} className="text-accent hover:underline disabled:opacity-50 dark:text-accent">{t("scheduler.sync_this_repo")}</button>
+                      )}
                     </div>
                   </div>
                 </div>

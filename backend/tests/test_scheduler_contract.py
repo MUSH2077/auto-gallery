@@ -145,9 +145,12 @@ def test_schedule_decision_snapshot_manual_has_no_next_due():
 
 
 def test_system_router_exposes_workbench_and_scheduler_decisions_routes():
-    from app.api.system import router
+    # scheduler-decisions moved to `tasks_ops_router` (Task 6 fix round 1:
+    # scheduler operations belong to the `tasks` permission module, not
+    # `system`) — check both routers defined in app.api.system.
+    from app.api.system import router, tasks_ops_router
 
-    paths = {route.path for route in router.routes}
+    paths = {route.path for route in router.routes} | {route.path for route in tasks_ops_router.routes}
     assert "/system/workbench" in paths
     assert "/system/scheduler-decisions" in paths
 

@@ -32,6 +32,11 @@ from app.services.operations import get_operation_status, set_operation_status
 from app.services.redis_client import get_redis
 
 router = APIRouter(dependencies=[RequirePermission("system")])
+# Dedup/merge-candidates endpoints belong to the `curation` module per spec
+# §A2 (dedup/merge are curation operations, not system settings).
+curation_ops_router = APIRouter(dependencies=[RequirePermission("curation")])
+# Scheduler-operation endpoints belong to the `tasks` module per spec §A2.
+tasks_ops_router = APIRouter(dependencies=[RequirePermission("tasks")])
 _clear_files = admin_data._clear_files
 
 # ── Settings schemas ──
@@ -1059,7 +1064,7 @@ class SchedulerSyncNowRequest(BaseModel):
     mode: Literal["force_eligible", "due_scan"] = "force_eligible"
 
 
-@router.post("/scheduler/sync-now")
+@tasks_ops_router.post("/scheduler/sync-now")
 async def trigger_sync_now(data: SchedulerSyncNowRequest | None = None, db: AsyncSession = Depends(get_db)):
     """Manually trigger subscription sync work.
 
@@ -2056,7 +2061,7 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
 
 # ── Dedup ──
 
-@router.get("/dedup/duplicates")
+@curation_ops_router.get("/dedup/duplicates")
 async def list_duplicates():
     from app.database import async_session
     from app.models import WorkSource
@@ -2085,7 +2090,7 @@ async def list_duplicates():
         return {"duplicates": duplicates, "total": len(duplicates)}
 
 
-@router.post("/dedup/scan")
+@curation_ops_router.post("/dedup/scan")
 async def scan_duplicates():
     from app.database import async_session
     from app.models import WorkSource
@@ -2107,7 +2112,7 @@ async def scan_duplicates():
 
 # ── Merge Candidates ──
 
-@router.get("/merge-candidates")
+@curation_ops_router.get("/merge-candidates")
 async def list_merge_candidates():
     from app.database import async_session
     from app.models import Work, WorkSource

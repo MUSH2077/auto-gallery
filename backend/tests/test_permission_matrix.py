@@ -125,3 +125,42 @@ async def test_unauthenticated_is_401_on_every_module():
                 assert r.status_code == 401, f"anon -> {path}: {r.status_code} {r.text}"
     finally:
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_moved_endpoints_pinned_to_curation_and_tasks():
+    """Regression pin (Task 6 fix round 1): dedup/merge-candidates were moved
+    from `system` to `curation`, and scheduler/queue-stats operations from
+    `system` to `tasks`, per spec §A2. Verify the new module boundary holds
+    and the old `system` permission no longer grants access.
+    """
+    from app.database import async_session, engine
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            await _seed_user(db, f"{PREFIX}curation_pin", permissions=["curation"])
+            await _seed_user(db, f"{PREFIX}tasks_pin", permissions=["tasks"])
+            await _seed_user(db, f"{PREFIX}system_pin", permissions=["system"])
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            curation_headers = _headers(f"{PREFIX}curation_pin")
+            tasks_headers = _headers(f"{PREFIX}tasks_pin")
+            system_headers = _headers(f"{PREFIX}system_pin")
+
+            r = await client.get("/api/v1/admin/dedup/duplicates", headers=curation_headers)
+            assert r.status_code == 200, f"curation -> dedup/duplicates: {r.status_code} {r.text}"
+            r = await client.get("/api/v1/admin/dedup/duplicates", headers=system_headers)
+            assert r.status_code == 403, f"system -> dedup/duplicates: {r.status_code} {r.text}"
+
+            r = await client.get("/api/v1/system/queue-stats", headers=tasks_headers)
+            assert r.status_code == 200, f"tasks -> queue-stats: {r.status_code} {r.text}"
+            r = await client.get("/api/v1/system/queue-stats", headers=system_headers)
+            assert r.status_code == 403, f"system -> queue-stats: {r.status_code} {r.text}"
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
