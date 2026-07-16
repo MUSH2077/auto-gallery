@@ -76,6 +76,45 @@ async def get_admin_key(
 RequireAdmin = Depends(get_admin_key)
 
 
+# ── Per-user permission dependencies ──────────────────────────────────────────
+
+async def _load_active_user(username: str):
+    from sqlalchemy import select
+    from app.database import async_session
+    from app.models.user import User
+    async with async_session() as session:
+        user = (await session.execute(select(User).where(User.username == username))).scalar_one_or_none()
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="Invalid or missing credentials")
+    return user
+
+
+def RequirePermission(module: str):
+    async def _check(
+        request: Request,
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ):
+        username = await get_admin_key(request, credentials)  # existing 401 + pwd-change logic
+        user = await _load_active_user(username)
+        if user.is_admin or module in (user.permissions or []):
+            return user
+        raise HTTPException(status_code=403, detail=f"Missing permission: {module}")
+    return Depends(_check)
+
+
+async def _admin_user(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+):
+    username = await get_admin_key(request, credentials)
+    user = await _load_active_user(username)
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user
+
+RequireAdminUser = Depends(_admin_user)
+
+
 # ── Admin user bootstrap ──────────────────────────────────────────────────────
 
 async def ensure_admin_user() -> None:
@@ -100,6 +139,7 @@ async def ensure_admin_user() -> None:
                 password_hash=hash_password(bootstrap_password),
                 display_name="Administrator",
                 is_active=True,
+                is_admin=True,
                 must_change_password=True,
             )
             session.add(admin)

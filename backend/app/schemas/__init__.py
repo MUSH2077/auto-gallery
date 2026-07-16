@@ -9,6 +9,7 @@ from app.schemas.import_job import ImportJobRead
 from app.schemas.work import WorkRead, WorkList
 from app.schemas.asset import AssetRead
 from app.schemas.tag import TagRead
+from app.schemas.users import UserOut, UserCreate, UserUpdate, ResetPasswordOut, MeOut, PreferencesIn
 
 __all__ = [
     "HealthResponse", "ServiceStatus",
@@ -22,4 +23,5 @@ __all__ = [
     "WorkRead", "WorkList",
     "AssetRead",
     "TagRead",
+    "UserOut", "UserCreate", "UserUpdate", "ResetPasswordOut", "MeOut", "PreferencesIn",
 ]

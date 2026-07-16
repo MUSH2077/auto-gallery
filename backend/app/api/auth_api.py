@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import (
@@ -18,9 +18,13 @@ from app.auth import (
 )
 from app.database import get_db
 from app.models.user import User
+from app.permissions import PERMISSION_MODULES
+from app.schemas.users import MeOut, PreferencesIn
 from app.services.rate_limiter import RateLimiter
 from app.services.tasks import TaskService
 from app.services.ws_tickets import issue_ws_ticket
+
+_ALLOWED_PREFERENCE_KEYS = {"theme", "palette", "lang", "appearance"}
 
 logger = logging.getLogger(__name__)
 
@@ -41,14 +45,6 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     must_change_password: bool = False
-
-
-class UserResponse(BaseModel):
-    id: int
-    username: str
-    display_name: str | None
-    is_active: bool
-    must_change_password: bool
 
 
 class ChangePasswordRequest(BaseModel):
@@ -104,7 +100,11 @@ async def login(body: LoginRequest, request: Request, session: AsyncSession = De
     must_change_password = bool(user.must_change_password)
     token = create_access_token(user.username, must_change_password=must_change_password)
 
-    # Best-effort account audit — never block login if recording fails.
+    user.last_login_at = func.now()
+    await session.commit()
+
+    # Best-effort account audit, in its own transaction after the login commit —
+    # never block login if recording fails.
     try:
         await TaskService(session).record_account_event(
             action="login", username=user.username, user_id=user.id, ip=client_ip,
@@ -117,15 +117,43 @@ async def login(body: LoginRequest, request: Request, session: AsyncSession = De
     return TokenResponse(access_token=token, must_change_password=must_change_password)
 
 
-@router.get("/me", response_model=UserResponse)
+@router.get("/me", response_model=MeOut)
 async def me(current_user: User = Depends(get_current_user)):
-    return UserResponse(
+    return MeOut(
         id=current_user.id,
         username=current_user.username,
         display_name=current_user.display_name,
+        is_admin=current_user.is_admin,
         is_active=current_user.is_active,
+        permissions=current_user.permissions or [],
+        modules=PERMISSION_MODULES,
+        preferences=current_user.preferences or {},
+        nsfw_visible=current_user.nsfw_visible,
+        upload_quota_bytes=current_user.upload_quota_bytes,
+        upload_used_bytes=current_user.upload_used_bytes,
         must_change_password=bool(current_user.must_change_password),
     )
+
+
+@router.put("/me/preferences")
+async def update_my_preferences(
+    body: PreferencesIn,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    invalid = set(body.preferences) - _ALLOWED_PREFERENCE_KEYS
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"invalid preference key(s): {', '.join(sorted(invalid))}",
+        )
+
+    # Re-fetch in this session to avoid detached instance
+    result = await session.execute(select(User).where(User.id == current_user.id))
+    user = result.scalars().first()
+    user.preferences = {**(user.preferences or {}), **body.preferences}
+    await session.commit()
+    return {"preferences": user.preferences}
 
 
 @router.post("/ws-ticket", response_model=WebSocketTicketResponse)

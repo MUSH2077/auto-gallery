@@ -16,6 +16,7 @@ from app.api.repositories import router as repositories_router
 from app.api.curation import router as curation_router
 from app.api.ws import router as ws_router
 from app.api.tasks import router as tasks_router
+from app.api.users import router as users_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(ws_router, tags=["websocket"])
@@ -34,3 +35,4 @@ api_router.include_router(works_router, prefix="/works", tags=["works"])
 api_router.include_router(tags_router, prefix="/tags", tags=["tags"])
 api_router.include_router(search_router, prefix="/search", tags=["search"])
 api_router.include_router(admin_router, prefix="/admin", tags=["admin"])
+api_router.include_router(users_router, prefix="/users", tags=["users"])
