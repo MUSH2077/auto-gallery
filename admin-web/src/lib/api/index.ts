@@ -389,6 +389,29 @@ export const api = {
   deleteImportJob: (id: string) =>
     request<{ status: string }>(`/api/v1/import-jobs/${id}`, { method: "DELETE" }),
 
+  // Users (multi-user management, admin-only)
+  listUsers: () => request<T.UserAccount[]>("/api/v1/users"),
+
+  createUser: (data: { username: string; password: string; display_name?: string; is_admin?: boolean; permissions?: string[] }) =>
+    request<T.UserAccount>("/api/v1/users", { method: "POST", body: JSON.stringify(data) }),
+
+  getUser: (id: number) => request<T.UserAccount>(`/api/v1/users/${id}`),
+
+  updateUser: (id: number, data: Record<string, unknown>) =>
+    request<T.UserAccount>(`/api/v1/users/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+
+  deleteUser: (id: number) =>
+    request<{ status: string }>(`/api/v1/users/${id}`, { method: "DELETE" }),
+
+  resetUserPassword: (id: number) =>
+    request<{ password: string }>(`/api/v1/users/${id}/reset-password`, { method: "POST" }),
+
+  // Me (current-user profile)
+  getMe: () => request<T.Me>("/api/v1/auth/me"),
+
+  updateMyPreferences: (preferences: Record<string, unknown>) =>
+    request<{ preferences: Record<string, unknown> }>("/api/v1/auth/me/preferences", { method: "PUT", body: JSON.stringify({ preferences }) }),
+
   // Admin
   getAdminSettings: () => request<T.AdminSettings>("/api/v1/admin/settings"),
 
@@ -692,6 +715,11 @@ export const queryKeys = {
     duplicates: ["dedup", "duplicates"] as const,
     mergeCandidates: ["dedup", "merge-candidates"] as const,
   },
+  users: {
+    all: ["users"] as const,
+    detail: (id: number) => ["users", id] as const,
+  },
+  me: ["me"] as const,
 } as const;
 
 // ── Auth ──────────────────────────────────────────────────────────────────────

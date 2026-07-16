@@ -917,6 +917,38 @@ export interface GitlleryRebuildReport {
   status?: string | null;
 }
 
+// ── Users (multi-user management) ──
+
+export interface UserAccount {
+  id: number;
+  username: string;
+  display_name?: string | null;
+  is_admin: boolean;
+  is_active: boolean;
+  permissions: string[];
+  nsfw_visible: boolean;
+  upload_quota_bytes: number | null;
+  upload_used_bytes: number;
+  must_change_password: boolean;
+  last_login_at?: string | null;
+  created_at: string;
+}
+
+export interface Me {
+  id: number;
+  username: string;
+  display_name?: string | null;
+  is_admin: boolean;
+  is_active: boolean;
+  permissions: string[];
+  modules: Record<string, string>;
+  preferences: Record<string, unknown>;
+  nsfw_visible: boolean;
+  upload_quota_bytes: number | null;
+  upload_used_bytes: number;
+  must_change_password: boolean;
+}
+
 export type GeneratedWork = components["schemas"]["WorkRead"];
 export type GeneratedWorkList = components["schemas"]["WorkList"];
 export type GeneratedAsset = components["schemas"]["AssetRead"];

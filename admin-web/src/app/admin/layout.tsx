@@ -2,6 +2,8 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
+import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { ThemeToggle, LangToggle, PaletteToggle } from "@/lib/theme";
 import { useAuth } from "@/lib/auth";
@@ -71,12 +73,19 @@ function AdminNav() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const { mounted: menuMounted, closing: menuClosing } = usePresence(open);
+  const me = useQuery({ queryKey: queryKeys.me, queryFn: api.getMe });
+  const adminGroupLinks: [string, string][] = [
+    ["/admin/data-mgmt", t("nav.datamgmt")],
+    ["/admin/system", t("nav.system")],
+    ["/admin/settings", t("nav.settings")],
+  ];
+  if (me.data?.is_admin) adminGroupLinks.push(["/admin/users", t("nav.users")]);
   const groups = [
     { label: t("nav.dashboard"), links: [["/admin", t("nav.dashboard")]] },
     { label: t("nav.library"), links: [["/admin/works", t("nav.works")], ["/admin/tags", t("nav.tags")], ["/admin/curation", t("nav.curation")], ["/admin/dedup", t("nav.dedup")], ["/admin/merge-candidates", t("nav.merge")]] },
     { label: t("nav.sources"), links: [["/admin/sources", t("nav.sources")], ["/admin/creators", t("nav.creators")], ["/admin/subscriptions", t("nav.subscriptions")], ["/admin/reference/danbooru", t("nav.danbooru")]] },
     { label: t("nav.operations"), links: [["/admin/jobs", t("nav.jobs")], ["/admin/scheduler", t("nav.scheduler")], ["/admin/notifications", t("notifications.title")]] },
-    { label: t("nav.admin"), links: [["/admin/data-mgmt", t("nav.datamgmt")], ["/admin/system", t("nav.system")], ["/admin/settings", t("nav.settings")]] },
+    { label: t("nav.admin"), links: adminGroupLinks },
   ];
   const links = groups.flatMap((group) => group.links);
   const isActive = (href: string) => pathname === href || (href !== "/admin" && pathname.startsWith(href));
