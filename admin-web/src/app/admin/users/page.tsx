@@ -114,7 +114,7 @@ export default function UsersPage() {
 
   return (
     <PageShell size="normal">
-      <PageHeader title={t("users.title")} description={t("users.count").replace("{count}", String(users.data?.length ?? 0))}>
+      <PageHeader title={t("users.title")} description={t("users.count", { count: users.data?.length ?? 0 })}>
         <button onClick={() => setShowCreate(true)} className="btn-primary">{t("users.new")}</button>
       </PageHeader>
 
@@ -136,7 +136,7 @@ export default function UsersPage() {
               style={!listEntered.current ? ({ "--delay": staggerDelay(i) } as React.CSSProperties) : undefined}
               onClick={() => router.push(`/admin/users/${u.id}`)}>
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-accent text-sm font-semibold text-white dark:border-border">
-                {(u.display_name || u.username).slice(0, 2).toUpperCase()}
+                {(u.display_name || u.username).trim().slice(0, 2).toUpperCase()}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex flex-wrap items-center gap-2">

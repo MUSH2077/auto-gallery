@@ -65,7 +65,7 @@ export default function UserDetailPage() {
       toast.success({ message: t("notification.deleted") });
       router.push("/admin/users");
     },
-    onError: (e: Error) => { toast.error({ message: e.message }); setConfirmDelete(false); },
+    onError: (e: Error) => toast.error({ message: e.message }),
   });
 
   const resetPw = useMutation({
@@ -134,7 +134,7 @@ export default function UserDetailPage() {
               <label className="mb-1 block text-sm font-medium">{t("user_detail.display_name_field")}</label>
               <div className="flex gap-2">
                 <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="input flex-1" />
-                <button onClick={() => update.mutate({ display_name: displayName || undefined })} disabled={!displayNameDirty || update.isPending} className="btn-primary shrink-0">
+                <button onClick={() => update.mutate({ display_name: displayName.trim() === "" ? null : displayName.trim() })} disabled={!displayNameDirty || update.isPending} className="btn-primary shrink-0">
                   {update.isPending ? t("common.saving") : t("common.save")}
                 </button>
               </div>
