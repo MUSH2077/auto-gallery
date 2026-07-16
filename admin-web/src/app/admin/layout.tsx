@@ -2,16 +2,37 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
-import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { ThemeToggle, LangToggle, PaletteToggle } from "@/lib/theme";
 import { useAuth } from "@/lib/auth";
+import { usePermissions } from "@/lib/usePermissions";
 import { usePresence } from "@/lib/motion";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { NotificationBell } from "@/components/NotificationCenter";
 
 export const dynamic = 'force-dynamic';
+
+// Nav href -> permission module. Links with no entry here (dashboard, users —
+// users is separately gated by is_admin below) are always shown once logged in.
+const LINK_MODULE: Record<string, string> = {
+  "/admin/works": "library",
+  "/admin/tags": "library",
+  "/admin/creators": "library",
+  "/admin/search": "library",
+  "/admin/curation": "curation",
+  "/admin/dedup": "curation",
+  "/admin/merge-candidates": "curation",
+  "/admin/sources": "subscriptions",
+  "/admin/subscriptions": "subscriptions",
+  "/admin/reference/danbooru": "subscriptions",
+  "/admin/jobs": "tasks",
+  "/admin/import-jobs": "tasks",
+  "/admin/scheduler": "tasks",
+  "/admin/notifications": "tasks",
+  "/admin/data-mgmt": "system",
+  "/admin/system": "system",
+  "/admin/settings": "system",
+};
 
 function UserMenu() {
   const t = useT();
@@ -73,22 +94,33 @@ function AdminNav() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const { mounted: menuMounted, closing: menuClosing } = usePresence(open);
-  const me = useQuery({ queryKey: queryKeys.me, queryFn: api.getMe });
+  const { isAdmin, has } = usePermissions();
   const adminGroupLinks: [string, string][] = [
     ["/admin/data-mgmt", t("nav.datamgmt")],
     ["/admin/system", t("nav.system")],
     ["/admin/settings", t("nav.settings")],
   ];
-  if (me.data?.is_admin) adminGroupLinks.push(["/admin/users", t("nav.users")]);
-  const groups = [
+  if (isAdmin) adminGroupLinks.push(["/admin/users", t("nav.users")]);
+  const rawGroups = [
     { label: t("nav.dashboard"), links: [["/admin", t("nav.dashboard")]] },
     { label: t("nav.library"), links: [["/admin/works", t("nav.works")], ["/admin/tags", t("nav.tags")], ["/admin/curation", t("nav.curation")], ["/admin/dedup", t("nav.dedup")], ["/admin/merge-candidates", t("nav.merge")]] },
     { label: t("nav.sources"), links: [["/admin/sources", t("nav.sources")], ["/admin/creators", t("nav.creators")], ["/admin/subscriptions", t("nav.subscriptions")], ["/admin/reference/danbooru", t("nav.danbooru")]] },
     { label: t("nav.operations"), links: [["/admin/jobs", t("nav.jobs")], ["/admin/scheduler", t("nav.scheduler")], ["/admin/notifications", t("notifications.title")]] },
     { label: t("nav.admin"), links: adminGroupLinks },
   ];
+  // Filter out links whose module the user lacks; drop groups left empty.
+  const groups = rawGroups
+    .map((group) => ({
+      ...group,
+      links: group.links.filter(([href]) => {
+        const module = LINK_MODULE[href];
+        return !module || has(module);
+      }),
+    }))
+    .filter((group) => group.links.length > 0);
   const links = groups.flatMap((group) => group.links);
   const isActive = (href: string) => pathname === href || (href !== "/admin" && pathname.startsWith(href));
+  const showSearchLink = has("library");
 
   return (
     <nav className="bg-nav text-nav-fg px-4 sm:px-6 py-3 border-b border-nav-fg/15">
@@ -106,12 +138,14 @@ function AdminNav() {
           ))}
         </div>
         <div className="flex items-center gap-1 shrink-0 ml-auto">
-          <Link href="/admin/search" className="p-1.5 rounded-md hover:bg-nav-fg/10 transition-colors" title={t("nav.search")} aria-label={t("nav.search")}>
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8" />
-              <path d="M21 21l-4.3-4.3" />
-            </svg>
-          </Link>
+          {showSearchLink && (
+            <Link href="/admin/search" className="p-1.5 rounded-md hover:bg-nav-fg/10 transition-colors" title={t("nav.search")} aria-label={t("nav.search")}>
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8" />
+                <path d="M21 21l-4.3-4.3" />
+              </svg>
+            </Link>
+          )}
           <NotificationBell />
           <LangToggle />
           <PaletteToggle />
@@ -137,8 +171,10 @@ function AdminNav() {
               ))}
             </div>
           ))}
-          <Link href="/admin/search" onClick={() => setOpen(false)}
-            className="hover:bg-nav-fg/10 hover:text-nav-fg rounded-md transition-colors px-2 py-1 text-sm">{t("nav.search")}</Link>
+          {showSearchLink && (
+            <Link href="/admin/search" onClick={() => setOpen(false)}
+              className="hover:bg-nav-fg/10 hover:text-nav-fg rounded-md transition-colors px-2 py-1 text-sm">{t("nav.search")}</Link>
+          )}
         </div>
       )}
     </nav>

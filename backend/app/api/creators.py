@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from app.auth import RequireAdmin
+from app.auth import RequirePermission
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +23,7 @@ from app.services.cache import (
 from app.services.curation import CurationService
 from app.services.gitllery import project_commit_safe
 
-router = APIRouter(dependencies=[RequireAdmin])
+router = APIRouter(dependencies=[RequirePermission("library")])
 
 @router.get("/count")
 async def count_creators(db: AsyncSession = Depends(get_db)):

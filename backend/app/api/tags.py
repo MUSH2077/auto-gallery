@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from app.auth import RequireAdmin
+from app.auth import RequirePermission
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,7 +12,7 @@ from app.models.tag import Tag
 from app.models.work_tag import WorkTag
 from app.models.work_source_tag import WorkSourceTag
 
-router = APIRouter(dependencies=[RequireAdmin])
+router = APIRouter(dependencies=[RequirePermission("library")])
 
 
 @router.get("", response_model=list[TagRead])

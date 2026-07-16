@@ -5,7 +5,7 @@ import { Suspense, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CurationCommit, queryKeys } from "@/lib/api";
-import { EmptyState, ErrorState, PageHeader } from "@/components";
+import { EmptyState, ErrorState, PageHeader, PermissionGuard } from "@/components";
 import { useT } from "@/lib/i18n";
 
 function formatBytes(bytes: number) {
@@ -308,8 +308,10 @@ function CurationContent() {
 
 export default function CurationPage() {
   return (
-    <Suspense>
-      <CurationContent />
-    </Suspense>
+    <PermissionGuard module="curation">
+      <Suspense>
+        <CurationContent />
+      </Suspense>
+    </PermissionGuard>
   );
 }

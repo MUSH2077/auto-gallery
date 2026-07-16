@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import RequireAdmin
+from app.auth import RequirePermission
 from app.database import get_db
 from app.models.asset_source import AssetSource
 from app.models.creator import Creator
@@ -19,7 +19,7 @@ from app.schemas.curation import RepositoryGraphResponse
 from app.services.curation import CurationService
 from app.services.subscription_enqueue import enqueue_subscription_source_sync
 
-router = APIRouter(dependencies=[RequireAdmin])
+router = APIRouter(dependencies=[RequirePermission("library")])
 
 RUNNING_STATUSES = {"enqueued", "downloading", "downloaded", "importing"}
 

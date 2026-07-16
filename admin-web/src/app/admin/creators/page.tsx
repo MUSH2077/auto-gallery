@@ -3,7 +3,7 @@ import { useState, useMemo, useEffect, useRef, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { staggerDelay } from "@/lib/motion";
-import { PageHeader, EmptyState, ErrorState, ConfirmDialog, Modal, FilterBar, SelectionBar, PageShell } from "@/components";
+import { PageHeader, EmptyState, ErrorState, ConfirmDialog, Modal, FilterBar, SelectionBar, PageShell, PermissionGuard } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useT } from "@/lib/i18n";
@@ -337,8 +337,10 @@ function CreatorsContent() {
 
 export default function CreatorsPage() {
   return (
-    <Suspense>
-      <CreatorsContent />
-    </Suspense>
+    <PermissionGuard module="library">
+      <Suspense>
+        <CreatorsContent />
+      </Suspense>
+    </PermissionGuard>
   );
 }

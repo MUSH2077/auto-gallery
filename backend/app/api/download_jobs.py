@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from app.auth import RequireAdmin, get_admin_key
+from app.auth import RequirePermission, get_admin_key
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -11,7 +11,7 @@ from app.services.download import DownloadService
 from app.services.progress import ProgressTracker
 from app.services.task_engine import TaskEngine, TaskEngineError
 
-router = APIRouter(dependencies=[RequireAdmin])
+router = APIRouter(dependencies=[RequirePermission("tasks")])
 
 
 @router.get("", response_model=list[DownloadJobRead])

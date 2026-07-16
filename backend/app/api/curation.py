@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import RequireAdmin
+from app.auth import RequirePermission
 from app.database import async_session, get_db
 from app.schemas.curation import (
     CurationBackfillRunResponse,
@@ -22,7 +22,7 @@ from app.schemas.gitllery import (
 from app.services.curation import CurationService
 from app.services.gitllery import GitlleryService, project_commit_safe
 
-router = APIRouter(dependencies=[RequireAdmin])
+router = APIRouter(dependencies=[RequirePermission("curation")])
 
 
 @router.get("/commits", response_model=CurationCommitListResponse)

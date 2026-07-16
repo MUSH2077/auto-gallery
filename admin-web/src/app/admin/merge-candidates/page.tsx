@@ -2,7 +2,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { staggerDelay } from "@/lib/motion";
-import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
+import { PageHeader, EmptyState, ErrorState, SourceBadge, PermissionGuard } from "@/components";
 import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
 
@@ -12,6 +12,7 @@ export default function MergeCandidatesPage() {
   const mc = useQuery({ queryKey: queryKeys.dedup.mergeCandidates, queryFn: api.listMergeCandidates });
 
   return (
+    <PermissionGuard module="curation">
     <main className="max-w-4xl mx-auto p-6">
       <PageHeader title={t("merge.title")} description={t("merge.desc")} />
 
@@ -42,5 +43,6 @@ export default function MergeCandidatesPage() {
         </div>
       ))}
     </main>
+    </PermissionGuard>
   );
 }

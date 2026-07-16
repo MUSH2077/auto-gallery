@@ -2,7 +2,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { staggerDelay } from "@/lib/motion";
-import { PageHeader, EmptyState, ErrorState } from "@/components";
+import { PageHeader, EmptyState, ErrorState, PermissionGuard } from "@/components";
 import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
 
@@ -14,6 +14,7 @@ export default function DedupPage() {
   const scan = useMutation({ mutationFn: api.scanDuplicates, onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.dedup.duplicates }) });
 
   return (
+    <PermissionGuard module="curation">
     <main className="max-w-4xl mx-auto p-6">
       <PageHeader title={t("dedup_scan.title")} description={t("dedup_scan.desc")}>
         <button onClick={() => scan.mutate()} disabled={scan.isPending}
@@ -48,5 +49,6 @@ export default function DedupPage() {
         </div>
       ))}
     </main>
+    </PermissionGuard>
   );
 }

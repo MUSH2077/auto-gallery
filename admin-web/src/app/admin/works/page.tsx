@@ -8,7 +8,7 @@ import { api, queryKeys, WorkListItem } from "@/lib/api";
 import type { WorkAsset } from "@/lib/api/endpoints/works";
 import { useAppearanceSettings } from "@/lib/appearance";
 import { staggerDelay } from "@/lib/motion";
-import { AssetImage, PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, WorkPreviewOverlay } from "@/components";
+import { AssetImage, PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, WorkPreviewOverlay, PermissionGuard } from "@/components";
 
 type PreviewState = {
   work: WorkListItem;
@@ -713,8 +713,10 @@ function WorksContent() {
 
 export default function WorksPage() {
   return (
-    <Suspense>
-      <WorksContent />
-    </Suspense>
+    <PermissionGuard module="library">
+      <Suspense>
+        <WorksContent />
+      </Suspense>
+    </PermissionGuard>
   );
 }

@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends
-from app.auth import RequireAdmin
+from app.auth import RequirePermission
 from sqlalchemy import and_, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,7 +29,7 @@ except ImportError:
     from backports.zoneinfo import ZoneInfo  # Python < 3.9
 
 logger = logging.getLogger(__name__)
-router = APIRouter(dependencies=[RequireAdmin])
+router = APIRouter(dependencies=[RequirePermission("system")])
 
 DOWNLOAD_RUNNING_STATUSES = {"enqueued", "downloading", "downloaded", "importing"}
 IMPORT_RUNNING_STATUSES = {"enqueued", "running"}

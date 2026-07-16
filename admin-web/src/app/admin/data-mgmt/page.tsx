@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { PageHeader, ConfirmDialog, PageShell, StatCard, StatusBadge } from "@/components";
+import { PageHeader, ConfirmDialog, PageShell, StatCard, StatusBadge, PermissionGuard } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
@@ -176,6 +176,7 @@ export default function DataManagementPage() {
   const layerEntries = breakdown?.layers ? Object.entries(breakdown.layers) : [];
 
   return (
+    <PermissionGuard module="system">
     <PageShell size="normal">
       <PageHeader title={t("datamgmt.title")} description={t("datamgmt.desc")} />
 
@@ -600,5 +601,6 @@ export default function DataManagementPage() {
         />
       )}
     </PageShell>
+    </PermissionGuard>
   );
 }

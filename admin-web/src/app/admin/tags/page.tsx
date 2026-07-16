@@ -6,7 +6,7 @@ import { api, queryKeys, Tag } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { staggerDelay } from "@/lib/motion";
 import { useToast } from "@/components/Toast";
-import { PageHeader, EmptyState, ErrorState, Modal, ConfirmDialog } from "@/components";
+import { PageHeader, EmptyState, ErrorState, Modal, ConfirmDialog, PermissionGuard } from "@/components";
 
 const CATEGORIES = ["general", "artist", "series", "character", "meta"];
 
@@ -119,6 +119,7 @@ export default function TagsPage() {
   }, [filtered]);
 
   return (
+    <PermissionGuard module="library">
     <main className="max-w-5xl mx-auto p-6">
       <PageHeader title={t("tags.title")} description={tags.data?.length ? t("common.page").replace("{page}", String(page + 1)) : t("tags.desc")}>
         <button onClick={() => { setFormName(""); setFormCat("general"); setShowCreate(true); }}
@@ -241,5 +242,6 @@ export default function TagsPage() {
         </div>
       )}
     </main>
+    </PermissionGuard>
   );
 }

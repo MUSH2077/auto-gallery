@@ -5,7 +5,7 @@ import { useT } from "@/lib/i18n";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, Subscription } from "@/lib/api";
-import { PageHeader, EmptyState, ErrorState, ConfirmDialog, Modal, SourceBadge, StatusBadge, FilterBar, SelectionBar, PageShell } from "@/components";
+import { PageHeader, EmptyState, ErrorState, ConfirmDialog, Modal, SourceBadge, StatusBadge, FilterBar, SelectionBar, PageShell, PermissionGuard } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { scheduleModeLabel, useI18nFormat } from "@/lib/i18n-format";
 
@@ -355,8 +355,10 @@ function SubscriptionsContent() {
 
 export default function SubscriptionsPage() {
   return (
-    <Suspense>
-      <SubscriptionsContent />
-    </Suspense>
+    <PermissionGuard module="subscriptions">
+      <Suspense>
+        <SubscriptionsContent />
+      </Suspense>
+    </PermissionGuard>
   );
 }

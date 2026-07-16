@@ -8,7 +8,7 @@ import { api, queryKeys, QueueBreakdown, SchedulerDecisionItem } from "@/lib/api
 import { useT } from "@/lib/i18n";
 import { pollInterval, hasActiveTask } from "@/lib/polling";
 import { scheduleModeLabel, schedulerDecisionLabel, useI18nFormat } from "@/lib/i18n-format";
-import { PageHeader, EmptyState, ErrorState, SourceBadge, StatusBadge } from "@/components";
+import { PageHeader, EmptyState, ErrorState, SourceBadge, StatusBadge, PermissionGuard } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useNotifications } from "@/components/NotificationCenter";
 
@@ -288,6 +288,7 @@ export default function SchedulerPage() {
   };
 
   return (
+    <PermissionGuard module="tasks">
     <main className="mx-auto max-w-7xl p-6">
       <PageHeader title={t("scheduler.title")} description={t("scheduler.explain_desc")}>
         <button onClick={refreshAll} className="btn-ghost px-5 py-2.5">
@@ -484,5 +485,6 @@ export default function SchedulerPage() {
         )}
       </section>
     </main>
+    </PermissionGuard>
   );
 }

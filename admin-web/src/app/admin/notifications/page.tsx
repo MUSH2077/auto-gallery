@@ -6,7 +6,7 @@ import { useT } from "@/lib/i18n";
 import { api, queryKeys } from "@/lib/api";
 import type { TaskRun } from "@/lib/api/types";
 import { useEnterOnce } from "@/lib/motion";
-import { PageHeader, EmptyState, ErrorState, StatusBadge, SourceBadge } from "@/components";
+import { PageHeader, EmptyState, ErrorState, StatusBadge, SourceBadge, PermissionGuard } from "@/components";
 
 type Filter = "all" | "tasks" | "account";
 const PAGE_SIZE = 50;
@@ -60,6 +60,7 @@ export default function NotificationsPage() {
   ];
 
   return (
+    <PermissionGuard module="tasks">
     <main className="max-w-3xl mx-auto p-6 md:p-10 page-transition">
       <PageHeader title={t("notifications.title")} description={t("notifications.desc")} />
 
@@ -141,5 +142,6 @@ export default function NotificationsPage() {
         </div>
       )}
     </main>
+    </PermissionGuard>
   );
 }

@@ -23,7 +23,7 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-from app.auth import RequireAdmin
+from app.auth import RequirePermission
 from app.database import async_session, get_db
 from app.models.system_setting import SystemSetting
 from app.services import admin_data
@@ -31,7 +31,7 @@ from app.services.admin_data import ENTITIES, clear_entity_data
 from app.services.operations import get_operation_status, set_operation_status
 from app.services.redis_client import get_redis
 
-router = APIRouter(dependencies=[RequireAdmin])
+router = APIRouter(dependencies=[RequirePermission("system")])
 _clear_files = admin_data._clear_files
 
 # ── Settings schemas ──

@@ -6,7 +6,7 @@ import { useToast } from "@/components/Toast";
 import { useT, type TFunction } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, JobProgress, queryKeys, TaskRun } from "@/lib/api";
-import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, StatCard } from "@/components";
+import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, StatCard, PermissionGuard } from "@/components";
 import { TaskDetailDrawer, JobDetailDrawer, shortId } from "@/components/JobDrawers";
 import { useJobWebSocket } from "@/lib/useWebSocket";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
@@ -1475,8 +1475,10 @@ function ImportJobsList({ downloadJobId }: { downloadJobId: string }) {
 
 export default function JobsPage() {
   return (
-    <Suspense>
-      <JobsContent />
-    </Suspense>
+    <PermissionGuard module="tasks">
+      <Suspense>
+        <JobsContent />
+      </Suspense>
+    </PermissionGuard>
   );
 }

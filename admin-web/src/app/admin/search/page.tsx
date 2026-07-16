@@ -7,7 +7,7 @@ import { api } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { staggerDelay } from "@/lib/motion";
-import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
+import { PageHeader, EmptyState, ErrorState, SourceBadge, PermissionGuard } from "@/components";
 import { Breadcrumb } from "@/components/Breadcrumb";
 
 type Kind = "all" | "works" | "creators" | "tags";
@@ -193,5 +193,9 @@ function SearchContent() {
 }
 
 export default function SearchPage() {
-  return <Suspense><SearchContent /></Suspense>;
+  return (
+    <PermissionGuard module="library">
+      <Suspense><SearchContent /></Suspense>
+    </PermissionGuard>
+  );
 }

@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { StatusBadge, PageHeader } from "@/components";
+import { StatusBadge, PageHeader, PermissionGuard } from "@/components";
 import { useT } from "@/lib/i18n";
 
 export default function SystemPage() {
@@ -12,6 +12,7 @@ export default function SystemPage() {
   const sources = useQuery({ queryKey: queryKeys.sources, queryFn: api.sources });
 
   return (
+    <PermissionGuard module="system">
     <main className="max-w-6xl mx-auto p-6">
       <PageHeader title={t("system_health.title")} description={t("system_health.desc")}>
         <button
@@ -64,5 +65,6 @@ export default function SystemPage() {
 
       {health.data && <p className="mt-4 text-xs text-muted">{t("system_health.version")} {health.data.version} · {t("system_health.last_update")} {new Date().toLocaleTimeString()}</p>}
     </main>
+    </PermissionGuard>
   );
 }

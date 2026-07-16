@@ -10,6 +10,7 @@ export { default as SelectionBar } from "./SelectionBar";
 export { default as StatCard } from "./StatCard";
 export { default as IconButton } from "./IconButton";
 export { default as EmptyState } from "./EmptyState";
+export { default as PermissionGuard } from "./PermissionGuard";
 export { default as ErrorState } from "./ErrorState";
 export { default as ConfirmDialog } from "./ConfirmDialog";
 export { default as DataTable } from "./DataTable";

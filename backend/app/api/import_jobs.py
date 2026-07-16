@@ -1,7 +1,7 @@
 import logging
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
-from app.auth import RequireAdmin, get_admin_key
+from app.auth import RequirePermission, get_admin_key
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, cast, String, or_
 
@@ -18,7 +18,7 @@ from app.services.task_engine import TaskEngine, TaskEngineError
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(dependencies=[RequireAdmin])
+router = APIRouter(dependencies=[RequirePermission("tasks")])
 
 
 def _import_job_payload(job: ImportJob) -> dict:

@@ -3,14 +3,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import RequireAdmin, get_admin_key
+from app.auth import RequirePermission, get_admin_key
 from app.database import get_db
 from app.services.operations import get_operation_status, set_operation_status
 from app.services.redis_client import get_redis
 from app.services.task_engine import TaskEngine, TaskEngineError
 from app.services.tasks import TaskService, task_payload
 
-router = APIRouter(dependencies=[RequireAdmin])
+router = APIRouter(dependencies=[RequirePermission("tasks")])
 
 
 @router.get("")

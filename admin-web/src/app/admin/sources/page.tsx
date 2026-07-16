@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys, ProviderInfo } from "@/lib/api";
 import { getSourceColor } from "@/lib/sourceColors";
-import { PageHeader, EmptyState } from "@/components";
+import { PageHeader, EmptyState, PermissionGuard } from "@/components";
 import { useT } from "@/lib/i18n";
 
 const DEFAULT_URLS: Record<string, string> = {
@@ -184,6 +184,7 @@ export default function SourcesPage() {
   const total = sources.data?.sources?.length || 0;
 
   return (
+    <PermissionGuard module="subscriptions">
     <main className="max-w-6xl mx-auto p-6">
       <PageHeader title={t("sources.title")} description={t("sources.desc", { total, downloadable, reference })} />
 
@@ -223,5 +224,6 @@ export default function SourcesPage() {
         </>
       )}
     </main>
+    </PermissionGuard>
   );
 }

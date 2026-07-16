@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from app.auth import RequireAdmin
+from app.auth import RequirePermission
 from app.models.work import Work
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
@@ -22,7 +22,7 @@ from app.services.media_signing import signed_media_url
 from app.services.curation import CurationService
 from app.services.gitllery import project_commit_safe
 
-router = APIRouter(dependencies=[RequireAdmin])
+router = APIRouter(dependencies=[RequirePermission("library")])
 
 
 @router.get("", response_model=WorkListResponse)

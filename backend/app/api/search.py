@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import RequireAdmin
+from app.auth import RequirePermission
 from app.database import get_db
 from app.services.search import SearchService
 
-router = APIRouter(dependencies=[RequireAdmin])
+router = APIRouter(dependencies=[RequirePermission("library")])
 
 
 @router.get("")

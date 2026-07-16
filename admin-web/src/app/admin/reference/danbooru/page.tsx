@@ -5,7 +5,7 @@ import { api, queryKeys } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useT } from "@/lib/i18n";
-import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
+import { PageHeader, EmptyState, ErrorState, SourceBadge, PermissionGuard } from "@/components";
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -440,6 +440,7 @@ export default function DanbooruReferencePage() {
   }, [artist]);
 
   return (
+    <PermissionGuard module="subscriptions">
     <main className="max-w-5xl mx-auto p-6">
       <PageHeader title={t("danbooru.title")} description={t("danbooru.desc")} />
 
@@ -750,5 +751,6 @@ export default function DanbooruReferencePage() {
           importName={importName} setImportName={setImportName} />
       )}
     </main>
+    </PermissionGuard>
   );
 }
