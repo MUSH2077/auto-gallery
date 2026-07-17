@@ -432,3 +432,116 @@ async def test_save_upload_runs_through_real_import_runner(tmp_path, monkeypatch
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_save_upload_honors_manual_is_nsfw_flag(tmp_path, monkeypatch):
+    """CRITICAL fix: _detect_nsfw() previously had no branch for source ==
+    "manual" and always fell through to `return False`, silently dropping the
+    uploader-supplied is_nsfw flag. Confirm both True and False propagate
+    through the REAL import runner onto Work.is_nsfw."""
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.jobs.import_runner import run_import_job
+    from app.models import Work
+    from app.services.manual_upload import ManualUploadService
+
+    download_root = tmp_path / "downloads"
+    library_root = tmp_path / "library"
+    monkeypatch.setattr(settings, "download_root", str(download_root))
+    monkeypatch.setattr(settings, "library_root", str(library_root))
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            user = await _make_user(db, f"{PREFIX}heidi", quota=100 * 1024 * 1024)
+
+            incoming = tmp_path / "incoming"
+            incoming.mkdir()
+
+            f_true = _make_upload_file(incoming, "nsfw_true.png", _png_bytes())
+            result_true = await ManualUploadService().save_upload(
+                db, user, [f_true], {"title": "NSFW true work", "is_nsfw": True},
+            )
+            await run_import_job(result_true.import_job_id)
+
+            f_false = _make_upload_file(incoming, "nsfw_false.png", _png_bytes())
+            result_false = await ManualUploadService().save_upload(
+                db, user, [f_false], {"title": "NSFW false work", "is_nsfw": False},
+            )
+            await run_import_job(result_false.import_job_id)
+
+            work_true = (await db.execute(
+                select(Work).where(Work.title == "NSFW true work")
+            )).scalar_one()
+            work_false = (await db.execute(
+                select(Work).where(Work.title == "NSFW false work")
+            )).scalar_one()
+
+            assert work_true.is_nsfw is True
+            assert work_false.is_nsfw is False
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_save_upload_video_asset_imports_through_real_import_runner(tmp_path, monkeypatch):
+    """IMPORTANT fix: video uploads (.mp4/.webm) previously validated and
+    charged quota but ASSET_EXTENSIONS in import_runner.py excluded video
+    extensions entirely, so the import ran with "no media assets found" and
+    never created a Work. Confirm a webm upload produces a real Work + Asset
+    row through the REAL import runner, and that thumbnail generation
+    (unsupported for video -- services/thumbnail.py is pyvips/image-only, no
+    ffmpeg path exists) is skipped gracefully rather than failing the
+    import."""
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.jobs.import_runner import run_import_job
+    from app.models import Asset, Work, WorkSource
+    from app.services.manual_upload import ManualUploadService
+
+    download_root = tmp_path / "downloads"
+    library_root = tmp_path / "library"
+    monkeypatch.setattr(settings, "download_root", str(download_root))
+    monkeypatch.setattr(settings, "library_root", str(library_root))
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            user = await _make_user(db, f"{PREFIX}ivan", quota=100 * 1024 * 1024)
+
+            incoming = tmp_path / "incoming"
+            incoming.mkdir()
+            # Tiny valid webm magic-bytes header + padding -- not a real
+            # decodable video, but enough to pass _sniff_magic() and exercise
+            # the full storage/import pipeline.
+            webm_bytes = b"\x1a\x45\xdf\xa3" + b"\x00" * 32
+            f = _make_upload_file(incoming, "clip.webm", webm_bytes)
+
+            result = await ManualUploadService().save_upload(
+                db, user, [f], {"title": "Video work", "tags": "fixture"},
+            )
+            assert result.import_job_id
+
+            await run_import_job(result.import_job_id)
+
+            work = (await db.execute(
+                select(Work).where(Work.title == "Video work")
+            )).scalar_one()
+            ws = (await db.execute(
+                select(WorkSource).where(WorkSource.work_id == work.id)
+            )).scalar_one()
+            assert ws.source == "manual"
+
+            assets = (await db.execute(select(Asset))).scalars().all()
+            assert len(assets) == 1
+            assert assets[0].file_name.endswith(".webm")
+            assert assets[0].thumb_sm_path is None
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()

@@ -14,6 +14,7 @@ from app.models.storage_artifact import StorageArtifact
 
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+VIDEO_EXTENSIONS = {".mp4", ".webm"}
 
 
 def artifact_type(path: Path) -> str:
@@ -21,6 +22,8 @@ def artifact_type(path: Path) -> str:
         return "metadata_json"
     if path.suffix.lower() in IMAGE_EXTENSIONS:
         return "image"
+    if path.suffix.lower() in VIDEO_EXTENSIONS:
+        return "video"
     if path.suffix.lower() == ".zip":
         return "archive"
     return "unknown"

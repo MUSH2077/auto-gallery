@@ -40,7 +40,8 @@ from app.services.work_import import WorkImportService
 logger = logging.getLogger(__name__)
 
 ARCHIVE_EXTENSIONS = {".zip"}
-ASSET_EXTENSIONS = IMAGE_EXTS | ARCHIVE_EXTENSIONS
+VIDEO_EXTS = {".mp4", ".webm"}
+ASSET_EXTENSIONS = IMAGE_EXTS | ARCHIVE_EXTENSIONS | VIDEO_EXTS
 
 # Backward-compatible private aliases used by older extensions and tests.
 _can_generate_thumbnail = can_generate_thumbnail
@@ -180,6 +181,11 @@ def _detect_nsfw(raw: dict, source: str) -> bool:
     elif source == "x":
         if raw.get("possibly_sensitive"):
             return True
+    elif source == "manual":
+        # ManualUploadService (app/services/manual_upload.py) writes the
+        # uploader-supplied flag straight onto the metadata.json top level --
+        # there is no upstream platform signal to derive it from.
+        return bool(raw.get("is_nsfw", False))
     return False
 
 
@@ -569,6 +575,12 @@ async def run_import_job(import_job_id: str):
                                     Path(tp).relative_to(settings.library_root))
                         except Exception as _thumb_err:
                             logger.warning("Thumbnail failed for %s: %s", fp, _thumb_err)
+                    elif fp.suffix.lower() in VIDEO_EXTS:
+                        # No ffmpeg/video thumbnailer exists yet (services/thumbnail.py
+                        # is pyvips/image-only). Skip gracefully rather than attempt
+                        # and fail -- one failed asset must not break the import.
+                        logger.info("Skipping thumbnail generation for video asset %s "
+                                    "(no video thumbnailer configured)", fp)
 
                     # Compute sha256 in thread pool (CPU-bound hashing)
                     try:
