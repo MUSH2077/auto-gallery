@@ -117,13 +117,20 @@ async def toggle_work_favorite(work_id: UUID, db: AsyncSession = Depends(get_db)
 
 
 @router.get("/{work_id}/sources")
-async def get_work_sources(work_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_work_sources(work_id: UUID, user: User = _require_library, db: AsyncSession = Depends(get_db)):
     repo = WorkRepository(db)
+    work = await repo.get(work_id, force_sfw=not user.nsfw_visible)
+    if not work:
+        raise HTTPException(status_code=404, detail="Work not found")
     return await repo.get_sources(work_id)
 
 
 @router.get("/{work_id}/tags")
-async def get_work_tags(work_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_work_tags(work_id: UUID, user: User = _require_library, db: AsyncSession = Depends(get_db)):
+    repo = WorkRepository(db)
+    work = await repo.get(work_id, force_sfw=not user.nsfw_visible)
+    if not work:
+        raise HTTPException(status_code=404, detail="Work not found")
     result = await db.execute(
         select(Tag).join(WorkTag, WorkTag.tag_id == Tag.id)
         .where(WorkTag.work_id == work_id)
@@ -133,7 +140,11 @@ async def get_work_tags(work_id: UUID, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{work_id}/assets")
-async def get_work_assets(work_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_work_assets(work_id: UUID, user: User = _require_library, db: AsyncSession = Depends(get_db)):
+    repo = WorkRepository(db)
+    work = await repo.get(work_id, force_sfw=not user.nsfw_visible)
+    if not work:
+        raise HTTPException(status_code=404, detail="Work not found")
     result = await db.execute(
         select(Asset).join(AssetSource, AssetSource.asset_id == Asset.id)
         .join(WorkSource, WorkSource.id == AssetSource.work_source_id)

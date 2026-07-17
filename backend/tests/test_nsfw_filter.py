@@ -196,3 +196,78 @@ async def test_search_service_omits_nsfw_filter_by_default(monkeypatch):
     works_calls = fake.calls_by_index.get(search_module.WORKS_INDEX)
     assert works_calls, "expected the works index to be searched"
     assert works_calls[-1].get("filter") is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_restricted_user_gets_404_on_nsfw_work_assets():
+    from app.database import async_session, engine
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            await _seed_user(db, f"{PREFIX}restricted_assets", nsfw_visible=False)
+            sfw, nsfw = await _seed_works(db)
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = _headers(f"{PREFIX}restricted_assets")
+            r = await client.get(f"/api/v1/works/{nsfw.id}/assets", headers=headers)
+            assert r.status_code == 404, r.text
+            r = await client.get(f"/api/v1/works/{sfw.id}/assets", headers=headers)
+            assert r.status_code == 200, r.text
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_restricted_user_gets_404_on_nsfw_work_sources():
+    from app.database import async_session, engine
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            await _seed_user(db, f"{PREFIX}restricted_sources", nsfw_visible=False)
+            sfw, nsfw = await _seed_works(db)
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = _headers(f"{PREFIX}restricted_sources")
+            r = await client.get(f"/api/v1/works/{nsfw.id}/sources", headers=headers)
+            assert r.status_code == 404, r.text
+            r = await client.get(f"/api/v1/works/{sfw.id}/sources", headers=headers)
+            assert r.status_code == 200, r.text
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_restricted_user_gets_404_on_nsfw_work_tags():
+    from app.database import async_session, engine
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            await _seed_user(db, f"{PREFIX}restricted_tags", nsfw_visible=False)
+            sfw, nsfw = await _seed_works(db)
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = _headers(f"{PREFIX}restricted_tags")
+            r = await client.get(f"/api/v1/works/{nsfw.id}/tags", headers=headers)
+            assert r.status_code == 404, r.text
+            r = await client.get(f"/api/v1/works/{sfw.id}/tags", headers=headers)
+            assert r.status_code == 200, r.text
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
