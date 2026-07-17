@@ -54,7 +54,9 @@ def test_list_works_passes_curation_visibility_to_repository(monkeypatch):
     monkeypatch.setattr(works, "cache_get", lambda _key: None)
     monkeypatch.setattr(works, "cache_set", lambda *_args, **_kwargs: None)
 
-    result = asyncio.run(works.list_works(curation_visibility="trashed", db=object()))
+    result = asyncio.run(works.list_works(
+        curation_visibility="trashed", user=SimpleNamespace(nsfw_visible=True), db=object(),
+    ))
 
     assert result == {"total": 0, "items": []}
     assert captured["kwargs"]["curation_visibility"] == "trashed"

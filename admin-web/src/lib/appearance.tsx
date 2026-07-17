@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { pushPreferences } from "@/lib/preferencesSync";
 
 export type WorkPreviewDelayMs = 150 | 250 | 400;
 export type WorkPreviewSize = "medium" | "large" | "fit";
@@ -65,6 +66,7 @@ export function readAppearanceSettings(): AppearanceSettings {
 function writeAppearanceSettings(settings: AppearanceSettings) {
   window.localStorage.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify(settings));
   window.dispatchEvent(new CustomEvent<AppearanceSettings>(APPEARANCE_EVENT, { detail: settings }));
+  pushPreferences({ appearance: settings });
 }
 
 export function useAppearanceSettings() {

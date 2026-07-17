@@ -64,7 +64,8 @@ class SearchService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def search(self, query: str, offset: int = 0, limit: int = 20, kind: str = "all") -> dict:
+    async def search(self, query: str, offset: int = 0, limit: int = 20, kind: str = "all",
+                      force_sfw: bool = False) -> dict:
         # The meilisearch SDK client is synchronous — run the HTTP round-trips in
         # a thread so this hot endpoint never blocks the single async event loop.
         def _run() -> dict:
@@ -73,7 +74,10 @@ class SearchService:
 
             # Works — searched for 'all' and 'works'
             if kind in ("all", "works"):
-                works_result = client.index(WORKS_INDEX).search(query, offset=offset, limit=limit)
+                works_result = client.index(WORKS_INDEX).search(
+                    query, offset=offset, limit=limit,
+                    filter="is_nsfw = false" if force_sfw else None,
+                )
                 works_hits = getattr(works_result, 'hits', []) or []
                 result["results"] = list(works_hits)
                 result["total"] = getattr(works_result, 'estimated_total_hits', 0) or 0

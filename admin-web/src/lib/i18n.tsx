@@ -1,11 +1,12 @@
 "use client";
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import { pushPreferences } from "@/lib/preferencesSync";
 
 export type Lang = "zh" | "en";
 type I18nVars = Record<string, string | number | boolean | null | undefined>;
 export type TFunction = (key: string, fallbackOrVars?: string | I18nVars, vars?: I18nVars) => string;
 
-const STORAGE_KEY = "auto-gallery-lang";
+export const STORAGE_KEY = "auto-gallery-lang";
 
 const zh: Record<string, string> = {
   // Nav
@@ -3752,6 +3753,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   const setLang = useCallback((l: Lang) => {
     setLangState(l);
     try { localStorage.setItem(STORAGE_KEY, l); } catch {}
+    pushPreferences({ lang: l });
   }, []);
 
   const t = useCallback<TFunction>(

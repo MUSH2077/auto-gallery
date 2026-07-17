@@ -21,7 +21,8 @@ class WorkRepository:
                        curation_visibility: str = "visible",
                        sort_by: str = "created_at",
                        sort_order: str = "desc",
-                       precomputed_total: int | None = None) -> tuple[list[Work], int]:
+                       precomputed_total: int | None = None,
+                       force_sfw: bool = False) -> tuple[list[Work], int]:
         # ── Pre-aggregated derived tables (run once, not per-row) ──
         ws_agg = (
             select(
@@ -86,6 +87,8 @@ class WorkRepository:
             conditions.append(Work.is_favorite == is_favorite)
         if is_ai_generated is not None:
             conditions.append(Work.is_ai_generated == is_ai_generated)
+        if force_sfw:
+            conditions.append(Work.is_nsfw == False)
         if curation_visibility and curation_visibility != "all":
             if curation_visibility == "visible":
                 conditions.append(or_(WorkCurationState.visibility.is_(None), WorkCurationState.visibility == "visible"))
@@ -176,9 +179,11 @@ class WorkRepository:
         await self.session.refresh(work)
         return work
 
-    async def get(self, work_id: UUID) -> Work | None:
+    async def get(self, work_id: UUID, force_sfw: bool = False) -> Work | None:
         work = await self.session.get(Work, work_id)
         if work is None:
+            return None
+        if force_sfw and work.is_nsfw:
             return None
         from app.models.creator import Creator
         row = await self.session.execute(

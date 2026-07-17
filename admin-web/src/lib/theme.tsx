@@ -1,13 +1,14 @@
 "use client";
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
 import { usePresence } from "@/lib/motion";
+import { pushPreferences } from "@/lib/preferencesSync";
 
 export type Theme = "light" | "dark" | "system";
 type ResolvedTheme = "light" | "dark";
 export type Palette = "github" | "nord" | "rose" | "solarized" | "gruvbox" | "catppuccin";
 
-const STORAGE_KEY = "auto-gallery-theme";
-const PALETTE_KEY = "auto-gallery-palette";
+export const STORAGE_KEY = "auto-gallery-theme";
+export const PALETTE_KEY = "auto-gallery-palette";
 export const PALETTES: Palette[] = ["github", "nord", "rose", "solarized", "gruvbox", "catppuccin"];
 export const PALETTE_LABELS: Record<Palette, string> = { github: "GitHub", nord: "Nord", rose: "Rosé", solarized: "Solarized", gruvbox: "Gruvbox", catppuccin: "Catppuccin" };
 
@@ -79,6 +80,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setThemeState(t);
     try { localStorage.setItem(STORAGE_KEY, t); } catch {}
     applyTheme(t);
+    pushPreferences({ theme: t });
   }, [applyTheme]);
 
   // ── Palette (data-theme) ──
@@ -95,6 +97,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setPaletteState(p);
     try { localStorage.setItem(PALETTE_KEY, p); } catch {}
     document.documentElement.setAttribute("data-theme", p);
+    pushPreferences({ palette: p });
   }, []);
 
   return <ThemeContext.Provider value={{ theme, resolved, setTheme, palette, setPalette }}>{children}</ThemeContext.Provider>;

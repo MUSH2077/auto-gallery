@@ -2,6 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import RequirePermission
+from app.models.user import User
 from app.models.work import Work
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
@@ -22,7 +23,14 @@ from app.services.media_signing import signed_media_url
 from app.services.curation import CurationService
 from app.services.gitllery import project_commit_safe
 
-router = APIRouter(dependencies=[RequirePermission("library")])
+# Reused as-is (same closure) for both the router-level gate and the
+# per-route parameter below — FastAPI's per-request dependency cache keys on
+# the callable identity, so declaring it as a route parameter too does not
+# trigger a second permission check/DB query; it just captures the User
+# already resolved by the router-level dependency.
+_require_library = RequirePermission("library")
+
+router = APIRouter(dependencies=[_require_library])
 
 
 @router.get("", response_model=WorkListResponse)
@@ -38,14 +46,16 @@ async def list_works(
     curation_visibility: str = "visible",
     sort_by: str = "created_at",
     sort_order: str = "desc",
+    user: User = _require_library,
     db: AsyncSession = Depends(get_db),
 ):
+    force_sfw = not user.nsfw_visible
     ck = cache_key("works:list", offset=offset, limit=limit,
                    search=search, source=source, creator_id=creator_id, tag=tag,
         is_nsfw=is_nsfw, is_favorite=is_favorite,
         is_ai_generated=is_ai_generated,
         curation_visibility=curation_visibility,
-        sort_by=sort_by, sort_order=sort_order)
+        sort_by=sort_by, sort_order=sort_order, force_sfw=force_sfw)
     cached = cache_get(ck)
     if cached is not None:
         return cached
@@ -56,7 +66,7 @@ async def list_works(
                          search=search, source=source, creator_id=creator_id, tag=tag,
                          is_nsfw=is_nsfw, is_favorite=is_favorite,
                          is_ai_generated=is_ai_generated,
-                         curation_visibility=curation_visibility)
+                         curation_visibility=curation_visibility, force_sfw=force_sfw)
     cached_total = cache_get(count_ck)
     repo = WorkRepository(db)
     works, total = await repo.list_all(
@@ -67,6 +77,7 @@ async def list_works(
         curation_visibility=curation_visibility,
         sort_by=sort_by, sort_order=sort_order,
         precomputed_total=cached_total,
+        force_sfw=force_sfw,
     )
     if cached_total is None:
         cache_set(count_ck, total, 300)
@@ -77,9 +88,9 @@ async def list_works(
 
 
 @router.get("/{work_id}", response_model=WorkRead)
-async def get_work(work_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_work(work_id: UUID, user: User = _require_library, db: AsyncSession = Depends(get_db)):
     repo = WorkRepository(db)
-    work = await repo.get(work_id)
+    work = await repo.get(work_id, force_sfw=not user.nsfw_visible)
     if not work:
         raise HTTPException(status_code=404, detail="Work not found")
     svc = CurationService(db)
