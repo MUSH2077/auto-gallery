@@ -1,9 +1,45 @@
-import { request } from "./client";
+import { request, ApiError, clearAuthOn401 } from "./client";
 import { worksApi } from "./endpoints";
 import type * as T from "./types";
 export * from "./client";
 export * from "./types";
 export * from "./endpoints";
+
+// Multipart upload via XHR — fetch() cannot report upload progress, so the
+// manual upload page needs `xhr.upload.onprogress`. Mirrors request()'s auth
+// handling (Bearer token from localStorage, 401 -> clearAuthOn401) instead of
+// duplicating it silently.
+function uploadWorks(form: FormData, onProgress?: (pct: number) => void): Promise<T.UploadResponse> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/v1/upload");
+    if (typeof window !== "undefined") {
+      const token = localStorage.getItem("ag_token");
+      if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
+    if (onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+      };
+    }
+    xhr.onload = () => {
+      let body: any = {};
+      try { body = JSON.parse(xhr.responseText); } catch { /* empty/non-JSON body */ }
+      if (xhr.status === 401) {
+        clearAuthOn401();
+        reject(new ApiError(401, "Session expired — redirecting to login"));
+        return;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(body as T.UploadResponse);
+      } else {
+        reject(new ApiError(xhr.status, body.detail || `${xhr.status} ${xhr.statusText}`));
+      }
+    };
+    xhr.onerror = () => reject(new ApiError(0, "Network error"));
+    xhr.send(form);
+  });
+}
 
 // ── API ──
 
@@ -405,6 +441,9 @@ export const api = {
 
   resetUserPassword: (id: number) =>
     request<{ password: string }>(`/api/v1/users/${id}/reset-password`, { method: "POST" }),
+
+  // Manual Upload
+  uploadWorks,
 
   // Me (current-user profile)
   getMe: () => request<T.Me>("/api/v1/auth/me"),

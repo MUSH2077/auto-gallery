@@ -949,6 +949,16 @@ export interface Me {
   must_change_password: boolean;
 }
 
+// ── Manual Upload ──
+
+export interface UploadResponse {
+  work_id: string;
+  download_job_id: string;
+  import_job_id: string | null;
+  used_bytes: number;
+  quota_bytes: number | null;
+}
+
 export type GeneratedWork = components["schemas"]["WorkRead"];
 export type GeneratedWorkList = components["schemas"]["WorkList"];
 export type GeneratedAsset = components["schemas"]["AssetRead"];

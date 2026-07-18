@@ -19,6 +19,7 @@ const LINK_MODULE: Record<string, string> = {
   "/admin/tags": "library",
   "/admin/creators": "library",
   "/admin/search": "library",
+  "/admin/upload": "upload",
   "/admin/curation": "curation",
   "/admin/dedup": "curation",
   "/admin/merge-candidates": "curation",
@@ -103,7 +104,7 @@ function AdminNav() {
   if (isAdmin) adminGroupLinks.push(["/admin/users", t("nav.users")]);
   const rawGroups = [
     { label: t("nav.dashboard"), links: [["/admin", t("nav.dashboard")]] },
-    { label: t("nav.library"), links: [["/admin/works", t("nav.works")], ["/admin/tags", t("nav.tags")], ["/admin/curation", t("nav.curation")], ["/admin/dedup", t("nav.dedup")], ["/admin/merge-candidates", t("nav.merge")]] },
+    { label: t("nav.library"), links: [["/admin/works", t("nav.works")], ["/admin/tags", t("nav.tags")], ["/admin/upload", t("nav.upload")], ["/admin/curation", t("nav.curation")], ["/admin/dedup", t("nav.dedup")], ["/admin/merge-candidates", t("nav.merge")]] },
     { label: t("nav.sources"), links: [["/admin/sources", t("nav.sources")], ["/admin/creators", t("nav.creators")], ["/admin/subscriptions", t("nav.subscriptions")], ["/admin/reference/danbooru", t("nav.danbooru")]] },
     { label: t("nav.operations"), links: [["/admin/jobs", t("nav.jobs")], ["/admin/scheduler", t("nav.scheduler")], ["/admin/notifications", t("notifications.title")]] },
     { label: t("nav.admin"), links: adminGroupLinks },

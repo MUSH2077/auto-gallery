@@ -427,6 +427,9 @@ function SourceRecord({ source: s }: { source: WorkSourceData }) {
       )}
       {s.title && <p className="text-xs text-fg mt-1">{t("work_detail.source_title")} {s.title}</p>}
       {s.posted_at && <p className="text-xs text-muted mt-1">{t("work_detail.source_posted")} {s.posted_at}</p>}
+      {s.source === "manual" && typeof s.raw_metadata?.uploaded_by === "string" && s.raw_metadata.uploaded_by && (
+        <p className="text-xs text-muted mt-1">{t("work_detail.uploaded_by")} {s.raw_metadata.uploaded_by}</p>
+      )}
       {s.raw_metadata && (
         <div className="mt-2">
           <button onClick={() => setShowRaw(!showRaw)}
