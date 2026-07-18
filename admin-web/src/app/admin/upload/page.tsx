@@ -22,7 +22,7 @@ const ACCEPT_ATTR = [
 ].join(",");
 const MAX_FILE_BYTES = 500 * 1024 * 1024;
 
-type RowStatus = "queued" | "uploading" | "done" | "error";
+type RowStatus = "queued" | "uploading" | "done" | "error" | "cancelled";
 
 interface FileRow {
   id: string;
@@ -60,12 +60,14 @@ function StatusPill({ status }: { status: RowStatus }) {
     uploading: "bg-accent-subtle text-accent",
     done: "bg-success-subtle text-success",
     error: "bg-danger-subtle text-danger",
+    cancelled: "bg-subtle text-muted",
   };
   const labels: Record<RowStatus, string> = {
     queued: t("upload.status_queued"),
     uploading: t("upload.status_uploading"),
     done: t("upload.status_done"),
     error: t("upload.status_error"),
+    cancelled: t("upload.status_cancelled"),
   };
   return <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${toneClasses[status]}`}>{labels[status]}</span>;
 }
@@ -74,12 +76,13 @@ function StatusPill({ status }: { status: RowStatus }) {
 // permission (see ManualUploadService._resolve_identity: creator_id requires
 // curation, else the backend 403s). Debounced search over api.listCreators.
 function CreatorPicker({
-  creatorId, creatorLabel, onSelect, onClear,
+  creatorId, creatorLabel, onSelect, onClear, disabled,
 }: {
   creatorId: string | null;
   creatorLabel: string | null;
   onSelect: (c: { id: string; label: string }) => void;
   onClear: () => void;
+  disabled?: boolean;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -113,6 +116,7 @@ function CreatorPicker({
         onFocus={() => setOpen(true)}
         placeholder={t("upload.creator_search_placeholder")}
         className="input w-full pr-8"
+        disabled={disabled}
       />
       {creatorId && (
         <button
@@ -120,6 +124,7 @@ function CreatorPicker({
           onClick={() => { onClear(); setQuery(""); }}
           className="absolute right-2 top-1/2 -translate-y-1/2 text-muted hover:text-fg"
           aria-label={t("common.clear")}
+          disabled={disabled}
         >
           &times;
         </button>
@@ -166,6 +171,7 @@ function UploadPageContent() {
   const [title, setTitle] = useState("");
   const [tags, setTags] = useState("");
   const [isNsfw, setIsNsfw] = useState(false);
+  const [combineBatch, setCombineBatch] = useState(false);
   const [creatorId, setCreatorId] = useState<string | null>(null);
   const [creatorLabel, setCreatorLabel] = useState<string | null>(null);
 
@@ -210,11 +216,51 @@ function UploadPageContent() {
   // Sequential per-work submit: one API call = one work (task-9-brief.md),
   // so each queued file is its own upload, processed one at a time (not in
   // parallel) so each row's progress bar reflects its own real XHR progress.
+  //
+  // When combineBatch is on, the backend's native "one call, many `files`
+  // fields" path is used instead: a SINGLE api.uploadWorks call carries every
+  // queued file, and the backend creates ONE multi-page work from them (see
+  // ManualUploadService.save_upload, which loops over all `files` under one
+  // work_uuid). All rows in that batch share the same progress and outcome.
   async function handleSubmit() {
     if (isSubmitting) return;
     setIsSubmitting(true);
     const toUpload = rows.filter((r) => r.status === "queued");
-    for (const row of toUpload) {
+
+    if (combineBatch) {
+      if (toUpload.length > 0) {
+        const ids = new Set(toUpload.map((r) => r.id));
+        setRows((prev) => prev.map((r) => (ids.has(r.id) ? { ...r, status: "uploading", progress: 0 } : r)));
+        const fd = new FormData();
+        for (const row of toUpload) fd.append("files", row.file);
+        if (title.trim()) fd.append("title", title.trim());
+        if (tags.trim()) fd.append("tags", tags.trim());
+        fd.append("is_nsfw", String(isNsfw));
+        if (creatorId) fd.append("creator_id", creatorId);
+        try {
+          const result = await api.uploadWorks(fd, (pct) => {
+            setRows((prev) => prev.map((r) => (ids.has(r.id) ? { ...r, progress: pct } : r)));
+          });
+          setRows((prev) => prev.map((r) => (ids.has(r.id) ? { ...r, status: "done", progress: 100, workId: result.work_id } : r)));
+          qc.invalidateQueries({ queryKey: queryKeys.me });
+          toast.success({
+            title: t("upload.upload_success"),
+            message: t("dashboard.file_count", { count: toUpload.length }),
+            action: { label: t("upload.view_work"), onClick: () => router.push(`/admin/works/${result.work_id}`) },
+          });
+        } catch (e) {
+          const err = e as ApiError;
+          setRows((prev) => prev.map((r) => (ids.has(r.id) ? { ...r, status: "error", error: err.message || t("common.unknown_error") } : r)));
+          toast.error({ message: err.message || t("common.unknown_error") });
+          if (err.status === 413) toast.warning({ message: t("upload.quota_exceeded_stop") });
+        }
+      }
+      setIsSubmitting(false);
+      return;
+    }
+
+    for (let i = 0; i < toUpload.length; i++) {
+      const row = toUpload[i];
       setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, status: "uploading", progress: 0 } : r)));
       const fd = new FormData();
       fd.append("files", row.file);
@@ -239,8 +285,11 @@ function UploadPageContent() {
         toast.error({ message: err.message || t("common.unknown_error") });
         if (err.status === 413) {
           // Quota is exhausted — every remaining file would fail the same
-          // way, so stop instead of hammering the server.
+          // way, so stop instead of hammering the server, and mark the rest
+          // of the queue cancelled so the UI matches the toast below.
           toast.warning({ message: t("upload.quota_exceeded_stop") });
+          const remainingIds = new Set(toUpload.slice(i + 1).map((r) => r.id));
+          setRows((prev) => prev.map((r) => (remainingIds.has(r.id) ? { ...r, status: "cancelled" } : r)));
           break;
         }
       }
@@ -287,6 +336,7 @@ function UploadPageContent() {
                   creatorLabel={creatorLabel}
                   onSelect={(c) => { setCreatorId(c.id); setCreatorLabel(c.label); }}
                   onClear={() => { setCreatorId(null); setCreatorLabel(null); }}
+                  disabled={isSubmitting}
                 />
               ) : (
                 <>
@@ -298,6 +348,10 @@ function UploadPageContent() {
             <label className="flex items-center gap-2 text-sm font-medium sm:col-span-2">
               <input type="checkbox" className="rounded" checked={isNsfw} onChange={(e) => setIsNsfw(e.target.checked)} disabled={isSubmitting} />
               {t("upload.nsfw_label")}
+            </label>
+            <label className="flex items-center gap-2 text-sm font-medium sm:col-span-2">
+              <input type="checkbox" className="rounded" checked={combineBatch} onChange={(e) => setCombineBatch(e.target.checked)} disabled={isSubmitting} />
+              {t("upload.combine_batch")}
             </label>
           </div>
         </SectionPanel>
@@ -348,7 +402,7 @@ function UploadPageContent() {
                   {r.status === "error" && r.error && (
                     <span className="max-w-[160px] shrink-0 truncate text-xs text-danger" title={r.error}>{r.error}</span>
                   )}
-                  {(r.status === "queued" || r.status === "error") && !isSubmitting && (
+                  {(r.status === "queued" || r.status === "error" || r.status === "cancelled") && !isSubmitting && (
                     <button onClick={() => removeRow(r.id)} className="btn-icon shrink-0" aria-label={t("upload.remove")}>&times;</button>
                   )}
                 </div>

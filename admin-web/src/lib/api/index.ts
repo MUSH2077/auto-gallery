@@ -13,6 +13,7 @@ function uploadWorks(form: FormData, onProgress?: (pct: number) => void): Promis
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/v1/upload");
+    xhr.timeout = 10 * 60 * 1000; // 10 min — large files over LAN
     if (typeof window !== "undefined") {
       const token = localStorage.getItem("ag_token");
       if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
@@ -22,6 +23,7 @@ function uploadWorks(form: FormData, onProgress?: (pct: number) => void): Promis
         if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
       };
     }
+    xhr.ontimeout = () => reject(new ApiError(0, "Upload timed out"));
     xhr.onload = () => {
       let body: any = {};
       try { body = JSON.parse(xhr.responseText); } catch { /* empty/non-JSON body */ }
