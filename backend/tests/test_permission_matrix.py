@@ -164,3 +164,59 @@ async def test_moved_endpoints_pinned_to_curation_and_tasks():
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_library_permission_blocked_from_curation_write_routes():
+    """Final-review fix (I1): write routes on works/creators/tags were moved
+    from `library` to `curation` per spec §A2 (favorite/trash/restore/purge/
+    dedup/merge/tag-editing and all other write operations on library
+    entities belong to `curation`; `library` is read/browsing only).
+
+    A library-only user still gets 200 on GET /works (read stays library)
+    but 403 on the favorite and tag-create mutation routes. A curation user
+    passes the router-level gate on the favorite route -- 404 for a
+    nonexistent work id, not 403, proving the permission check itself no
+    longer blocks it.
+    """
+    from uuid import uuid4
+    from app.database import async_session, engine
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            await _seed_user(db, f"{PREFIX}library_write", permissions=["library"])
+            await _seed_user(db, f"{PREFIX}curation_write", permissions=["curation"])
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            library_headers = _headers(f"{PREFIX}library_write")
+            curation_headers = _headers(f"{PREFIX}curation_write")
+            random_id = uuid4()
+
+            r = await client.get("/api/v1/works", headers=library_headers)
+            assert r.status_code == 200, f"library -> GET /works: {r.status_code} {r.text}"
+
+            r = await client.post(f"/api/v1/works/{random_id}/favorite", headers=library_headers)
+            assert r.status_code == 403, (
+                f"library -> POST /works/{{id}}/favorite: {r.status_code} {r.text}"
+            )
+
+            r = await client.post(
+                "/api/v1/tags", json={"normalized_name": "perm_matrix_probe"}, headers=library_headers
+            )
+            assert r.status_code == 403, f"library -> POST /tags: {r.status_code} {r.text}"
+
+            # curation permission clears the router-level gate; 404 (not 403)
+            # confirms the request reached the handler and only the
+            # not-found lookup failed.
+            r = await client.post(f"/api/v1/works/{random_id}/favorite", headers=curation_headers)
+            assert r.status_code == 404, (
+                f"curation -> POST /works/{{id}}/favorite: {r.status_code} {r.text}"
+            )
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()

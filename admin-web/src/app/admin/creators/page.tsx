@@ -8,6 +8,7 @@ import { useNotifications } from "@/components/NotificationCenter";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
+import { usePermissions } from "@/lib/usePermissions";
 
 type FilterMode = "all" | "active" | "inactive" | "has_danbooru" | "has_subscription" | "no_subscription" | "favorites";
 
@@ -100,6 +101,8 @@ function CreatorsContent() {
   const notify = useNotifications();
   const sp = useSearchParams();
   const pathname = usePathname();
+  const { has } = usePermissions();
+  const canCurate = has("curation");
 
   // Filter state derived from URL
   const search = sp.get("q") ?? "";
@@ -231,7 +234,7 @@ function CreatorsContent() {
       <PageHeader title={t("creators.title")} description={t("creators.count", "0 creators").replace("{count}", String(creatorCount.data?.count ?? 0))}>
         <div className="flex gap-2">
           <button onClick={() => router.push("/admin/creators/duplicates")} className="btn-ghost">{t("creators.duplicates")}</button>
-          <button onClick={() => setShowCreate(true)} className="btn-primary">{t("creators.new")}</button>
+          {canCurate && <button onClick={() => setShowCreate(true)} className="btn-primary">{t("creators.new")}</button>}
         </div>
       </PageHeader>
 
@@ -248,19 +251,21 @@ function CreatorsContent() {
         </div>
       </FilterBar>
 
-      <SelectionBar
-        count={selected.size}
-        label={t("creators.delete_selected").replace("{count}", String(selected.size))}
-        clearLabel={t("common.clear")}
-        onClear={() => setSelected(new Set())}
-      >
-        <button onClick={() => setConfirmBatchDel(true)} className="btn-danger text-xs">
-          {t("creators.delete_selected").replace("{count}", String(selected.size))}
-        </button>
-      </SelectionBar>
+      {canCurate && (
+        <SelectionBar
+          count={selected.size}
+          label={t("creators.delete_selected").replace("{count}", String(selected.size))}
+          clearLabel={t("common.clear")}
+          onClear={() => setSelected(new Set())}
+        >
+          <button onClick={() => setConfirmBatchDel(true)} className="btn-danger text-xs">
+            {t("creators.delete_selected").replace("{count}", String(selected.size))}
+          </button>
+        </SelectionBar>
+      )}
 
       {/* Select all */}
-      {creators.data && creators.data.items.length > 0 && (
+      {canCurate && creators.data && creators.data.items.length > 0 && (
         <label className="mb-2 flex cursor-pointer items-center gap-2 text-xs text-muted">
           <input type="checkbox" aria-label="Select item" checked={selected.size === creators.data.items.length && creators.data.items.length > 0} onChange={selectAll} className="rounded" />
           {t("creators.select_all")}
@@ -274,7 +279,7 @@ function CreatorsContent() {
         <EmptyState
           title={search || filter !== "all" ? t("works.no_works_filter") : t("creators.no_creators")}
           description={search || filter !== "all" ? undefined : t("creators.no_creators_desc")}
-          action={(!search && filter === "all") ? <button onClick={() => setShowCreate(true)} className="btn-primary">{t("creators.create_creator")}</button> : undefined}
+          action={(canCurate && !search && filter === "all") ? <button onClick={() => setShowCreate(true)} className="btn-primary">{t("creators.create_creator")}</button> : undefined}
         />
       )}
 
@@ -285,7 +290,9 @@ function CreatorsContent() {
               className={`${!listEntered.current ? "page-item" : ""} flex cursor-pointer items-center gap-3 border-b border-border p-4 last:border-b-0 hover:bg-subtle dark:border-border dark:hover:bg-subtle ${selected.has(c.id) ? "bg-accent-subtle dark:bg-accent-subtle" : ""}`}
               style={!listEntered.current ? ({ "--delay": staggerDelay(i) } as React.CSSProperties) : undefined}
               onClick={() => router.push(`/admin/creators/${c.id}`)}>
-              <input type="checkbox" aria-label="Select item" checked={selected.has(c.id)} onChange={() => toggleSelect(c.id)} className="rounded shrink-0" onClick={(e) => e.stopPropagation()} />
+              {canCurate && (
+                <input type="checkbox" aria-label="Select item" checked={selected.has(c.id)} onChange={() => toggleSelect(c.id)} className="rounded shrink-0" onClick={(e) => e.stopPropagation()} />
+              )}
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-accent text-sm font-semibold text-white dark:border-border">
                 {(c.display_name || c.name).slice(0, 2).toUpperCase()}
               </div>
@@ -305,12 +312,16 @@ function CreatorsContent() {
               <div className="flex items-center gap-2 shrink-0 text-xs" onClick={(e) => e.stopPropagation()}>
                 {(c as any).danbooru_artist_id && <span className="rounded-full bg-purple-100 px-2 py-0.5 font-mono text-[10px] text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">D#{String((c as any).danbooru_artist_id)}</span>}
                 {(c.subscription_count ?? 0) > 0 && <span className="rounded-full bg-success-subtle px-2 py-0.5 text-[10px] text-success dark:bg-success-subtle dark:text-success">{t("creators.sub_badge")}</span>}
-                <button onClick={(e) => { e.stopPropagation(); toggleFavorite.mutate(c.id); }}
-                  className={`text-lg ${c.is_favorite ? "text-yellow-500" : "text-muted hover:text-yellow-400"}`}
-                  title={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}>
-                  {c.is_favorite ? "★" : "☆"}
-                </button>
-                <button onClick={(e) => { e.stopPropagation(); setDeleteId(c.id); }} className="text-danger hover:underline dark:text-danger">{t("creators.del")}</button>
+                {canCurate && (
+                  <button onClick={(e) => { e.stopPropagation(); toggleFavorite.mutate(c.id); }}
+                    className={`text-lg ${c.is_favorite ? "text-yellow-500" : "text-muted hover:text-yellow-400"}`}
+                    title={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}>
+                    {c.is_favorite ? "★" : "☆"}
+                  </button>
+                )}
+                {canCurate && (
+                  <button onClick={(e) => { e.stopPropagation(); setDeleteId(c.id); }} className="text-danger hover:underline dark:text-danger">{t("creators.del")}</button>
+                )}
               </div>
             </div>
           ))}

@@ -24,6 +24,12 @@ from app.services.curation import CurationService
 from app.services.gitllery import project_commit_safe
 
 router = APIRouter(dependencies=[RequirePermission("library")])
+# Write/mutation routes on the `creator` library entity belong to the
+# `curation` module per spec §A2 (create/update/delete/batch-delete/merge/
+# favorite/curation-ops/creator-link & source CRUD are curation operations,
+# not library browsing). Included with the same "/creators" prefix in
+# app/api/__init__.py, so URLs are unchanged.
+curation_router = APIRouter(dependencies=[RequirePermission("curation")])
 
 @router.get("/count")
 async def count_creators(db: AsyncSession = Depends(get_db)):
@@ -68,7 +74,7 @@ async def list_creators(
 
 # ── Batch Operations ──
 
-@router.post("/batch-delete")
+@curation_router.post("/batch-delete")
 async def batch_delete_creators(data: dict, db: AsyncSession = Depends(get_db)):
     """Delete multiple creators by ID list."""
     ids = data.get("ids", [])
@@ -96,7 +102,7 @@ async def list_duplicate_creators(db: AsyncSession = Depends(get_db)):
     return {"duplicates": candidates, "total": len(candidates)}
 
 
-@router.post("/merge")
+@curation_router.post("/merge")
 async def merge_creators_endpoint(data: dict, db: AsyncSession = Depends(get_db)):
     """Merge source creators into target. Source creators are deleted after merge.
 
@@ -130,7 +136,7 @@ async def get_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.post("", response_model=CreatorRead, status_code=201)
+@curation_router.post("", response_model=CreatorRead, status_code=201)
 async def create_creator(data: CreatorCreate, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)
     result = await svc.create_creator(data.model_dump())
@@ -138,7 +144,7 @@ async def create_creator(data: CreatorCreate, db: AsyncSession = Depends(get_db)
     return result
 
 
-@router.patch("/{creator_id}", response_model=CreatorRead)
+@curation_router.patch("/{creator_id}", response_model=CreatorRead)
 async def update_creator(creator_id: UUID, data: CreatorUpdate, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)
     try:
@@ -378,7 +384,7 @@ async def get_creator_subscription_overview(creator_id: UUID, db: AsyncSession =
     }
 
 
-@router.delete("/{creator_id}", status_code=204)
+@curation_router.delete("/{creator_id}", status_code=204)
 async def delete_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)
     try:
@@ -388,7 +394,7 @@ async def delete_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.post("/{creator_id}/favorite", response_model=CreatorRead)
+@curation_router.post("/{creator_id}/favorite", response_model=CreatorRead)
 async def toggle_creator_favorite(creator_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)
     try:
@@ -399,7 +405,7 @@ async def toggle_creator_favorite(creator_id: UUID, db: AsyncSession = Depends(g
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.post("/{creator_id}/enrich")
+@curation_router.post("/{creator_id}/enrich")
 async def enrich_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
     """Try to establish the Danbooru identity mapping for one creator."""
     from app.services.creator_enrichment import enrich_creator_by_id
@@ -412,7 +418,7 @@ async def enrich_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
     return result
 
 
-@router.post("/{creator_id}/curation", response_model=CurationCommitRead)
+@curation_router.post("/{creator_id}/curation", response_model=CurationCommitRead)
 async def curate_creator(creator_id: UUID, data: CreatorCurationRequest, db: AsyncSession = Depends(get_db)):
     svc = CurationService(db)
     commit = await svc.curate_creator(
@@ -439,7 +445,7 @@ async def list_source_creators(creator_id: UUID, db: AsyncSession = Depends(get_
     return result.scalars().all()
 
 
-@router.post("/{creator_id}/sources", response_model=SourceCreatorRead, status_code=201)
+@curation_router.post("/{creator_id}/sources", response_model=SourceCreatorRead, status_code=201)
 async def add_source_creator(creator_id: UUID, data: SourceCreatorCreate, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)
     d = data.model_dump()
@@ -455,7 +461,7 @@ async def list_creator_links(creator_id: UUID, db: AsyncSession = Depends(get_db
     return await svc.list_links(creator_id)
 
 
-@router.post("/{creator_id}/links", response_model=CreatorLinkRead, status_code=201)
+@curation_router.post("/{creator_id}/links", response_model=CreatorLinkRead, status_code=201)
 async def add_creator_link(creator_id: UUID, data: CreatorLinkCreate, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)
     d = data.model_dump()
@@ -463,7 +469,7 @@ async def add_creator_link(creator_id: UUID, data: CreatorLinkCreate, db: AsyncS
     return await svc.add_link(d)
 
 
-@router.patch("/{creator_id}/links/{link_id}", response_model=CreatorLinkRead)
+@curation_router.patch("/{creator_id}/links/{link_id}", response_model=CreatorLinkRead)
 async def update_creator_link(
     creator_id: UUID, link_id: UUID, data: CreatorLinkUpdate, db: AsyncSession = Depends(get_db)
 ):
@@ -473,7 +479,7 @@ async def update_creator_link(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-@router.delete("/{creator_id}/links/{link_id}", status_code=204)
+@curation_router.delete("/{creator_id}/links/{link_id}", status_code=204)
 async def delete_creator_link(creator_id: UUID, link_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = CreatorService(db)
     try:

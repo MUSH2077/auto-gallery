@@ -7,6 +7,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { AssetFilmstrip, AssetImage, PageHeader, SourceBadge, ErrorState, EmptyState, isArchiveAsset } from "@/components";
 import { Breadcrumb } from "@/components/Breadcrumb";
+import { usePermissions } from "@/lib/usePermissions";
 import { FullImageLightbox, ArrowIcon, DisclosurePanel, type AssetData } from "@/components/WorkViewerParts";
 
 interface WorkSourceData {
@@ -164,6 +165,8 @@ export default function WorkDetailPage() {
   const router = useRouter();
   const id = params.id as string;
   const qc = useQueryClient();
+  const { has } = usePermissions();
+  const canCurate = has("curation");
 
   const work = useQuery({ queryKey: queryKeys.works.detail(id), queryFn: () => api.getWork(id) });
   const toggleFavorite = useMutation({
@@ -314,11 +317,13 @@ export default function WorkDetailPage() {
                   </Link>
                 )}
               </div>
-              <button onClick={() => toggleFavorite.mutate(id)}
-                className={`shrink-0 text-2xl ${work.data?.is_favorite ? "text-warning" : "text-muted hover:text-warning"}`}
-                title={work.data?.is_favorite ? t("common.unfavorite") : t("common.favorite")}>
-                {work.data?.is_favorite ? "★" : "☆"}
-              </button>
+              {canCurate && (
+                <button onClick={() => toggleFavorite.mutate(id)}
+                  className={`shrink-0 text-2xl ${work.data?.is_favorite ? "text-warning" : "text-muted hover:text-warning"}`}
+                  title={work.data?.is_favorite ? t("common.unfavorite") : t("common.favorite")}>
+                  {work.data?.is_favorite ? "★" : "☆"}
+                </button>
+              )}
             </div>
             <dl className="space-y-2 text-sm">
               {primaryWs?.source_work_id && <div className="flex justify-between gap-3"><dt className="text-muted">{t("work_detail.work_id")}</dt><dd className="truncate font-mono text-xs">{primaryWs.source_work_id}</dd></div>}
@@ -329,11 +334,11 @@ export default function WorkDetailPage() {
               <div className="flex justify-between gap-3"><dt className="text-muted">{t("work_detail.imported")}</dt><dd className="text-right text-xs">{new Date(w.created_at).toLocaleString()}</dd></div>
             </dl>
             <div className="mt-4 flex flex-wrap gap-2">
-              {visibility === "visible" ? (
+              {canCurate && visibility === "visible" ? (
                 <button onClick={() => curateWork.mutate("trash")} disabled={curateWork.isPending} className="btn-danger text-xs">
                   Move to Trash
                 </button>
-              ) : visibility === "trashed" ? (
+              ) : canCurate && visibility === "trashed" ? (
                 <button onClick={() => curateWork.mutate("restore")} disabled={curateWork.isPending} className="btn-ghost text-xs">
                   Restore
                 </button>

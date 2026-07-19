@@ -7,6 +7,7 @@ import { useT } from "@/lib/i18n";
 import { staggerDelay } from "@/lib/motion";
 import { useToast } from "@/components/Toast";
 import { PageHeader, EmptyState, ErrorState, Modal, ConfirmDialog, PermissionGuard } from "@/components";
+import { usePermissions } from "@/lib/usePermissions";
 
 const CATEGORIES = ["general", "artist", "series", "character", "meta"];
 
@@ -66,6 +67,8 @@ export default function TagsPage() {
   const toast = useToast();
   const router = useRouter();
   const qc = useQueryClient();
+  const { has } = usePermissions();
+  const canCurate = has("curation");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [showCreate, setShowCreate] = useState(false);
@@ -122,8 +125,10 @@ export default function TagsPage() {
     <PermissionGuard module="library">
     <main className="max-w-5xl mx-auto p-6">
       <PageHeader title={t("tags.title")} description={tags.data?.length ? t("common.page").replace("{page}", String(page + 1)) : t("tags.desc")}>
-        <button onClick={() => { setFormName(""); setFormCat("general"); setShowCreate(true); }}
-          className="btn-primary">{t("tags.new")}</button>
+        {canCurate && (
+          <button onClick={() => { setFormName(""); setFormCat("general"); setShowCreate(true); }}
+            className="btn-primary">{t("tags.new")}</button>
+        )}
       </PageHeader>
 
       <div className="mb-6">
@@ -172,10 +177,14 @@ export default function TagsPage() {
                   <span className="opacity-40 ml-0.5" style={{ fontSize: `calc(${light.fontSize} * 0.65)` }}>
                     {tag.usage_count}
                   </span>
-                  <button onClick={(e) => { e.stopPropagation(); openEdit(tag); }}
-                    className="ml-1 opacity-0 group-hover:opacity-100 hover:text-blue-500 transition-opacity text-sm leading-none" title="Edit">&#9998;</button>
-                  <button onClick={(e) => { e.stopPropagation(); setDeleteId(tag.id); }}
-                    className="opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity text-lg leading-none">&times;</button>
+                  {canCurate && (
+                    <button onClick={(e) => { e.stopPropagation(); openEdit(tag); }}
+                      className="ml-1 opacity-0 group-hover:opacity-100 hover:text-blue-500 transition-opacity text-sm leading-none" title="Edit">&#9998;</button>
+                  )}
+                  {canCurate && (
+                    <button onClick={(e) => { e.stopPropagation(); setDeleteId(tag.id); }}
+                      className="opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity text-lg leading-none">&times;</button>
+                  )}
                 </div>
               );
             })}

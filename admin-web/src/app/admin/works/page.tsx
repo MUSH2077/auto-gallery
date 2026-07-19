@@ -9,6 +9,7 @@ import type { WorkAsset } from "@/lib/api/endpoints/works";
 import { useAppearanceSettings } from "@/lib/appearance";
 import { staggerDelay } from "@/lib/motion";
 import { AssetImage, PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, WorkPreviewOverlay, PermissionGuard } from "@/components";
+import { usePermissions } from "@/lib/usePermissions";
 
 type PreviewState = {
   work: WorkListItem;
@@ -35,6 +36,7 @@ function WorkCard({
   onCancelClosePreview,
   onPreviewPage,
   enterAnimate = true,
+  canCurate,
 }: {
   w: WorkListItem;
   onToggleFavorite: (id: string) => void;
@@ -53,6 +55,7 @@ function WorkCard({
   onScheduleClosePreview: () => void;
   onCancelClosePreview: () => void;
   onPreviewPage: (workId: string, pageIndex: number) => void;
+  canCurate: boolean;
 }) {
   const t = useT();
   const router = useRouter();
@@ -119,12 +122,14 @@ function WorkCard({
             />
           </label>
         )}
-        <button onClick={(e) => { e.stopPropagation(); onToggleFavorite(w.id); }}
-          className={`absolute top-1 right-1 z-10 text-base ${w.is_favorite ? "text-warning" : "text-white/60 hover:text-warning"} drop-shadow`}
-          title={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}
-          aria-label={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}>
-          {w.is_favorite ? "★" : "☆"}
-        </button>
+        {canCurate && (
+          <button onClick={(e) => { e.stopPropagation(); onToggleFavorite(w.id); }}
+            className={`absolute top-1 right-1 z-10 text-base ${w.is_favorite ? "text-warning" : "text-white/60 hover:text-warning"} drop-shadow`}
+            title={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}
+            aria-label={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}>
+            {w.is_favorite ? "★" : "☆"}
+          </button>
+        )}
         {w.asset_count > 1 && (
           <span className="absolute bottom-1 left-1 bg-black/70 text-white text-xs px-1.5 py-0.5 rounded font-medium">{w.asset_count}p</span>
         )}
@@ -154,7 +159,7 @@ function WorkCard({
         <div className="text-xs text-muted mt-0.5">
           {w.posted_at ? new Date(w.posted_at).toLocaleDateString() : t("works.no_date")}
         </div>
-        {trashMode && (
+        {trashMode && canCurate && (
           <div className="mt-3 flex gap-2">
             <button onClick={(e) => { e.stopPropagation(); onRestore?.(w.id); }} className="rounded border border-border px-2 py-1 text-xs hover:bg-subtle dark:border-border dark:hover:bg-subtle">{t("works.restore")}</button>
             <button onClick={(e) => { e.stopPropagation(); onPurge?.(w.id); }} className="rounded bg-danger px-2 py-1 text-xs text-white hover:bg-danger">{t("works.purge")}</button>
@@ -174,6 +179,8 @@ function WorksContent() {
   const qc = useQueryClient();
   const sp = useSearchParams();
   const pathname = usePathname();
+  const { has } = usePermissions();
+  const canCurate = has("curation");
   const { settings: appearance, updateSettings } = useAppearanceSettings();
   const [selectedWorkIds, setSelectedWorkIds] = useState<Set<string>>(new Set());
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -545,7 +552,7 @@ function WorksContent() {
         )}
       </div>
 
-      {works.data && works.data.items?.length > 0 && curationVisibility === "visible" && (
+      {canCurate && works.data && works.data.items?.length > 0 && curationVisibility === "visible" && (
         selectedCount > 0 ? (
           <SelectionBar
             count={selectedCount}
@@ -609,7 +616,7 @@ function WorksContent() {
               onCancelClosePreview={cancelClosePreview}
               onPreviewPage={(workId, pageIndex) => setPreview((current) => current?.work.id === workId ? { ...current, pageIndex } : current)}
               trashMode={curationVisibility === "trashed"}
-              selectable={curationVisibility === "visible"}
+              selectable={canCurate && curationVisibility === "visible"}
               selected={selectedWorkIds.has(w.id)}
               onToggleSelect={toggleSelectWork}
               onToggleFavorite={(id) => toggleFavorite.mutate(id)}
@@ -617,6 +624,7 @@ function WorksContent() {
               onPurge={(id) => {
                 if (window.confirm(t("works.purge_confirm"))) purgeWork.mutate(id);
               }}
+              canCurate={canCurate}
             />
           ))}
         </div>
@@ -627,7 +635,7 @@ function WorksContent() {
         <div className="space-y-1 mb-6">
           {works.data.items.map((w: WorkListItem) => (
             <div key={w.id} className={`flex cursor-pointer items-center gap-3 rounded-md border border-border bg-surface p-3 shadow-sm transition-shadow hover:shadow-md ${selectedWorkIds.has(w.id) ? "ring-2 ring-accent" : ""}`} onClick={() => router.push(`/admin/works/${w.id}`)}>
-              {curationVisibility === "visible" && (
+              {canCurate && curationVisibility === "visible" && (
                 <input
                   type="checkbox"
                   checked={selectedWorkIds.has(w.id)}
@@ -655,13 +663,15 @@ function WorksContent() {
                   <span>{w.posted_at ? new Date(w.posted_at).toLocaleDateString() : "—"}</span>
                 </div>
               </div>
-              <button onClick={(e) => { e.stopPropagation(); toggleFavorite.mutate(w.id); }}
-                className={`text-lg shrink-0 ${w.is_favorite ? "text-warning" : "text-muted hover:text-warning"}`}
-                title={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}
-                aria-label={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}>
-                {w.is_favorite ? "★" : "☆"}
-              </button>
-              {curationVisibility === "trashed" && (
+              {canCurate && (
+                <button onClick={(e) => { e.stopPropagation(); toggleFavorite.mutate(w.id); }}
+                  className={`text-lg shrink-0 ${w.is_favorite ? "text-warning" : "text-muted hover:text-warning"}`}
+                  title={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}
+                  aria-label={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}>
+                  {w.is_favorite ? "★" : "☆"}
+                </button>
+              )}
+              {canCurate && curationVisibility === "trashed" && (
                 <div className="flex shrink-0 gap-2">
                   <button onClick={(e) => { e.stopPropagation(); restoreWork.mutate(w.id); }} className="rounded border border-border px-2 py-1 text-xs hover:bg-subtle dark:border-border dark:hover:bg-subtle">{t("works.restore")}</button>
                   <button onClick={(e) => { e.stopPropagation(); if (window.confirm(t("works.purge_confirm"))) purgeWork.mutate(w.id); }} className="rounded bg-danger px-2 py-1 text-xs text-white hover:bg-danger">{t("works.purge")}</button>

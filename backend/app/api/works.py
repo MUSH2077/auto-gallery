@@ -29,8 +29,14 @@ from app.services.gitllery import project_commit_safe
 # trigger a second permission check/DB query; it just captures the User
 # already resolved by the router-level dependency.
 _require_library = RequirePermission("library")
+_require_curation = RequirePermission("curation")
 
 router = APIRouter(dependencies=[_require_library])
+# Write/mutation routes on the `work` library entity belong to the
+# `curation` module per spec §A2 (favorite/trash/restore/batch-curate/
+# batch-tag are curation operations, not library browsing). Included with
+# the same "/works" prefix in app/api/__init__.py, so URLs are unchanged.
+curation_router = APIRouter(dependencies=[_require_curation])
 
 
 @router.get("", response_model=WorkListResponse)
@@ -98,10 +104,10 @@ async def get_work(work_id: UUID, user: User = _require_library, db: AsyncSessio
     return work
 
 
-@router.post("/{work_id}/favorite", response_model=WorkRead)
-async def toggle_work_favorite(work_id: UUID, db: AsyncSession = Depends(get_db)):
+@curation_router.post("/{work_id}/favorite", response_model=WorkRead)
+async def toggle_work_favorite(work_id: UUID, user: User = _require_curation, db: AsyncSession = Depends(get_db)):
     repo = WorkRepository(db)
-    work = await repo.get(work_id)
+    work = await repo.get(work_id, force_sfw=not user.nsfw_visible)
     if not work:
         raise HTTPException(status_code=404, detail="Work not found")
     before = bool(work.is_favorite)
@@ -163,7 +169,7 @@ async def get_work_assets(work_id: UUID, user: User = _require_library, db: Asyn
     } for a in assets]
 
 
-@router.delete("/{work_id}", status_code=204)
+@curation_router.delete("/{work_id}", status_code=204)
 async def delete_work(work_id: UUID, db: AsyncSession = Depends(get_db)):
     """Move a work to trash. Does NOT delete database rows or files from disk."""
     work = await db.get(Work, work_id)
@@ -175,7 +181,7 @@ async def delete_work(work_id: UUID, db: AsyncSession = Depends(get_db)):
     cache_delete_pattern("works:*")
 
 
-@router.post("/batch-delete")
+@curation_router.post("/batch-delete")
 async def batch_delete_works(data: dict, db: AsyncSession = Depends(get_db)):
     """Move multiple works to trash by ID list."""
     ids = data.get("ids", [])
@@ -193,7 +199,7 @@ async def batch_delete_works(data: dict, db: AsyncSession = Depends(get_db)):
     }
 
 
-@router.post("/batch-curate", response_model=CurationCommitRead)
+@curation_router.post("/batch-curate", response_model=CurationCommitRead)
 async def batch_curate_works(data: BatchCurateRequest, db: AsyncSession = Depends(get_db)):
     svc = CurationService(db)
     if data.action == "trash":
@@ -207,7 +213,7 @@ async def batch_curate_works(data: BatchCurateRequest, db: AsyncSession = Depend
     return await svc.commit_payload(commit.id)
 
 
-@router.post("/batch-tag")
+@curation_router.post("/batch-tag")
 async def batch_tag_works(data: dict, db: AsyncSession = Depends(get_db)):
     """Add or remove tags on multiple works."""
     ids = data.get("ids", [])

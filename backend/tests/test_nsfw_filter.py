@@ -26,7 +26,7 @@ async def _clear(db):
     cache_delete_pattern("works:*")
 
 
-async def _seed_user(db, username, *, is_admin=False, nsfw_visible=True):
+async def _seed_user(db, username, *, is_admin=False, nsfw_visible=True, permissions=None):
     from app.auth import hash_password
     from app.models.user import User
 
@@ -35,7 +35,7 @@ async def _seed_user(db, username, *, is_admin=False, nsfw_visible=True):
         password_hash=hash_password("hunter22"),
         is_admin=is_admin,
         is_active=True,
-        permissions=["library"],
+        permissions=permissions if permissions is not None else ["library"],
         nsfw_visible=nsfw_visible,
         must_change_password=False,
     )
@@ -266,6 +266,39 @@ async def test_restricted_user_gets_404_on_nsfw_work_tags():
             r = await client.get(f"/api/v1/works/{nsfw.id}/tags", headers=headers)
             assert r.status_code == 404, r.text
             r = await client.get(f"/api/v1/works/{sfw.id}/tags", headers=headers)
+            assert r.status_code == 200, r.text
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_restricted_curation_user_gets_404_favoriting_nsfw_work():
+    """Final-review fix (I2): the favorite route (now under `curation`
+    permission) must mirror the detail-route NSFW guard -- a restricted user
+    (nsfw_visible=false) gets 404 attempting to favorite an NSFW work, even
+    though they hold the `curation` permission needed to reach the handler.
+    The same user can still favorite the SFW work.
+    """
+    from app.database import async_session, engine
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            await _seed_user(
+                db, f"{PREFIX}restricted_curation", nsfw_visible=False, permissions=["curation"]
+            )
+            sfw, nsfw = await _seed_works(db)
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = _headers(f"{PREFIX}restricted_curation")
+            r = await client.post(f"/api/v1/works/{nsfw.id}/favorite", headers=headers)
+            assert r.status_code == 404, r.text
+            r = await client.post(f"/api/v1/works/{sfw.id}/favorite", headers=headers)
             assert r.status_code == 200, r.text
     finally:
         async with async_session() as db:
