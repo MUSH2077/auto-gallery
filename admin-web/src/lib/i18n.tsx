@@ -31,6 +31,7 @@ const zh: Record<string, string> = {
   "nav.merge": "合并候选",
   "nav.system": "系统状态",
   "nav.users": "用户管理",
+  "nav.sidebar_toggle": "切换侧栏",
   "nav.upload": "上传",
 
   // Auth
@@ -1940,6 +1941,7 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "nav.merge": "Merge Candidates",
     "nav.system": "System Status",
     "nav.users": "Users",
+    "nav.sidebar_toggle": "Toggle sidebar",
     "nav.upload": "Upload",
 
     // Auth

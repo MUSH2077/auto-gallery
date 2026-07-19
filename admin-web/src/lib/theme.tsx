@@ -206,7 +206,7 @@ export function PaletteToggle() {
     <div className="relative">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="p-1.5 rounded hover:bg-white/10 transition-colors text-white/80 hover:text-white flex items-center gap-1"
+        className="p-1.5 rounded-md hover:bg-subtle transition-colors text-muted hover:text-fg flex items-center gap-1"
         title={`Theme: ${PALETTE_LABELS[palette]}`}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -244,7 +244,7 @@ export function LangToggle() {
   return (
     <button
       onClick={() => setLang(lang === "zh" ? "en" : "zh")}
-      className="p-1.5 rounded hover:bg-white/10 transition-colors text-white/80 hover:text-white flex items-center gap-1"
+      className="p-1.5 rounded-md hover:bg-subtle transition-colors text-muted hover:text-fg flex items-center gap-1"
       title={lang === "zh" ? "Switch to English" : "切换到中文"}
     >
       <GlobeIcon className="w-5 h-5" />

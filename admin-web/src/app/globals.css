@@ -378,6 +378,32 @@
   }
   .drawer-panel { animation: drawerIn 240ms cubic-bezier(0.16, 1, 0.3, 1); }
   .drawer-panel-exit { animation: drawerOut 150ms cubic-bezier(0.4, 0, 0.2, 1) forwards; pointer-events: none; }
+  /* Left-edge variant for the mobile app-shell sidebar. */
+  @keyframes drawerLeftIn {
+    from { transform: translateX(-100%); }
+    to   { transform: translateX(0); }
+  }
+  @keyframes drawerLeftOut {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-100%); }
+  }
+  .drawer-left { animation: drawerLeftIn 240ms cubic-bezier(0.16, 1, 0.3, 1); }
+  .drawer-left-exit { animation: drawerLeftOut 150ms cubic-bezier(0.4, 0, 0.2, 1) forwards; pointer-events: none; }
+  /* App-shell sidebar items (GitHub ActionList style): hover wash, selected
+     state with a 4px accent indicator hugging the sidebar edge. */
+  .side-item {
+    @apply relative mx-0 my-px flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-fg;
+    transition: background-color 120ms ease-out;
+  }
+  .side-item > svg { @apply text-muted; }
+  .side-item:hover { background-color: rgb(var(--ag-muted) / 0.12); }
+  .side-item-active { @apply font-semibold; background-color: rgb(var(--ag-muted) / 0.14); }
+  .side-item-active > svg { @apply text-fg; }
+  .side-item-active::before {
+    content: "";
+    @apply absolute -left-2 rounded-r bg-accent;
+    top: 6px; bottom: 6px; width: 4px;
+  }
   /* One-shot state-change confirmation on job rows (WS status_change).
      Background-only on a single row — cheap paint, strong feedback. */
   @keyframes rowFlash {

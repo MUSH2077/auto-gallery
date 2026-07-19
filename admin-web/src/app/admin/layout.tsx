@@ -1,186 +1,15 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { useT } from "@/lib/i18n";
-import { ThemeToggle, LangToggle, PaletteToggle } from "@/lib/theme";
 import { useAuth } from "@/lib/auth";
-import { usePermissions } from "@/lib/usePermissions";
 import { usePresence } from "@/lib/motion";
 import ErrorBoundary from "@/components/ErrorBoundary";
-import { NotificationBell } from "@/components/NotificationCenter";
+import AppSidebar from "@/components/AppSidebar";
+import AppTopBar from "@/components/AppTopBar";
 
 export const dynamic = 'force-dynamic';
 
-// Nav href -> permission module. Links with no entry here (dashboard, users —
-// users is separately gated by is_admin below) are always shown once logged in.
-const LINK_MODULE: Record<string, string> = {
-  "/admin/works": "library",
-  "/admin/tags": "library",
-  "/admin/creators": "library",
-  "/admin/search": "library",
-  "/admin/upload": "upload",
-  "/admin/curation": "curation",
-  "/admin/dedup": "curation",
-  "/admin/merge-candidates": "curation",
-  "/admin/sources": "subscriptions",
-  "/admin/subscriptions": "subscriptions",
-  "/admin/reference/danbooru": "subscriptions",
-  "/admin/jobs": "tasks",
-  "/admin/import-jobs": "tasks",
-  "/admin/scheduler": "tasks",
-  "/admin/notifications": "tasks",
-  "/admin/data-mgmt": "system",
-  "/admin/system": "system",
-  "/admin/settings": "system",
-};
-
-function UserMenu() {
-  const t = useT();
-  const { user, logout } = useAuth();
-  const [open, setOpen] = useState(false);
-  const { mounted, closing } = usePresence(open);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, []);
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-subtle transition-colors text-sm"
-        title={user?.display_name || user?.username}
-      >
-        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="8" r="4" />
-          <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
-        </svg>
-        <span className="hidden sm:inline max-w-[100px] truncate">{user?.display_name || user?.username}</span>
-      </button>
-      {mounted && (
-        <div className={`popover ${closing ? "popover-exit" : ""} absolute right-0 mt-1 w-44 bg-surface border border-border rounded-md shadow-overlay dark:shadow-overlay-dark z-50 text-fg text-sm overflow-hidden`}>
-          <Link
-            href="/admin/settings/profile"
-            onClick={() => setOpen(false)}
-            className="flex items-center gap-2 px-3 py-2 hover:bg-subtle dark:hover:bg-subtle transition-colors"
-          >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
-            </svg>
-            {t("auth.change_password")}
-          </Link>
-          <button
-            onClick={() => { setOpen(false); logout(); }}
-            className="w-full flex items-center gap-2 px-3 py-2 hover:bg-subtle dark:hover:bg-subtle transition-colors text-left text-danger dark:text-danger"
-          >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" />
-            </svg>
-            {t("auth.logout")}
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function AdminNav() {
-  const t = useT();
-  const pathname = usePathname();
-  const [open, setOpen] = useState(false);
-  const { mounted: menuMounted, closing: menuClosing } = usePresence(open);
-  const { isAdmin, has } = usePermissions();
-  const adminGroupLinks: [string, string][] = [
-    ["/admin/data-mgmt", t("nav.datamgmt")],
-    ["/admin/system", t("nav.system")],
-    ["/admin/settings", t("nav.settings")],
-  ];
-  if (isAdmin) adminGroupLinks.push(["/admin/users", t("nav.users")]);
-  const rawGroups = [
-    { label: t("nav.dashboard"), links: [["/admin", t("nav.dashboard")]] },
-    { label: t("nav.library"), links: [["/admin/works", t("nav.works")], ["/admin/tags", t("nav.tags")], ["/admin/upload", t("nav.upload")], ["/admin/curation", t("nav.curation")], ["/admin/dedup", t("nav.dedup")], ["/admin/merge-candidates", t("nav.merge")]] },
-    { label: t("nav.sources"), links: [["/admin/sources", t("nav.sources")], ["/admin/creators", t("nav.creators")], ["/admin/subscriptions", t("nav.subscriptions")], ["/admin/reference/danbooru", t("nav.danbooru")]] },
-    { label: t("nav.operations"), links: [["/admin/jobs", t("nav.jobs")], ["/admin/scheduler", t("nav.scheduler")], ["/admin/notifications", t("notifications.title")]] },
-    { label: t("nav.admin"), links: adminGroupLinks },
-  ];
-  // Filter out links whose module the user lacks; drop groups left empty.
-  const groups = rawGroups
-    .map((group) => ({
-      ...group,
-      links: group.links.filter(([href]) => {
-        const module = LINK_MODULE[href];
-        return !module || has(module);
-      }),
-    }))
-    .filter((group) => group.links.length > 0);
-  const links = groups.flatMap((group) => group.links);
-  const isActive = (href: string) => pathname === href || (href !== "/admin" && pathname.startsWith(href));
-  const showSearchLink = has("library");
-
-  return (
-    <nav className="bg-nav text-nav-fg px-4 sm:px-6 py-3 border-b border-nav-fg/15">
-      <div className="flex items-center gap-4 text-sm">
-        <Link href="/admin" className="font-semibold text-base shrink-0 tracking-tight">auto-gallery</Link>
-        {/* Desktop links */}
-        <div className="hidden md:flex items-center gap-2 flex-1 flex-wrap">
-          {groups.map((group) => (
-            <div key={group.label} className="flex items-center gap-1 rounded-lg bg-nav-fg/[0.04] px-1 py-1">
-              {group.links.map(([href, label]) => (
-                <Link key={href} href={href}
-                    className={`rounded-md px-2 py-1 transition-colors ${isActive(href) ? "bg-nav-fg/10 text-nav-fg font-medium shadow-sm" : "text-nav-fg/70 hover:bg-nav-fg/10 hover:text-nav-fg"}`}>{label}</Link>
-              ))}
-            </div>
-          ))}
-        </div>
-        <div className="flex items-center gap-1 shrink-0 ml-auto">
-          {showSearchLink && (
-            <Link href="/admin/search" className="p-1.5 rounded-md hover:bg-nav-fg/10 transition-colors" title={t("nav.search")} aria-label={t("nav.search")}>
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="11" cy="11" r="8" />
-                <path d="M21 21l-4.3-4.3" />
-              </svg>
-            </Link>
-          )}
-          <NotificationBell />
-          <LangToggle />
-          <PaletteToggle />
-          <ThemeToggle />
-          <UserMenu />
-          {/* Hamburger — mobile only */}
-          <button onClick={() => setOpen(!open)} className="md:hidden p-1.5 rounded-md hover:bg-nav-fg/10" aria-label="Toggle navigation menu">
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              {open ? <path d="M18 6L6 18M6 6l12 12" /> : <path d="M4 6h16M4 12h16M4 18h16" />}
-            </svg>
-          </button>
-        </div>
-      </div>
-      {/* Mobile menu */}
-      {menuMounted && (
-        <div className={`popover ${menuClosing ? "popover-exit" : ""} md:hidden mt-3 pt-3 border-t border-nav-fg/20 flex flex-col gap-1 pb-1`}>
-          {groups.map((group) => (
-            <div key={group.label} className="py-1">
-              <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-nav-fg/50">{group.label}</div>
-              {group.links.map(([href, label]) => (
-                <Link key={href} href={href} onClick={() => setOpen(false)}
-                  className={`block hover:bg-nav-fg/10 hover:text-nav-fg rounded-md transition-colors px-2 py-1 text-sm ${isActive(href) ? "bg-nav-fg/10 text-nav-fg" : ""}`}>{label}</Link>
-              ))}
-            </div>
-          ))}
-          {showSearchLink && (
-            <Link href="/admin/search" onClick={() => setOpen(false)}
-              className="hover:bg-nav-fg/10 hover:text-nav-fg rounded-md transition-colors px-2 py-1 text-sm">{t("nav.search")}</Link>
-          )}
-        </div>
-      )}
-    </nav>
-  );
-}
+const SIDEBAR_KEY = "auto-gallery-sidebar";
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading, user } = useAuth();
@@ -216,6 +45,57 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function AppShell({ children }: { children: React.ReactNode }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const { mounted: drawerMounted, closing: drawerClosing } = usePresence(mobileOpen);
+
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(SIDEBAR_KEY) === "collapsed") setCollapsed(true);
+    } catch {}
+  }, []);
+
+  const toggleSidebar = () => {
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches) {
+      setMobileOpen((open) => !open);
+      return;
+    }
+    setCollapsed((c) => {
+      try { localStorage.setItem(SIDEBAR_KEY, c ? "open" : "collapsed"); } catch {}
+      return !c;
+    });
+  };
+
+  return (
+    <div className="flex min-h-screen">
+      {/* Desktop sidebar — sticky full-height, collapse is instant by design */}
+      {!collapsed && (
+        <aside className="sticky top-0 hidden h-screen shrink-0 overflow-hidden border-r border-border bg-subtle md:block">
+          <AppSidebar />
+        </aside>
+      )}
+      {/* Mobile drawer */}
+      {drawerMounted && (
+        <>
+          <div
+            className={`fixed inset-0 z-40 bg-black/30 md:hidden ${drawerClosing ? "overlay-backdrop-exit" : "overlay-backdrop"}`}
+            onClick={() => setMobileOpen(false)}
+            aria-hidden
+          />
+          <aside className={`fixed inset-y-0 left-0 z-50 border-r border-border bg-subtle md:hidden ${drawerClosing ? "drawer-left-exit" : "drawer-left"}`}>
+            <AppSidebar onNavigate={() => setMobileOpen(false)} />
+          </aside>
+        </>
+      )}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <AppTopBar onToggleSidebar={toggleSidebar} />
+        <main id="main-content" className="min-h-[calc(100vh-56px)]">{children}</main>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isLoginPage = pathname === "/admin/login";
@@ -227,11 +107,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   return (
     <ErrorBoundary>
       <AuthGuard>
-        <div>
-          <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-subtle focus:text-nav-fg focus:rounded">Skip to content</a>
-          <AdminNav />
-          <main id="main-content" className="min-h-[calc(100vh-52px)]">{children}</main>
-        </div>
+        <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-subtle focus:text-fg focus:rounded">Skip to content</a>
+        <AppShell>{children}</AppShell>
       </AuthGuard>
     </ErrorBoundary>
   );

@@ -531,7 +531,7 @@ export function NotificationBell() {
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="p-1.5 rounded hover:bg-white/10 transition-colors relative"
+        className="p-1.5 rounded-md hover:bg-subtle text-muted hover:text-fg transition-colors relative"
         title={t("notification.bell_label")}
         aria-label={t("notification.bell_label")}
       >
