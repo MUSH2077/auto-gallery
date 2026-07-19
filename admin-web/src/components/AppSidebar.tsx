@@ -1,6 +1,8 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
+import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { usePermissions } from "@/lib/usePermissions";
 
@@ -120,10 +122,64 @@ export function findNavEntry(pathname: string): { groupKey: string; labelKey: st
   return best && { groupKey: best.groupKey, labelKey: best.labelKey };
 }
 
+/** Machine-status footer: what the NAS is doing right now, always visible.
+ *  workbench lives in the `system` module, so the block (and the jobs badge
+ *  it feeds) only renders for users holding that permission. */
+function SidebarStatus({ enabled }: { enabled: boolean }) {
+  const t = useT();
+  const workbench = useQuery({
+    queryKey: queryKeys.workbench,
+    queryFn: api.workbench,
+    enabled,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const active = (data?.queue.active_download_count || 0) + (data?.queue.active_import_count || 0);
+      return active > 0 ? 10000 : 30000;
+    },
+  });
+  if (!enabled || !workbench.data) return null;
+  const q = workbench.data.queue;
+  const active = (q.active_download_count || 0) + (q.active_import_count || 0);
+  const usedPercent = workbench.data.storage.disk_used_percent ?? null;
+  const risk = workbench.data.storage.risk_level;
+  const barColor = risk === "critical" ? "bg-danger" : risk === "warning" ? "bg-warning" : "bg-success";
+  return (
+    <div className="grid gap-2 border-t border-border px-4 py-3 text-xs text-muted">
+      <div className="flex items-center gap-2">
+        <span className={`h-2 w-2 shrink-0 rounded-full ${active > 0 ? "animate-pulse bg-accent" : "bg-success"}`} />
+        <span className="truncate">
+          {active > 0
+            ? t("sidebar.running", { downloads: q.active_download_count, imports: q.active_import_count })
+            : t("sidebar.idle")}
+        </span>
+      </div>
+      {usedPercent !== null && (
+        <div className="flex items-center gap-2">
+          <span className="tabular shrink-0">{t("sidebar.disk", { percent: usedPercent })}</span>
+          <span className="h-1 flex-1 overflow-hidden rounded-full bg-border">
+            <i className={`block h-full w-full rounded-full ${barColor} transition-transform duration-slow`}
+              style={{ transform: `scaleX(${Math.min(100, usedPercent) / 100})`, transformOrigin: "left" }} />
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AppSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const t = useT();
   const pathname = usePathname();
   const { isAdmin, has } = usePermissions();
+  const canSeeStatus = has("system");
+  const workbenchBadge = useQuery({
+    queryKey: queryKeys.workbench,
+    queryFn: api.workbench,
+    enabled: canSeeStatus,
+    staleTime: 10000,
+  });
+  const activeJobs = canSeeStatus
+    ? (workbenchBadge.data?.queue.active_download_count || 0) + (workbenchBadge.data?.queue.active_import_count || 0)
+    : 0;
 
   const groups = NAV_GROUPS
     .map((group) => ({
@@ -157,11 +213,17 @@ export default function AppSidebar({ onNavigate }: { onNavigate?: () => void }) 
                 className={`side-item ${isActive(href) ? "side-item-active" : ""}`}>
                 <Icon name={icon} />
                 <span className="truncate">{t(labelKey)}</span>
+                {href === "/admin/jobs" && activeJobs > 0 && (
+                  <span className="tabular ml-auto rounded-full bg-accent px-1.5 text-[11px] font-medium leading-[18px] text-white">
+                    {activeJobs}
+                  </span>
+                )}
               </Link>
             ))}
           </div>
         ))}
       </nav>
+      <SidebarStatus enabled={canSeeStatus} />
     </div>
   );
 }
