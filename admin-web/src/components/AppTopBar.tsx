@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
 import { ThemeToggle, LangToggle, PaletteToggle } from "@/lib/theme";
 import { useAuth } from "@/lib/auth";
@@ -61,10 +61,24 @@ function UserMenu() {
 export default function AppTopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const t = useT();
   const pathname = usePathname();
+  const router = useRouter();
   const { has } = usePermissions();
   const crumb = findNavEntry(pathname);
   const showSearch = has("library");
   const showUpload = has("upload");
+
+  // ⌘K / Ctrl+K jumps to global search (GitHub-style shortcut).
+  useEffect(() => {
+    if (!showSearch) return;
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        router.push("/admin/search");
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [showSearch, router]);
 
   return (
     <header className="sticky top-0 z-40 flex h-14 items-center gap-2 border-b border-border bg-canvas px-4">
@@ -93,6 +107,7 @@ export default function AppTopBar({ onToggleSidebar }: { onToggleSidebar: () => 
               <path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-1.06 1.06ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z" />
             </svg>
             <span className="truncate">{t("search.placeholder")}</span>
+            <kbd className="ml-auto shrink-0 rounded border border-border bg-subtle px-1 font-mono text-[10px] text-muted">⌘K</kbd>
           </Link>
         )}
         {showUpload && (

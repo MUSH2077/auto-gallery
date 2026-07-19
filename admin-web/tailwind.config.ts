@@ -49,6 +49,8 @@ const config: Config = {
         slow: "240ms",
       },
       fontFamily: {
+        // GitHub's system stack — part of the Primer alignment.
+        sans: ["-apple-system", "BlinkMacSystemFont", "Segoe UI", "Noto Sans", "Helvetica", "Arial", "sans-serif", "Apple Color Emoji", "Segoe UI Emoji"],
         mono: ["JetBrains Mono", "ui-monospace", "SFMono-Regular", "monospace"],
       },
       fontSize: {
