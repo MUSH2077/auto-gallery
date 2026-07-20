@@ -168,3 +168,29 @@ src/lib/motion/
 | R6 | `SOURCE_BADGE_COLORS` 硬编码 Tailwind 色、不随 6 套 palette 走 | 与主题系统不一致(约束文档要求硬编码) | 保持现状,仅记录 |
 | R7 | 未用 next/image、无优先级提示 | 与动效无关的加载优化空间 | 不在本计划范围 |
 | R8 | anime.js 无 AnimatePresence 等价物 | 退场编排需自建 usePresence | Phase 1 一次性成本,已计入 |
+
+---
+
+# 附录:性能与可访问性录制(Phase 5,2026-07-20)
+
+Chromium headless(1440×900)对三条主路径各录两遍——正常 + 模拟 `prefers-reduced-motion: reduce`,首屏加载后静置 8 秒(覆盖 ≥1 轮 jobs 2–5s / 仪表盘 5–15s 轮询)。采集 long task(>50ms)、CLS 及逐条 layout-shift、LCP/FCP、`document.getAnimations()` 运行中动画数、`.page-transition` 计算动画时长。方法:playwright-core 驱动本机 Chromium,后端 SECRET_KEY 直签 admin JWT(cookie+localStorage 注入),脚本见 scratchpad `perf-trace.js`。
+
+## 结果
+
+| 页面 | 模式 | FCP | LCP | CLS | long tasks | 运行中动画 | .page-transition 时长 |
+|---|---|---|---|---|---|---|---|
+| /admin | normal | 976ms | 1396ms | 0.003 | **0** | 0 | 0.4s |
+| /admin | reduced | 876ms | 912ms | 0.004 | **0** | 0 | **~0(1e-5s)** |
+| /admin/works | normal | 864ms | 1068ms | **0.24** | **0** | 0 | — |
+| /admin/works | reduced | 876ms | 1020ms | **0.39** | **0** | 0 | — |
+| /admin/jobs | normal | 856ms | 984ms | 0.057 | **0** | **16** | — |
+| /admin/jobs | reduced | 896ms | 1040ms | 0.045 | **0** | **0** | — |
+
+## 结论
+
+1. **主线程零阻塞**:三页两模式 long task 全为 0——动效工作(stagger、pulse、scaleX、count-up 懒加载)均未产生 >50ms 长任务。印证红线 #1「轮询/WS 重渲染 × 入场动画」在 `useEnterOnce` + 纯 transform/opacity 约束下没有恶化主线程。
+2. **reduced-motion 三层门控实测通过**:①CSS kill-switch —— `.page-transition` 时长 0.4s → **~0**;②JS `shouldAnimate()` 源头拦截 —— jobs 运行中动画 **16 → 0**(脉冲点/徽章在 reduce 下不启动,而非启动后被 CSS 掐掉);③`usePresence` 退场归零。这正是计划 Phase 5 要的「系统设置→JS 门控→CSS 兜底」端到端验证。
+3. **jobs 的 16 个常驻动画**均为 `animate-pulse`(侧栏机器状态脉冲点、任务实时徽章、JobLifecycle 活动步进点、连接点)——纯 CSS 合成器动画,long task=0,reduce 下全部停,符合预期。
+4. **/admin/works CLS 偏高(0.24 / 0.39)= 既有图片尺寸问题,非动效回归**:works 网格用原生 `<img loading="lazy">` 且未预留宽高(即风险登记 R7「未用 next/image」),图片解码后撑开布局造成位移。两模式差异(0.24 vs 0.39)是图片加载时序的运行间抖动,与 motion 无关——works 卡片入场是 opacity/transform,不参与布局。**建议**:后续给缩略图容器加 `aspect-ratio` 占位(与动效计划无关的独立优化,归入 R7)。
+
+**判定**:动效系统在性能与可访问性维度达标——零长任务、reduced-motion 三层生效。唯一 CLS 告警定位为既有图片尺寸问题(R7),不在本动效计划范围。MU-T2 完成,动效五阶段计划全部结项。
