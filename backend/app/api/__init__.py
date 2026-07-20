@@ -24,6 +24,7 @@ from app.api.ws import router as ws_router
 from app.api.tasks import router as tasks_router
 from app.api.users import router as users_router
 from app.api.upload import router as upload_router
+from app.api.showcase import router as showcase_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(ws_router, tags=["websocket"])
@@ -50,3 +51,4 @@ api_router.include_router(admin_curation_ops_router, prefix="/admin", tags=["adm
 api_router.include_router(admin_tasks_ops_router, prefix="/admin", tags=["admin"])
 api_router.include_router(users_router, prefix="/users", tags=["users"])
 api_router.include_router(upload_router, prefix="/upload", tags=["upload"])
+api_router.include_router(showcase_router, prefix="/showcase", tags=["showcase"])
