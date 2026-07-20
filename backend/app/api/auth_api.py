@@ -24,7 +24,7 @@ from app.services.rate_limiter import RateLimiter
 from app.services.tasks import TaskService
 from app.services.ws_tickets import issue_ws_ticket
 
-_ALLOWED_PREFERENCE_KEYS = {"theme", "palette", "lang", "appearance"}
+_ALLOWED_PREFERENCE_KEYS = {"theme", "palette", "lang", "appearance", "showcase"}
 
 logger = logging.getLogger(__name__)
 

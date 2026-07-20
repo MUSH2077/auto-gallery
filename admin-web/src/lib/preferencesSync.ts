@@ -16,6 +16,7 @@ const THEME_KEY = "auto-gallery-theme";
 const PALETTE_KEY = "auto-gallery-palette";
 const LANG_KEY = "auto-gallery-lang";
 const APPEARANCE_KEY = "auto-gallery-appearance-v1";
+const SHOWCASE_KEY = "auto-gallery-showcase-v1";
 const TOKEN_KEY = "ag_token";
 
 const DEBOUNCE_MS = 800;
@@ -30,11 +31,13 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 function readFullPreferencesFromLocalStorage(): Record<string, unknown> {
   try {
     const appearanceRaw = localStorage.getItem(APPEARANCE_KEY);
+    const showcaseRaw = localStorage.getItem(SHOWCASE_KEY);
     return {
       theme: localStorage.getItem(THEME_KEY) || "system",
       palette: localStorage.getItem(PALETTE_KEY) || "github",
       lang: localStorage.getItem(LANG_KEY) || "zh",
       appearance: appearanceRaw ? JSON.parse(appearanceRaw) : {},
+      showcase: showcaseRaw ? JSON.parse(showcaseRaw) : {},
     };
   } catch {
     return {};

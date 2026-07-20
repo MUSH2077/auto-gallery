@@ -5,6 +5,7 @@ import { ThemeProvider, useTheme, PALETTES, type Theme, type Palette } from "@/l
 import { I18nProvider, useI18n, type Lang } from "@/lib/i18n";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { useAppearanceSettings, type AppearanceSettings } from "@/lib/appearance";
+import { ShowcaseConfigProvider, applyShowcasePreferences } from "@/lib/showcase/config";
 import { api, queryKeys } from "@/lib/api";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { ToastProvider } from "@/components/Toast";
@@ -55,6 +56,7 @@ function PreferencesHydrator() {
     if (prefs.appearance && typeof prefs.appearance === "object") {
       updateSettings(prefs.appearance as Partial<AppearanceSettings>);
     }
+    if (prefs.showcase) applyShowcasePreferences(prefs.showcase);
   }, [me.data, setTheme, setPalette, setLang, updateSettings]);
 
   return null;
@@ -70,10 +72,12 @@ export default function Providers({ children }: { children: React.ReactNode }) {
         <I18nProvider>
           <ThemeProvider>
             <AuthProvider>
-              <PreferencesHydrator />
-              <NotificationProvider>
-                <ToastProvider>{children}</ToastProvider>
-              </NotificationProvider>
+              <ShowcaseConfigProvider>
+                <PreferencesHydrator />
+                <NotificationProvider>
+                  <ToastProvider>{children}</ToastProvider>
+                </NotificationProvider>
+              </ShowcaseConfigProvider>
             </AuthProvider>
           </ThemeProvider>
         </I18nProvider>

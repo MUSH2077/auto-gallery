@@ -289,3 +289,31 @@ async def test_put_preferences_rejects_invalid_keys():
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_put_preferences_accepts_showcase_key():
+    from app.database import async_session, engine
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            await _seed_user(db, f"{PREFIX}prefs_showcase", is_admin=True)
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            h = _headers(f"{PREFIX}prefs_showcase")
+            body = {"preferences": {"theme": "dark",
+                                    "showcase": {"scope": "favorites", "trailMax": 12}}}
+            r = await client.put("/api/v1/auth/me/preferences", json=body, headers=h)
+            assert r.status_code == 200, r.text
+            assert r.json()["preferences"]["showcase"]["scope"] == "favorites"
+
+            me = await client.get("/api/v1/auth/me", headers=h)
+            assert me.json()["preferences"]["showcase"]["trailMax"] == 12
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
