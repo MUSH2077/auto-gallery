@@ -67,6 +67,24 @@ async def sample(
             precomputed_total=total,
             force_sfw=force_sfw,
         )
+        if not works:
+            # Self-heal from a stale cached total: `total` above may have
+            # come from the 300s count cache. If rows were deleted or hidden
+            # since it was cached, `offset` can land past the real end of the
+            # filtered set and this window comes back empty even though
+            # matching works still exist. Retry once at offset 0 with
+            # precomputed_total=None to force a fresh COUNT, and refresh the
+            # cache with that fresh value so subsequent requests don't repeat
+            # this. This extra query only runs on this rare stale-cache path
+            # — the common path above is unaffected.
+            works, total = await repo.list_all(
+                offset=0, limit=count,
+                source=source, tag=tag, is_favorite=is_favorite,
+                curation_visibility="visible",
+                precomputed_total=None,
+                force_sfw=force_sfw,
+            )
+            cache_set(count_ck, total, 300)
 
     works = list(works)
     random.shuffle(works)
