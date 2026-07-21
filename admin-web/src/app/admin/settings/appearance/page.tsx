@@ -126,7 +126,7 @@ export default function AppearanceSettingsPage() {
             }`}
             aria-pressed={settings.workPreviewEnabled}
           >
-            {settings.workPreviewEnabled ? t("common.enabled", "Enabled") : t("common.disabled", "Disabled")}
+            {settings.workPreviewEnabled ? t("common.on") : t("common.off")}
           </button>
         </SettingRow>
         <SettingRow title={t("appearance.preview_delay", "Preview delay")} description={t("appearance.preview_delay_desc", "Delay before the enlarged preview opens.")}>

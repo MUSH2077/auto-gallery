@@ -74,7 +74,7 @@ function ToggleButton({
         checked ? "border-accent bg-accent-subtle text-accent" : "border-border text-muted hover:bg-subtle"
       }`}
     >
-      {checked ? t("common.enabled", "已启用") : t("common.disabled", "已关闭")}
+      {checked ? t("common.on") : t("common.off")}
     </button>
   );
 }
@@ -173,7 +173,7 @@ export default function ShowcaseSettingsPage() {
               aria-label={t("showcase_settings.source", "来源")}
             >
               <option value="">{t("showcase_settings.source_any", "任意")}</option>
-              {(sources.data?.sources || []).map((s: ProviderInfo) => (
+              {(sources.data?.sources || []).filter((s: ProviderInfo) => s.capabilities.can_download || s.capabilities.can_import_local).map((s: ProviderInfo) => (
                 <option key={s.source_name} value={s.source_name}>
                   {s.display_name}
                 </option>
