@@ -25,7 +25,19 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const authUser = await login(username, password);
-      router.replace(authUser.must_change_password ? "/admin/settings/profile" : "/admin");
+      if (authUser.must_change_password) {
+        router.replace("/admin/settings/profile");
+      } else {
+        const landing = (() => {
+          try {
+            const raw = localStorage.getItem("auto-gallery-showcase-v1");
+            return raw && JSON.parse(raw).landing === "dashboard" ? "/admin" : "/";
+          } catch {
+            return "/";
+          }
+        })();
+        router.replace(landing);
+      }
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : t("auth.invalid_credentials"));
     } finally {

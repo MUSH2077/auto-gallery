@@ -964,3 +964,20 @@ export type GeneratedWorkList = components["schemas"]["WorkList"];
 export type GeneratedAsset = components["schemas"]["AssetRead"];
 export type GeneratedCreator = components["schemas"]["CreatorRead"];
 export type GeneratedSubscription = components["schemas"]["SubscriptionRead"];
+
+// ── Showcase ──
+
+export interface ShowcaseItem {
+  work_id: string;
+  title: string | null;
+  creator_name: string | null;
+  source: string | null;
+  thumb_url: string;
+  preview_url: string;
+  width: number | null;
+  height: number | null;
+}
+
+export interface ShowcaseSampleResponse {
+  items: ShowcaseItem[];
+}

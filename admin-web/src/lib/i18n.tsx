@@ -1190,6 +1190,12 @@ const zh: Record<string, string> = {
   "showcase_settings.headline": "标题文案",
   "showcase_settings.show_stats": "显示统计数据",
   "showcase.headline_default": "你的画廊，静静展开",
+  "showcase.stats": "正在展示 {count} 件作品",
+  "showcase.enter_gallery": "进入图库",
+  "showcase.enter_dashboard": "进入仪表盘",
+  "showcase.enter_upload": "上传作品",
+  "showcase.empty_title": "画廊还是空的",
+  "showcase.empty_desc": "订阅创作者或上传作品后，随机作品会展示在这里。",
 
   // Gallery-dl config
   "gallerydl.title": "gallery-dl 配置",
@@ -3862,6 +3868,12 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "showcase_settings.headline": "Headline",
     "showcase_settings.show_stats": "Show stats",
     "showcase.headline_default": "Your gallery, quietly unfolding.",
+    "showcase.stats": "Showing {count} works",
+    "showcase.enter_gallery": "Enter Gallery",
+    "showcase.enter_dashboard": "Enter Dashboard",
+    "showcase.enter_upload": "Upload Works",
+    "showcase.empty_title": "Your gallery is empty",
+    "showcase.empty_desc": "Subscribe to creators or upload some works, and they'll show up here.",
   });
   return result;
 }

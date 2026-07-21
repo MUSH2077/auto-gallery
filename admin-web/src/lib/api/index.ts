@@ -361,6 +361,19 @@ export const api = {
       { method: "POST" },
     ),
 
+  // Showcase
+  showcaseSample: (params: {
+    count?: number; scope?: string; source?: string | null; tag?: string | null; include_nsfw?: boolean;
+  } = {}) => {
+    const q = new URLSearchParams();
+    if (params.count) q.set("count", String(params.count));
+    if (params.scope) q.set("scope", params.scope);
+    if (params.source) q.set("source", params.source);
+    if (params.tag) q.set("tag", params.tag);
+    if (params.include_nsfw) q.set("include_nsfw", "true");
+    return request<T.ShowcaseSampleResponse>(`/api/v1/showcase/sample?${q.toString()}`);
+  },
+
   // Works
   ...worksApi,
 
@@ -710,6 +723,9 @@ export const queryKeys = {
     all: ["gitllery"] as const,
     status: ["gitllery", "status"] as const,
     log: (repositoryId: string) => ["gitllery", "log", repositoryId] as const,
+  },
+  showcase: {
+    sample: (params: Record<string, unknown>) => ["showcase", "sample", params] as const,
   },
   downloadJobs: {
     all: ["download-jobs"] as const,
