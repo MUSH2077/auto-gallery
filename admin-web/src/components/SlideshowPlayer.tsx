@@ -100,6 +100,16 @@ function SlideLayer({ item, gen, front, kenBurns, dwellMs }: {
     retryRef.current = 0;
     setUrl(null);
     setBroken(false);
+    // The back slot doesn't need a signed URL until it is actually shown:
+    // every place that assigns this slot a new (gen, workId, assetId) also
+    // flips `front` to true in the same state batch (see navigateTo and the
+    // "fresh session" effect), so skipping the fetch here only ever defers
+    // it to the render where it's genuinely needed — never drops it.
+    // Deliberately NOT a dependency: `front` also flips back to false on the
+    // *other* slot's turn (this slot going front → back after a crossfade)
+    // without its own gen changing, and re-running this effect then would
+    // wipe the url/broken state mid-fade-out.
+    if (!front) return;
     fetchPreviewUrl(workId, assetId).then((resolved) => {
       if (cancelledRef.current) return;
       if (resolved) setUrl(resolved);
@@ -111,6 +121,7 @@ function SlideLayer({ item, gen, front, kenBurns, dwellMs }: {
     // `gen` bumps every time this slot is assigned a slide (including being
     // reassigned the *same* index later in a loop) — re-fetching then keeps
     // the signed URL fresh rather than reusing one that may have expired.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gen, workId, assetId]);
 
   const handleError = useCallback(() => {
@@ -272,6 +283,38 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
       if (e.key === " " || e.code === "Space" || e.key === "Spacebar") {
         e.preventDefault();
         setPaused((p) => !p);
+        return;
+      }
+      if (e.key === "Tab") {
+        // Focus trap, mirrored from Modal.tsx's contract: query focusable
+        // elements at keypress time (not captured once on open) since
+        // controls come and go with `slideShowMeta`/`total`. The container
+        // itself (tabIndex={-1}) is where initial focus lands on open, and
+        // — since this player is mounted inline in the host page rather
+        // than through a portal — the browser's default Tab/Shift+Tab walk
+        // from that container would otherwise be free to step onto
+        // background page content before/after it in the DOM. So every
+        // branch below is explicit; nothing here falls through to default
+        // browser tab behavior.
+        const focusables = el.querySelectorAll<HTMLElement>(
+          'input:not([disabled]), button:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+        if (!focusables.length) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        const activeEl = document.activeElement;
+        if (activeEl === el) {
+          e.preventDefault();
+          (e.shiftKey ? last : first).focus();
+          return;
+        }
+        if (e.shiftKey && activeEl === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && activeEl === last) {
+          e.preventDefault();
+          first.focus();
+        }
       }
     };
     el.addEventListener("keydown", onKeyDown);
