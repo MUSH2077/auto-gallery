@@ -53,14 +53,12 @@ const FADE_OUT_SCALE_END = 0.85;
 // `render(items, pointer)` is a fixed 2-argument interface — it does not
 // receive the config-derived `lifetimeMs` that ShowcaseTrailDOM's ageStyle()
 // curve is normalized against (that value lives in ShowcaseCanvas, which
-// constructs the trail controller). Rather than duplicate config plumbing
-// through a signature we're not allowed to change, this renderer derives a
-// self-adjusting *estimate* of the same quantity by watching how old the
-// longest-lived currently-alive item gets: the controller upstream already
-// culls items at the true lifetimeMs, so the oldest surviving item's age
-// converges to it within one spawn/cull cycle. That's enough to drive a
-// graceful fade-out envelope without any extra coupling.
-const INITIAL_LIFETIME_ESTIMATE_MS = 900; // seeds at the same floor ShowcaseTrailDOM's lifetime is clamped to.
+// constructs the trail controller). That value is instead threaded through
+// `createShowcaseRenderer`'s options object (`opts.lifetimeMs`, computed by
+// the caller via the shared `computeLifetimeMs()` in trailTiming.ts) so the
+// WebGL fade-out envelope is normalized against the exact same lifetime the
+// DOM renderer and the trail controller's own culling use — no estimate, no
+// drift between the two renderers.
 
 // Clamp on the per-frame pointer delta used for uVelocity/parallax so a tab
 // resuming from background (a huge apparent jump) can't blow up the shader
@@ -117,13 +115,13 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-/** Item-age envelope: fade+pop in, hold, fade+shrink out — see the lifetime-estimate note above for why the "out" edge is estimated rather than exact. */
-function ageEnvelope(age: number, lifetimeEstimateMs: number): { opacity: number; scale: number } {
+/** Item-age envelope: fade+pop in, hold, fade+shrink out, normalized against the caller-supplied true `lifetimeMs`. */
+function ageEnvelope(age: number, lifetimeMs: number): { opacity: number; scale: number } {
   if (age <= FADE_IN_MS) {
     const p = FADE_IN_MS > 0 ? age / FADE_IN_MS : 1;
     return { opacity: p, scale: POP_SCALE_START + (1 - POP_SCALE_START) * p };
   }
-  const remaining = lifetimeEstimateMs - age;
+  const remaining = lifetimeMs - age;
   if (remaining <= FADE_OUT_MS) {
     const p = clamp(remaining / FADE_OUT_MS, 0, 1);
     return { opacity: p, scale: FADE_OUT_SCALE_END + (1 - FADE_OUT_SCALE_END) * p };
@@ -145,7 +143,7 @@ async function fetchBitmap(url: string): Promise<ImageBitmap> {
 
 export async function createShowcaseRenderer(
   canvas: HTMLCanvasElement,
-  opts: { maxTextures: number; parallaxStrength: number },
+  opts: { maxTextures: number; parallaxStrength: number; lifetimeMs: number },
 ): Promise<ShowcaseRenderer> {
   const { Renderer, Camera, Transform, Plane, Program, Mesh, Texture } = await import("ogl");
   type OglTexture = InstanceType<typeof Texture>;
@@ -301,7 +299,6 @@ export async function createShowcaseRenderer(
 
   let hasLastPointer = false;
   const lastPointer = { x: 0, y: 0 };
-  let lifetimeEstimateMs = INITIAL_LIFETIME_ESTIMATE_MS;
   let destroyed = false;
 
   function render(items: TrailItem[], pointer: { x: number; y: number }): void {
@@ -324,10 +321,6 @@ export async function createShowcaseRenderer(
     const offsetX = vx * opts.parallaxStrength;
     const offsetY = vy * opts.parallaxStrength;
 
-    for (const it of items) {
-      lifetimeEstimateMs = Math.max(lifetimeEstimateMs, now - it.bornAt + FADE_OUT_MS);
-    }
-
     const slotCount = Math.max(items.length, meshPool.length);
     for (let i = 0; i < slotCount; i++) {
       const slot = ensureMesh(i);
@@ -341,7 +334,7 @@ export async function createShowcaseRenderer(
       const cached = url ? touch(url) : undefined;
       slot.texture = cached ? cached.texture : emptyTexture;
 
-      const { opacity, scale } = ageEnvelope(now - item.bornAt, lifetimeEstimateMs);
+      const { opacity, scale } = ageEnvelope(now - item.bornAt, opts.lifetimeMs);
       slot.opacity = cached ? opacity : 0;
 
       const worldX = item.x + offsetX;
@@ -384,14 +377,43 @@ export async function createShowcaseRenderer(
     } catch {
       /* already gone */
     }
+    // `geometry` (the shared Plane) allocates its own VBO/VAO on `gl`, same
+    // as textures/program above. Explicit here for the same reason: since
+    // destroy() no longer forces the context lost (see below), those buffers
+    // now outlive this renderer instance unless freed explicitly — the
+    // context persisting across recreations is exactly the point, so any GPU
+    // object this instance allocated must be deleted by hand instead of
+    // relying on context loss to reclaim it.
+    try {
+      geometry.remove();
+    } catch {
+      /* already gone */
+    }
     // No listeners are registered internally by this module (ShowcaseCanvas
     // owns pointermove/resize/visibilitychange/webglcontextlost) — this is
     // the hook to remove any that a future change adds here.
-    try {
-      gl.getExtension("WEBGL_lose_context")?.loseContext();
-    } catch {
-      /* not supported — nothing to release */
-    }
+    //
+    // Deliberately does NOT call `gl.getExtension("WEBGL_lose_context")
+    // ?.loseContext()` here. The canvas element this context belongs to is
+    // reused by ShowcaseCanvas's mount effect (only a subset of the effect's
+    // deps actually changes the rendered JSX's `useWebGL`/`fellBack`
+    // branch, so a settings-only re-run tears down and recreates the
+    // renderer on the *same* <canvas>). Per the HTML spec, `getContext()` on
+    // a canvas is idempotent for a given (type, attributes) pair, and an
+    // explicitly-lost context (via `loseContext()`) is never replaced by a
+    // later `getContext()` call — only `restoreContext()` on that same
+    // extension instance can undo it, which nothing here calls. Forcing the
+    // context lost would therefore permanently brick every future renderer
+    // built on this canvas: `new Renderer({ canvas })` would still return a
+    // (dead) `gl`, the `if (!gl) throw` guard would never fire, and every GL
+    // call after would silently no-op — a blank canvas with no error and no
+    // fallback. The explicit `deleteTexture`/`program.remove()` calls above
+    // already release the GPU resources this renderer allocated; that's the
+    // correct and sufficient teardown for a context that outlives this one
+    // renderer instance. A *genuine* context loss (GPU reset, driver crash,
+    // browser resource reclamation) still fires `webglcontextlost` on its
+    // own and is handled by ShowcaseCanvas's `onContextLost` -> `fellBack`
+    // path — that path never runs through this function.
   }
 
   return { setImages, render, resize, destroy };

@@ -172,6 +172,7 @@ export default function ShowcaseCanvas({
         created = await createShowcaseRenderer(canvas!, {
           maxTextures: config.trailMax * 2,
           parallaxStrength: config.parallaxStrength,
+          lifetimeMs,
         });
       } catch {
         if (!cancelled) setFellBack(true);
