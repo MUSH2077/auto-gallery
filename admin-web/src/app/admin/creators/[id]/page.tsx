@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
-import { GitlleryPanel, Modal, RepositoryCard, SourceBadge, StatusBadge, WorkGrid } from "@/components";
+import { GitlleryPanel, Modal, RepositoryCard, SourceBadge, StatusBadge, WorkGrid, type SlideItem } from "@/components";
+import { useSlideshow } from "@/lib/useSlideshow";
 import { POLL_IDLE_MS } from "@/lib/polling";
 import { Breadcrumb } from "@/components/Breadcrumb";
 import { useToast } from "@/components/Toast";
@@ -118,6 +119,11 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
     }),
   });
 
+  const slideshow = useSlideshow();
+  const slideItems: SlideItem[] = (filteredWorks.data?.items || [])
+    .filter((w): w is WorkListItem & { thumbnail_asset_id: string } => !!w.thumbnail_asset_id)
+    .map((w) => ({ assetId: w.thumbnail_asset_id, workId: w.id, title: w.title, creatorName: w.creator_name }));
+
   return (
     <div className="space-y-4">
       <div className="rounded-md border border-border bg-white p-4 dark:border-border dark:bg-surface">
@@ -126,9 +132,16 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
             <h2 className="text-base font-semibold">{t("creator_detail.works_title")}</h2>
             <p className="mt-1 text-sm text-muted">{t("creator_detail.works_filter_hint")}</p>
           </div>
-          <Link href={`/admin/works?creator=${creatorId}${selectedTag ? `&tag=${encodeURIComponent(selectedTag)}` : ""}`} className="btn-ghost">
-            {t("creator_detail.open_full_gallery")}
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            {slideItems.length > 0 && (
+              <button type="button" onClick={() => slideshow.open(slideItems)} className="btn-ghost">
+                {t("slideshow.open")}
+              </button>
+            )}
+            <Link href={`/admin/works?creator=${creatorId}${selectedTag ? `&tag=${encodeURIComponent(selectedTag)}` : ""}`} className="btn-ghost">
+              {t("creator_detail.open_full_gallery")}
+            </Link>
+          </div>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <input
@@ -180,6 +193,7 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
           </div>
         </>
       )}
+      {slideshow.node}
     </div>
   );
 }

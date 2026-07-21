@@ -8,7 +8,8 @@ import { api, queryKeys, WorkListItem } from "@/lib/api";
 import type { WorkAsset } from "@/lib/api/endpoints/works";
 import { useAppearanceSettings } from "@/lib/appearance";
 import { staggerDelay } from "@/lib/motion";
-import { AssetImage, PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, WorkPreviewOverlay, PermissionGuard } from "@/components";
+import { AssetImage, PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, WorkPreviewOverlay, PermissionGuard, type SlideItem } from "@/components";
+import { useSlideshow } from "@/lib/useSlideshow";
 import { usePermissions } from "@/lib/usePermissions";
 
 type PreviewState = {
@@ -313,6 +314,11 @@ function WorksContent() {
     },
   });
 
+  const slideshow = useSlideshow();
+  const slideItems: SlideItem[] = (works.data?.items || [])
+    .filter((w): w is WorkListItem & { thumbnail_asset_id: string } => !!w.thumbnail_asset_id)
+    .map((w) => ({ assetId: w.thumbnail_asset_id, workId: w.id, title: w.title, creatorName: w.creator_name }));
+
   // Stagger only the FIRST grid the visitor sees. Page flips, filter changes
   // and refetches render instantly — browsing speed beats entrance flair
   // (motion principle #1), and poll-driven re-renders must never replay.
@@ -409,7 +415,13 @@ function WorksContent() {
 
   return (
     <PageShell>
-      <PageHeader title={t("works.title")} description={t("works.count", "0 works").replace("{count}", String(works.data?.total ?? 0))} />
+      <PageHeader title={t("works.title")} description={t("works.count", "0 works").replace("{count}", String(works.data?.total ?? 0))}>
+        {slideItems.length > 0 && (
+          <button type="button" onClick={() => slideshow.open(slideItems)} className="btn-ghost">
+            {t("slideshow.open")}
+          </button>
+        )}
+      </PageHeader>
 
       {/* Search & Filters */}
       <div className="mb-3 flex flex-wrap items-center gap-2 md:hidden">
@@ -717,6 +729,7 @@ function WorksContent() {
           <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!works.data || (page + 1) * limit >= works.data.total} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-border dark:text-muted">{t("works.next")}</button>
         </div>
       )}
+      {slideshow.node}
     </PageShell>
   );
 }

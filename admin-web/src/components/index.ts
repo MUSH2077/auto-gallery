@@ -33,3 +33,6 @@ export { default as PageLayout } from "./PageLayout";
 export { TaskDetailDrawer, JobDetailDrawer } from "./JobDrawers";
 export { FullImageLightbox, DisclosurePanel } from "./WorkViewerParts";
 export type { AssetData } from "./WorkViewerParts";
+
+export { default as SlideshowPlayer } from "./SlideshowPlayer";
+export type { SlideItem } from "./SlideshowPlayer";

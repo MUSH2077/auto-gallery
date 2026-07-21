@@ -1197,6 +1197,14 @@ const zh: Record<string, string> = {
   "showcase.empty_title": "画廊还是空的",
   "showcase.empty_desc": "订阅创作者或上传作品后，随机作品会展示在这里。",
 
+  "slideshow.open": "幻灯片放映",
+  "slideshow.play": "播放",
+  "slideshow.pause": "暂停",
+  "slideshow.prev": "上一张",
+  "slideshow.next": "下一张",
+  "slideshow.close": "关闭幻灯片",
+  "slideshow.counter": "{current} / {total}",
+
   // Gallery-dl config
   "gallerydl.title": "gallery-dl 配置",
   "gallerydl.desc": "各站点提取器选项，保存到 config.json。",
@@ -3874,6 +3882,14 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "showcase.enter_upload": "Upload Works",
     "showcase.empty_title": "Your gallery is empty",
     "showcase.empty_desc": "Subscribe to creators or upload some works, and they'll show up here.",
+
+    "slideshow.open": "Slideshow",
+    "slideshow.play": "Play",
+    "slideshow.pause": "Pause",
+    "slideshow.prev": "Previous slide",
+    "slideshow.next": "Next slide",
+    "slideshow.close": "Close slideshow",
+    "slideshow.counter": "{current} / {total}",
   });
   return result;
 }

@@ -6,7 +6,8 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { Breadcrumb } from "@/components/Breadcrumb";
-import { ErrorState, EmptyState } from "@/components";
+import { ErrorState, EmptyState, type SlideItem } from "@/components";
+import { useSlideshow } from "@/lib/useSlideshow";
 
 export default function TagDetailPage() {
   const t = useT();
@@ -25,6 +26,11 @@ export default function TagDetailPage() {
     queryFn: () => api.listWorks(page * limit, limit, { tag: tag.data?.normalized_name }),
     enabled: !!tag.data?.normalized_name,
   });
+
+  const slideshow = useSlideshow();
+  const slideItems: SlideItem[] = (works.data?.items || [])
+    .filter((w) => !!w.thumbnail_asset_id)
+    .map((w) => ({ assetId: w.thumbnail_asset_id as string, workId: w.id, title: w.title, creatorName: w.creator_name }));
 
   if (tag.isLoading) return <main className="max-w-6xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded bg-subtle" /><div className="h-64 rounded bg-subtle" /></div></main>;
   if (tag.error) return <main className="max-w-6xl mx-auto p-6"><ErrorState message={(tag.error as Error).message} onRetry={() => tag.refetch()} /></main>;
@@ -66,7 +72,14 @@ export default function TagDetailPage() {
         </aside>
 
         <section>
-          <h2 className="text-base font-semibold mb-4">{t("tag_detail.works_with_tag", { count: works.data?.total || 0 })}</h2>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-base font-semibold">{t("tag_detail.works_with_tag", { count: works.data?.total || 0 })}</h2>
+            {slideItems.length > 0 && (
+              <button type="button" onClick={() => slideshow.open(slideItems)} className="btn-ghost">
+                {t("slideshow.open")}
+              </button>
+            )}
+          </div>
           {works.isLoading && <div className="grid grid-cols-2 md:grid-cols-3 gap-4">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-48 animate-pulse rounded-md bg-subtle" />)}</div>}
           {works.data && works.data.items.length === 0 && <EmptyState title={t("tag_detail.no_works")} />}
           {works.data && works.data.items.length > 0 && (
@@ -99,6 +112,7 @@ export default function TagDetailPage() {
           )}
         </section>
       </div>
+      {slideshow.node}
     </main>
   );
 }
