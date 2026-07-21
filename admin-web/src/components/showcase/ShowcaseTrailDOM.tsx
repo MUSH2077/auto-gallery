@@ -54,6 +54,23 @@ const REFERENCE_FRAME_MS = 1000 / 60;
 // screen. Defense-in-depth alongside resetting lastFrameTime on hide (see
 // onVisibility below).
 const MAX_DT_MS = 100;
+// Real browser `pointermove` events stop firing the instant the pointer
+// stops moving (or leaves the container/window) — `paint()` does not, it
+// keeps running every rAF frame regardless. Forwarding to
+// `controller.pointerMove` must therefore be gated on genuine motion, not
+// merely "a pointer has been seen at some point": keep forwarding while
+// either (a) a real `pointermove` event arrived within this window — so a
+// still-moving-but-nearly-caught-up pointer (large followDamping, or a very
+// slow/sub-pixel drag) never gets cut off — or (b) `damped` has not yet
+// converged to `raw` within CONVERGENCE_EPSILON_PX, which lets the trail
+// finish its short smoothing-lag deceleration tail after the last real
+// event before going quiet. Once neither holds, spawning stops.
+const MOVE_RECENCY_WINDOW_MS = 200;
+// Below this many px of lag between `raw` and `damped`, the smoothing tail
+// is considered finished. Small relative to any perceptible pointer speed
+// (which moves `raw` many px/frame), so it only trips once motion has
+// genuinely stopped and `damped` has caught up.
+const CONVERGENCE_EPSILON_PX = 0.5;
 
 function computeLifetimeMs(config: TrailConfig): number {
   return Math.max(MIN_LIFETIME_MS, config.trailMax * config.spawnIntervalMs);
@@ -129,9 +146,16 @@ export default function ShowcaseTrailDOM({ items, config }: { items: ShowcaseIte
     const damped = { x: 0, y: 0 };
     let rafId = 0;
     let running = true;
-    // No pointer input has arrived yet — must not spawn trail items at the
-    // (0,0) default before the user actually moves the mouse.
+    // No pointer input is currently active — must not spawn trail items at
+    // the (0,0) default before the user actually moves the mouse, and must
+    // stop again once the pointer leaves the container/window (see
+    // onPointerLeave below). Distinct from the motion-recency/convergence
+    // gate in paint(): this is "is there a pointer here at all", that gate
+    // is "is it still moving".
     let hasPointer = false;
+    // Wall-clock timestamp of the most recent REAL `pointermove` event (not
+    // a painted frame) — feeds the MOVE_RECENCY_WINDOW_MS check in paint().
+    let lastRealMoveTime = -Infinity;
     // Wall-clock timestamp of the previous painted frame; null means "no
     // previous frame to diff against" (first frame after mount, or the
     // first frame after resuming from document.hidden).
@@ -141,14 +165,25 @@ export default function ShowcaseTrailDOM({ items, config }: { items: ShowcaseIte
       const rect = container!.getBoundingClientRect();
       raw.x = e.clientX - rect.left;
       raw.y = e.clientY - rect.top;
+      lastRealMoveTime = performance.now();
       if (!hasPointer) {
-        // Snap instead of lerping from (0,0) on the very first move, so the
+        // Snap instead of lerping from (0,0) on the very first move (or the
+        // first move after re-entering following a pointerleave), so the
         // trail starts exactly at the cursor rather than visibly crawling
-        // in from the top-left corner.
+        // in from the previous position or the top-left corner.
         hasPointer = true;
         damped.x = raw.x;
         damped.y = raw.y;
       }
+    }
+
+    function onPointerLeave() {
+      // Pointer left the container (including leaving the browser window
+      // entirely — pointerleave fires on the last-hovered element in that
+      // case too): stop spawning immediately rather than riding out the
+      // smoothing tail, since there is no longer a real cursor position to
+      // trail toward. Re-entry re-triggers the snap-to-cursor path above.
+      hasPointer = false;
     }
 
     function paint(now: number) {
@@ -170,7 +205,16 @@ export default function ShowcaseTrailDOM({ items, config }: { items: ShowcaseIte
       const alpha = frameIndependentAlpha(config.followDamping, dt);
       damped.x += (raw.x - damped.x) * alpha;
       damped.y += (raw.y - damped.y) * alpha;
-      if (hasPointer) controller.pointerMove(damped.x, damped.y);
+      if (hasPointer) {
+        // Forward only while genuinely in motion (see MOVE_RECENCY_WINDOW_MS
+        // / CONVERGENCE_EPSILON_PX above) — otherwise a pointer that has
+        // stopped (or left, via onPointerLeave clearing hasPointer) would
+        // spawn a fresh item at the same frozen coordinate every
+        // spawnIntervalMs forever, instead of quietly fading to nothing.
+        const recentRealMove = now - lastRealMoveTime < MOVE_RECENCY_WINDOW_MS;
+        const stillConverging = Math.hypot(raw.x - damped.x, raw.y - damped.y) > CONVERGENCE_EPSILON_PX;
+        if (recentRealMove || stillConverging) controller.pointerMove(damped.x, damped.y);
+      }
 
       // parallaxStrength stays a small *shared* depth offset — the gap
       // between the raw cursor and the smoothed spawn point, scaled down —
@@ -228,6 +272,7 @@ export default function ShowcaseTrailDOM({ items, config }: { items: ShowcaseIte
     }
 
     container.addEventListener("pointermove", onPointerMove);
+    container.addEventListener("pointerleave", onPointerLeave);
     document.addEventListener("visibilitychange", onVisibility);
     if (!document.hidden) rafId = requestAnimationFrame(paint);
 
@@ -235,6 +280,7 @@ export default function ShowcaseTrailDOM({ items, config }: { items: ShowcaseIte
       running = false;
       cancelAnimationFrame(rafId);
       container.removeEventListener("pointermove", onPointerMove);
+      container.removeEventListener("pointerleave", onPointerLeave);
       document.removeEventListener("visibilitychange", onVisibility);
       controller.reset();
     };
