@@ -19,17 +19,14 @@ import { useEffect, useRef, useState } from "react";
 import type { ShowcaseItem } from "@/lib/api";
 import { createTrail, type TrailController, type TrailItem } from "@/lib/showcase/trail";
 import { motionConfig, motionTokens } from "@/lib/motion";
-import type { ShowcaseConfig } from "@/lib/showcase/config";
+import {
+  computeLifetimeMs,
+  frameIndependentAlpha,
+  isPointerActive,
+  MAX_DT_MS,
+  type TrailConfig,
+} from "@/lib/showcase/trailTiming";
 
-type TrailConfig = Pick<
-  ShowcaseConfig,
-  "trailMax" | "spawnIntervalMs" | "followDamping" | "parallaxStrength" | "minimal"
->;
-
-// Brief-specified floor: `lifetimeMs = trailMax * spawnIntervalMs`, clamped to
-// at least 900ms so a small trailMax / fast spawnInterval combination never
-// produces a flash-cut trail.
-const MIN_LIFETIME_MS = 900;
 // Fade-in duration reuses the shared "fast" token (120ms) rather than a new
 // hardcoded value.
 const FADE_IN_MS = motionTokens.duration.fast;
@@ -39,62 +36,6 @@ const HOLD_FRACTION = 0.3;
 const POP_SCALE_START = 0.7;
 const FADE_OUT_SCALE_END = 0.85;
 const STATIC_GRID_COUNT = 8;
-
-// `followDamping` was authored (and its default/range tuned) against the old
-// per-callback lerp — `damped += (raw - damped) * followDamping`, invoked
-// once per rAF frame with no time term — which implicitly means "close this
-// fraction of the gap in one 60Hz frame's worth of time." REFERENCE_FRAME_MS
-// is that assumed frame time; frameIndependentAlpha() below converts the
-// per-frame fraction into a continuous rate so the *wall-clock* convergence
-// speed stays the same regardless of the display's actual refresh rate.
-const REFERENCE_FRAME_MS = 1000 / 60;
-// Clamp applied to the rAF delta before it feeds the smoothing formula, so a
-// backgrounded tab returning to the foreground (or any other multi-frame
-// stall) can't be read as "one giant frame" and snap the trail across the
-// screen. Defense-in-depth alongside resetting lastFrameTime on hide (see
-// onVisibility below).
-const MAX_DT_MS = 100;
-// Real browser `pointermove` events stop firing the instant the pointer
-// stops moving (or leaves the container/window) — `paint()` does not, it
-// keeps running every rAF frame regardless. Forwarding to
-// `controller.pointerMove` must therefore be gated on genuine motion, not
-// merely "a pointer has been seen at some point": keep forwarding while
-// either (a) a real `pointermove` event arrived within this window — so a
-// still-moving-but-nearly-caught-up pointer (large followDamping, or a very
-// slow/sub-pixel drag) never gets cut off — or (b) `damped` has not yet
-// converged to `raw` within CONVERGENCE_EPSILON_PX, which lets the trail
-// finish its short smoothing-lag deceleration tail after the last real
-// event before going quiet. Once neither holds, spawning stops.
-const MOVE_RECENCY_WINDOW_MS = 200;
-// Below this many px of lag between `raw` and `damped`, the smoothing tail
-// is considered finished. Small relative to any perceptible pointer speed
-// (which moves `raw` many px/frame), so it only trips once motion has
-// genuinely stopped and `damped` has caught up.
-const CONVERGENCE_EPSILON_PX = 0.5;
-
-function computeLifetimeMs(config: TrailConfig): number {
-  return Math.max(MIN_LIFETIME_MS, config.trailMax * config.spawnIntervalMs);
-}
-
-/**
- * Frame-rate-independent exponential smoothing factor.
- *
- * Given `perFrameFactor` — the fraction of the remaining gap that should
- * close in one REFERENCE_FRAME_MS-long frame — returns the equivalent
- * fraction that closes in `dtMs` of actual elapsed time:
- *
- *   alpha(dt) = 1 - (1 - perFrameFactor) ^ (dt / REFERENCE_FRAME_MS)
- *
- * At dt === REFERENCE_FRAME_MS this reduces exactly to `perFrameFactor`, so
- * existing tuned defaults keep their 60Hz feel; at any other refresh rate
- * (144Hz, a throttled background tab, …) the same wall-clock convergence
- * time is preserved instead of scaling with frame count. This is the
- * formula Task 5's WebGL renderer must copy verbatim to keep both trail
- * implementations feeling identical.
- */
-function frameIndependentAlpha(perFrameFactor: number, dtMs: number): number {
-  return 1 - Math.pow(1 - perFrameFactor, dtMs / REFERENCE_FRAME_MS);
-}
 
 /** Scale/opacity purely as a function of item age: fade+pop in, hold, fade+shrink out. */
 function ageStyle(age: number, lifetimeMs: number): { opacity: number; scale: number } {
@@ -206,14 +147,12 @@ export default function ShowcaseTrailDOM({ items, config }: { items: ShowcaseIte
       damped.x += (raw.x - damped.x) * alpha;
       damped.y += (raw.y - damped.y) * alpha;
       if (hasPointer) {
-        // Forward only while genuinely in motion (see MOVE_RECENCY_WINDOW_MS
-        // / CONVERGENCE_EPSILON_PX above) — otherwise a pointer that has
-        // stopped (or left, via onPointerLeave clearing hasPointer) would
-        // spawn a fresh item at the same frozen coordinate every
-        // spawnIntervalMs forever, instead of quietly fading to nothing.
-        const recentRealMove = now - lastRealMoveTime < MOVE_RECENCY_WINDOW_MS;
-        const stillConverging = Math.hypot(raw.x - damped.x, raw.y - damped.y) > CONVERGENCE_EPSILON_PX;
-        if (recentRealMove || stillConverging) controller.pointerMove(damped.x, damped.y);
+        // Forward only while genuinely in motion (see isPointerActive in
+        // trailTiming.ts) — otherwise a pointer that has stopped (or left,
+        // via onPointerLeave clearing hasPointer) would spawn a fresh item
+        // at the same frozen coordinate every spawnIntervalMs forever,
+        // instead of quietly fading to nothing.
+        if (isPointerActive(now, lastRealMoveTime, raw, damped)) controller.pointerMove(damped.x, damped.y);
       }
 
       // parallaxStrength stays a small *shared* depth offset — the gap

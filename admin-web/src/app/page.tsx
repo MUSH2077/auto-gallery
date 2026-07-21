@@ -6,7 +6,7 @@ import { api, queryKeys } from "@/lib/api";
 import { useShowcaseConfig } from "@/lib/showcase/config";
 import { ErrorState } from "@/components";
 import ShowcaseHero from "@/components/showcase/ShowcaseHero";
-import ShowcaseTrailDOM from "@/components/showcase/ShowcaseTrailDOM";
+import ShowcaseCanvas from "@/components/showcase/ShowcaseCanvas";
 import ShowcaseEmpty from "@/components/showcase/ShowcaseEmpty";
 
 export default function Home() {
@@ -56,7 +56,7 @@ export default function Home() {
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-subtle dark:bg-canvas">
-      <ShowcaseTrailDOM items={items} config={config} />
+      <ShowcaseCanvas items={items} config={config} onPreviewExpired={() => sample.refetch()} />
       <ShowcaseHero config={config} itemCount={items.length} />
     </main>
   );
