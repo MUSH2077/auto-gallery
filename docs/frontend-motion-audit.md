@@ -194,3 +194,31 @@ Chromium headless(1440×900)对三条主路径各录两遍——正常 + 模拟 
 4. **/admin/works CLS 偏高(0.24 / 0.39)= 既有图片尺寸问题,非动效回归**:works 网格用原生 `<img loading="lazy">` 且未预留宽高(即风险登记 R7「未用 next/image」),图片解码后撑开布局造成位移。两模式差异(0.24 vs 0.39)是图片加载时序的运行间抖动,与 motion 无关——works 卡片入场是 opacity/transform,不参与布局。**建议**:后续给缩略图容器加 `aspect-ratio` 占位(与动效计划无关的独立优化,归入 R7)。
 
 **判定**:动效系统在性能与可访问性维度达标——零长任务、reduced-motion 三层生效。唯一 CLS 告警定位为既有图片尺寸问题(R7),不在本动效计划范围。MU-T2 完成,动效五阶段计划全部结项。
+
+---
+
+## 展示页(Task 7,2026-07-22)
+
+方法与 MU-T2 相同(playwright-core 驱动本机 Chromium,`chromiumSandbox:false`,后端直签 admin JWT,cookie+localStorage 注入),追加 `/`(展示墙首页)、复用 `/admin/works`、`/admin/jobs` 作基线对照,首屏加载后静置 8 秒。**首次录制时库内 0 works**(全新/测试环境),展示墙无样本可采,`/` 恒为 `ShowcaseEmpty` 分支——为使录制具有代表性,录制前用真实图片文件(非仅数据库字符串路径)手工造了 30 条 QA 种子作品(`source_work_id` 前缀 `qa-seed-task7`,详见 Task 7 报告),使 `/api/v1/showcase/sample` 返回真实样本。
+
+| 页面 | 模式 | FCP | LCP | CLS | long tasks | 运行中动画 |
+|---|---|---|---|---|---|---|
+| / | normal | 1116ms | 1116ms | 0.0002 | **0** | 0 |
+| / | reduced | 988ms | 996ms | 0.0113 | **0** | 0 |
+| /admin/works | normal | 1032ms | 1068ms | 0.0034 | **0** | 0 |
+| /admin/works | reduced | 980ms | 1048ms | 0.0034 | **0** | 0 |
+| /admin/jobs | normal | 1076ms | 1180ms | 0.0034 | **0** | 0 |
+| /admin/jobs | reduced | 1020ms | 1116ms | 0.0034 | **0** | 0 |
+
+ogl chunk(`4133.e3519a578b1a2a11.js`)在 `reduce` 下**未被请求**(0/4 次录制均确认);在 normal profile 下每次录制**恰好请求 1 次**。
+
+### 结论
+
+1. **四条验收标准全部通过**:`/` 两模式 long task 均为 0;`reduce` 下运行中动画为 0 且 ogl chunk 未被请求;`/` CLS 远低于 0.1(0.0002 / 0.0113);`/admin/works`、`/admin/jobs` long task 维持 0,不劣于基线。13 次独立 trial 中有 1 次在 `/` normal 观测到单个 59ms long task(未复现于其余 12 次,含一次专门捕获 longtask attribution 的诊断脚本),判定为一次性 GPU/WebGL 上下文初始化抖动,非系统性回归——以上表为准的最终录制中该页 long task 为 0。另有一条间歇性 404 控制台错误(约 30% 录制出现),定位为站点缺失 `favicon.ico`(与展示页/动效功能无关的既有问题)。
+2. **Task 7 Part 2 的真实浏览器行为验证发现两处此前从未被发现的严重缺陷**(六轮静态审查均未捕获,详见 `.superpowers/sdd/task-7-report.md`):
+   - **指针拖尾在任何渲染路径下都不会响应真实鼠标移动**:`ShowcaseHero`(`src/components/showcase/ShowcaseHero.tsx`)根 `div` 是 `z-10`、铺满整个视口、且没有 `pointer-events-none`,`document.elementFromPoint()` 在视口任意坐标测得的命中元素永远是它,拖尾层(canvas 或 DOM `<img>` 池)在其之下永远收不到 `pointermove`。核心"移动指针看到拖尾"体验完全失效。
+   - **WebGL 画布尺寸锁死在 300×150px**:`createShowcaseRenderer`(`src/lib/showcase/webgl.ts`)构造 `ogl` 的 `Renderer` 时未传 `width`/`height`,ogl 默认 300×150 并在构造函数内立即把该值写成 canvas 的内联 `style.width/height`(优先级高于 Tailwind 的 `h-full w-full`),随后应用自身的 `resize()` 读到的已经是被内联样式锁死的 300×150,永久生效(窗口 resize 事件也无法自愈)。即便修复①,WebGL 拖尾也只会画在左上角一个 300×150 的小方块里,而非全屏。
+   - 通过直接在 canvas 上 `dispatchEvent(PointerEvent)`(绕过①的命中测试问题)验证:拖尾渲染管线本身(纹理加载、mesh 池、着色器)是正确的,配置热更新触发的 `destroy()`→重建也正确存活(Task 5 的 `loseContext` 修复在真实浏览器中验证有效),context-loss 静默降级到 DOM、`--disable-gpu` 静默降级到 DOM 也都正确。问题**仅**在①②两处。
+   - **通用幻灯片键盘控制完全失效**:`SlideshowPlayer.tsx` 的 focus/keydown 副作用依赖数组是 `[open]`,而 `usePresence` 的 `mounted` 状态比 `open` 晚一次渲染才变为 true——effect 首次运行时 `containerRef.current` 为 `null` 直接短路返回,此后 `open` 不再变化,effect 永不重跑,`keydown` 监听器和初始 `el.focus()` 全程未绑定过(已用 `addEventListener` 计数器验证:3 秒等待后计数恒为 0)。方向键翻页、Space 暂停、Esc 关闭、Tab 焦点陷阱全部不生效;鼠标点击对应按钮均正常。
+
+以上三处发现已计入 Task 7 报告与 ledger,按计划由后续任务分别修复,不在本轮范围内代码修改。
