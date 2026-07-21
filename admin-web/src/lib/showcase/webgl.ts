@@ -115,6 +115,23 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+// ogl's Renderer constructor defaults width/height to 300x150 and immediately
+// writes them onto `canvas.style` as an inline style (Renderer.setSize, see
+// node_modules/ogl/src/core/Renderer.js) — inline styles beat the
+// Tailwind/CSS sizing classes regardless of specificity. So the canvas's own
+// clientWidth/clientHeight become self-referential the instant the renderer
+// has run once: they just read back whatever setSize last wrote. Measuring
+// off the *parent* container instead (which the canvas absolutely covers but
+// never influences the layout of, since it's `position: absolute`) gives a
+// stable, non-self-corrupting source of truth for both the initial
+// construction size and every later resize() call.
+function measureContainerSize(canvas: HTMLCanvasElement): { width: number; height: number } {
+  const rect = canvas.parentElement?.getBoundingClientRect();
+  const width = rect && rect.width > 0 ? rect.width : window.innerWidth;
+  const height = rect && rect.height > 0 ? rect.height : window.innerHeight;
+  return { width: Math.max(1, Math.round(width)), height: Math.max(1, Math.round(height)) };
+}
+
 /** Item-age envelope: fade+pop in, hold, fade+shrink out, normalized against the caller-supplied true `lifetimeMs`. */
 function ageEnvelope(age: number, lifetimeMs: number): { opacity: number; scale: number } {
   if (age <= FADE_IN_MS) {
@@ -149,9 +166,11 @@ export async function createShowcaseRenderer(
   type OglTexture = InstanceType<typeof Texture>;
   type OglMesh = InstanceType<typeof Mesh>;
 
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
   let renderer: InstanceType<typeof Renderer>;
   try {
-    renderer = new Renderer({ canvas, alpha: true, dpr: Math.min(window.devicePixelRatio || 1, 2) });
+    const initialSize = measureContainerSize(canvas);
+    renderer = new Renderer({ canvas, alpha: true, dpr, width: initialSize.width, height: initialSize.height });
   } catch {
     throw new Error("webgl unavailable");
   }
@@ -281,12 +300,13 @@ export async function createShowcaseRenderer(
     return state;
   }
 
-  let viewWidth = Math.max(1, canvas.clientWidth);
-  let viewHeight = Math.max(1, canvas.clientHeight);
+  let viewWidth = 1;
+  let viewHeight = 1;
 
   function resize(): void {
-    viewWidth = Math.max(1, canvas.clientWidth);
-    viewHeight = Math.max(1, canvas.clientHeight);
+    const size = measureContainerSize(canvas);
+    viewWidth = size.width;
+    viewHeight = size.height;
     renderer.setSize(viewWidth, viewHeight);
     // Orthographic camera in CSS-pixel world units, top-left origin matching
     // DOM pointer coordinates: world (0,0) -> screen top-left, world

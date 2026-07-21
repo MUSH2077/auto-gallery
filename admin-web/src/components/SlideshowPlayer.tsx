@@ -19,12 +19,17 @@
 // Teardown contract: the autoplay setTimeout is recreated by its effect on
 // every index change and is cleared by that same effect's cleanup on pause,
 // close, and unmount. The keydown listener + focus management is bound once
-// per open session (deps: [open] only, reading live callbacks through refs
-// so incidental parent re-renders — e.g. background polling on the host
-// page — never rebind it or steal focus back mid-session) and is removed,
-// with focus restored to the trigger, on close and unmount alike. React
-// always runs effect cleanups on unmount regardless of document.hidden, so
-// backgrounding the tab and then navigating away tears down cleanly too.
+// per open session (deps: [open, containerEl] — containerEl is state set via
+// a callback ref, not a plain ref, specifically so the effect re-fires once
+// the dialog's element actually mounts; usePresence mounts it a render after
+// `open` first flips true, so a ref-only `[open]`-keyed effect would read a
+// null container on that render and never get a second chance. Live
+// callbacks are still read through refs so incidental parent re-renders —
+// e.g. background polling on the host page — never rebind it or steal focus
+// back mid-session) and is removed, with focus restored to the trigger, on
+// close and unmount alike. React always runs effect cleanups on unmount
+// regardless of document.hidden, so backgrounding the tab and then
+// navigating away tears down cleanly too.
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { api } from "@/lib/api";
@@ -165,7 +170,16 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
   const { config } = useShowcaseConfig();
   const { mounted, closing } = usePresence(open, motionTokens.duration.base);
 
-  const containerRef = useRef<HTMLDivElement>(null);
+  // State (not a plain ref) so the focus/keyboard effect below can depend on
+  // the *actual mounted element*, not on `open` alone. `usePresence` mounts
+  // the dialog a tick after `open` flips true (see its own comment above),
+  // so on the render where `open` first becomes true the container doesn't
+  // exist yet; a ref-only `[open]`-keyed effect reads `null` that one time
+  // and never gets a second chance to run since `open` doesn't change again
+  // for the rest of the open session. Tracking the node itself as state
+  // means the effect re-fires the moment the node actually appears,
+  // regardless of how many renders that takes.
+  const [containerEl, setContainerEl] = useState<HTMLDivElement | null>(null);
   const prevFocusRef = useRef<HTMLElement | null>(null);
 
   const [index, setIndex] = useState(startIndex);
@@ -262,7 +276,7 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
   stepPrevRef.current = stepPrev;
 
   useEffect(() => {
-    const el = containerRef.current;
+    const el = containerEl;
     if (!open || !el) return;
     prevFocusRef.current = document.activeElement as HTMLElement | null;
     el.focus();
@@ -322,7 +336,7 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
       el.removeEventListener("keydown", onKeyDown);
       prevFocusRef.current?.focus();
     };
-  }, [open]);
+  }, [open, containerEl]);
 
   if (!mounted || total === 0) return null;
 
@@ -331,7 +345,7 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
 
   return (
     <div
-      ref={containerRef}
+      ref={setContainerEl}
       role="dialog"
       aria-modal="true"
       aria-label={t("slideshow.open")}
