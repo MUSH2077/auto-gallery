@@ -13,14 +13,26 @@
 //      fall back to DOM, never the reverse in the same session.
 //   3. document.hidden -> pause the rAF loop (no rendering while hidden).
 //   4. config.minimal -> also falls through to ShowcaseTrailDOM, which
-//      already renders the static grid for `minimal` on its own — no second
-//      minimal branch needed here.
+//      already renders the static grid for `minimal` on its own. Unlike
+//      rules 1-3, this one is LIVE: `minimal` is a user preference that can
+//      change (settings page, propagated cross-tab via useShowcaseConfig)
+//      while `/` is already mounted with WebGL active, and the settings
+//      page promises the motion parameters "no longer take effect" once it's
+//      on — so flipping it must tear the renderer down and show the static
+//      grid without a reload, and flipping it back must bring WebGL back
+//      (if the frozen hardware decision below allows it). If `minimal` is
+//      already true at mount, `createShowcaseRenderer` is still never
+//      called and the `ogl` chunk is still never fetched — same as rule 1.
 //
-// The WebGL-vs-DOM decision is made once on mount (`useWebGL`, a lazy
+// The WebGL-vs-DOM decision is split into two parts: the hardware/
+// reduced-motion capability (`hardwareOk`) is decided once on mount (a lazy
 // useState initializer) and never re-evaluated for the same mount — flipping
-// renderers under the user mid-session would be worse than either fixed
-// choice. `fellBack` is the one-way escape hatch for rules 2's runtime
-// failures.
+// renderers under the user mid-session based on a hardware property would be
+// worse than either fixed choice. `config.minimal`, by contrast, is read
+// live every render and combined with `hardwareOk` into `useWebGL`, so only
+// the user's own live toggle can move the renderer between WebGL and DOM
+// after mount. `fellBack` is the separate one-way escape hatch for rule 2's
+// runtime failures.
 
 import { useEffect, useRef, useState } from "react";
 
@@ -52,11 +64,14 @@ export default function ShowcaseCanvas({
   config: TrailConfig;
   onPreviewExpired?: () => void;
 }) {
-  // Decided once on mount — a device/OS property plus the user's `minimal`
-  // preference at mount time, not something that should flip mid-session.
-  const [useWebGL] = useState(
-    () => typeof window !== "undefined" && motionConfig.shouldAnimate() && !config.minimal,
-  );
+  // Decided once on mount — a device/OS property, not something that should
+  // flip mid-session (see the module doc above).
+  const [hardwareOk] = useState(() => typeof window !== "undefined" && motionConfig.shouldAnimate());
+  // Live: recomputed every render so toggling `config.minimal` (in this tab
+  // or another) tears the WebGL renderer down or spins it back up without a
+  // reload — mirrors ShowcaseTrailDOM's own `showStatic = !animate ||
+  // config.minimal`, just with `hardwareOk` standing in for the frozen half.
+  const useWebGL = hardwareOk && !config.minimal;
   const [fellBack, setFellBack] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -214,6 +229,12 @@ export default function ShowcaseCanvas({
       rendererRef.current = null;
       renderer?.destroy();
     };
+    // `useWebGL` (not just `hardwareOk`) drives re-evaluation so toggling
+    // `config.minimal` off mid-session tears this effect's renderer/rAF/
+    // listeners down (via the cleanup above) — the render branch below then
+    // shows ShowcaseTrailDOM — and toggling it back on (with `hardwareOk`
+    // true) re-runs this body and spins WebGL back up. Mirrors
+    // ShowcaseTrailDOM's own `showStatic`-keyed effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [useWebGL, fellBack, config.trailMax, config.spawnIntervalMs, config.followDamping, config.parallaxStrength]);
 

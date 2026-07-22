@@ -51,7 +51,8 @@ export default function Home() {
   const items = sample.data?.items ?? [];
 
   if (items.length === 0) {
-    return <ShowcaseEmpty />;
+    const filterActive = config.scope !== "all" || config.source != null || config.tag != null;
+    return <ShowcaseEmpty variant={filterActive ? "filtered" : "library"} />;
   }
 
   return (

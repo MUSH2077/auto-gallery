@@ -1196,6 +1196,8 @@ const zh: Record<string, string> = {
   "showcase.enter_upload": "上传作品",
   "showcase.empty_title": "画廊还是空的",
   "showcase.empty_desc": "订阅创作者或上传作品后，随机作品会展示在这里。",
+  "showcase.empty_filtered_title": "没有符合当前筛选条件的作品",
+  "showcase.empty_filtered_desc": "展示墙的范围、来源或标签筛选没有匹配到任何作品。前往展示墙设置调整或清除筛选条件。",
 
   "slideshow.open": "幻灯片放映",
   "slideshow.play": "播放",
@@ -3882,6 +3884,8 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "showcase.enter_upload": "Upload Works",
     "showcase.empty_title": "Your gallery is empty",
     "showcase.empty_desc": "Subscribe to creators or upload some works, and they'll show up here.",
+    "showcase.empty_filtered_title": "No works match your showcase filter",
+    "showcase.empty_filtered_desc": "The showcase's scope, source, or tag filter didn't match any works. Go to showcase settings to adjust or clear the filter.",
 
     "slideshow.open": "Slideshow",
     "slideshow.play": "Play",
