@@ -10,11 +10,15 @@ export interface ShowcaseConfig {
   source: string | null;
   tag: string | null;
   includeNsfw: boolean;
-  // motion
+  // motion (trail — removed in Task 6)
   trailMax: number;
   spawnIntervalMs: number;
   followDamping: number;
   parallaxStrength: number;
+  // motion (gallery)
+  planeHeightVh: number;
+  autoScrollSpeed: number;
+  curveStrength: number;
   minimal: boolean;
   // slideshow
   slideDwellMs: number;
@@ -36,6 +40,9 @@ export const DEFAULT_SHOWCASE_CONFIG: ShowcaseConfig = {
   spawnIntervalMs: 90,
   followDamping: 0.12,
   parallaxStrength: 0.4,
+  planeHeightVh: 48,
+  autoScrollSpeed: 1.0,
+  curveStrength: 0.5,
   minimal: false,
   slideDwellMs: 5000,
   slideTransition: "kenburns",
@@ -87,6 +94,9 @@ export function sanitizeShowcaseConfig(value: unknown): ShowcaseConfig {
     spawnIntervalMs: clampNumber(raw.spawnIntervalMs, 40, 400, DEFAULT_SHOWCASE_CONFIG.spawnIntervalMs),
     followDamping: clampNumber(raw.followDamping, 0.02, 0.5, DEFAULT_SHOWCASE_CONFIG.followDamping),
     parallaxStrength: clampNumber(raw.parallaxStrength, 0, 1, DEFAULT_SHOWCASE_CONFIG.parallaxStrength),
+    planeHeightVh: clampNumber(raw.planeHeightVh, 30, 70, DEFAULT_SHOWCASE_CONFIG.planeHeightVh),
+    autoScrollSpeed: clampNumber(raw.autoScrollSpeed, 0.2, 3.0, DEFAULT_SHOWCASE_CONFIG.autoScrollSpeed),
+    curveStrength: clampNumber(raw.curveStrength, 0, 1, DEFAULT_SHOWCASE_CONFIG.curveStrength),
     minimal: typeof raw.minimal === "boolean" ? raw.minimal : DEFAULT_SHOWCASE_CONFIG.minimal,
     slideDwellMs: clampNumber(raw.slideDwellMs, 2000, 15000, DEFAULT_SHOWCASE_CONFIG.slideDwellMs),
     slideTransition: isSlideTransition(raw.slideTransition) ? raw.slideTransition : DEFAULT_SHOWCASE_CONFIG.slideTransition,
