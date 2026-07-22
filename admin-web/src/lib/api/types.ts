@@ -972,6 +972,7 @@ export interface ShowcaseItem {
   title: string | null;
   creator_name: string | null;
   source: string | null;
+  asset_id: string;
   thumb_url: string;
   preview_url: string;
   width: number | null;

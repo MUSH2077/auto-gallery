@@ -130,6 +130,7 @@ async def test_sample_hides_nsfw_from_restricted_user_and_signs_preview_urls():
             item = next(i for i in items if i["work_id"] == str(sfw.id))
             assert item["width"] == 1200 and item["height"] == 1600
             assert item["thumb_url"] == f"/media/thumb/{asset.id}"
+            assert item["asset_id"] == str(asset.id)
 
             parsed = urlparse(item["preview_url"])
             q = parse_qs(parsed.query)

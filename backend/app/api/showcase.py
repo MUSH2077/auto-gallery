@@ -108,6 +108,7 @@ async def sample(
             title=w.title,
             creator_name=getattr(w, "creator_name", None),
             source=getattr(w, "source", None),
+            asset_id=aid,
             thumb_url=f"/media/thumb/{aid}",
             preview_url=signed_media_url(aid, "preview"),
             width=width,
