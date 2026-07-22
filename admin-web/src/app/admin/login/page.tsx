@@ -1,10 +1,43 @@
 "use client";
 import { useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { useAuth } from "@/lib/auth";
+import { useAuth, type AuthUser } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import { ThemeToggle, LangToggle } from "@/lib/theme";
+import { SHOWCASE_STORAGE_KEY, DEFAULT_SHOWCASE_CONFIG } from "@/lib/showcase/config";
+
+/**
+ * Decide the post-login destination. The server-side preference
+ * (`preferences.showcase.landing`, from `/me`) is authoritative — it's what
+ * `PreferencesHydrator` eventually mirrors into localStorage, but that mirror
+ * runs asynchronously and never on a fresh browser/device before this runs.
+ * Falls back to localStorage (covers e.g. an already-hydrated session where
+ * the in-memory `user` hasn't been refreshed), then to the showcase default.
+ */
+function resolveLanding(preferences: AuthUser["preferences"]): "/" | "/admin" {
+  const serverShowcase =
+    preferences && typeof preferences === "object"
+      ? (preferences as Record<string, unknown>).showcase
+      : undefined;
+  const serverLanding =
+    serverShowcase && typeof serverShowcase === "object"
+      ? (serverShowcase as Record<string, unknown>).landing
+      : undefined;
+  if (serverLanding === "dashboard") return "/admin";
+  if (serverLanding === "showcase") return "/";
+
+  try {
+    const raw = localStorage.getItem(SHOWCASE_STORAGE_KEY);
+    const local = raw ? JSON.parse(raw) : null;
+    if (local && local.landing === "dashboard") return "/admin";
+    if (local && local.landing === "showcase") return "/";
+  } catch {
+    // malformed localStorage — fall through to default
+  }
+
+  return DEFAULT_SHOWCASE_CONFIG.landing === "dashboard" ? "/admin" : "/";
+}
 
 export default function LoginPage() {
   const t = useT();
@@ -16,7 +49,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   if (isAuthenticated) {
-    router.replace(user?.must_change_password ? "/admin/settings/profile" : "/admin");
+    router.replace(user?.must_change_password ? "/admin/settings/profile" : resolveLanding(user?.preferences));
     return null;
   }
 
@@ -28,15 +61,7 @@ export default function LoginPage() {
       if (authUser.must_change_password) {
         router.replace("/admin/settings/profile");
       } else {
-        const landing = (() => {
-          try {
-            const raw = localStorage.getItem("auto-gallery-showcase-v1");
-            return raw && JSON.parse(raw).landing === "dashboard" ? "/admin" : "/";
-          } catch {
-            return "/";
-          }
-        })();
-        router.replace(landing);
+        router.replace(resolveLanding(authUser.preferences));
       }
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : t("auth.invalid_credentials"));
