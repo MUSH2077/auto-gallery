@@ -1,37 +1,18 @@
-// The ONLY module allowed to reference "ogl" — everything else that wants
-// the WebGL showcase trail goes through `createShowcaseRenderer` /
-// `ShowcaseRenderer` below. `ogl` is pulled in via a dynamic `import("ogl")`
-// inside `createShowcaseRenderer` (mirroring `src/lib/motion/anime.ts`'s
-// dynamic `import("animejs")`), so the library only lands in its own
-// content-hashed lazy chunk and is never fetched by a route that doesn't use
-// it — in particular, never under reduced-motion / low-end / minimal, where
-// the caller (ShowcaseCanvas) must not call this factory at all.
-//
-// This module only ever runs client-side (invoked from a mount effect), so
-// referencing `window`/`document`/canvas APIs inside functions is safe; there
-// is no top-level code here that touches them, so importing this module
-// itself (for its types) is SSR-safe too.
+// The ONLY module allowed to reference "ogl". `ogl` is pulled in via a dynamic
+// import() so it lands only in its own lazy chunk and is never fetched under
+// reduced-motion / low-end / minimal. Client-only (invoked from a mount effect).
 
-import type { TrailItem } from "./trail";
-import { motionTokens } from "@/lib/motion";
+import { computeStrip, screenX, hitTestStrip, type GalleryImage, type PlaneLayout } from "./galleryLayout";
 
 export interface ShowcaseRenderer {
-  setImages(urls: string[]): Promise<void>;
-  render(items: TrailItem[], pointer: { x: number; y: number }): void;
+  setImages(images: GalleryImage[]): Promise<void>;
+  render(scroll: { current: number; velocity: number }): void;
   resize(): void;
+  hitTest(clientX: number, clientY: number): number | null;
   destroy(): void;
 }
 
-/**
- * Thrown by `setImages` when any preview URL comes back 401 — the signed
- * `preview_url`s from the showcase sample endpoint carry a short TTL (see
- * backend/app/services/media_signing.py), and once one has expired the rest
- * of the same batch almost certainly has too (they're signed together in one
- * response). The caller (ShowcaseCanvas) should treat this as "refetch the
- * whole sample batch," not as a per-image failure — ordinary per-image
- * failures (404, decode error, transient network error) are swallowed
- * inside `setImages` instead and never surface as a rejection.
- */
+/** Thrown by setImages when any preview URL 401s — the whole signed batch has expired together; caller refetches the batch. */
 export class PreviewAuthExpiredError extends Error {
   constructor(url: string) {
     super(`showcase preview url expired (401): ${url}`);
@@ -39,92 +20,46 @@ export class PreviewAuthExpiredError extends Error {
   }
 }
 
-// Base plane size in CSS px before the item-age scale envelope multiplies it
-// — mirrors the DOM renderer's ~80px/112px pooled <img> footprint.
-const BASE_ITEM_SIZE_PX = 96;
+const GAP_PX = 40;
+const ASPECT_CLAMP: [number, number] = [0.4, 2.5];
+const VELOCITY_CLAMP = 4000;
 
-// Fade-in reuses the shared motion token (same value ShowcaseTrailDOM uses)
-// so the pop-in feels identical between renderers.
-const FADE_IN_MS = motionTokens.duration.fast;
-const FADE_OUT_MS = motionTokens.duration.slow;
-const POP_SCALE_START = 0.7;
-const FADE_OUT_SCALE_END = 0.85;
-
-// `render(items, pointer)` is a fixed 2-argument interface — it does not
-// receive the config-derived `lifetimeMs` that ShowcaseTrailDOM's ageStyle()
-// curve is normalized against (that value lives in ShowcaseCanvas, which
-// constructs the trail controller). That value is instead threaded through
-// `createShowcaseRenderer`'s options object (`opts.lifetimeMs`, computed by
-// the caller via the shared `computeLifetimeMs()` in trailTiming.ts) so the
-// WebGL fade-out envelope is normalized against the exact same lifetime the
-// DOM renderer and the trail controller's own culling use — no estimate, no
-// drift between the two renderers.
-
-// Clamp on the per-frame pointer delta used for uVelocity/parallax so a tab
-// resuming from background (a huge apparent jump) can't blow up the shader
-// offset or fling the parallax layer across the screen.
-const VELOCITY_CLAMP_PX = 60;
-
+// Aspect-cover UV correction (object-fit: cover) + velocity-driven cylindrical
+// Z-bend. No chromatic aberration, no idle sine warp — those were the ghosting
+// and wobble in the old trail shader.
 const VERTEX = /* glsl */ `
   attribute vec2 uv;
   attribute vec3 position;
-
   uniform mat4 modelViewMatrix;
   uniform mat4 projectionMatrix;
-
+  uniform float uStrength;
+  uniform vec2 uViewportSizes;
   varying vec2 vUv;
-
   void main() {
     vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vec3 p = position;
+    p.z += sin(p.y / uViewportSizes.y * 3.14159265 + 3.14159265 / 2.0) * -uStrength;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
   }
 `;
 
-// Fluid-distortion look: sample tMap three times with a per-channel UV
-// offset proportional to uVelocity (a cheap RGB chromatic-aberration split
-// that reads as "fluid" when the cursor moves fast), plus a mild sinusoidal
-// UV warp driven by uTime so idle items still have a slow living ripple.
-// The final color is multiplied by uOpacity to drive the item-age fade.
 const FRAGMENT = /* glsl */ `
   precision highp float;
-
   uniform sampler2D tMap;
   uniform float uOpacity;
-  uniform vec2 uVelocity;
-  uniform float uTime;
-
+  uniform vec2 uPlaneSizes;
+  uniform vec2 uImageSizes;
   varying vec2 vUv;
-
   void main() {
-    vec2 warp = vec2(
-      sin(vUv.y * 6.0 + uTime * 1.6),
-      cos(vUv.x * 6.0 + uTime * 1.6)
-    ) * 0.012;
-    vec2 uv = vUv + warp;
-
-    vec2 offset = uVelocity * 0.015;
-    float r = texture2D(tMap, uv + offset).r;
-    vec4 mid = texture2D(tMap, uv);
-    float b = texture2D(tMap, uv - offset).b;
-
-    gl_FragColor = vec4(r, mid.g, b, mid.a) * uOpacity;
+    vec2 ratio = vec2(
+      min((uPlaneSizes.x / uPlaneSizes.y) / (uImageSizes.x / uImageSizes.y), 1.0),
+      min((uPlaneSizes.y / uPlaneSizes.x) / (uImageSizes.y / uImageSizes.x), 1.0)
+    );
+    vec2 uv = vec2(vUv.x * ratio.x + (1.0 - ratio.x) * 0.5, vUv.y * ratio.y + (1.0 - ratio.y) * 0.5);
+    gl_FragColor = texture2D(tMap, uv) * uOpacity;
   }
 `;
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
-// ogl's Renderer constructor defaults width/height to 300x150 and immediately
-// writes them onto `canvas.style` as an inline style (Renderer.setSize, see
-// node_modules/ogl/src/core/Renderer.js) — inline styles beat the
-// Tailwind/CSS sizing classes regardless of specificity. So the canvas's own
-// clientWidth/clientHeight become self-referential the instant the renderer
-// has run once: they just read back whatever setSize last wrote. Measuring
-// off the *parent* container instead (which the canvas absolutely covers but
-// never influences the layout of, since it's `position: absolute`) gives a
-// stable, non-self-corrupting source of truth for both the initial
-// construction size and every later resize() call.
 function measureContainerSize(canvas: HTMLCanvasElement): { width: number; height: number } {
   const rect = canvas.parentElement?.getBoundingClientRect();
   const width = rect && rect.width > 0 ? rect.width : window.innerWidth;
@@ -132,35 +67,20 @@ function measureContainerSize(canvas: HTMLCanvasElement): { width: number; heigh
   return { width: Math.max(1, Math.round(width)), height: Math.max(1, Math.round(height)) };
 }
 
-/** Item-age envelope: fade+pop in, hold, fade+shrink out, normalized against the caller-supplied true `lifetimeMs`. */
-function ageEnvelope(age: number, lifetimeMs: number): { opacity: number; scale: number } {
-  if (age <= FADE_IN_MS) {
-    const p = FADE_IN_MS > 0 ? age / FADE_IN_MS : 1;
-    return { opacity: p, scale: POP_SCALE_START + (1 - POP_SCALE_START) * p };
-  }
-  const remaining = lifetimeMs - age;
-  if (remaining <= FADE_OUT_MS) {
-    const p = clamp(remaining / FADE_OUT_MS, 0, 1);
-    return { opacity: p, scale: FADE_OUT_SCALE_END + (1 - FADE_OUT_SCALE_END) * p };
-  }
-  return { opacity: 1, scale: 1 };
-}
-
 async function fetchBitmap(url: string): Promise<ImageBitmap> {
   const res = await fetch(url);
   if (res.status === 401) throw new PreviewAuthExpiredError(url);
-  if (!res.ok) throw new Error(`preview fetch failed: ${res.status} ${res.statusText}`);
+  if (!res.ok) throw new Error(`preview fetch failed: ${res.status}`);
   const blob = await res.blob();
-  // Decoding off the main thread — this is the whole point of
-  // createImageBitmap over new Image(): no main-thread decode cost, keeping
-  // the project's zero-long-task baseline intact even while loading two
-  // dozen preview images.
-  return createImageBitmap(blob);
+  // imageOrientation:"flipY" gives a correctly-oriented bitmap for WebGL's
+  // bottom-left origin — ogl's Texture flipY (UNPACK_FLIP_Y_WEBGL) is a no-op
+  // for ImageBitmap sources, which is exactly why the old trail was upside-down.
+  return createImageBitmap(blob, { imageOrientation: "flipY" });
 }
 
 export async function createShowcaseRenderer(
   canvas: HTMLCanvasElement,
-  opts: { maxTextures: number; parallaxStrength: number; lifetimeMs: number },
+  opts: { planeHeightVh: number; curveStrength: number; maxTextures: number },
 ): Promise<ShowcaseRenderer> {
   const { Renderer, Camera, Transform, Plane, Program, Mesh, Texture } = await import("ogl");
   type OglTexture = InstanceType<typeof Texture>;
@@ -169,8 +89,8 @@ export async function createShowcaseRenderer(
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   let renderer: InstanceType<typeof Renderer>;
   try {
-    const initialSize = measureContainerSize(canvas);
-    renderer = new Renderer({ canvas, alpha: true, dpr, width: initialSize.width, height: initialSize.height });
+    const s = measureContainerSize(canvas);
+    renderer = new Renderer({ canvas, alpha: true, dpr, width: s.width, height: s.height });
   } catch {
     throw new Error("webgl unavailable");
   }
@@ -179,262 +99,138 @@ export async function createShowcaseRenderer(
 
   const camera = new Camera(gl);
   const scene = new Transform();
-  const geometry = new Plane(gl);
-  // One shared Program for every pooled mesh (OGL's own idiom for instancing
-  // — see e.g. its sort-transparency example, where 50 meshes share one
-  // Program). Per-mesh "own uniforms" are achieved via each mesh's
-  // onBeforeRender callback writing that mesh's tMap/uOpacity into the
-  // shared uniforms object immediately before that mesh draws — the same
-  // mechanism OGL itself uses internally for per-mesh matrices.
-  const program = new Program(gl, {
-    vertex: VERTEX,
-    fragment: FRAGMENT,
-    uniforms: {
-      tMap: { value: null as OglTexture | null },
-      uOpacity: { value: 0 },
-      uVelocity: { value: [0, 0] as [number, number] },
-      uTime: { value: 0 },
-    },
-    transparent: true,
-    depthTest: false,
-    cullFace: false,
-  });
-
-  // Placeholder so `program.uniforms.tMap.value` is never null — OGL's
-  // Program.use() does `uniform.value.texture` on every active sampler
-  // uniform without a null-check, so assigning `null` there would throw on
-  // the very first frame. An empty Texture uploads a harmless 1x1 pixel.
+  const geometry = new Plane(gl, { widthSegments: 20, heightSegments: 1 });
   const emptyTexture: OglTexture = new Texture(gl);
-
-  interface CacheEntry {
-    texture: OglTexture;
-    bitmap: ImageBitmap;
-  }
-  const cache = new Map<string, CacheEntry>();
-  let currentUrls: string[] = [];
-
-  function touch(url: string): CacheEntry | undefined {
-    const entry = cache.get(url);
-    if (!entry) return undefined;
-    cache.delete(url);
-    cache.set(url, entry); // move to MRU end
-    return entry;
-  }
-
-  function evictOldest(): void {
-    const oldestKey = cache.keys().next().value;
-    if (oldestKey === undefined) return;
-    const entry = cache.get(oldestKey);
-    cache.delete(oldestKey);
-    if (entry) {
-      try {
-        gl.deleteTexture(entry.texture.texture);
-      } catch {
-        /* already lost */
-      }
-      try {
-        entry.bitmap.close();
-      } catch {
-        /* already closed */
-      }
-    }
-  }
-
-  async function setImages(urls: string[]): Promise<void> {
-    currentUrls = urls.slice();
-
-    const toFetch = urls.filter((u) => !cache.has(u));
-    const settled = await Promise.allSettled(toFetch.map((url) => fetchBitmap(url)));
-
-    let authExpired = false;
-    toFetch.forEach((url, i) => {
-      const result = settled[i];
-      if (result.status === "rejected") {
-        if (result.reason instanceof PreviewAuthExpiredError) {
-          authExpired = true;
-        } else {
-          // A single failed image is skipped, never rejects the whole call.
-          // eslint-disable-next-line no-console
-          console.debug("[showcase webgl] skipped preview image", url, result.reason);
-        }
-        return;
-      }
-      const texture = new Texture(gl, { flipY: true });
-      // ogl's ImageRepresentation type predates ImageBitmap support in its
-      // .d.ts, but Texture.update() only ever reads .width/.height and hands
-      // the value straight to texImage2D — both of which accept an
-      // ImageBitmap at runtime. Narrow cast, not a behavior workaround.
-      texture.image = result.value as unknown as OglTexture["image"];
-      cache.set(url, { texture, bitmap: result.value });
-    });
-
-    // Touch every requested url (already-cached or newly-fetched) in request
-    // order so MRU ordering reflects "most recently requested," then trim
-    // down to the cap. A url that never got a texture (skipped/expired) is
-    // simply absent from the cache — render() treats that as "not ready yet"
-    // and skips drawing it this frame rather than failing.
-    for (const url of urls) touch(url);
-    while (cache.size > opts.maxTextures) evictOldest();
-
-    if (authExpired) throw new PreviewAuthExpiredError(urls[0] ?? "");
-  }
-
-  interface PooledMesh {
-    mesh: OglMesh;
-    texture: OglTexture;
-    opacity: number;
-  }
-  const meshPool: PooledMesh[] = [];
-
-  function ensureMesh(i: number): PooledMesh {
-    const existing = meshPool[i];
-    if (existing) return existing;
-    const mesh = new Mesh(gl, { geometry, program });
-    mesh.setParent(scene);
-    const state: PooledMesh = { mesh, texture: emptyTexture, opacity: 0 };
-    mesh.onBeforeRender(() => {
-      program.uniforms.tMap.value = state.texture;
-      program.uniforms.uOpacity.value = state.opacity;
-    });
-    meshPool[i] = state;
-    return state;
-  }
 
   let viewWidth = 1;
   let viewHeight = 1;
+  let planeH = 1;
+  let images: GalleryImage[] = [];
+  let planes: PlaneLayout[] = [];
+  let totalWidth = 0;
+  let lastScroll = 0;
+
+  interface Cell { mesh: OglMesh; imageIndex: number }
+  const cells: Cell[] = [];
+  const cache = new Map<string, { texture: OglTexture; bitmap: ImageBitmap; w: number; h: number }>();
+
+  function makeProgram() {
+    return new Program(gl, {
+      vertex: VERTEX,
+      fragment: FRAGMENT,
+      uniforms: {
+        tMap: { value: emptyTexture },
+        uOpacity: { value: 1 },
+        uStrength: { value: 0 },
+        uViewportSizes: { value: [1, 1] },
+        uPlaneSizes: { value: [1, 1] },
+        uImageSizes: { value: [1, 1] },
+      },
+      transparent: true,
+      depthTest: false,
+      cullFace: false,
+    });
+  }
+
+  function relayout() {
+    planeH = (opts.planeHeightVh / 100) * viewHeight;
+    const built = computeStrip(images, { planeH, gap: GAP_PX, aspectClamp: ASPECT_CLAMP });
+    planes = built.planes;
+    totalWidth = built.totalWidth;
+    for (const c of cells) { try { (c.mesh.program as InstanceType<typeof Program>).remove(); } catch {} c.mesh.setParent(null); }
+    cells.length = 0;
+    for (const p of planes) {
+      const mesh = new Mesh(gl, { geometry, program: makeProgram() });
+      mesh.setParent(scene);
+      cells.push({ mesh, imageIndex: p.index });
+    }
+  }
+
+  async function setImages(next: GalleryImage[]): Promise<void> {
+    images = next.slice();
+    const toFetch = images.filter((im) => !cache.has(im.url));
+    const settled = await Promise.allSettled(toFetch.map((im) => fetchBitmap(im.url)));
+    let authExpired = false;
+    toFetch.forEach((im, i) => {
+      const r = settled[i];
+      if (r.status === "rejected") {
+        if (r.reason instanceof PreviewAuthExpiredError) authExpired = true;
+        return;
+      }
+      const texture = new Texture(gl, { flipY: false });
+      texture.image = r.value as unknown as OglTexture["image"];
+      cache.set(im.url, { texture, bitmap: r.value, w: r.value.width, h: r.value.height });
+    });
+    while (cache.size > opts.maxTextures) {
+      const oldest = cache.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      const e = cache.get(oldest);
+      cache.delete(oldest);
+      if (e) { try { gl.deleteTexture(e.texture.texture); } catch {} try { e.bitmap.close(); } catch {} }
+    }
+    relayout();
+    if (authExpired) throw new PreviewAuthExpiredError(images[0]?.url ?? "");
+  }
 
   function resize(): void {
-    const size = measureContainerSize(canvas);
-    viewWidth = size.width;
-    viewHeight = size.height;
+    const s = measureContainerSize(canvas);
+    viewWidth = s.width;
+    viewHeight = s.height;
     renderer.setSize(viewWidth, viewHeight);
-    // Orthographic camera in CSS-pixel world units, top-left origin matching
-    // DOM pointer coordinates: world (0,0) -> screen top-left, world
-    // (viewWidth, viewHeight) -> screen bottom-right. Mesh positions can
-    // then use item.x/item.y directly with no per-item flip.
-    camera.orthographic({ left: 0, right: viewWidth, bottom: 0, top: viewHeight, near: 0.1, far: 10 });
-    camera.position.z = 1;
+    camera.orthographic({ left: -viewWidth / 2, right: viewWidth / 2, bottom: -viewHeight / 2, top: viewHeight / 2, near: 0.1, far: 1000 });
+    camera.position.z = 100;
+    relayout();
   }
   resize();
 
-  let hasLastPointer = false;
-  const lastPointer = { x: 0, y: 0 };
-  let destroyed = false;
-
-  function render(items: TrailItem[], pointer: { x: number; y: number }): void {
-    if (destroyed) return;
-    const now = performance.now();
-
-    let vx = 0;
-    let vy = 0;
-    if (hasLastPointer) {
-      vx = clamp(pointer.x - lastPointer.x, -VELOCITY_CLAMP_PX, VELOCITY_CLAMP_PX);
-      vy = clamp(pointer.y - lastPointer.y, -VELOCITY_CLAMP_PX, VELOCITY_CLAMP_PX);
+  function render(scroll: { current: number; velocity: number }): void {
+    const uStrength =
+      (Math.max(-VELOCITY_CLAMP, Math.min(VELOCITY_CLAMP, scroll.velocity)) / viewWidth) * opts.curveStrength * 40;
+    for (let i = 0; i < cells.length; i++) {
+      const cell = cells[i];
+      const p = planes[i];
+      if (!p) continue;
+      const entry = cache.get(images[cell.imageIndex].url);
+      const x = screenX(p.basePosX, scroll.current, totalWidth);
+      cell.mesh.position.set(x, 0, 0);
+      cell.mesh.scale.set(p.planeW, p.planeH, 1);
+      const u = (cell.mesh.program as InstanceType<typeof Program>).uniforms;
+      u.tMap.value = entry ? entry.texture : emptyTexture;
+      u.uOpacity.value = entry ? 1 : 0;
+      u.uStrength.value = uStrength;
+      u.uViewportSizes.value = [viewWidth, viewHeight];
+      u.uPlaneSizes.value = [p.planeW, p.planeH];
+      u.uImageSizes.value = entry ? [entry.w, entry.h] : [1, 1];
     }
-    lastPointer.x = pointer.x;
-    lastPointer.y = pointer.y;
-    hasLastPointer = true;
-
-    program.uniforms.uTime.value = now * 0.001;
-    program.uniforms.uVelocity.value = [vx, vy];
-
-    const offsetX = vx * opts.parallaxStrength;
-    const offsetY = vy * opts.parallaxStrength;
-
-    const slotCount = Math.max(items.length, meshPool.length);
-    for (let i = 0; i < slotCount; i++) {
-      const slot = ensureMesh(i);
-      const item = items[i];
-      if (!item) {
-        slot.opacity = 0;
-        continue;
-      }
-
-      const url = currentUrls.length > 0 ? currentUrls[item.imageIndex % currentUrls.length] : undefined;
-      const cached = url ? touch(url) : undefined;
-      slot.texture = cached ? cached.texture : emptyTexture;
-
-      const { opacity, scale } = ageEnvelope(now - item.bornAt, opts.lifetimeMs);
-      slot.opacity = cached ? opacity : 0;
-
-      const worldX = item.x + offsetX;
-      const worldY = viewHeight - (item.y + offsetY);
-      slot.mesh.position.set(worldX, worldY, 0);
-      const size = BASE_ITEM_SIZE_PX * scale;
-      slot.mesh.scale.set(size, size, 1);
-    }
-
+    lastScroll = scroll.current;
     renderer.render({ scene, camera });
   }
 
-  function destroy(): void {
-    if (destroyed) return;
-    destroyed = true;
-    for (const key of Array.from(cache.keys())) {
-      const entry = cache.get(key);
-      cache.delete(key);
-      if (!entry) continue;
-      try {
-        gl.deleteTexture(entry.texture.texture);
-      } catch {
-        /* already lost */
-      }
-      try {
-        entry.bitmap.close();
-      } catch {
-        /* already closed */
-      }
-    }
-    try {
-      gl.deleteTexture(emptyTexture.texture);
-    } catch {
-      /* already lost */
-    }
-    meshPool.length = 0;
-    currentUrls = [];
-    try {
-      program.remove();
-    } catch {
-      /* already gone */
-    }
-    // `geometry` (the shared Plane) allocates its own VBO/VAO on `gl`, same
-    // as textures/program above. Explicit here for the same reason: since
-    // destroy() no longer forces the context lost (see below), those buffers
-    // now outlive this renderer instance unless freed explicitly — the
-    // context persisting across recreations is exactly the point, so any GPU
-    // object this instance allocated must be deleted by hand instead of
-    // relying on context loss to reclaim it.
-    try {
-      geometry.remove();
-    } catch {
-      /* already gone */
-    }
-    // No listeners are registered internally by this module (ShowcaseCanvas
-    // owns pointermove/resize/visibilitychange/webglcontextlost) — this is
-    // the hook to remove any that a future change adds here.
-    //
-    // Deliberately does NOT call `gl.getExtension("WEBGL_lose_context")
-    // ?.loseContext()` here. The canvas element this context belongs to is
-    // reused by ShowcaseCanvas's mount effect (only a subset of the effect's
-    // deps actually changes the rendered JSX's `useWebGL`/`fellBack`
-    // branch, so a settings-only re-run tears down and recreates the
-    // renderer on the *same* <canvas>). Per the HTML spec, `getContext()` on
-    // a canvas is idempotent for a given (type, attributes) pair, and an
-    // explicitly-lost context (via `loseContext()`) is never replaced by a
-    // later `getContext()` call — only `restoreContext()` on that same
-    // extension instance can undo it, which nothing here calls. Forcing the
-    // context lost would therefore permanently brick every future renderer
-    // built on this canvas: `new Renderer({ canvas })` would still return a
-    // (dead) `gl`, the `if (!gl) throw` guard would never fire, and every GL
-    // call after would silently no-op — a blank canvas with no error and no
-    // fallback. The explicit `deleteTexture`/`program.remove()` calls above
-    // already release the GPU resources this renderer allocated; that's the
-    // correct and sufficient teardown for a context that outlives this one
-    // renderer instance. A *genuine* context loss (GPU reset, driver crash,
-    // browser resource reclamation) still fires `webglcontextlost` on its
-    // own and is handled by ShowcaseCanvas's `onContextLost` -> `fellBack`
-    // path — that path never runs through this function.
+  function hitTest(clientX: number, clientY: number): number | null {
+    const rect = canvas.getBoundingClientRect();
+    const px = clientX - rect.left;
+    const py = clientY - rect.top;
+    if (Math.abs(py - viewHeight / 2) > planeH / 2) return null;
+    return hitTestStrip(planes, lastScroll, totalWidth, viewWidth / 2, px);
   }
 
-  return { setImages, render, resize, destroy };
+  function destroy(): void {
+    for (const key of Array.from(cache.keys())) {
+      const e = cache.get(key);
+      cache.delete(key);
+      if (!e) continue;
+      try { gl.deleteTexture(e.texture.texture); } catch {}
+      try { e.bitmap.close(); } catch {}
+    }
+    try { gl.deleteTexture(emptyTexture.texture); } catch {}
+    for (const c of cells) { try { (c.mesh.program as InstanceType<typeof Program>).remove(); } catch {} }
+    cells.length = 0;
+    try { geometry.remove(); } catch {}
+    // Deliberately does NOT loseContext() — the canvas is reused across renderer
+    // recreations (settings changes); forcing loss would brick every future
+    // renderer on this canvas. Genuine loss fires webglcontextlost, handled by
+    // ShowcaseCanvas.
+  }
+
+  return { setImages, render, resize, hitTest, destroy };
 }

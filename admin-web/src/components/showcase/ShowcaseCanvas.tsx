@@ -1,76 +1,46 @@
 "use client";
 
-// The WebGL enhancement layer for the showcase pointer trail, sitting on top
-// of the permanent DOM renderer (ShowcaseTrailDOM, Task 4). This component
-// owns the full degradation contract:
-//
-//   1. prefers-reduced-motion OR low-end (motionConfig.shouldAnimate() ===
-//      false) -> render ShowcaseTrailDOM, and the `ogl`-loading renderer
-//      factory (createShowcaseRenderer, in ./webgl) is never called, so the
-//      `ogl` chunk is never fetched.
-//   2. WebGL context creation fails, or `webglcontextlost` fires -> fall
-//      back to ShowcaseTrailDOM silently (no error UI). One-way: WebGL can
-//      fall back to DOM, never the reverse in the same session.
-//   3. document.hidden -> pause the rAF loop (no rendering while hidden).
-//   4. config.minimal -> also falls through to ShowcaseTrailDOM, which
-//      already renders the static grid for `minimal` on its own. Unlike
-//      rules 1-3, this one is LIVE: `minimal` is a user preference that can
-//      change (settings page, propagated cross-tab via useShowcaseConfig)
-//      while `/` is already mounted with WebGL active, and the settings
-//      page promises the motion parameters "no longer take effect" once it's
-//      on — so flipping it must tear the renderer down and show the static
-//      grid without a reload, and flipping it back must bring WebGL back
-//      (if the frozen hardware decision below allows it). If `minimal` is
-//      already true at mount, `createShowcaseRenderer` is still never
-//      called and the `ogl` chunk is still never fetched — same as rule 1.
-//
-// The WebGL-vs-DOM decision is split into two parts: the hardware/
-// reduced-motion capability (`hardwareOk`) is decided once on mount (a lazy
-// useState initializer) and never re-evaluated for the same mount — flipping
-// renderers under the user mid-session based on a hardware property would be
-// worse than either fixed choice. `config.minimal`, by contrast, is read
-// live every render and combined with `hardwareOk` into `useWebGL`, so only
-// the user's own live toggle can move the renderer between WebGL and DOM
-// after mount. `fellBack` is the separate one-way escape hatch for rule 2's
-// runtime failures.
+// Gallery canvas: owns auto-scroll + wheel/drag, drives the WebGL renderer with
+// a dt-independent scroll lerp, and the degradation contract. `hardwareOk`
+// (reduced-motion/low-end) is frozen at mount; `config.minimal` is live;
+// `fellBack` (runtime WebGL loss) is one-way. When not WebGL -> static grid
+// (Task 4 makes low-end/fellBack use ShowcaseGalleryDOM instead).
 
 import { useEffect, useRef, useState } from "react";
-
 import type { ShowcaseItem } from "@/lib/api";
-import { createTrail } from "@/lib/showcase/trail";
+import type { ShowcaseConfig } from "@/lib/showcase/config";
 import { motionConfig } from "@/lib/motion";
-import {
-  computeLifetimeMs,
-  frameIndependentAlpha,
-  isPointerActive,
-  MAX_DT_MS,
-  type TrailConfig,
-} from "@/lib/showcase/trailTiming";
+import { frameIndependentAlpha, MAX_DT_MS } from "@/lib/showcase/smoothing";
 import { createShowcaseRenderer, PreviewAuthExpiredError, type ShowcaseRenderer } from "@/lib/showcase/webgl";
-import ShowcaseTrailDOM from "./ShowcaseTrailDOM";
+import type { GalleryImage } from "@/lib/showcase/galleryLayout";
+import ShowcaseStaticGrid from "./ShowcaseStaticGrid";
 
-// A stale signed-URL batch that keeps 401ing even after a refetch (clock
-// skew, misconfiguration) must not turn into an unbounded refetch loop
-// hammering the backend. Stop auto-refetching after this many consecutive
-// expired batches; the streak resets the moment a batch loads cleanly.
 const MAX_AUTO_REFETCH_STREAK = 2;
+const DRAG_PX_PER_UNIT = 1;
+const WHEEL_SCALE = 0.6;
+const SCROLL_EASE = 0.1;
+
+export type GalleryCanvasConfig = Pick<
+  ShowcaseConfig,
+  "planeHeightVh" | "autoScrollSpeed" | "curveStrength" | "minimal"
+>;
+
+function toGalleryImages(items: ShowcaseItem[]): GalleryImage[] {
+  return items.map((it) => ({ url: it.preview_url, width: it.width, height: it.height }));
+}
 
 export default function ShowcaseCanvas({
   items,
   config,
   onPreviewExpired,
+  onHit,
 }: {
   items: ShowcaseItem[];
-  config: TrailConfig;
+  config: GalleryCanvasConfig;
   onPreviewExpired?: () => void;
+  onHit?: (index: number) => void;
 }) {
-  // Decided once on mount — a device/OS property, not something that should
-  // flip mid-session (see the module doc above).
   const [hardwareOk] = useState(() => typeof window !== "undefined" && motionConfig.shouldAnimate());
-  // Live: recomputed every render so toggling `config.minimal` (in this tab
-  // or another) tears the WebGL renderer down or spins it back up without a
-  // reload — mirrors ShowcaseTrailDOM's own `showStatic = !animate ||
-  // config.minimal`, just with `hardwareOk` standing in for the frozen half.
   const useWebGL = hardwareOk && !config.minimal;
   const [fellBack, setFellBack] = useState(false);
 
@@ -80,6 +50,8 @@ export default function ShowcaseCanvas({
   itemsRef.current = items;
   const onPreviewExpiredRef = useRef(onPreviewExpired);
   onPreviewExpiredRef.current = onPreviewExpired;
+  const onHitRef = useRef(onHit);
+  onHitRef.current = onHit;
   const expiredStreakRef = useRef(0);
 
   function reportSetImagesOutcome(expired: boolean): void {
@@ -91,13 +63,8 @@ export default function ShowcaseCanvas({
     }
   }
 
-  // Renderer lifecycle: create (or degrade), wire up the rAF loop and
-  // listeners, tear down on unmount/config change. Never re-entered when
-  // `items` changes alone (see the sync effect below) — mirrors
-  // ShowcaseTrailDOM's own itemsRef pattern so a background refetch never
-  // restarts the pointer listener or the trail controller.
   useEffect(() => {
-    if (!useWebGL || fellBack) return; // Never call the renderer factory outside this path — the ogl chunk must not be fetched.
+    if (!useWebGL || fellBack) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -106,111 +73,72 @@ export default function ShowcaseCanvas({
     let rafId = 0;
     let running = true;
     let lastFrameTime: number | null = null;
-    let hasPointer = false;
-    let lastRealMoveTime = -Infinity;
-    const raw = { x: 0, y: 0 };
-    const damped = { x: 0, y: 0 };
+    const scroll = { current: 0, target: 0, velocity: 0 };
 
-    const lifetimeMs = computeLifetimeMs(config);
-    const controller = createTrail({
-      max: config.trailMax,
-      spawnIntervalMs: config.spawnIntervalMs,
-      lifetimeMs,
-      imageCount: itemsRef.current.length,
-    });
-
+    let dragging = false;
+    let lastDragX = 0;
+    function onPointerDown(e: PointerEvent) {
+      dragging = true;
+      lastDragX = e.clientX;
+      canvas!.setPointerCapture(e.pointerId);
+    }
     function onPointerMove(e: PointerEvent) {
-      const rect = canvas!.getBoundingClientRect();
-      raw.x = e.clientX - rect.left;
-      raw.y = e.clientY - rect.top;
-      lastRealMoveTime = performance.now();
-      if (!hasPointer) {
-        hasPointer = true;
-        damped.x = raw.x;
-        damped.y = raw.y;
-      }
+      if (!dragging) return;
+      scroll.target -= (e.clientX - lastDragX) * DRAG_PX_PER_UNIT;
+      lastDragX = e.clientX;
     }
-
-    function onPointerLeave() {
-      hasPointer = false;
+    function onPointerUp(e: PointerEvent) {
+      dragging = false;
+      try { canvas!.releasePointerCapture(e.pointerId); } catch {}
     }
-
-    function onContextLost(e: Event) {
-      // Runtime WebGL failure after a successful start: fall back silently,
-      // one-way (never re-attempt WebGL for this mount).
+    function onWheel(e: WheelEvent) {
       e.preventDefault();
-      setFellBack(true);
+      scroll.target += (e.deltaY + e.deltaX) * WHEEL_SCALE;
     }
-
-    function onResize() {
-      renderer?.resize();
-    }
+    function onContextLost(e: Event) { e.preventDefault(); setFellBack(true); }
+    function onResize() { renderer?.resize(); }
 
     function paint(now: number) {
       if (!running || !renderer) return;
-
       const dt = lastFrameTime === null ? 0 : Math.min(now - lastFrameTime, MAX_DT_MS);
       lastFrameTime = now;
-
-      const alpha = frameIndependentAlpha(config.followDamping, dt);
-      damped.x += (raw.x - damped.x) * alpha;
-      damped.y += (raw.y - damped.y) * alpha;
-
-      if (hasPointer && isPointerActive(now, lastRealMoveTime, raw, damped)) {
-        controller.pointerMove(damped.x, damped.y);
-      }
-
-      const live = controller.tick(now);
-      renderer.render(live, { x: damped.x, y: damped.y });
-
+      scroll.target += config.autoScrollSpeed * (dt / (1000 / 60));
+      const alpha = frameIndependentAlpha(SCROLL_EASE, dt);
+      const prev = scroll.current;
+      scroll.current += (scroll.target - scroll.current) * alpha;
+      scroll.velocity = dt > 0 ? ((scroll.current - prev) / dt) * 1000 : 0;
+      renderer.render({ current: scroll.current, velocity: scroll.velocity });
       rafId = requestAnimationFrame(paint);
     }
-
     function onVisibility() {
-      if (document.hidden) {
-        running = false;
-        cancelAnimationFrame(rafId);
-        lastFrameTime = null;
-      } else if (!running && renderer) {
-        running = true;
-        rafId = requestAnimationFrame(paint);
-      }
+      if (document.hidden) { running = false; cancelAnimationFrame(rafId); lastFrameTime = null; }
+      else if (!running && renderer) { running = true; rafId = requestAnimationFrame(paint); }
     }
 
-    // Registered before the first frame, per the contract — a context loss
-    // at any point (including during setup) must degrade silently.
     canvas.addEventListener("webglcontextlost", onContextLost);
 
     void (async () => {
       let created: ShowcaseRenderer;
       try {
         created = await createShowcaseRenderer(canvas!, {
-          maxTextures: config.trailMax * 2,
-          parallaxStrength: config.parallaxStrength,
-          lifetimeMs,
+          planeHeightVh: config.planeHeightVh,
+          curveStrength: config.curveStrength,
+          maxTextures: Math.max(24, itemsRef.current.length + 4),
         });
-      } catch {
-        if (!cancelled) setFellBack(true);
-        return;
-      }
-      if (cancelled) {
-        created.destroy();
-        return;
-      }
+      } catch { if (!cancelled) setFellBack(true); return; }
+      if (cancelled) { created.destroy(); return; }
       renderer = created;
       rendererRef.current = created;
       renderer.resize();
-
       try {
-        await renderer.setImages(itemsRef.current.map((it) => it.preview_url));
+        await renderer.setImages(toGalleryImages(itemsRef.current));
         if (!cancelled) reportSetImagesOutcome(false);
-      } catch (err) {
-        if (!cancelled) reportSetImagesOutcome(err instanceof PreviewAuthExpiredError);
-      }
+      } catch (err) { if (!cancelled) reportSetImagesOutcome(err instanceof PreviewAuthExpiredError); }
       if (cancelled) return;
-
+      canvas!.addEventListener("pointerdown", onPointerDown);
       canvas!.addEventListener("pointermove", onPointerMove);
-      canvas!.addEventListener("pointerleave", onPointerLeave);
+      canvas!.addEventListener("pointerup", onPointerUp);
+      canvas!.addEventListener("wheel", onWheel, { passive: false });
       window.addEventListener("resize", onResize);
       document.addEventListener("visibilitychange", onVisibility);
       if (!document.hidden) rafId = requestAnimationFrame(paint);
@@ -221,50 +149,32 @@ export default function ShowcaseCanvas({
       running = false;
       cancelAnimationFrame(rafId);
       canvas.removeEventListener("webglcontextlost", onContextLost);
+      canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
-      canvas.removeEventListener("pointerleave", onPointerLeave);
+      canvas.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("wheel", onWheel);
       window.removeEventListener("resize", onResize);
       document.removeEventListener("visibilitychange", onVisibility);
-      controller.reset();
       rendererRef.current = null;
       renderer?.destroy();
     };
-    // `useWebGL` (not just `hardwareOk`) drives re-evaluation so toggling
-    // `config.minimal` off mid-session tears this effect's renderer/rAF/
-    // listeners down (via the cleanup above) — the render branch below then
-    // shows ShowcaseTrailDOM — and toggling it back on (with `hardwareOk`
-    // true) re-runs this body and spins WebGL back up. Mirrors
-    // ShowcaseTrailDOM's own `showStatic`-keyed effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [useWebGL, fellBack, config.trailMax, config.spawnIntervalMs, config.followDamping, config.parallaxStrength]);
+  }, [useWebGL, fellBack, config.planeHeightVh, config.curveStrength, config.autoScrollSpeed]);
 
-  // Texture sync: push a fresh URL list into the already-running renderer
-  // whenever `items` changes (initial load is handled by the effect above;
-  // this covers a later background refetch — including the one triggered by
-  // a 401 above — without tearing down rAF/listeners). No-ops until the
-  // renderer exists.
   useEffect(() => {
     if (!useWebGL || fellBack) return;
     const renderer = rendererRef.current;
     if (!renderer) return;
     let cancelled = false;
-    renderer
-      .setImages(items.map((it) => it.preview_url))
-      .then(() => {
-        if (!cancelled) reportSetImagesOutcome(false);
-      })
-      .catch((err) => {
-        if (!cancelled) reportSetImagesOutcome(err instanceof PreviewAuthExpiredError);
-      });
-    return () => {
-      cancelled = true;
-    };
+    renderer.setImages(toGalleryImages(items))
+      .then(() => { if (!cancelled) reportSetImagesOutcome(false); })
+      .catch((err) => { if (!cancelled) reportSetImagesOutcome(err instanceof PreviewAuthExpiredError); });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, useWebGL, fellBack]);
 
   if (!useWebGL || fellBack) {
-    return <ShowcaseTrailDOM items={items} config={config} />;
+    return <ShowcaseStaticGrid items={items} />;
   }
-
-  return <canvas ref={canvasRef} aria-hidden="true" className="absolute inset-0 h-full w-full" />;
+  return <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />;
 }
