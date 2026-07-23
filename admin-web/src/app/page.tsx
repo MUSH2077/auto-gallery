@@ -4,13 +4,16 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api, queryKeys } from "@/lib/api";
 import { useShowcaseConfig } from "@/lib/showcase/config";
+import { useSlideshow } from "@/lib/useSlideshow";
 import { ErrorState } from "@/components";
+import type { SlideItem } from "@/components/SlideshowPlayer";
 import ShowcaseHero from "@/components/showcase/ShowcaseHero";
 import ShowcaseCanvas from "@/components/showcase/ShowcaseCanvas";
 import ShowcaseEmpty from "@/components/showcase/ShowcaseEmpty";
 
 export default function Home() {
   const { config } = useShowcaseConfig();
+  const slideshow = useSlideshow();
 
   const params = {
     count: 24,
@@ -49,6 +52,12 @@ export default function Home() {
   }
 
   const items = sample.data?.items ?? [];
+  const slideItems: SlideItem[] = items.map((item) => ({
+    assetId: item.asset_id,
+    workId: item.work_id,
+    title: item.title,
+    creatorName: item.creator_name,
+  }));
 
   if (items.length === 0) {
     const filterActive = config.scope !== "all" || config.source != null || config.tag != null;
@@ -57,8 +66,14 @@ export default function Home() {
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-subtle dark:bg-canvas">
-      <ShowcaseCanvas items={items} config={config} onPreviewExpired={() => sample.refetch()} />
+      <ShowcaseCanvas
+        items={items}
+        config={config}
+        onPreviewExpired={() => sample.refetch()}
+        onHit={(index) => slideshow.open(slideItems, index)}
+      />
       <ShowcaseHero config={config} itemCount={items.length} />
+      {slideshow.node}
     </main>
   );
 }

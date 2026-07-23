@@ -78,17 +78,40 @@ export default function ShowcaseCanvas({
 
     let dragging = false;
     let lastDragX = 0;
+    let lastDragY = 0;
+    let downX = 0;
+    let downY = 0;
+    let downT = 0;
+    let moved = 0;
     function onPointerDown(e: PointerEvent) {
       dragging = true;
       lastDragX = e.clientX;
+      lastDragY = e.clientY;
+      downX = e.clientX;
+      downY = e.clientY;
+      downT = performance.now();
+      moved = 0;
       canvas!.setPointerCapture(e.pointerId);
     }
     function onPointerMove(e: PointerEvent) {
       if (!dragging) return;
+      moved += Math.hypot(e.clientX - lastDragX, e.clientY - lastDragY);
       scroll.target -= (e.clientX - lastDragX) * DRAG_PX_PER_UNIT;
       lastDragX = e.clientX;
+      lastDragY = e.clientY;
     }
     function onPointerUp(e: PointerEvent) {
+      if (!dragging) return;
+      dragging = false;
+      try { canvas!.releasePointerCapture(e.pointerId); } catch {}
+      const dist = Math.hypot(e.clientX - downX, e.clientY - downY);
+      if (dist < 6 && moved < 6 && performance.now() - downT < 400 && renderer) {
+        const index = renderer.hitTest(e.clientX, e.clientY);
+        if (index != null) onHitRef.current?.(index);
+      }
+    }
+    function onPointerCancel(e: PointerEvent) {
+      if (!dragging) return;
       dragging = false;
       try { canvas!.releasePointerCapture(e.pointerId); } catch {}
     }
@@ -139,6 +162,7 @@ export default function ShowcaseCanvas({
       canvas!.addEventListener("pointerdown", onPointerDown);
       canvas!.addEventListener("pointermove", onPointerMove);
       canvas!.addEventListener("pointerup", onPointerUp);
+      canvas!.addEventListener("pointercancel", onPointerCancel);
       canvas!.addEventListener("wheel", onWheel, { passive: false });
       window.addEventListener("resize", onResize);
       document.addEventListener("visibilitychange", onVisibility);
@@ -153,6 +177,7 @@ export default function ShowcaseCanvas({
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("pointercancel", onPointerCancel);
       canvas.removeEventListener("wheel", onWheel);
       window.removeEventListener("resize", onResize);
       document.removeEventListener("visibilitychange", onVisibility);
@@ -183,5 +208,5 @@ export default function ShowcaseCanvas({
     }
     return <ShowcaseGalleryDOM items={items} config={config} />;
   }
-  return <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />;
+  return <canvas ref={canvasRef} className="absolute inset-0 h-full w-full cursor-pointer touch-none" />;
 }
