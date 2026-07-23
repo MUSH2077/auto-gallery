@@ -2,7 +2,7 @@
 // import() so it lands only in its own lazy chunk and is never fetched under
 // reduced-motion / low-end / minimal. Client-only (invoked from a mount effect).
 
-import { computeStrip, screenX, hitTestStrip, type GalleryImage, type PlaneLayout } from "./galleryLayout";
+import { computeStrip, screenX, type GalleryImage, type PlaneLayout } from "./galleryLayout";
 
 export interface ShowcaseRenderer {
   setImages(images: GalleryImage[]): Promise<void>;
@@ -23,6 +23,7 @@ export class PreviewAuthExpiredError extends Error {
 const GAP_PX = 40;
 const ASPECT_CLAMP: [number, number] = [0.4, 2.5];
 const VELOCITY_CLAMP = 4000;
+const CAMERA_FOV_DEG = 45;
 
 // Aspect-cover UV correction (object-fit: cover) + velocity-driven cylindrical
 // Z-bend. No chromatic aberration, no idle sine warp — those were the ghosting
@@ -34,11 +35,16 @@ const VERTEX = /* glsl */ `
   uniform mat4 projectionMatrix;
   uniform float uStrength;
   uniform vec2 uViewportSizes;
+  uniform vec2 uPlaneSizes;
   varying vec2 vUv;
   void main() {
     vUv = uv;
     vec3 p = position;
-    p.z += sin(p.y / uViewportSizes.y * 3.14159265 + 3.14159265 / 2.0) * -uStrength;
+    // Plane geometry is shared at unit size and enlarged by mesh.scale in the
+    // model matrix. Reconstruct its world-space Y here; using raw position.y
+    // (roughly -0.5..0.5) makes the curve effectively constant.
+    float worldY = p.y * uPlaneSizes.y;
+    p.z += sin(worldY / uViewportSizes.y * 3.14159265 + 3.14159265 / 2.0) * -uStrength;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
   }
 `;
@@ -99,7 +105,10 @@ export async function createShowcaseRenderer(
 
   const camera = new Camera(gl);
   const scene = new Transform();
-  const geometry = new Plane(gl, { widthSegments: 20, heightSegments: 1 });
+  // The bend varies along Y, so both axes need subdivisions. With a single
+  // height segment the top and bottom rows receive the same symmetric sine
+  // value and the whole image can only move in Z as one rigid rectangle.
+  const geometry = new Plane(gl, { widthSegments: 20, heightSegments: 20 });
   const emptyTexture: OglTexture = new Texture(gl);
 
   let viewWidth = 1;
@@ -109,6 +118,8 @@ export async function createShowcaseRenderer(
   let planes: PlaneLayout[] = [];
   let totalWidth = 0;
   let lastScroll = 0;
+  let lastStrength = 0;
+  let cameraDistance = 1;
 
   interface Cell { mesh: OglMesh; imageIndex: number }
   const cells: Cell[] = [];
@@ -177,8 +188,17 @@ export async function createShowcaseRenderer(
     viewWidth = s.width;
     viewHeight = s.height;
     renderer.setSize(viewWidth, viewHeight);
-    camera.orthographic({ left: -viewWidth / 2, right: viewWidth / 2, bottom: -viewHeight / 2, top: viewHeight / 2, near: 0.1, far: 1000 });
-    camera.position.z = 100;
+    // Perspective is required for a Z displacement to be visible. Position
+    // the camera so the z=0 plane still maps one world unit to one CSS pixel;
+    // this preserves all existing pixel-based layout math at rest.
+    cameraDistance = viewHeight / (2 * Math.tan((CAMERA_FOV_DEG * Math.PI) / 360));
+    camera.perspective({
+      aspect: viewWidth / viewHeight,
+      fov: CAMERA_FOV_DEG,
+      near: 0.1,
+      far: cameraDistance + 2000,
+    });
+    camera.position.z = cameraDistance;
     relayout();
   }
   resize();
@@ -203,6 +223,7 @@ export async function createShowcaseRenderer(
       u.uImageSizes.value = entry ? [entry.w, entry.h] : [1, 1];
     }
     lastScroll = scroll.current;
+    lastStrength = uStrength;
     renderer.render({ scene, camera });
   }
 
@@ -210,8 +231,29 @@ export async function createShowcaseRenderer(
     const rect = canvas.getBoundingClientRect();
     const px = clientX - rect.left;
     const py = clientY - rect.top;
-    if (Math.abs(py - viewHeight / 2) > planeH / 2) return null;
-    return hitTestStrip(planes, lastScroll, totalWidth, viewWidth / 2, px);
+    const screenY = py - viewHeight / 2;
+
+    // Invert the perspective projection at this Y with a few fixed-point
+    // iterations. This keeps click targets aligned with visibly bent planes
+    // during fast wheel/drag input; at rest scale=1 and it reduces to the
+    // original screen-space interval test.
+    let worldY = screenY;
+    let scale = 1;
+    for (let i = 0; i < 3; i++) {
+      const curve = Math.sin((worldY / viewHeight) * Math.PI + Math.PI / 2);
+      const z = -lastStrength * curve;
+      scale = cameraDistance / (cameraDistance - z);
+      worldY = screenY / scale;
+    }
+    if (Math.abs(worldY) > planeH / 2) return null;
+
+    for (const plane of planes) {
+      const centerWorld = screenX(plane.basePosX, lastScroll, totalWidth);
+      const left = viewWidth / 2 + (centerWorld - plane.planeW / 2) * scale;
+      const right = viewWidth / 2 + (centerWorld + plane.planeW / 2) * scale;
+      if (px >= left && px <= right) return plane.index;
+    }
+    return null;
   }
 
   function destroy(): void {
