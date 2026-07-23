@@ -10,12 +10,7 @@ export interface ShowcaseConfig {
   source: string | null;
   tag: string | null;
   includeNsfw: boolean;
-  // motion (trail — removed in Task 6)
-  trailMax: number;
-  spawnIntervalMs: number;
-  followDamping: number;
-  parallaxStrength: number;
-  // motion (gallery)
+  // motion
   planeHeightVh: number;
   autoScrollSpeed: number;
   curveStrength: number;
@@ -36,10 +31,6 @@ export const DEFAULT_SHOWCASE_CONFIG: ShowcaseConfig = {
   source: null,
   tag: null,
   includeNsfw: false,
-  trailMax: 18,
-  spawnIntervalMs: 90,
-  followDamping: 0.12,
-  parallaxStrength: 0.4,
   planeHeightVh: 48,
   autoScrollSpeed: 1.0,
   curveStrength: 0.5,
@@ -80,7 +71,7 @@ function sanitizeNullableString(value: unknown): string | null {
  * preferences payload) into a well-formed ShowcaseConfig. Any field that is
  * missing, of the wrong type, or out of range falls back to the corresponding
  * DEFAULT_SHOWCASE_CONFIG value — this never throws. Numeric ranges must match
- * the bounds offered by the settings UI (see Task 3) exactly.
+ * the bounds offered by the settings UI exactly.
  */
 export function sanitizeShowcaseConfig(value: unknown): ShowcaseConfig {
   if (!value || typeof value !== "object") return DEFAULT_SHOWCASE_CONFIG;
@@ -90,10 +81,6 @@ export function sanitizeShowcaseConfig(value: unknown): ShowcaseConfig {
     source: sanitizeNullableString(raw.source),
     tag: sanitizeNullableString(raw.tag),
     includeNsfw: typeof raw.includeNsfw === "boolean" ? raw.includeNsfw : DEFAULT_SHOWCASE_CONFIG.includeNsfw,
-    trailMax: clampNumber(raw.trailMax, 4, 40, DEFAULT_SHOWCASE_CONFIG.trailMax),
-    spawnIntervalMs: clampNumber(raw.spawnIntervalMs, 40, 400, DEFAULT_SHOWCASE_CONFIG.spawnIntervalMs),
-    followDamping: clampNumber(raw.followDamping, 0.02, 0.5, DEFAULT_SHOWCASE_CONFIG.followDamping),
-    parallaxStrength: clampNumber(raw.parallaxStrength, 0, 1, DEFAULT_SHOWCASE_CONFIG.parallaxStrength),
     planeHeightVh: clampNumber(raw.planeHeightVh, 30, 70, DEFAULT_SHOWCASE_CONFIG.planeHeightVh),
     autoScrollSpeed: clampNumber(raw.autoScrollSpeed, 0.2, 3.0, DEFAULT_SHOWCASE_CONFIG.autoScrollSpeed),
     curveStrength: clampNumber(raw.curveStrength, 0, 1, DEFAULT_SHOWCASE_CONFIG.curveStrength),

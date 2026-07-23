@@ -207,41 +207,31 @@ export default function ShowcaseSettingsPage() {
         <section className="card mt-5 p-5">
           <h2 className="section-title mb-2">{t("showcase_settings.group_motion", "动效")}</h2>
           <RangeRow
-            title={t("showcase_settings.trail_max", "拖尾粒子数上限")}
-            value={config.trailMax}
-            min={4}
-            max={40}
-            step={1}
+            title={t("showcase_settings.plane_height")}
+            value={config.planeHeightVh}
+            min={30}
+            max={70}
+            step={5}
             disabled={config.minimal}
-            onChange={(value) => update({ trailMax: value })}
+            onChange={(value) => update({ planeHeightVh: value })}
           />
           <RangeRow
-            title={t("showcase_settings.spawn_interval", "生成间隔")}
-            value={config.spawnIntervalMs}
-            min={40}
-            max={400}
-            step={10}
-            unit="ms"
+            title={t("showcase_settings.auto_scroll_speed")}
+            value={config.autoScrollSpeed}
+            min={0.2}
+            max={3}
+            step={0.1}
             disabled={config.minimal}
-            onChange={(value) => update({ spawnIntervalMs: value })}
+            onChange={(value) => update({ autoScrollSpeed: value })}
           />
           <RangeRow
-            title={t("showcase_settings.follow_damping", "跟随阻尼")}
-            value={config.followDamping}
-            min={0.02}
-            max={0.5}
-            step={0.01}
-            disabled={config.minimal}
-            onChange={(value) => update({ followDamping: value })}
-          />
-          <RangeRow
-            title={t("showcase_settings.parallax", "视差强度")}
-            value={config.parallaxStrength}
+            title={t("showcase_settings.curve_strength")}
+            value={config.curveStrength}
             min={0}
             max={1}
             step={0.05}
             disabled={config.minimal}
-            onChange={(value) => update({ parallaxStrength: value })}
+            onChange={(value) => update({ curveStrength: value })}
           />
           <SettingRow title={t("showcase_settings.minimal", "极简模式")} description={t("showcase_settings.minimal_hint", "开启后，以上动效参数将不再生效。")}>
             <ToggleButton
