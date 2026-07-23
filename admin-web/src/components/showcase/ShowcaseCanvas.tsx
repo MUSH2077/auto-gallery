@@ -3,8 +3,8 @@
 // Gallery canvas: owns auto-scroll + wheel/drag, drives the WebGL renderer with
 // a dt-independent scroll lerp, and the degradation contract. `hardwareOk`
 // (reduced-motion/low-end) is frozen at mount; `config.minimal` is live;
-// `fellBack` (runtime WebGL loss) is one-way. When not WebGL -> static grid
-// (Task 4 makes low-end/fellBack use ShowcaseGalleryDOM instead).
+// `fellBack` (runtime WebGL loss) is one-way. Reduced-motion/minimal use a
+// static grid; low-end/WebGL-unavailable devices use the CSS drift band.
 
 import { useEffect, useRef, useState } from "react";
 import type { ShowcaseItem } from "@/lib/api";
@@ -13,6 +13,7 @@ import { motionConfig } from "@/lib/motion";
 import { frameIndependentAlpha, MAX_DT_MS } from "@/lib/showcase/smoothing";
 import { createShowcaseRenderer, PreviewAuthExpiredError, type ShowcaseRenderer } from "@/lib/showcase/webgl";
 import type { GalleryImage } from "@/lib/showcase/galleryLayout";
+import ShowcaseGalleryDOM from "./ShowcaseGalleryDOM";
 import ShowcaseStaticGrid from "./ShowcaseStaticGrid";
 
 const MAX_AUTO_REFETCH_STREAK = 2;
@@ -174,7 +175,13 @@ export default function ShowcaseCanvas({
   }, [items, useWebGL, fellBack]);
 
   if (!useWebGL || fellBack) {
-    return <ShowcaseStaticGrid items={items} />;
+    const reducedMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reducedMotion || config.minimal) {
+      return <ShowcaseStaticGrid items={items} />;
+    }
+    return <ShowcaseGalleryDOM items={items} config={config} />;
   }
   return <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />;
 }
