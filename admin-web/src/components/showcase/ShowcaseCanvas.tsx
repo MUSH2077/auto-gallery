@@ -201,7 +201,7 @@ export default function ShowcaseCanvas({
 
   if (!useWebGL || fellBack) {
     const reducedMotion =
-      typeof window !== "undefined" &&
+      typeof window === "undefined" ||
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (reducedMotion || config.minimal) {
       return <ShowcaseStaticGrid items={items} />;

@@ -8,7 +8,7 @@ export default function ShowcaseStaticGrid({ items }: { items: ShowcaseItem[] })
   const shown = items.slice(0, GRID_COUNT);
   return (
     <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-8">
-      <div className="grid max-w-5xl grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid w-full max-w-5xl grid-cols-2 gap-3 sm:grid-cols-4">
         {shown.map((it) => (
           <img
             key={it.work_id}

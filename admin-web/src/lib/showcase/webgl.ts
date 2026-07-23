@@ -120,10 +120,13 @@ export async function createShowcaseRenderer(
   let lastScroll = 0;
   let lastStrength = 0;
   let cameraDistance = 1;
+  let destroyed = false;
+  let cellBuildVersion = 0;
 
   interface Cell { mesh: OglMesh; imageIndex: number }
   const cells: Cell[] = [];
   const cache = new Map<string, { texture: OglTexture; bitmap: ImageBitmap; w: number; h: number }>();
+  const warmScene = new Transform();
 
   function makeProgram() {
     return new Program(gl, {
@@ -143,17 +146,74 @@ export async function createShowcaseRenderer(
     });
   }
 
-  function relayout() {
+  function updateLayout() {
     planeH = (opts.planeHeightVh / 100) * viewHeight;
     const built = computeStrip(images, { planeH, gap: GAP_PX, aspectClamp: ASPECT_CLAMP });
     planes = built.planes;
     totalWidth = built.totalWidth;
-    for (const c of cells) { try { (c.mesh.program as InstanceType<typeof Program>).remove(); } catch {} c.mesh.setParent(null); }
-    cells.length = 0;
-    for (const p of planes) {
+  }
+
+  function disposeCells(target: Cell[]): void {
+    for (const c of target) {
+      try { (c.mesh.program as InstanceType<typeof Program>).remove(); } catch {}
+      c.mesh.setParent(null);
+    }
+  }
+
+  function yieldToBrowser(): Promise<void> {
+    return new Promise((resolve) => window.setTimeout(resolve, 0));
+  }
+
+  function updateCell(cell: Cell, plane: PlaneLayout, scrollCurrent: number, strength: number): void {
+    const image = images[cell.imageIndex];
+    const entry = image ? cache.get(image.url) : undefined;
+    const x = screenX(plane.basePosX, scrollCurrent, totalWidth);
+    cell.mesh.position.set(x, 0, 0);
+    cell.mesh.scale.set(plane.planeW, plane.planeH, 1);
+    const uniforms = (cell.mesh.program as InstanceType<typeof Program>).uniforms;
+    uniforms.tMap.value = entry ? entry.texture : emptyTexture;
+    uniforms.uOpacity.value = entry ? 1 : 0;
+    uniforms.uStrength.value = strength;
+    uniforms.uViewportSizes.value = [viewWidth, viewHeight];
+    uniforms.uPlaneSizes.value = [plane.planeW, plane.planeH];
+    uniforms.uImageSizes.value = entry ? [entry.w, entry.h] : [1, 1];
+  }
+
+  async function syncCells(): Promise<void> {
+    const version = ++cellBuildVersion;
+    if (cells.length === planes.length) return;
+
+    const planeSnapshot = planes.slice();
+    const nextCells: Cell[] = [];
+    for (const p of planeSnapshot) {
+      if (destroyed || version !== cellBuildVersion) {
+        disposeCells(nextCells);
+        return;
+      }
       const mesh = new Mesh(gl, { geometry, program: makeProgram() });
-      mesh.setParent(scene);
-      cells.push({ mesh, imageIndex: p.index });
+      const cell = { mesh, imageIndex: p.index };
+      nextCells.push(cell);
+
+      // Program linking and the first texture upload are lazy in the browser.
+      // Submit one off-screen plane per task so the first visible frame never
+      // has to initialize every GPU resource in one main-thread task.
+      updateCell(cell, p, 0, 0);
+      mesh.position.x = viewWidth * 2 + p.planeW;
+      mesh.setParent(warmScene);
+      renderer.render({ scene: warmScene, camera, frustumCull: false });
+      mesh.setParent(null);
+      await yieldToBrowser();
+    }
+
+    if (destroyed || version !== cellBuildVersion) {
+      disposeCells(nextCells);
+      return;
+    }
+    disposeCells(cells);
+    cells.length = 0;
+    for (const cell of nextCells) {
+      cell.mesh.setParent(scene);
+      cells.push(cell);
     }
   }
 
@@ -162,6 +222,14 @@ export async function createShowcaseRenderer(
     const toFetch = images.filter((im) => !cache.has(im.url));
     const settled = await Promise.allSettled(toFetch.map((im) => fetchBitmap(im.url)));
     let authExpired = false;
+    if (destroyed) {
+      for (const result of settled) {
+        if (result.status === "fulfilled") {
+          try { result.value.close(); } catch {}
+        }
+      }
+      return;
+    }
     toFetch.forEach((im, i) => {
       const r = settled[i];
       if (r.status === "rejected") {
@@ -179,7 +247,8 @@ export async function createShowcaseRenderer(
       cache.delete(oldest);
       if (e) { try { gl.deleteTexture(e.texture.texture); } catch {} try { e.bitmap.close(); } catch {} }
     }
-    relayout();
+    updateLayout();
+    await syncCells();
     if (authExpired) throw new PreviewAuthExpiredError(images[0]?.url ?? "");
   }
 
@@ -199,7 +268,7 @@ export async function createShowcaseRenderer(
       far: cameraDistance + 2000,
     });
     camera.position.z = cameraDistance;
-    relayout();
+    updateLayout();
   }
   resize();
 
@@ -210,17 +279,7 @@ export async function createShowcaseRenderer(
       const cell = cells[i];
       const p = planes[i];
       if (!p) continue;
-      const entry = cache.get(images[cell.imageIndex].url);
-      const x = screenX(p.basePosX, scroll.current, totalWidth);
-      cell.mesh.position.set(x, 0, 0);
-      cell.mesh.scale.set(p.planeW, p.planeH, 1);
-      const u = (cell.mesh.program as InstanceType<typeof Program>).uniforms;
-      u.tMap.value = entry ? entry.texture : emptyTexture;
-      u.uOpacity.value = entry ? 1 : 0;
-      u.uStrength.value = uStrength;
-      u.uViewportSizes.value = [viewWidth, viewHeight];
-      u.uPlaneSizes.value = [p.planeW, p.planeH];
-      u.uImageSizes.value = entry ? [entry.w, entry.h] : [1, 1];
+      updateCell(cell, p, scroll.current, uStrength);
     }
     lastScroll = scroll.current;
     lastStrength = uStrength;
@@ -257,6 +316,8 @@ export async function createShowcaseRenderer(
   }
 
   function destroy(): void {
+    destroyed = true;
+    cellBuildVersion += 1;
     for (const key of Array.from(cache.keys())) {
       const e = cache.get(key);
       cache.delete(key);
@@ -265,7 +326,7 @@ export async function createShowcaseRenderer(
       try { e.bitmap.close(); } catch {}
     }
     try { gl.deleteTexture(emptyTexture.texture); } catch {}
-    for (const c of cells) { try { (c.mesh.program as InstanceType<typeof Program>).remove(); } catch {} }
+    disposeCells(cells);
     cells.length = 0;
     try { geometry.remove(); } catch {}
     // Deliberately does NOT loseContext() — the canvas is reused across renderer

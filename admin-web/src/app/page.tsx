@@ -31,11 +31,13 @@ export default function Home() {
 
   if (sample.isLoading) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-subtle px-4 dark:bg-canvas">
-        <div className="grid grid-cols-3 gap-4 sm:grid-cols-4">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="h-20 w-20 animate-pulse rounded-md bg-surface sm:h-28 sm:w-28" />
-          ))}
+      <main className="relative min-h-screen overflow-hidden bg-subtle dark:bg-canvas">
+        <div className="absolute inset-0 flex items-center justify-center px-4">
+          <div className="grid grid-cols-3 gap-4 sm:grid-cols-4">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} className="h-20 w-20 animate-pulse rounded-md bg-surface sm:h-28 sm:w-28" />
+            ))}
+          </div>
         </div>
       </main>
     );
