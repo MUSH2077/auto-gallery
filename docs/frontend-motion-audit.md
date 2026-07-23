@@ -222,3 +222,27 @@ ogl chunk(`4133.e3519a578b1a2a11.js`)在 `reduce` 下**未被请求**(0/4 次录
    - **通用幻灯片键盘控制完全失效**:`SlideshowPlayer.tsx` 的 focus/keydown 副作用依赖数组是 `[open]`,而 `usePresence` 的 `mounted` 状态比 `open` 晚一次渲染才变为 true——effect 首次运行时 `containerRef.current` 为 `null` 直接短路返回,此后 `open` 不再变化,effect 永不重跑,`keydown` 监听器和初始 `el.focus()` 全程未绑定过(已用 `addEventListener` 计数器验证:3 秒等待后计数恒为 0)。方向键翻页、Space 暂停、Esc 关闭、Tab 焦点陷阱全部不生效;鼠标点击对应按钮均正常。
 
 以上三处发现已计入 Task 7 报告与 ledger,按计划由后续任务分别修复,不在本轮范围内代码修改。
+
+---
+
+## 展示页画廊化重构(GT7,2026-07-23)
+
+基于 7 月 22 日的展示页改造计划,用 12 条带真实 JPEG/WEBP 文件的临时作品(`qa-seed-gallery-*`)完成最终验收。Chromium headless 1440×900,playwright-core 注入有效 JWT,每次均使用独立冷启动浏览器并静置 8 秒。`/admin/works`、`/admin/jobs` 为同轮基线对照。
+
+| 页面 | 模式 | FCP | LCP | CLS | long tasks | 运行中动画 |
+|---|---|---|---|---|---|---|
+| / | normal | 1108ms | 1108ms | 0.0002 | **0** | 0 |
+| / | reduced | 1028ms | 1076ms | 0.0000 | **0** | 0 |
+| /admin/works | normal | 1000ms | 1080ms | 0.0000 | **0** | 0 |
+| /admin/works | reduced | 952ms | 1064ms | 0.0034 | **0** | 0 |
+| /admin/jobs | normal | 1016ms | 1048ms | 0.0334 | **0** | 0 |
+| /admin/jobs | reduced | 932ms | 1040ms | 0.0319 | **0** | 0 |
+
+最终冷启动矩阵的 `/` normal 3/3、reduced 2/2 均为零 long task,CLS 范围 0–0.000155。ogl 懒加载 chunk(`4133.e3519a578b1a2a11.js`)在每次 normal 录制中恰好请求 1 次,reduced-motion/低端/minimal 新加载时均为 0 次。
+
+### 验收结论
+
+1. **视觉与交互全通过**:图片方向和原始宽高比正确,plane 高度约为视口的 48%;自动漂移、滚轮反向、拖拽、无限回绕均连续;高速输入时出现透视弯曲,静止后恢复平面;无色差、idle 抖动或接缝。点击命中正确作品并打开幻灯片,150px 拖拽不会误触点击。
+2. **降级矩阵全通过**:reduced-motion/minimal 为 8 图静态网格且零运行中动画;低端、WebGL 不可用与 `webglcontextlost` 均单向落到 CSS 漂移带且无错误 UI;`document.hidden` 时 draw call 冻结,恢复可见后继续。
+3. **真实浏览器补出的实现修正**:正交相机中的 Z 位移不可见,已改为保持像素比例的透视相机并把 plane 沿 Y 细分为 20 段,同时修正弯曲态命中测试;reduced 初始 CLS 来自加载态外壳和无固定宽度的静态网格,分别稳定外壳与补 `w-full`;WebGL 首帧长任务来自一次性提交全部 shader link/纹理上传,现逐 plane 分任务预热并在 resize 时复用 Program,最终 5/5 冷启动零 long task。
+4. **清理完成**:`qa-seed-gallery-*` 的 work/work_source/asset/asset_source 各 12 条均已删除,两处临时目录均不存在,缓存清除后采样端点返回空数组,当前总 works 为 0。唯一已知控制台噪声仍是站点既有的 `/favicon.ico` 404,与画廊功能无关。
