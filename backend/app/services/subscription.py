@@ -1,7 +1,7 @@
 import logging
 from uuid import UUID
 
-from sqlalchemy import select, delete as sql_delete, update as sql_update
+from sqlalchemy import select, delete as sql_delete, update as sql_update, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.subscription import SubscriptionRepository
@@ -159,54 +159,94 @@ class SubscriptionService:
 
     async def _enrich_creator_from_danbooru(self, creator_id: UUID, source_url: str) -> int:
         """Query Danbooru for this source URL and create CreatorLink suggestions."""
-        try:
-            from app.services import danbooru as danbooru_svc
-            from app.models import Creator
-            import asyncio
+        from app.services.creator_enrichment import fetch_and_link_danbooru_artist
+        result = await fetch_and_link_danbooru_artist(
+            self.db, creator_id, source_url=source_url, reraise_unavailable=False,
+        )
+        if result:
+            logger.info("Danbooru enrichment: %d links created for creator %s from URL %s",
+                        result, creator_id, source_url)
+        return result
 
-            # Danbooru HTTP is synchronous (urllib); run in thread to avoid
-            # blocking the FastAPI event loop during API calls.
-            artist, links = await asyncio.to_thread(
-                danbooru_svc.search_and_extract, source_url=source_url
-            )
-            if not links:
-                return 0
+    async def trigger_sync(self, subscription_id: UUID) -> dict:
+        from app.services.tasks import TaskService
+        from app.services.subscription_enqueue import enqueue_subscription_source_sync
+        from app.services.cache import invalidate_api_caches
 
-            # Enrich creator record with Danbooru data
-            c = await self.db.get(Creator, creator_id)
-            if c and artist:
-                if c.danbooru_artist_id is None:
-                    c.danbooru_artist_id = artist.get("id")
-                # description is left for the admin to write — keep creator
-                # pages identical regardless of which import path created them.
-                await self.db.flush()
+        sub = await self.db.get(Subscription, subscription_id)
+        if not sub:
+            raise ValueError("Subscription not found")
 
-            created = 0
-            for link_data in links:
-                existing = await self.db.execute(
-                    select(CreatorLink).where(
-                        CreatorLink.creator_id == creator_id,
-                        CreatorLink.url == link_data["url"],
-                    )
+        sources = await self.db.execute(
+            select(SubscriptionSource).where(
+                and_(
+                    SubscriptionSource.subscription_id == subscription_id,
+                    SubscriptionSource.is_enabled == True,
                 )
-                if existing.scalar_one_or_none():
-                    continue
-                self.db.add(CreatorLink(
-                    creator_id=creator_id,
-                    url=link_data["url"],
-                    link_type=link_data["link_type"],
-                    source=link_data["source"],
-                    confidence=link_data["confidence"],
-                    is_verified=link_data["is_verified"],
-                    notes=link_data.get("notes"),
-                ))
-                created += 1
+            )
+        )
+        sub_sources = sources.scalars().all()
+        if not sub_sources:
+            return {"status": "ok", "message": "No enabled sources", "job_ids": []}
 
-            if created or (c and c.danbooru_artist_id):
-                await self.db.commit()
-                logger.info("Danbooru enrichment: %d links created for creator %s from URL %s",
-                            created, creator_id, source_url)
-            return created
-        except Exception as e:
-            logger.warning("Danbooru enrichment failed for creator %s: %s", creator_id, e)
-            return 0
+        task_service = TaskService(self.db)
+        parent_task = await task_service.create_task(
+            kind="admin",
+            operation_type="subscription-sync-batch",
+            title=f"Sync subscription {subscription_id}",
+            status="running",
+            queue_name="downloads",
+            progress={"phase": "scanning", "label": "Checking subscription sources", "current": 0, "total": len(sub_sources)},
+            meta={"subscription_id": str(subscription_id), "scope": "subscription"},
+        )
+
+        job_ids = []
+        task_ids = []
+        skipped = []
+        errors = []
+
+        for index, ss in enumerate(sub_sources, start=1):
+            result = await enqueue_subscription_source_sync(
+                self.db,
+                ss.id,
+                trigger="manual_subscription",
+                force=False,
+                parent_task_id=parent_task.id,
+                force_reason="subscription_sync_now",
+            )
+            if result["status"] == "enqueued":
+                job_ids.append(result["job_id"])
+                if result.get("task_id"):
+                    task_ids.append(result["task_id"])
+            elif result["status"] == "error":
+                errors.append(result)
+            else:
+                skipped.append(result)
+            await task_service.update_task(
+                parent_task,
+                progress={"phase": "enqueuing", "label": "Enqueuing source downloads", "current": index, "total": len(sub_sources)},
+            )
+
+        summary = {
+            "enqueued_count": len(job_ids),
+            "skipped_count": len(skipped),
+            "error_count": len(errors),
+            "job_ids": job_ids,
+            "task_ids": task_ids,
+            "skipped": skipped,
+            "errors": errors,
+        }
+
+        if errors and not job_ids:
+            await task_service.update_task(parent_task, status="failed", result=summary, error="All enqueue attempts failed")
+            await self.db.commit()
+            return {"status": "error", "message": "All enqueue attempts failed", "task_id": str(parent_task.id), **summary}
+        if errors:
+            invalidate_api_caches("subscriptions", "creators")
+            await task_service.update_task(parent_task, status="complete", result=summary, progress={"phase": "complete", "label": "Subscription sync enqueued", "current": len(sub_sources), "total": len(sub_sources)})
+            await self.db.commit()
+            return {"status": "partial_error", "message": f"Enqueued {len(job_ids)} jobs, {len(errors)} failed", "task_id": str(parent_task.id), **summary}
+        invalidate_api_caches("subscriptions", "creators")
+        await task_service.update_task(parent_task, status="complete", result=summary, progress={"phase": "complete", "label": "Subscription sync enqueued", "current": len(sub_sources), "total": len(sub_sources)})
+        await self.db.commit()
+        return {"status": "ok", "message": f"Enqueued {len(job_ids)} download jobs", "task_id": str(parent_task.id), **summary}

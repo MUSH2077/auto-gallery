@@ -303,6 +303,8 @@ class TaskService:
         filters = []
         if kind and kind != "all":
             filters.append(TaskRun.kind == kind)
+        elif not kind:
+            filters.append(TaskRun.kind != "account")
         if status:
             filters.append(TaskRun.status == normalize_task_status(status))
         if operation_type:

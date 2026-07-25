@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.creator import Creator
+from app.models.creator_link import CreatorLink
 from app.models.source_creator import SourceCreator
 from app.services import danbooru as danbooru_svc
 from app.services.danbooru import DanbooruUnavailableError
@@ -198,3 +199,67 @@ async def reenrich_pending(
             break
 
     return {"scanned": len(items), "total": len(rows), **counts, "aborted": aborted, "items": items}
+
+
+async def fetch_and_link_danbooru_artist(
+    db: AsyncSession,
+    creator_id: UUID,
+    *,
+    source_url: str | None = None,
+    pixiv_id: str | None = None,
+    artist_name: str | None = None,
+    reraise_unavailable: bool = False,
+) -> int:
+    """Query Danbooru for this creator and create CreatorLink suggestions.
+
+    Never blocks the event loop — Danbooru HTTP runs via ``asyncio.to_thread``.
+
+    *reraise_unavailable* controls error handling:
+      ``True``  → re-raise ``DanbooruUnavailableError`` so the caller can return 503.
+      ``False`` → log a warning and return 0 (suitable for async-sync paths).
+    """
+    try:
+        artist, links = await asyncio.to_thread(
+            danbooru_svc.search_and_extract,
+            source_url=source_url,
+            pixiv_id=pixiv_id,
+            artist_name=artist_name,
+        )
+        if not links:
+            return 0
+
+        c = await db.get(Creator, creator_id)
+        if c and artist:
+            if c.danbooru_artist_id is None:
+                c.danbooru_artist_id = artist.get("id")
+            await db.flush()
+
+        created = 0
+        for link_data in links:
+            existing = await db.execute(
+                select(CreatorLink).where(
+                    CreatorLink.creator_id == creator_id,
+                    CreatorLink.url == link_data["url"],
+                )
+            )
+            if existing.scalar_one_or_none():
+                continue
+            db.add(CreatorLink(
+                creator_id=creator_id,
+                url=link_data["url"],
+                link_type=link_data["link_type"],
+                source=link_data["source"],
+                confidence=link_data["confidence"],
+                is_verified=link_data["is_verified"],
+                notes=link_data.get("notes"),
+            ))
+            created += 1
+
+        if created:
+            await db.commit()
+        return created
+    except Exception as e:
+        if reraise_unavailable and isinstance(e, DanbooruUnavailableError):
+            raise
+        logger.warning("Danbooru enrichment failed for creator %s: %s", creator_id, e)
+        return 0

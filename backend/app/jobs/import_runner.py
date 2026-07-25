@@ -29,7 +29,7 @@ from app.providers import registry
 from app.repositories.download_job import DownloadJobRepository
 from app.services.job_progress import apply_download_progress, apply_import_progress
 from app.services.job_manifest import append_manifest_event, update_manifest
-from app.services.job_state import transition_import_job
+from app.models.task_state import transition_import_job
 from app.services.settings import get_download_defaults
 from app.services.redis_client import get_redis
 from app.services.subscription_enqueue import mark_source_sync_success

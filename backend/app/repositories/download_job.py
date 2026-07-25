@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DownloadJob, ImportJob
 from app.services.job_manifest import append_manifest_event
-from app.services.job_state import transition_download_job
+from app.models.task_state import transition_download_job
 
 
 class DownloadJobRepository:

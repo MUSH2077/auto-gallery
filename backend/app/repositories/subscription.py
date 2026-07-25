@@ -1,14 +1,13 @@
 from uuid import UUID
 
 from sqlalchemy import select, or_, and_, func
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Subscription, SubscriptionSource, Creator, DownloadJob
+from app.repositories.base import BaseRepository
 
 
-class SubscriptionRepository:
-    def __init__(self, session: AsyncSession):
-        self.session = session
+class SubscriptionRepository(BaseRepository[Subscription]):
+    model = Subscription
 
     async def list_all(self, offset: int = 0, limit: int = 50,
                        search: str | None = None,
@@ -145,23 +144,6 @@ class SubscriptionRepository:
         sub.creator_display_name = _creator_name or None
         sub.creator_name = _creator_name or _creator_base or f"Creator {sub.creator_id}"
         return sub
-
-    async def create(self, data: dict) -> Subscription:
-        sub = Subscription(**data)
-        self.session.add(sub)
-        await self.session.flush()
-        return sub
-
-    async def update(self, sub: Subscription, data: dict) -> Subscription:
-        for key, value in data.items():
-            if value is not None:
-                setattr(sub, key, value)
-        await self.session.flush()
-        return sub
-
-    async def delete(self, sub: Subscription) -> None:
-        await self.session.delete(sub)
-        await self.session.flush()
 
     async def add_source(self, data: dict) -> SubscriptionSource:
         ss = SubscriptionSource(**data)

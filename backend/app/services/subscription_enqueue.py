@@ -12,7 +12,7 @@ from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.providers import registry
 from app.services.job_manifest import append_manifest_event, update_manifest
-from app.services.job_state import DOWNLOAD_RUNNING_STATUSES, transition_download_job
+from app.models.task_state import DOWNLOAD_RUNNING_STATUSES, transition_download_job
 from app.services.job_progress import apply_download_progress
 from app.services.locks import redis_lock
 from app.services.redis_client import get_redis

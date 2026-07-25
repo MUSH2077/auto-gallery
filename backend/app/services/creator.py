@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 
 from sqlalchemy import select, delete as sql_delete
@@ -5,8 +6,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.creator import CreatorRepository
 from app.models import Creator, CreatorLink, SourceCreator, Subscription, SubscriptionSource, DownloadJob, ImportJob
+from app.models.work_source import WorkSource
+from app.models.work_tag import WorkTag
+from app.models.tag import Tag
+from app.models.asset_source import AssetSource
 from app.models.storage_artifact import StorageArtifact
 from app.schemas.creator import CreatorRead
+
+logger = logging.getLogger(__name__)
 
 
 class CreatorService:
@@ -14,14 +21,27 @@ class CreatorService:
         self.db = db
         self.repo = CreatorRepository(db)
 
+    async def _search_creator_ids(self, search: str) -> list[UUID] | None:
+        try:
+            from app.services.search import _client, CREATORS_INDEX
+            client = _client()
+            result = client.index(CREATORS_INDEX).search(search, limit=500)
+            hits = getattr(result, "hits", []) or []
+            ids = [UUID(h["id"]) for h in hits if h.get("id")]
+            return ids if ids else None
+        except Exception:
+            return None
+
     async def list_creators(self, offset: int = 0, limit: int = 50,
                             search: str | None = None,
                             is_active: bool | None = None,
                             has_danbooru: bool | None = None,
                             has_subscription: bool | None = None,
                             is_favorite: bool | None = None):
+        search_ids = await self._search_creator_ids(search) if search else None
         creators, total = await self.repo.list_all(offset, limit,
-                                        search=search, is_active=is_active,
+                                        search=search, search_ids=search_ids,
+                                        is_active=is_active,
                                         has_danbooru=has_danbooru,
                                         has_subscription=has_subscription,
                                         is_favorite=is_favorite)
@@ -139,58 +159,208 @@ class CreatorService:
                                     pixiv_id: str | None = None,
                                     artist_name: str | None = None) -> int:
         """Query Danbooru and create CreatorLink suggestions for this creator."""
-        import logging
-        import asyncio
-        logger = logging.getLogger(__name__)
+        from app.services.creator_enrichment import fetch_and_link_danbooru_artist
+        return await fetch_and_link_danbooru_artist(
+            self.db, creator_id,
+            source_url=source_url, pixiv_id=pixiv_id, artist_name=artist_name,
+            reraise_unavailable=True,
+        )
 
-        try:
-            from app.services import danbooru as danbooru_svc
+    async def get_stats(self, creator_id: UUID) -> dict:
+        from sqlalchemy import func, and_
+        from app.services.cache import cache_get, cache_set, cache_key, TTL
 
-            # Danbooru HTTP is synchronous (urllib); run in thread to avoid
-            # blocking the FastAPI event loop during API calls.
-            artist, links = await asyncio.to_thread(
-                danbooru_svc.search_and_extract,
-                source_url=source_url, pixiv_id=pixiv_id, artist_name=artist_name,
+        ck = cache_key("creators:stats", creator_id=str(creator_id))
+        cached = cache_get(ck)
+        if cached is not None:
+            return cached
+
+        # Works per source
+        ws_rows = await self.db.execute(
+            select(WorkSource.source, func.count(WorkSource.id).label("cnt"))
+            .join(SourceCreator, and_(
+                SourceCreator.source == WorkSource.source,
+                SourceCreator.source_creator_id == WorkSource.source_creator_id))
+            .where(SourceCreator.creator_id == creator_id)
+            .group_by(WorkSource.source)
+            .order_by(func.count(WorkSource.id).desc())
+        )
+        source_breakdown = [{"source": row[0], "count": row[1]} for row in ws_rows]
+
+        # Top tags
+        tag_rows = await self.db.execute(
+            select(Tag.normalized_name, func.count(WorkTag.work_id).label("cnt"))
+            .join(WorkTag, WorkTag.tag_id == Tag.id)
+            .join(WorkSource, WorkSource.work_id == WorkTag.work_id)
+            .join(SourceCreator, and_(
+                SourceCreator.source == WorkSource.source,
+                SourceCreator.source_creator_id == WorkSource.source_creator_id))
+            .where(SourceCreator.creator_id == creator_id)
+            .group_by(Tag.normalized_name)
+            .order_by(func.count(WorkTag.work_id).desc())
+            .limit(20)
+        )
+        tag_distribution = [{"tag": row[0], "count": row[1]} for row in tag_rows]
+
+        # Monthly posting frequency
+        month_rows = await self.db.execute(
+            select(
+                func.to_char(func.date_trunc("month", WorkSource.posted_at), "YYYY-MM").label("month"),
+                func.count(WorkSource.id).label("cnt"))
+            .join(SourceCreator, and_(
+                SourceCreator.source == WorkSource.source,
+                SourceCreator.source_creator_id == WorkSource.source_creator_id))
+            .where(SourceCreator.creator_id == creator_id)
+            .where(WorkSource.posted_at.isnot(None))
+            .group_by("month")
+            .order_by("month")
+        )
+        monthly = [{"month": row[0], "count": row[1]} for row in month_rows]
+
+        total_works = sum(s["count"] for s in source_breakdown)
+        total_tags = len(tag_distribution)
+
+        asset_result = await self.db.execute(
+            select(func.count(AssetSource.id))
+            .select_from(WorkSource)
+            .join(AssetSource, AssetSource.work_source_id == WorkSource.id)
+            .join(SourceCreator, and_(
+                SourceCreator.source == WorkSource.source,
+                SourceCreator.source_creator_id == WorkSource.source_creator_id))
+            .where(SourceCreator.creator_id == creator_id)
+        )
+        total_assets = asset_result.scalar() or 0
+
+        data = {
+            "creator_id": str(creator_id),
+            "total_works": total_works,
+            "total_assets": total_assets,
+            "total_tags": total_tags,
+            "source_breakdown": source_breakdown,
+            "tag_distribution": tag_distribution,
+            "monthly_frequency": monthly,
+        }
+        cache_set(ck, data, TTL["creators:stats"])
+        return data
+
+    async def get_subscription_overview(self, creator_id: UUID) -> dict:
+        from app.models.subscription import Subscription as Sub
+        from app.models.subscription_source import SubscriptionSource as SS
+        from app.models.download_job import DownloadJob as DJ
+        from app.providers import registry
+
+        sub_rows = await self.db.execute(
+            select(Sub)
+            .where(Sub.creator_id == creator_id)
+            .order_by(Sub.created_at.desc())
+        )
+        subscriptions = list(sub_rows.scalars().all())
+        subscription_ids = [s.id for s in subscriptions]
+
+        if not subscription_ids:
+            return {
+                "creator_id": str(creator_id),
+                "subscriptions": [],
+                "repositories": [],
+                "summary": {
+                    "subscription_count": 0,
+                    "repository_count": 0,
+                    "enabled_repository_count": 0,
+                    "running_job_count": 0,
+                },
+            }
+
+        source_rows = await self.db.execute(
+            select(SS)
+            .where(SS.subscription_id.in_(subscription_ids))
+            .order_by(SS.source, SS.created_at.desc())
+        )
+        sub_sources = list(source_rows.scalars().all())
+
+        repositories = []
+        running_statuses = {"enqueued", "downloading", "downloaded", "importing"}
+        running_job_count = 0
+
+        for ss in sub_sources:
+            can_download = False
+            supports_gallerydl = False
+            url_valid = False
+            provider_name = ss.source
+            provider_display_name = ss.source
+            try:
+                provider = registry.get(ss.source)
+                provider_name = provider.source_name
+                provider_display_name = provider.display_name
+                can_download = bool(provider.capabilities.can_download)
+                supports_gallerydl = bool(provider.capabilities.supports_gallerydl)
+                normalized_url = provider.normalize_url(ss.source_url) if ss.source_url else None
+                url_valid = bool(ss.source_url and provider.validate_url(normalized_url or ss.source_url))
+            except Exception:
+                url_valid = False
+
+            latest_job_row = await self.db.execute(
+                select(DJ)
+                .where(DJ.subscription_source_id == ss.id)
+                .order_by(DJ.created_at.desc())
+                .limit(1)
             )
-            if not links:
-                return 0
+            latest_job = latest_job_row.scalar_one_or_none()
+            latest_job_payload = None
+            if latest_job:
+                if latest_job.status in running_statuses:
+                    running_job_count += 1
+                latest_job_payload = {
+                    "id": str(latest_job.id),
+                    "status": latest_job.status,
+                    "created_at": latest_job.created_at.isoformat() if latest_job.created_at else None,
+                    "updated_at": latest_job.updated_at.isoformat() if latest_job.updated_at else None,
+                    "error_log_excerpt": (latest_job.error_log or "")[:240] or None,
+                }
 
-            # Enrich creator record with Danbooru data
-            creator = await self.repo.get(creator_id)
-            if creator and artist:
-                if creator.danbooru_artist_id is None:
-                    creator.danbooru_artist_id = artist.get("id")
-                # description is left for the admin to write — keep creator
-                # pages identical regardless of which import path created them.
-                await self.db.flush()
+            is_repository = bool(can_download and url_valid and ss.source_url)
+            repositories.append({
+                "id": str(ss.id),
+                "subscription_id": str(ss.subscription_id),
+                "source": provider_name,
+                "source_display_name": provider_display_name,
+                "source_url": ss.source_url,
+                "source_creator_id": ss.source_creator_id,
+                "is_enabled": ss.is_enabled,
+                "auth_healthy": ss.auth_healthy,
+                "auth_status": ss.auth_status,
+                "auth_error_reason": ss.auth_error_reason,
+                "last_auth_checked_at": ss.last_auth_checked_at.isoformat() if ss.last_auth_checked_at else None,
+                "last_successful_auth": ss.last_successful_auth.isoformat() if ss.last_successful_auth else None,
+                "last_synced_at": ss.last_synced_at.isoformat() if ss.last_synced_at else None,
+                "last_attempted_at": ss.last_attempted_at.isoformat() if ss.last_attempted_at else None,
+                "can_download": can_download,
+                "supports_gallerydl": supports_gallerydl,
+                "url_valid": url_valid,
+                "is_repository": is_repository,
+                "latest_job": latest_job_payload,
+                "created_at": ss.created_at.isoformat() if ss.created_at else None,
+                "updated_at": ss.updated_at.isoformat() if ss.updated_at else None,
+            })
 
-            created = 0
-            for link_data in links:
-                existing = await self.db.execute(
-                    select(CreatorLink).where(
-                        CreatorLink.creator_id == creator_id,
-                        CreatorLink.url == link_data["url"],
-                    )
-                )
-                if existing.scalar_one_or_none():
-                    continue
-                self.db.add(CreatorLink(
-                    creator_id=creator_id,
-                    url=link_data["url"],
-                    link_type=link_data["link_type"],
-                    source=link_data["source"],
-                    confidence=link_data["confidence"],
-                    is_verified=link_data["is_verified"],
-                    notes=link_data.get("notes"),
-                ))
-                created += 1
-
-            if created:
-                await self.db.commit()
-            return created
-        except Exception as e:
-            from app.services.danbooru import DanbooruUnavailableError
-            if isinstance(e, DanbooruUnavailableError):
-                raise  # let the API layer report 503 instead of a silent zero
-            logger.warning("Danbooru enrichment failed: %s", e)
-            return 0
+        return {
+            "creator_id": str(creator_id),
+            "subscriptions": [{
+                "id": str(s.id),
+                "name": s.name,
+                "is_active": s.is_active,
+                "sync_enabled": s.sync_enabled,
+                "sync_interval_hours": s.sync_interval_hours,
+                "schedule_mode": s.schedule_mode,
+                "scheduled_times": s.scheduled_times,
+                "last_synced_at": s.last_synced_at.isoformat() if s.last_synced_at else None,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+                "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+            } for s in subscriptions],
+            "repositories": repositories,
+            "summary": {
+                "subscription_count": len(subscriptions),
+                "repository_count": sum(1 for r in repositories if r["is_repository"]),
+                "enabled_repository_count": sum(1 for r in repositories if r["is_repository"] and r["is_enabled"]),
+                "running_job_count": running_job_count,
+            },
+        }

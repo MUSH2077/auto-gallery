@@ -1,7 +1,8 @@
 "use client";
-import { useMemo, useState, useEffect, Suspense } from "react";
+import { useMemo, useState, useEffect, useRef, Suspense } from "react";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
+import { staggerDelay } from "@/lib/motion";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, Subscription } from "@/lib/api";
@@ -148,6 +149,11 @@ function SubscriptionsContent() {
     return grouped;
   }, [decisions.data?.items]);
 
+  const listEntered = useRef(false);
+  useEffect(() => {
+    if (subs.data?.length) listEntered.current = true;
+  }, [subs.data?.length]);
+
   const refreshSubscriptionViews = () => {
     qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
     qc.invalidateQueries({ queryKey: queryKeys.creators.all });
@@ -263,11 +269,17 @@ function SubscriptionsContent() {
 
       {/* Content */}
       {subs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-subtle dark:bg-subtle animate-pulse" />)}</div>}
-      {subs.error && <ErrorState message={(subs.error as Error).message} />}
-      {subs.data && !subs.data.length && <EmptyState title={t("subscriptions.no_subs")} description={t("subscriptions.no_subs_desc")} action={<button onClick={() => setShowCreate(true)} className="btn-primary">{t("subscriptions.create_sub")}</button>} />}
+      {subs.error && <ErrorState message={(subs.error as Error).message} onRetry={() => subs.refetch()} />}
+      {subs.data && !subs.data.length && (
+        <EmptyState
+          title={search || filter !== "all" ? t("works.no_works_filter") : t("subscriptions.no_subs")}
+          description={search || filter !== "all" ? undefined : t("subscriptions.no_subs_desc")}
+          action={!search && filter === "all" ? <button onClick={() => setShowCreate(true)} className="btn-primary">{t("subscriptions.create_sub")}</button> : undefined}
+        />
+      )}
 
       {subs.data && subs.data.length > 0 && (
-        <div className="overflow-hidden rounded-md border border-border bg-surface dark:border-border dark:bg-surface">
+        <div className="overflow-hidden rounded-md border border-border bg-white dark:border-border dark:bg-surface">
           <div className="hidden grid-cols-[minmax(0,1.45fr)_minmax(120px,0.8fr)_minmax(140px,0.9fr)_minmax(150px,1fr)_minmax(170px,1fr)] gap-3 border-b border-border bg-subtle px-4 py-2 text-xs font-medium uppercase text-muted lg:grid">
             <span>{t("subscriptions.col_group", "Sync group")}</span>
             <span>{t("subscriptions.col_sources", "Sources")}</span>
@@ -275,8 +287,8 @@ function SubscriptionsContent() {
             <span>{t("subscriptions.col_schedule", "Schedule")}</span>
             <span>{t("subscriptions.col_actions", "Actions")}</span>
           </div>
-          {subs.data.map((s: Subscription) => (
-            <div key={s.id} className={`grid cursor-pointer grid-cols-1 gap-3 border-b border-border p-4 last:border-b-0 hover:bg-subtle dark:border-border dark:hover:bg-subtle lg:grid-cols-[minmax(0,1.45fr)_minmax(120px,0.8fr)_minmax(140px,0.9fr)_minmax(150px,1fr)_minmax(170px,1fr)] ${selected.has(s.id) ? "bg-accent-subtle dark:bg-accent-subtle" : ""}`} onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>
+          {subs.data.map((s: Subscription, i: number) => (
+            <div key={s.id} className={`${!listEntered.current ? "page-item" : ""} grid cursor-pointer grid-cols-1 gap-3 border-b border-border p-4 last:border-b-0 hover:bg-subtle dark:border-border dark:hover:bg-subtle lg:grid-cols-[minmax(0,1.45fr)_minmax(120px,0.8fr)_minmax(140px,0.9fr)_minmax(150px,1fr)_minmax(170px,1fr)] ${selected.has(s.id) ? "bg-accent-subtle dark:bg-accent-subtle" : ""}`} style={!listEntered.current ? ({ "--delay": staggerDelay(i) } as React.CSSProperties) : undefined} onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>
               <div className="flex min-w-0 gap-3">
                 <input type="checkbox" aria-label="Select item" checked={selected.has(s.id)} onChange={() => toggleSelect(s.id)} className="mt-1 shrink-0 rounded" onClick={(e) => e.stopPropagation()} />
                 <div className="min-w-0">

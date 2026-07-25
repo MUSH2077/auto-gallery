@@ -11,7 +11,7 @@ from app.models.download_job import DownloadJob
 from app.models.subscription import Subscription
 from app.models.creator import Creator
 from app.schemas.import_job import ImportJobRead
-from app.services.job_state import transition_import_job
+from app.models.task_state import transition_import_job
 from app.services.job_progress import import_progress_from_job
 from app.services.progress import ProgressTracker
 from app.services.task_engine import TaskEngine, TaskEngineError
