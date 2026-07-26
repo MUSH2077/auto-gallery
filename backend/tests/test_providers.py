@@ -157,6 +157,32 @@ class TestXProvider:
         assert ("fanart", "hashtag") in tag_names
         assert ("illustration", "hashtag") in tag_names
 
+    def test_parse_current_gallerydl_metadata(self):
+        metadata = {
+            "tweet_id": 1806295396614095134,
+            "date": "2024-06-27 11:55:56",
+            "content": "Artwork #WutheringWaves #changli",
+            "sensitive": True,
+            "hashtags": ["WutheringWaves", "changli"],
+            "user": {
+                "id": 1260945906582470661,
+                "name": "xianyuliangryo",
+                "nick": "咸鱼魉ryo",
+            },
+        }
+
+        creator = self.p.parse_source_creator(metadata)
+        work = self.p.parse_work_source(metadata)
+        tags = self.p.parse_source_tags(metadata)
+
+        assert creator["source_creator_id"] == "1260945906582470661"
+        assert creator["source_url"] == "https://x.com/xianyuliangryo"
+        assert work["source_work_id"] == "1806295396614095134"
+        assert work["source_url"].endswith("/status/1806295396614095134")
+        assert work["description"] == metadata["content"]
+        assert work["posted_at"] == metadata["date"]
+        assert [tag["original_name"] for tag in tags] == ["WutheringWaves", "changli"]
+
     def test_get_creator_dir_from_url(self):
         """get_creator_dir_from_url extracts screen name from profile URL."""
         assert self.p.get_creator_dir_from_url("https://x.com/artist_handle") == "artist_handle"

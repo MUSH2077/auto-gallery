@@ -299,6 +299,9 @@ export const api = {
   getRepository: (id: string) =>
     request<T.RepositoryDetailResponse>(`/api/v1/repositories/${id}`),
 
+  getRepositoryTags: (id: string, offset = 0, limit = 50) =>
+    request<T.RepositoryTagsResponse>(`/api/v1/repositories/${id}/tags?offset=${offset}&limit=${limit}`),
+
   syncRepository: (id: string) =>
     request<{ status: string; message?: string; job_id?: string; task_id?: string; reason?: string | { code?: string; message?: string } }>(`/api/v1/repositories/${id}/sync-now`, { method: "POST" }),
 
@@ -492,12 +495,8 @@ export const api = {
   getSystemInfo: () => request<{ version: string; downloads_size_mb: number; library_size_mb: number; downloads_free_gb: number; archives_kb: Record<string, number> }>("/api/v1/admin/system-info"),
   getImportProgress: () => request<{ running: number; pending: number; complete: number; failed: number; recent: { id: string; status: string; error: string }[] }>("/api/v1/admin/import-progress"),
   cleanupMetadataJSONs: () => request<{ status: string; removed: number }>("/api/v1/admin/cleanup-metadata-jsons", { method: "POST" }),
-  getStorageBreakdown: () => request<{
-    sources: Record<string, { size_mb: number; creator_count: number; work_count: number }>;
-    creators: { name: string; display_name: string; source: string; size_mb: number; work_count: number; creator_id?: string }[];
-    db_stats?: Record<string, number>;
-    layers?: Record<string, { path: string; size_mb: number; description: string }>;
-  }>("/api/v1/admin/storage-breakdown"),
+  getStorageBreakdown: () =>
+    request<T.StorageBreakdownResponse>("/api/v1/admin/storage-breakdown"),
   getIntegrityCheck: () => request<{
     issues: { type: string; severity: string; count: number; description: string; items: any[] }[];
     db_stats: Record<string, number>;
@@ -710,6 +709,7 @@ export const queryKeys = {
   },
   repositories: {
     detail: (id: string) => ["repositories", id] as const,
+    tags: (id: string, page = 0) => ["repositories", id, "tags", page] as const,
     graph: (id: string, offset = 0, params?: unknown) => ["repositories", id, "curation-graph", offset, params || {}] as const,
   },
   curation: {

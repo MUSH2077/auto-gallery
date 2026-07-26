@@ -23,8 +23,13 @@ from app.jobs.stage_timing import stage_timer
 from app.services.job_manifest import append_manifest_event, update_manifest
 from app.services.job_progress import apply_download_progress, apply_import_progress, publish_progress
 from app.services.redis_client import get_redis
-from app.services.settings import build_effective_gallerydl_config, get_download_defaults
+from app.services.settings import (
+    build_effective_gallerydl_config,
+    extractor_key_for_source,
+    get_download_defaults,
+)
 from app.services.subscription_enqueue import mark_source_sync_success
+from app.services.artifact_discovery import group_metadata_by_work, media_files_for_group
 
 logger = logging.getLogger(__name__)
 
@@ -693,23 +698,47 @@ async def run_download_job(job_id: str):
             # concurrent jobs while remaining independent of the exact
             # gallery-dl directory template.
             from app.services.artifact_ledger import ArtifactLedger, artifact_row
-            scan_root = Path(settings.download_root) / job.source
+            from app.providers import registry as _provider_registry
+
+            scan_root = Path(settings.download_root) / extractor_key_for_source(job.source)
             rows = []
             seen = set()
             if scan_root.exists():
-                for jf in scan_root.rglob("*.json"):
-                    if jf.is_file() and jf.parent != scan_root:
-                        if jf.stat().st_mtime < download_start:
-                            continue  # not created by this job
-                        for af in jf.parent.iterdir():
-                            if af.is_file() and af.suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".zip"}:
-                                if af.stat().st_mtime < download_start:
-                                    continue
-                                ar = artifact_row(af, Path(settings.download_root), job_uuid)
-                                if ar and ar["file_path"] not in seen:
-                                    seen.add(ar["file_path"])
-                                    rows.append(ar)
-                        row = artifact_row(jf, Path(settings.download_root), job_uuid)
+                metadata_paths = [
+                    path
+                    for path in scan_root.rglob("*.json")
+                    if (
+                        path.is_file()
+                        and path.parent != scan_root
+                        and path.stat().st_mtime >= download_start
+                    )
+                ]
+                provider = _provider_registry.get(job.source)
+                groups, invalid_metadata = group_metadata_by_work(provider, metadata_paths)
+                for invalid_path in invalid_metadata:
+                    logger.warning("Could not extract work identity from %s", invalid_path)
+                for source_work_id, items in groups.items():
+                    for jf, _ in items:
+                        row = artifact_row(
+                            jf,
+                            Path(settings.download_root),
+                            job_uuid,
+                            source=job.source,
+                            source_work_id=source_work_id,
+                        )
+                        if row and row["file_path"] not in seen:
+                            seen.add(row["file_path"])
+                            rows.append(row)
+                    for asset_path in media_files_for_group(items, source_work_id):
+                        if asset_path.stat().st_mtime < download_start:
+                            continue
+                        row = artifact_row(
+                            asset_path,
+                            Path(settings.download_root),
+                            job_uuid,
+                            source=job.source,
+                            source_work_id=source_work_id,
+                        )
                         if row and row["file_path"] not in seen:
                             seen.add(row["file_path"])
                             rows.append(row)

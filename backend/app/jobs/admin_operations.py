@@ -175,6 +175,8 @@ async def _run_disk_import_operation(job_id: str, options: dict) -> dict:
 
         async with async_session() as db:
             result = await reconcile_downloads_to_db(db, {**options, "parent_task_id": job_id}, update_progress)
+        from app.api.admin.settings import invalidate_storage_breakdown_cache
+        invalidate_storage_breakdown_cache()
         async with async_session() as task_db:
             svc = TaskService(task_db)
             task = await svc.get(UUID(job_id))

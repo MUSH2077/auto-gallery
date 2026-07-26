@@ -1,19 +1,30 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { useParams, useRouter } from "next/navigation";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { Breadcrumb } from "@/components/Breadcrumb";
-import { ErrorState, EmptyState, type SlideItem } from "@/components";
+import { ConfirmDialog, ErrorState, EmptyState, Modal, type SlideItem } from "@/components";
 import { useSlideshow } from "@/lib/useSlideshow";
+import { usePermissions } from "@/lib/usePermissions";
+
+const CATEGORIES = ["general", "artist", "series", "character", "meta"];
 
 export default function TagDetailPage() {
   const t = useT();
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const { has } = usePermissions();
+  const canCurate = has("curation");
   const params = useParams();
   const id = params.id as string;
   const [page, setPage] = useState(0);
+  const [showEdit, setShowEdit] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
+  const [formName, setFormName] = useState("");
+  const [formCategory, setFormCategory] = useState("general");
   const limit = 24;
 
   const tag = useQuery({
@@ -25,6 +36,26 @@ export default function TagDetailPage() {
     queryKey: ["tag-works", id, page],
     queryFn: () => api.listWorks(page * limit, limit, { tag: tag.data?.normalized_name }),
     enabled: !!tag.data?.normalized_name,
+  });
+
+  const updateTag = useMutation({
+    mutationFn: () => api.updateTag(id, {
+      normalized_name: formName.trim().toLowerCase(),
+      category: formCategory || undefined,
+    }),
+    onSuccess: async () => {
+      setShowEdit(false);
+      await queryClient.invalidateQueries({ queryKey: ["tag-detail", id] });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.tags.all });
+    },
+  });
+
+  const deleteTag = useMutation({
+    mutationFn: () => api.deleteTag(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.tags.all });
+      router.push("/admin/tags");
+    },
   });
 
   const slideshow = useSlideshow();
@@ -53,6 +84,24 @@ export default function TagDetailPage() {
               <div className="flex justify-between"><dt className="text-muted">{t("tag_detail.work_count")}</dt><dd className="font-semibold">{td.usage_count}</dd></div>
               <div className="flex justify-between"><dt className="text-muted">{t("tag_detail.created")}</dt><dd className="text-xs">{new Date(td.created_at).toLocaleDateString()}</dd></div>
             </dl>
+            {canCurate && (
+              <div className="mt-4 flex gap-2 border-t border-border pt-4">
+                <button
+                  type="button"
+                  className="btn-ghost flex-1 text-sm"
+                  onClick={() => {
+                    setFormName(td.normalized_name);
+                    setFormCategory(td.category || "general");
+                    setShowEdit(true);
+                  }}
+                >
+                  {t("common.edit")}
+                </button>
+                <button type="button" className="btn-danger flex-1 text-sm" onClick={() => setShowDelete(true)}>
+                  {t("common.delete")}
+                </button>
+              </div>
+            )}
           </div>
 
           {td.top_creators && td.top_creators.length > 0 && (
@@ -112,6 +161,41 @@ export default function TagDetailPage() {
           )}
         </section>
       </div>
+      <Modal open={showEdit} onClose={() => setShowEdit(false)} title={t("tags.edit_title")}>
+        <div className="space-y-4">
+          <div>
+            <label className="mb-1 block text-sm font-medium">{t("tags.name_label")}</label>
+            <input value={formName} onChange={(event) => setFormName(event.target.value)} className="input w-full" />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium">{t("tags.category_label")}</label>
+            <select value={formCategory} onChange={(event) => setFormCategory(event.target.value)} className="select w-full">
+              {CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
+            </select>
+          </div>
+          {updateTag.error && <p className="text-sm text-danger">{(updateTag.error as Error).message}</p>}
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn-ghost" onClick={() => setShowEdit(false)}>{t("tags.cancel")}</button>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={!formName.trim() || updateTag.isPending}
+              onClick={() => updateTag.mutate()}
+            >
+              {updateTag.isPending ? t("tags.saving") : t("tags.save")}
+            </button>
+          </div>
+        </div>
+      </Modal>
+      <ConfirmDialog
+        open={showDelete}
+        title={t("tags.delete_title")}
+        message={t("tags.delete_msg")}
+        onConfirm={() => deleteTag.mutate()}
+        onCancel={() => setShowDelete(false)}
+        isPending={deleteTag.isPending}
+        error={(deleteTag.error as Error)?.message}
+      />
       {slideshow.node}
     </main>
   );

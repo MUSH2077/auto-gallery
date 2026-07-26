@@ -84,7 +84,7 @@ DEFAULT_GALLERYDL_CONFIG = {
         },
         "lofter": {
             "auto-enable-on-import": False,
-            "directory": ["lofter", "{blog_name}", "{date}"],
+            "directory": ["lofter", "{blog_name}", "{id}"],
             "filename": "{id}_{num}.{extension}",
         },
         "weibo": {

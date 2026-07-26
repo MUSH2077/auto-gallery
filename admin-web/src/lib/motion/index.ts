@@ -2,7 +2,7 @@
 // only — never from "animejs" directly (enforced by convention; anime.ts is
 // the single wrapper).
 
-export { motionTokens, staggerDelay } from "./tokens";
+export { motionTokens, staggerDelay, bubbleStaggerDelay } from "./tokens";
 export { motionConfig } from "./config";
 export { enterHeatmap, countUp } from "./anime";
 export { usePresence, useEnterOnce, useStaggeredEntrance } from "./hooks";

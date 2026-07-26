@@ -14,10 +14,13 @@ from app.models.subscription_source import SubscriptionSource
 from app.models.work import Work
 from app.models.curation import WorkCurationState
 from app.models.work_source import WorkSource
+from app.models.work_source_tag import WorkSourceTag
+from app.models.tag import Tag
 from app.providers import registry
 from app.schemas.curation import RepositoryGraphResponse
 from app.services.curation import CurationService
 from app.services.subscription_enqueue import enqueue_subscription_source_sync
+from app.services.repository_identity import resolve_repository_source_creator_ids
 
 router = APIRouter(dependencies=[RequirePermission("library")])
 
@@ -136,8 +139,9 @@ async def get_repository(source_id: UUID, db: AsyncSession = Depends(get_db)):
     recent_jobs = list(jobs_result.scalars().all())
     latest_job = recent_jobs[0] if recent_jobs else None
 
+    source_creator_ids = await resolve_repository_source_creator_ids(db, ss, creator.id)
     recent_works = []
-    if ss.source_creator_id:
+    if source_creator_ids:
         asset_count_sq = (
             select(AssetSource.work_source_id, func.count(AssetSource.asset_id).label("asset_count"))
             .group_by(AssetSource.work_source_id)
@@ -150,7 +154,7 @@ async def get_repository(source_id: UUID, db: AsyncSession = Depends(get_db)):
             .outerjoin(WorkCurationState, WorkCurationState.work_id == Work.id)
             .where(
                 WorkSource.source == ss.source,
-                WorkSource.source_creator_id == ss.source_creator_id,
+                WorkSource.source_creator_id.in_(source_creator_ids),
                 (WorkCurationState.visibility.is_(None)) | (WorkCurationState.visibility == "visible"),
             )
             .order_by(WorkSource.posted_at.desc(), Work.created_at.desc())
@@ -194,6 +198,57 @@ async def get_repository(source_id: UUID, db: AsyncSession = Depends(get_db)):
         "provider": provider,
         "recent_jobs": [_job_payload(job) for job in recent_jobs],
         "recent_works": recent_works,
+    }
+
+
+@router.get("/{source_id}/tags")
+async def get_repository_tags(
+    source_id: UUID,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    ss, _, creator = await _get_source_context(db, source_id)
+    source_creator_ids = await resolve_repository_source_creator_ids(db, ss, creator.id)
+    if not source_creator_ids:
+        return {"items": [], "total": 0}
+
+    filters = (
+        WorkSource.source == ss.source,
+        WorkSource.source_creator_id.in_(source_creator_ids),
+    )
+    total = int((await db.execute(
+        select(func.count(func.distinct(WorkSourceTag.tag_id)))
+        .select_from(WorkSourceTag)
+        .join(WorkSource, WorkSource.id == WorkSourceTag.work_source_id)
+        .where(*filters)
+    )).scalar() or 0)
+
+    rows = (await db.execute(
+        select(
+            Tag,
+            func.count(func.distinct(WorkSource.work_id)).label("usage_count"),
+        )
+        .join(WorkSourceTag, WorkSourceTag.tag_id == Tag.id)
+        .join(WorkSource, WorkSource.id == WorkSourceTag.work_source_id)
+        .where(*filters)
+        .group_by(Tag.id)
+        .order_by(
+            func.count(func.distinct(WorkSource.work_id)).desc(),
+            Tag.normalized_name,
+        )
+        .offset(offset)
+        .limit(limit)
+    )).all()
+    return {
+        "items": [{
+            "id": str(tag.id),
+            "normalized_name": tag.normalized_name,
+            "category": tag.category,
+            "usage_count": int(usage_count or 0),
+            "created_at": tag.created_at.isoformat() if tag.created_at else None,
+        } for tag, usage_count in rows],
+        "total": total,
     }
 
 

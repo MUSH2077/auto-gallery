@@ -4,7 +4,6 @@ import json
 import logging
 import os
 from time import monotonic
-from collections import defaultdict
 from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import Any
@@ -36,6 +35,7 @@ from app.services.subscription_enqueue import mark_source_sync_success
 from app.services.curation import CurationService
 from app.services.gitllery import project_commit_safe
 from app.services.work_import import WorkImportService
+from app.services.artifact_discovery import group_metadata_by_work, media_files_for_group
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +179,11 @@ def _detect_nsfw(raw: dict, source: str) -> bool:
         if rating and rating not in ("general", "allages", "all-ages", "safe"):
             return True
     elif source == "x":
-        if raw.get("possibly_sensitive"):
+        if (
+            raw.get("possibly_sensitive")
+            or raw.get("sensitive")
+            or bool(raw.get("sensitive_flags"))
+        ):
             return True
     elif source == "manual":
         # ManualUploadService (app/services/manual_upload.py) writes the
@@ -309,17 +313,9 @@ async def run_import_job(import_job_id: str):
 
         # Group JSONs by work_id ("parse" stage — timed for observability)
         _parse_started = monotonic()
-        groups = defaultdict(list)
-        for jf in all_json_files:
-            try:
-                with open(jf) as f:
-                    raw = json.load(f)
-                ws = provider.parse_work_source(raw)
-                src_work_id = ws.get("source_work_id")
-                if src_work_id:
-                    groups[src_work_id].append((jf, raw))
-            except Exception:
-                logger.warning("Failed to parse JSON %s", jf, exc_info=True)
+        groups, invalid_metadata = group_metadata_by_work(provider, all_json_files)
+        for metadata_path in invalid_metadata:
+            logger.warning("Failed to extract a work ID from JSON %s", metadata_path)
         _parse_ms = int((monotonic() - _parse_started) * 1000)
 
         if not groups:
@@ -450,6 +446,21 @@ async def run_import_job(import_job_id: str):
                         else:
                             sc_creator_id = sc_obj.creator_id
 
+                        if dj.subscription_source_id:
+                            subscription_source = await sc_db.get(
+                                SubscriptionSource, dj.subscription_source_id,
+                            )
+                            should_link, _, _ = _should_auto_link_creator(
+                                provider, first_raw, subscription_source,
+                            )
+                            if (
+                                should_link
+                                and subscription_source
+                                and subscription_source.source == sc_data["source"]
+                                and not subscription_source.source_creator_id
+                            ):
+                                subscription_source.source_creator_id = sc_data["source_creator_id"]
+
                         await sc_db.commit()
                         break
                     except IntegrityError:
@@ -476,11 +487,7 @@ async def run_import_job(import_job_id: str):
             # Media assets are in the SAME directory as the JSONs
             # (gallery-dl per-work directories, no moving needed)
             work_dir = first_file.parent
-            asset_files = sorted(
-                [p for p in work_dir.iterdir()
-                 if p.is_file() and p.suffix.lower() in ASSET_EXTENSIONS],
-                key=lambda p: p.stem,
-            )
+            asset_files = media_files_for_group(items, src_work_id)
 
             if not asset_files:
                 stats["skipped"] += 1

@@ -1,5 +1,6 @@
 "use client";
-import { useState } from "react";
+import { Fragment, useState } from "react";
+import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, ConfirmDialog, PageShell, StatCard, StatusBadge, PermissionGuard } from "@/components";
@@ -49,6 +50,7 @@ export default function DataManagementPage() {
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [integrityItems, setIntegrityItems] = useState<{ type: string; description: string; count: number; items: any[] } | null>(null);
   const [dangerConfirm, setDangerConfirm] = useState("");
+  const [expandedCreators, setExpandedCreators] = useState<Set<string>>(new Set());
 
   // ── Data queries ──
   const systemInfo = useQuery({
@@ -178,14 +180,15 @@ export default function DataManagementPage() {
   const sourceEntries = breakdown?.sources
     ? Object.entries(breakdown.sources).sort(([, a], [, b]) => b.size_mb - a.size_mb)
     : [];
-  const creatorEntries = breakdown?.creators || [];
+  const creatorEntries = breakdown?.creator_tree || [];
+  const unlinkedRepositories = breakdown?.unlinked_repositories || [];
   const integrityItemKeys = (integrityItems?.items || []).map(
     (item, index) => item.id || item.path || item.file_name || item.name || `item:${index}`,
   );
   const layerEntrance = useStaggeredEntrance(layerEntries.map(([key]) => `layer:${key}`));
   const sourceEntrance = useStaggeredEntrance(sourceEntries.map(([source]) => `source:${source}`));
   const creatorEntrance = useStaggeredEntrance(
-    creatorEntries.map((creator) => creator.creator_id || `${creator.source}:${creator.name}`),
+    creatorEntries.map((creator) => creator.creator_id),
   );
   const issueEntrance = useStaggeredEntrance(issues.map((issue) => issue.type));
   const integrityItemEntrance = useStaggeredEntrance(integrityItemKeys);
@@ -256,7 +259,7 @@ export default function DataManagementPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div className="grid grid-cols-1 gap-6 mb-6 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)]">
         {/* ═══ Storage Distribution ═══ */}
         <div className="card p-4">
           <h3 className="font-medium text-sm mb-3">{t("datamgmt.storage_title")}</h3>
@@ -293,42 +296,102 @@ export default function DataManagementPage() {
         {/* ═══ Creator Storage Top ═══ */}
         <div className="card p-4">
           <h3 className="font-medium text-sm mb-3">{t("datamgmt.storage_creators_title")}</h3>
-          {breakdown?.creators && breakdown.creators.length > 0 ? (
+          {creatorEntries.length > 0 || unlinkedRepositories.length > 0 ? (
             <div className="overflow-x-auto">
-              <table className="w-full text-xs">
+              {creatorEntries.length > 0 && <table className="w-full text-xs">
                 <thead>
                   <tr className="text-muted border-b">
                     <th className="text-left py-1.5 font-medium">#</th>
                     <th className="text-left py-1.5 font-medium">{t("datamgmt.storage_creator_col")}</th>
-                    <th className="text-left py-1.5 font-medium">{t("datamgmt.storage_source_label")}</th>
+                    <th className="text-left py-1.5 font-medium">{t("datamgmt.storage_repositories_label")}</th>
                     <th className="text-right py-1.5 font-medium">{t("datamgmt.storage_works_label")}</th>
                     <th className="text-right py-1.5 font-medium">Size</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {breakdown.creators.map((c, i) => {
-                    const itemKey = c.creator_id || `${c.source}:${c.name}`;
-                    const entrance = creatorEntrance(itemKey, i);
+                  {creatorEntries.map((creator, index) => {
+                    const entrance = creatorEntrance(creator.creator_id, index);
+                    const expanded = expandedCreators.has(creator.creator_id);
+                    const detailId = `creator-storage-${creator.creator_id}`;
                     return (
-                    <tr key={`${c.source}/${c.name}`} className={`${entrance.className} border-b border-border/50 hover:bg-subtle dark:hover:bg-subtle cursor-pointer`}
-                        style={entrance.style}
-                        onClick={() => c.creator_id && router.push(`/admin/creators/${c.creator_id}`)}
-                        title={c.creator_id ? "View creator detail" : ""}>
-                      <td className="py-1.5 text-muted">{i + 1}</td>
-                      <td className="py-1.5 font-medium truncate max-w-[120px]" title={c.display_name || c.name}>
-                        <span className={c.creator_id ? "text-accent hover:underline" : ""}>{c.display_name || c.name}</span>
-                      </td>
-                      <td className="py-1.5 capitalize">
-                        <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: getSourceColor(c.source) }} />
-                        {c.source}
-                      </td>
-                      <td className="py-1.5 text-right">{c.work_count}</td>
-                      <td className="py-1.5 text-right font-mono text-fg">{formatSize(c.size_mb)}</td>
-                    </tr>
+                      <Fragment key={creator.creator_id}>
+                        <tr className={`${entrance.className} border-b border-border/60 hover:bg-subtle dark:hover:bg-subtle`} style={entrance.style}>
+                          <td className="py-1 text-muted">{index + 1}</td>
+                          <td className="py-1">
+                            <div className="flex min-w-0 items-center gap-1">
+                              <button
+                                type="button"
+                                className="btn-icon h-8 min-h-8 w-8 min-w-8 shrink-0 text-muted"
+                                aria-expanded={expanded}
+                                aria-controls={detailId}
+                                aria-label={expanded ? t("datamgmt.storage_collapse") : t("datamgmt.storage_expand")}
+                                onClick={() => setExpandedCreators((current) => {
+                                  const next = new Set(current);
+                                  if (next.has(creator.creator_id)) next.delete(creator.creator_id);
+                                  else next.add(creator.creator_id);
+                                  return next;
+                                })}
+                              >
+                                <svg viewBox="0 0 16 16" aria-hidden="true" className={`h-4 w-4 transition-transform ${expanded ? "rotate-90" : ""}`}>
+                                  <path d="m6 3 5 5-5 5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              </button>
+                              <Link href={`/admin/creators/${creator.creator_id}`} className="truncate font-semibold text-accent hover:underline">
+                                {creator.display_name}
+                              </Link>
+                            </div>
+                          </td>
+                          <td className="py-1 text-muted">{creator.repository_count}</td>
+                          <td className="py-1 text-right font-medium">{creator.work_count}</td>
+                          <td className="py-1 text-right font-mono font-semibold text-fg">{formatSize(creator.size_mb)}</td>
+                        </tr>
+                        {expanded && creator.repositories.map((repository, repositoryIndex) => (
+                          <tr
+                            id={repositoryIndex === 0 ? detailId : undefined}
+                            key={`${creator.creator_id}:${repository.source}:${repository.directory_name}`}
+                            className="border-b border-border/40 bg-subtle/40"
+                          >
+                            <td />
+                            <td className="py-1.5 pl-10">
+                              {repository.repository_id ? (
+                                <Link href={`/admin/repositories/${repository.repository_id}`} className="inline-flex min-w-0 items-center gap-2 text-accent hover:underline">
+                                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: getSourceColor(repository.source) }} />
+                                  <span className="truncate font-medium">{repository.directory_name}</span>
+                                </Link>
+                              ) : (
+                                <span className="inline-flex min-w-0 items-center gap-2 text-muted">
+                                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: getSourceColor(repository.source) }} />
+                                  <span className="truncate">{repository.directory_name}</span>
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-1.5 capitalize text-muted">{repository.source_display_name}</td>
+                            <td className="py-1.5 text-right">{repository.work_count}</td>
+                            <td className="py-1.5 text-right font-mono text-fg">{formatSize(repository.size_mb)}</td>
+                          </tr>
+                        ))}
+                      </Fragment>
                     );
                   })}
                 </tbody>
-              </table>
+              </table>}
+              {unlinkedRepositories.length > 0 && (
+                <div className="mt-4 border-t border-border pt-3">
+                  <h4 className="text-xs font-semibold text-warning">{t("datamgmt.storage_unlinked_title")}</h4>
+                  <p className="mt-1 text-xs text-muted">{t("datamgmt.storage_unlinked_desc")}</p>
+                  <div className="mt-2 space-y-1">
+                    {unlinkedRepositories.map((repository) => (
+                      <div key={`${repository.disk_source}:${repository.directory_name}`} className="flex items-center justify-between gap-3 rounded-md bg-subtle px-3 py-2 text-xs">
+                        <span className="min-w-0 truncate">
+                          <span className="mr-2 inline-block h-2 w-2 rounded-full" style={{ backgroundColor: getSourceColor(repository.source) }} />
+                          {repository.source}/{repository.directory_name}
+                        </span>
+                        <span className="shrink-0 font-mono">{formatSize(repository.size_mb)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <p className="text-sm text-muted text-center py-6">{t("datamgmt.storage_no_data")}</p>

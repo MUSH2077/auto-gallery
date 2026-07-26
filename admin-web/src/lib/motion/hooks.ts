@@ -65,6 +65,7 @@ export function usePresence(
  */
 export function useEnterOnce(
   keys: ReadonlyArray<string | number>,
+  maxStaggerDelay: number = motionTokens.stagger.cap,
 ): (key: string | number) => boolean {
   const seen = useRef<Set<string | number>>(new Set());
   const entering = useRef<Set<string | number>>(new Set());
@@ -80,9 +81,9 @@ export function useEnterOnce(
     const timer = setTimeout(() => {
       for (const key of newKeys) entering.current.delete(key);
       timers.current.delete(timer);
-    }, motionTokens.duration.enter + motionTokens.stagger.cap + motionTokens.duration.instant);
+    }, motionTokens.duration.enter + maxStaggerDelay + motionTokens.duration.instant);
     timers.current.add(timer);
-  });
+  }, [keys, maxStaggerDelay]);
 
   useEffect(() => () => {
     for (const timer of timers.current) clearTimeout(timer);

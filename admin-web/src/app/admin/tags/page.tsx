@@ -1,58 +1,20 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
-import { api, queryKeys, Tag } from "@/lib/api";
+import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
-import { useStaggeredEntrance } from "@/lib/motion";
-import { useToast } from "@/components/Toast";
-import { PageHeader, PageShell, EmptyState, ErrorState, Modal, ConfirmDialog, PermissionGuard, RowActionMenu } from "@/components";
+import { PageHeader, PageShell, EmptyState, ErrorState, Modal, PermissionGuard, TagBubbleChart } from "@/components";
 import { usePermissions } from "@/lib/usePermissions";
 
 const CATEGORIES = ["general", "artist", "series", "character", "meta"];
 
-function hashStr(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) {
-    h = ((h << 5) - h) + s.charCodeAt(i);
-    h |= 0;
-  }
-  return Math.abs(h);
-}
-
-function bubbleStyle(tag: Tag, minCount: number, maxCount: number) {
-  const range = maxCount > minCount ? maxCount - minCount : 1;
-  const count = Math.max(tag.usage_count, minCount);
-  const logMin = Math.log(minCount || 1);
-  const logMax = Math.log(maxCount || 1);
-  const logRange = logMax > logMin ? logMax - logMin : 1;
-  const ratio = (Math.log(count) - logMin) / logRange;
-  const fontSize = 0.75 + ratio * 1.75; // 0.75rem to 2.5rem
-  const paddingX = 0.5 + ratio * 1.0;   // 0.5rem to 1.5rem
-  const paddingY = 0.25 + ratio * 0.5;   // 0.25rem to 0.75rem
-
-  const hue = hashStr(tag.category || tag.normalized_name) % 360;
-  return {
-    fontSize: `${fontSize.toFixed(2)}rem`,
-    padding: `${paddingY.toFixed(2)}rem ${paddingX.toFixed(2)}rem`,
-    backgroundColor: `hsl(${hue}, 55%, 92%)`,
-    color: `hsl(${hue}, 40%, 25%)`,
-    borderColor: `hsl(${hue}, 40%, 82%)`,
-  };
-}
-
 export default function TagsPage() {
   const t = useT();
-  const toast = useToast();
-  const router = useRouter();
   const qc = useQueryClient();
   const { has } = usePermissions();
   const canCurate = has("curation");
-  const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [showCreate, setShowCreate] = useState(false);
-  const [editId, setEditId] = useState<string | null>(null);
-  const [deleteId, setDeleteId] = useState<string | null>(null);
   const [formName, setFormName] = useState("");
   const [formCat, setFormCat] = useState("general");
   const limit = 50;
@@ -67,33 +29,6 @@ export default function TagsPage() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.tags.all }); setShowCreate(false); setFormName(""); setFormCat("general"); },
   });
 
-  const update = useMutation({
-    mutationFn: () => api.updateTag(editId!, { normalized_name: formName.trim().toLowerCase() || undefined, category: formCat || undefined }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.tags.all }); setEditId(null); },
-  });
-
-  const deleteTag = useMutation({
-    mutationFn: () => api.deleteTag(deleteId!),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.tags.all }); setDeleteId(null); },
-  });
-
-  const openEdit = (tag: Tag) => {
-    setEditId(tag.id);
-    setFormName(tag.normalized_name);
-    setFormCat(tag.category || "general");
-  };
-
-  const filtered = tags.data?.filter((t: Tag) =>
-    !search || t.normalized_name.includes(search.toLowerCase())
-  ) || [];
-  const tagEntrance = useStaggeredEntrance(filtered.map((tag) => tag.id));
-
-  const { minCount, maxCount } = useMemo(() => {
-    if (!filtered.length) return { minCount: 0, maxCount: 0 };
-    const counts = filtered.map(t => t.usage_count);
-    return { minCount: Math.min(...counts), maxCount: Math.max(...counts) };
-  }, [filtered]);
-
   return (
     <PermissionGuard module="library">
     <PageShell size="normal">
@@ -104,18 +39,12 @@ export default function TagsPage() {
         )}
       </PageHeader>
 
-      <div className="mb-6">
-        <input value={search} onChange={(e) => setSearch(e.target.value)}
-          placeholder={t("tags.search")} className="input w-full max-w-xs" />
-      </div>
-
       {tags.isLoading && (
-        <div className="flex flex-wrap gap-2 items-center">
+        <div className="flex min-h-80 flex-wrap items-center justify-center gap-3">
           {Array.from({ length: 20 }).map((_, i) => {
-            const w = 60 + Math.random() * 120;
-            const h = 24 + Math.random() * 24;
-            return <div key={i} style={{ width: `${w}px`, height: `${h}px` }}
-              className="rounded-full bg-subtle animate-pulse dark:bg-subtle" />;
+            const size = 44 + (i % 5) * 12;
+            return <div key={i} style={{ width: size, height: size }}
+              className="animate-pulse rounded-full bg-subtle dark:bg-subtle" />;
           })}
         </div>
       )}
@@ -123,50 +52,10 @@ export default function TagsPage() {
       {tags.data && !tags.data.length && <EmptyState title={t("tags.no_tags")} description={t("tags.no_tags_desc")} />}
 
       {tags.data && tags.data.length > 0 && (
-        <div className="card p-6">
-          <div className="flex flex-wrap gap-2 items-center justify-center">
-            {filtered.map((tag, i) => {
-              const light = bubbleStyle(tag, minCount, maxCount);
-              const entrance = tagEntrance(tag.id, i);
-              return (
-                <div key={tag.id}
-                  className={`${entrance.className} inline-flex items-center gap-1 rounded-full border cursor-pointer hover:shadow-md transition-shadow`}
-                  style={{
-                    fontSize: light.fontSize,
-                    padding: light.padding,
-                    backgroundColor: light.backgroundColor,
-                    color: light.color,
-                    borderColor: light.borderColor,
-                    ...entrance.style,
-                  } as React.CSSProperties}
-                  onClick={() => router.push(`/admin/tags/${tag.id}`)}>
-                  <span className="font-semibold truncate max-w-[16rem]">{tag.normalized_name}</span>
-                  {tag.category && (
-                    <span className="opacity-60" style={{ fontSize: `calc(${light.fontSize} * 0.7)` }}>
-                      {tag.category}
-                    </span>
-                  )}
-                  <span className="opacity-40 ml-0.5" style={{ fontSize: `calc(${light.fontSize} * 0.65)` }}>
-                    {tag.usage_count}
-                  </span>
-                  {canCurate && (
-                    <RowActionMenu
-                      label={t("common.more_actions")}
-                      items={[
-                        { label: t("common.edit"), onSelect: () => openEdit(tag) },
-                        { label: t("common.delete"), tone: "danger", onSelect: () => setDeleteId(tag.id) },
-                      ]}
-                    />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          {search && !filtered.length && <p className="mt-4 text-center text-sm text-muted">{t("tags.no_match").replace("{query}", search)}</p>}
+        <div className="rounded-md border border-border bg-white p-3 dark:border-border dark:bg-surface sm:p-5">
+          <TagBubbleChart tags={tags.data} ariaLabel={t("tags.title")} />
           <p className="mt-5 text-center text-xs text-muted">
-            {search
-              ? t("tags.matching").replace("{count}", String(filtered.length))
-              : t("tags.total").replace("{count}", String(filtered.length))}
+            {t("tags.total").replace("{count}", String(tags.data.length))}
           </p>
         </div>
       )}
@@ -190,28 +79,6 @@ export default function TagsPage() {
           {create.error && <p className="text-red-600 text-sm">{(create.error as Error).message}</p>}
         </div>
       </Modal>
-
-      <Modal open={!!editId} onClose={() => setEditId(null)} title={t("tags.edit_title")}>
-        <div className="space-y-4">
-          <div><label className="block text-sm font-medium mb-1">{t("tags.name_label")}</label>
-            <input value={formName} onChange={(e) => setFormName(e.target.value)}
-              className="input w-full" /></div>
-          <div><label className="block text-sm font-medium mb-1">{t("tags.category_label")}</label>
-            <select value={formCat} onChange={(e) => setFormCat(e.target.value)} className="select w-full">
-              {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select></div>
-          <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => setEditId(null)} className="btn-ghost">{t("tags.cancel")}</button>
-            <button onClick={() => update.mutate()} disabled={!formName.trim() || update.isPending}
-              className="btn-primary">
-              {update.isPending ? t("tags.saving") : t("tags.save")}
-            </button>
-          </div>
-          {update.error && <p className="text-red-600 text-sm">{(update.error as Error).message}</p>}
-        </div>
-      </Modal>
-
-      {deleteId && <ConfirmDialog open title={t("tags.delete_title")} message={t("tags.delete_msg")} onConfirm={() => deleteTag.mutate()} onCancel={() => setDeleteId(null)} isPending={deleteTag.isPending} error={(deleteTag.error as Error)?.message} />}
 
       {/* Pagination */}
       {tags.data && tags.data.length > 0 && (

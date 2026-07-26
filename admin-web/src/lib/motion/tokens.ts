@@ -36,6 +36,9 @@ export const motionTokens = {
   stagger: {
     step: 30,
     cap: 300,
+    /** Tag bubbles stay individually legible across a full 50-item page. */
+    bubbleStep: 24,
+    bubbleCap: 1176,
     /** Dense stagger for large target sets (SVG heatmap cells). */
     denseStep: 1.5,
   },
@@ -47,4 +50,8 @@ export const motionTokens = {
  */
 export function staggerDelay(index: number): string {
   return `${Math.min(index * motionTokens.stagger.step, motionTokens.stagger.cap)}ms`;
+}
+
+export function bubbleStaggerDelay(index: number): string {
+  return `${Math.min(index * motionTokens.stagger.bubbleStep, motionTokens.stagger.bubbleCap)}ms`;
 }

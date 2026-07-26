@@ -29,19 +29,34 @@ def artifact_type(path: Path) -> str:
     return "unknown"
 
 
-def artifact_row(path: Path, root: Path, download_job_id: UUID | None = None) -> dict | None:
+def artifact_row(
+    path: Path,
+    root: Path,
+    download_job_id: UUID | None = None,
+    *,
+    source: str | None = None,
+    creator_dir: str | None = None,
+    source_work_id: str | None = None,
+) -> dict | None:
     rel = path.relative_to(root)
     parts = rel.parts
-    if len(parts) < 4:
+    # Legacy callers infer identity from a source/creator/work directory and
+    # therefore still require four path components. Provider-aware callers
+    # pass the parsed work ID explicitly, which also supports gallery-dl's
+    # flatter ``twitter/{creator}/{filename}`` layout.
+    resolved_source = source or (parts[0] if parts else None)
+    resolved_creator = creator_dir or (parts[1] if len(parts) > 1 else None)
+    resolved_work_id = source_work_id or (parts[2] if len(parts) > 2 else None)
+    if not resolved_source or not resolved_creator or not resolved_work_id:
         return None
     stat = path.stat()
     return {
         "id": uuid4(),
         "storage_root": "downloads",
         "file_path": str(rel),
-        "source": parts[0],
-        "creator_dir": parts[1],
-        "source_work_id": parts[2],
+        "source": resolved_source,
+        "creator_dir": resolved_creator,
+        "source_work_id": resolved_work_id,
         "file_name": path.name,
         "artifact_type": artifact_type(path),
         "file_size": stat.st_size,
@@ -74,9 +89,18 @@ class ArtifactLedger:
         for offset in range(0, len(rows), chunk_size):
             batch = rows[offset:offset + chunk_size]
             stmt = insert(StorageArtifact).values(batch)
+            should_refresh = (
+                StorageArtifact.mtime_ns.is_distinct_from(stmt.excluded.mtime_ns)
+                | (StorageArtifact.state == "failed")
+            )
             stmt = stmt.on_conflict_do_update(
                 constraint="uq_storage_artifacts_root_path",
                 set_={
+                    "source": stmt.excluded.source,
+                    "creator_dir": stmt.excluded.creator_dir,
+                    "source_work_id": stmt.excluded.source_work_id,
+                    "file_name": stmt.excluded.file_name,
+                    "artifact_type": stmt.excluded.artifact_type,
                     "file_size": stmt.excluded.file_size,
                     "mtime_ns": stmt.excluded.mtime_ns,
                     # Only reassign download_job_id when the file has genuinely
@@ -84,19 +108,19 @@ class ArtifactLedger:
                     # to prevent cross-contamination between jobs of different
                     # creators that share the same source root.
                     "download_job_id": case(
-                        (StorageArtifact.mtime_ns.is_distinct_from(stmt.excluded.mtime_ns), stmt.excluded.download_job_id),
+                        (should_refresh, stmt.excluded.download_job_id),
                         else_=StorageArtifact.download_job_id,
                     ),
                     "state": case(
-                        (StorageArtifact.mtime_ns.is_distinct_from(stmt.excluded.mtime_ns), "new"),
+                        (should_refresh, "new"),
                         else_=StorageArtifact.state,
                     ),
                     "import_job_id": case(
-                        (StorageArtifact.mtime_ns.is_distinct_from(stmt.excluded.mtime_ns), None),
+                        (should_refresh, None),
                         else_=StorageArtifact.import_job_id,
                     ),
                     "lease_expires_at": case(
-                        (StorageArtifact.mtime_ns.is_distinct_from(stmt.excluded.mtime_ns), None),
+                        (should_refresh, None),
                         else_=StorageArtifact.lease_expires_at,
                     ),
                     "updated_at": datetime.now(timezone.utc),

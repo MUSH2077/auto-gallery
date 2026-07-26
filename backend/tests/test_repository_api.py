@@ -16,16 +16,23 @@ class _ScalarResult:
 
 
 class _Result:
-    def __init__(self, *, first=None, scalars=None, rows=None):
+    def __init__(self, *, first=None, scalars=None, rows=None, scalar=None):
         self._first = first
         self._scalars = scalars or []
         self._rows = rows or []
+        self._scalar = scalar
 
     def first(self):
         return self._first
 
     def scalars(self):
         return _ScalarResult(self._scalars)
+
+    def scalar(self):
+        return self._scalar
+
+    def all(self):
+        return self._rows
 
     def __iter__(self):
         return iter(self._rows)
@@ -165,3 +172,72 @@ def test_repository_sync_now_delegates_to_existing_enqueue(monkeypatch):
     payload = asyncio.run(repositories.sync_repository(source_id, db=db))
 
     assert payload == {"status": "skipped", "reason": "source_disabled"}
+
+
+def test_repository_tags_are_scoped_and_paginated():
+    from app.api.repositories import get_repository_tags
+
+    source_id = uuid4()
+    sub_id = uuid4()
+    creator_id = uuid4()
+    tag_id = uuid4()
+    ss, sub, creator = _source_context(source_id, sub_id, creator_id)
+    tag = SimpleNamespace(
+        id=tag_id,
+        normalized_name="fixture",
+        category="general",
+        created_at=_dt(),
+    )
+    db = _FakeDB([
+        _Result(first=(ss, sub, creator)),
+        _Result(scalar=1),
+        _Result(rows=[(tag, 3)]),
+    ])
+
+    payload = asyncio.run(get_repository_tags(source_id, offset=0, limit=50, db=db))
+
+    assert payload["total"] == 1
+    assert payload["items"] == [{
+        "id": str(tag_id),
+        "normalized_name": "fixture",
+        "category": "general",
+        "usage_count": 3,
+        "created_at": _dt().isoformat(),
+    }]
+
+
+def test_repository_tags_fall_back_to_normalized_source_creator_url():
+    from app.api.repositories import get_repository_tags
+
+    source_id = uuid4()
+    sub_id = uuid4()
+    creator_id = uuid4()
+    tag_id = uuid4()
+    ss, sub, creator = _source_context(source_id, sub_id, creator_id)
+    ss.source_creator_id = None
+    source_creator = SimpleNamespace(
+        id=uuid4(),
+        creator_id=creator_id,
+        source="pixiv",
+        source_creator_id="1980643",
+        source_url="https://www.pixiv.net/users/1980643/",
+        created_at=_dt(),
+    )
+    tag = SimpleNamespace(
+        id=tag_id,
+        normalized_name="fallback",
+        category="general",
+        created_at=_dt(),
+    )
+    db = _FakeDB([
+        _Result(first=(ss, sub, creator)),
+        _Result(scalars=[source_creator]),
+        _Result(scalar=1),
+        _Result(rows=[(tag, 2)]),
+    ])
+
+    payload = asyncio.run(get_repository_tags(source_id, offset=0, limit=50, db=db))
+
+    assert payload["total"] == 1
+    assert payload["items"][0]["normalized_name"] == "fallback"
+    assert payload["items"][0]["usage_count"] == 2

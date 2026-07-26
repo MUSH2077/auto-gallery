@@ -629,6 +629,47 @@ export interface Tag {
   created_at: string;
 }
 
+export interface RepositoryTagsResponse {
+  items: Tag[];
+  total: number;
+}
+
+export interface StorageRepositoryNode {
+  repository_id?: string | null;
+  source: string;
+  source_display_name: string;
+  disk_source: string;
+  directory_name: string;
+  size_mb: number;
+  work_count: number;
+}
+
+export interface CreatorStorageNode {
+  creator_id: string;
+  display_name: string;
+  size_mb: number;
+  work_count: number;
+  repository_count: number;
+  repositories: StorageRepositoryNode[];
+}
+
+export interface StorageBreakdownResponse {
+  sources: Record<string, { size_mb: number; creator_count: number; work_count: number }>;
+  creators: {
+    name: string;
+    display_name: string;
+    source: string;
+    size_mb: number;
+    work_count: number;
+    creator_id?: string;
+    repository_id?: string;
+  }[];
+  creator_tree: CreatorStorageNode[];
+  unlinked_repositories: StorageRepositoryNode[];
+  db_stats?: Record<string, number>;
+  layers?: Record<string, { path: string; size_mb: number; description: string }>;
+}
+
 export interface CreatorRef {
   creator_id: string;
   creator_name: string;

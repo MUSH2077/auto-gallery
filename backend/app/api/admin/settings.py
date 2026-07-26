@@ -226,6 +226,12 @@ _storage_breakdown_cache_ts: float = 0.0
 _STORAGE_BREAKDOWN_CACHE_TTL = 60.0
 
 
+def invalidate_storage_breakdown_cache() -> None:
+    global _storage_breakdown_cache, _storage_breakdown_cache_ts
+    _storage_breakdown_cache = None
+    _storage_breakdown_cache_ts = 0.0
+
+
 @router.get("/storage-breakdown")
 async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     """Return per-source and per-creator storage breakdown."""
@@ -240,8 +246,10 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     lib_root = Path(settings.library_root)
 
     def _compute_fs_sizes() -> dict:
-        """Blocking: recursive size walks over the whole library. Offloaded to a
-        thread so these rglob("*") passes never run on the event loop."""
+        """Walk storage once and recover provider-native repository identity."""
+        from app.providers import registry
+        from app.services.settings import source_key_for_extractor
+
         def _safe_file_size(path: Path) -> int:
             try:
                 return path.stat().st_size if path.is_file() else 0
@@ -270,46 +278,90 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
         for backup_root in (dl_root / ".backups", Path(settings.app_config_root) / "backups"):
             backup_bytes += _safe_dir_size(backup_root)
 
-        original_media_bytes = 0
-        try:
-            for source_dir in dl_root.iterdir():
-                if source_dir.is_dir() and source_dir.name != ".backups":
-                    original_media_bytes += _safe_dir_size(source_dir)
-        except Exception:
-            original_media_bytes = _safe_dir_size(dl_root) - archive_bytes - backup_bytes
-
         library_index_bytes = _safe_dir_size(lib_root)
-
-        sources: dict = {}
+        original_media_bytes = 0
+        source_acc: dict[str, dict] = {}
+        repositories: list[dict] = []
         try:
             for source_dir in dl_root.iterdir():
-                if not source_dir.is_dir():
+                if not source_dir.is_dir() or source_dir.name.startswith("."):
                     continue
-                source_name = source_dir.name
-                total_size = 0
-                creator_count = 0
-                work_count = 0
+                canonical_source = source_key_for_extractor(source_dir.name)
+                try:
+                    provider = registry.get(canonical_source)
+                except KeyError:
+                    original_media_bytes += _safe_dir_size(source_dir)
+                    continue
+
+                source_stats = source_acc.setdefault(
+                    canonical_source,
+                    {"size_bytes": 0, "creators": set(), "work_ids": set()},
+                )
                 for creator_dir in source_dir.iterdir():
                     if not creator_dir.is_dir():
                         continue
-                    creator_count += 1
-                    for work_dir in creator_dir.iterdir():
-                        if not work_dir.is_dir():
+                    repo_bytes = 0
+                    work_ids: set[str] = set()
+                    source_creator_id: str | None = None
+                    source_url: str | None = None
+                    metadata_display_name: str | None = None
+
+                    for file_path in creator_dir.rglob("*"):
+                        if not file_path.is_file():
                             continue
-                        work_count += 1
-                        for f in work_dir.rglob("*"):
-                            if f.is_file():
-                                try:
-                                    total_size += f.stat().st_size
-                                except Exception:
-                                    pass
-                sources[source_name] = {
-                    "size_mb": round(total_size / (1024 ** 2), 1),
-                    "creator_count": creator_count,
-                    "work_count": work_count,
-                }
+                        file_size = _safe_file_size(file_path)
+                        repo_bytes += file_size
+                        original_media_bytes += file_size
+                        if file_path.suffix.lower() != ".json":
+                            continue
+                        try:
+                            with file_path.open(encoding="utf-8") as handle:
+                                raw = json.load(handle)
+                            work_data = provider.parse_work_source(raw)
+                            work_id = str(work_data.get("source_work_id") or "").strip()
+                            if work_id:
+                                work_ids.add(work_id)
+                            if source_creator_id is None:
+                                creator_data = provider.parse_source_creator(raw)
+                                source_creator_id = str(
+                                    creator_data.get("source_creator_id") or "",
+                                ).strip() or None
+                                source_url = creator_data.get("source_url")
+                                metadata_display_name = creator_data.get("display_name")
+                        except Exception:
+                            continue
+
+                    if not work_ids:
+                        work_ids = {
+                            child.name
+                            for child in creator_dir.iterdir()
+                            if child.is_dir()
+                        }
+
+                    source_stats["size_bytes"] += repo_bytes
+                    source_stats["creators"].add(creator_dir.name)
+                    source_stats["work_ids"].update(work_ids)
+                    repositories.append({
+                        "disk_source": source_dir.name,
+                        "source": canonical_source,
+                        "directory_name": creator_dir.name,
+                        "size_bytes": repo_bytes,
+                        "work_count": len(work_ids),
+                        "source_creator_id": source_creator_id,
+                        "source_url": source_url,
+                        "metadata_display_name": metadata_display_name,
+                    })
         except Exception:
-            pass
+            logger.warning("Storage breakdown filesystem scan was incomplete", exc_info=True)
+
+        sources = {
+            source: {
+                "size_mb": round(stats["size_bytes"] / (1024 ** 2), 1),
+                "creator_count": len(stats["creators"]),
+                "work_count": len(stats["work_ids"]),
+            }
+            for source, stats in source_acc.items()
+        }
 
         return {
             "archive_bytes": archive_bytes,
@@ -317,6 +369,7 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
             "original_media_bytes": original_media_bytes,
             "library_index_bytes": library_index_bytes,
             "sources": sources,
+            "repositories": repositories,
         }
 
     _fs = await asyncio.to_thread(_compute_fs_sizes)
@@ -325,135 +378,156 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     original_media_bytes = _fs["original_media_bytes"]
     library_index_bytes = _fs["library_index_bytes"]
     sources = _fs["sources"]
+    filesystem_repositories = _fs["repositories"]
 
-    # ── Resolve creator display names from the database ──
-    # The filesystem uses gallery-dl-derived directory names which may
-    # not match any DB field. We cross-reference via work_sources:
-    #   work_dir name (source_work_id) → work_sources.source_creator_id
-    #   → source_creators.creator_id → creators.display_name
-    creator_display: dict[tuple[str, str], str] = {}
-    creator_id_map: dict[tuple[str, str], str] = {}  # (source, dir_name) → display_name
-    try:
-        from app.models.work_source import WorkSource
-        from app.models.source_creator import SourceCreator
-        from app.models.creator import Creator
+    # Resolve physical repository directories to stable creator/repository IDs.
+    from app.models.creator import Creator
+    from app.models.source_creator import SourceCreator
+    from app.models.subscription import Subscription
+    from app.models.subscription_source import SubscriptionSource
+    from app.providers import registry
 
-        if dl_root.exists():
-            # Collect one sample work_id per creator directory for lookup
-            lookup_pairs: list[tuple[str, str, str]] = []  # (source, creator_dir, work_id)
-            for source_dir in dl_root.iterdir():
-                if not source_dir.is_dir():
-                    continue
-                src = source_dir.name
-                for creator_dir in source_dir.iterdir():
-                    if not creator_dir.is_dir():
-                        continue
-                    for work_dir in creator_dir.iterdir():
-                        if work_dir.is_dir():
-                            lookup_pairs.append((src, creator_dir.name, work_dir.name))
-                            break  # first work is enough for lookup
+    repository_contexts = list((await db.execute(
+        select(SubscriptionSource, Subscription, Creator)
+        .join(Subscription, Subscription.id == SubscriptionSource.subscription_id)
+        .join(Creator, Creator.id == Subscription.creator_id)
+    )).all())
+    source_creators = list((await db.execute(
+        select(SourceCreator).where(SourceCreator.creator_id.is_not(None))
+    )).scalars().all())
+    source_creator_owner = {
+        (row.source, row.source_creator_id): str(row.creator_id)
+        for row in source_creators
+        if row.creator_id
+    }
 
-            if lookup_pairs:
-                work_ids = [p[2] for p in lookup_pairs]
-                # Batch query work_sources
-                ws_result = await db.execute(
-                    select(
-                        WorkSource.source,
-                        WorkSource.source_work_id,
-                        WorkSource.source_creator_id,
-                    ).where(WorkSource.source_work_id.in_(work_ids))
-                )
-                # work_id → source_creator_id
-                work_to_sc: dict[str, str] = {}
-                for row in ws_result:
-                    ws_src, ws_wid, ws_scid = row[0], row[1], row[2]
-                    if ws_scid:
-                        work_to_sc[ws_wid] = ws_scid
+    contexts_by_source: dict[str, list[tuple]] = {}
+    creator_by_id: dict[str, Creator] = {}
+    for subscription_source, subscription, creator in repository_contexts:
+        contexts_by_source.setdefault(subscription_source.source, []).append(
+            (subscription_source, subscription, creator),
+        )
+        creator_by_id[str(creator.id)] = creator
 
-                # source_creator_id → creator display_name
-                sc_ids = set(work_to_sc.values())
-                if sc_ids:
-                    sc_result = await db.execute(
-                        select(
-                            SourceCreator.source_creator_id,
-                            Creator.display_name,
-                            Creator.name,
-                            Creator.id,
-                        )
-                        .join(Creator, Creator.id == SourceCreator.creator_id)
-                        .where(SourceCreator.source_creator_id.in_(list(sc_ids)))
-                    )
-                    sc_to_display: dict[str, str] = {}
-                    sc_to_creator_id: dict[str, str] = {}
-                    for row in sc_result:
-                        scid, cdisplay, cname, cid = row[0], row[1], row[2], str(row[3]) if row[3] else None
-                        sc_to_display[scid] = cdisplay or cname or scid
-                        if cid:
-                            sc_to_creator_id[scid] = cid
-
-                    for src, dir_name, work_id in lookup_pairs:
-                        scid = work_to_sc.get(work_id)
-                        if scid and scid in sc_to_display:
-                            creator_display[(src, dir_name)] = sc_to_display[scid]
-                            cid = sc_to_creator_id.get(scid)
-                            if cid:
-                                creator_id_map[(src, dir_name)] = cid
-                        else:
-                            creator_display[(src, dir_name)] = dir_name
-    except Exception:
-        pass
-
-    # Per-creator top breakdown (by storage)
-    def _compute_creator_sizes() -> list:
-        """Blocking per-creator size walk — offloaded off the event loop so this
-        second full-library rglob pass doesn't freeze concurrent requests."""
-        rows: list[tuple[str, str, str, int, int]] = []  # (name, display, source, size, work_count)
+    def _normalized_url(source: str, value: str | None) -> str:
+        if not value:
+            return ""
         try:
-            for source_dir in dl_root.iterdir():
-                if not source_dir.is_dir():
-                    continue
-                src = source_dir.name
-                for creator_dir in source_dir.iterdir():
-                    if not creator_dir.is_dir():
-                        continue
-                    cname = creator_dir.name
-                    csize = 0
-                    wc = 0
-                    for work_dir in creator_dir.iterdir():
-                        if not work_dir.is_dir():
-                            continue
-                        wc += 1
-                        for f in work_dir.rglob("*"):
-                            if f.is_file():
-                                try:
-                                    csize += f.stat().st_size
-                                except Exception:
-                                    pass
-                    display = creator_display.get((src, cname), cname)
-                    rows.append((cname, display, src, csize, wc))
+            provider = registry.get(source)
+            return (provider.normalize_url(value) or value).rstrip("/").casefold()
         except Exception:
-            pass
-        return rows
+            return value.rstrip("/").casefold()
 
-    creators = []
-    try:
-        creator_sizes = await asyncio.to_thread(_compute_creator_sizes)
-        # Sort by size descending, top 20
-        creator_sizes.sort(key=lambda x: x[3], reverse=True)
-        for cname, display, src, sz, wc in creator_sizes[:20]:
-            entry = {
-                "name": cname,
-                "display_name": display,
-                "source": src,
-                "size_mb": round(sz / (1024 ** 2), 1),
-                "work_count": wc,
-            }
-            cid = creator_id_map.get((src, cname))
-            if cid:
-                entry["creator_id"] = cid
-            creators.append(entry)
-    except Exception:
-        pass
+    creator_nodes: dict[str, dict] = {}
+    unlinked_repositories: list[dict] = []
+    legacy_creators: list[dict] = []
+
+    for fs_repo in filesystem_repositories:
+        source = fs_repo["source"]
+        candidates = contexts_by_source.get(source, [])
+        owner_id = source_creator_owner.get(
+            (source, fs_repo.get("source_creator_id")),
+        )
+        fs_url = _normalized_url(source, fs_repo.get("source_url"))
+        best_context = None
+        best_score = 0
+        for context in candidates:
+            subscription_source, _, creator = context
+            score = 0
+            if (
+                fs_repo.get("source_creator_id")
+                and subscription_source.source_creator_id == fs_repo["source_creator_id"]
+            ):
+                score = max(score, 100)
+            if fs_url and _normalized_url(source, subscription_source.source_url) == fs_url:
+                score = max(score, 95)
+            try:
+                provider = registry.get(source)
+                url_dir = provider.get_creator_dir_from_url(subscription_source.source_url or "")
+                if (
+                    url_dir
+                    and str(url_dir).casefold() == fs_repo["directory_name"].casefold()
+                ):
+                    score = max(score, 90)
+            except Exception:
+                pass
+            if owner_id and str(creator.id) == owner_id:
+                score = max(score, 80)
+            if score > best_score:
+                best_score = score
+                best_context = context
+
+        creator_id: str | None = owner_id
+        repository_id: str | None = None
+        display_name = fs_repo.get("metadata_display_name") or fs_repo["directory_name"]
+        if best_context:
+            subscription_source, _, creator = best_context
+            creator_id = str(creator.id)
+            repository_id = str(subscription_source.id)
+            display_name = creator.display_name or creator.name or display_name
+        elif creator_id and creator_id in creator_by_id:
+            creator = creator_by_id[creator_id]
+            display_name = creator.display_name or creator.name or display_name
+
+        try:
+            source_display_name = registry.get(source).display_name
+        except Exception:
+            source_display_name = source
+
+        child = {
+            "repository_id": repository_id,
+            "source": source,
+            "source_display_name": source_display_name,
+            "disk_source": fs_repo["disk_source"],
+            "directory_name": fs_repo["directory_name"],
+            "size_mb": round(fs_repo["size_bytes"] / (1024 ** 2), 1),
+            "work_count": fs_repo["work_count"],
+        }
+        legacy_entry = {
+            "name": fs_repo["directory_name"],
+            "display_name": display_name,
+            "source": source,
+            "size_mb": child["size_mb"],
+            "work_count": child["work_count"],
+        }
+        if creator_id:
+            legacy_entry["creator_id"] = creator_id
+        if repository_id:
+            legacy_entry["repository_id"] = repository_id
+        legacy_creators.append(legacy_entry)
+
+        if not creator_id:
+            unlinked_repositories.append(child)
+            continue
+
+        node = creator_nodes.setdefault(creator_id, {
+            "creator_id": creator_id,
+            "display_name": display_name,
+            "size_mb": 0.0,
+            "work_count": 0,
+            "repository_count": 0,
+            "repositories": [],
+        })
+        node["size_mb"] = round(node["size_mb"] + child["size_mb"], 1)
+        node["work_count"] += child["work_count"]
+        node["repository_count"] += 1
+        node["repositories"].append(child)
+
+    creator_tree = sorted(
+        creator_nodes.values(),
+        key=lambda node: (-node["size_mb"], node["display_name"].casefold()),
+    )[:20]
+    for node in creator_tree:
+        node["repositories"].sort(
+            key=lambda child: (-child["size_mb"], child["source"], child["directory_name"]),
+        )
+    unlinked_repositories.sort(
+        key=lambda child: (-child["size_mb"], child["source"], child["directory_name"]),
+    )
+    creators = sorted(
+        legacy_creators,
+        key=lambda entry: (-entry["size_mb"], entry["display_name"].casefold()),
+    )[:20]
 
     db_stats = {}
     try:
@@ -466,6 +540,8 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     result = {
         "sources": sources,
         "creators": creators,
+        "creator_tree": creator_tree,
+        "unlinked_repositories": unlinked_repositories,
         "db_stats": db_stats,
         "layers": {
             "original_media_store": {

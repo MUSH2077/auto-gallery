@@ -6,12 +6,12 @@ import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import type { CreatorRepository, RepositoryDetailResponse, RepositoryGraphNode, RepositoryRecentJob, RepositoryRecentWork, SchedulerDecisionItem } from "@/lib/api";
-import { EmptyState, ErrorState, SourceBadge } from "@/components";
+import { EmptyState, ErrorState, SourceBadge, TagBubbleChart } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { scheduleModeLabel, schedulerDecisionLabel, statusLabel, useI18nFormat } from "@/lib/i18n-format";
 
-type TabKey = "overview" | "jobs" | "works" | "activity" | "config";
+type TabKey = "overview" | "jobs" | "works" | "tags" | "activity" | "config";
 
 function hostFromUrl(url?: string | null): string {
   if (!url) return "repo";
@@ -292,9 +292,16 @@ export default function RepositoryDetailPage() {
   const qc = useQueryClient();
   const id = params.id as string;
   const [tab, setTab] = useState<TabKey>("overview");
+  const [tagPage, setTagPage] = useState(0);
+  const tagLimit = 50;
 
   const detail = useQuery({ queryKey: queryKeys.repositories.detail(id), queryFn: () => api.getRepository(id), refetchInterval: 12000 });
   const decisions = useQuery({ queryKey: [...queryKeys.schedulerDecisions, "repository", id], queryFn: api.schedulerDecisions, refetchInterval: 15000 });
+  const repositoryTags = useQuery({
+    queryKey: queryKeys.repositories.tags(id, tagPage),
+    queryFn: () => api.getRepositoryTags(id, tagPage * tagLimit, tagLimit),
+    enabled: tab === "tags",
+  });
 
   const repo = detail.data?.repository;
   const decision = useMemo(() => decisions.data?.items.find((item) => item.source_id === id), [decisions.data?.items, id]);
@@ -339,6 +346,7 @@ export default function RepositoryDetailPage() {
     { key: "overview", label: t("repo_detail.tab_overview") },
     { key: "jobs", label: t("repo_detail.tab_jobs"), count: recent_jobs.length },
     { key: "works", label: t("repo_detail.tab_works"), count: recent_works.length },
+    { key: "tags", label: t("repo_detail.tab_tags"), count: repositoryTags.data?.total },
     { key: "activity", label: t("repo_detail.tab_graph") },
     { key: "config", label: t("repo_detail.tab_config") },
   ];
@@ -438,6 +446,52 @@ export default function RepositoryDetailPage() {
           </div>
         )}
         {tab === "works" && <WorksGrid works={recent_works} />}
+        {tab === "tags" && (
+          <div className="space-y-4">
+            {repositoryTags.isLoading && (
+              <div className="flex min-h-72 flex-wrap items-center justify-center gap-3">
+                {Array.from({ length: 16 }).map((_, index) => {
+                  const size = 44 + (index % 4) * 12;
+                  return <div key={index} className="animate-pulse rounded-full bg-subtle" style={{ width: size, height: size }} />;
+                })}
+              </div>
+            )}
+            {repositoryTags.error && (
+              <ErrorState message={(repositoryTags.error as Error).message} onRetry={() => repositoryTags.refetch()} />
+            )}
+            {repositoryTags.data?.items.length === 0 && (
+              <EmptyState title={t("repo_detail.no_tags_title")} description={t("repo_detail.no_tags_desc")} />
+            )}
+            {!!repositoryTags.data?.items.length && (
+              <>
+                <div className="rounded-md border border-border bg-white p-3 dark:border-border dark:bg-surface sm:p-5">
+                  <TagBubbleChart tags={repositoryTags.data.items} ariaLabel={t("repo_detail.tab_tags")} />
+                </div>
+                {repositoryTags.data.total > tagLimit && (
+                  <div className="flex items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      className="btn-ghost text-sm"
+                      disabled={tagPage === 0}
+                      onClick={() => setTagPage((current) => Math.max(0, current - 1))}
+                    >
+                      {t("common.prev")}
+                    </button>
+                    <span className="px-2 text-sm text-muted">{t("common.page").replace("{page}", String(tagPage + 1))}</span>
+                    <button
+                      type="button"
+                      className="btn-ghost text-sm"
+                      disabled={(tagPage + 1) * tagLimit >= repositoryTags.data.total}
+                      onClick={() => setTagPage((current) => current + 1)}
+                    >
+                      {t("common.next")}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
         {tab === "activity" && <RepositoryGraph repositoryId={id} />}
         {tab === "config" && <ConfigRows detail={detail.data} decision={decision} />}
       </section>

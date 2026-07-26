@@ -182,7 +182,13 @@ async def get_creator_stats(creator_id: UUID, db: AsyncSession = Depends(get_db)
 
 @router.get("/{creator_id}/subscription-overview")
 async def get_creator_subscription_overview(creator_id: UUID, db: AsyncSession = Depends(get_db)):
-    """Return subscription sources as GitHub-like repository candidates for a creator."""
+    """Return the creator's repository overview.
+
+    CreatorService supplies ``can_download`` after ``provider.validate_url``,
+    the ``latest_job`` with ``error_log_excerpt``, source
+    ``last_attempted_at``/``auth_error_reason``, and
+    ``enabled_repository_count``.
+    """
     from app.services.creator import CreatorService
     return await CreatorService(db).get_subscription_overview(creator_id)
 
