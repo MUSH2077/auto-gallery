@@ -189,8 +189,13 @@
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
       animation-duration: 0.01ms !important;
+      animation-delay: 0ms !important;
       animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
+    }
+    .page-item {
+      opacity: 1 !important;
+      animation: none !important;
     }
   }
 
@@ -200,7 +205,11 @@
     .btn-primary, .btn-ghost, .btn-danger, .btn-icon, .clickable,
     .input, .select, .textarea { min-height: 44px; }
     .btn-icon { min-width: 44px; }
+    .row-menu-item { min-height: 44px; }
   }
+  .row-menu-trigger,
+  .row-menu-item { min-height: 44px; }
+  .row-menu-trigger { min-width: 44px; }
 
 @layer components {
   /* All component colors are token-driven (semantic Tailwind tokens backed by
@@ -292,6 +301,74 @@
   .table-row {
     @apply border-b border-border last:border-b-0 hover:bg-subtle;
   }
+  /* Shared object-list anatomy. The outer list remains overflow-visible so
+     per-row action menus are never clipped by the rounded surface. */
+  .entity-list {
+    @apply rounded-md border border-border bg-surface;
+  }
+  .entity-list > [role="listitem"] + [role="listitem"] {
+    @apply border-t border-border;
+  }
+  .entity-row {
+    @apply relative flex min-h-[76px] w-full min-w-0 cursor-pointer items-center gap-3 p-4
+           transition-colors hover:bg-subtle
+           focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2
+           focus-visible:ring-inset focus-visible:ring-accent/40;
+  }
+  .entity-row-selected {
+    @apply bg-accent-subtle;
+  }
+  .entity-row-selected:hover {
+    background-color: rgb(var(--ag-accent-subtle));
+  }
+  .entity-avatar {
+    @apply flex h-10 w-10 shrink-0 items-center justify-center rounded-full
+           border border-border bg-accent text-sm font-semibold text-white;
+  }
+  .entity-main {
+    @apply min-w-0 flex-1;
+  }
+  .entity-title-line {
+    @apply flex flex-wrap items-center gap-x-2 gap-y-1;
+  }
+  .entity-title {
+    @apply min-w-0 truncate text-sm font-semibold text-accent;
+  }
+  .entity-supporting {
+    @apply mt-1 line-clamp-1 text-xs text-muted;
+  }
+  .entity-meta {
+    @apply mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted;
+  }
+  .entity-actions {
+    @apply ml-auto flex shrink-0 items-center gap-1.5;
+  }
+  .row-menu-trigger {
+    @apply min-h-11 min-w-11 border-border bg-surface text-muted;
+  }
+  .row-menu-item {
+    @apply flex min-h-11 w-full items-center px-3 py-1.5 text-left text-sm
+           transition-colors hover:bg-subtle
+           focus-visible:bg-subtle focus-visible:outline-none
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .row-menu-item-danger {
+    @apply text-danger hover:bg-danger-subtle focus-visible:bg-danger-subtle;
+  }
+  .page-section {
+    @apply border-t border-border pt-5;
+  }
+  @media (max-width: 639px) {
+    .entity-row {
+      @apply flex-wrap items-start p-3;
+    }
+    .entity-main {
+      flex-basis: calc(100% - 5rem);
+    }
+    .entity-actions {
+      @apply w-full justify-end border-t border-border pt-2;
+    }
+  }
   .divider {
     @apply border-t border-border;
   }
@@ -318,7 +395,7 @@
      (the old .skeleton/shimmer pair had zero consumers and was removed). */
   .page-item {
     opacity: 0;
-    animation: fadeUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation: fadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     animation-delay: var(--delay, 0ms);
   }
   /* Bar entrance — transform-only (scaleX, never width: layout is banned from

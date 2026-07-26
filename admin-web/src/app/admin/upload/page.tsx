@@ -10,7 +10,7 @@ import { useT } from "@/lib/i18n";
 import { usePermissions } from "@/lib/usePermissions";
 import { useDebounce } from "@/lib/useDebounce";
 import { formatBytes } from "@/lib/format";
-import { usePresence, useEnterOnce } from "@/lib/motion";
+import { usePresence, useStaggeredEntrance } from "@/lib/motion";
 import { PageHeader, PageShell, SectionPanel, Banner, EmptyState, PermissionGuard } from "@/components";
 import { useToast } from "@/components/Toast";
 
@@ -179,7 +179,7 @@ function UploadPageContent() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const isNew = useEnterOnce(rows.map((r) => r.id));
+  const rowEntrance = useStaggeredEntrance(rows.map((row) => row.id));
 
   function addFiles(fileList: FileList | File[]) {
     const incoming: FileRow[] = [];
@@ -388,8 +388,10 @@ function UploadPageContent() {
             <EmptyState title={t("upload.no_files")} />
           ) : (
             <div className="space-y-2">
-              {rows.map((r) => (
-                <div key={r.id} className={`flex items-center gap-3 rounded-md border border-border p-2 text-sm ${isNew(r.id) ? "fade-in" : ""}`}>
+              {rows.map((r, index) => {
+                const entrance = rowEntrance(r.id, index);
+                return (
+                <div key={r.id} className={`${entrance.className} flex items-center gap-3 rounded-md border border-border p-2 text-sm`} style={entrance.style}>
                   <span className="min-w-0 flex-1 truncate">{r.file.name}</span>
                   <span className="shrink-0 font-mono text-xs text-muted">{formatBytes(r.file.size)}</span>
                   {r.status === "uploading" && <MiniProgressBar pct={r.progress} />}
@@ -406,7 +408,8 @@ function UploadPageContent() {
                     <button onClick={() => removeRow(r.id)} className="btn-icon shrink-0" aria-label={t("upload.remove")}>&times;</button>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </SectionPanel>

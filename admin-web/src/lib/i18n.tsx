@@ -10,6 +10,7 @@ export const STORAGE_KEY = "auto-gallery-lang";
 
 const zh: Record<string, string> = {
   // Nav
+  "nav.overview": "概览",
   "nav.dashboard": "仪表盘",
   "nav.sources": "数据源",
   "nav.creators": "创作者",
@@ -32,6 +33,8 @@ const zh: Record<string, string> = {
   "nav.system": "系统状态",
   "nav.users": "用户管理",
   "nav.sidebar_toggle": "切换侧栏",
+  "nav.close_sidebar": "关闭侧栏",
+  "nav.primary": "主导航",
   "sidebar.running": "下载 {downloads} · 导入 {imports} 运行中",
   "sidebar.idle": "队列空闲",
   "sidebar.disk": "磁盘 {percent}%",
@@ -195,6 +198,9 @@ const zh: Record<string, string> = {
   "creators.view": "查看",
   "creators.del": "删除",
   "creators.sub_badge": "已订",
+  "creators.repository_count": "{count} 个仓库",
+  "creators.source_count": "{count} 个来源",
+  "creators.last_sync": "上次同步 {time}",
   "creators.new_creator_title": "新建创作者",
   "creators.delete_title": "删除创作者",
   "creators.delete_msg": "此操作将永久删除该创作者及其所有关联链接。",
@@ -1730,6 +1736,9 @@ const zh: Record<string, string> = {
   "common.refresh": "刷新",
   "common.all": "全部",
   "common.actions": "操作",
+  "common.more_actions": "更多操作",
+  "common.open_item": "打开 {name}",
+  "common.select_item": "选择 {name}",
   "common.status": "状态",
   "common.source": "来源",
   "common.created": "创建时间",
@@ -1972,6 +1981,7 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
   }
   // Override with proper English
   Object.assign(result, {
+    "nav.overview": "Overview",
     "nav.dashboard": "Dashboard",
     "nav.sources": "Sources",
     "nav.creators": "Creators",
@@ -1994,6 +2004,8 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "nav.system": "System Status",
     "nav.users": "Users",
     "nav.sidebar_toggle": "Toggle sidebar",
+    "nav.close_sidebar": "Close sidebar",
+    "nav.primary": "Primary navigation",
     "sidebar.running": "Downloads {downloads} · Imports {imports} running",
     "sidebar.idle": "Queue idle",
     "sidebar.disk": "Disk {percent}%",
@@ -2154,6 +2166,9 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "creators.view": "View",
     "creators.del": "Del",
     "creators.sub_badge": "sub",
+    "creators.repository_count": "{count} repositories",
+    "creators.source_count": "{count} sources",
+    "creators.last_sync": "Last sync {time}",
     "creators.new_creator_title": "New Creator",
     "creators.delete_title": "Delete Creator",
     "creators.delete_msg": "This will permanently delete the creator and all associated links.",
@@ -3613,6 +3628,9 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "common.refresh": "Refresh",
     "common.all": "All",
     "common.actions": "Actions",
+    "common.more_actions": "More actions",
+    "common.open_item": "Open {name}",
+    "common.select_item": "Select {name}",
     "common.status": "Status",
     "common.source": "Source",
     "common.created": "Created",

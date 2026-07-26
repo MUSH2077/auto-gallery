@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { PageHeader, ErrorState, ConfirmDialog, PermissionGuard } from "@/components";
+import { PageHeader, PageShell, ErrorState, ConfirmDialog, PermissionGuard } from "@/components";
 import { useT, useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import Link from "next/link";
@@ -37,7 +37,7 @@ export default function SettingsPage() {
 
   return (
     <PermissionGuard module="system">
-    <main className="mx-auto max-w-4xl p-6 page-transition">
+    <PageShell size="normal" className="page-transition">
       <PageHeader title={t("settings.title")} description={t("settings.desc_default")} />
 
       {/* Config Cards */}
@@ -131,7 +131,7 @@ export default function SettingsPage() {
       {confirmReindex && <ConfirmDialog open title={t("settings.reindex_confirm_title")} message={t("settings.reindex_confirm_msg")}
         onConfirm={() => reindex.mutate()} onCancel={() => setConfirmReindex(false)}
         isPending={reindex.isPending} error={(reindex.error as Error)?.message} />}
-    </main>
+    </PageShell>
     </PermissionGuard>
   );
 }

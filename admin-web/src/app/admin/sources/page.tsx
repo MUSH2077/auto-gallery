@@ -3,7 +3,8 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys, ProviderInfo } from "@/lib/api";
 import { getSourceColor } from "@/lib/sourceColors";
-import { PageHeader, EmptyState, PermissionGuard } from "@/components";
+import { useStaggeredEntrance } from "@/lib/motion";
+import { PageHeader, PageShell, EmptyState, PermissionGuard } from "@/components";
 import { useT } from "@/lib/i18n";
 
 const DEFAULT_URLS: Record<string, string> = {
@@ -182,10 +183,12 @@ export default function SourcesPage() {
   const downloadable = sources.data?.sources?.filter((s) => s.capabilities.can_download).length || 0;
   const reference = sources.data?.sources?.filter((s) => s.capabilities.is_reference_only).length || 0;
   const total = sources.data?.sources?.length || 0;
+  const sourceItems = sources.data?.sources || [];
+  const sourceEntrance = useStaggeredEntrance(sourceItems.map((source) => source.source_name));
 
   return (
     <PermissionGuard module="subscriptions">
-    <main className="max-w-6xl mx-auto p-6">
+    <PageShell size="normal">
       <PageHeader title={t("sources.title")} description={t("sources.desc", { total, downloadable, reference })} />
 
       {sources.isLoading && <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="card p-4 animate-pulse"><div className="mb-2 h-4 w-1/2 rounded bg-subtle dark:bg-subtle" /><div className="mb-4 h-3 w-3/4 rounded bg-subtle dark:bg-subtle" /><div className="h-16 rounded bg-subtle dark:bg-subtle" /></div>)}</div>}
@@ -197,7 +200,14 @@ export default function SourcesPage() {
       {sources.data && sources.data.sources.length > 0 && (
         <>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-            {sources.data.sources.map((s) => <ProviderCard key={s.source_name} s={s} />)}
+            {sources.data.sources.map((s, index) => {
+              const entrance = sourceEntrance(s.source_name, index);
+              return (
+                <div key={s.source_name} className={entrance.className} style={entrance.style}>
+                  <ProviderCard s={s} />
+                </div>
+              );
+            })}
           </div>
 
           <details className="card p-4 text-sm">
@@ -223,7 +233,7 @@ export default function SourcesPage() {
           </details>
         </>
       )}
-    </main>
+    </PageShell>
     </PermissionGuard>
   );
 }

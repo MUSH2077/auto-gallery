@@ -1,8 +1,8 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { staggerDelay } from "@/lib/motion";
-import { PageHeader, EmptyState, ErrorState, PermissionGuard } from "@/components";
+import { useStaggeredEntrance } from "@/lib/motion";
+import { PageHeader, PageShell, EmptyState, ErrorState, PermissionGuard } from "@/components";
 import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
 
@@ -12,10 +12,14 @@ export default function DedupPage() {
   const qc = useQueryClient();
   const dups = useQuery({ queryKey: queryKeys.dedup.duplicates, queryFn: api.listDuplicates });
   const scan = useMutation({ mutationFn: api.scanDuplicates, onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.dedup.duplicates }) });
+  const duplicateItems = dups.data?.duplicates || [];
+  const duplicateEntrance = useStaggeredEntrance(
+    duplicateItems.map((item) => `${item.source}:${item.source_work_id}`),
+  );
 
   return (
     <PermissionGuard module="curation">
-    <main className="max-w-4xl mx-auto p-6">
+    <PageShell size="normal">
       <PageHeader title={t("dedup_scan.title")} description={t("dedup_scan.desc")}>
         <button onClick={() => scan.mutate()} disabled={scan.isPending}
           className="btn-primary">
@@ -34,8 +38,11 @@ export default function DedupPage() {
         <EmptyState title={t("dedup_scan.no_duplicates")} description={t("dedup_scan.no_duplicates_desc")} />
       )}
 
-      {dups.data?.duplicates.map((d, i) => (
-        <div key={i} className="card page-item mb-2 p-4 text-sm" style={{ "--delay": staggerDelay(i) } as React.CSSProperties}>
+      {dups.data?.duplicates.map((d, i) => {
+        const itemKey = `${d.source}:${d.source_work_id}`;
+        const entrance = duplicateEntrance(itemKey, i);
+        return (
+        <div key={itemKey} className={`card ${entrance.className} mb-2 p-4 text-sm`} style={entrance.style}>
           <div className="flex items-center justify-between mb-2">
             <span className="font-mono text-xs text-muted">{d.source}:{d.source_work_id}</span>
             <span className="badge border-danger-subtle bg-danger-subtle text-danger dark:border-danger/30 dark:bg-danger/15 dark:text-danger">{d.count} {t("dedup_scan.duplicates")}</span>
@@ -47,8 +54,9 @@ export default function DedupPage() {
             ))}
           </div>
         </div>
-      ))}
-    </main>
+        );
+      })}
+    </PageShell>
     </PermissionGuard>
   );
 }

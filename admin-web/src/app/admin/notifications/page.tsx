@@ -5,8 +5,8 @@ import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
 import { api, queryKeys } from "@/lib/api";
 import type { TaskRun } from "@/lib/api/types";
-import { useEnterOnce } from "@/lib/motion";
-import { PageHeader, EmptyState, ErrorState, StatusBadge, SourceBadge, PermissionGuard } from "@/components";
+import { useStaggeredEntrance } from "@/lib/motion";
+import { PageHeader, PageShell, EmptyState, ErrorState, StatusBadge, SourceBadge, PermissionGuard } from "@/components";
 
 type Filter = "all" | "tasks" | "account";
 const PAGE_SIZE = 50;
@@ -51,7 +51,7 @@ export default function NotificationsPage() {
     if (filter === "tasks") return all.filter((task) => TASK_KINDS.includes(task.kind));
     return all;
   }, [query.data, filter]);
-  const isNewItem = useEnterOnce(items.map((task) => task.id));
+  const itemEntrance = useStaggeredEntrance(items.map((task) => task.id));
 
   const filters: { key: Filter; label: string }[] = [
     { key: "all", label: t("notifications.filter_all", "全部") },
@@ -61,7 +61,7 @@ export default function NotificationsPage() {
 
   return (
     <PermissionGuard module="tasks">
-    <main className="max-w-3xl mx-auto p-6 md:p-10 page-transition">
+    <PageShell size="normal" className="page-transition">
       <PageHeader title={t("notifications.title")} description={t("notifications.desc")} />
 
       <div className="mb-4 flex gap-1">
@@ -92,8 +92,9 @@ export default function NotificationsPage() {
         <EmptyState title={t("notification.empty")} />
       ) : (
         <div className="space-y-3">
-          {items.map((task) => {
+          {items.map((task, index) => {
             const link = taskLink(task);
+            const entrance = itemEntrance(task.id, index);
             const pct =
               task.progress_total && task.progress_current !== undefined && task.progress_total > 0
                 ? Math.round(((task.progress_current ?? 0) / task.progress_total) * 100)
@@ -101,7 +102,8 @@ export default function NotificationsPage() {
             return (
               <div
                 key={task.id}
-                className={`card p-4 ${isNewItem(task.id) ? "fade-in" : ""} ${link ? "cursor-pointer hover:border-accent/50" : ""}`}
+                className={`card p-4 ${entrance.className} ${link ? "cursor-pointer hover:border-accent/50" : ""}`}
+                style={entrance.style}
                 onClick={() => link && router.push(link)}
               >
                 <div className="flex items-start gap-3">
@@ -141,7 +143,7 @@ export default function NotificationsPage() {
           )}
         </div>
       )}
-    </main>
+    </PageShell>
     </PermissionGuard>
   );
 }

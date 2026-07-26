@@ -1,10 +1,10 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { staggerDelay } from "@/lib/motion";
-import { PageHeader, PageShell, EmptyState, ErrorState, ConfirmDialog, Modal } from "@/components";
+import { useStaggeredEntrance } from "@/lib/motion";
+import { PageHeader, PageShell, EmptyState, ErrorState, ConfirmDialog, Modal, EntityList, EntityRow, RowActionMenu } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
@@ -86,11 +86,8 @@ export default function UsersPage() {
   const users = useQuery({ queryKey: queryKeys.users.all, queryFn: api.listUsers });
   const me = useQuery({ queryKey: queryKeys.me, queryFn: api.getMe });
 
-  // Rows stagger in once on first data load only.
-  const listEntered = useRef(false);
-  useEffect(() => {
-    if (users.data?.length) listEntered.current = true;
-  }, [users.data]);
+  const userItems = users.data || [];
+  const userEntrance = useStaggeredEntrance(userItems.map((user) => user.id));
 
   const create = useMutation({
     mutationFn: (data: { username: string; password: string; display_name?: string; is_admin: boolean; permissions: string[] }) => api.createUser(data),
@@ -129,33 +126,43 @@ export default function UsersPage() {
       )}
 
       {users.data && users.data.length > 0 && (
-        <div className="overflow-hidden rounded-md border border-border bg-white dark:border-border dark:bg-surface">
+        <EntityList label={t("users.title")}>
           {users.data.map((u, i) => (
-            <div key={u.id}
-              className={`${!listEntered.current ? "page-item" : ""} flex cursor-pointer items-center gap-3 border-b border-border p-4 last:border-b-0 hover:bg-subtle dark:border-border dark:hover:bg-subtle`}
-              style={!listEntered.current ? ({ "--delay": staggerDelay(i) } as React.CSSProperties) : undefined}
-              onClick={() => router.push(`/admin/users/${u.id}`)}>
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-accent text-sm font-semibold text-white dark:border-border">
+            <EntityRow
+              key={u.id}
+              label={t("common.open_item", { name: u.display_name || u.username })}
+              entrance={userEntrance(u.id, i)}
+              onOpen={() => router.push(`/admin/users/${u.id}`)}
+            >
+              <div className="entity-avatar">
                 {(u.display_name || u.username).trim().slice(0, 2).toUpperCase()}
               </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="truncate text-sm font-semibold text-accent">{u.display_name || u.username}</span>
+              <div className="entity-main">
+                <div className="entity-title-line">
+                  <span className="entity-title">{u.display_name || u.username}</span>
                   {u.display_name && <span className="truncate font-mono text-xs text-muted">{u.username}</span>}
-                  {u.is_active ? <span className="w-1.5 h-1.5 bg-green-500 rounded-full shrink-0" /> : <span className="w-1.5 h-1.5 bg-subtle rounded-full shrink-0" />}
+                  <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${u.is_active ? "bg-success" : "bg-border"}`} />
                   {u.is_admin && <span className="rounded-full bg-accent-subtle px-2 py-0.5 text-[10px] text-accent dark:bg-accent-subtle dark:text-accent">{t("users.admin_badge")}</span>}
                 </div>
-                <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted">
+                <div className="entity-meta">
                   <span>{u.is_admin ? t("users.all_permissions") : t("users.permission_count", { count: u.permissions.length })}</span>
                   <span>{t("users.last_login", { time: u.last_login_at ? fmt.dateTime(u.last_login_at) : t("common.never") })}</span>
                 </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0 text-xs" onClick={(e) => e.stopPropagation()}>
-                <button onClick={(e) => { e.stopPropagation(); setDeleteId(u.id); }} className="text-danger hover:underline dark:text-danger">{t("users.del")}</button>
+              <div className="entity-actions" onClick={(event) => event.stopPropagation()}>
+                <RowActionMenu
+                  label={t("common.more_actions")}
+                  items={[{
+                    label: t("users.del"),
+                    tone: "danger",
+                    disabled: u.id === me.data?.id,
+                    onSelect: () => setDeleteId(u.id),
+                  }]}
+                />
               </div>
-            </div>
+            </EntityRow>
           ))}
-        </div>
+        </EntityList>
       )}
 
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title={t("users.new_user_title")}>

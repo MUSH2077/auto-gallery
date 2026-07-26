@@ -9,6 +9,7 @@ RUN if [ -n "$NPM_REGISTRY" ]; then \
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
+ARG CACHEBUST=1
 COPY . .
 ARG NEXT_PUBLIC_WS_URL
 ENV NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL

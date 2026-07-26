@@ -1,12 +1,12 @@
 "use client";
-import { useMemo, useState, useEffect, useRef, Suspense } from "react";
+import { useMemo, useState, useEffect, Suspense } from "react";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
-import { staggerDelay } from "@/lib/motion";
+import { useStaggeredEntrance } from "@/lib/motion";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, Subscription } from "@/lib/api";
-import { PageHeader, EmptyState, ErrorState, ConfirmDialog, Modal, SourceBadge, StatusBadge, FilterBar, SelectionBar, PageShell, PermissionGuard } from "@/components";
+import { PageHeader, PageSection, EmptyState, ErrorState, ConfirmDialog, Modal, StatusBadge, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityList, EntityRow, RowActionMenu } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { scheduleModeLabel, useI18nFormat } from "@/lib/i18n-format";
 
@@ -115,6 +115,8 @@ function SubscriptionsContent() {
     queryFn: () => api.listSubscriptions(page * limit, limit, filters),
     placeholderData: (previousData) => previousData,
   });
+  const subscriptionItems = subs.data || [];
+  const subscriptionEntrance = useStaggeredEntrance(subscriptionItems.map((subscription) => subscription.id));
 
   useEffect(() => {
     if (notify.operationJob?.kind !== "danbooru-import-all" || notify.operationJob.status !== "completed") return;
@@ -148,11 +150,6 @@ function SubscriptionsContent() {
     }
     return grouped;
   }, [decisions.data?.items]);
-
-  const listEntered = useRef(false);
-  useEffect(() => {
-    if (subs.data?.length) listEntered.current = true;
-  }, [subs.data?.length]);
 
   const refreshSubscriptionViews = () => {
     qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
@@ -244,6 +241,7 @@ function SubscriptionsContent() {
         </div>
       </FilterBar>
 
+      <PageSection className="mt-5">
       <SelectionBar
         count={selected.size}
         label={t("subscriptions.delete_selected").replace("{count}", String(selected.size))}
@@ -262,7 +260,7 @@ function SubscriptionsContent() {
       {/* Select all */}
       {subs.data && subs.data.length > 0 && (
         <label className="mb-2 flex cursor-pointer items-center gap-2 text-xs text-muted">
-          <input type="checkbox" aria-label="Select item" checked={selected.size === subs.data.length && subs.data.length > 0} onChange={selectAll} className="rounded" />
+          <input type="checkbox" aria-label={t("subscriptions.select_all")} checked={selected.size === subs.data.length && subs.data.length > 0} onChange={selectAll} className="rounded" />
           {t("subscriptions.select_all")}
         </label>
       )}
@@ -279,72 +277,102 @@ function SubscriptionsContent() {
       )}
 
       {subs.data && subs.data.length > 0 && (
-        <div className="overflow-hidden rounded-md border border-border bg-white dark:border-border dark:bg-surface">
-          <div className="hidden grid-cols-[minmax(0,1.45fr)_minmax(120px,0.8fr)_minmax(140px,0.9fr)_minmax(150px,1fr)_minmax(170px,1fr)] gap-3 border-b border-border bg-subtle px-4 py-2 text-xs font-medium uppercase text-muted lg:grid">
-            <span>{t("subscriptions.col_group", "Sync group")}</span>
-            <span>{t("subscriptions.col_sources", "Sources")}</span>
-            <span>{t("subscriptions.col_health", "Health")}</span>
-            <span>{t("subscriptions.col_schedule", "Schedule")}</span>
-            <span>{t("subscriptions.col_actions", "Actions")}</span>
-          </div>
-          {subs.data.map((s: Subscription, i: number) => (
-            <div key={s.id} className={`${!listEntered.current ? "page-item" : ""} grid cursor-pointer grid-cols-1 gap-3 border-b border-border p-4 last:border-b-0 hover:bg-subtle dark:border-border dark:hover:bg-subtle lg:grid-cols-[minmax(0,1.45fr)_minmax(120px,0.8fr)_minmax(140px,0.9fr)_minmax(150px,1fr)_minmax(170px,1fr)] ${selected.has(s.id) ? "bg-accent-subtle dark:bg-accent-subtle" : ""}`} style={!listEntered.current ? ({ "--delay": staggerDelay(i) } as React.CSSProperties) : undefined} onClick={() => router.push(`/admin/subscriptions/${s.id}`)}>
-              <div className="flex min-w-0 gap-3">
-                <input type="checkbox" aria-label="Select item" checked={selected.has(s.id)} onChange={() => toggleSelect(s.id)} className="mt-1 shrink-0 rounded" onClick={(e) => e.stopPropagation()} />
-                <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="truncate text-sm font-semibold text-accent">{s.name || s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8)}</span>
-                  {s.is_active ? <span className="w-1.5 h-1.5 bg-green-500 rounded-full shrink-0" /> : <span className="w-1.5 h-1.5 bg-subtle rounded-full shrink-0" />}
-                  <StatusBadge status={s.latest_job_status || "unknown"} label={s.latest_job_status ? undefined : t("subscriptions.no_jobs", "No jobs")} className="py-0 text-[10px]" />
+        <EntityList label={t("subscriptions.title")}>
+          {subs.data.map((s: Subscription, i: number) => {
+            const name = s.name || s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8);
+            const creatorName = s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8);
+            const decision = decisionBySub.get(s.id);
+            const blocked = decision?.blocked || 0;
+            const due = decision?.due || 0;
+            const scheduleMode = s.schedule_mode || sysDefaults?.schedule_mode || "interval";
+            const scheduleValue = s.schedule_mode === "fixed_time"
+              ? (s.scheduled_times || t("scheduler.fixed_time"))
+              : s.schedule_mode === "manual"
+                ? t("subscriptions.manual")
+                : s.schedule_mode === "interval"
+                  ? `${s.sync_interval_hours}h`
+                  : sysDefaults?.schedule_mode === "fixed_time"
+                    ? t("scheduler.fixed_time")
+                    : `${s.sync_interval_hours || sysDefaults?.default_sync_interval_hours}h`;
+            return (
+              <EntityRow
+                key={s.id}
+                label={t("common.open_item", { name })}
+                selected={selected.has(s.id)}
+                entrance={subscriptionEntrance(s.id, i)}
+                onOpen={() => router.push(`/admin/subscriptions/${s.id}`)}
+              >
+                <input
+                  type="checkbox"
+                  aria-label={t("common.select_item", { name })}
+                  checked={selected.has(s.id)}
+                  onChange={() => toggleSelect(s.id)}
+                  className="shrink-0 rounded"
+                  onClick={(event) => event.stopPropagation()}
+                />
+                <div className="entity-avatar">
+                  {creatorName.trim().slice(0, 2).toUpperCase()}
                 </div>
-                <div className="text-xs text-muted">
-                  {t("subscriptions.creator_prefix")}{" "}
-                  <span className="text-blue-600 hover:underline" onClick={(e) => { e.stopPropagation(); router.push(`/admin/creators/${s.creator_id}`); }}>
-                    {s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8)}
-                  </span>
+                <div className="entity-main">
+                  <div className="entity-title-line">
+                    <span className="entity-title">{name}</span>
+                    <span
+                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${s.is_active ? "bg-success" : "bg-border"}`}
+                      title={s.is_active ? t("subscriptions.filter_active") : t("subscriptions.filter_inactive")}
+                    />
+                    <StatusBadge
+                      status={s.latest_job_status || "unknown"}
+                      label={s.latest_job_status ? undefined : t("subscriptions.no_jobs", "No jobs")}
+                      className="py-0 text-[10px]"
+                    />
+                    {due > 0 && <span className="rounded-full bg-accent-subtle px-2 py-0.5 text-[10px] font-medium text-accent">{t("subscriptions.due_sources", { count: due })}</span>}
+                    {blocked > 0 && <span className="rounded-full bg-danger-subtle px-2 py-0.5 text-[10px] font-medium text-danger">{t("subscriptions.blocked_sources", { count: blocked })}</span>}
+                    {(s.running_job_count || 0) > 0 && <span className="rounded-full bg-accent-subtle px-2 py-0.5 text-[10px] font-medium text-accent">{t("subscriptions.running_jobs", { count: s.running_job_count || 0 })}</span>}
+                    {(s.failed_job_count || 0) > 0 && <span className="rounded-full bg-danger-subtle px-2 py-0.5 text-[10px] font-medium text-danger">{t("subscriptions.failed_jobs", { count: s.failed_job_count || 0 })}</span>}
+                  </div>
+                  <div className="entity-supporting">
+                    {t("subscriptions.creator_prefix")}{" "}
+                    <button
+                      type="button"
+                      className="text-accent hover:underline"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        router.push(`/admin/creators/${s.creator_id}`);
+                      }}
+                    >
+                      {creatorName}
+                    </button>
+                  </div>
+                  <div className="entity-meta">
+                    <span>{t("subscriptions.sources_summary", { enabled: s.enabled_source_count ?? 0, total: s.source_count ?? 0 })}</span>
+                    <span className={s.sync_enabled ? "text-success" : ""}>{s.sync_enabled ? t("subscriptions.auto_sync") : t("subscriptions.manual")}</span>
+                    <span>{t("subscriptions.last_success", { time: fmt.relative(s.last_synced_at, "subscriptions.never") })}</span>
+                    <span>{scheduleModeLabel(t, scheduleMode)} · {scheduleValue}</span>
+                    <span>{t("subscriptions.next_due", { time: fmt.dateTime(decision?.nextDueAt) })}</span>
+                  </div>
                 </div>
-                <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted">
-                  <span>{t("subscriptions.last_success", { time: fmt.relative(s.last_synced_at, "subscriptions.never") })}</span>
-                  {s.latest_job_id && <span className="font-mono">{s.latest_job_id.slice(0, 8)}</span>}
+                <div className="entity-actions" onClick={(event) => event.stopPropagation()}>
+                  <button
+                    type="button"
+                    onClick={() => syncNow.mutate(s.id)}
+                    disabled={syncNow.isPending}
+                    className="btn-primary text-xs"
+                  >
+                    {syncingSubId === s.id ? t("subscriptions.syncing") : t("subscriptions.sync_all", "Sync all")}
+                  </button>
+                  <RowActionMenu
+                    label={t("common.more_actions")}
+                    items={[
+                      { label: t("subscriptions.view"), href: `/admin/subscriptions/${s.id}` },
+                      { label: t("scheduler.open_jobs"), href: `/admin/jobs?q=${encodeURIComponent(name)}` },
+                      { label: t("subscriptions.del"), tone: "danger", onSelect: () => setDeleteId(s.id) },
+                    ]}
+                  />
                 </div>
-                </div>
-              </div>
-              <div className="text-xs text-muted">
-                <div className="font-semibold text-fg">{t("subscriptions.sources_summary", { enabled: s.enabled_source_count ?? 0, total: s.source_count ?? 0 })}</div>
-                <div className="mt-1 flex flex-wrap gap-2">
-                  {s.sync_enabled ? <span className="text-success">{t("subscriptions.auto_sync")}</span> : <span>{t("subscriptions.manual")}</span>}
-                  {(decisionBySub.get(s.id)?.due || 0) > 0 && <span className="text-accent">{t("subscriptions.due_sources", { count: decisionBySub.get(s.id)?.due || 0 })}</span>}
-                </div>
-              </div>
-              <div className="text-xs text-muted">
-                <div className={`font-semibold ${(s.failed_job_count || 0) > 0 || (decisionBySub.get(s.id)?.blocked || 0) > 0 ? "text-danger" : (s.running_job_count || 0) > 0 ? "text-accent" : "text-fg"}`}>
-                  {(s.running_job_count || 0) > 0 ? t("subscriptions.running_jobs", { count: s.running_job_count || 0 }) : (s.failed_job_count || 0) > 0 ? t("subscriptions.failed_jobs", { count: s.failed_job_count || 0 }) : t("subscriptions.healthy", "Healthy")}
-                </div>
-                <div className="mt-1">{t("subscriptions.blocked_sources", { count: decisionBySub.get(s.id)?.blocked || 0 })}</div>
-              </div>
-              <div className="text-xs text-muted">
-                <div className="font-semibold text-fg">{scheduleModeLabel(t, s.schedule_mode || sysDefaults?.schedule_mode || "interval")}</div>
-                <div className="mt-1">{
-                  s.schedule_mode === "fixed_time" ? (s.scheduled_times || t("scheduler.fixed_time")) :
-                  s.schedule_mode === "manual" ? t("subscriptions.manual") :
-                  s.schedule_mode === "interval" ? `${s.sync_interval_hours}h` :
-                  sysDefaults?.schedule_mode === "fixed_time" ? t("scheduler.fixed_time") :
-                  sysDefaults?.schedule_mode === "interval" ? `${s.sync_interval_hours || sysDefaults?.default_sync_interval_hours}h` :
-                  `${s.sync_interval_hours}h`
-                }</div>
-                <div className="mt-1">{t("subscriptions.next_due", { time: fmt.dateTime(decisionBySub.get(s.id)?.nextDueAt) })}</div>
-              </div>
-              <div className="flex flex-wrap items-center gap-3 text-xs" onClick={(e) => e.stopPropagation()}>
-                <button onClick={(e) => { e.stopPropagation(); syncNow.mutate(s.id); }} disabled={syncNow.isPending}
-                  className="text-accent hover:underline disabled:opacity-50 dark:text-accent">
-                  {syncingSubId === s.id ? t("subscriptions.syncing") : t("subscriptions.sync_all", "Sync all")}
-                </button>
-                <button onClick={(e) => { e.stopPropagation(); router.push(`/admin/jobs?tab=downloads&subscription_id=${s.id}`); }} className="text-accent hover:underline dark:text-accent">{t("scheduler.open_jobs")}</button>
-                <button onClick={(e) => { e.stopPropagation(); setDeleteId(s.id); }} className="text-danger hover:underline dark:text-danger">{t("subscriptions.del")}</button>
-              </div>
-            </div>
-          ))}
-        </div>
+              </EntityRow>
+            );
+          })}
+        </EntityList>
       )}
 
       {/* Pagination */}
@@ -355,6 +383,7 @@ function SubscriptionsContent() {
           <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!subs.data || subs.data.length < limit} className="btn-ghost disabled:opacity-30">{t("common.next")}</button>
         </div>
       )}
+      </PageSection>
 
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title={t("subscriptions.new_sub_title")}>
         <CreateForm isPending={create.isPending} error={create.error} onSubmit={(data) => create.mutate(data)} onClose={() => setShowCreate(false)} />

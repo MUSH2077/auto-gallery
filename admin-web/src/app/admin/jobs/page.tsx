@@ -6,12 +6,13 @@ import { useToast } from "@/components/Toast";
 import { useT, type TFunction } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, JobProgress, queryKeys, TaskRun } from "@/lib/api";
-import { PageHeader, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, StatCard, PermissionGuard } from "@/components";
+import { PageHeader, PageShell, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, StatCard, PermissionGuard } from "@/components";
 import { TaskDetailDrawer, JobDetailDrawer, shortId } from "@/components/JobDrawers";
 import { useJobWebSocket } from "@/lib/useWebSocket";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { classifyJob, categoryBorderClass, estimatedRetryBackoff } from "@/lib/jobCategory";
 import { POLL_ACTIVE_MS as REFETCH_ACTIVE_MS, POLL_IDLE_MS as REFETCH_IDLE_MS } from "@/lib/polling";
+import { useStaggeredEntrance, type StaggeredEntranceProps } from "@/lib/motion";
 
 
 const PAGE_LIMIT = 200;
@@ -241,6 +242,7 @@ function JobRowShell({
   error,
   result,
   className = "",
+  entrance,
   onClick,
 }: {
   select?: ReactNode;
@@ -258,11 +260,12 @@ function JobRowShell({
   error?: string | null;
   result?: ReactNode;
   className?: string;
+  entrance?: StaggeredEntranceProps;
   onClick: () => void;
 }) {
   const progressOrTime = progress ? <RealProgressBar progress={progress} /> : activeSince ? <Elapsed since={activeSince} active /> : timestamp;
   return (
-    <div>
+    <div className={entrance?.className} style={entrance?.style}>
       <div
         onClick={onClick}
         className={`card grid min-h-[64px] w-full min-w-0 cursor-pointer grid-cols-[28px_minmax(78px,0.55fr)_minmax(78px,0.55fr)_60px_minmax(68px,0.45fr)_minmax(150px,1fr)_minmax(220px,1.25fr)_minmax(220px,0.9fr)_minmax(152px,max-content)] items-center gap-2 p-2 text-sm hover:border-accent/50 ${className}`}
@@ -530,6 +533,7 @@ function TaskRunRow({
   openTaskDetail,
   openDownloadDetail,
   openImportDetail,
+  entrance,
   indent = 0,
 }: {
   task: TaskRun;
@@ -538,6 +542,7 @@ function TaskRunRow({
   openTaskDetail: (id: string) => void;
   openDownloadDetail: (id: string) => void;
   openImportDetail: (id: string) => void;
+  entrance?: StaggeredEntranceProps;
   indent?: number;
 }) {
   const t = useT();
@@ -551,6 +556,7 @@ function TaskRunRow({
     <div className={indent ? "pl-6" : undefined}>
       <JobRowShell
         id={task.id}
+        entrance={entrance}
         status={task.status}
         typeLabel={operationLabel(t, task.operation_type, task.kind)}
         select={<input type="checkbox" checked={selected.has(task.id)} onClick={(e) => e.stopPropagation()} onChange={() => onToggleSelect(task.id)} className="h-4 w-4 shrink-0 rounded border-border" aria-label={t("jobs.select_task", { id: shortId(task.id) })} />}
@@ -598,6 +604,7 @@ function UnifiedTaskList({
 }) {
   const t = useT();
   const rows = tasks?.items || [];
+  const rowEntrance = useStaggeredEntrance(rows.map((task) => task.id));
 
   return (
     <section className="mb-8">
@@ -610,10 +617,11 @@ function UnifiedTaskList({
       {!isLoading && !error && rows.length === 0 && <EmptyState title={t("jobs.no_dl")} description={t("jobs.no_dl_desc")} />}
       {rows.length > 0 && (
         <div className="space-y-1">
-          {rows.map((task) => (
+          {rows.map((task, index) => (
             <TaskRunRow
               key={task.id}
               task={task}
+              entrance={rowEntrance(task.id, index)}
               selected={selected}
               onToggleSelect={onToggleSelect}
               openTaskDetail={openTaskDetail}
@@ -644,12 +652,14 @@ function TaskTreeChildren({
   openImportDetail: (id: string) => void;
   indent: number;
 }) {
+  const nodeEntrance = useStaggeredEntrance(nodes.map((node) => node.task.id));
   return (
     <div className="space-y-1">
-      {nodes.map((node) => (
+      {nodes.map((node, index) => (
         <div key={node.task.id} className="space-y-1">
           <TaskRunRow
             task={node.task}
+            entrance={nodeEntrance(node.task.id, index)}
             selected={selected}
             onToggleSelect={onToggleSelect}
             openTaskDetail={openTaskDetail}
@@ -699,6 +709,7 @@ function GroupedTaskList({
   const fmt = useI18nFormat();
   const rows = useMemo(() => tasks?.items ?? [], [tasks?.items]);
   const roots = useMemo(() => buildTaskTree(rows), [rows]);
+  const rootEntrance = useStaggeredEntrance(roots.map((node) => node.task.id));
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -735,12 +746,13 @@ function GroupedTaskList({
       {!isLoading && !error && roots.length === 0 && <EmptyState title={t("jobs.no_dl")} description={t("jobs.no_dl_desc")} />}
       {roots.length > 0 && (
         <div className="space-y-2">
-          {roots.map((node) => {
+          {roots.map((node, index) => {
             if (node.children.length === 0) {
               return (
                 <TaskRunRow
                   key={node.task.id}
                   task={node.task}
+                  entrance={rootEntrance(node.task.id, index)}
                   selected={selected}
                   onToggleSelect={onToggleSelect}
                   openTaskDetail={openTaskDetail}
@@ -763,6 +775,7 @@ function GroupedTaskList({
               <div key={node.task.id} className="space-y-1">
                 <JobRowShell
                   id={node.task.id}
+                  entrance={rootEntrance(node.task.id, index)}
                   status={aggregate.status}
                   typeLabel={operationLabel(t, node.task.operation_type, node.task.kind)}
                   select={(
@@ -935,6 +948,8 @@ function JobsContent() {
     enabled: activeTab === "imports",
     refetchInterval: (!status || isActiveImport(status)) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
   });
+  const downloadEntrance = useStaggeredEntrance((downloads.data ?? []).map((job) => job.id));
+  const importEntrance = useStaggeredEntrance((imports.data?.items ?? []).map((job) => job.id));
 
   const taskParams = useMemo(() => ({
     kind: activeTab === "admin" ? "admin" : undefined,
@@ -1194,7 +1209,7 @@ function JobsContent() {
       : TASK_STATUS_OPTIONS;
 
   return (
-    <main className="max-w-7xl mx-auto p-6">
+    <PageShell size="wide">
       <PageHeader title={t("jobs.title")} description={t("jobs.desc")}>
         <JobsBatchToolbar
           activeTab={activeTab}
@@ -1281,7 +1296,7 @@ function JobsContent() {
         {downloads.data && !downloads.data?.length && <EmptyState title={t("jobs.no_dl")} description={t("jobs.no_dl_desc")} />}
         {downloads.data && downloads.data?.length > 0 && (
           <div className="space-y-1">
-            {downloads.data.map((j: any) => {
+            {downloads.data.map((j: any, index: number) => {
               const active = isActiveDownload(j.status);
               const progress = active
                 ? downloadProgress[j.id] || (j.progress_data as JobProgress | null) || fallbackProgress(j.pipeline_stage || j.status)
@@ -1291,6 +1306,7 @@ function JobsContent() {
               return (
                 <div key={j.id}>
                   <JobRowShell
+                    entrance={downloadEntrance(j.id, index)}
                     id={j.id}
                     status={j.status}
                     typeLabel={operationLabel(t, j.operation_type, "download")}
@@ -1371,7 +1387,7 @@ function JobsContent() {
         {imports.data?.items && !imports.data?.items.length && <p className="text-sm text-muted">{t("jobs.no_im")}</p>}
         {imports.data?.items && imports.data?.items.length > 0 && (
           <div className="space-y-1">
-            {imports.data?.items?.map((j: any) => {
+            {imports.data?.items?.map((j: any, index: number) => {
               const active = isActiveImport(j.status);
               const progress = active
                 ? importProgress[j.id] || (j.progress_data as JobProgress | null) || fallbackProgress(j.progress_stage || j.status)
@@ -1381,6 +1397,7 @@ function JobsContent() {
               return (
                 <div key={j.id}>
                   <JobRowShell
+                    entrance={importEntrance(j.id, index)}
                     id={j.id}
                     status={j.status}
                     typeLabel={operationLabel(t, j.operation_type, "import")}
@@ -1447,7 +1464,7 @@ function JobsContent() {
       {(deleteId && deleteType === "im") && (
         <ConfirmDialog open title={t("jobs.delete_im_title")} message={t("jobs.delete_im_msg")} onConfirm={() => deleteIM.mutate(deleteId!)} onCancel={() => setDeleteId(null)} isPending={deleteIM.isPending} error={(deleteIM.error as Error)?.message} />
       )}
-    </main>
+    </PageShell>
   );
 }
 
@@ -1458,12 +1475,17 @@ function ImportJobsList({ downloadJobId }: { downloadJobId: string }) {
     queryKey: ["import-jobs", downloadJobId],
     queryFn: () => api.getDownloadJobImports(downloadJobId),
   });
+  const entrance = useStaggeredEntrance((imports.data ?? []).map((item) => item.id));
   if (imports.isLoading) return <div className="ml-8 mt-1 text-xs text-muted">{t("common.loading")}...</div>;
   if (!imports.data?.length) return <div className="ml-8 mt-1 text-xs text-muted">{t("jobs.no_imports_yet")}</div>;
   return (
     <div className="ml-8 mt-1 space-y-0.5">
-      {imports.data?.map((imp: any) => (
-        <div key={imp.id} className="flex items-center gap-2 text-xs bg-subtle rounded px-2 py-1">
+      {imports.data?.map((imp: any, index: number) => (
+        <div
+          key={imp.id}
+          className={`${entrance(imp.id, index).className ?? ""} flex items-center gap-2 rounded bg-subtle px-2 py-1 text-xs`}
+          style={entrance(imp.id, index).style}
+        >
           <span className="font-mono text-muted">{imp.id.slice(0, 8)}</span>
           <StatusBadge status={imp.status} className="px-2 py-0 text-[10px]" />
           {imp.error_log && <span className="max-w-xs truncate text-warning">{imp.error_log.slice(0, 100)}</span>}

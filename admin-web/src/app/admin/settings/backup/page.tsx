@@ -3,8 +3,9 @@ import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useStaggeredEntrance } from "@/lib/motion";
 import Link from "next/link";
-import { PageHeader, ConfirmDialog, EmptyState, ErrorState } from "@/components";
+import { PageHeader, PageShell, ConfirmDialog, EmptyState, ErrorState, RowActionMenu } from "@/components";
 import { useToast } from "@/components/Toast";
 
 const ALL_CONTENTS = ["database", "gallerydl-config", "app-config", "download-archives", "library-metadata"] as const;
@@ -50,6 +51,8 @@ export default function BackupPage() {
 
   const backups = useQuery({ queryKey: queryKeys.backups.list, queryFn: api.listBackups });
   const estimate = useQuery({ queryKey: queryKeys.backups.estimate, queryFn: () => api.estimateBackupSizes() });
+  const backupItems = backups.data?.backups || [];
+  const backupEntrance = useStaggeredEntrance(backupItems.map((backup) => backup.filename));
 
   const toggle = (c: string) => {
     const next = new Set(selected);
@@ -112,7 +115,7 @@ export default function BackupPage() {
   };
 
   return (
-    <main className="max-w-4xl mx-auto p-6">
+    <PageShell size="normal">
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("common.back")}</Link>
       </div>
@@ -181,8 +184,10 @@ export default function BackupPage() {
         {backups.data?.backups && backups.data.backups.length === 0 && <EmptyState title={t("backup.no_backups")} description={t("backup.no_backups_desc")} />}
         {backups.data?.backups && backups.data.backups.length > 0 && (
           <div className="space-y-2">
-            {backups.data.backups.map((b) => (
-              <div key={b.filename} className="flex items-start justify-between p-3 bg-subtle rounded-lg text-sm">
+            {backups.data.backups.map((b, index) => {
+              const entrance = backupEntrance(b.filename, index);
+              return (
+              <div key={b.filename} className={`${entrance.className} flex items-start justify-between p-3 bg-subtle rounded-lg text-sm`} style={entrance.style}>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-medium dark:text-white font-mono text-xs">{b.filename}</span>
@@ -201,10 +206,18 @@ export default function BackupPage() {
                 </div>
                 <div className="flex items-center gap-2 ml-3 shrink-0">
                   <button onClick={() => doDownload(b.filename)} className="btn-ghost px-2.5 py-1 text-xs">{t("backup.download")}</button>
-                  <button onClick={() => setDeleteTarget(b.filename)} className="btn-danger px-2.5 py-1 text-xs">&times;</button>
+                  <RowActionMenu
+                    label={t("common.more_actions")}
+                    items={[{
+                      label: t("common.delete"),
+                      tone: "danger",
+                      onSelect: () => setDeleteTarget(b.filename),
+                    }]}
+                  />
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -235,6 +248,6 @@ export default function BackupPage() {
           onCancel={() => setDeleteTarget(null)}
           isPending={false} />
       )}
-    </main>
+    </PageShell>
   );
 }

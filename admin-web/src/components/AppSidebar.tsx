@@ -3,40 +3,18 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
+import {
+  ADMIN_LINK_MODULE,
+  ADMIN_NAV_GROUPS,
+  ADMIN_USERS_LINK,
+  type AdminIconName,
+} from "@/lib/adminNavigation";
 import { useT } from "@/lib/i18n";
 import { usePermissions } from "@/lib/usePermissions";
 
-// Nav href -> permission module. Links with no entry (dashboard; users is
-// separately gated by is_admin) are always shown once logged in.
-export const LINK_MODULE: Record<string, string> = {
-  "/admin/works": "library",
-  "/admin/tags": "library",
-  "/admin/creators": "library",
-  "/admin/search": "library",
-  "/admin/upload": "upload",
-  "/admin/curation": "curation",
-  "/admin/dedup": "curation",
-  "/admin/merge-candidates": "curation",
-  "/admin/sources": "subscriptions",
-  "/admin/subscriptions": "subscriptions",
-  "/admin/reference/danbooru": "subscriptions",
-  "/admin/jobs": "tasks",
-  "/admin/import-jobs": "tasks",
-  "/admin/scheduler": "tasks",
-  "/admin/notifications": "tasks",
-  "/admin/data-mgmt": "system",
-  "/admin/system": "system",
-  "/admin/settings": "system",
-};
-
-type IconName =
-  | "home" | "image" | "tag" | "upload" | "branch" | "copy" | "merge"
-  | "globe" | "person" | "inbox" | "code" | "clock" | "calendar" | "bell"
-  | "database" | "pulse" | "gear" | "people";
-
 // 16px octicon-style glyphs (fill: currentColor).
-function Icon({ name }: { name: IconName }) {
-  const paths: Record<IconName, string> = {
+function Icon({ name }: { name: AdminIconName }) {
+  const paths: Record<AdminIconName, string> = {
     home: "M6.906.664a1.749 1.749 0 0 1 2.187 0l5.25 4.2c.415.332.657.835.657 1.367v7.019A1.75 1.75 0 0 1 13.25 15h-3.5a.75.75 0 0 1-.75-.75V9H7v5.25a.75.75 0 0 1-.75.75h-3.5A1.75 1.75 0 0 1 1 13.25V6.23c0-.531.242-1.034.657-1.366l5.25-4.2Z",
     image: "M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25Zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h.94l6.06-6.06a.75.75 0 0 1 1.06 0l3.69 3.69V2.75a.25.25 0 0 0-.25-.25ZM5.5 4.5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Z",
     tag: "M1 7.775V2.75C1 1.784 1.784 1 2.75 1h5.025c.464 0 .91.184 1.238.513l6.25 6.25a1.75 1.75 0 0 1 0 2.474l-5.026 5.026a1.75 1.75 0 0 1-2.474 0l-6.25-6.25A1.752 1.752 0 0 1 1 7.775Zm1.5 0c0 .066.026.13.073.177l6.25 6.25a.25.25 0 0 0 .354 0l5.025-5.025a.25.25 0 0 0 0-.354l-6.25-6.25a.25.25 0 0 0-.177-.073H2.75a.25.25 0 0 0-.25.25ZM6 5a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z",
@@ -61,65 +39,6 @@ function Icon({ name }: { name: IconName }) {
       <path d={paths[name]} />
     </svg>
   );
-}
-
-interface NavLinkDef { href: string; labelKey: string; icon: IconName; }
-interface NavGroupDef { labelKey: string; links: NavLinkDef[]; }
-
-const NAV_GROUPS: NavGroupDef[] = [
-  { labelKey: "nav.dashboard", links: [{ href: "/admin", labelKey: "nav.dashboard", icon: "home" }] },
-  {
-    labelKey: "nav.library",
-    links: [
-      { href: "/admin/works", labelKey: "nav.works", icon: "image" },
-      { href: "/admin/tags", labelKey: "nav.tags", icon: "tag" },
-      { href: "/admin/upload", labelKey: "nav.upload", icon: "upload" },
-      { href: "/admin/curation", labelKey: "nav.curation", icon: "branch" },
-      { href: "/admin/dedup", labelKey: "nav.dedup", icon: "copy" },
-      { href: "/admin/merge-candidates", labelKey: "nav.merge", icon: "merge" },
-    ],
-  },
-  {
-    labelKey: "nav.sources",
-    links: [
-      { href: "/admin/sources", labelKey: "nav.sources", icon: "globe" },
-      { href: "/admin/creators", labelKey: "nav.creators", icon: "person" },
-      { href: "/admin/subscriptions", labelKey: "nav.subscriptions", icon: "inbox" },
-      { href: "/admin/reference/danbooru", labelKey: "nav.danbooru", icon: "code" },
-    ],
-  },
-  {
-    labelKey: "nav.operations",
-    links: [
-      { href: "/admin/jobs", labelKey: "nav.jobs", icon: "clock" },
-      { href: "/admin/scheduler", labelKey: "nav.scheduler", icon: "calendar" },
-      { href: "/admin/notifications", labelKey: "notifications.title", icon: "bell" },
-    ],
-  },
-  {
-    labelKey: "nav.admin",
-    links: [
-      { href: "/admin/data-mgmt", labelKey: "nav.datamgmt", icon: "database" },
-      { href: "/admin/system", labelKey: "nav.system", icon: "pulse" },
-      { href: "/admin/settings", labelKey: "nav.settings", icon: "gear" },
-    ],
-  },
-];
-
-const USERS_LINK: NavLinkDef = { href: "/admin/users", labelKey: "nav.users", icon: "people" };
-
-/** Longest-prefix nav match for the top-bar breadcrumb. */
-export function findNavEntry(pathname: string): { groupKey: string; labelKey: string } | null {
-  let best: { groupKey: string; labelKey: string; len: number } | null = null;
-  for (const group of NAV_GROUPS) {
-    for (const link of [...group.links, USERS_LINK]) {
-      const hit = link.href === "/admin" ? pathname === "/admin" : pathname.startsWith(link.href);
-      if (hit && (!best || link.href.length > best.len)) {
-        best = { groupKey: group.labelKey, labelKey: link.labelKey, len: link.href.length };
-      }
-    }
-  }
-  return best && { groupKey: best.groupKey, labelKey: best.labelKey };
 }
 
 /** Machine-status footer: what the NAS is doing right now, always visible.
@@ -166,7 +85,13 @@ function SidebarStatus({ enabled }: { enabled: boolean }) {
   );
 }
 
-export default function AppSidebar({ onNavigate }: { onNavigate?: () => void }) {
+export default function AppSidebar({
+  onNavigate,
+  onDismiss,
+}: {
+  onNavigate?: () => void;
+  onDismiss?: () => void;
+}) {
   const t = useT();
   const pathname = usePathname();
   const { isAdmin, has } = usePermissions();
@@ -181,15 +106,15 @@ export default function AppSidebar({ onNavigate }: { onNavigate?: () => void }) 
     ? (workbenchBadge.data?.queue.active_download_count || 0) + (workbenchBadge.data?.queue.active_import_count || 0)
     : 0;
 
-  const groups = NAV_GROUPS
+  const groups = ADMIN_NAV_GROUPS
     .map((group) => ({
       ...group,
       links: [
         ...group.links.filter(({ href }) => {
-          const module = LINK_MODULE[href];
+          const module = ADMIN_LINK_MODULE[href];
           return !module || has(module);
         }),
-        ...(group.labelKey === "nav.admin" && isAdmin ? [USERS_LINK] : []),
+        ...(group.labelKey === "nav.admin" && isAdmin ? [ADMIN_USERS_LINK] : []),
       ],
     }))
     .filter((group) => group.links.length > 0);
@@ -201,15 +126,31 @@ export default function AppSidebar({ onNavigate }: { onNavigate?: () => void }) 
       <div className="flex items-center gap-2 px-4 pb-2 pt-4 text-sm font-semibold">
         <span className="flex h-[22px] w-[22px] items-center justify-center rounded-md bg-fg text-xs text-canvas">ag</span>
         auto-gallery
+        {onDismiss && (
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="btn-icon ml-auto"
+            aria-label={t("nav.close_sidebar")}
+            title={t("nav.close_sidebar")}
+          >
+            <svg viewBox="0 0 16 16" className="h-4 w-4" fill="currentColor" aria-hidden>
+              <path d="M3.22 3.22a.75.75 0 0 1 1.06 0L8 6.94l3.72-3.72a.75.75 0 1 1 1.06 1.06L9.06 8l3.72 3.72a.75.75 0 1 1-1.06 1.06L8 9.06l-3.72 3.72a.75.75 0 0 1-1.06-1.06L6.94 8 3.22 4.28a.75.75 0 0 1 0-1.06Z" />
+            </svg>
+          </button>
+        )}
       </div>
-      <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        {groups.map((group) => (
-          <div key={group.labelKey}>
-            {group.labelKey !== "nav.dashboard" && (
-              <div className="mx-2 mb-1 mt-4 text-[11px] font-semibold tracking-wide text-muted">{t(group.labelKey)}</div>
-            )}
+      <nav aria-label={t("nav.primary")} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        {groups.map((group, groupIndex) => {
+          const labelId = `sidebar-group-${groupIndex}`;
+          return (
+          <section key={group.labelKey} aria-labelledby={labelId} className="border-t border-border/70 pb-1 pt-3 first:border-t-0 first:pt-1">
+            <h2 id={labelId} className="mx-2 mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted">
+              {t(group.labelKey)}
+            </h2>
             {group.links.map(({ href, labelKey, icon }) => (
               <Link key={href} href={href} onClick={onNavigate}
+                aria-current={isActive(href) ? "page" : undefined}
                 className={`side-item ${isActive(href) ? "side-item-active" : ""}`}>
                 <Icon name={icon} />
                 <span className="truncate">{t(labelKey)}</span>
@@ -220,8 +161,9 @@ export default function AppSidebar({ onNavigate }: { onNavigate?: () => void }) 
                 )}
               </Link>
             ))}
-          </div>
-        ))}
+          </section>
+          );
+        })}
       </nav>
       <SidebarStatus enabled={canSeeStatus} />
     </div>

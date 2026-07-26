@@ -7,7 +7,7 @@ import { useT } from "@/lib/i18n";
 import { api, queryKeys, WorkListItem } from "@/lib/api";
 import type { WorkAsset } from "@/lib/api/endpoints/works";
 import { useAppearanceSettings } from "@/lib/appearance";
-import { staggerDelay } from "@/lib/motion";
+import { useStaggeredEntrance, type StaggeredEntranceProps } from "@/lib/motion";
 import { AssetImage, PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, WorkPreviewOverlay, PermissionGuard, type SlideItem } from "@/components";
 import { useSlideshow } from "@/lib/useSlideshow";
 import { usePermissions } from "@/lib/usePermissions";
@@ -28,7 +28,7 @@ function WorkCard({
   selectable,
   selected,
   onToggleSelect,
-  index,
+  entrance,
   previewEnabled,
   previewDelayMs,
   wheelThreshold,
@@ -36,7 +36,6 @@ function WorkCard({
   onScheduleClosePreview,
   onCancelClosePreview,
   onPreviewPage,
-  enterAnimate = true,
   canCurate,
 }: {
   w: WorkListItem;
@@ -47,8 +46,7 @@ function WorkCard({
   selectable?: boolean;
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
-  index?: number;
-  enterAnimate?: boolean;
+  entrance?: StaggeredEntranceProps;
   previewEnabled: boolean;
   previewDelayMs: number;
   wheelThreshold: number;
@@ -88,8 +86,8 @@ function WorkCard({
   return (
     <div
       ref={cardRef}
-      className={`card-interactive ${enterAnimate ? "page-item" : ""} overflow-hidden cursor-pointer group ${selected ? "ring-2 ring-accent" : ""}`}
-      style={enterAnimate ? ({ "--delay": staggerDelay(index ?? 0) } as React.CSSProperties) : undefined}
+      className={`card-interactive ${entrance?.className || ""} overflow-hidden cursor-pointer group ${selected ? "ring-2 ring-accent" : ""}`}
+      style={entrance?.style}
       onClick={() => router.push(`/admin/works/${w.id}`)}
       onMouseEnter={() => {
         onCancelClosePreview();
@@ -319,13 +317,8 @@ function WorksContent() {
     .filter((w): w is WorkListItem & { thumbnail_asset_id: string } => !!w.thumbnail_asset_id)
     .map((w) => ({ assetId: w.thumbnail_asset_id, workId: w.id, title: w.title, creatorName: w.creator_name }));
 
-  // Stagger only the FIRST grid the visitor sees. Page flips, filter changes
-  // and refetches render instantly — browsing speed beats entrance flair
-  // (motion principle #1), and poll-driven re-renders must never replay.
-  const gridEntered = useRef(false);
-  useEffect(() => {
-    if (works.data?.items?.length) gridEntered.current = true;
-  }, [works.data]);
+  const workItems = works.data?.items || [];
+  const workEntrance = useStaggeredEntrance(workItems.map((work) => work.id));
 
   const previewAssets = useQuery({
     queryKey: ["works", preview?.work.id, "assets"],
@@ -617,8 +610,7 @@ function WorksContent() {
           {works.data.items.map((w: WorkListItem, i: number) => (
             <WorkCard
               key={w.id}
-              index={i}
-              enterAnimate={!gridEntered.current}
+              entrance={workEntrance(w.id, i)}
               w={w}
               previewEnabled={previewEnabled}
               previewDelayMs={appearance.workPreviewDelayMs}
@@ -645,8 +637,15 @@ function WorksContent() {
       {/* List View */}
       {works.data && works.data.items?.length > 0 && viewMode === "list" && (
         <div className="space-y-1 mb-6">
-          {works.data.items.map((w: WorkListItem) => (
-            <div key={w.id} className={`flex cursor-pointer items-center gap-3 rounded-md border border-border bg-surface p-3 shadow-sm transition-shadow hover:shadow-md ${selectedWorkIds.has(w.id) ? "ring-2 ring-accent" : ""}`} onClick={() => router.push(`/admin/works/${w.id}`)}>
+          {works.data.items.map((w: WorkListItem, index: number) => {
+            const entrance = workEntrance(w.id, index);
+            return (
+            <div
+              key={w.id}
+              className={`${entrance.className} flex cursor-pointer items-center gap-3 rounded-md border border-border bg-surface p-3 shadow-sm transition-shadow hover:shadow-md ${selectedWorkIds.has(w.id) ? "ring-2 ring-accent" : ""}`}
+              style={entrance.style}
+              onClick={() => router.push(`/admin/works/${w.id}`)}
+            >
               {canCurate && curationVisibility === "visible" && (
                 <input
                   type="checkbox"
@@ -690,7 +689,8 @@ function WorksContent() {
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

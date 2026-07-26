@@ -1,22 +1,17 @@
 "use client";
-import { useState, useMemo, useEffect, useRef, Suspense } from "react";
+import { useState, useMemo, useEffect, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { staggerDelay } from "@/lib/motion";
-import { PageHeader, EmptyState, ErrorState, ConfirmDialog, Modal, FilterBar, SelectionBar, PageShell, PermissionGuard } from "@/components";
+import { useStaggeredEntrance } from "@/lib/motion";
+import { PageHeader, PageSection, EmptyState, ErrorState, ConfirmDialog, Modal, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityList, EntityRow, RowActionMenu } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useT } from "@/lib/i18n";
+import { useI18nFormat } from "@/lib/i18n-format";
 import { useToast } from "@/components/Toast";
 import { usePermissions } from "@/lib/usePermissions";
 
 type FilterMode = "all" | "active" | "inactive" | "has_danbooru" | "has_subscription" | "no_subscription" | "favorites";
-
-function fmtLastSync(value?: string) {
-  if (!value) return "never synced";
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? "sync unknown" : `last sync ${d.toLocaleDateString()}`;
-}
 
 function CreateForm({ isPending, error, onSubmit, onClose }: {
   isPending: boolean; error: Error | null;
@@ -95,6 +90,7 @@ function buildFilters(mode: FilterMode, search: string) {
 
 function CreatorsContent() {
   const t = useT();
+  const fmt = useI18nFormat();
   const toast = useToast();
   const router = useRouter();
   const qc = useQueryClient();
@@ -156,13 +152,8 @@ function CreatorsContent() {
     queryFn: () => api.listCreators(page * limit, limit, filters as any),
     placeholderData: (previousData) => previousData,
   });
-
-  // Rows stagger in once on first data; page flips (placeholderData swap),
-  // filter changes and refetches render instantly.
-  const listEntered = useRef(false);
-  useEffect(() => {
-    if (creators.data?.items?.length) listEntered.current = true;
-  }, [creators.data]);
+  const creatorItems = creators.data?.items || [];
+  const creatorEntrance = useStaggeredEntrance(creatorItems.map((creator) => creator.id));
 
   useEffect(() => {
     if (notify.operationJob?.kind !== "danbooru-import-all" || notify.operationJob.status !== "completed") return;
@@ -251,6 +242,7 @@ function CreatorsContent() {
         </div>
       </FilterBar>
 
+      <PageSection className="mt-5">
       {canCurate && (
         <SelectionBar
           count={selected.size}
@@ -267,7 +259,7 @@ function CreatorsContent() {
       {/* Select all */}
       {canCurate && creators.data && creators.data.items.length > 0 && (
         <label className="mb-2 flex cursor-pointer items-center gap-2 text-xs text-muted">
-          <input type="checkbox" aria-label="Select item" checked={selected.size === creators.data.items.length && creators.data.items.length > 0} onChange={selectAll} className="rounded" />
+          <input type="checkbox" aria-label={t("creators.select_all")} checked={selected.size === creators.data.items.length && creators.data.items.length > 0} onChange={selectAll} className="rounded" />
           {t("creators.select_all")}
         </label>
       )}
@@ -284,48 +276,74 @@ function CreatorsContent() {
       )}
 
       {creators.data && creators.data.items.length > 0 && (
-        <div className="overflow-hidden rounded-md border border-border bg-white dark:border-border dark:bg-surface">
+        <EntityList label={t("creators.title")}>
           {creators.data.items.map((c, i) => (
-            <div key={c.id}
-              className={`${!listEntered.current ? "page-item" : ""} flex cursor-pointer items-center gap-3 border-b border-border p-4 last:border-b-0 hover:bg-subtle dark:border-border dark:hover:bg-subtle ${selected.has(c.id) ? "bg-accent-subtle dark:bg-accent-subtle" : ""}`}
-              style={!listEntered.current ? ({ "--delay": staggerDelay(i) } as React.CSSProperties) : undefined}
-              onClick={() => router.push(`/admin/creators/${c.id}`)}>
+            <EntityRow
+              key={c.id}
+              label={t("common.open_item", { name: c.display_name || c.name })}
+              selected={selected.has(c.id)}
+              entrance={creatorEntrance(c.id, i)}
+              onOpen={() => router.push(`/admin/creators/${c.id}`)}
+            >
               {canCurate && (
-                <input type="checkbox" aria-label="Select item" checked={selected.has(c.id)} onChange={() => toggleSelect(c.id)} className="rounded shrink-0" onClick={(e) => e.stopPropagation()} />
+                <input
+                  type="checkbox"
+                  aria-label={t("common.select_item", { name: c.display_name || c.name })}
+                  checked={selected.has(c.id)}
+                  onChange={() => toggleSelect(c.id)}
+                  className="shrink-0 rounded"
+                  onClick={(event) => event.stopPropagation()}
+                />
               )}
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-accent text-sm font-semibold text-white dark:border-border">
+              <div className="entity-avatar">
                 {(c.display_name || c.name).slice(0, 2).toUpperCase()}
               </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="truncate text-sm font-semibold text-accent">{c.display_name || c.name}</span>
+              <div className="entity-main">
+                <div className="entity-title-line">
+                  <span className="entity-title">{c.display_name || c.name}</span>
                   {c.display_name && <span className="truncate font-mono text-xs text-muted">{c.name}</span>}
-                  {c.is_active ? <span className="w-1.5 h-1.5 bg-green-500 rounded-full shrink-0" /> : <span className="w-1.5 h-1.5 bg-subtle rounded-full shrink-0" />}
+                  <span
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${c.is_active ? "bg-success" : "bg-border"}`}
+                    title={c.is_active ? t("creators.filter_active") : t("creators.filter_inactive")}
+                  />
+                  {(c as any).danbooru_artist_id && <span className="rounded-full bg-purple-100 px-2 py-0.5 font-mono text-[10px] text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">D#{String((c as any).danbooru_artist_id)}</span>}
+                  {(c.subscription_count ?? 0) > 0 && <span className="rounded-full bg-success-subtle px-2 py-0.5 text-[10px] text-success">{t("creators.sub_badge")}</span>}
                 </div>
-                {c.description && <p className="mt-1 line-clamp-1 text-xs text-muted">{c.description}</p>}
-                <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted">
-                  <span>{c.repository_count ?? 0} repositories</span>
-                  <span>{c.source_count ?? 0} sources</span>
-                  <span>{fmtLastSync(c.last_synced_at)}</span>
+                {c.description && <p className="entity-supporting">{c.description}</p>}
+                <div className="entity-meta">
+                  <span>{t("creators.repository_count", { count: c.repository_count ?? 0 })}</span>
+                  <span>{t("creators.source_count", { count: c.source_count ?? 0 })}</span>
+                  <span>{t("creators.last_sync", { time: c.last_synced_at ? fmt.dateTime(c.last_synced_at) : t("common.never") })}</span>
                 </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0 text-xs" onClick={(e) => e.stopPropagation()}>
-                {(c as any).danbooru_artist_id && <span className="rounded-full bg-purple-100 px-2 py-0.5 font-mono text-[10px] text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">D#{String((c as any).danbooru_artist_id)}</span>}
-                {(c.subscription_count ?? 0) > 0 && <span className="rounded-full bg-success-subtle px-2 py-0.5 text-[10px] text-success dark:bg-success-subtle dark:text-success">{t("creators.sub_badge")}</span>}
+              <div className="entity-actions" onClick={(event) => event.stopPropagation()}>
                 {canCurate && (
-                  <button onClick={(e) => { e.stopPropagation(); toggleFavorite.mutate(c.id); }}
-                    className={`text-lg ${c.is_favorite ? "text-yellow-500" : "text-muted hover:text-yellow-400"}`}
-                    title={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}>
+                  <button
+                    type="button"
+                    onClick={() => toggleFavorite.mutate(c.id)}
+                    className={`btn-icon text-lg ${c.is_favorite ? "text-warning" : "text-muted hover:text-warning"}`}
+                    title={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}
+                    aria-label={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}
+                  >
                     {c.is_favorite ? "★" : "☆"}
                   </button>
                 )}
                 {canCurate && (
-                  <button onClick={(e) => { e.stopPropagation(); setDeleteId(c.id); }} className="text-danger hover:underline dark:text-danger">{t("creators.del")}</button>
+                  <RowActionMenu
+                    label={t("common.more_actions")}
+                    items={[
+                      {
+                        label: t("creators.del"),
+                        tone: "danger",
+                        onSelect: () => setDeleteId(c.id),
+                      },
+                    ]}
+                  />
                 )}
               </div>
-            </div>
+            </EntityRow>
           ))}
-        </div>
+        </EntityList>
       )}
 
       {/* Pagination */}
@@ -336,6 +354,7 @@ function CreatorsContent() {
           <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!creators.data?.items || creators.data.items.length < limit} className="btn-ghost disabled:opacity-30">{t("common.next")}</button>
         </div>
       )}
+      </PageSection>
 
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title={t("creators.new_creator_title")}>
         <CreateForm isPending={create.isPending} error={create.error} onSubmit={(data) => create.mutate(data)} onClose={() => setShowCreate(false)} />

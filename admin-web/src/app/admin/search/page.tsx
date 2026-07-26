@@ -6,8 +6,8 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
-import { staggerDelay } from "@/lib/motion";
-import { PageHeader, EmptyState, ErrorState, SourceBadge, PermissionGuard } from "@/components";
+import { useStaggeredEntrance } from "@/lib/motion";
+import { PageHeader, PageShell, EmptyState, ErrorState, SourceBadge, PermissionGuard } from "@/components";
 import { Breadcrumb } from "@/components/Breadcrumb";
 
 type Kind = "all" | "works" | "creators" | "tags";
@@ -57,6 +57,9 @@ function SearchContent() {
   const worksHits = data?.results || [];
   const creatorsHits = (data?.creators || []) as any[];
   const tagsHits = (data?.tags || []) as any[];
+  const creatorEntrance = useStaggeredEntrance(creatorsHits.map((creator) => `creator:${creator.id}`));
+  const workEntrance = useStaggeredEntrance(worksHits.map((work) => `work:${work.id}`));
+  const tagEntrance = useStaggeredEntrance(tagsHits.map((tag) => `tag:${tag.id}`));
   const total = data?.total || 0;
 
   const tabs: { key: Kind; label: string; count: number }[] = [
@@ -67,7 +70,7 @@ function SearchContent() {
   ];
 
   return (
-    <main className="max-w-6xl mx-auto p-6">
+    <PageShell size="normal">
       <Breadcrumb items={[{ label: t("search.title") }, { label: debounced || "..." }]} />
       <PageHeader title={t("search.title")} description={t("search.desc")}>
         <button className="btn-ghost px-3 py-1.5 text-xs" onClick={() => {
@@ -109,12 +112,15 @@ function SearchContent() {
           </div>
 
           {(kind === "all" || kind === "creators") && creatorsHits.length > 0 && (
-            <div className="mb-6 page-item" style={{ "--delay": staggerDelay(0) } as React.CSSProperties}>
+            <div className="mb-6">
               {kind === "all" && <h3 className="text-sm font-medium text-muted mb-2">{t("search.creators_section")}</h3>}
               <div className="space-y-2">
-                {creatorsHits.map((c: any) => (
+                {creatorsHits.map((c: any, index: number) => {
+                  const entrance = creatorEntrance(`creator:${c.id}`, index);
+                  return (
                   <Link key={c.id} href={`/admin/creators/${c.id}`}
-                    className="card-interactive fade-in flex items-center gap-4 p-4 cursor-pointer">
+                    className={`card-interactive ${entrance.className} flex items-center gap-4 p-4 cursor-pointer`}
+                    style={entrance.style}>
                     <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-accent to-purple-600 text-white font-semibold text-lg">
                       {(c.display_name || c.name).trim().slice(0, 2).toUpperCase()}
                     </div>
@@ -124,17 +130,20 @@ function SearchContent() {
                       {c.description && <p className="text-xs text-muted mt-1 line-clamp-1">{c.description}</p>}
                     </div>
                   </Link>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
 
           {(kind === "all" || kind === "works") && worksHits.length > 0 && (
-            <div className="mb-6 page-item" style={{ "--delay": staggerDelay(2) } as React.CSSProperties}>
+            <div className="mb-6">
               {kind === "all" && <h3 className="text-sm font-medium text-muted mb-2">{t("search.works_section")}</h3>}
               <div className="space-y-2">
-                {worksHits.map((w: any) => (
-                  <div key={w.id} className="card-interactive fade-in flex cursor-pointer gap-4 p-4" onClick={() => router.push(`/admin/works/${w.id}`)}>
+                {worksHits.map((w: any, index: number) => {
+                  const entrance = workEntrance(`work:${w.id}`, index);
+                  return (
+                  <div key={w.id} className={`card-interactive ${entrance.className} flex cursor-pointer gap-4 p-4`} style={entrance.style} onClick={() => router.push(`/admin/works/${w.id}`)}>
                     {w.thumbnail_asset_id ? (
                       <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="w-16 h-16 object-cover rounded shrink-0" loading="lazy" decoding="async" />
                     ) : (
@@ -163,22 +172,27 @@ function SearchContent() {
                       )}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
 
           {(kind === "all" || kind === "tags") && tagsHits.length > 0 && (
-            <div className="page-item" style={{ "--delay": staggerDelay(4) } as React.CSSProperties}>
+            <div>
               {kind === "all" && <h3 className="text-sm font-medium text-muted mb-2">{t("search.tags_section")}</h3>}
               <div className="flex flex-wrap gap-2">
-                {tagsHits.map((tag: any) => (
+                {tagsHits.map((tag: any, index: number) => {
+                  const entrance = tagEntrance(`tag:${tag.id}`, index);
+                  return (
                   <Link key={tag.id} href={`/admin/tags/${tag.id}`}
-                    className="fade-in px-3 py-1.5 bg-subtle rounded-full text-sm hover:bg-accent/90 hover:text-accent dark:hover:bg-accent/90 dark:hover:text-accent transition-colors">
+                    className={`${entrance.className} px-3 py-1.5 bg-subtle rounded-full text-sm hover:bg-accent/90 hover:text-accent dark:hover:bg-accent/90 dark:hover:text-accent transition-colors`}
+                    style={entrance.style}>
                     #{tag.normalized_name}
                     {tag.category && <span className="text-xs text-muted ml-1">({tag.category})</span>}
                   </Link>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -188,7 +202,7 @@ function SearchContent() {
           )}
         </>
       )}
-    </main>
+    </PageShell>
   );
 }
 

@@ -1,12 +1,12 @@
 "use client";
-import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { api, queryKeys, Tag } from "@/lib/api";
 import { useT } from "@/lib/i18n";
-import { staggerDelay } from "@/lib/motion";
+import { useStaggeredEntrance } from "@/lib/motion";
 import { useToast } from "@/components/Toast";
-import { PageHeader, EmptyState, ErrorState, Modal, ConfirmDialog, PermissionGuard } from "@/components";
+import { PageHeader, PageShell, EmptyState, ErrorState, Modal, ConfirmDialog, PermissionGuard, RowActionMenu } from "@/components";
 import { usePermissions } from "@/lib/usePermissions";
 
 const CATEGORIES = ["general", "artist", "series", "character", "meta"];
@@ -41,27 +41,6 @@ function bubbleStyle(tag: Tag, minCount: number, maxCount: number) {
   };
 }
 
-function bubbleStyleDark(tag: Tag, minCount: number, maxCount: number) {
-  const range = maxCount > minCount ? maxCount - minCount : 1;
-  const count = Math.max(tag.usage_count, minCount);
-  const logMin = Math.log(minCount || 1);
-  const logMax = Math.log(maxCount || 1);
-  const logRange = logMax > logMin ? logMax - logMin : 1;
-  const ratio = (Math.log(count) - logMin) / logRange;
-  const fontSize = 0.75 + ratio * 1.75;
-  const paddingX = 0.5 + ratio * 1.0;
-  const paddingY = 0.25 + ratio * 0.5;
-
-  const hue = hashStr(tag.category || tag.normalized_name) % 360;
-  return {
-    fontSize: `${fontSize.toFixed(2)}rem`,
-    padding: `${paddingY.toFixed(2)}rem ${paddingX.toFixed(2)}rem`,
-    backgroundColor: `hsl(${hue}, 30%, 22%)`,
-    color: `hsl(${hue}, 45%, 78%)`,
-    borderColor: `hsl(${hue}, 25%, 32%)`,
-  };
-}
-
 export default function TagsPage() {
   const t = useT();
   const toast = useToast();
@@ -82,13 +61,6 @@ export default function TagsPage() {
     queryKey: [...queryKeys.tags.all, page],
     queryFn: () => api.listTags(page * limit, limit),
   });
-
-  // Cloud staggers in once on first data; pagination and the local filter
-  // render instantly (same enter-once rule as the works grid).
-  const cloudEntered = useRef(false);
-  useEffect(() => {
-    if (tags.data?.length) cloudEntered.current = true;
-  }, [tags.data]);
 
   const create = useMutation({
     mutationFn: () => api.createTag({ normalized_name: formName.trim().toLowerCase(), category: formCat || undefined }),
@@ -114,6 +86,7 @@ export default function TagsPage() {
   const filtered = tags.data?.filter((t: Tag) =>
     !search || t.normalized_name.includes(search.toLowerCase())
   ) || [];
+  const tagEntrance = useStaggeredEntrance(filtered.map((tag) => tag.id));
 
   const { minCount, maxCount } = useMemo(() => {
     if (!filtered.length) return { minCount: 0, maxCount: 0 };
@@ -123,7 +96,7 @@ export default function TagsPage() {
 
   return (
     <PermissionGuard module="library">
-    <main className="max-w-5xl mx-auto p-6">
+    <PageShell size="normal">
       <PageHeader title={t("tags.title")} description={tags.data?.length ? t("common.page").replace("{page}", String(page + 1)) : t("tags.desc")}>
         {canCurate && (
           <button onClick={() => { setFormName(""); setFormCat("general"); setShowCreate(true); }}
@@ -154,18 +127,17 @@ export default function TagsPage() {
           <div className="flex flex-wrap gap-2 items-center justify-center">
             {filtered.map((tag, i) => {
               const light = bubbleStyle(tag, minCount, maxCount);
-              const dark = bubbleStyleDark(tag, minCount, maxCount);
-              const enterAnimate = !cloudEntered.current;
+              const entrance = tagEntrance(tag.id, i);
               return (
                 <div key={tag.id}
-                  className={`group inline-flex items-center gap-1 rounded-full border cursor-pointer hover:shadow-md transition-shadow ${enterAnimate ? "page-item" : ""}`}
+                  className={`${entrance.className} inline-flex items-center gap-1 rounded-full border cursor-pointer hover:shadow-md transition-shadow`}
                   style={{
                     fontSize: light.fontSize,
                     padding: light.padding,
                     backgroundColor: light.backgroundColor,
                     color: light.color,
                     borderColor: light.borderColor,
-                    ...(enterAnimate ? { "--delay": staggerDelay(i) } : {}),
+                    ...entrance.style,
                   } as React.CSSProperties}
                   onClick={() => router.push(`/admin/tags/${tag.id}`)}>
                   <span className="font-semibold truncate max-w-[16rem]">{tag.normalized_name}</span>
@@ -178,12 +150,13 @@ export default function TagsPage() {
                     {tag.usage_count}
                   </span>
                   {canCurate && (
-                    <button onClick={(e) => { e.stopPropagation(); openEdit(tag); }}
-                      className="ml-1 opacity-0 group-hover:opacity-100 hover:text-blue-500 transition-opacity text-sm leading-none" title="Edit">&#9998;</button>
-                  )}
-                  {canCurate && (
-                    <button onClick={(e) => { e.stopPropagation(); setDeleteId(tag.id); }}
-                      className="opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity text-lg leading-none">&times;</button>
+                    <RowActionMenu
+                      label={t("common.more_actions")}
+                      items={[
+                        { label: t("common.edit"), onSelect: () => openEdit(tag) },
+                        { label: t("common.delete"), tone: "danger", onSelect: () => setDeleteId(tag.id) },
+                      ]}
+                    />
                   )}
                 </div>
               );
@@ -250,7 +223,7 @@ export default function TagsPage() {
             className="btn-ghost px-3 py-1 text-sm disabled:opacity-30">{t("common.next")}</button>
         </div>
       )}
-    </main>
+    </PageShell>
     </PermissionGuard>
   );
 }

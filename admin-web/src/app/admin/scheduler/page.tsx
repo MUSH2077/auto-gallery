@@ -8,7 +8,8 @@ import { api, queryKeys, QueueBreakdown, SchedulerDecisionItem } from "@/lib/api
 import { useT } from "@/lib/i18n";
 import { pollInterval, hasActiveTask } from "@/lib/polling";
 import { scheduleModeLabel, schedulerDecisionLabel, useI18nFormat } from "@/lib/i18n-format";
-import { PageHeader, EmptyState, ErrorState, SourceBadge, StatusBadge, PermissionGuard } from "@/components";
+import { useStaggeredEntrance } from "@/lib/motion";
+import { PageHeader, PageShell, EmptyState, ErrorState, SourceBadge, StatusBadge, PermissionGuard, SelectionBar, RowActionMenu } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useNotifications } from "@/components/NotificationCenter";
 import { usePermissions } from "@/lib/usePermissions";
@@ -94,6 +95,7 @@ function AdminOperationsSection() {
   });
 
   const activeOps = ops.data?.items || [];
+  const operationEntrance = useStaggeredEntrance(activeOps.map((operation) => operation.id));
 
   return (
     <section className="card mb-6 p-4">
@@ -118,8 +120,10 @@ function AdminOperationsSection() {
 
       {activeOps.length > 0 && (
         <div className="space-y-2">
-          {activeOps.map((op) => (
-            <div key={op.id} className="flex items-center gap-3 rounded-md border border-border bg-subtle px-3 py-2 dark:border-border dark:bg-subtle">
+          {activeOps.map((op, index) => {
+            const entrance = operationEntrance(op.id, index);
+            return (
+            <div key={op.id} className={`${entrance.className} flex items-center gap-3 rounded-md border border-border bg-subtle px-3 py-2 dark:border-border dark:bg-subtle`} style={entrance.style}>
               <StatusBadge status={op.status === "running" ? "downloading" : op.status === "enqueued" ? "pending" : op.status === "complete" ? "complete" : "failed"} />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium truncate">
@@ -138,7 +142,8 @@ function AdminOperationsSection() {
                 {op.id.slice(0, 8)}
               </Link>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </section>
@@ -254,7 +259,9 @@ export default function SchedulerPage() {
         || (item.source_url || "").toLowerCase().includes(q)
         || (item.source_creator_id || "").toLowerCase().includes(q));
   });
+  const decisionEntrance = useStaggeredEntrance(filteredItems.map((item) => item.source_id));
   const queueRows = queue.data?.queues ? Object.entries(queue.data.queues) : [];
+  const queueEntrance = useStaggeredEntrance(queueRows.map(([name]) => name));
   const summary = useMemo(() => ({
     due: items.filter((item) => item.due).length,
     blocked: items.filter((item) => ["auth_unhealthy", "url_invalid", "unknown_provider"].includes(item.reason)).length,
@@ -294,7 +301,7 @@ export default function SchedulerPage() {
 
   return (
     <PermissionGuard module="tasks">
-    <main className="mx-auto max-w-7xl p-6">
+    <PageShell size="wide">
       <PageHeader title={t("scheduler.title")} description={t("scheduler.explain_desc")}>
         <button onClick={refreshAll} className="btn-ghost px-5 py-2.5">
           {t("scheduler.refresh")}
@@ -372,7 +379,14 @@ export default function SchedulerPage() {
             <span>{t("scheduler.queue_started")}</span>
             <span>{t("scheduler.queue_failed")}</span>
           </div>
-          {queueRows.map(([name, stats]) => <QueueRow key={name} name={name} stats={stats} />)}
+          {queueRows.map(([name, stats], index) => {
+            const entrance = queueEntrance(name, index);
+            return (
+              <div key={name} className={entrance.className} style={entrance.style}>
+                <QueueRow name={name} stats={stats} />
+              </div>
+            );
+          })}
           {queue.data?.queues && (
             <div className="flex flex-wrap gap-2 border-t border-border px-4 py-3 text-xs dark:border-border">
               {(["downloads", "imports"] as const).map((name) => {
@@ -410,9 +424,12 @@ export default function SchedulerPage() {
         </div>
 
         {/* Batch action bar */}
-        {selected.size > 0 && (
-          <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/30 bg-warning-subtle px-4 py-2 dark:bg-warning-subtle">
-            <span className="text-xs font-medium text-warning dark:text-warning">{t("common.selected_count", { count: selected.size })}</span>
+        <SelectionBar
+          count={selected.size}
+          label={t("common.selected_count", { count: selected.size })}
+          clearLabel={t("common.deselect_all")}
+          onClear={() => { setSelected(new Set()); setSelectAll(false); }}
+        >
             {has("subscriptions") && (
               <>
                 <button
@@ -431,9 +448,7 @@ export default function SchedulerPage() {
                 </button>
               </>
             )}
-            <button onClick={() => { setSelected(new Set()); setSelectAll(false); }} className="ml-auto text-xs text-warning hover:underline dark:text-warning">{t("common.deselect_all")}</button>
-          </div>
-        )}
+        </SelectionBar>
 
         {decisions.isLoading && <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-20 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div>}
         {decisions.error && <ErrorState message={(decisions.error as Error).message} onRetry={() => decisions.refetch()} />}
@@ -451,8 +466,10 @@ export default function SchedulerPage() {
               <span>{t("scheduler.col_last_state")}</span>
             </div>
             <div className="divide-y divide-border dark:divide-border">
-              {filteredItems.map((item) => (
-                <div key={item.source_id} className="grid grid-cols-1 gap-3 px-4 py-3 text-sm hover:bg-subtle dark:hover:bg-subtle lg:grid-cols-[auto_1.2fr_1fr_1fr_1fr_1fr]">
+              {filteredItems.map((item, index) => {
+                const entrance = decisionEntrance(item.source_id, index);
+                return (
+                <div key={item.source_id} className={`${entrance.className} grid grid-cols-1 gap-3 px-4 py-3 text-sm hover:bg-subtle dark:hover:bg-subtle lg:grid-cols-[auto_1.2fr_1fr_1fr_1fr_1fr]`} style={entrance.style}>
                   <div className="flex items-center">
                     <input type="checkbox" checked={selected.has(item.source_id)} onChange={() => toggleSelect(item.source_id)} className="w-4 h-4 rounded border-border" onClick={(e) => e.stopPropagation()} />
                   </div>
@@ -480,22 +497,28 @@ export default function SchedulerPage() {
                   <div className="text-xs text-muted">
                     <div>{t("scheduler.synced_at", { time: fmt.dateTime(item.last_synced_at) })}</div>
                     <div className="mt-1">{t("scheduler.attempted_at", { time: fmt.dateTime(item.last_attempted_at) })}</div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <Link href={`/admin/repositories/${item.source_id}`} className="text-accent hover:underline dark:text-accent">{t("scheduler.open_repository")}</Link>
-                      <Link href={`/admin/jobs?tab=downloads&subscription_source_id=${item.source_id}`} className="text-accent hover:underline dark:text-accent">{t("scheduler.open_jobs")}</Link>
-                      <Link href={`/admin/subscriptions/${item.subscription_id}`} className="text-accent hover:underline dark:text-accent">{t("scheduler.manage")}</Link>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
                       {has("library") && (
-                        <button onClick={() => syncRepo.mutate(item.source_id)} disabled={syncRepo.isPending} className="text-accent hover:underline disabled:opacity-50 dark:text-accent">{t("scheduler.sync_this_repo")}</button>
+                        <button onClick={() => syncRepo.mutate(item.source_id)} disabled={syncRepo.isPending} className="btn-ghost text-xs">{t("scheduler.sync_this_repo")}</button>
                       )}
+                      <RowActionMenu
+                        label={t("common.more_actions")}
+                        items={[
+                          { label: t("scheduler.open_repository"), href: `/admin/repositories/${item.source_id}` },
+                          { label: t("scheduler.open_jobs"), href: `/admin/jobs?tab=downloads&subscription_source_id=${item.source_id}` },
+                          { label: t("scheduler.manage"), href: `/admin/subscriptions/${item.subscription_id}` },
+                        ]}
+                      />
                     </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
       </section>
-    </main>
+    </PageShell>
     </PermissionGuard>
   );
 }

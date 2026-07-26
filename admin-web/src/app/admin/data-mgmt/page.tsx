@@ -6,6 +6,7 @@ import { PageHeader, ConfirmDialog, PageShell, StatCard, StatusBadge, Permission
 import { useNotifications } from "@/components/NotificationCenter";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
+import { useStaggeredEntrance } from "@/lib/motion";
 import { useRouter } from "next/navigation";
 import { getSourceColor } from "@/lib/sourceColors";
 
@@ -174,6 +175,20 @@ export default function DataManagementPage() {
     ? Object.values(breakdown.sources).reduce((sum, s) => sum + s.size_mb, 0)
     : 0;
   const layerEntries = breakdown?.layers ? Object.entries(breakdown.layers) : [];
+  const sourceEntries = breakdown?.sources
+    ? Object.entries(breakdown.sources).sort(([, a], [, b]) => b.size_mb - a.size_mb)
+    : [];
+  const creatorEntries = breakdown?.creators || [];
+  const integrityItemKeys = (integrityItems?.items || []).map(
+    (item, index) => item.id || item.path || item.file_name || item.name || `item:${index}`,
+  );
+  const layerEntrance = useStaggeredEntrance(layerEntries.map(([key]) => `layer:${key}`));
+  const sourceEntrance = useStaggeredEntrance(sourceEntries.map(([source]) => `source:${source}`));
+  const creatorEntrance = useStaggeredEntrance(
+    creatorEntries.map((creator) => creator.creator_id || `${creator.source}:${creator.name}`),
+  );
+  const issueEntrance = useStaggeredEntrance(issues.map((issue) => issue.type));
+  const integrityItemEntrance = useStaggeredEntrance(integrityItemKeys);
 
   return (
     <PermissionGuard module="system">
@@ -224,13 +239,16 @@ export default function DataManagementPage() {
         <div className="card mb-6 p-4">
           <h3 className="font-medium text-sm mb-3">{t("datamgmt.storage_layers_title")}</h3>
           <div className="grid gap-3 md:grid-cols-4">
-            {layerEntries.map(([key, layer]) => (
-              <div key={key} className="rounded-md border border-border bg-subtle p-3 dark:border-border dark:bg-surface">
+            {layerEntries.map(([key, layer], index) => {
+              const entrance = layerEntrance(`layer:${key}`, index);
+              return (
+              <div key={key} className={`${entrance.className} rounded-md border border-border bg-subtle p-3 dark:border-border dark:bg-surface`} style={entrance.style}>
                 <div className="text-xs text-muted">{t(`datamgmt.layer_${key}`)}</div>
                 <div className="mt-1 text-lg font-semibold dark:text-white">{formatSize(layer.size_mb)}</div>
                 <div className="mt-1 truncate font-mono text-[10px] text-muted" title={layer.path}>{layer.path}</div>
               </div>
-            ))}
+              );
+            })}
           </div>
           <p className="mt-3 text-xs text-muted">
             DOWNLOAD_ROOT is the long-term original media store. LIBRARY_ROOT keeps metadata and thumbnails for indexing and browsing.
@@ -244,13 +262,12 @@ export default function DataManagementPage() {
           <h3 className="font-medium text-sm mb-3">{t("datamgmt.storage_title")}</h3>
           {breakdown?.sources && Object.keys(breakdown.sources).length > 0 ? (
             <div className="space-y-2">
-              {Object.entries(breakdown.sources)
-                .sort(([, a], [, b]) => b.size_mb - a.size_mb)
-                .map(([source, s]) => {
+              {sourceEntries.map(([source, s], index) => {
                   const pct = totalSourceSize > 0 ? (s.size_mb / totalSourceSize) * 100 : 0;
                   const color = getSourceColor(source);
+                  const entrance = sourceEntrance(`source:${source}`, index);
                   return (
-                    <div key={source}>
+                    <div key={source} className={entrance.className} style={entrance.style}>
                       <div className="flex items-center justify-between text-xs mb-0.5">
                         <span className="font-medium capitalize">{source}</span>
                         <span className="text-muted">
@@ -289,8 +306,12 @@ export default function DataManagementPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {breakdown.creators.map((c, i) => (
-                    <tr key={`${c.source}/${c.name}`} className="border-b border-border/50 hover:bg-subtle dark:hover:bg-subtle cursor-pointer"
+                  {breakdown.creators.map((c, i) => {
+                    const itemKey = c.creator_id || `${c.source}:${c.name}`;
+                    const entrance = creatorEntrance(itemKey, i);
+                    return (
+                    <tr key={`${c.source}/${c.name}`} className={`${entrance.className} border-b border-border/50 hover:bg-subtle dark:hover:bg-subtle cursor-pointer`}
+                        style={entrance.style}
                         onClick={() => c.creator_id && router.push(`/admin/creators/${c.creator_id}`)}
                         title={c.creator_id ? "View creator detail" : ""}>
                       <td className="py-1.5 text-muted">{i + 1}</td>
@@ -304,7 +325,8 @@ export default function DataManagementPage() {
                       <td className="py-1.5 text-right">{c.work_count}</td>
                       <td className="py-1.5 text-right font-mono text-fg">{formatSize(c.size_mb)}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -337,8 +359,10 @@ export default function DataManagementPage() {
               </div>
             ) : (
               <div className="space-y-2">
-                {issues.map((issue) => (
-                  <div key={issue.type} className={`border rounded-lg p-3 flex items-center justify-between ${
+                {issues.map((issue, index) => {
+                  const entrance = issueEntrance(issue.type, index);
+                  return (
+                  <div key={issue.type} style={entrance.style} className={`${entrance.className} border rounded-lg p-3 flex items-center justify-between ${
                     issue.severity === "error" ? "border-danger/30 bg-danger-subtle/50" :
                     issue.severity === "warning" ? "border-warning/30 bg-warning-subtle/50" :
                     "border-accent/30 bg-accent-subtle/50"
@@ -366,7 +390,8 @@ export default function DataManagementPage() {
                       </button>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -409,8 +434,11 @@ export default function DataManagementPage() {
                 <button onClick={() => setIntegrityItems(null)} className="text-muted hover:text-muted text-lg">&times;</button>
               </div>
               <div className="space-y-1 max-h-96 overflow-auto">
-                {integrityItems.items.map((item, i) => (
-                  <div key={i} className="text-xs p-2 bg-subtle rounded flex items-center justify-between">
+                {integrityItems.items.map((item, i) => {
+                  const itemKey = integrityItemKeys[i];
+                  const entrance = integrityItemEntrance(itemKey, i);
+                  return (
+                  <div key={itemKey} className={`${entrance.className} text-xs p-2 bg-subtle rounded flex items-center justify-between`} style={entrance.style}>
                     <div className="truncate flex-1">
                       {item.path && <span className="font-mono text-fg">{item.path}</span>}
                       {item.file_name && !item.path && <span className="font-mono">{item.file_name}</span>}
@@ -424,7 +452,8 @@ export default function DataManagementPage() {
                       <span className="text-muted ml-2 shrink-0 text-[10px]">{item.source}/{item.source_work_id}</span>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>

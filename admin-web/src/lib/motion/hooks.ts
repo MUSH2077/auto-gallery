@@ -4,10 +4,10 @@
 // entrance animations against replaying on poll-driven re-renders — the #1
 // motion risk in this app (see docs/frontend-motion-audit.md §3.3.1).
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 
 import { motionConfig } from "./config";
-import { motionTokens } from "./tokens";
+import { motionTokens, staggerDelay } from "./tokens";
 
 /**
  * Keep an element mounted through its exit animation.
@@ -51,9 +51,10 @@ export function usePresence(
 }
 
 /**
- * Marks list keys as "seen" after each commit and returns a predicate that is
- * true only for keys not yet committed — i.e. items entering for the first
- * time. Poll/refetch re-renders of already-seen items never re-animate.
+ * Marks list keys as "seen" after each commit and keeps their entrance state
+ * alive through the shared animation window. This prevents an immediate
+ * progress/state re-render from cancelling a just-started animation while
+ * ensuring later poll/refetch renders do not replay old keys.
  * Render-phase pure (seen is only mutated in the effect), so StrictMode
  * double renders stay consistent.
  *
@@ -66,8 +67,56 @@ export function useEnterOnce(
   keys: ReadonlyArray<string | number>,
 ): (key: string | number) => boolean {
   const seen = useRef<Set<string | number>>(new Set());
+  const entering = useRef<Set<string | number>>(new Set());
+  const timers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+
   useEffect(() => {
-    for (const key of keys) seen.current.add(key);
+    const newKeys = keys.filter((key) => !seen.current.has(key));
+    if (!newKeys.length) return;
+    for (const key of newKeys) {
+      seen.current.add(key);
+      entering.current.add(key);
+    }
+    const timer = setTimeout(() => {
+      for (const key of newKeys) entering.current.delete(key);
+      timers.current.delete(timer);
+    }, motionTokens.duration.enter + motionTokens.stagger.cap + motionTokens.duration.instant);
+    timers.current.add(timer);
   });
-  return useCallback((key: string | number) => !seen.current.has(key), []);
+
+  useEffect(() => () => {
+    for (const timer of timers.current) clearTimeout(timer);
+    timers.current.clear();
+    seen.current.clear();
+    entering.current.clear();
+  }, []);
+
+  return useCallback(
+    (key: string | number) => !seen.current.has(key) || entering.current.has(key),
+    [],
+  );
+}
+
+export interface StaggeredEntranceProps {
+  className: string;
+  style?: CSSProperties;
+}
+
+/**
+ * Returns the shared one-shot stagger props for a dynamic collection.
+ * Existing keys never replay after polling/refetch; newly observed keys enter
+ * in their current visual order.
+ */
+export function useStaggeredEntrance(
+  keys: ReadonlyArray<string | number>,
+): (key: string | number, index: number) => StaggeredEntranceProps {
+  const isNew = useEnterOnce(keys);
+  return useCallback((key: string | number, index: number) => (
+    isNew(key)
+      ? {
+          className: "page-item",
+          style: { "--delay": staggerDelay(index) } as CSSProperties,
+        }
+      : { className: "" }
+  ), [isNew]);
 }

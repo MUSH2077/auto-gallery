@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { usePresence } from "@/lib/motion";
@@ -48,7 +48,9 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 function AppShell({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [mobileViewport, setMobileViewport] = useState(false);
   const { mounted: drawerMounted, closing: drawerClosing } = usePresence(mobileOpen);
+  const sidebarTriggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     try {
@@ -56,8 +58,57 @@ function AppShell({ children }: { children: React.ReactNode }) {
     } catch {}
   }, []);
 
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 767px)");
+    const syncViewport = () => {
+      setMobileViewport(media.matches);
+      if (!media.matches) setMobileOpen(false);
+    };
+    syncViewport();
+    media.addEventListener("change", syncViewport);
+    return () => media.removeEventListener("change", syncViewport);
+  }, []);
+
+  useEffect(() => {
+    if (!mobileOpen || !drawerMounted) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>("#admin-mobile-sidebar button, #admin-mobile-sidebar a")?.focus();
+    });
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMobileOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const drawer = document.querySelector<HTMLElement>("#admin-mobile-sidebar");
+      const focusable = Array.from(drawer?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) || []).filter((element) => !element.hasAttribute("hidden"));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      (sidebarTriggerRef.current || previousFocus)?.focus();
+    };
+  }, [drawerMounted, mobileOpen]);
+
   const toggleSidebar = () => {
-    if (typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches) {
+    if (mobileViewport) {
       setMobileOpen((open) => !open);
       return;
     }
@@ -71,7 +122,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-screen">
       {/* Desktop sidebar — sticky full-height, collapse is instant by design */}
       {!collapsed && (
-        <aside className="sticky top-0 hidden h-screen shrink-0 overflow-hidden border-r border-border bg-subtle md:block">
+        <aside id="admin-sidebar" className="sticky top-0 hidden h-screen shrink-0 overflow-hidden border-r border-border bg-subtle md:block">
           <AppSidebar />
         </aside>
       )}
@@ -79,17 +130,31 @@ function AppShell({ children }: { children: React.ReactNode }) {
       {drawerMounted && (
         <>
           <div
-            className={`fixed inset-0 z-40 bg-black/30 md:hidden ${drawerClosing ? "overlay-backdrop-exit" : "overlay-backdrop"}`}
+            className={`fixed inset-0 z-50 bg-black/30 md:hidden ${drawerClosing ? "overlay-backdrop-exit" : "overlay-backdrop"}`}
             onClick={() => setMobileOpen(false)}
             aria-hidden
           />
-          <aside className={`fixed inset-y-0 left-0 z-50 border-r border-border bg-subtle md:hidden ${drawerClosing ? "drawer-left-exit" : "drawer-left"}`}>
-            <AppSidebar onNavigate={() => setMobileOpen(false)} />
+          <aside
+            id="admin-mobile-sidebar"
+            role="dialog"
+            aria-modal="true"
+            aria-label="auto-gallery"
+            className={`fixed inset-y-0 left-0 z-[60] border-r border-border bg-subtle md:hidden ${drawerClosing ? "drawer-left-exit" : "drawer-left"}`}
+          >
+            <AppSidebar
+              onNavigate={() => setMobileOpen(false)}
+              onDismiss={() => setMobileOpen(false)}
+            />
           </aside>
         </>
       )}
       <div className="flex min-w-0 flex-1 flex-col">
-        <AppTopBar onToggleSidebar={toggleSidebar} />
+        <AppTopBar
+          onToggleSidebar={toggleSidebar}
+          sidebarExpanded={mobileViewport ? mobileOpen : !collapsed}
+          sidebarId={mobileViewport ? "admin-mobile-sidebar" : "admin-sidebar"}
+          sidebarTriggerRef={sidebarTriggerRef}
+        />
         <main id="main-content" className="min-h-[calc(100vh-56px)]">{children}</main>
       </div>
     </div>

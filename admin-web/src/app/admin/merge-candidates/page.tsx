@@ -1,8 +1,8 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { staggerDelay } from "@/lib/motion";
-import { PageHeader, EmptyState, ErrorState, SourceBadge, PermissionGuard } from "@/components";
+import { useStaggeredEntrance } from "@/lib/motion";
+import { PageHeader, PageShell, EmptyState, ErrorState, SourceBadge, PermissionGuard } from "@/components";
 import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
 
@@ -10,10 +10,14 @@ export default function MergeCandidatesPage() {
   const t = useT();
   const router = useRouter();
   const mc = useQuery({ queryKey: queryKeys.dedup.mergeCandidates, queryFn: api.listMergeCandidates });
+  const candidateItems = mc.data?.candidates || [];
+  const candidateEntrance = useStaggeredEntrance(
+    candidateItems.map((candidate) => candidate.work_ids.join(":")),
+  );
 
   return (
     <PermissionGuard module="curation">
-    <main className="max-w-4xl mx-auto p-6">
+    <PageShell size="normal">
       <PageHeader title={t("merge.title")} description={t("merge.desc")} />
 
       <div className="mb-6 rounded-md border border-warning-subtle bg-warning-subtle p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-warning">
@@ -27,8 +31,11 @@ export default function MergeCandidatesPage() {
         <EmptyState title={t("merge.no_candidates")} description={t("merge.no_candidates_desc")} />
       )}
 
-      {mc.data?.candidates.map((c, i) => (
-        <div key={i} className="card page-item mb-2 p-4 text-sm" style={{ "--delay": staggerDelay(i) } as React.CSSProperties}>
+      {mc.data?.candidates.map((c, i) => {
+        const itemKey = c.work_ids.join(":");
+        const entrance = candidateEntrance(itemKey, i);
+        return (
+        <div key={itemKey} className={`card ${entrance.className} mb-2 p-4 text-sm`} style={entrance.style}>
           <div className="font-medium mb-2">{c.title}</div>
           <div className="flex items-center gap-2 mb-2">
             {c.sources.map((s) => <SourceBadge key={s} source={s} />)}
@@ -41,8 +48,9 @@ export default function MergeCandidatesPage() {
             ))}
           </div>
         </div>
-      ))}
-    </main>
+        );
+      })}
+    </PageShell>
     </PermissionGuard>
   );
 }

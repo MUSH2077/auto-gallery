@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
@@ -7,8 +7,8 @@ import { ThemeToggle, LangToggle, PaletteToggle } from "@/lib/theme";
 import { useAuth } from "@/lib/auth";
 import { usePermissions } from "@/lib/usePermissions";
 import { usePresence } from "@/lib/motion";
+import { findAdminNavEntry } from "@/lib/adminNavigation";
 import { NotificationBell } from "@/components/NotificationCenter";
-import { findNavEntry } from "@/components/AppSidebar";
 
 function UserMenu() {
   const t = useT();
@@ -58,12 +58,22 @@ function UserMenu() {
   );
 }
 
-export default function AppTopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
+export default function AppTopBar({
+  onToggleSidebar,
+  sidebarExpanded,
+  sidebarId,
+  sidebarTriggerRef,
+}: {
+  onToggleSidebar: () => void;
+  sidebarExpanded: boolean;
+  sidebarId: string;
+  sidebarTriggerRef?: RefObject<HTMLButtonElement>;
+}) {
   const t = useT();
   const pathname = usePathname();
   const router = useRouter();
   const { has } = usePermissions();
-  const crumb = findNavEntry(pathname);
+  const crumb = findAdminNavEntry(pathname);
   const showSearch = has("library");
   const showUpload = has("upload");
 
@@ -82,7 +92,15 @@ export default function AppTopBar({ onToggleSidebar }: { onToggleSidebar: () => 
 
   return (
     <header className="sticky top-0 z-40 flex h-14 items-center gap-2 border-b border-border bg-canvas px-4">
-      <button onClick={onToggleSidebar} className="btn-icon no-press" aria-label={t("nav.sidebar_toggle")}>
+      <button
+        ref={sidebarTriggerRef}
+        type="button"
+        onClick={onToggleSidebar}
+        className="btn-icon no-press"
+        aria-label={t("nav.sidebar_toggle")}
+        aria-controls={sidebarId}
+        aria-expanded={sidebarExpanded}
+      >
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
           <path d="M1 2.75A.75.75 0 0 1 1.75 2h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 2.75Zm0 5A.75.75 0 0 1 1.75 7h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 7.75ZM1.75 12h12.5a.75.75 0 0 1 0 1.5H1.75a.75.75 0 0 1 0-1.5Z" />
         </svg>

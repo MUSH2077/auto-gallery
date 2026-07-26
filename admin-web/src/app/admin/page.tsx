@@ -7,6 +7,7 @@ import { api, queryKeys, WorkbenchSummary } from "@/lib/api";
 import { EmptyState, ErrorState, SourceBadge, StatusBadge, PageHeader, PageShell, MotionNumber } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
+import { useStaggeredEntrance, type StaggeredEntranceProps } from "@/lib/motion";
 
 function fmtBytes(bytes?: number | null): string {
   if (!bytes) return "0 B";
@@ -62,9 +63,17 @@ function AttentionCard({ title, value, description, href, tone }: { title: strin
   );
 }
 
-function RecentRow({ children, href }: { children: ReactNode; href: string }) {
+function RecentRow({
+  children,
+  href,
+  entrance,
+}: {
+  children: ReactNode;
+  href: string;
+  entrance?: StaggeredEntranceProps;
+}) {
   return (
-    <Link href={href} className="flex min-w-0 items-center gap-3 rounded-md px-2 py-2 text-sm hover:bg-subtle dark:hover:bg-subtle">
+    <Link href={href} className={`${entrance?.className || ""} flex min-w-0 items-center gap-3 rounded-md px-2 py-2 text-sm hover:bg-subtle dark:hover:bg-subtle`} style={entrance?.style}>
       {children}
     </Link>
   );
@@ -88,14 +97,18 @@ function MiniBar({ value, max, tone }: { value: number; max: number; tone: "info
 function RecentActivity({ data }: { data: WorkbenchSummary }) {
   const t = useT();
   const fmt = useI18nFormat();
+  const downloadEntrance = useStaggeredEntrance(data.recent.download_jobs.map((job) => `download:${job.id}`));
+  const importEntrance = useStaggeredEntrance(data.recent.import_jobs.map((job) => `import:${job.id}`));
+  const workEntrance = useStaggeredEntrance(data.recent.works.map((work) => `work:${work.id}`));
+  const syncEntrance = useStaggeredEntrance(data.recent.successful_syncs.map((sync) => `sync:${sync.source_id}`));
   return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
       <section className="card p-4">
         <h2 className="mb-3 text-base font-semibold">{t("dashboard.recent_download_jobs")}</h2>
         {data.recent.download_jobs.length ? (
           <div className="space-y-1">
-            {data.recent.download_jobs.map((job) => (
-              <RecentRow key={job.id} href="/admin/jobs">
+            {data.recent.download_jobs.map((job, index) => (
+              <RecentRow key={job.id} href="/admin/jobs" entrance={downloadEntrance(`download:${job.id}`, index)}>
                 <SourceBadge source={job.source} />
                 <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted">{job.source_url}</span>
                 <StatusBadge status={job.status} />
@@ -108,15 +121,15 @@ function RecentActivity({ data }: { data: WorkbenchSummary }) {
       <section className="card p-4">
         <h2 className="mb-3 text-base font-semibold">{t("dashboard.recent_imports_works")}</h2>
         <div className="space-y-1">
-          {data.recent.import_jobs.slice(0, 3).map((job) => (
-            <RecentRow key={job.id} href="/admin/import-jobs">
+          {data.recent.import_jobs.slice(0, 3).map((job, index) => (
+            <RecentRow key={job.id} href="/admin/import-jobs" entrance={importEntrance(`import:${job.id}`, index)}>
               <span className="w-20 font-mono text-xs text-muted">{job.id.slice(0, 8)}</span>
               <span className="min-w-0 flex-1 truncate text-xs text-muted">{t("dashboard.import_for", { id: job.download_job_id.slice(0, 8) })}</span>
               <StatusBadge status={job.status} />
             </RecentRow>
           ))}
-          {data.recent.works.slice(0, 5).map((work) => (
-            <RecentRow key={work.id} href={`/admin/works/${work.id}`}>
+          {data.recent.works.slice(0, 5).map((work, index) => (
+            <RecentRow key={work.id} href={`/admin/works/${work.id}`} entrance={workEntrance(`work:${work.id}`, index)}>
               <div className="h-8 w-8 shrink-0 overflow-hidden rounded-md border border-border bg-subtle dark:border-border dark:bg-subtle">
                 {work.thumbnail_asset_id && <img src={api.mediaUrl(work.thumbnail_asset_id, "thumb")} alt="" className="h-full w-full object-cover" loading="lazy" decoding="async" />}
               </div>
@@ -133,8 +146,8 @@ function RecentActivity({ data }: { data: WorkbenchSummary }) {
         <h2 className="mb-3 text-base font-semibold">{t("dashboard.successful_syncs")}</h2>
         {data.recent.successful_syncs.length ? (
           <div className="grid gap-2 md:grid-cols-2">
-            {data.recent.successful_syncs.map((sync) => (
-              <RecentRow key={sync.source_id} href={`/admin/creators/${sync.creator_id}`}>
+            {data.recent.successful_syncs.map((sync, index) => (
+              <RecentRow key={sync.source_id} href={`/admin/creators/${sync.creator_id}`} entrance={syncEntrance(`sync:${sync.source_id}`, index)}>
                 <SourceBadge source={sync.source} />
                 <span className="min-w-0 flex-1 truncate text-sm text-fg">{sync.creator_name}</span>
                 <span className="text-xs text-muted">{fmt.relative(sync.last_synced_at)}</span>

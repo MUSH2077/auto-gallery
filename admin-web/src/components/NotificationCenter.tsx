@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
 import { api, queryKeys } from "@/lib/api";
-import { useEnterOnce, usePresence } from "@/lib/motion";
+import { usePresence, useStaggeredEntrance } from "@/lib/motion";
 
 type ActivityStatus = "running" | "completed" | "error" | "pending";
 
@@ -484,7 +484,7 @@ export function NotificationBell() {
     staleTime: 10_000,
   });
   const serverItems = recent.data?.items ?? [];
-  const isNewItem = useEnterOnce(serverItems.map((task) => task.id));
+  const itemEntrance = useStaggeredEntrance(serverItems.map((task) => task.id));
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -659,12 +659,14 @@ export function NotificationBell() {
                     </div>
                   </div>
                 )}
-                {serverItems.map((task) => {
+                {serverItems.map((task, index) => {
                   const st = taskActivityStatus(task.status);
                   const link = bellTaskLink(task);
+                  const entrance = itemEntrance(task.id, index);
                   return (
                     <div key={task.id}
-                      className={`${isNewItem(task.id) ? "fade-in" : ""} border-b border-border px-4 py-2.5 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle ${link ? "cursor-pointer" : "cursor-default"}`}
+                      className={`${entrance.className} border-b border-border px-4 py-2.5 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle ${link ? "cursor-pointer" : "cursor-default"}`}
+                      style={entrance.style}
                       onClick={() => { if (link) { setOpen(false); router.push(link); } }}>
                       <div className="flex items-start gap-2.5">
                         <div className="mt-0.5">{statusIcon(st)}</div>

@@ -5,8 +5,9 @@ import { Suspense, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CurationCommit, queryKeys } from "@/lib/api";
-import { EmptyState, ErrorState, PageHeader, PermissionGuard } from "@/components";
+import { EmptyState, ErrorState, PageHeader, PageShell, PermissionGuard } from "@/components";
 import { useT } from "@/lib/i18n";
+import { useStaggeredEntrance } from "@/lib/motion";
 
 function formatBytes(bytes: number) {
   if (!bytes) return "0 B";
@@ -144,6 +145,10 @@ function CurationContent() {
   const purgePreview = useQuery({ queryKey: [...queryKeys.curation.all, "purge-preview"], queryFn: () => api.previewPurge(), refetchInterval: 30000 });
   const suggestions = useQuery({ queryKey: queryKeys.curation.suggestions, queryFn: api.curationRuleSuggestions });
   const backfillStatus = useQuery({ queryKey: queryKeys.curation.backfillStatus, queryFn: api.getCurationBackfillStatus, refetchInterval: 30000 });
+  const commitItems = commits.data?.items ?? [];
+  const suggestionItems = suggestions.data ?? [];
+  const commitEntrance = useStaggeredEntrance(commitItems.map((commit) => commit.id));
+  const suggestionEntrance = useStaggeredEntrance(suggestionItems.map((item) => item.id));
 
   const revert = useMutation({
     mutationFn: (id: string) => api.revertCurationCommit(id),
@@ -194,7 +199,7 @@ function CurationContent() {
   };
 
   return (
-    <main className="mx-auto max-w-7xl p-6">
+    <PageShell size="wide">
       <PageHeader title={t("curation.title")} description={t("curation.desc")} />
       {(subjectType || subjectId) && (
         <div className="mb-4 rounded-md border border-border bg-white px-3 py-2 text-sm dark:border-border dark:bg-surface">
@@ -226,9 +231,14 @@ function CurationContent() {
           {commits.isLoading && <div className="h-48 rounded-md border border-border bg-white dark:border-border dark:bg-surface" />}
           {commits.error && <ErrorState message={(commits.error as Error).message} onRetry={() => commits.refetch()} />}
           {commits.data && commits.data.items.length === 0 && <EmptyState title={t("curation.empty_title")} description={t("curation.empty_desc")} />}
-          {commits.data?.items.map((commit) => (
-            <CommitCard key={commit.id} commit={commit} onRevert={(id) => revert.mutate(id)} reverting={revert.isPending} />
-          ))}
+          {commitItems.map((commit, index) => {
+            const entrance = commitEntrance(commit.id, index);
+            return (
+              <div key={commit.id} className={entrance.className} style={entrance.style}>
+                <CommitCard commit={commit} onRevert={(id) => revert.mutate(id)} reverting={revert.isPending} />
+              </div>
+            );
+          })}
         </section>
 
         <aside className="space-y-4">
@@ -292,17 +302,20 @@ function CurationContent() {
           <div className="rounded-md border border-border bg-white p-4 dark:border-border dark:bg-surface">
             <h2 className="text-sm font-semibold">{t("curation.rule_suggestions")}</h2>
             <div className="mt-3 space-y-3">
-              {suggestions.data?.length ? suggestions.data.map((item) => (
-                <div key={item.id} className="rounded-md border border-border p-3 text-sm dark:border-border">
-                  <div className="font-medium">{item.title}</div>
-                  <p className="mt-1 text-xs text-muted">{item.description}</p>
-                </div>
-              )) : <p className="text-xs text-muted">{t("curation.no_suggestions")}</p>}
+              {suggestionItems.length ? suggestionItems.map((item, index) => {
+                const entrance = suggestionEntrance(item.id, index);
+                return (
+                  <div key={item.id} className={`${entrance.className} rounded-md border border-border p-3 text-sm dark:border-border`} style={entrance.style}>
+                    <div className="font-medium">{item.title}</div>
+                    <p className="mt-1 text-xs text-muted">{item.description}</p>
+                  </div>
+                );
+              }) : <p className="text-xs text-muted">{t("curation.no_suggestions")}</p>}
             </div>
           </div>
         </aside>
       </div>
-    </main>
+    </PageShell>
   );
 }
 

@@ -2,8 +2,8 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { motionConfig, motionTokens, staggerDelay } from "@/lib/motion";
-import { PageHeader, EmptyState, ErrorState, ConfirmDialog } from "@/components";
+import { motionConfig, motionTokens, useStaggeredEntrance } from "@/lib/motion";
+import { PageHeader, PageShell, EmptyState, ErrorState, ConfirmDialog } from "@/components";
 import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
 
@@ -15,6 +15,10 @@ export default function CreatorDuplicatesPage() {
   const [selectedTarget, setSelectedTarget] = useState<string | null>(null);
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
   const [confirmMerge, setConfirmMerge] = useState(false);
+  const duplicateGroups = dups.data?.duplicates || [];
+  const groupEntrance = useStaggeredEntrance(
+    duplicateGroups.map((group) => group.creator_ids.join(":")),
+  );
   // Merge feedback: the merged group collapses briefly before the refetch
   // removes it (state confirmation → essential, survives low-end gate).
   const [collapsingGroup, setCollapsingGroup] = useState<number | null>(null);
@@ -60,7 +64,7 @@ export default function CreatorDuplicatesPage() {
   };
 
   return (
-    <main className="max-w-5xl mx-auto p-6">
+    <PageShell size="normal">
       <PageHeader title={t("duplicates.title")} description={t("duplicates.desc")} />
 
       <div className="mb-6 rounded-md border border-warning-subtle bg-warning-subtle p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-warning">
@@ -75,10 +79,12 @@ export default function CreatorDuplicatesPage() {
         <EmptyState title={t("duplicates.no_duplicates")} description={t("duplicates.no_duplicates_desc")} />
       )}
 
-      {dups.data?.duplicates.map((group, gi) => (
-        <div key={gi}
-          className={`card mb-4 p-4 page-item ${collapsingGroup === gi ? "merge-collapse" : ""}`}
-          style={{ "--delay": staggerDelay(gi) } as React.CSSProperties}>
+      {dups.data?.duplicates.map((group, gi) => {
+        const entrance = groupEntrance(group.creator_ids.join(":"), gi);
+        return (
+        <div key={group.creator_ids.join(":")}
+          className={`card mb-4 p-4 ${entrance.className} ${collapsingGroup === gi ? "merge-collapse" : ""}`}
+          style={entrance.style}>
           <div className="flex items-center justify-between mb-3">
             <div>
               <span className="badge font-mono">
@@ -113,7 +119,8 @@ export default function CreatorDuplicatesPage() {
             ))}
           </div>
         </div>
-      ))}
+        );
+      })}
 
       {/* Merge action bar */}
       {selectedSources.size > 0 && (
@@ -154,6 +161,6 @@ export default function CreatorDuplicatesPage() {
           error={(merge.error as Error)?.message}
         />
       )}
-    </main>
+    </PageShell>
   );
 }
