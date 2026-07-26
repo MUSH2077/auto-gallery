@@ -176,7 +176,6 @@ export default function DataManagementPage() {
   const totalSourceSize = breakdown?.sources
     ? Object.values(breakdown.sources).reduce((sum, s) => sum + s.size_mb, 0)
     : 0;
-  const layerEntries = breakdown?.layers ? Object.entries(breakdown.layers) : [];
   const sourceEntries = breakdown?.sources
     ? Object.entries(breakdown.sources).sort(([, a], [, b]) => b.size_mb - a.size_mb)
     : [];
@@ -185,7 +184,6 @@ export default function DataManagementPage() {
   const integrityItemKeys = (integrityItems?.items || []).map(
     (item, index) => item.id || item.path || item.file_name || item.name || `item:${index}`,
   );
-  const layerEntrance = useStaggeredEntrance(layerEntries.map(([key]) => `layer:${key}`));
   const sourceEntrance = useStaggeredEntrance(sourceEntries.map(([source]) => `source:${source}`));
   const creatorEntrance = useStaggeredEntrance(
     creatorEntries.map((creator) => creator.creator_id),
@@ -237,27 +235,6 @@ export default function DataManagementPage() {
           <StatCard key={s.label} label={s.label} value={s.value} tone={s.color === "green" ? "success" : s.color === "amber" ? "warning" : "active"} className="p-3 text-center [&>div:first-child]:text-xl" />
         ))}
       </div>
-
-      {layerEntries.length > 0 && (
-        <div className="card mb-6 p-4">
-          <h3 className="font-medium text-sm mb-3">{t("datamgmt.storage_layers_title")}</h3>
-          <div className="grid gap-3 md:grid-cols-4">
-            {layerEntries.map(([key, layer], index) => {
-              const entrance = layerEntrance(`layer:${key}`, index);
-              return (
-              <div key={key} className={`${entrance.className} rounded-md border border-border bg-subtle p-3 dark:border-border dark:bg-surface`} style={entrance.style}>
-                <div className="text-xs text-muted">{t(`datamgmt.layer_${key}`)}</div>
-                <div className="mt-1 text-lg font-semibold dark:text-white">{formatSize(layer.size_mb)}</div>
-                <div className="mt-1 truncate font-mono text-[10px] text-muted" title={layer.path}>{layer.path}</div>
-              </div>
-              );
-            })}
-          </div>
-          <p className="mt-3 text-xs text-muted">
-            DOWNLOAD_ROOT is the long-term original media store. LIBRARY_ROOT keeps metadata and thumbnails for indexing and browsing.
-          </p>
-        </div>
-      )}
 
       <div className="grid grid-cols-1 gap-6 mb-6 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)]">
         {/* ═══ Storage Distribution ═══ */}
