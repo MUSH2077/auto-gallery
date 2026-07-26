@@ -363,8 +363,6 @@ function SubscriptionsContent() {
                   <RowActionMenu
                     label={t("common.more_actions")}
                     items={[
-                      { label: t("subscriptions.view"), href: `/admin/subscriptions/${s.id}` },
-                      { label: t("scheduler.open_jobs"), href: `/admin/jobs?q=${encodeURIComponent(name)}` },
                       { label: t("subscriptions.del"), tone: "danger", onSelect: () => setDeleteId(s.id) },
                     ]}
                   />

@@ -42,18 +42,23 @@ async def get_tag(tag_id: UUID, db: AsyncSession = Depends(get_db)):
     from app.models.creator import Creator
     from sqlalchemy import func
 
+    usage_count_result = await db.execute(
+        select(func.count(WorkTag.work_id)).where(WorkTag.tag_id == tag_id)
+    )
+    usage_count = usage_count_result.scalar() or 0
+
     top_creators_rows = await db.execute(
         select(
             Creator.id,
             func.coalesce(Creator.display_name, Creator.name).label("creator_name"),
-            func.count(WorkTag.work_id).label("work_count"),
+            func.count(func.distinct(WorkTag.work_id)).label("work_count"),
         )
         .join(SourceCreator, SourceCreator.creator_id == Creator.id)
         .join(WorkSource, WorkSource.source_creator_id == SourceCreator.source_creator_id)
         .join(WorkTag, WorkTag.work_id == WorkSource.work_id)
         .where(WorkTag.tag_id == tag_id)
         .group_by(Creator.id)
-        .order_by(func.count(WorkTag.work_id).desc())
+        .order_by(func.count(func.distinct(WorkTag.work_id)).desc())
         .limit(10)
     )
     top_creators = [
@@ -65,7 +70,7 @@ async def get_tag(tag_id: UUID, db: AsyncSession = Depends(get_db)):
         id=tag.id,
         normalized_name=tag.normalized_name,
         category=tag.category,
-        usage_count=tag.usage_count,
+        usage_count=usage_count,
         created_at=tag.created_at,
         top_creators=top_creators,
     )
