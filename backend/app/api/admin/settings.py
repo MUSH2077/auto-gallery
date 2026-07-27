@@ -17,7 +17,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,7 +34,15 @@ from app.services.admin_data import ENTITIES, clear_entity_data
 
 from ._routers import router
 
-DEFAULT_DEDUP = {"source_level_enabled": False, "cross_source_enabled": False, "auto_merge": False, "phash_threshold": 8}
+DEFAULT_DEDUP = {
+    "auto_group_enabled": True,
+    "phash_threshold": 4,
+    "ssim_threshold": 0.98,
+    "aspect_ratio_tolerance": 0.01,
+    "auto_group_score": 95,
+    "review_score": 70,
+    "quarantine_days": 30,
+}
 DEFAULT_DL = {"timeout_seconds": 600, "max_retries": 3, "retry_backoff_base_seconds": 60, "max_posts": 200, "skip_ai_generated": False}
 
 _system_info_cache: dict | None = None
@@ -43,10 +51,19 @@ _SYSTEM_INFO_CACHE_TTL = 60.0
 _system_info_lock = asyncio.Lock()
 
 class DedupSettings(BaseModel):
-    source_level_enabled: bool = False
-    cross_source_enabled: bool = False
-    auto_merge: bool = False
-    phash_threshold: int = 8
+    auto_group_enabled: bool = True
+    phash_threshold: int = Field(default=4, ge=0, le=4)
+    ssim_threshold: float = Field(default=0.98, ge=0.9, le=1.0)
+    aspect_ratio_tolerance: float = Field(default=0.01, ge=0.0, le=0.05)
+    auto_group_score: float = Field(default=95, ge=70, le=100)
+    review_score: float = Field(default=70, ge=0, le=100)
+    quarantine_days: int = Field(default=30, ge=1, le=365)
+
+    @model_validator(mode="after")
+    def validate_score_order(self):
+        if self.review_score > self.auto_group_score:
+            raise ValueError("review_score must not exceed auto_group_score")
+        return self
 
 class SubscriptionDefaults(BaseModel):
     default_sync_interval_hours: int = 6
@@ -250,20 +267,36 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
         from app.providers import registry
         from app.services.settings import source_key_for_extractor
 
-        def _safe_file_size(path: Path) -> int:
+        def _safe_file_stat(path: Path):
             try:
-                return path.stat().st_size if path.is_file() else 0
+                return path.stat() if path.is_file() else None
             except Exception:
-                return 0
+                return None
 
-        def _safe_dir_size(path: Path) -> int:
+        def _safe_file_size(path: Path) -> int:
+            stat = _safe_file_stat(path)
+            return stat.st_size if stat else 0
+
+        def _safe_dir_size(
+            path: Path,
+            seen_inodes: set[tuple[int, int]] | None = None,
+        ) -> int:
             total = 0
+            if seen_inodes is None:
+                seen_inodes = set()
             try:
                 if not path.exists():
                     return 0
                 for f in path.rglob("*"):
                     if f.is_file():
-                        total += _safe_file_size(f)
+                        stat = _safe_file_stat(f)
+                        if not stat:
+                            continue
+                        inode = (stat.st_dev, stat.st_ino)
+                        if inode in seen_inodes:
+                            continue
+                        seen_inodes.add(inode)
+                        total += stat.st_size
             except Exception:
                 return total
             return total
@@ -280,27 +313,45 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
 
         library_index_bytes = _safe_dir_size(lib_root)
         original_media_bytes = 0
+        original_media_inodes: set[tuple[int, int]] = set()
         source_acc: dict[str, dict] = {}
         repositories: list[dict] = []
         try:
             for source_dir in dl_root.iterdir():
-                if not source_dir.is_dir() or source_dir.name.startswith("."):
+                if not source_dir.is_dir():
+                    continue
+                if source_dir.name == ".dedup-quarantine":
+                    original_media_bytes += _safe_dir_size(
+                        source_dir,
+                        original_media_inodes,
+                    )
+                    continue
+                if source_dir.name.startswith("."):
                     continue
                 canonical_source = source_key_for_extractor(source_dir.name)
                 try:
                     provider = registry.get(canonical_source)
                 except KeyError:
-                    original_media_bytes += _safe_dir_size(source_dir)
+                    original_media_bytes += _safe_dir_size(
+                        source_dir,
+                        original_media_inodes,
+                    )
                     continue
 
                 source_stats = source_acc.setdefault(
                     canonical_source,
-                    {"size_bytes": 0, "creators": set(), "work_ids": set()},
+                    {
+                        "size_bytes": 0,
+                        "logical_size_bytes": 0,
+                        "creators": set(),
+                        "work_ids": set(),
+                    },
                 )
                 for creator_dir in source_dir.iterdir():
                     if not creator_dir.is_dir():
                         continue
-                    repo_bytes = 0
+                    repo_bytes = 0.0
+                    repo_logical_bytes = 0
                     work_ids: set[str] = set()
                     source_creator_id: str | None = None
                     source_url: str | None = None
@@ -309,9 +360,19 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
                     for file_path in creator_dir.rglob("*"):
                         if not file_path.is_file():
                             continue
-                        file_size = _safe_file_size(file_path)
-                        repo_bytes += file_size
-                        original_media_bytes += file_size
+                        stat = _safe_file_stat(file_path)
+                        if not stat:
+                            continue
+                        file_size = stat.st_size
+                        repo_logical_bytes += file_size
+                        # A hard-linked byte has multiple repository paths but
+                        # occupies disk once. Attribute an equal share to each
+                        # link so creator/repository totals remain meaningful.
+                        repo_bytes += file_size / max(1, stat.st_nlink)
+                        inode = (stat.st_dev, stat.st_ino)
+                        if inode not in original_media_inodes:
+                            original_media_inodes.add(inode)
+                            original_media_bytes += file_size
                         if file_path.suffix.lower() != ".json":
                             continue
                         try:
@@ -338,14 +399,17 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
                             if child.is_dir()
                         }
 
-                    source_stats["size_bytes"] += repo_bytes
+                    repo_physical_bytes = round(repo_bytes)
+                    source_stats["size_bytes"] += repo_physical_bytes
+                    source_stats["logical_size_bytes"] += repo_logical_bytes
                     source_stats["creators"].add(creator_dir.name)
                     source_stats["work_ids"].update(work_ids)
                     repositories.append({
                         "disk_source": source_dir.name,
                         "source": canonical_source,
                         "directory_name": creator_dir.name,
-                        "size_bytes": repo_bytes,
+                        "size_bytes": repo_physical_bytes,
+                        "logical_size_bytes": repo_logical_bytes,
                         "work_count": len(work_ids),
                         "source_creator_id": source_creator_id,
                         "source_url": source_url,
@@ -357,6 +421,10 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
         sources = {
             source: {
                 "size_mb": round(stats["size_bytes"] / (1024 ** 2), 1),
+                "logical_size_mb": round(
+                    stats["logical_size_bytes"] / (1024 ** 2),
+                    1,
+                ),
                 "creator_count": len(stats["creators"]),
                 "work_count": len(stats["work_ids"]),
             }
@@ -481,6 +549,10 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
             "disk_source": fs_repo["disk_source"],
             "directory_name": fs_repo["directory_name"],
             "size_mb": round(fs_repo["size_bytes"] / (1024 ** 2), 1),
+            "logical_size_mb": round(
+                fs_repo["logical_size_bytes"] / (1024 ** 2),
+                1,
+            ),
             "work_count": fs_repo["work_count"],
         }
         legacy_entry = {

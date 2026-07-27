@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 ENTITIES = {
     "works": [
         "work_source_tags", "work_tags", "asset_sources",
+        "asset_dedup_decisions", "asset_dedup_cases", "visual_asset_members",
+        "visual_asset_groups", "asset_dedup_evidence", "asset_dedup_outbox",
+        "asset_dedup_scans",
         "work_curation_states", "asset_storage_states",
         "assets", "work_sources", "works",
     ],
@@ -55,6 +58,9 @@ async def clear_entity_data(entity: str, db: AsyncSession) -> dict:
         await db.flush()
         order = [
             "work_source_tags", "work_tags", "asset_sources",
+            "asset_dedup_decisions", "asset_dedup_cases", "visual_asset_members",
+            "visual_asset_groups", "asset_dedup_evidence", "asset_dedup_outbox",
+            "asset_dedup_scans",
             "curation_changes", "work_curation_states", "creator_curation_states",
             "asset_storage_states", "curation_commits", "assets", "work_sources",
             "works", "storage_artifacts", "task_runs", "import_jobs", "download_jobs",

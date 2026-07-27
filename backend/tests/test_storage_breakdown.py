@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 from sqlalchemy import text
@@ -80,6 +81,9 @@ async def test_storage_breakdown_aggregates_creator_repositories_and_keeps_unlin
         json.dumps(_x_metadata(888, 303, "orphan_fixture")),
         encoding="utf-8",
     )
+    pixiv_media = pixiv_dir / "12345_1.jpg"
+    pixiv_media.write_bytes(b"x" * (1024 * 1024))
+    os.link(pixiv_media, x_dir / "777_1.jpg")
 
     monkeypatch.setattr(settings, "download_root", str(download_root))
     monkeypatch.setattr(settings, "library_root", str(library_root))
@@ -147,6 +151,13 @@ async def test_storage_breakdown_aggregates_creator_repositories_and_keeps_unlin
             assert [row["directory_name"] for row in payload["unlinked_repositories"]] == [
                 "orphan_fixture",
             ]
+            physical_source_mb = sum(
+                source["size_mb"] for source in payload["sources"].values()
+            )
+            logical_source_mb = sum(
+                source["logical_size_mb"] for source in payload["sources"].values()
+            )
+            assert logical_source_mb > physical_source_mb
     finally:
         settings_api.invalidate_storage_breakdown_cache()
         async with async_session() as db:

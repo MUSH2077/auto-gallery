@@ -24,7 +24,6 @@ export const ADMIN_LINK_MODULE: Record<string, string> = {
   "/admin/upload": "upload",
   "/admin/curation": "curation",
   "/admin/dedup": "curation",
-  "/admin/merge-candidates": "curation",
   "/admin/sources": "subscriptions",
   "/admin/subscriptions": "subscriptions",
   "/admin/reference/danbooru": "subscriptions",
@@ -50,7 +49,6 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
       { href: "/admin/upload", labelKey: "nav.upload", icon: "upload" },
       { href: "/admin/curation", labelKey: "nav.curation", icon: "branch" },
       { href: "/admin/dedup", labelKey: "nav.dedup", icon: "copy" },
-      { href: "/admin/merge-candidates", labelKey: "nav.merge", icon: "merge" },
     ],
   },
   {
@@ -112,4 +110,3 @@ export function findAdminNavEntry(pathname: string): {
   }
   return best && { groupKey: best.groupKey, labelKey: best.labelKey };
 }
-

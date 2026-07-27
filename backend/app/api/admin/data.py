@@ -66,7 +66,15 @@ def _reschedule_subscription_sync_scan(config: dict) -> dict:
     return {"removed": removed, "job_id": job.id, "interval_minutes": interval}
 
 
-DEFAULT_DEDUP = {"source_level_enabled": False, "cross_source_enabled": False, "auto_merge": False, "phash_threshold": 8}
+DEFAULT_DEDUP = {
+    "auto_group_enabled": True,
+    "phash_threshold": 4,
+    "ssim_threshold": 0.98,
+    "aspect_ratio_tolerance": 0.01,
+    "auto_group_score": 95,
+    "review_score": 70,
+    "quarantine_days": 30,
+}
 DEFAULT_DL = {"timeout_seconds": 600, "max_retries": 3, "retry_backoff_base_seconds": 60, "max_posts": 200, "skip_ai_generated": False}
 
 

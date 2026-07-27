@@ -561,9 +561,42 @@ export const api = {
   clearFailedJobs: () =>
     request<{ status: string; message: string }>("/api/v1/system/clear-failed-jobs", { method: "POST" }),
 
-  listDuplicates: () => request<{ duplicates: { source: string; source_work_id: string; count: number; work_ids: string[] }[]; total: number }>("/api/v1/admin/dedup/duplicates"),
-  scanDuplicates: () => request<{ status: string; unique_works: number; total_source_records: number; message: string }>("/api/v1/admin/dedup/scan", { method: "POST" }),
-  listMergeCandidates: () => request<{ candidates: { title: string; source_count: number; sources: string[]; work_ids: string[] }[]; total: number }>("/api/v1/admin/merge-candidates"),
+  listAssetDedupCases: (status = "pending", offset = 0, limit = 50) =>
+    request<T.AssetDedupCasePage>(
+      `/api/v1/admin/dedup/cases?status=${encodeURIComponent(status)}&offset=${offset}&limit=${limit}`,
+    ),
+  getAssetDedupCase: (id: string) =>
+    request<T.AssetDedupCase>(`/api/v1/admin/dedup/cases/${id}`),
+  decideAssetDedupCase: (
+    id: string,
+    data: {
+      expected_revision: number;
+      action: "merge" | "separate" | "defer";
+      representative_asset_id?: string;
+      reason?: string;
+      idempotency_key: string;
+    },
+  ) =>
+    request<T.AssetDedupDecision>(`/api/v1/admin/dedup/cases/${id}/decisions`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  startAssetDedupScan: (autoApply = true) =>
+    request<{ scan_id: string; job_id: string; status: string }>("/api/v1/admin/dedup/scans", {
+      method: "POST",
+      body: JSON.stringify({ auto_apply: autoApply, batch_size: 100 }),
+    }),
+  getAssetDedupScan: (id: string) =>
+    request<{
+      scan_id: string;
+      status: string;
+      assets_scanned: number;
+      candidates_evaluated: number;
+      cases_created: number;
+      assets_grouped: number;
+      bytes_reclaimable: number;
+      error?: string;
+    }>(`/api/v1/admin/dedup/scans/${id}`),
 
   // Danbooru Reference
   getDanbooruArtist: (artistId: number) =>
@@ -769,8 +802,9 @@ export const queryKeys = {
     estimate: ["backups", "estimate"] as const,
   },
   dedup: {
-    duplicates: ["dedup", "duplicates"] as const,
-    mergeCandidates: ["dedup", "merge-candidates"] as const,
+    cases: (status = "pending", offset = 0) => ["dedup", "cases", status, offset] as const,
+    case: (id: string) => ["dedup", "case", id] as const,
+    scan: (id: string) => ["dedup", "scan", id] as const,
   },
   users: {
     all: ["users"] as const,

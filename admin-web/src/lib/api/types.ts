@@ -641,6 +641,7 @@ export interface StorageRepositoryNode {
   disk_source: string;
   directory_name: string;
   size_mb: number;
+  logical_size_mb?: number;
   work_count: number;
 }
 
@@ -654,7 +655,15 @@ export interface CreatorStorageNode {
 }
 
 export interface StorageBreakdownResponse {
-  sources: Record<string, { size_mb: number; creator_count: number; work_count: number }>;
+  sources: Record<
+    string,
+    {
+      size_mb: number;
+      logical_size_mb?: number;
+      creator_count: number;
+      work_count: number;
+    }
+  >;
   creators: {
     name: string;
     display_name: string;
@@ -702,10 +711,92 @@ export interface TagSearchHit {
 }
 
 export interface DedupSettings {
-  source_level_enabled: boolean;
-  cross_source_enabled: boolean;
-  auto_merge: boolean;
+  auto_group_enabled: boolean;
   phash_threshold: number;
+  ssim_threshold: number;
+  aspect_ratio_tolerance: number;
+  auto_group_score: number;
+  review_score: number;
+  quarantine_days: number;
+}
+
+export interface AssetDedupAsset {
+  id: string;
+  file_name: string;
+  file_size?: number | null;
+  mime_type?: string | null;
+  width?: number | null;
+  height?: number | null;
+  sha256?: string | null;
+  phash?: string | null;
+  source?: string | null;
+  source_work_id?: string | null;
+  source_url?: string | null;
+  work_id?: string | null;
+  work_title?: string | null;
+  creator_id?: string | null;
+  creator_name?: string | null;
+  posted_at?: string | null;
+  thumb_url: string;
+  preview_url: string;
+  group_id?: string | null;
+  is_representative: boolean;
+}
+
+export interface AssetDedupEvidence {
+  id: string;
+  algorithm_version: string;
+  sha256_equal: boolean;
+  phash_distance?: number | null;
+  ssim_score?: number | null;
+  aspect_ratio_delta?: number | null;
+  visual_score: number;
+  metadata_score: number;
+  total_score: number;
+  hard_gate_passed: boolean;
+  facts: {
+    metadata?: {
+      same_canonical_creator?: boolean;
+      min_posted_delta_hours?: number | null;
+      left_sources?: string[];
+      right_sources?: string[];
+    };
+    thresholds?: Record<string, number>;
+  };
+}
+
+export interface AssetDedupCase {
+  id: string;
+  status: "pending" | "merged" | "separate" | "deferred";
+  revision: number;
+  left: AssetDedupAsset;
+  right: AssetDedupAsset;
+  evidence: AssetDedupEvidence;
+  suggested_representative_asset_id?: string | null;
+  created_at: string;
+  decided_at?: string | null;
+  decided_by?: string | null;
+  decision_reason?: string | null;
+}
+
+export interface AssetDedupCasePage {
+  items: AssetDedupCase[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export interface AssetDedupDecision {
+  decision_id: string;
+  case_id: string;
+  action: string;
+  status: string;
+  revision: number;
+  representative_asset_id?: string | null;
+  group_id?: string | null;
+  storage_actions: number;
+  bytes_reclaimable: number;
+  curation_commit_id?: string | null;
 }
 
 export interface SubscriptionDefaults {

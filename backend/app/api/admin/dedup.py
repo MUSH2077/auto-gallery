@@ -1,4 +1,4 @@
-"""Dedup and merge candidates."""
+"""Asset-level deduplication review and scan endpoints."""
 
 import asyncio
 import json
@@ -15,7 +15,7 @@ from typing import Literal
 from uuid import UUID
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import and_, select
@@ -27,96 +27,203 @@ logger = logging.getLogger(__name__)
 
 from app.auth import RequirePermission
 from app.database import async_session, get_db
+from app.models import AssetDedupScan
+from app.schemas.asset_dedup import (
+    AssetDedupCasePage,
+    AssetDedupCaseRead,
+    AssetDedupDecisionRead,
+    AssetDedupDecisionRequest,
+    AssetDedupScanRead,
+    AssetDedupScanRequest,
+)
+from app.services.asset_reconciliation import (
+    AssetReconciliation,
+    DedupIdempotencyConflict,
+    StaleDedupCase,
+)
 from app.services.redis_client import get_redis
-from app.services.operations import get_operation_status, set_operation_status
+from app.services.operations import (
+    enqueue_admin_operation,
+    get_operation_status,
+    set_operation_status,
+)
 
 from ._routers import router, curation_ops_router
 
-@curation_ops_router.get("/dedup/duplicates")
-async def list_duplicates():
-    from app.database import async_session
-    from app.models import WorkSource
-    from sqlalchemy import func, select
+@curation_ops_router.get("/dedup/cases", response_model=AssetDedupCasePage)
+async def list_asset_dedup_cases(
+    status: str = Query(default="pending", pattern="^(pending|merged|separate|deferred|all)$"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    return await AssetReconciliation(db).list_cases(
+        status=status,
+        offset=offset,
+        limit=limit,
+    )
 
-    async with async_session() as db:
-        result = await db.execute(
-            select(
-                WorkSource.source,
-                WorkSource.source_work_id,
-                func.count(WorkSource.id).label("cnt"),
-                func.array_agg(WorkSource.work_id).label("work_ids"),
-            )
-            .group_by(WorkSource.source, WorkSource.source_work_id)
-            .having(func.count(WorkSource.id) > 1)
-            .limit(100)
+
+@curation_ops_router.get(
+    "/dedup/cases/{case_id}", response_model=AssetDedupCaseRead
+)
+async def get_asset_dedup_case(
+    case_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    payload = await AssetReconciliation(db).get_case(case_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Asset dedup case not found")
+    return payload
+
+
+@curation_ops_router.post(
+    "/dedup/cases/{case_id}/decisions",
+    response_model=AssetDedupDecisionRead,
+)
+async def decide_asset_dedup_case(
+    case_id: UUID,
+    data: AssetDedupDecisionRequest,
+    user=RequirePermission("curation"),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        result = await AssetReconciliation(db).decide(
+            case_id,
+            expected_revision=data.expected_revision,
+            action=data.action,
+            representative_asset_id=data.representative_asset_id,
+            actor_type="admin",
+            actor_id=str(user.id),
+            reason=data.reason,
+            idempotency_key=data.idempotency_key,
         )
-        duplicates = []
-        for row in result:
-            duplicates.append({
-                "source": row.source,
-                "source_work_id": row.source_work_id,
-                "count": row.cnt,
-                "work_ids": [str(w) for w in row.work_ids],
-            })
-        return {"duplicates": duplicates, "total": len(duplicates)}
+        await db.commit()
+    except KeyError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StaleDedupCase as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except DedupIdempotencyConflict as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try:
+        from rq import Queue
+
+        Queue(name="operations", connection=get_redis()).enqueue(
+            "app.jobs.asset_dedup.run_asset_dedup_outbox",
+            100,
+            job_timeout=3600,
+            result_ttl=86400,
+        )
+    except Exception:
+        logger.warning("Failed to enqueue asset dedup storage drain", exc_info=True)
+    return result
+
+
+@curation_ops_router.post("/dedup/scans")
+async def start_asset_dedup_scan(
+    data: AssetDedupScanRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    scan = AssetDedupScan(
+        status="pending",
+        options={
+            "auto_apply": data.auto_apply,
+            "batch_size": data.batch_size,
+        },
+    )
+    db.add(scan)
+    await db.commit()
+    await db.refresh(scan)
+    try:
+        operation = await enqueue_admin_operation(
+            lock_key="lock:admin:asset-dedup-scan",
+            operation_type="asset-dedup-scan",
+            title="Asset dedup scan",
+            entity="assets",
+            func="app.jobs.asset_dedup.run_asset_dedup_scan",
+            options={"scan_id": str(scan.id)},
+            job_timeout=14400,
+        )
+    except Exception:
+        scan.status = "failed"
+        scan.error = "Unable to enqueue asset dedup scan"
+        await db.commit()
+        raise
+    return {
+        "scan_id": str(scan.id),
+        "job_id": operation["job_id"],
+        "status": operation["status"],
+    }
+
+
+@curation_ops_router.get("/dedup/scans/{scan_id}", response_model=AssetDedupScanRead)
+async def get_asset_dedup_scan(
+    scan_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    scan = await db.get(AssetDedupScan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Asset dedup scan not found")
+    return {
+        "scan_id": scan.id,
+        "status": scan.status,
+        "assets_scanned": scan.assets_scanned,
+        "candidates_evaluated": scan.candidates_evaluated,
+        "cases_created": scan.cases_created,
+        "assets_grouped": scan.assets_grouped,
+        "bytes_reclaimable": scan.bytes_reclaimable,
+        "error": scan.error,
+    }
+
+
+# Compatibility endpoint retained for permission checks and older clients.
+@curation_ops_router.get("/dedup/duplicates")
+async def list_duplicates(
+    db: AsyncSession = Depends(get_db),
+):
+    page = await AssetReconciliation(db).list_cases(
+        status="pending",
+        offset=0,
+        limit=100,
+    )
+    return {
+        "duplicates": page["items"],
+        "total": page["total"],
+        "deprecated": True,
+    }
 
 
 @curation_ops_router.post("/dedup/scan")
-async def scan_duplicates():
-    from app.database import async_session
-    from app.models import WorkSource
-    from sqlalchemy import func, select
+async def scan_duplicates(
+    db: AsyncSession = Depends(get_db),
+):
+    return await start_asset_dedup_scan(
+        AssetDedupScanRequest(),
+        db,
+    )
 
-    async with async_session() as db:
-        result = await db.execute(
-            select(func.count(func.distinct(WorkSource.source + WorkSource.source_work_id)).label("unique_works"),
-                   func.count(WorkSource.id).label("total_sources"))
-        )
-        row = result.one()
-        return {
-            "status": "ok",
-            "unique_works": row.unique_works,
-            "total_source_records": row.total_sources,
-            "message": "Dedup scan completed.",
-        }
-
-
-# ── Merge Candidates ──
 
 @curation_ops_router.get("/merge-candidates")
-async def list_merge_candidates():
-    from app.database import async_session
-    from app.models import Work, WorkSource
-    from sqlalchemy import func, select
-
-    async with async_session() as db:
-        result = await db.execute(
-            select(
-                Work.title,
-                func.count(func.distinct(WorkSource.source)).label("source_count"),
-                func.array_agg(func.distinct(WorkSource.source)).label("sources"),
-                func.array_agg(Work.id).label("work_ids"),
-            )
-            .join(WorkSource, WorkSource.work_id == Work.id)
-            .where(Work.title.isnot(None))
-            .group_by(Work.title)
-            .having(func.count(func.distinct(WorkSource.source)) > 1)
-            .limit(100)
-        )
-        candidates = []
-        for row in result:
-            candidates.append({
-                "title": row.title,
-                "source_count": row.source_count,
-                "sources": [str(s) for s in row.sources],
-                "work_ids": [str(w) for w in row.work_ids],
-            })
-        return {"candidates": candidates, "total": len(candidates)}
-
-
-@router.post("/merge-candidates/{work_id}/merge")
-async def merge_works(work_id: str, data: dict):
-    return {"status": "not_implemented", "message": "Merge functionality is deferred to a future phase."}
+async def list_merge_candidates(
+    db: AsyncSession = Depends(get_db),
+):
+    page = await AssetReconciliation(db).list_cases(
+        status="pending",
+        offset=0,
+        limit=100,
+    )
+    return {
+        "candidates": page["items"],
+        "total": page["total"],
+        "deprecated": True,
+    }
 
 
 # ── Auth Status ──

@@ -49,14 +49,24 @@ _storage_cache_ts: float = 0.0
 _STORAGE_CACHE_TTL = 60.0  # seconds
 
 
-def _dir_size(path: str) -> int:
+def _dir_size(
+    path: str,
+    seen_inodes: set[tuple[int, int]] | None = None,
+) -> int:
+    """Return physical file bytes, counting hard-linked inodes once."""
+    if seen_inodes is None:
+        seen_inodes = set()
     total = 0
     try:
         for entry in os.scandir(path):
             if entry.is_file(follow_symlinks=False):
-                total += entry.stat().st_size
+                stat = entry.stat(follow_symlinks=False)
+                inode = (stat.st_dev, stat.st_ino)
+                if inode not in seen_inodes:
+                    seen_inodes.add(inode)
+                    total += stat.st_size
             elif entry.is_dir(follow_symlinks=False):
-                total += _dir_size(entry.path)
+                total += _dir_size(entry.path, seen_inodes)
     except (OSError, PermissionError) as e:
         logger.debug("Cannot scan %s: %s", path, e)
     return total

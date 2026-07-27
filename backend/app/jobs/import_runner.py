@@ -555,6 +555,7 @@ async def run_import_job(import_job_id: str):
                 lib_dir.mkdir(parents=True, exist_ok=True)
 
                 # Assets from the media files (already in final location)
+                imported_asset_ids: list[UUID] = []
                 for idx, fp in enumerate(asset_files):
                     dims = get_image_dims(fp) if fp.suffix.lower() in IMAGE_EXTS else None
                     width, height = dims if dims else (None, None)
@@ -570,6 +571,7 @@ async def run_import_job(import_job_id: str):
                     )
                     db.add(asset)
                     await db.flush()
+                    imported_asset_ids.append(asset.id)
 
                     # Generate per-page thumbnail in thread pool (CPU-bound pyvips)
                     if can_generate_thumbnail(fp.suffix):
@@ -611,6 +613,13 @@ async def run_import_job(import_job_id: str):
                         source_asset_id=fp.stem,
                         source_url=None,
                         raw_metadata=None,
+                        ordinal=idx,
+                        role=(
+                            "video" if fp.suffix.lower() in VIDEO_EXTS
+                            else "archive" if fp.suffix.lower() in ARCHIVE_EXTENSIONS
+                            else "animation" if fp.suffix.lower() == ".gif"
+                            else "page"
+                        ),
                     ))
                     await db.flush()
 
@@ -684,6 +693,37 @@ async def run_import_job(import_job_id: str):
                 await db.commit()
                 if curation_commit is not None:
                     await project_commit_safe(db, curation_commit.id)
+
+                # Asset identity is deliberately evaluated after the authoritative
+                # import transaction. Work/WorkSource rows never merge; only the
+                # downloaded Asset variants may share a visual group.
+                if imported_asset_ids:
+                    try:
+                        async with async_session() as dedup_db:
+                            from app.services.asset_reconciliation import AssetReconciliation
+
+                            dedup_result = await AssetReconciliation(dedup_db).observe(
+                                imported_asset_ids,
+                                auto_apply=True,
+                            )
+                            await dedup_db.commit()
+                        if dedup_result["storage_actions"]:
+                            from rq import Queue
+
+                            Queue(name="operations", connection=get_redis()).enqueue(
+                                "app.jobs.asset_dedup.run_asset_dedup_outbox",
+                                100,
+                                job_timeout=3600,
+                                result_ttl=86400,
+                            )
+                    except Exception:
+                        logger.warning(
+                            "Asset reconciliation failed for imported work %s/%s; "
+                            "the resumable admin scan can recover it",
+                            provider.source_name,
+                            src_work_id,
+                            exc_info=True,
+                        )
                 batch_count += 1
                 if batch_count >= BATCH_SIZE and meili_docs:
                     try:

@@ -139,6 +139,24 @@ async def lifespan(app: FastAPI):
     import_recovery_task = asyncio.create_task(import_recovery_loop())
     logger.info("Import recovery background task started")
 
+    async def asset_dedup_outbox_loop():
+        # PostgreSQL is authoritative for pending storage effects. This small
+        # recovery loop closes the gap when an RQ enqueue is lost during an API
+        # or worker restart; file hashing itself runs off the event loop.
+        while True:
+            await asyncio.sleep(60)
+            try:
+                from app.jobs.asset_dedup import process_asset_dedup_outbox
+
+                result = await process_asset_dedup_outbox(limit=20)
+                if result["processed"] or result["failed"]:
+                    logger.info("Asset dedup outbox drained", **result)
+            except Exception:
+                logger.warning("Asset dedup outbox recovery failed", exc_info=True)
+
+    asset_dedup_task = asyncio.create_task(asset_dedup_outbox_loop())
+    logger.info("Asset dedup outbox recovery started")
+
     # ── Memory monitor — logs RSS so an OOM leaves a visible climb in the
     #    logs + the last thing that was happening. WARNs past a threshold. ──
     async def memory_monitor_loop():
@@ -173,6 +191,7 @@ async def lifespan(app: FastAPI):
     ws_task.cancel()
     stale_task.cancel()
     import_recovery_task.cancel()
+    asset_dedup_task.cancel()
     memory_task.cancel()
     try:
         await ws_task
@@ -184,6 +203,10 @@ async def lifespan(app: FastAPI):
         pass
     try:
         await import_recovery_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await asset_dedup_task
     except asyncio.CancelledError:
         pass
     try:

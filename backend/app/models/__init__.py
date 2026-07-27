@@ -24,6 +24,15 @@ from app.models.curation import (
     CurationCommit,
     WorkCurationState,
 )
+from app.models.asset_dedup import (
+    AssetDedupCase,
+    AssetDedupDecision,
+    AssetDedupEvidence,
+    AssetDedupOutbox,
+    AssetDedupScan,
+    VisualAssetGroup,
+    VisualAssetMember,
+)
 
 __all__ = [
     "Base",
@@ -52,4 +61,11 @@ __all__ = [
     "CurationChange",
     "CurationCommit",
     "WorkCurationState",
+    "AssetDedupCase",
+    "AssetDedupDecision",
+    "AssetDedupEvidence",
+    "AssetDedupOutbox",
+    "AssetDedupScan",
+    "VisualAssetGroup",
+    "VisualAssetMember",
 ]
