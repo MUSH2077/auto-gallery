@@ -758,8 +758,22 @@ export interface AssetDedupEvidence {
     metadata?: {
       same_canonical_creator?: boolean;
       min_posted_delta_hours?: number | null;
+      creator_bonus?: number;
+      time_bonus?: number;
       left_sources?: string[];
       right_sources?: string[];
+    };
+    scope?: {
+      eligible?: boolean;
+      reason?: string;
+      assets?: Record<
+        string,
+        {
+          sources?: string[];
+          work_ids?: string[];
+          work_source_ids?: string[];
+        }
+      >;
     };
     thresholds?: Record<string, number>;
   };

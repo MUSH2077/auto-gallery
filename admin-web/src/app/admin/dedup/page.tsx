@@ -134,7 +134,9 @@ function EvidencePanel({ item }: { item: AssetDedupCase }) {
           </span>
         )}
         {metadata?.same_canonical_creator && (
-          <span className="badge">{t("asset_dedup.same_creator")}</span>
+          <span className="badge">
+            {t("asset_dedup.same_creator")} +{metadata.creator_bonus ?? 6}
+          </span>
         )}
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -174,7 +176,11 @@ function EvidencePanel({ item }: { item: AssetDedupCase }) {
           label={t("asset_dedup.time_delta")}
           value={
             metadata?.min_posted_delta_hours != null
-              ? `${metadata.min_posted_delta_hours.toFixed(1)}h`
+              ? `${metadata.min_posted_delta_hours.toFixed(1)}h${
+                  metadata.time_bonus
+                    ? ` (+${metadata.time_bonus.toFixed(0)})`
+                    : ""
+                }`
               : "—"
           }
         />

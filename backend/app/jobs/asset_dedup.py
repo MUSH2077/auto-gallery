@@ -18,6 +18,12 @@ from app.models import (
     AssetDedupOutbox,
     AssetDedupScan,
     AssetStorageState,
+    VisualAssetGroup,
+    VisualAssetMember,
+)
+from app.services.asset_dedup_scope import (
+    CrossSourceDedupScope,
+    scope_error_message,
 )
 from app.services.asset_reconciliation import (
     IMAGE_MIME_TYPES,
@@ -98,11 +104,35 @@ async def _fail_event(event_id: UUID, attempts: int, error: Exception) -> None:
 async def _load_storage_subjects(payload: dict):
     asset_id = UUID(payload["asset_id"])
     representative_id = UUID(payload["representative_asset_id"])
+    group_id = UUID(payload["group_id"])
+    if asset_id == representative_id:
+        raise ValueError("Representative cannot be its own storage subject")
     async with async_session() as db:
         asset = await db.get(Asset, asset_id)
         representative = await db.get(Asset, representative_id)
         if not asset or not representative:
             raise ValueError("Asset storage subject no longer exists")
+        group = await db.get(VisualAssetGroup, group_id)
+        if not group or group.representative_asset_id != representative_id:
+            raise ValueError(
+                "Visual group or representative changed; refusing storage action"
+            )
+        member_ids = set(
+            (
+                await db.execute(
+                    select(VisualAssetMember.asset_id).where(
+                        VisualAssetMember.group_id == group_id
+                    )
+                )
+            ).scalars()
+        )
+        if asset_id not in member_ids or representative_id not in member_ids:
+            raise ValueError(
+                "Storage subjects are no longer members of the visual group"
+            )
+        scope = await CrossSourceDedupScope(db).group(member_ids)
+        if not scope.eligible:
+            raise ValueError(scope_error_message(scope.reason))
         state = (
             await db.execute(
                 select(AssetStorageState).where(
@@ -119,6 +149,10 @@ async def _load_storage_subjects(payload: dict):
             )
             db.add(state)
             await db.commit()
+        elif state.served_by_asset_id != representative_id:
+            raise ValueError(
+                "Asset storage representative changed; refusing storage action"
+            )
         return asset, representative
 
 

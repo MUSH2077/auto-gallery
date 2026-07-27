@@ -8,9 +8,11 @@ from sqlalchemy import func, select, text
 from app.services.asset_reconciliation import (
     REVIEW_MIN_SCORE,
     AssetReconciliation,
+    metadata_time_bonus,
     phash_distance,
     structural_similarity,
 )
+from app.services.asset_dedup_scope import canonical_source
 
 
 def _sha(path):
@@ -22,6 +24,18 @@ def test_phash_distance_is_hamming_distance():
     assert phash_distance("0000000000000000", "000000000000000f") == 4
     assert phash_distance(None, "0") is None
     assert phash_distance("not-hex", "0") is None
+
+
+def test_cross_source_aliases_and_metadata_time_bands():
+    assert canonical_source("x") == "x"
+    assert canonical_source("Twitter") == "x"
+    assert metadata_time_bonus(None) == 0
+    assert metadata_time_bonus(24) == 4
+    assert metadata_time_bonus(24.001) == 2
+    assert metadata_time_bonus(24 * 7) == 2
+    assert metadata_time_bonus(24 * 7 + 0.001) == 1
+    assert metadata_time_bonus(24 * 30) == 1
+    assert metadata_time_bonus(24 * 30 + 0.001) == 0
 
 
 def test_structural_similarity_accepts_resize_and_jpeg_compression(tmp_path):
@@ -345,6 +359,287 @@ async def test_work_purge_keeps_representative_used_by_visible_group_member():
             )
 
             assert candidates == []
+    finally:
+        async with async_session() as db:
+            await clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reconciliation_excludes_same_work_and_same_source_even_for_exact_sha(
+    tmp_path, monkeypatch
+):
+    from PIL import Image
+
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models import (
+        Asset,
+        AssetDedupCase,
+        AssetDedupEvidence,
+        AssetDedupOutbox,
+        AssetStorageState,
+        AssetSource,
+        VisualAssetGroup,
+        VisualAssetMember,
+        Work,
+        WorkSource,
+    )
+
+    download_root = tmp_path / "downloads"
+    download_root.mkdir()
+    paths = []
+    for index in range(6):
+        path = download_root / f"asset-{index}.png"
+        colors = ((30, 90, 180), (180, 60, 30), (40, 170, 80))
+        Image.new("RGB", (80, 60), colors[index // 2]).save(path)
+        paths.append(path)
+    monkeypatch.setattr(settings, "download_root", str(download_root))
+
+    async def clear(db):
+        await db.execute(
+            text(
+                """
+                TRUNCATE
+                    asset_dedup_decisions,
+                    asset_dedup_cases,
+                    visual_asset_members,
+                    visual_asset_groups,
+                    asset_dedup_evidence,
+                    asset_dedup_outbox,
+                    asset_dedup_scans,
+                    asset_sources,
+                    asset_storage_states,
+                    assets,
+                    curation_changes,
+                    curation_commits,
+                    work_sources,
+                    works
+                RESTART IDENTITY CASCADE
+                """
+            )
+        )
+        await db.commit()
+
+    try:
+        async with async_session() as db:
+            await clear(db)
+            same_work = Work(title="intentional difference pages", is_nsfw=False)
+            pixiv_works = [
+                Work(title="same source left", is_nsfw=False),
+                Work(title="same source right", is_nsfw=False),
+            ]
+            alias_works = [
+                Work(title="x alias left", is_nsfw=False),
+                Work(title="x alias right", is_nsfw=False),
+            ]
+            db.add_all([same_work, *pixiv_works, *alias_works])
+            await db.flush()
+            work_sources = [
+                WorkSource(
+                    work_id=same_work.id,
+                    source="pixiv",
+                    source_work_id="96166990",
+                ),
+                WorkSource(
+                    work_id=pixiv_works[0].id,
+                    source="pixiv",
+                    source_work_id="pixiv-left",
+                ),
+                WorkSource(
+                    work_id=pixiv_works[1].id,
+                    source="pixiv",
+                    source_work_id="pixiv-right",
+                ),
+                WorkSource(
+                    work_id=alias_works[0].id,
+                    source="x",
+                    source_work_id="x-left",
+                ),
+                WorkSource(
+                    work_id=alias_works[1].id,
+                    source="twitter",
+                    source_work_id="twitter-right",
+                ),
+            ]
+            db.add_all(work_sources)
+            await db.flush()
+
+            phashes = (
+                "1111111111111111",
+                "aaaaaaaaaaaaaaaa",
+                "5555555555555555",
+            )
+            assets = [
+                Asset(
+                    file_path=path.name,
+                    file_name=path.name,
+                    file_size=path.stat().st_size,
+                    mime_type="image/png",
+                    width=80,
+                    height=60,
+                    sha256=_sha(path),
+                    phash=phashes[index // 2],
+                )
+                for index, path in enumerate(paths)
+            ]
+            db.add_all(assets)
+            await db.flush()
+            bindings = (
+                (0, 0, "pixiv", 0),
+                (1, 0, "pixiv", 1),
+                (2, 1, "pixiv", 0),
+                (3, 2, "pixiv", 0),
+                (4, 3, "x", 0),
+                (5, 4, "twitter", 0),
+            )
+            db.add_all(
+                [
+                    AssetSource(
+                        asset_id=assets[asset_index].id,
+                        work_source_id=work_sources[source_index].id,
+                        source=source,
+                        source_asset_id=f"scope-{asset_index}",
+                        ordinal=ordinal,
+                        role="page",
+                    )
+                    for asset_index, source_index, source, ordinal in bindings
+                ]
+            )
+            await db.commit()
+
+            service = AssetReconciliation(db)
+            same_work_scope = await service.scope.pair(
+                assets[0].id, assets[1].id
+            )
+            same_source_scope = await service.scope.pair(
+                assets[2].id, assets[3].id
+            )
+            alias_scope = await service.scope.pair(
+                assets[4].id, assets[5].id
+            )
+            assert same_work_scope.reason == "same_work"
+            assert same_source_scope.reason == "same_source"
+            assert alias_scope.reason == "same_source"
+            group_scope = await service.scope.group(
+                (assets[2].id, assets[3].id, assets[4].id)
+            )
+            assert group_scope.reason == "group_source_conflict"
+
+            result = await service.observe(
+                [assets[0].id, assets[2].id, assets[4].id],
+                auto_apply=True,
+            )
+            await db.commit()
+            assert result["candidates_evaluated"] == 0
+            assert (
+                await db.execute(select(func.count(AssetDedupEvidence.id)))
+            ).scalar_one() == 0
+            assert (
+                await db.execute(select(func.count(AssetDedupCase.id)))
+            ).scalar_one() == 0
+            assert (
+                await db.execute(select(func.count(VisualAssetGroup.id)))
+            ).scalar_one() == 0
+            assert (
+                await db.execute(select(func.count(AssetDedupOutbox.id)))
+            ).scalar_one() == 0
+
+            left_id, right_id = sorted(
+                (assets[0].id, assets[1].id),
+                key=lambda value: value.int,
+            )
+            legacy_evidence = AssetDedupEvidence(
+                left_asset_id=left_id,
+                right_asset_id=right_id,
+                algorithm_version="legacy-test",
+                input_digest="f" * 64,
+                sha256_equal=True,
+                phash_distance=0,
+                ssim_score=1,
+                aspect_ratio_delta=0,
+                visual_score=100,
+                metadata_score=0,
+                total_score=100,
+                hard_gate_passed=True,
+                facts={},
+            )
+            db.add(legacy_evidence)
+            await db.flush()
+            legacy_evidence_id = legacy_evidence.id
+            legacy_case = AssetDedupCase(
+                left_asset_id=left_id,
+                right_asset_id=right_id,
+                evidence_id=legacy_evidence.id,
+                status="pending",
+                revision=1,
+                suggested_representative_asset_id=left_id,
+            )
+            db.add(legacy_case)
+            await db.commit()
+
+            with pytest.raises(
+                ValueError, match="same Work never enter reconciliation"
+            ):
+                await service.decide(
+                    legacy_case.id,
+                    expected_revision=1,
+                    action="merge",
+                    representative_asset_id=left_id,
+                    actor_type="admin",
+                    actor_id="scope-test",
+                    reason=None,
+                    idempotency_key="scope-test:same-work",
+                )
+            await db.rollback()
+            assert (
+                await db.execute(select(func.count(VisualAssetGroup.id)))
+            ).scalar_one() == 0
+            assert (
+                await db.execute(select(func.count(AssetDedupOutbox.id)))
+            ).scalar_one() == 0
+
+            invalid_group = VisualAssetGroup(
+                representative_asset_id=left_id,
+                policy_version="legacy-test",
+            )
+            db.add(invalid_group)
+            await db.flush()
+            invalid_group_id = invalid_group.id
+            db.add_all(
+                [
+                        VisualAssetMember(
+                            group_id=invalid_group.id,
+                            asset_id=asset_id,
+                            evidence_id=legacy_evidence_id,
+                        quality_score=1,
+                    )
+                    for asset_id in (left_id, right_id)
+                ]
+            )
+            db.add(
+                AssetStorageState(
+                    asset_id=right_id,
+                    storage_state="available",
+                    served_by_asset_id=left_id,
+                    bytes_reclaimed=0,
+                )
+            )
+            await db.commit()
+
+            from app.jobs.asset_dedup import _load_storage_subjects
+
+            with pytest.raises(
+                ValueError, match="at most one asset from each Work"
+            ):
+                await _load_storage_subjects(
+                    {
+                        "group_id": str(invalid_group_id),
+                        "asset_id": str(right_id),
+                        "representative_asset_id": str(left_id),
+                    }
+                )
     finally:
         async with async_session() as db:
             await clear(db)

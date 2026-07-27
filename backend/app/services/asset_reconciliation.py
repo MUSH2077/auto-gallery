@@ -17,8 +17,9 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, func, or_, select, text
+from sqlalchemy import delete, exists, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.config import settings
 from app.models import (
@@ -36,11 +37,17 @@ from app.models import (
     WorkSource,
 )
 from app.services.curation import CurationService
+from app.services.asset_dedup_scope import (
+    CrossSourceDedupScope,
+    canonical_source,
+    scope_error_message,
+)
 from app.services.media_signing import signed_media_url
+from app.services.settings import extractor_key_for_source
 
 
-ALGORITHM_VERSION = "asset-visual-v1"
-QUALITY_POLICY_VERSION = "asset-quality-v1"
+ALGORITHM_VERSION = "asset-visual-v2"
+QUALITY_POLICY_VERSION = "asset-quality-v2"
 PHASH_MAX_DISTANCE = 4
 ASPECT_RATIO_MAX_DELTA = 0.01
 SSIM_MIN_SCORE = 0.98
@@ -128,6 +135,18 @@ def aspect_ratio_delta(left: Asset, right: Asset) -> float | None:
     return abs(left_ratio - right_ratio) / max(left_ratio, right_ratio)
 
 
+def metadata_time_bonus(min_delta_hours: float | None) -> float:
+    if min_delta_hours is None:
+        return 0.0
+    if min_delta_hours <= 24:
+        return 4.0
+    if min_delta_hours <= 24 * 7:
+        return 2.0
+    if min_delta_hours <= 24 * 30:
+        return 1.0
+    return 0.0
+
+
 def _normalized_pixels(path: Path):
     import numpy as np
     from PIL import Image, ImageOps
@@ -208,6 +227,7 @@ class AssetReconciliation:
 
     def __init__(self, db: AsyncSession):
         self.db = db
+        self.scope = CrossSourceDedupScope(db)
         self._policy_value: DedupPolicy | None = None
 
     async def policy(self) -> DedupPolicy:
@@ -280,6 +300,9 @@ class AssetReconciliation:
         policy = await self.policy()
         results: list[EvaluationResult] = []
         for candidate in candidates:
+            scope = await self.scope.pair(asset.id, candidate.id)
+            if not scope.eligible:
+                continue
             evidence_facts = await self._evaluate_pair(asset, candidate)
             if not evidence_facts["sha256_equal"] and not evidence_facts["hard_gate_passed"]:
                 continue
@@ -287,6 +310,20 @@ class AssetReconciliation:
                 continue
 
             await self._lock_pair(asset.id, candidate.id)
+            scope = await self.scope.pair(asset.id, candidate.id)
+            if not scope.eligible:
+                continue
+            evidence_facts["facts"]["scope"] = scope.facts()
+            evidence_facts["input_digest"] = hashlib.sha256(
+                json.dumps(
+                    {
+                        "visual_input_digest": evidence_facts["input_digest"],
+                        "scope": scope.facts(),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
             evidence = await self._persist_evidence(asset, candidate, evidence_facts)
             case, case_created = await self._upsert_case(asset, candidate, evidence)
             auto_merged = False
@@ -545,6 +582,9 @@ class AssetReconciliation:
         )
 
     async def _candidate_assets(self, asset: Asset) -> list[Asset]:
+        anchor = (await self.scope.contexts((asset.id,)))[asset.id]
+        if not anchor.complete:
+            return []
         conditions = []
         if asset.sha256:
             conditions.append(Asset.sha256 == asset.sha256)
@@ -556,12 +596,61 @@ class AssetReconciliation:
                 )
         if not conditions:
             return []
+
+        candidate_asset_source = aliased(AssetSource)
+        candidate_work_source = aliased(WorkSource)
+        bound_candidate = exists(
+            select(1)
+            .select_from(candidate_asset_source)
+            .join(
+                candidate_work_source,
+                candidate_work_source.id
+                == candidate_asset_source.work_source_id,
+            )
+            .where(candidate_asset_source.asset_id == Asset.id)
+        )
+        shared_work = exists(
+            select(1)
+            .select_from(candidate_asset_source)
+            .join(
+                candidate_work_source,
+                candidate_work_source.id
+                == candidate_asset_source.work_source_id,
+            )
+            .where(
+                candidate_asset_source.asset_id == Asset.id,
+                candidate_work_source.work_id.in_(anchor.work_ids),
+            )
+        )
+        blocked_source_keys = set(anchor.raw_sources)
+        blocked_source_keys.update(anchor.sources)
+        blocked_source_keys.update(
+            extractor_key_for_source(source) for source in anchor.sources
+        )
+        shared_source = exists(
+            select(1)
+            .select_from(candidate_asset_source)
+            .join(
+                candidate_work_source,
+                candidate_work_source.id
+                == candidate_asset_source.work_source_id,
+            )
+            .where(
+                candidate_asset_source.asset_id == Asset.id,
+                func.lower(candidate_work_source.source).in_(
+                    sorted(blocked_source_keys)
+                ),
+            )
+        )
         rows = await self.db.execute(
             select(Asset)
             .where(
                 Asset.id != asset.id,
                 Asset.mime_type.in_(IMAGE_MIME_TYPES),
                 or_(*conditions),
+                bound_candidate,
+                ~shared_work,
+                ~shared_source,
             )
             .order_by(
                 (Asset.sha256 == asset.sha256).desc() if asset.sha256 else Asset.created_at,
@@ -677,20 +766,17 @@ class AssetReconciliation:
                         / 3600
                     )
         min_delta_hours = min(deltas) if deltas else None
-        score = 6.0 if same_creator else 0.0
-        if min_delta_hours is not None:
-            if min_delta_hours <= 24:
-                score += 4.0
-            elif min_delta_hours <= 72:
-                score += 3.0
-            elif min_delta_hours <= 24 * 7:
-                score += 1.0
+        creator_bonus = 6.0 if same_creator else 0.0
+        time_bonus = metadata_time_bonus(min_delta_hours)
+        score = creator_bonus + time_bonus
         return {
             "same_canonical_creator": same_creator,
             "min_posted_delta_hours": (
                 round(min_delta_hours, 3) if min_delta_hours is not None else None
             ),
             "score": min(10.0, score),
+            "creator_bonus": creator_bonus,
+            "time_bonus": time_bonus,
             "left_sources": sorted({item["source"] for item in left}),
             "right_sources": sorted({item["source"] for item in right}),
         }
@@ -716,7 +802,7 @@ class AssetReconciliation:
         )
         return [
             {
-                "source": row.source,
+                "source": canonical_source(row.source),
                 "posted_at": row.posted_at,
                 "creator_id": str(row.creator_id) if row.creator_id else None,
             }
@@ -803,49 +889,22 @@ class AssetReconciliation:
         right_id: UUID,
         evidence: AssetDedupEvidence,
     ) -> bool:
-        if not evidence.sha256_equal:
-            shared_work_source = (
-                await self.db.execute(
-                    select(AssetSource.work_source_id)
-                    .where(
-                        AssetSource.asset_id.in_([left_id, right_id]),
-                        AssetSource.work_source_id.isnot(None),
-                    )
-                    .group_by(AssetSource.work_source_id)
-                    .having(func.count(func.distinct(AssetSource.asset_id)) == 2)
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-            if shared_work_source:
-                # Similar pages in one source publication may be intentional
-                # variations. They can still be reviewed, but never auto-group.
-                return False
+        pair_scope = await self.scope.pair(left_id, right_id)
+        if not pair_scope.eligible:
+            return False
         group_rows = await self.db.execute(
             select(VisualAssetMember.asset_id, VisualAssetMember.group_id).where(
                 VisualAssetMember.asset_id.in_([left_id, right_id])
             )
         )
         groups = {row.group_id for row in group_rows}
-        if len(groups) <= 1:
-            if not groups:
-                return True
-            group_id = next(iter(groups))
-            members = list(
-                (
-                    await self.db.execute(
-                        select(Asset.sha256)
-                        .join(
-                            VisualAssetMember,
-                            VisualAssetMember.asset_id == Asset.id,
-                        )
-                        .where(VisualAssetMember.group_id == group_id)
-                    )
-                ).scalars()
-            )
-            return evidence.sha256_equal and all(
-                value == members[0] for value in members if value
-            )
-        return False
+        if groups:
+            # Group expansion is deliberately review-only. The manual merge
+            # path validates the full prospective group under a row lock.
+            return False
+        return (
+            await self.scope.group((left_id, right_id))
+        ).eligible
 
     async def _merge_assets(
         self,
@@ -855,6 +914,9 @@ class AssetReconciliation:
         representative_asset_id: UUID | None,
         evidence: AssetDedupEvidence,
     ) -> tuple[UUID, UUID, int, int]:
+        pair_scope = await self.scope.pair(left_id, right_id)
+        if not pair_scope.eligible:
+            raise ValueError(scope_error_message(pair_scope.reason))
         assets = list(
             (
                 await self.db.execute(
@@ -878,6 +940,10 @@ class AssetReconciliation:
             ).scalars()
         )
         group_ids = {member.group_id for member in member_rows}
+        if len(group_ids) > 1:
+            raise ValueError(
+                "Existing visual groups cannot be merged transitively"
+            )
         all_asset_ids = {left_id, right_id}
         if group_ids:
             all_asset_ids.update(
@@ -889,6 +955,9 @@ class AssetReconciliation:
                     )
                 ).scalars()
             )
+        group_scope = await self.scope.group(all_asset_ids)
+        if not group_scope.eligible:
+            raise ValueError(scope_error_message(group_scope.reason))
         all_assets = list(
             (
                 await self.db.execute(
@@ -929,7 +998,76 @@ class AssetReconciliation:
             if states.get(asset.id) is None
             or states[asset.id].storage_state not in {"quarantined", "purged"}
         ]
-        if representative_asset_id:
+        existing_group = None
+        if group_ids:
+            existing_group = await self.db.get(
+                VisualAssetGroup, next(iter(group_ids))
+            )
+            if not existing_group:
+                raise ValueError("Existing visual group no longer exists")
+            if (
+                representative_asset_id is not None
+                and representative_asset_id
+                != existing_group.representative_asset_id
+            ):
+                raise ValueError(
+                    "An existing visual group's representative cannot change "
+                    "during expansion"
+                )
+            representative = next(
+                (
+                    asset
+                    for asset in available_assets
+                    if asset.id == existing_group.representative_asset_id
+                ),
+                None,
+            )
+            if not representative:
+                raise ValueError(
+                    "Existing visual group representative is unavailable"
+                )
+            current_member_ids = {
+                member.asset_id for member in member_rows
+            }
+            current_member_ids.update(
+                (
+                    await self.db.execute(
+                        select(VisualAssetMember.asset_id).where(
+                            VisualAssetMember.group_id
+                            == existing_group.id
+                        )
+                    )
+                ).scalars()
+            )
+            new_asset_ids = all_asset_ids - current_member_ids
+            for new_asset_id in new_asset_ids:
+                new_asset = next(
+                    asset for asset in all_assets if asset.id == new_asset_id
+                )
+                evidence_pair = {
+                    evidence.left_asset_id,
+                    evidence.right_asset_id,
+                }
+                expected_pair = {representative.id, new_asset.id}
+                if evidence_pair == expected_pair:
+                    validation = {
+                        "hard_gate_passed": evidence.hard_gate_passed,
+                        "total_score": evidence.total_score,
+                    }
+                else:
+                    validation = await self._evaluate_pair(
+                        representative, new_asset
+                    )
+                policy = await self.policy()
+                if (
+                    not validation["hard_gate_passed"]
+                    or validation["total_score"] < policy.review_score
+                ):
+                    raise ValueError(
+                        "New group member does not match the current "
+                        "representative"
+                    )
+        elif representative_asset_id:
             representative = next(
                 (asset for asset in available_assets if asset.id == representative_asset_id),
                 None,
@@ -940,8 +1078,8 @@ class AssetReconciliation:
             representative = max(available_assets, key=_quality_key)
 
         if group_ids:
-            target_group_id = min(group_ids, key=lambda value: value.int)
-            group = await self.db.get(VisualAssetGroup, target_group_id)
+            target_group_id = next(iter(group_ids))
+            group = existing_group
         else:
             group = VisualAssetGroup(
                 representative_asset_id=representative.id,
