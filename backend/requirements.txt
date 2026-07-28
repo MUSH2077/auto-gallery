@@ -97,7 +97,7 @@ pillow==10.4.0
     #   imagehash
 pluggy==1.6.0
     # via pytest
-pyasn1==0.6.3
+pyasn1==0.4.8
     # via
     #   python-jose
     #   rsa
@@ -129,7 +129,7 @@ python-dotenv==1.2.2
     # via
     #   pydantic-settings
     #   uvicorn
-python-jose[cryptography]==3.3.0
+python-jose[cryptography]==3.4.0
     # via -r requirements.in
 python-multipart==0.0.19
     # via -r requirements.in
