@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/MUSH2077/auto-gallery/tree/master/docs
+    about: Read setup, architecture, provider, and troubleshooting guides first.
+  - name: Support guide
+    url: https://github.com/MUSH2077/auto-gallery/blob/master/SUPPORT.md
+    about: Choose the right support path and learn how to sanitize diagnostics.
+  - name: Private security report
+    url: https://github.com/MUSH2077/auto-gallery/security/advisories/new
+    about: Report vulnerabilities privately. Do not disclose security details in an issue.

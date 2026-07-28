@@ -1,370 +1,181 @@
 # Development Guide
 
-## Project Structure
+Read [CONTRIBUTING.md](../CONTRIBUTING.md) first for the contribution workflow,
+required checks, privacy rules, and pull request expectations.
+
+## Repository map
 
 ```text
 auto-gallery/
-  docker-compose.yaml
-  .env.example
-  README.md
-  docs/
-    architecture.md    architecture.zh.md
-    setup.md           setup.zh.md
-    development.md     development.zh.md
-    providers.md       providers.zh.md
-    risks.md           risks.zh.md
   backend/
-    Dockerfile
-    requirements.txt
-    alembic.ini
     app/
-      main.py
-      config.py
-      database.py
-      models/
-      schemas/
-      repositories/
-      services/
-      api/
-      providers/
-      jobs/
-    alembic/
-      env.py
-      versions/
+      api/            FastAPI route modules
+      models/         SQLAlchemy models
+      repositories/   database access
+      schemas/        API contracts
+      services/       business and orchestration logic
+      providers/      source-specific URL and metadata adapters
+      jobs/           background job entry points
+    alembic/          database migrations
     tests/
   admin-web/
-    Dockerfile
-    package.json
-    tsconfig.json
-    tailwind.config.ts
     src/
-      app/
-        admin/           # all admin pages
-          creators/      # list, detail, mapping, duplicates
-          subscriptions/ # list, detail
-          jobs/          # download + import unified queue
-          works/         # list, detail
-          tags/          # tag manager
-          scheduler/     # sync schedule + queue
-          search/        # Meilisearch full-text search
-          reference/     # Danbooru reference mapping
-          sources/       # provider capability matrix
-          system/        # system health dashboard
-          settings/      # gallery-dl, dedup, proxy, auth-status, logs, backup
-          data-mgmt/     # storage stats, integrity checks, danger zone
-          merge-candidates/
-          dedup/
-          login/
-      components/        # shared components
-        ConfirmDialog.tsx
-        DataTable.tsx
-        EmptyState.tsx
-        ErrorBoundary.tsx
-        ErrorState.tsx
-        LoadingSkeleton.tsx
-        Modal.tsx
-        PageHeader.tsx
-        SourceBadge.tsx
-        StatusBadge.tsx
-        Toast.tsx
-        WorkGrid.tsx
-      lib/               # typed API client, i18n, auth, theme
-        api.ts
-        auth.tsx
-        i18n.tsx
-        theme.tsx
+      app/admin/      App Router pages and layouts
+      components/     shared UI primitives and domain components
+      lib/api/        typed API client, generated and hand-written types
+      lib/            auth, i18n, navigation, theme, preferences
+    tests/e2e/        Playwright browser coverage
+  docs/
+  scripts/
+  docker-compose.yaml
 ```
 
-## Backend Development
+The live Docker Compose services are:
+
+- `postgres`, `redis`, and `meilisearch`
+- `backend`
+- `worker-download`, `worker-import`, and `worker-operations`
+- `scheduler`
+- `admin-web`
+
+The API and Python workers share the backend image. Only the download worker
+executes gallery-dl.
+
+## Backend
 
 ### Stack
 
-- Python 3.12
-- FastAPI
-- SQLAlchemy 2.0 (async)
-- Alembic
-- PostgreSQL 16
-- Redis (RQ)
-- Meilisearch
+Python 3.12, FastAPI, SQLAlchemy 2.0 async, Alembic, PostgreSQL 16, Redis/RQ,
+Meilisearch, and gallery-dl.
 
-### Ports
+### Local iteration
 
-| Context              | Backend | Admin Web |
-|----------------------|---------|-----------|
-| Host (mapped)        | 8818    | 13000     |
-| Container-internal   | 8000    | 3000      |
-
-### Running locally (without Docker for iteration)
+Start data services, then run the API from a virtual environment:
 
 ```bash
+docker compose up -d postgres redis meilisearch
+
 cd backend
 python -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
-
-# Requires postgres, redis, meilisearch running (via Docker)
-docker compose up -d postgres redis meilisearch
-
-# Run API (container-internal port 8000)
+python -m pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-### Running tests
+The mapped Compose backend is `http://localhost:8818`; a locally started
+Uvicorn process uses `http://localhost:8000`.
+
+### Tests and lint
+
+The container path is the most reproducible:
 
 ```bash
-# All tests
-docker compose run --rm -e PYTHONDONTWRITEBYTECODE=1 backend python -m pytest
-
-# Single test file
-docker compose run --rm -e PYTHONDONTWRITEBYTECODE=1 backend python -m pytest tests/test_providers.py
-
-# With coverage
-docker compose run --rm -e PYTHONDONTWRITEBYTECODE=1 backend python -m pytest --cov=app
+docker compose run --rm -T --volume "$PWD/backend:/app" \
+  -e PYTHONDONTWRITEBYTECODE=1 backend \
+  python -m pytest
+docker compose run --rm -T --volume "$PWD/backend:/app" \
+  -e PYTHONDONTWRITEBYTECODE=1 backend \
+  ruff check app tests
 ```
 
-For local virtualenv runs, install the same dependency set used by CI:
+For one test file, append its path after `pytest`. Local virtualenv runs use the
+same commands without `docker compose run ... backend`.
 
-```bash
-cd backend
-source venv/bin/activate
-pip install -r requirements.txt
-python -m pytest
-ruff check app tests
-```
+### Dependencies
 
-The test suite sets safe test defaults in `tests/conftest.py` before importing
-the app, so local runs do not need production secrets.
-
-If a previous root/container run left host-owned bytecode caches behind, remove
-them before running tests as your normal user:
-
-```bash
-sudo find backend -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} +
-```
-
-### Python dependency lock
-
-Backend runtime and CI install `requirements.txt`, which is generated from
-`requirements.in` with `pip-tools`.
+`backend/requirements.txt` is generated from `requirements.in` with pip-tools.
+Keep provider-sensitive packages such as gallery-dl pinned.
 
 ```bash
 cd backend
 python -m pip install pip-tools
-pip-compile --resolver=backtracking --allow-unsafe --output-file requirements.txt requirements.in
+pip-compile --resolver=backtracking --allow-unsafe \
+  --output-file requirements.txt requirements.in
 ```
 
-Keep provider-sensitive packages such as `gallery-dl` pinned and run the Docker
-Compose smoke test before merging dependency updates.
+Run provider tests and the Docker Compose smoke path after dependency updates.
 
 ### Database migrations
 
 ```bash
-# Create a new migration
-docker compose run --rm backend alembic revision --autogenerate -m "description"
-
-# Apply migrations
+docker compose run --rm backend \
+  alembic revision --autogenerate -m "description"
 docker compose run --rm backend alembic upgrade head
-
-# Rollback one
 docker compose run --rm backend alembic downgrade -1
 ```
 
-### Migration safety
+Review autogenerated migrations. Column renames often appear as destructive
+drop/add operations. Test upgrade and downgrade and document backfills,
+reindexing, long locks, and data-loss risks in the pull request.
 
-- Always review `--autogenerate` output before committing.
-- Watch for: drop tables/columns, constraint changes, column renames (autogenerate sees rename as drop+add).
-- If a migration loses data, explicitly state the reason in the commit message.
-- Test both `alembic upgrade head` and `alembic downgrade -1` before merging.
+### Module boundaries
 
-### Code conventions
+- Routes authenticate, validate, and delegate.
+- Services contain business rules and orchestration.
+- Repositories own database access.
+- Providers validate and normalize URLs and parse source metadata; they do not
+  access the database.
+- Import and maintenance operations are idempotent.
+- Background state transitions belong to the defined job state machine.
 
-- Business logic in services, never in route handlers
-- Database access through repositories, never in services directly
-- Pydantic schemas for all API inputs/outputs
-- Provider modules have no database access
-- JSONB for raw source metadata
-- Idempotent import logic (re-running an import must not create duplicates)
+## Admin web
 
-## Provider Development
+### Stack and structure
 
-See [docs/providers.md](providers.md) for the full provider interface and implementation guide.
+The frontend uses Next.js 14, React 18, TypeScript, Tailwind CSS, TanStack Query,
+and Playwright. Major product areas live under `src/app/admin`; shared page
+shells, navigation, feedback, object lists, overflow handling, and interaction
+primitives live under `src/components`.
 
-## Admin Web Development
-
-### Stack
-
-- Next.js 14 (14.2.18)
-- React 18 (18.3.1)
-- TypeScript (5.7.2)
-- Tailwind CSS (3.4.16)
-- TanStack Query (5.62.0)
-
-### Pages
-
-The admin web is fully built with the following pages:
-
-| Section | Pages |
-|---------|-------|
-| Dashboard | System health, storage, recent activity |
-| Creators | List, detail, identity mapping, duplicates |
-| Subscriptions | List, detail (multi-source config) |
-| Jobs | Unified download + import job queue |
-| Works | Grid/list view, detail with source records and assets |
-| Tags | Tag manager with search and categories |
-| Scheduler | Sync schedule, queue status, scheduler config |
-| Search | Meilisearch full-text search across works, creators, tags |
-| Danbooru Reference | Artist search, URL batch import, Pixiv ID search |
-| Sources | Provider capability matrix, URL validation |
-| Settings > gallery-dl | Per-source extractor config (auth, content, file organization, rate limits) |
-| Settings > Dedup | Source-level, cross-source, and perceptual hash dedup toggles |
-| Settings > Proxy | HTTP/HTTPS proxy config for gallery-dl and API calls |
-| Settings > Auth Status | Cookie/token health monitoring per subscription source |
-| Settings > Logs | Live log viewer from in-memory ring buffer |
-| Settings > Backup & Restore | Full system backup creation and restore |
-| Settings > Download Defaults | Timeout, retries, backoff, max posts |
-| Settings > Subscription Defaults | Sync interval, schedule mode, timezone |
-| Data Management | Storage stats, integrity checks, cleanup, danger zone |
-
-### Running admin-web locally
+API access is split across `src/lib/api/client.ts`, `types.ts`,
+`types.generated.ts`, and `index.ts`. Regenerate the OpenAPI types only while a
+compatible backend is running:
 
 ```bash
 cd admin-web
-npm install
+npm run generate:api-types
+```
 
-# Start dev server on port 3000
+### Local iteration and checks
+
+```bash
+cd admin-web
+npm ci
 npm run dev
 ```
 
-The dev server proxies API requests to the backend (configured via `BACKEND_INTERNAL_URL` env var).
-
-### Building for production
+Before a pull request:
 
 ```bash
 npm run typecheck
 npm run build
+npm run test:e2e
 ```
 
-### Admin-web debugging
+Install the Playwright browser if your environment does not already provide it:
 
 ```bash
-# Check for TypeScript/build errors
-npm run typecheck
-npm run build
-
-# The build output will show any type errors or compilation issues
+npx playwright install chromium
 ```
 
-### i18n (Internationalization)
+### Frontend expectations
 
-The admin web supports Chinese and English. All UI strings are defined in `src/lib/i18n.tsx` with both `zh` and `en` values. Language preference is stored in localStorage and defaults to the browser's language.
+- Add every user-facing string in both Chinese and English.
+- Reuse navigation metadata instead of defining page hierarchy in each page.
+- Verify narrow screens and long text without relying on fixed pixel widths.
+- Preserve keyboard focus, touch targets, semantic names, and reduced motion.
+- Treat loading, empty, error, partial, and permission-denied states as
+  first-class UI.
+- Update sanitized docs assets when a major workflow no longer resembles the
+  published image.
 
-When adding new UI:
-
-1. Add keys for ALL text that appears in the UI
-2. Use Chinese values that read naturally to a Chinese speaker
-3. Use English values that read naturally to an English speaker
-4. Never display raw i18n key IDs -- if you see a key displayed instead of its value, the key is missing from i18n.tsx
-
-Key format: `namespace.natural_name` (e.g., `jobs.download`, `creators.title`).
-
-### Admin web conventions
-
-- Typed API client in `src/lib/api.ts`
-- Reusable components in `src/components/`
-- Pages keep logic thin; TanStack Query handles server state
-- Mobile-friendly but desktop-optimized
-- Dark mode support via `src/lib/theme.tsx`
-
-## Debugging
-
-### Debug Toolkit (recommended first stop)
-
-```bash
-# Quick overview — container health, disk, queue lengths
-bash scripts/debug.sh quick
-
-# Targeted modes
-bash scripts/debug.sh backend   # Backend logs, DB pool, API checks
-bash scripts/debug.sh download  # Download worker logs, per-source queues
-bash scripts/debug.sh storage   # Disk usage, FileIndex stats
-bash scripts/debug.sh proxy     # Proxy connectivity, DNS checks
-```
-
-### Deploying changes
-
-```bash
-# Single-command deploy — detect changes, build, restart, verify
-bash scripts/deploy.sh
-```
-
-### Viewing logs
-
-```bash
-# All services
-docker compose logs -f
-
-# Specific services
-docker compose logs -f worker-download
-docker compose logs -f worker-import
-docker compose logs -f worker-import
-
-# Last 100 lines
-docker compose logs --tail=100 backend
-```
-
-### Accessing the database
-
-```bash
-docker compose exec postgres psql -U autogallery
-```
-
-### Checking Redis queue
-
-```bash
-docker compose exec redis redis-cli -a $REDIS_PASSWORD
-> KEYS *
-> LLEN rq:queue:default
-> LLEN rq:queue:downloads
-> LLEN rq:queue:imports
-> LLEN rq:queue:scheduled
-```
-
-### Testing gallery-dl manually
-
-```bash
-docker compose exec worker-download gallery-dl --version
-docker compose exec worker-download gallery-dl --config /gallerydl-config/config.json "https://www.pixiv.net/artworks/123456"
-```
-
-### Rebuilding after dependency changes
-
-```bash
-docker compose build backend
-docker compose up -d backend worker-download worker-import scheduler
-
-# Or for admin-web
-docker compose build admin-web
-docker compose up -d admin-web
-```
-
-### Runtime verification
-
-```bash
-docker compose build backend admin-web
-docker compose up -d backend admin-web worker-download worker-import scheduler
-scripts/verify-runtime.sh
-```
-
-For CI-style runtime verification with the checked-in safe environment:
+## Repository checks
 
 ```bash
 docker compose --env-file .env.ci config --quiet
-docker compose --env-file .env.ci build backend admin-web
-docker compose --env-file .env.ci up -d
-COMPOSE_ENV_FILE=.env.ci scripts/verify-runtime.sh
-docker compose --env-file .env.ci down -v
+bash scripts/privacy-scan.sh
+bash scripts/package-release.sh ci
 ```
 
-`.env.ci` uses Docker named volumes instead of repository-local `data/ci`
-bind mounts, so `down -v` removes container-written runtime data without
-leaving root-owned files in the working tree.
+The CI workflow adds the full backend, frontend, repository, and Compose smoke
+checks. See [.github/workflows/ci.yml](../.github/workflows/ci.yml).

@@ -1,19 +1,33 @@
 # auto-gallery
 
-[English version](README.md)
+[English](README.md)
 
-![License](https://img.shields.io/badge/license-AGPL--3.0--only-blue)
-![Status](https://img.shields.io/badge/status-beta-yellow)
-![Deploy](https://img.shields.io/badge/deploy-Docker%20Compose-2496ed)
-![Backend](https://img.shields.io/badge/backend-pytest-2ea44f)
-![Admin](https://img.shields.io/badge/admin-Next.js%2014-black)
-![LAN First](https://img.shields.io/badge/security-LAN--first-57606a)
+[![CI](https://github.com/MUSH2077/auto-gallery/actions/workflows/ci.yml/badge.svg)](https://github.com/MUSH2077/auto-gallery/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/MUSH2077/auto-gallery/actions/workflows/codeql.yml/badge.svg)](https://github.com/MUSH2077/auto-gallery/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/MUSH2077/auto-gallery/badge)](https://securityscorecards.dev/viewer/?uri=github.com/MUSH2077/auto-gallery)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
+[![Status: public beta](https://img.shields.io/badge/status-public%20beta-f59e0b)](CHANGELOG.md)
 
-面向个人 NAS / Linux 主机的自托管、局域网优先、多来源媒体归档与画廊管理系统。
+面向创作者内容集合的自托管、局域网优先媒体归档系统。
 
-auto-gallery 通过 Docker Compose 运行，使用 gallery-dl 下载、导入、索引并管理以创作者为中心的媒体库。管理后台采用 GitHub-like 信息架构，覆盖创作者、订阅 URL、作品、任务、搜索、调度器、gallery-dl 配置和数据管理。
+auto-gallery 通过 Docker Compose 从多个来源下载、导入、索引并管理媒体，适用于个人
+NAS 和 Linux 主机。它提供可访问的管理界面，覆盖创作者、仓库、作品、订阅、任务、
+搜索、调度、去重和 gallery-dl 配置。
 
-> Beta 提示：auto-gallery 面向个人自托管归档场景。不要把管理后台或后端 API 直接暴露到公网。
+> [!WARNING]
+> auto-gallery 目前是面向可信自托管环境的公开 Beta。不要把管理后台或后端 API
+> 直接暴露到公网；请使用反向代理、TLS、访问控制，并根据你的网络环境建立威胁模型。
+
+## 为什么选择 auto-gallery？
+
+- **以创作者为中心。** 一个规范创作者可关联多个平台身份和仓库。
+- **仓库独立同步。** 每个受支持的 gallery-dl 订阅 URL 都是可观测、可独立调度的同步单元。
+- **保留原始媒体。** 下载文件保持为事实来源，PostgreSQL、缩略图与 Meilisearch
+  共同提供可浏览的媒体库索引。
+- **后台任务隔离。** 下载、导入和维护在独立 worker 中执行，不阻塞 API 请求。
+- **完整运维可见性。** 后台提供健康、计划、队列、存储、日志、备份、来源认证和数据检查。
+- **跨来源资产去重。** 以图片资产为粒度比较不同来源，歧义结果进入人工审核，不静默合并。
+- **双语且可访问。** 支持中英文、键盘导航、响应式布局、深色模式与降低动效。
 
 ## 截图
 
@@ -21,23 +35,16 @@ auto-gallery 通过 Docker Compose 运行，使用 gallery-dl 下载、导入、
 |---|---|
 | ![脱敏仪表盘演示](docs/assets/dashboard.svg) | ![脱敏创作者详情演示](docs/assets/creator-detail.svg) |
 
-| Repositories / 订阅 | 作品详情 | gallery-dl 设置 |
+| 仓库 | 作品详情 | gallery-dl 设置 |
 |---|---|---|
-| ![脱敏订阅仓库演示](docs/assets/repositories.svg) | ![脱敏作品详情演示](docs/assets/works-detail.svg) | ![脱敏 gallery-dl 设置演示](docs/assets/gallerydl-settings.svg) |
+| ![脱敏仓库演示](docs/assets/repositories.svg) | ![脱敏作品详情演示](docs/assets/works-detail.svg) | ![脱敏 gallery-dl 设置演示](docs/assets/gallerydl-settings.svg) |
 
-上方 SVG 是基于虚构数据制作的脱敏演示截图，不包含真实创作者、凭据、本地路径或已下载媒体。
-
-## 功能亮点
-
-- 以创作者为中心：一个规范创作者可以绑定多个平台账号。
-- GitHub-like 创作者页：Profile、活动、作品、链接和 repository 风格订阅 URL。
-- 每条合法 gallery-dl 订阅 URL 都是独立同步单元。
-- gallery-dl 仅在 worker 中执行，API 请求不直接 shell out。
-- 导入管线支持元数据解析、哈希、标签、缩略图、搜索索引和完整性检查。
-- 后台工作流覆盖订阅、调度器、任务、批量操作、去重候选、认证健康、代理、备份恢复和数据管理。
-- 局域网优先：JWT 管理员登录、`.env` 默认忽略、v1 不建议公网暴露。
+这些 SVG 使用虚构数据，不包含凭据、本地路径、真实创作者或已下载媒体。
 
 ## 支持的来源
+
+Provider 兼容性依赖 gallery-dl，目标站点变化可能造成兼容性变化。当前限制请查阅
+[Provider 指南](docs/providers.zh.md)。
 
 | 来源 | 下载方式 | 认证 | 状态 |
 |---|---|---|---|
@@ -49,110 +56,93 @@ auto-gallery 通过 Docker Compose 运行，使用 gallery-dl 下载、导入、
 | Bilibili | gallery-dl | 公开内容 | 已支持 |
 | Pinterest | gallery-dl | 公开内容 | 已支持 |
 | LOFTER | gallery-dl | 公开内容 | 已支持 |
-| 本地文件夹 | 直接导入 | 本地路径 | 计划中 |
-| 手动上传 | 管理后台 | 管理员 | 计划中 |
-
-Provider 兼容性依赖 gallery-dl 和目标站点行为。详见
-[docs/providers.zh.md](docs/providers.zh.md) 与
-[docs/gallerydl-config.zh.md](docs/gallerydl-config.zh.md)。
+| 手动上传 | 管理后台 | 管理员 | 已支持 |
+| 本地文件夹 | 直接导入 | 本地路径 | 实验性 |
 
 ## 快速开始
 
+### 环境要求
+
+- Docker Engine 与 Docker Compose v2
+- 带持久化存储的 Linux 主机或 NAS
+- 能容纳原始媒体、缩略图和备份的磁盘空间
+
 ```bash
-git clone <repo-url> auto-gallery
+git clone https://github.com/MUSH2077/auto-gallery.git
 cd auto-gallery
 
-scripts/generate-env.sh
-# 检查 .env：设置端口、时区和宿主机路径。
-# ADMIN_PASSWORD 可保留 change-me-admin 用于首次登录，登录后会强制修改。
+bash scripts/generate-env.sh
+# 检查 .env，特别是宿主机路径、端口、时区与 ADMIN_PASSWORD。
 
-docker compose up -d
-docker compose exec backend alembic upgrade head
-
+docker compose up -d --build
 curl http://localhost:8818/api/v1/system/health
 ```
 
-首次启动时，backend 会自动创建 `data/config/gallery-dl/config.json`
-并写入安全的默认文件组织规则。之后可在 **设置 -> gallery-dl 配置 -> 文件组织**
-中修改。
+backend 启动时会自动运行数据库迁移。访问 `http://<host>:13000`，立即修改初始密码，
+再到设置中配置 gallery-dl 凭据和文件组织规则。
 
-打开管理后台：
-
-```text
-http://<host>:13000
-```
-
-完整部署文档见 [docs/setup.zh.md](docs/setup.zh.md)。
-
-## 首次部署 Checklist
-
-- 运行 `scripts/generate-env.sh`，或复制 `.env.example` 为 `.env` 后手动替换
-  `POSTGRES_PASSWORD`、`REDIS_PASSWORD`、`MEILI_MASTER_KEY` 和 `SECRET_KEY`。
-- 首次登录账号为 `admin / change-me-admin`；也可以部署前把 `ADMIN_PASSWORD` 改成自定义初始密码。登录后系统会强制修改密码。
-- 设置 downloads、library、app config、gallery-dl config 和服务数据的宿主机路径。
-- 设置 `TIMEZONE`，确保调度器按预期运行。
-- 如果通过反向代理访问，确认 `/api/v1/ws` 支持 WebSocket upgrade；否则设置 `NEXT_PUBLIC_WS_URL` 后重新构建 admin-web。WebSocket 不通时任务页会自动使用轮询，不会影响任务状态刷新。
-- 启动 Docker Compose。
-- 运行 Alembic 迁移。
-- 访问 `/api/v1/system/health` 检查后端健康。
-- 登录管理后台。
-- 在 Settings 配置 gallery-dl 凭据和文件组织。
-- 创建创作者和订阅 URL，先做小规模同步验证。
-- 大规模导入前确认备份和恢复预期。
+反向代理、存储布局、升级与故障排查请参阅[完整部署指南](docs/setup.zh.md)。
 
 ## 架构
 
 ```text
 Sources
-  -> gallery-dl worker jobs
-    -> gallery-dl job output
-      -> Original Media Store (DOWNLOAD_ROOT)
-        -> Library Index (LIBRARY_ROOT metadata + thumbnails)
-          -> PostgreSQL canonical data
-          -> Meilisearch full-text index
-          -> Next.js admin web
+  -> gallery-dl download workers / manual upload
+    -> Original Media Store (DOWNLOAD_ROOT)
+      -> import and asset processing
+        -> Library Index (metadata + thumbnails)
+        -> PostgreSQL canonical data
+        -> Meilisearch full-text index
+        -> Next.js admin web
 ```
 
-核心模型与来源无关：`creator`、`work`、`asset`、`tag` 和 subscription sources。Provider 模块负责 URL 校验、normalize、gallery-dl 配置和元数据解析。
-
-更多细节见 [docs/architecture.zh.md](docs/architecture.zh.md)。
+核心模型与来源无关：创作者、作品、资产、标签和订阅来源。Provider 模块负责 URL
+校验与规范化、gallery-dl 配置和元数据解析。修改这些边界前请阅读
+[架构文档](docs/architecture.zh.md)。
 
 ## 文档
 
-- [部署](docs/setup.zh.md)
+- [文档索引](docs/README.md)
+- [部署与升级](docs/setup.zh.md)
 - [架构](docs/architecture.zh.md)
-- [Provider 指南](docs/providers.zh.md)
-- [gallery-dl 配置](docs/gallerydl-config.zh.md)
-- [开发](docs/development.zh.md)
-- [分发与隐私](docs/distribution.zh.md)
-- [风险登记](docs/risks.zh.md)
-- [Release checklist](docs/release-checklist.md)
+- [Provider 开发](docs/providers.zh.md)
+- [开发指南](docs/development.zh.md)
 - [安全策略](SECURITY.md)
-- [贡献指南](CONTRIBUTING.md)
+- [贡献指南](CONTRIBUTING.zh.md)
+- [项目治理](GOVERNANCE.md)
+- [支持渠道](SUPPORT.md)
+- [变更记录](CHANGELOG.md)
 
-## 已知限制
+## 项目状态
 
-- 来源站点可能随时变化，导致 gallery-dl extractor 失效。
-- gallery-dl 版本变化可能影响输出元数据和解析行为。
-- Cookies、refresh token 和平台凭据需要用户自行维护。
-- 大规模首次同步会耗时较长，并可能给 NAS 磁盘带来较高 I/O。
-- 搜索索引可能短暂滞后于 PostgreSQL，需要等待或重建索引。
-- v1 是局域网优先、管理员导向，不是公开多租户服务。
+auto-gallery 仍处于 1.0 之前。数据库迁移、Provider 行为和部署设置可能在 Beta
+版本之间变化，升级前请备份媒体与应用状态。
+
+已知限制：
+
+- 来源站点可能随时变化并导致 gallery-dl extractor 失效。
+- Cookies 和平台凭据需要运维者持续维护。
+- 大规模首次同步可能在 NAS 上消耗较长时间和较高磁盘 I/O。
+- 搜索索引可能短暂滞后于 PostgreSQL。
+- 产品面向管理员，不是公开的多租户媒体服务。
+
+近期规划通过
+[GitHub issues](https://github.com/MUSH2077/auto-gallery/issues) 跟踪，重点是 Provider
+兼容性测试、恢复校验、本地文件夹导入和首个稳定 Beta 标签。
 
 ## 合法与负责任使用
 
-auto-gallery 用于归档你有权访问和下载的内容。你需要自行遵守来源平台条款、版权法律和所在地法律。
+仅使用 auto-gallery 归档你有权访问和下载的内容。你需要自行遵守来源平台条款、
+版权法律和所在地法律。
 
-本项目不鼓励绕过付费墙、DRM、访问控制、速率限制或平台限制。不要在 issue 或 PR 中公开 cookies、凭据、私有创作者 URL、私有媒体或数据库备份。
+本项目不鼓励绕过付费墙、DRM、访问控制、速率限制或平台限制。不要在 Issue 或 PR
+中公开 cookies、凭据、私有创作者 URL、私有媒体、数据库备份或未脱敏日志。
 
-## Roadmap
+## 社区与许可证
 
-- 增加更多脱敏演示截图和简短工作流视频。
-- 增强 provider 兼容性 smoke tests。
-- 完善备份/恢复校验。
-- 支持本地文件夹导入和手动上传。
-- 在局域网优先的管理端稳定后，再扩展可选远程客户端能力。
+参与前请阅读[贡献指南](CONTRIBUTING.zh.md)和
+[行为准则](CODE_OF_CONDUCT.md)。安全问题必须按 [SECURITY.md](SECURITY.md)
+中的私密流程报告。
 
-## License
-
-auto-gallery 使用 `AGPL-3.0-only` 许可证。详见 [LICENSE](LICENSE)。
+auto-gallery 使用
+[GNU Affero General Public License v3.0 only](LICENSE)。
