@@ -6,8 +6,8 @@ import urllib.request
 import time
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Depends
-from app.auth import RequireAdmin
+from fastapi import APIRouter, Depends, Query
+from app.auth import RequirePermission
 from sqlalchemy import and_, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,9 +17,11 @@ from app.jobs.subscription_sync import schedule_decision_snapshot
 from app.models.creator import Creator
 from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
+from app.models.source_creator import SourceCreator
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.models.work import Work
+from app.models.work_source import WorkSource
 from app.providers import registry
 from app.services.settings import get_download_defaults, get_scheduler_config
 
@@ -29,12 +31,19 @@ except ImportError:
     from backports.zoneinfo import ZoneInfo  # Python < 3.9
 
 logger = logging.getLogger(__name__)
-router = APIRouter(dependencies=[RequireAdmin])
+router = APIRouter(dependencies=[RequirePermission("system")])
+# Scheduler/queue operations belong to the `tasks` module per spec §A2
+# (jobs/scheduler/notifications/tasks -> tasks), not `system`.
+tasks_ops_router = APIRouter(dependencies=[RequirePermission("tasks")])
 
-DOWNLOAD_RUNNING_STATUSES = {"pending", "downloading", "downloaded", "importing"}
-IMPORT_RUNNING_STATUSES = {"pending", "running"}
+DOWNLOAD_RUNNING_STATUSES = {"enqueued", "downloading", "downloaded", "importing"}
+IMPORT_RUNNING_STATUSES = {"enqueued", "running"}
 FAILED_STATUSES = {"failed", "stale"}
-QUEUE_NAMES = ("default", "downloads", "imports", "scheduled")
+QUEUE_NAMES = (
+    "default", "downloads", "imports", "operations", "scheduled",
+    "downloads:pixiv", "downloads:danbooru", "downloads:iwara",
+    "downloads:weibo", "downloads:bilibili", "downloads:pinterest", "downloads:lofter",
+)
 
 # ── Storage stats TTL cache ────────────────────────────────────────────────────
 _storage_cache: dict | None = None
@@ -42,14 +51,24 @@ _storage_cache_ts: float = 0.0
 _STORAGE_CACHE_TTL = 60.0  # seconds
 
 
-def _dir_size(path: str) -> int:
+def _dir_size(
+    path: str,
+    seen_inodes: set[tuple[int, int]] | None = None,
+) -> int:
+    """Return physical file bytes, counting hard-linked inodes once."""
+    if seen_inodes is None:
+        seen_inodes = set()
     total = 0
     try:
         for entry in os.scandir(path):
             if entry.is_file(follow_symlinks=False):
-                total += entry.stat().st_size
+                stat = entry.stat(follow_symlinks=False)
+                inode = (stat.st_dev, stat.st_ino)
+                if inode not in seen_inodes:
+                    seen_inodes.add(inode)
+                    total += stat.st_size
             elif entry.is_dir(follow_symlinks=False):
-                total += _dir_size(entry.path)
+                total += _dir_size(entry.path, seen_inodes)
     except (OSError, PermissionError) as e:
         logger.debug("Cannot scan %s: %s", path, e)
     return total
@@ -232,7 +251,7 @@ async def storage_stats():
     return result
 
 
-@router.get("/system/queue-stats")
+@tasks_ops_router.get("/system/queue-stats")
 async def queue_stats():
     try:
         from app.database import async_session
@@ -258,12 +277,77 @@ async def queue_stats():
         return {"default_queue": -1, "scheduled_queue": -1, "failed_jobs": -1, "scheduler_enabled": True}
 
 
+async def _get_proxy_health_summary() -> dict:
+    """Read proxy health from Redis keys set by download pre-flight checks."""
+    sources = ["pixiv", "danbooru", "iwara", "weibo", "bilibili", "pinterest", "lofter"]
+    result = {}
+    try:
+        from app.services.redis_client import get_redis
+        r = get_redis()
+        for source in sources:
+            data = r.hgetall(f"proxy:health:{source}")
+            if data:
+                result[source] = {
+                    "status": data.get(b"status", b"unknown").decode(),
+                    "last_check": data.get(b"last_check", b"").decode(),
+                    "warnings": data.get(b"warnings", b"").decode(),
+                }
+    except Exception:
+        pass
+    return {"sources": result}
+
+
+async def _count_active_rebuilds() -> int:
+    try:
+        from app.services.redis_client import get_redis
+        r = get_redis()
+        active = r.get("library:rebuild:active")
+        if not active:
+            return 0
+        from app.services.operations import get_operation_status
+        jid = active.decode() if isinstance(active, bytes) else active
+        status = get_operation_status(jid)
+        return 1 if status and status.get("status") == "running" else 0
+    except Exception:
+        return 0
+
+
+_workbench_cache: dict | None = None
+_workbench_cache_ts: float = 0.0
+_WORKBENCH_CACHE_TTL = 10.0
+
+
 @router.get("/system/workbench")
-async def workbench_summary(db: AsyncSession = Depends(get_db)):
+async def workbench_summary(
+    refresh: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+):
     """Read-only dashboard aggregation for the live admin workbench."""
+    global _workbench_cache, _workbench_cache_ts
+    _now_mono = time.monotonic()
+    if (
+        not refresh
+        and _workbench_cache is not None
+        and (_now_mono - _workbench_cache_ts) < _WORKBENCH_CACHE_TTL
+    ):
+        return _workbench_cache
+
     now = datetime.now(timezone.utc)
-    storage = await storage_stats()
-    storage_risk = _storage_risk(storage)
+    # O(1) disk stats via statvfs instead of recursive filesystem scans
+    try:
+        stat = os.statvfs(settings.download_root)
+        disk_total_bytes = stat.f_frsize * stat.f_blocks
+        disk_free_bytes = stat.f_frsize * stat.f_bavail
+        disk_used_bytes = disk_total_bytes - disk_free_bytes
+        disk_used_percent = round((disk_used_bytes / disk_total_bytes) * 100, 1) if disk_total_bytes else None
+        disk_free_percent = round((disk_free_bytes / disk_total_bytes) * 100, 1) if disk_total_bytes else None
+    except (OSError, PermissionError):
+        disk_total_bytes = disk_free_bytes = disk_used_bytes = 0
+        disk_used_percent = disk_free_percent = None
+    storage_risk = "unknown"
+    if disk_total_bytes > 0:
+        free_pct = (disk_free_bytes / disk_total_bytes) * 100
+        storage_risk = "critical" if free_pct < 5 else "warning" if free_pct < 15 else "ok"
     queue_payload = await _queue_stats_payload()
     scheduler_config = await get_scheduler_config(db)
     download_defaults = await get_download_defaults(db)
@@ -292,15 +376,52 @@ async def workbench_summary(db: AsyncSession = Depends(get_db)):
     )
     auth_unhealthy_count = int(auth_unhealthy_rows.scalar() or 0)
 
-    latest_downloads = list((await db.execute(
-        select(DownloadJob).order_by(DownloadJob.created_at.desc()).limit(5)
-    )).scalars().all())
-    latest_imports = list((await db.execute(
-        select(ImportJob).order_by(ImportJob.created_at.desc()).limit(5)
-    )).scalars().all())
+    latest_download_rows = list((await db.execute(
+        select(DownloadJob, Subscription, Creator)
+        .join(Subscription, DownloadJob.subscription_id == Subscription.id)
+        .join(Creator, Subscription.creator_id == Creator.id)
+        .order_by(DownloadJob.created_at.desc())
+        .limit(5)
+    )).all())
+    latest_import_rows = list((await db.execute(
+        select(ImportJob, DownloadJob, Subscription, Creator)
+        .join(DownloadJob, ImportJob.download_job_id == DownloadJob.id)
+        .join(Subscription, DownloadJob.subscription_id == Subscription.id)
+        .join(Creator, Subscription.creator_id == Creator.id)
+        .order_by(ImportJob.created_at.desc())
+        .limit(5)
+    )).all())
     latest_works = list((await db.execute(
         select(Work).order_by(Work.created_at.desc()).limit(5)
     )).scalars().all())
+    work_context: dict = {}
+    if latest_works:
+        work_context_rows = list((await db.execute(
+            select(
+                WorkSource.work_id,
+                WorkSource.source,
+                Creator.display_name,
+                Creator.name,
+            )
+            .outerjoin(
+                SourceCreator,
+                and_(
+                    SourceCreator.source == WorkSource.source,
+                    SourceCreator.source_creator_id == WorkSource.source_creator_id,
+                ),
+            )
+            .outerjoin(Creator, Creator.id == SourceCreator.creator_id)
+            .where(WorkSource.work_id.in_([work.id for work in latest_works]))
+            .order_by(WorkSource.created_at.asc())
+        )).all())
+        for work_id, source, creator_display_name, creator_name in work_context_rows:
+            work_context.setdefault(
+                work_id,
+                {
+                    "source": source,
+                    "creator_name": creator_display_name or creator_name,
+                },
+            )
     successful_sync_rows = list((await db.execute(
         select(SubscriptionSource, Subscription, Creator)
         .join(Subscription, SubscriptionSource.subscription_id == Subscription.id)
@@ -310,13 +431,14 @@ async def workbench_summary(db: AsyncSession = Depends(get_db)):
         .limit(5)
     )).all())
 
-    return {
+    payload = {
         "updated_at": now.isoformat(),
         "queue": {
             "default": queue_payload["default_queue"],
             "scheduled": queue_payload["scheduled_queue"],
             "failed": queue_payload["failed_jobs"],
             "started": queue_payload["started_jobs"],
+            "rebuild_active": await _count_active_rebuilds(),
             "active_download_count": active_download_count,
             "active_import_count": active_import_count,
             "failed_download_count": failed_download_count,
@@ -333,16 +455,13 @@ async def workbench_summary(db: AsyncSession = Depends(get_db)):
             "scan_interval_minutes": int(scheduler_config.get("scheduler_scan_interval_minutes", 60)),
             "next_scan_at": queue_payload["next_sync_scan_at"],
         },
+        "proxy_health": await _get_proxy_health_summary(),
         "storage": {
-            "original_media_size_bytes": storage["downloads"]["size_bytes"],
-            "original_media_file_count": storage["downloads"]["file_count"],
-            "library_size_bytes": storage["library"]["size_bytes"],
-            "library_file_count": storage["library"]["file_count"],
-            "disk_total_bytes": storage["disk"]["total_bytes"],
-            "disk_free_bytes": storage["disk"]["free_bytes"],
-            "disk_used_bytes": storage["disk"]["used_bytes"],
-            "disk_used_percent": round((storage["disk"]["used_bytes"] / storage["disk"]["total_bytes"]) * 100, 1) if storage["disk"]["total_bytes"] else None,
-            "disk_free_percent": round((storage["disk"]["free_bytes"] / storage["disk"]["total_bytes"]) * 100, 1) if storage["disk"]["total_bytes"] else None,
+            "disk_total_bytes": disk_total_bytes,
+            "disk_free_bytes": disk_free_bytes,
+            "disk_used_bytes": disk_used_bytes,
+            "disk_used_percent": disk_used_percent,
+            "disk_free_percent": disk_free_percent,
             "risk_level": storage_risk,
         },
         "health": await _quick_service_health(db),
@@ -361,23 +480,40 @@ async def workbench_summary(db: AsyncSession = Depends(get_db)):
                 "subscription_source_id": str(j.subscription_source_id) if j.subscription_source_id else None,
                 "source": j.source,
                 "source_url": j.source_url,
+                "creator_id": str(creator.id),
+                "creator_name": creator.display_name or creator.name,
+                "subscription_name": sub.name,
                 "status": j.status,
+                "pipeline_stage": j.pipeline_stage,
+                "progress_data": j.progress_data,
                 "created_at": _iso(j.created_at),
                 "updated_at": _iso(j.updated_at),
                 "error_log_excerpt": _excerpt(j.error_log),
-            } for j in latest_downloads],
+            } for j, sub, creator in latest_download_rows],
             "import_jobs": [{
                 "id": str(j.id),
                 "download_job_id": str(j.download_job_id),
+                "source": download.source,
+                "source_url": download.source_url,
+                "subscription_id": str(sub.id),
+                "subscription_name": sub.name,
+                "creator_id": str(creator.id),
+                "creator_name": creator.display_name or creator.name,
                 "status": j.status,
+                "progress_stage": j.progress_stage,
+                "progress_works_done": j.progress_works_done,
+                "progress_works_total": j.progress_works_total,
+                "progress_data": j.progress_data,
                 "created_at": _iso(j.created_at),
                 "updated_at": _iso(j.updated_at),
                 "error_log_excerpt": _excerpt(j.error_log),
-            } for j in latest_imports],
+            } for j, download, sub, creator in latest_import_rows],
             "works": [{
                 "id": str(w.id),
                 "title": w.title,
                 "thumbnail_asset_id": str(w.thumbnail_asset_id) if w.thumbnail_asset_id else None,
+                "source": (work_context.get(w.id) or {}).get("source"),
+                "creator_name": (work_context.get(w.id) or {}).get("creator_name"),
                 "created_at": _iso(w.created_at),
             } for w in latest_works],
             "successful_syncs": [{
@@ -391,9 +527,12 @@ async def workbench_summary(db: AsyncSession = Depends(get_db)):
             } for ss, sub, creator in successful_sync_rows],
         },
     }
+    _workbench_cache = payload
+    _workbench_cache_ts = time.monotonic()
+    return payload
 
 
-@router.get("/system/scheduler-decisions")
+@tasks_ops_router.get("/system/scheduler-decisions")
 async def scheduler_decisions(db: AsyncSession = Depends(get_db)):
     """Explain current scheduler decisions at subscription-source granularity.
 
@@ -491,11 +630,12 @@ async def get_logs(limit: int = 200, level: str | None = None, name: str | None 
     """Get recent application log entries from the in-memory ring buffer."""
     from app.services.log_buffer import get_recent, MAX_ENTRIES
     entries = get_recent(limit=min(limit, MAX_ENTRIES), level=level, name_filter=name)
-    levels = sorted(set(e["level"] for e in entries), key=lambda x: ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"].index(x) if x in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] else 0)
+    _LEVEL_ORDER = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+    levels = sorted(set(e["level"] for e in entries), key=lambda x: _LEVEL_ORDER.index(x) if x in _LEVEL_ORDER else len(_LEVEL_ORDER))
     return {"entries": entries, "total": len(entries), "levels": levels}
 
 
-@router.post("/system/clear-failed-jobs")
+@tasks_ops_router.post("/system/clear-failed-jobs")
 async def clear_failed_jobs():
     """Remove all failed jobs from Redis registries."""
     import redis as redis_lib

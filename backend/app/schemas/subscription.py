@@ -41,7 +41,11 @@ class SubscriptionRead(BaseModel):
     last_synced_at: datetime | None = None
     source_count: int | None = None
     enabled_source_count: int | None = None
+    running_job_count: int | None = None
+    failed_job_count: int | None = None
+    latest_job_id: UUID | None = None
     latest_job_status: str | None = None
+    latest_job_created_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

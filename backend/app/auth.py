@@ -65,7 +65,7 @@ async def get_admin_key(
 
         username = payload.get("sub")
         if username:
-            if payload.get("pwd_chg_required") and request.url.path != "/api/v1/auth/change-password":
+            if payload.get("pwd_chg_required") and request.url.path not in ("/api/v1/auth/change-password", "/api/v1/auth/me"):
                 raise HTTPException(status_code=403, detail="Password change required")
             return username
 
@@ -74,6 +74,45 @@ async def get_admin_key(
 
 # Dependency alias
 RequireAdmin = Depends(get_admin_key)
+
+
+# ── Per-user permission dependencies ──────────────────────────────────────────
+
+async def _load_active_user(username: str):
+    from sqlalchemy import select
+    from app.database import async_session
+    from app.models.user import User
+    async with async_session() as session:
+        user = (await session.execute(select(User).where(User.username == username))).scalar_one_or_none()
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="Invalid or missing credentials")
+    return user
+
+
+def RequirePermission(module: str):
+    async def _check(
+        request: Request,
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ):
+        username = await get_admin_key(request, credentials)  # existing 401 + pwd-change logic
+        user = await _load_active_user(username)
+        if user.is_admin or module in (user.permissions or []):
+            return user
+        raise HTTPException(status_code=403, detail=f"Missing permission: {module}")
+    return Depends(_check)
+
+
+async def _admin_user(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+):
+    username = await get_admin_key(request, credentials)
+    user = await _load_active_user(username)
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user
+
+RequireAdminUser = Depends(_admin_user)
 
 
 # ── Admin user bootstrap ──────────────────────────────────────────────────────
@@ -100,15 +139,9 @@ async def ensure_admin_user() -> None:
                 password_hash=hash_password(bootstrap_password),
                 display_name="Administrator",
                 is_active=True,
+                is_admin=True,
                 must_change_password=True,
             )
             session.add(admin)
             await session.commit()
-        else:
-            await session.execute(
-                update(User)
-                .where(User.username == "admin")
-                .where(User.must_change_password == False)  # noqa: E712
-                .values(must_change_password=True)
-            )
-            await session.commit()
+        # Once password is changed, never force-reset on restart

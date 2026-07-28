@@ -8,14 +8,14 @@ interface State { hasError: boolean; error: Error | null }
 function ErrorFallback({ error }: { error: Error | null }) {
   const t = useT();
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#f6f8fa] dark:bg-[#0d1117]">
+    <div className="flex min-h-screen items-center justify-center bg-subtle dark:bg-canvas">
       <div className="card mx-4 w-full max-w-lg p-8 text-center">
         <div className="text-4xl mb-4">⚠</div>
-        <h2 className="mb-2 text-xl font-semibold text-[#24292f] dark:text-[#e6edf3]">{t("common.something_wrong")}</h2>
-        <p className="mb-4 text-sm text-[#57606a] dark:text-[#8b949e]">
+        <h2 className="mb-2 text-xl font-semibold text-fg">{t("common.something_wrong")}</h2>
+        <p className="mb-4 text-sm text-muted">
           {t("common.unexpected_error")}
         </p>
-        <pre className="mb-4 max-h-32 overflow-auto rounded-md border border-[#cf222e]/30 bg-[#ffebe9] p-3 text-left text-xs text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">
+        <pre className="mb-4 max-h-32 overflow-auto rounded-md border border-danger/30 bg-danger-subtle p-3 text-left text-xs text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">
           {error?.message || t("common.unknown_error")}
         </pre>
         <button

@@ -5,6 +5,11 @@ from app.providers.base import BaseProvider, ProviderCapabilities
 
 
 class XProvider(BaseProvider):
+    @staticmethod
+    def _user(raw_metadata: dict) -> dict:
+        user = raw_metadata.get("user") or raw_metadata.get("author") or {}
+        return user if isinstance(user, dict) else {}
+
     @property
     def source_name(self) -> str:
         return "x"
@@ -45,9 +50,9 @@ class XProvider(BaseProvider):
         return cfg
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:
-        user = raw_metadata.get("user", {})
-        user_id = str(user.get("id", ""))
-        name = user.get("name", "")
+        user = self._user(raw_metadata)
+        name = user.get("name") or user.get("screen_name") or ""
+        user_id = str(user.get("id") or user.get("id_str") or name)
         return {
             "source": self.source_name,
             "source_creator_id": user_id,
@@ -57,17 +62,29 @@ class XProvider(BaseProvider):
         }
 
     def parse_work_source(self, raw_metadata: dict) -> dict:
-        tweet_id = str(raw_metadata.get("id_str") or raw_metadata.get("id", ""))
-        user = raw_metadata.get("user", {})
-        screen_name = user.get("name", "")
+        tweet_id = str(
+            raw_metadata.get("tweet_id")
+            or raw_metadata.get("id_str")
+            or raw_metadata.get("id")
+            or ""
+        )
+        user = self._user(raw_metadata)
+        screen_name = user.get("name") or user.get("screen_name") or ""
+        source_creator_id = str(user.get("id") or user.get("id_str") or screen_name)
+        body = (
+            raw_metadata.get("content")
+            or raw_metadata.get("full_text")
+            or raw_metadata.get("text")
+            or ""
+        )
         return {
             "source": self.source_name,
             "source_work_id": tweet_id,
             "source_url": f"https://x.com/{screen_name}/status/{tweet_id}" if screen_name and tweet_id else None,
-            "source_creator_id": str(user.get("id", "")),
-            "title": (raw_metadata.get("full_text") or raw_metadata.get("text") or "")[:200],
-            "description": raw_metadata.get("full_text") or raw_metadata.get("text") or "",
-            "posted_at": raw_metadata.get("created_at"),
+            "source_creator_id": source_creator_id,
+            "title": body[:200],
+            "description": body,
+            "posted_at": raw_metadata.get("date") or raw_metadata.get("created_at"),
             "raw_metadata": raw_metadata,
         }
 
@@ -100,12 +117,24 @@ class XProvider(BaseProvider):
 
     def parse_source_tags(self, raw_metadata: dict) -> list[dict]:
         result = []
-        # Hashtags from entities
+        seen: set[str] = set()
+
+        # Current gallery-dl emits a top-level list of strings. Older metadata
+        # fixtures and API responses use entities.hashtags objects.
+        for hashtag in raw_metadata.get("hashtags", []) or []:
+            text = hashtag.get("text", "") if isinstance(hashtag, dict) else str(hashtag)
+            normalized = text.strip()
+            if normalized and normalized.casefold() not in seen:
+                seen.add(normalized.casefold())
+                result.append({"source": self.source_name, "original_name": normalized, "category": "hashtag"})
+
         entities = raw_metadata.get("entities", {})
         for hashtag in entities.get("hashtags", []):
-            text = hashtag.get("text", "")
-            if text:
-                result.append({"source": self.source_name, "original_name": text, "category": "hashtag"})
+            text = hashtag.get("text", "") if isinstance(hashtag, dict) else str(hashtag)
+            normalized = text.strip()
+            if normalized and normalized.casefold() not in seen:
+                seen.add(normalized.casefold())
+                result.append({"source": self.source_name, "original_name": normalized, "category": "hashtag"})
         # User mentions
         for mention in entities.get("user_mentions", []):
             name = mention.get("name") or mention.get("screen_name", "")
@@ -118,5 +147,5 @@ class XProvider(BaseProvider):
         return m.group(1) if m else None
 
     def get_creator_directory_name(self, raw_metadata: dict) -> str:
-        user = raw_metadata.get("user", {})
-        return str(user.get("name") or user.get("id", "unknown"))
+        user = self._user(raw_metadata)
+        return str(user.get("name") or user.get("screen_name") or user.get("id", "unknown"))

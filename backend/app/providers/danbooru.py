@@ -57,11 +57,13 @@ class DanbooruProvider(BaseProvider):
         return cfg
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:
-        # Danbooru posts have tag_string_artist for the artist name(s).
-        # Use the full tag string as the source_creator_id to avoid
-        # splitting multi-word artist names (e.g., "John Smith").
+        # Danbooru tag_string_artist uses spaces to separate artist tags
+        # and underscores within artist names (e.g., "john_doe ask_askzy"
+        # = two artists).  Use only the first artist to match the
+        # Danbooru pre-import convention of one SourceCreator per artist.
         tag_artist = raw_metadata.get("tag_string_artist", "")
-        artist_name = tag_artist if tag_artist else "unknown"
+        first_artist = tag_artist.split()[0] if tag_artist else ""
+        artist_name = first_artist if first_artist else "unknown"
         return {
             "source": self.source_name,
             "source_creator_id": artist_name,
@@ -76,8 +78,7 @@ class DanbooruProvider(BaseProvider):
             "source": self.source_name,
             "source_work_id": post_id,
             "source_url": f"https://danbooru.donmai.us/posts/{post_id}",
-            "source_creator_id": (raw_metadata.get("tag_string_artist", "").split()[0]
-                                  if raw_metadata.get("tag_string_artist") else None),
+            "source_creator_id": (first_artist if (first_artist := (raw_metadata.get("tag_string_artist", "").split()[0] if raw_metadata.get("tag_string_artist", "").strip() else "")) else None),
             "title": None,
             "description": raw_metadata.get("artist_commentary_desc"),
             "posted_at": raw_metadata.get("created_at"),

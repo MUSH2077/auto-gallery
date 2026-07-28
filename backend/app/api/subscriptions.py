@@ -2,7 +2,7 @@ import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from app.auth import RequireAdmin
+from app.auth import RequirePermission
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,7 +11,6 @@ from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.schemas.subscription import SubscriptionCreate, SubscriptionRead, SubscriptionUpdate
 from app.schemas.subscription_source import SubscriptionSourceCreate, SubscriptionSourceRead, SubscriptionSourceUpdate
-from app.services.subscription_enqueue import enqueue_subscription_source_sync
 from app.services.subscription import SubscriptionService
 from app.services.cache import (
     cache_get,
@@ -23,7 +22,7 @@ from app.services.cache import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(dependencies=[RequireAdmin])
+router = APIRouter(dependencies=[RequirePermission("subscriptions")])
 
 
 
@@ -96,42 +95,11 @@ async def batch_toggle_sync(data: dict, db: AsyncSession = Depends(get_db)):
 @router.post("/{subscription_id}/sync-now")
 async def trigger_subscription_sync(subscription_id: UUID, db: AsyncSession = Depends(get_db)):
     """Manually trigger sync for a single subscription — creates download jobs for all enabled sources."""
-    sub = await db.get(Subscription, subscription_id)
-    if not sub:
-        raise HTTPException(status_code=404, detail="Subscription not found")
-
-    sources = await db.execute(
-        select(SubscriptionSource).where(
-            and_(
-                SubscriptionSource.subscription_id == subscription_id,
-                SubscriptionSource.is_enabled == True,
-            )
-        )
-    )
-    sub_sources = sources.scalars().all()
-    if not sub_sources:
-        return {"status": "ok", "message": "No enabled sources", "job_ids": []}
-
-    job_ids = []
-    skipped = []
-    errors = []
-
-    for ss in sub_sources:
-        result = await enqueue_subscription_source_sync(db, ss.id, trigger="manual_subscription", force=True)
-        if result["status"] == "enqueued":
-            job_ids.append(result["job_id"])
-        elif result["status"] == "error":
-            errors.append(result)
-        else:
-            skipped.append(result)
-
-    if errors and not job_ids:
-        return {"status": "error", "message": "All enqueue attempts failed", "job_ids": [], "skipped": skipped, "errors": errors}
-    if errors:
-        invalidate_api_caches("subscriptions", "creators")
-        return {"status": "partial_error", "message": f"Enqueued {len(job_ids)} jobs, {len(errors)} failed", "job_ids": job_ids, "skipped": skipped, "errors": errors}
-    invalidate_api_caches("subscriptions", "creators")
-    return {"status": "ok", "message": f"Enqueued {len(job_ids)} download jobs", "job_ids": job_ids, "skipped": skipped}
+    from app.services.subscription import SubscriptionService
+    try:
+        return await SubscriptionService(db).trigger_sync(subscription_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/{subscription_id}", response_model=SubscriptionRead)

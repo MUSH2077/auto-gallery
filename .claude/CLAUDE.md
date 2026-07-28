@@ -2,6 +2,11 @@
 
 NAS-hosted multi-source media archive and gallery manager. Downloads, imports, indexes, and manages creator-based media from 8 platforms through Docker Compose.
 
+## Communication (语言规范)
+
+- 默认用中文（简体）回复用户。Reply to the user in Chinese (Simplified) by default.
+- 代码、标识符、commit message、文件内容保持原语言（通常为英文），不要翻译。
+
 ## Quick Start
 
 ```bash
@@ -25,9 +30,10 @@ Backend API: `8818`, Admin Web: `13000`.
 | Service | Role |
 |---------|------|
 | `backend` | FastAPI API server |
-| `worker-download` | RQ worker — gallery-dl subprocess (queue: `downloads`) |
+| `worker-download` | RQ worker — gallery-dl subprocess (per-source queues: `downloads:{source}`) |
 | `worker-import` | RQ worker — metadata import, batch import (queue: `imports`) |
-| `scheduler` | RQ scheduler — subscription sync loop |
+| `worker-operations` | RQ worker — admin operations: backup, reindex, disk import (queue: `operations`) |
+| `scheduler` | RQ scheduler — subscription sync loop + creator auto-relink |
 | `admin-web` | Next.js admin interface |
 | `postgres`, `redis`, `meilisearch` | Data services |
 
@@ -127,6 +133,29 @@ subscription_source enabled → enqueue download_job (downloads queue)
 - Worker containers need `ADMIN_PASSWORD` env var (config.py validates at import time)
 - Alembic versions are baked into image via `COPY . .` — no bind mount needed
 
+## Skills First (MANDATORY)
+
+Before ANY task — whether a question, bug investigation, feature request, or code change — check whether a relevant skill exists and invoke it. Never skip this step, even for seemingly trivial tasks.
+
+- Check the available skills list in the session context for matches
+- If even a 1% chance a skill applies, invoke it via the Skill tool FIRST
+- Skills determine HOW to approach the task (debugging, planning, code review, etc.)
+- Never rationalize skipping: "this is simple" "I know this already" "let me explore first" are all wrong
+
+## Constraint Docs (load on demand)
+
+Detailed non-negotiable rules live in `.claude/constraints/`. Read the relevant file BEFORE touching that area (the `/plan` command loads all of them; otherwise pull the ones below as needed):
+
+- `security.md` — subprocess `shell=False`, URL validation at boundary, auth, CORS, `/media` serving
+- `source-abstraction.md` — source-agnostic naming, the provider interface
+- `filesystem-paths.md` — `Path.relative_to` containment, `DOWNLOAD_ROOT`/`LIBRARY_ROOT`
+- `metadata-detection.md` — before/after snapshot, gallery-dl metadata JSON detection
+- `deduplication.md` — dedup defaults OFF, no auto-merge/auto-delete
+- `creator-display-name.md` · `danbooru-reference.md` — creator identity & Danbooru reference-only rules
+- `docker.md` · `deployment.md` · `remote-access.md` — Compose, NAS deploy flow, remote access
+- `frontend-discipline.md` · `client-api.md` · `source-colors.md` — frontend, typed API client, per-source colors
+- `tech-stack.md` · `verification.md` · `commit-checklist.md` — stack, verification, commit gate
+
 ## Coding Rules
 
 - Business logic in services, never in routes
@@ -138,3 +167,42 @@ subscription_source enabled → enqueue download_job (downloads queue)
 - Batch operations return per-item results, never silently swallow errors
 - Frontend: typed API client, TanStack Query, thin pages, i18n keys natural-language
 - Commit immediately after each completed task
+
+## Completion Workflow (MANDATORY)
+
+After completing any non-trivial code change, execute these steps in order:
+
+### 1. Verify — run tests
+
+```bash
+docker compose exec backend python -m pytest -v
+```
+
+All tests must pass. Do NOT proceed past a failure.
+
+### 2. Deploy — rebuild and restart
+
+Backend code is baked into the Docker image via `COPY . .`; stale containers run old code.
+
+```bash
+docker compose build --build-arg CACHEBUST="$(date +%s)" --pull backend
+docker compose up -d --force-recreate backend worker-download worker-import worker-operations scheduler
+```
+
+Or: `bash scripts/deploy.sh`
+
+- Also applies to frontend changes (`admin-web/**`) — add `admin-web` to build + restart list.
+- `CACHEBUST` is required; without it Docker may reuse a stale `COPY . .` layer.
+- Verify: `docker compose logs worker-import --tail=20`
+
+### 3. Commit — record the change
+
+```bash
+git add -A
+git commit -m "<conventional-commit-message>"
+```
+
+Always end commit messages with:
+```
+Co-Authored-By: Claude <noreply@anthropic.com>
+```

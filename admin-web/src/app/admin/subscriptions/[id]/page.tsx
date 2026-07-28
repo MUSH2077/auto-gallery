@@ -1,11 +1,13 @@
 "use client";
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorRepository, queryKeys, SubscriptionSource as SS, ProviderInfo } from "@/lib/api";
-import { PageHeader, StatusBadge, Modal, ConfirmDialog, ErrorState, EmptyState, RepositoryCard } from "@/components";
+import { PageHeader, PageShell, StatusBadge, Modal, ConfirmDialog, ErrorState, EmptyState, RepositoryCard } from "@/components";
+import { useToast } from "@/components/Toast";
+import { useI18nFormat } from "@/lib/i18n-format";
 
 function AddSourceForm({ subId, onClose }: { subId: string; onClose: () => void }) {
   const [source, setSource] = useState("pixiv"); const [sourceUrl, setSourceUrl] = useState(""); const [sourceCreatorId, setSourceCreatorId] = useState("");
@@ -43,23 +45,23 @@ function AddSourceForm({ subId, onClose }: { subId: string; onClose: () => void 
         <select value={source} onChange={(e) => handleSourceChange(e.target.value)} className="select w-full">
           {sources.data?.sources?.filter((s: ProviderInfo) => s.capabilities.can_download || s.capabilities.can_import_local).map((s: ProviderInfo) => <option key={s.source_name} value={s.source_name}>{s.display_name} ({s.source_name})</option>)}
         </select>
-        <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.multi_source_hint")}</p>
+        <p className="mt-1 text-xs text-muted">{t("subscription_detail.multi_source_hint")}</p>
       </div>
       <div>
         <label className="block text-sm font-medium mb-1">{t("subscription_detail.source_creator_id")}</label>
         <input value={sourceCreatorId} onChange={(e) => handleIdChange(e.target.value)} className="input w-full" placeholder={t("subscription_detail.source_creator_id_placeholder")} />
-        <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.source_creator_id_hint")}</p>
+        <p className="mt-1 text-xs text-muted">{t("subscription_detail.source_creator_id_hint")}</p>
       </div>
       <div>
         <label className="block text-sm font-medium mb-1">{t("subscription_detail.source_url_field")}</label>
         <input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} className="input w-full font-mono" placeholder={urlHint} />
-        <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.source_url_hint")} {urlHint}</p>
+        <p className="mt-1 text-xs text-muted">{t("subscription_detail.source_url_hint")} {urlHint}</p>
       </div>
       <div className="flex justify-end gap-3 pt-2">
         <button onClick={onClose} className="btn-ghost">{t("subscription_detail.cancel")}</button>
         <button onClick={() => create.mutate()} disabled={create.isPending} className="btn-primary">{create.isPending ? t("subscription_detail.adding") : t("subscription_detail.add_source_btn")}</button>
       </div>
-      {create.error && <p className="text-sm text-[#cf222e] dark:text-[#f85149]">{(create.error as Error).message}</p>}
+      {create.error && <p className="text-sm text-danger dark:text-danger">{(create.error as Error).message}</p>}
     </div>
   );
 }
@@ -67,10 +69,14 @@ function AddSourceForm({ subId, onClose }: { subId: string; onClose: () => void 
 export default function SubscriptionDetailPage() {
   const params = useParams(); const router = useRouter(); const qc = useQueryClient();
   const t = useT();
+  const toast = useToast();
+  const fmt = useI18nFormat();
   const id = params.id as string;
 
   const sub = useQuery({ queryKey: queryKeys.subscriptions.detail(id), queryFn: () => api.getSubscription(id) });
   const sources = useQuery({ queryKey: queryKeys.subscriptions.sources(id), queryFn: () => api.listSubscriptionSources(id) });
+  const jobs = useQuery({ queryKey: [...queryKeys.downloadJobs.all, "subscription", id], queryFn: () => api.listDownloadJobs({ subscription_id: id, limit: 50 }), refetchInterval: 12000 });
+  const decisions = useQuery({ queryKey: [...queryKeys.schedulerDecisions, "subscription", id], queryFn: api.schedulerDecisions, refetchInterval: 15000 });
   const providerInfos = useQuery({ queryKey: queryKeys.sources, queryFn: api.sources });
   const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
   const [showAddSource, setShowAddSource] = useState(false);
@@ -94,23 +100,47 @@ export default function SubscriptionDetailPage() {
   });
   const startSync = useMutation({
     mutationFn: (ssId: string) => {
-      const ss = sources.data?.find((s: SS) => s.id === ssId);
-      if (!ss) throw new Error(t("subscription_detail.source_not_found"));
-      return api.createDownloadJob({ subscription_id: id, subscription_source_id: ssId, source: ss.source, source_url: ss.source_url || "" });
+      return api.syncRepository(ssId);
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
       qc.invalidateQueries({ queryKey: queryKeys.subscriptions.sources(id) });
+      qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
+      if (result.status === "enqueued") toast.success(result.message || t("repo_detail.sync_queued", "Sync queued"));
+      else {
+        const reason = typeof result.reason === "object" ? result.reason?.message : result.reason;
+        toast.warning(reason || result.message || t("subscriptions.sync_no_jobs"));
+      }
     },
+    onError: (e: Error) => toast.error(e.message),
   });
+  const decisionBySource = useMemo(
+    () => new Map((decisions.data?.items || []).filter((item) => item.subscription_id === id).map((item) => [item.source_id, item])),
+    [decisions.data?.items, id],
+  );
+  const detailStats = useMemo(() => {
+    const sourceRows = sources.data || [];
+    const decisionRows = [...decisionBySource.values()];
+    const jobRows = jobs.data || [];
+    return {
+      total: sourceRows.length,
+      enabled: sourceRows.filter((item) => item.is_enabled).length,
+      due: decisionRows.filter((item) => item.due).length,
+      blocked: decisionRows.filter((item) => ["auth_unhealthy", "url_invalid", "unknown_provider", "provider_not_downloadable"].includes(item.reason)).length,
+      running: jobRows.filter((job) => ["enqueued", "pending", "downloading", "downloaded", "importing"].includes(job.status)).length,
+      failed: jobRows.filter((job) => ["failed", "stale"].includes(job.status)).length,
+      nextDueAt: decisionRows.map((item) => item.next_due_at).filter(Boolean).sort()[0] || null,
+    };
+  }, [decisionBySource, jobs.data, sources.data]);
 
   const getCreatorName = (creatorId: string) => {
     const c = creators.data?.items.find((c) => c.id === creatorId);
     return c ? (c.display_name || c.name) : creatorId.slice(0, 8);
   };
 
-  if (sub.isLoading) return <main className="max-w-4xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 w-1/4 rounded bg-[#eaeef2] dark:bg-[#21262d]" /><div className="h-32 rounded bg-[#eaeef2] dark:bg-[#21262d]" /></div></main>;
-  if (sub.error) return <main className="max-w-4xl mx-auto p-6"><ErrorState message={(sub.error as Error).message} onRetry={() => sub.refetch()} /></main>;
+  if (sub.isLoading) return <PageShell size="normal"><div className="animate-pulse space-y-4"><div className="h-8 w-1/4 rounded bg-subtle dark:bg-subtle" /><div className="h-32 rounded bg-subtle dark:bg-subtle" /></div></PageShell>;
+  if (sub.error) return <PageShell size="normal"><ErrorState message={(sub.error as Error).message} onRetry={() => sub.refetch()} /></PageShell>;
   if (!sub.data) return null;
   const s = sub.data;
   const providerMap = new Map((providerInfos.data?.sources || []).map((p: ProviderInfo) => [p.source_name, p]));
@@ -138,25 +168,34 @@ export default function SubscriptionDetailPage() {
   };
 
   return (
-    <main className="max-w-5xl mx-auto p-6">
-      <Link href="/admin/subscriptions" className="inline-flex items-center gap-1 text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">&larr; 返回</Link>
+    <PageShell size="normal">
+      <Link href="/admin/subscriptions" className="inline-flex items-center gap-1 text-sm text-accent hover:underline dark:text-accent">&larr; 返回</Link>
       <PageHeader title={s.name || (s.creator_display_name || s.creator_name || getCreatorName(s.creator_id))} description={s.creator_display_name || s.creator_name ? `${t("subscription_detail.creator")} ${s.creator_display_name || s.creator_name}` : undefined}>
         <div className="flex gap-2">
           <button onClick={() => { setEditName(s.name || ""); setEditMode(s.schedule_mode || ""); setEditInterval(s.sync_interval_hours || 24); setEditTimes(s.scheduled_times || ""); setEditing(true); }} className="btn-primary">{t("subscription_detail.edit")}</button>
         </div>
       </PageHeader>
 
+      <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
+        <div className="card p-3"><div className="text-lg font-semibold text-fg">{detailStats.enabled}/{detailStats.total}</div><div className="text-xs uppercase text-muted">{t("subscriptions.col_sources", "Sources")}</div></div>
+        <div className="card p-3"><div className="text-lg font-semibold text-accent">{detailStats.due}</div><div className="text-xs uppercase text-muted">{t("scheduler.filter_due")}</div></div>
+        <div className="card p-3"><div className={`text-lg font-semibold ${detailStats.blocked ? "text-danger" : "text-fg"}`}>{detailStats.blocked}</div><div className="text-xs uppercase text-muted">{t("scheduler.filter_blocked")}</div></div>
+        <div className="card p-3"><div className="text-lg font-semibold text-fg">{detailStats.running}</div><div className="text-xs uppercase text-muted">{t("subscriptions.running", "Running")}</div></div>
+        <div className="card p-3"><div className={`text-lg font-semibold ${detailStats.failed ? "text-danger" : "text-fg"}`}>{detailStats.failed}</div><div className="text-xs uppercase text-muted">{t("subscriptions.failed", "Failed")}</div></div>
+        <div className="card p-3"><div className="truncate text-sm font-semibold text-fg">{fmt.dateTime(detailStats.nextDueAt)}</div><div className="text-xs uppercase text-muted">{t("subscriptions.next_due_short", "Next due")}</div></div>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div className="col-span-2">
           <div className="card p-4 mb-4">
             <h3 className="font-medium mb-3">{t("subscription_detail.details")}</h3>
             <dl className="text-sm space-y-2">
-              <div className="flex gap-2"><dt className="w-28 text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.creator")}</dt><dd className="cursor-pointer text-[#0969da] hover:underline dark:text-[#58a6ff]" onClick={() => router.push(`/admin/creators/${s.creator_id}`)}>{s.creator_display_name || s.creator_name || getCreatorName(s.creator_id)}</dd></div>
-              <div className="flex gap-2"><dt className="w-28 text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.status")}</dt><dd><StatusBadge status={s.is_active ? "up" : "down"} /></dd></div>
-              <div className="flex gap-2"><dt className="w-28 text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.auto_sync")}</dt><dd>{s.sync_enabled ? <span className="text-[#1a7f37] dark:text-[#3fb950]">{t("subscription_detail.sync_enabled")}</span> : <span className="text-[#8c959f] dark:text-[#6e7681]">{t("subscription_detail.sync_disabled")}</span>}</dd></div>
-              <div className="flex gap-2"><dt className="w-28 text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.sync_strategy")}</dt><dd className="text-xs">
+              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.creator")}</dt><dd className="cursor-pointer text-accent hover:underline dark:text-accent" onClick={() => router.push(`/admin/creators/${s.creator_id}`)}>{s.creator_display_name || s.creator_name || getCreatorName(s.creator_id)}</dd></div>
+              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.status")}</dt><dd><StatusBadge status={s.is_active ? "up" : "down"} /></dd></div>
+              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.auto_sync")}</dt><dd>{s.sync_enabled ? <span className="text-success dark:text-success">{t("subscription_detail.sync_enabled")}</span> : <span className="text-placeholder dark:text-muted">{t("subscription_detail.sync_disabled")}</span>}</dd></div>
+              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.sync_strategy")}</dt><dd className="text-xs">
                 {!s.schedule_mode || s.schedule_mode === "inherit" ? (
-                  <span className="text-gray-500">{t("subscription_detail.strategy_inherit")}</span>
+                  <span className="text-muted">{t("subscription_detail.strategy_inherit")}</span>
                 ) : s.schedule_mode === "manual" ? (
                   <span className="text-orange-600">{t("subscription_detail.strategy_manual")}</span>
                 ) : s.schedule_mode === "fixed_time" ? (
@@ -165,8 +204,8 @@ export default function SubscriptionDetailPage() {
                   <span className="text-blue-600">{t("subscription_detail.strategy_interval")} · {s.sync_interval_hours}h</span>
                 )}
               </dd></div>
-              <div className="flex gap-2"><dt className="w-28 text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.last_synced")}</dt><dd className="text-xs">{s.last_synced_at ? new Date(s.last_synced_at).toLocaleString() : t("subscription_detail.never_synced")}</dd></div>
-              <div className="flex gap-2"><dt className="w-28 text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.created")}</dt><dd className="text-xs">{new Date(s.created_at).toLocaleString()}</dd></div>
+              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.last_synced")}</dt><dd className="text-xs">{s.last_synced_at ? new Date(s.last_synced_at).toLocaleString() : t("subscription_detail.never_synced")}</dd></div>
+              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.created")}</dt><dd className="text-xs">{new Date(s.created_at).toLocaleString()}</dd></div>
             </dl>
           </div>
 
@@ -183,7 +222,8 @@ export default function SubscriptionDetailPage() {
                     onToggle={() => setToggleId(ss.id)}
                     onDelete={() => setDeleteSsId(ss.id)}
                     syncPending={startSync.isPending}
-                    togglePending={toggleSource.isPending} />
+                    togglePending={toggleSource.isPending}
+                    decision={decisionBySource.get(ss.id)} />
                 ))}
               </div>
             ) : (
@@ -195,8 +235,8 @@ export default function SubscriptionDetailPage() {
 
         <div className="card h-fit p-4 text-sm">
           <h4 className="font-medium mb-2">{t("subscription_detail.multi_source_title")}</h4>
-          <p className="text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.multi_source_desc")}</p>
-          <div className="mt-4 space-y-2 border-t border-[#d8dee4] pt-4 text-xs dark:border-[#30363d]">
+          <p className="text-muted">{t("subscription_detail.multi_source_desc")}</p>
+          <div className="mt-4 space-y-2 border-t border-border pt-4 text-xs dark:border-border">
             <div className="flex justify-between"><span>Repositories</span><span className="font-semibold">{sources.data?.length || 0}</span></div>
             <div className="flex justify-between"><span>Enabled</span><span className="font-semibold">{sources.data?.filter((x) => x.is_enabled).length || 0}</span></div>
             <div className="flex justify-between"><span>Last sync</span><span className="font-semibold">{s.last_synced_at ? new Date(s.last_synced_at).toLocaleDateString() : t("subscription_detail.never_synced")}</span></div>
@@ -216,7 +256,7 @@ export default function SubscriptionDetailPage() {
               <option value="fixed_time">{t("subscription_detail.strategy_fixed_time")}</option>
               <option value="manual">{t("subscription_detail.strategy_manual")}</option>
             </select>
-            <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{t("subscription_detail.strategy_desc")}</p>
+            <p className="mt-1 text-xs text-muted">{t("subscription_detail.strategy_desc")}</p>
           </div>
           {editMode === "interval" && (
             <div>
@@ -225,7 +265,7 @@ export default function SubscriptionDetailPage() {
                 <input type="number" min={1} max={168} value={editInterval}
                   onChange={(e) => setEditInterval(parseInt(e.target.value) || 24)}
                   className="input w-16 px-2 py-1.5 text-center font-mono" />
-                <span className="pr-2 text-xs text-[#57606a] dark:text-[#8b949e]">hours</span>
+                <span className="pr-2 text-xs text-muted">hours</span>
               </div>
             </div>
           )}
@@ -235,7 +275,7 @@ export default function SubscriptionDetailPage() {
               <input value={editTimes} onChange={(e) => setEditTimes(e.target.value)}
                 placeholder="03:00, 21:00"
                 className="input w-full font-mono" />
-              <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">{t("subdefaults.scheduled_times.example")}</p>
+              <p className="mt-1 text-xs text-muted">{t("subdefaults.scheduled_times.example")}</p>
             </div>
           )}
           <div className="flex justify-end gap-3 pt-2">
@@ -247,13 +287,13 @@ export default function SubscriptionDetailPage() {
               scheduled_times: editMode === "fixed_time" ? (editTimes || null) : undefined,
             })} disabled={update.isPending} className="btn-primary">{t("subscription_detail.save")}</button>
           </div>
-          {update.error && <p className="text-sm text-[#cf222e] dark:text-[#f85149]">{(update.error as Error).message}</p>}
+          {update.error && <p className="text-sm text-danger dark:text-danger">{(update.error as Error).message}</p>}
         </div>
       </Modal>
 
       <Modal open={showAddSource} onClose={() => setShowAddSource(false)} title={t("subscription_detail.add_source_title")}><AddSourceForm subId={id} onClose={() => setShowAddSource(false)} /></Modal>
       {toggleId && <ConfirmDialog open title={sources.data?.find((ss: SS) => ss.id === toggleId)?.is_enabled ? t("subscription_detail.disable_source_title") : t("subscription_detail.enable_source_title")} message={t("subscription_detail.toggle_source_msg")} onConfirm={() => { const ss = sources.data?.find((s: SS) => s.id === toggleId); if (ss) toggleSource.mutate({ ssId: toggleId, enabled: !ss.is_enabled }); }} onCancel={() => setToggleId(null)} isPending={toggleSource.isPending} error={(toggleSource.error as Error)?.message} />}
       {deleteSsId && <ConfirmDialog open title={t("subscription_detail.delete_source_title")} message={t("subscription_detail.delete_source_msg")} onConfirm={() => deleteSource.mutate(deleteSsId)} onCancel={() => setDeleteSsId(null)} isPending={deleteSource.isPending} error={(deleteSource.error as Error)?.message} />}
-    </main>
+    </PageShell>
   );
 }

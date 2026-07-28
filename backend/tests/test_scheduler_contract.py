@@ -17,6 +17,15 @@ def test_scheduler_uses_source_enqueue_and_does_not_mark_success_on_enqueue():
     assert 'Queue(name="scheduled", connection=r).enqueue(' not in locked_src
 
 
+def test_scheduler_scan_does_not_return_before_reschedule_when_no_stale_candidates():
+    from app.jobs import subscription_sync
+
+    locked_src = inspect.getsource(subscription_sync._sync_subscriptions_locked)
+    assert "if not candidates:\n                return" not in locked_src
+    assert ".enqueue_in(" in locked_src
+    assert "rescheduled_at" in locked_src
+
+
 def test_seed_sync_checks_scheduled_registry():
     from pathlib import Path
 
@@ -136,9 +145,12 @@ def test_schedule_decision_snapshot_manual_has_no_next_due():
 
 
 def test_system_router_exposes_workbench_and_scheduler_decisions_routes():
-    from app.api.system import router
+    # scheduler-decisions moved to `tasks_ops_router` (Task 6 fix round 1:
+    # scheduler operations belong to the `tasks` permission module, not
+    # `system`) — check both routers defined in app.api.system.
+    from app.api.system import router, tasks_ops_router
 
-    paths = {route.path for route in router.routes}
+    paths = {route.path for route in router.routes} | {route.path for route in tasks_ops_router.routes}
     assert "/system/workbench" in paths
     assert "/system/scheduler-decisions" in paths
 

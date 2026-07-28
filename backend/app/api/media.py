@@ -7,6 +7,7 @@ from app.auth import bearer_scheme, get_admin_key
 from app.config import settings
 from app.database import async_session
 from app.models.asset import Asset
+from app.models.asset_dedup import VisualAssetGroup, VisualAssetMember
 from app.models.curation import AssetStorageState
 from app.services.media_signing import verify_media_token
 
@@ -41,6 +42,29 @@ async def _serve(asset_id: str, size: str):
         asset = result.scalar_one_or_none()
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
+        representative_id = (
+            await db.execute(
+                select(VisualAssetGroup.representative_asset_id)
+                .join(
+                    VisualAssetMember,
+                    VisualAssetMember.group_id == VisualAssetGroup.id,
+                )
+                .where(VisualAssetMember.asset_id == asset.id)
+            )
+        ).scalar_one_or_none()
+        if not representative_id:
+            state_result = await db.execute(
+                select(AssetStorageState.served_by_asset_id).where(
+                    AssetStorageState.asset_id == asset.id
+                )
+            )
+            representative_id = state_result.scalar_one_or_none()
+        if representative_id and representative_id != asset.id:
+            representative = await db.get(Asset, representative_id)
+            if not representative:
+                raise HTTPException(status_code=404, detail="Representative asset not found")
+            asset = representative
+
         storage_result = await db.execute(select(AssetStorageState).where(AssetStorageState.asset_id == asset.id))
         storage_state = storage_result.scalar_one_or_none()
         if storage_state and storage_state.storage_state == "purged":
@@ -62,8 +86,14 @@ async def _serve(asset_id: str, size: str):
 
 @router.get("/media/thumb/{asset_id}")
 async def thumb(asset_id: str):
-    """Serve thumbnail — no auth needed (embedded in <img> tags on admin-web)."""
-    return await _serve(asset_id, "thumb")
+    """Serve thumbnail — no auth needed (embedded in <img> tags on admin-web).
+
+    Thumbnails are content-addressed by asset id and never change, so they are
+    safe to cache in the browser. preview/original stay uncached (auth-gated).
+    """
+    resp = await _serve(asset_id, "thumb")
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
 
 
 @router.get("/media/preview/{asset_id}")

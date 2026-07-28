@@ -1,9 +1,47 @@
-import { request } from "./client";
+import { request, ApiError, clearAuthOn401 } from "./client";
 import { worksApi } from "./endpoints";
 import type * as T from "./types";
 export * from "./client";
 export * from "./types";
 export * from "./endpoints";
+
+// Multipart upload via XHR — fetch() cannot report upload progress, so the
+// manual upload page needs `xhr.upload.onprogress`. Mirrors request()'s auth
+// handling (Bearer token from localStorage, 401 -> clearAuthOn401) instead of
+// duplicating it silently.
+function uploadWorks(form: FormData, onProgress?: (pct: number) => void): Promise<T.UploadResponse> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/v1/upload");
+    xhr.timeout = 10 * 60 * 1000; // 10 min — large files over LAN
+    if (typeof window !== "undefined") {
+      const token = localStorage.getItem("ag_token");
+      if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
+    if (onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+      };
+    }
+    xhr.ontimeout = () => reject(new ApiError(0, "Upload timed out"));
+    xhr.onload = () => {
+      let body: any = {};
+      try { body = JSON.parse(xhr.responseText); } catch { /* empty/non-JSON body */ }
+      if (xhr.status === 401) {
+        clearAuthOn401();
+        reject(new ApiError(401, "Session expired — redirecting to login"));
+        return;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(body as T.UploadResponse);
+      } else {
+        reject(new ApiError(xhr.status, body.detail || `${xhr.status} ${xhr.statusText}`));
+      }
+    };
+    xhr.onerror = () => reject(new ApiError(0, "Network error"));
+    xhr.send(form);
+  });
+}
 
 // ── API ──
 
@@ -12,6 +50,7 @@ export const api = {
   health: () => request<T.HealthResponse>("/api/v1/system/health"),
 
   workbench: () => request<T.WorkbenchSummary>("/api/v1/system/workbench"),
+  refreshWorkbench: () => request<T.WorkbenchSummary>("/api/v1/system/workbench?refresh=true"),
 
   schedulerDecisions: () => request<T.SchedulerDecisionsResponse>("/api/v1/system/scheduler-decisions"),
 
@@ -30,6 +69,33 @@ export const api = {
   }>("/api/v1/system/storage"),
 
   queueStats: () => request<T.QueueStatsResponse>("/api/v1/system/queue-stats"),
+
+  // Unified task runs
+  listTasks: (params?: { kind?: string; status?: string; operation_type?: string; source?: string; q?: string; offset?: number; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.kind) q.set("kind", params.kind);
+    if (params?.status) q.set("status", params.status);
+    if (params?.operation_type) q.set("operation_type", params.operation_type);
+    if (params?.source) q.set("source", params.source);
+    if (params?.q) q.set("q", params.q);
+    q.set("offset", String(params?.offset || 0));
+    q.set("limit", String(params?.limit || 50));
+    return request<T.TaskRunListResponse>(`/api/v1/tasks?${q.toString()}`);
+  },
+
+  getTask: (id: string) => request<T.TaskRun>(`/api/v1/tasks/${id}`),
+  retryTask: (id: string) => request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/retry`, { method: "POST" }),
+  cancelTask: (id: string, note?: string) =>
+    request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/cancel`, {
+      method: "POST",
+      body: note ? JSON.stringify({ note }) : undefined,
+    }),
+  pauseTask: (id: string, note?: string) =>
+    request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/pause`, {
+      method: "POST",
+      body: note ? JSON.stringify({ note }) : undefined,
+    }),
+  resumeTask: (id: string) => request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/resume`, { method: "POST" }),
 
   // Sources
   sources: () => request<{ sources: T.ProviderInfo[] }>("/api/v1/sources"),
@@ -146,7 +212,11 @@ export const api = {
       "/api/v1/subscriptions/batch-toggle-sync", { method: "POST", body: JSON.stringify({ ids, sync_enabled: syncEnabled }) }),
 
   syncNowSubscription: (id: string) =>
-    request<{ status: string; message: string; job_ids: string[] }>(`/api/v1/subscriptions/${id}/sync-now`, { method: "POST" }),
+    request<{
+      status: string; message: string; task_id?: string; job_ids: string[]; task_ids?: string[];
+      enqueued_count?: number; skipped_count?: number; error_count?: number;
+      skipped?: unknown[]; errors?: unknown[];
+    }>(`/api/v1/subscriptions/${id}/sync-now`, { method: "POST" }),
 
   listSubscriptionSources: (subId: string) =>
     request<T.SubscriptionSource[]>(`/api/v1/subscriptions/${subId}/sources`),
@@ -177,6 +247,24 @@ export const api = {
 
   getDownloadJob: (id: string) =>
     request<T.DownloadJob>(`/api/v1/download-jobs/${id}`),
+
+  cancelDownloadJob: (id: string, note?: string) =>
+    request<{ job_id: string; status: string }>(`/api/v1/download-jobs/${id}/cancel`, {
+      method: "POST",
+      body: note ? JSON.stringify({ note }) : undefined,
+    }),
+
+  batchDownloadJobsByFilter: (filters: Record<string, string>, action: string, note?: string) =>
+    request<{ total_matched: number; succeeded: number; failed: number }>(`/api/v1/download-jobs/batch-by-filter`, {
+      method: "POST",
+      body: JSON.stringify({ filters, action, note }),
+    }),
+
+  getDownloadProgress: (id: string) =>
+    request<{ job_id: string; stage: string; current: number; total: number; percent: number }>(`/api/v1/download-jobs/${id}/progress`),
+
+  getDownloadPipeline: (id: string) =>
+    request<{ job_id: string; current_stage: string; stages: Array<{ name: string; status: string }>; progress: Record<string, unknown> | null }>(`/api/v1/download-jobs/${id}/pipeline`),
 
   createDownloadJob: (data: { subscription_id: string; subscription_source_id?: string; source: string; source_url: string }) =>
     request<{ job_id: string; status: string }>("/api/v1/download-jobs", { method: "POST", body: JSON.stringify(data) }),
@@ -212,8 +300,11 @@ export const api = {
   getRepository: (id: string) =>
     request<T.RepositoryDetailResponse>(`/api/v1/repositories/${id}`),
 
+  getRepositoryTags: (id: string, offset = 0, limit = 50) =>
+    request<T.RepositoryTagsResponse>(`/api/v1/repositories/${id}/tags?offset=${offset}&limit=${limit}`),
+
   syncRepository: (id: string) =>
-    request<{ status: string; message?: string; job_id?: string; reason?: string }>(`/api/v1/repositories/${id}/sync-now`, { method: "POST" }),
+    request<{ status: string; message?: string; job_id?: string; task_id?: string; reason?: string | { code?: string; message?: string } }>(`/api/v1/repositories/${id}/sync-now`, { method: "POST" }),
 
   getRepositoryCurationGraph: (id: string, offset = 0, limit = 100, params?: { trigger?: string; include_baseline?: boolean }) => {
     const q = new URLSearchParams({ offset: String(offset), limit: String(limit) });
@@ -253,7 +344,39 @@ export const api = {
     request<T.CurationBackfillStatus>("/api/v1/curation/backfill/status"),
 
   runCurationBackfill: () =>
-    request<T.CurationBackfillRunResponse>("/api/v1/curation/backfill", { method: "POST" }),
+    request<{ status: string; job_id: string }>("/api/v1/curation/backfill", { method: "POST" }),
+
+  // Gitllery (on-disk curation history projection)
+  gitlleryStatus: () =>
+    request<T.GitlleryStatus>("/api/v1/curation/gitllery/status"),
+
+  gitlleryReconcile: (repositoryId?: string) =>
+    request<T.GitlleryReconcileResponse>(
+      `/api/v1/curation/gitllery/reconcile${repositoryId ? `?repository_id=${encodeURIComponent(repositoryId)}` : ""}`,
+      { method: "POST" },
+    ),
+
+  gitlleryLog: (repositoryId: string) =>
+    request<T.GitlleryLogResponse>(`/api/v1/curation/repositories/${encodeURIComponent(repositoryId)}/gitllery/log`),
+
+  gitlleryRebuild: (dryRun: boolean, repositoryId?: string) =>
+    request<T.GitlleryRebuildReport>(
+      `/api/v1/curation/gitllery/rebuild?dry_run=${dryRun}${repositoryId ? `&repository_id=${encodeURIComponent(repositoryId)}` : ""}`,
+      { method: "POST" },
+    ),
+
+  // Showcase
+  showcaseSample: (params: {
+    count?: number; scope?: string; source?: string | null; tag?: string | null; include_nsfw?: boolean;
+  } = {}) => {
+    const q = new URLSearchParams();
+    if (params.count) q.set("count", String(params.count));
+    if (params.scope) q.set("scope", params.scope);
+    if (params.source) q.set("source", params.source);
+    if (params.tag) q.set("tag", params.tag);
+    if (params.include_nsfw) q.set("include_nsfw", "true");
+    return request<T.ShowcaseSampleResponse>(`/api/v1/showcase/sample?${q.toString()}`);
+  },
 
   // Works
   ...worksApi,
@@ -272,7 +395,13 @@ export const api = {
     request<{ status: string }>(`/api/v1/tags/${id}`, { method: "DELETE" }),
 
   // Search
-  search: (q: string, offset = 0, limit = 20) => request<{ results: T.SearchWorkResult[]; total: number; creators?: { id: string; name: string; display_name?: string }[]; tags?: { id: string; normalized_name: string; category?: string }[] }>(`/api/v1/search?q=${encodeURIComponent(q)}&offset=${offset}&limit=${limit}`),
+  search: (q: string, offset = 0, limit = 20, kind = "all") => {
+    const params = new URLSearchParams({ q, offset: String(offset), limit: String(limit) });
+    if (kind !== "all") params.set("kind", kind);
+    return request<{ results: T.SearchWorkResult[]; total: number; query?: string; creators?: { id: string; name: string; display_name?: string }[]; tags?: { id: string; normalized_name: string; category?: string }[] }>(`/api/v1/search?${params.toString()}`);
+  },
+
+  getTagDetail: (id: string) => request<T.TagDetail>(`/api/v1/tags/${id}`),
 
   // Import Jobs
   listImportJobs: (statusOrParams?: string | { status?: string; download_job_id?: string; q?: string; offset?: number; limit?: number }, offset = 0, limit = 50) => {
@@ -294,11 +423,52 @@ export const api = {
   retryImportJob: (id: string) =>
     request<{ status: string; message: string }>(`/api/v1/import-jobs/${id}/retry`, { method: "POST" }),
 
+  cancelImportJob: (id: string, note?: string) =>
+    request<{ job_id: string; status: string }>(`/api/v1/import-jobs/${id}/cancel`, {
+      method: "POST",
+      body: note ? JSON.stringify({ note }) : undefined,
+    }),
+
+  batchImportJobsByFilter: (filters: Record<string, string | string[]>, action: string, note?: string) =>
+    request<{ total_matched: number; succeeded: number; failed: number; errors?: { id: string; error: string }[] }>(
+      `/api/v1/import-jobs/batch-by-filter`,
+      {
+        method: "POST",
+        body: JSON.stringify({ filters, action, note }),
+      },
+    ),
+
   deleteDownloadJob: (id: string) =>
     request<{ status: string }>(`/api/v1/download-jobs/${id}`, { method: "DELETE" }),
 
   deleteImportJob: (id: string) =>
     request<{ status: string }>(`/api/v1/import-jobs/${id}`, { method: "DELETE" }),
+
+  // Users (multi-user management, admin-only)
+  listUsers: () => request<T.UserAccount[]>("/api/v1/users"),
+
+  createUser: (data: { username: string; password: string; display_name?: string; is_admin?: boolean; permissions?: string[] }) =>
+    request<T.UserAccount>("/api/v1/users", { method: "POST", body: JSON.stringify(data) }),
+
+  getUser: (id: number) => request<T.UserAccount>(`/api/v1/users/${id}`),
+
+  updateUser: (id: number, data: Record<string, unknown>) =>
+    request<T.UserAccount>(`/api/v1/users/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+
+  deleteUser: (id: number) =>
+    request<{ status: string }>(`/api/v1/users/${id}`, { method: "DELETE" }),
+
+  resetUserPassword: (id: number) =>
+    request<{ password: string }>(`/api/v1/users/${id}/reset-password`, { method: "POST" }),
+
+  // Manual Upload
+  uploadWorks,
+
+  // Me (current-user profile)
+  getMe: () => request<T.Me>("/api/v1/auth/me"),
+
+  updateMyPreferences: (preferences: Record<string, unknown>) =>
+    request<{ preferences: Record<string, unknown> }>("/api/v1/auth/me/preferences", { method: "PUT", body: JSON.stringify({ preferences }) }),
 
   // Admin
   getAdminSettings: () => request<T.AdminSettings>("/api/v1/admin/settings"),
@@ -311,7 +481,7 @@ export const api = {
   }) =>
     request<{ status: string; message: string }>("/api/v1/admin/settings", { method: "PUT", body: JSON.stringify(data) }),
 
-  reindexSearch: () => request<{ status: string; message: string }>("/api/v1/admin/search/reindex", { method: "POST" }),
+  reindexSearch: () => request<{ status: string; job_id: string; message?: string }>("/api/v1/admin/search/reindex", { method: "POST" }),
 
   getAuthStatus: () => request<T.AuthStatusResponse>("/api/v1/admin/auth-status"),
 
@@ -326,12 +496,8 @@ export const api = {
   getSystemInfo: () => request<{ version: string; downloads_size_mb: number; library_size_mb: number; downloads_free_gb: number; archives_kb: Record<string, number> }>("/api/v1/admin/system-info"),
   getImportProgress: () => request<{ running: number; pending: number; complete: number; failed: number; recent: { id: string; status: string; error: string }[] }>("/api/v1/admin/import-progress"),
   cleanupMetadataJSONs: () => request<{ status: string; removed: number }>("/api/v1/admin/cleanup-metadata-jsons", { method: "POST" }),
-  getStorageBreakdown: () => request<{
-    sources: Record<string, { size_mb: number; creator_count: number; work_count: number }>;
-    creators: { name: string; display_name: string; source: string; size_mb: number; work_count: number; creator_id?: string }[];
-    db_stats?: Record<string, number>;
-    layers?: Record<string, { path: string; size_mb: number; description: string }>;
-  }>("/api/v1/admin/storage-breakdown"),
+  getStorageBreakdown: () =>
+    request<T.StorageBreakdownResponse>("/api/v1/admin/storage-breakdown"),
   getIntegrityCheck: () => request<{
     issues: { type: string; severity: string; count: number; description: string; items: any[] }[];
     db_stats: Record<string, number>;
@@ -340,8 +506,33 @@ export const api = {
   clearEntity: (entity: string) =>
     request<{ status: string; message: string; deleted?: Record<string, number> }>(`/api/v1/admin/clear/${entity}`, { method: "POST" }),
 
+  rebuildLibrary: (options: { mode?: "repair" | "full"; source?: string; creator_id?: string; work_id?: string; resume?: boolean } = {}) =>
+    request<{ job_id: string; status: string; message: string }>("/api/v1/admin/library/rebuild", {
+      method: "POST",
+      body: JSON.stringify(options),
+    }),
+
+  importFromDisk: (options: { source?: string; reset_ledger?: boolean } = {}) =>
+    request<{ job_id: string; status: string; message: string }>("/api/v1/admin/library/import-from-disk", {
+      method: "POST",
+      body: JSON.stringify(options),
+    }),
+
+  reenrichCreators: () =>
+    request<{ job_id: string; status: string; message: string }>("/api/v1/admin/creators/re-enrich", {
+      method: "POST",
+    }),
+
+  enrichCreator: (creatorId: string) =>
+    request<{ status: string; artist_id?: number; artist_name?: string }>(`/api/v1/creators/${creatorId}/enrich`, {
+      method: "POST",
+    }),
+
+  listAdminOperations: () =>
+    request<{ operations: { job_id: string; status: string; operation_type: string; progress?: { phase: string; label: string }; error?: string; updated_at: number }[] }>("/api/v1/admin/operations"),
+
   startClearOperation: (entity: string) =>
-    request<{ job_id: string; status: "queued" }>("/api/v1/admin/operations/clear", {
+    request<{ job_id: string; status: "queued" | "enqueued" }>("/api/v1/admin/operations/clear", {
       method: "POST",
       body: JSON.stringify({ entity }),
     }),
@@ -349,7 +540,7 @@ export const api = {
   getAdminOperationStatus: (jobId: string) =>
     request<{
       job_id: string;
-      status: "queued" | "running" | "complete" | "failed";
+      status: "queued" | "enqueued" | "running" | "complete" | "failed";
       operation_type: "admin-clear" | "danbooru-import-all" | string;
       progress?: { phase?: string; label?: string; current?: number; total?: number };
       result?: any;
@@ -361,15 +552,52 @@ export const api = {
   resetSettings: () =>
     request<{ status: string; message: string }>("/api/v1/admin/reset-settings", { method: "POST" }),
 
-  triggerSyncNow: () =>
-    request<{ status: string; message: string; job_id: string }>("/api/v1/admin/scheduler/sync-now", { method: "POST" }),
+  triggerSyncNow: (mode: "force_eligible" | "due_scan" = "force_eligible") =>
+    request<{
+      status: string; message: string; task_id: string; mode: "force_eligible" | "due_scan";
+      enqueued_count: number; skipped_count: number; error_count?: number;
+      skipped_reasons?: Record<string, number>; job_ids: string[]; task_ids?: string[];
+    }>("/api/v1/admin/scheduler/sync-now", { method: "POST", body: JSON.stringify({ mode }) }),
 
   clearFailedJobs: () =>
     request<{ status: string; message: string }>("/api/v1/system/clear-failed-jobs", { method: "POST" }),
 
-  listDuplicates: () => request<{ duplicates: { source: string; source_work_id: string; count: number; work_ids: string[] }[]; total: number }>("/api/v1/admin/dedup/duplicates"),
-  scanDuplicates: () => request<{ status: string; unique_works: number; total_source_records: number; message: string }>("/api/v1/admin/dedup/scan", { method: "POST" }),
-  listMergeCandidates: () => request<{ candidates: { title: string; source_count: number; sources: string[]; work_ids: string[] }[]; total: number }>("/api/v1/admin/merge-candidates"),
+  listAssetDedupCases: (status = "pending", offset = 0, limit = 50) =>
+    request<T.AssetDedupCasePage>(
+      `/api/v1/admin/dedup/cases?status=${encodeURIComponent(status)}&offset=${offset}&limit=${limit}`,
+    ),
+  getAssetDedupCase: (id: string) =>
+    request<T.AssetDedupCase>(`/api/v1/admin/dedup/cases/${id}`),
+  decideAssetDedupCase: (
+    id: string,
+    data: {
+      expected_revision: number;
+      action: "merge" | "separate" | "defer";
+      representative_asset_id?: string;
+      reason?: string;
+      idempotency_key: string;
+    },
+  ) =>
+    request<T.AssetDedupDecision>(`/api/v1/admin/dedup/cases/${id}/decisions`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  startAssetDedupScan: (autoApply = true) =>
+    request<{ scan_id: string; job_id: string; status: string }>("/api/v1/admin/dedup/scans", {
+      method: "POST",
+      body: JSON.stringify({ auto_apply: autoApply, batch_size: 100 }),
+    }),
+  getAssetDedupScan: (id: string) =>
+    request<{
+      scan_id: string;
+      status: string;
+      assets_scanned: number;
+      candidates_evaluated: number;
+      cases_created: number;
+      assets_grouped: number;
+      bytes_reclaimable: number;
+      error?: string;
+    }>(`/api/v1/admin/dedup/scans/${id}`),
 
   // Danbooru Reference
   getDanbooruArtist: (artistId: number) =>
@@ -428,14 +656,6 @@ export const api = {
     }>(
       "/api/v1/reference/danbooru/url-batch-import",
       { method: "POST", body: JSON.stringify({ urls }) }),
-
-  syncDanbooruFavorites: () =>
-    request<{
-      status: string; message?: string;
-      total_favorites?: number; created: number; matched: number; errors: number;
-      details?: { artist_name: string; danbooru_id?: number; action: string;
-                  creator_id?: string; post_count?: number; error?: string }[];
-    }>("/api/v1/reference/danbooru/favorites/sync", { method: "POST" }),
 
   getBatchImportStatus: (jobId?: string) =>
     request<{
@@ -502,12 +722,17 @@ export const queryKeys = {
   workbench: ["system", "workbench"] as const,
   schedulerDecisions: ["system", "scheduler-decisions"] as const,
   sources: ["sources"] as const,
+  tasks: {
+    all: ["tasks"] as const,
+    detail: (id: string) => ["tasks", id] as const,
+  },
   creators: {
     all: ["creators"] as const,
     count: ["creators", "count"] as const,
     list: (page = 0, limit = 50, filters?: unknown) => ["creators", "list", page, limit, filters || {}] as const,
     detail: (id: string) => ["creators", id] as const,
     links: (id: string) => ["creators", id, "links"] as const,
+    duplicates: ["creators", "duplicates"] as const,
   },
   subscriptions: {
     all: ["subscriptions"] as const,
@@ -518,6 +743,7 @@ export const queryKeys = {
   },
   repositories: {
     detail: (id: string) => ["repositories", id] as const,
+    tags: (id: string, page = 0) => ["repositories", id, "tags", page] as const,
     graph: (id: string, offset = 0, params?: unknown) => ["repositories", id, "curation-graph", offset, params || {}] as const,
   },
   curation: {
@@ -527,28 +753,65 @@ export const queryKeys = {
     suggestions: ["curation", "rule-suggestions"] as const,
     backfillStatus: ["curation", "backfill", "status"] as const,
   },
+  gitllery: {
+    all: ["gitllery"] as const,
+    status: ["gitllery", "status"] as const,
+    log: (repositoryId: string) => ["gitllery", "log", repositoryId] as const,
+  },
+  showcase: {
+    sample: (params: Record<string, unknown>) => ["showcase", "sample", params] as const,
+  },
   downloadJobs: {
     all: ["download-jobs"] as const,
     detail: (id: string) => ["download-jobs", id] as const,
     imports: (id: string) => ["download-jobs", id, "imports"] as const,
+    progress: (id: string) => ["download-jobs", id, "progress"] as const,
+    pipeline: (id: string) => ["download-jobs", id, "pipeline"] as const,
+  },
+  importJobs: {
+    all: ["import-jobs"] as const,
+    detail: (id: string) => ["import-jobs", id] as const,
   },
   works: {
     all: ["works"] as const,
     detail: (id: string) => ["works", id] as const,
     sources: (id: string) => ["works", id, "sources"] as const,
+    assets: (id: string) => ["works", id, "assets"] as const,
+    tags: (id: string) => ["works", id, "tags"] as const,
   },
   tags: {
     all: ["tags"] as const,
-  },
-  importJobs: {
-    all: ["import-jobs"] as const,
+    detail: (id: string) => ["tags", id] as const,
   },
   admin: {
     settings: ["admin", "settings"] as const,
+    gallerydlConfig: ["admin", "gallerydl-config"] as const,
+    authStatus: ["admin", "auth-status"] as const,
   },
   reference: {
     danbooru: ["reference", "danbooru"] as const,
   },
+  system: {
+    logs: (limit?: number, level?: string, name?: string) => ["system", "logs", limit, level, name] as const,
+    storage: ["system", "storage"] as const,
+    queueStats: ["system", "queue-stats"] as const,
+    systemInfo: ["system", "info"] as const,
+    integrityCheck: ["system", "integrity-check"] as const,
+  },
+  backups: {
+    list: ["backups", "list"] as const,
+    estimate: ["backups", "estimate"] as const,
+  },
+  dedup: {
+    cases: (status = "pending", offset = 0) => ["dedup", "cases", status, offset] as const,
+    case: (id: string) => ["dedup", "case", id] as const,
+    scan: (id: string) => ["dedup", "scan", id] as const,
+  },
+  users: {
+    all: ["users"] as const,
+    detail: (id: number) => ["users", id] as const,
+  },
+  me: ["me"] as const,
 } as const;
 
 // ── Auth ──────────────────────────────────────────────────────────────────────

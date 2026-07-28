@@ -1,40 +1,77 @@
 "use client";
 import { useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { useAuth } from "@/lib/auth";
+import { useAuth, type AuthUser } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
+import { useToast } from "@/components/Toast";
 import { ThemeToggle, LangToggle } from "@/lib/theme";
+import { SHOWCASE_STORAGE_KEY, DEFAULT_SHOWCASE_CONFIG } from "@/lib/showcase/config";
+
+/**
+ * Decide the post-login destination. The server-side preference
+ * (`preferences.showcase.landing`, from `/me`) is authoritative — it's what
+ * `PreferencesHydrator` eventually mirrors into localStorage, but that mirror
+ * runs asynchronously and never on a fresh browser/device before this runs.
+ * Falls back to localStorage (covers e.g. an already-hydrated session where
+ * the in-memory `user` hasn't been refreshed), then to the showcase default.
+ */
+function resolveLanding(preferences: AuthUser["preferences"]): "/" | "/admin" {
+  const serverShowcase =
+    preferences && typeof preferences === "object"
+      ? (preferences as Record<string, unknown>).showcase
+      : undefined;
+  const serverLanding =
+    serverShowcase && typeof serverShowcase === "object"
+      ? (serverShowcase as Record<string, unknown>).landing
+      : undefined;
+  if (serverLanding === "dashboard") return "/admin";
+  if (serverLanding === "showcase") return "/";
+
+  try {
+    const raw = localStorage.getItem(SHOWCASE_STORAGE_KEY);
+    const local = raw ? JSON.parse(raw) : null;
+    if (local && local.landing === "dashboard") return "/admin";
+    if (local && local.landing === "showcase") return "/";
+  } catch {
+    // malformed localStorage — fall through to default
+  }
+
+  return DEFAULT_SHOWCASE_CONFIG.landing === "dashboard" ? "/admin" : "/";
+}
 
 export default function LoginPage() {
   const t = useT();
   const { login, isAuthenticated, user } = useAuth();
   const router = useRouter();
+  const toast = useToast();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   if (isAuthenticated) {
-    router.replace(user?.must_change_password ? "/admin/settings/profile" : "/admin");
+    router.replace(user?.must_change_password ? "/admin/settings/profile" : resolveLanding(user?.preferences));
     return null;
   }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    setError("");
     setLoading(true);
     try {
       const authUser = await login(username, password);
-      router.replace(authUser.must_change_password ? "/admin/settings/profile" : "/admin");
+      if (authUser.must_change_password) {
+        router.replace("/admin/settings/profile");
+      } else {
+        router.replace(resolveLanding(authUser.preferences));
+      }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : t("auth.invalid_credentials"));
+      toast.error(err instanceof Error ? err.message : t("auth.invalid_credentials"));
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#f6f8fa] px-4 py-10 text-[#24292f] dark:bg-[#0d1117] dark:text-[#e6edf3]">
+    <main className="flex min-h-screen items-center justify-center bg-subtle px-4 py-10 text-fg dark:bg-canvas dark:text-fg">
       <div className="absolute right-4 top-4 flex items-center gap-2">
         <LangToggle />
         <ThemeToggle />
@@ -42,11 +79,11 @@ export default function LoginPage() {
 
       <section className="w-full max-w-sm">
         <div className="mb-6 text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-md border border-[#d8dee4] bg-white text-lg font-semibold tracking-tight shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-md border border-border bg-white text-lg font-semibold tracking-tight shadow-sm dark:border-border dark:bg-surface">
             AG
           </div>
           <h1 className="text-2xl font-semibold tracking-normal">auto-gallery</h1>
-          <p className="mt-1 text-sm text-[#57606a] dark:text-[#8b949e]">{t("auth.admin_panel")}</p>
+          <p className="mt-1 text-sm text-muted">{t("auth.admin_panel")}</p>
         </div>
 
         <form onSubmit={handleSubmit} className="card p-5">
@@ -79,19 +116,13 @@ export default function LoginPage() {
               />
             </div>
 
-            {error && (
-              <div className="rounded-md border border-[#cf222e]/30 bg-[#ffebe9] px-3 py-2 text-sm text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">
-                {error}
-              </div>
-            )}
-
             <button type="submit" disabled={loading} className="btn-primary w-full">
               {loading ? t("auth.logging_in") : t("auth.login_button")}
             </button>
           </div>
         </form>
 
-        <p className="mt-5 text-center text-xs text-[#57606a] dark:text-[#8b949e]">
+        <p className="mt-5 text-center text-xs text-muted">
           v0.1.0 · secure admin access
         </p>
       </section>
