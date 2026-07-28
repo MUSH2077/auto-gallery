@@ -64,6 +64,27 @@ class TestURLClassification:
         assert _classify_url("https://x.com/artist") == "x"
         assert _classify_url("https://twitter.com/artist") == "x"
 
+    @pytest.mark.parametrize(
+        ("url", "expected"),
+        [
+            ("https://pixiv.net.evil.example/users/1", "website"),
+            ("https://evilpixiv.net/users/1", "website"),
+            ("https://pixiv.net@evil.example/users/1", "website"),
+            ("https://x.com.evil.example/artist", "website"),
+            ("https://evil.example/path/twitter.com/artist", "website"),
+            ("ftp://pixiv.net/users/1", "website"),
+            ("mailto:user@pixiv.net", "website"),
+            ("https://cdn.sketch.pixiv.net/@artist", "pixiv_sketch"),
+            ("https://PIXIV.NET./users/1", "pixiv"),
+        ],
+    )
+    def test_domain_boundaries(self, url, expected):
+        assert _classify_url(url) == expected
+
+    def test_scheme_less_url(self):
+        assert _classify_url("www.pixiv.net/users/1980643") == "pixiv"
+        assert _classify_url("//www.pixiv.net/users/1980643") == "pixiv"
+
     def test_website_fallback(self):
         assert _classify_url("https://example.com/profile") == "website"
         assert _classify_url("https://random-site.org/about") == "website"

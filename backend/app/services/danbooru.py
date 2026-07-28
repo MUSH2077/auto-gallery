@@ -146,87 +146,103 @@ DOWNLOADABLE_PATTERNS = {
 
 def _classify_url(url: str) -> str:
     """Classify a URL into a link_type."""
-    u = url.lower()
+    candidate = url.strip()
+    if candidate.startswith("//"):
+        candidate = f"https:{candidate}"
+    elif not re.match(r"^[a-z][a-z0-9+.-]*:", candidate, re.IGNORECASE):
+        candidate = f"https://{candidate}"
+    try:
+        parsed = urllib.parse.urlsplit(candidate)
+        if parsed.scheme.lower() not in {"http", "https"}:
+            return "website"
+        hostname = (parsed.hostname or "").lower().rstrip(".")
+        path = parsed.path.lower()
+    except ValueError:
+        return "website"
+
+    def host_is(domain: str) -> bool:
+        """Match a registrable host or one of its subdomains, never a substring."""
+        normalized = domain.lower().rstrip(".")
+        return hostname == normalized or hostname.endswith(f".{normalized}")
+
     # Pixiv sub-types
-    if "sketch.pixiv.net" in u:
+    if host_is("sketch.pixiv.net"):
         return "pixiv_sketch"
-    if "pixiv.net/stacc" in u:
+    if host_is("pixiv.net") and path.startswith("/stacc"):
         return "pixiv_stacc"
-    if "pixiv.net/fanbox" in u or "fanbox.cc" in u:
+    if (host_is("pixiv.net") and path.startswith("/fanbox")) or host_is("fanbox.cc"):
         return "fanbox"
-    if "pixiv.net" in u:
+    if host_is("pixiv.net"):
         return "pixiv"
-    # Social / X  (use regex to avoid matching substrings like ax.com)
-    if "twitter.com" in u or re.search(r"(?:^|[./@])x\.com(?:[/?#:]|$)", u):
+    # Social / X
+    if host_is("twitter.com") or host_is("x.com"):
         return "x"
-    if "bsky.app" in u:
+    if host_is("bsky.app"):
         return "bluesky"
-    if "misskey" in u:
+    if "misskey" in hostname.split("."):
         return "misskey"
-    if "mastodon" in u:
+    if "mastodon" in hostname.split("."):
         return "mastodon"
     # Video platforms
-    if "iwara.tv" in u:
+    if host_is("iwara.tv"):
         return "iwara"
-    if "youtube.com" in u or "youtu.be" in u:
+    if host_is("youtube.com") or host_is("youtu.be"):
         return "youtube"
-    if "bilibili.com" in u:
+    if host_is("bilibili.com"):
         return "bilibili"
-    if "nicovideo.jp" in u:
+    if host_is("nicovideo.jp"):
         return "nicovideo"
-    if "vimeo.com" in u:
+    if host_is("vimeo.com"):
         return "vimeo"
     # Art platforms
-    if "danbooru" in u:
+    if host_is("danbooru.donmai.us"):
         return "danbooru"
-    if "deviantart.com" in u:
+    if host_is("deviantart.com"):
         return "deviantart"
-    if "artstation.com" in u:
+    if host_is("artstation.com"):
         return "artstation"
     # Chinese platforms
-    if "weibo.com" in u or "weibo.cn" in u:
+    if host_is("weibo.com") or host_is("weibo.cn"):
         return "weibo"
-    if "xiaohongshu.com" in u:
+    if host_is("xiaohongshu.com"):
         return "xiaohongshu"
-    if "bcy.net" in u:
+    if host_is("bcy.net"):
         return "bcy"
-    if "pinterest.com" in u or "pin.it" in u:
+    if host_is("pinterest.com") or host_is("pin.it"):
         return "pinterest"
     # Lofter: only subdomain blogs (user.lofter.com), not www.lofter.com
-    if ".lofter.com" in u and "www.lofter.com" not in u:
+    if host_is("lofter.com") and hostname not in {"lofter.com", "www.lofter.com"}:
         return "lofter"
     # Funding / Shop
-    if "fanbox" in u:
-        return "fanbox"
-    if "skeb.jp" in u:
+    if host_is("skeb.jp"):
         return "skeb"
-    if "patreon.com" in u:
+    if host_is("patreon.com"):
         return "patreon"
-    if "boosty.to" in u:
+    if host_is("boosty.to"):
         return "boosty"
-    if "gumroad.com" in u:
+    if host_is("gumroad.com"):
         return "gumroad"
-    if "fantia.jp" in u:
+    if host_is("fantia.jp"):
         return "fantia"
     # Social media
-    if "instagram.com" in u:
+    if host_is("instagram.com"):
         return "instagram"
-    if "tumblr.com" in u:
+    if host_is("tumblr.com"):
         return "tumblr"
-    if "facebook.com" in u:
+    if host_is("facebook.com"):
         return "facebook"
-    if "tiktok.com" in u:
+    if host_is("tiktok.com"):
         return "tiktok"
-    if "threads.net" in u:
+    if host_is("threads.net"):
         return "threads"
-    if "reddit.com" in u:
+    if host_is("reddit.com"):
         return "reddit"
     # Other
-    if "linktr.ee" in u:
+    if host_is("linktr.ee"):
         return "linktree"
-    if "carrd.co" in u:
+    if host_is("carrd.co"):
         return "carrd"
-    if "about.me" in u:
+    if host_is("about.me"):
         return "aboutme"
     return "website"
 
@@ -366,4 +382,3 @@ def _add_auth(req: urllib.request.Request) -> urllib.request.Request:
             # API key as query param
             req.add_header("X-Api-Key", api_key)
     return req
-

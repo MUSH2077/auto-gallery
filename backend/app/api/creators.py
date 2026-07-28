@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -23,6 +24,7 @@ from app.services.cache import (
 from app.services.curation import CurationService
 from app.services.gitllery import project_commit_safe
 
+logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[RequirePermission("library")])
 # Write/mutation routes on the `creator` library entity belong to the
 # `curation` module per spec §A2 (create/update/delete/batch-delete/merge/
@@ -82,11 +84,17 @@ async def batch_delete_creators(data: dict, db: AsyncSession = Depends(get_db)):
     results = []
     for cid in ids:
         try:
-            await svc.delete_creator(UUID(cid))
+            creator_id = UUID(cid)
+        except (TypeError, ValueError):
+            results.append({"id": cid, "status": "error", "error": "invalid_id"})
+            continue
+        try:
+            await svc.delete_creator(creator_id)
             results.append({"id": cid, "status": "deleted"})
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning("batch_delete_creators failed for %s: %s", cid, e, exc_info=True)
+        except ValueError:
+            results.append({"id": cid, "status": "error", "error": "not_found"})
+        except Exception:
+            logger.warning("batch_delete_creators failed for %s", cid, exc_info=True)
             results.append({"id": cid, "status": "error", "error": "internal_error"})
     invalidate_creator_subscription_caches(include_works=True)
     return {"status": "ok", "results": results}
@@ -110,16 +118,43 @@ async def merge_creators_endpoint(data: dict, db: AsyncSession = Depends(get_db)
     """
     from app.services.creator_dedup import merge_creators
 
-    target_id = UUID(data["target_id"])
+    try:
+        target_id = UUID(data["target_id"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid target_id")
     source_ids = data.get("source_ids", [])
     results = []
     for source_id_str in source_ids:
-        source_id = UUID(source_id_str)
+        try:
+            source_id = UUID(source_id_str)
+        except (TypeError, ValueError):
+            results.append({
+                "source_id": source_id_str,
+                "status": "error",
+                "error": "invalid_id",
+            })
+            continue
         try:
             stats = await merge_creators(db, target_id, source_id)
             results.append({"source_id": source_id_str, "status": "merged", **stats})
-        except ValueError as e:
-            results.append({"source_id": source_id_str, "status": "error", "error": str(e)})
+        except ValueError:
+            results.append({
+                "source_id": source_id_str,
+                "status": "error",
+                "error": "merge_rejected",
+            })
+        except Exception:
+            logger.warning(
+                "merge_creators failed for source=%s target=%s",
+                source_id_str,
+                target_id,
+                exc_info=True,
+            )
+            results.append({
+                "source_id": source_id_str,
+                "status": "error",
+                "error": "merge_failed",
+            })
     invalidate_creator_subscription_caches(include_works=True)
     return {"status": "ok", "results": results}
 

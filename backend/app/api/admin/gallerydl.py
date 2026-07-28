@@ -520,12 +520,12 @@ async def test_source_connection(data: dict):
             "message": "Connection test timed out after 120s",
             "details": "The request to the remote server took too long.",
         }
-    except Exception as e:
-        logger.error("Connection test failed for %s: %s", source, e)
+    except Exception:
+        logger.exception("Connection test failed for %s", source)
         return {
             "source": source, "success": False,
-            "message": f"Test failed: {str(e)[:200]}",
-            "details": str(e),
+            "message": "Connection test failed unexpectedly.",
+            "details": "Check the backend logs for the request details.",
         }
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

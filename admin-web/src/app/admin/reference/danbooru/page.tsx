@@ -247,28 +247,44 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
 }
 
 function classifyUrl(url: string): string {
-  const u = url.toLowerCase();
-  if (u.includes("sketch.pixiv.net")) return "pixiv_sketch";
-  if (u.includes("pixiv.net/stacc")) return "pixiv_stacc";
-  if (u.includes("pixiv.net")) return "pixiv";
-  if (u.includes("twitter.com") || u.includes("x.com")) return "x";
-  if (u.includes("bsky.app")) return "bluesky";
-  if (u.includes("iwara.tv")) return "iwara";
-  if (u.includes("youtube.com") || u.includes("youtu.be")) return "youtube";
-  if (u.includes("bilibili.com")) return "bilibili";
-  if (u.includes("danbooru")) return "danbooru";
-  if (u.includes("deviantart.com")) return "deviantart";
-  if (u.includes("artstation.com")) return "artstation";
-  if (u.includes("weibo.com") || u.includes("weibo.cn")) return "weibo";
-  if (u.includes("xiaohongshu.com")) return "xiaohongshu";
-  if (u.includes("fanbox")) return "fanbox";
-  if (u.includes("skeb.jp")) return "skeb";
-  if (u.includes("patreon.com")) return "patreon";
-  if (u.includes("instagram.com")) return "instagram";
-  if (u.includes("tumblr.com")) return "tumblr";
-  if (u.includes("tiktok.com")) return "tiktok";
-  if (u.includes("nicovideo.jp")) return "nicovideo";
-  if (u.includes("fantia.jp")) return "fantia";
+  let parsed: URL;
+  try {
+    let candidate = url;
+    if (candidate.startsWith("//")) {
+      candidate = `https:${candidate}`;
+    } else if (!/^[a-z][a-z0-9+.-]*:/i.test(candidate)) {
+      candidate = `https://${candidate}`;
+    }
+    parsed = new URL(candidate);
+  } catch {
+    return "website";
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "website";
+  const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  const path = parsed.pathname.toLowerCase();
+  const hostIs = (domain: string) => hostname === domain || hostname.endsWith(`.${domain}`);
+
+  if (hostIs("sketch.pixiv.net")) return "pixiv_sketch";
+  if (hostIs("pixiv.net") && path.startsWith("/stacc")) return "pixiv_stacc";
+  if ((hostIs("pixiv.net") && path.startsWith("/fanbox")) || hostIs("fanbox.cc")) return "fanbox";
+  if (hostIs("pixiv.net")) return "pixiv";
+  if (hostIs("twitter.com") || hostIs("x.com")) return "x";
+  if (hostIs("bsky.app")) return "bluesky";
+  if (hostIs("iwara.tv")) return "iwara";
+  if (hostIs("youtube.com") || hostIs("youtu.be")) return "youtube";
+  if (hostIs("bilibili.com")) return "bilibili";
+  if (hostIs("danbooru.donmai.us")) return "danbooru";
+  if (hostIs("deviantart.com")) return "deviantart";
+  if (hostIs("artstation.com")) return "artstation";
+  if (hostIs("weibo.com") || hostIs("weibo.cn")) return "weibo";
+  if (hostIs("xiaohongshu.com")) return "xiaohongshu";
+  if (hostIs("skeb.jp")) return "skeb";
+  if (hostIs("patreon.com")) return "patreon";
+  if (hostIs("instagram.com")) return "instagram";
+  if (hostIs("tumblr.com")) return "tumblr";
+  if (hostIs("tiktok.com")) return "tiktok";
+  if (hostIs("nicovideo.jp")) return "nicovideo";
+  if (hostIs("fantia.jp")) return "fantia";
   return "website";
 }
 

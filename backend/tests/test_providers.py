@@ -1,5 +1,7 @@
 """Unit tests for source provider parse methods."""
 
+from urllib.parse import urlsplit
+
 from app.providers.pixiv import PixivProvider
 from app.providers.iwara import IwaraProvider
 from app.providers.x import XProvider
@@ -37,7 +39,9 @@ class TestPixivProvider:
         assert result["source"] == "pixiv"
         assert result["source_creator_id"] == "1980643"
         assert result["display_name"] == "ASK"
-        assert "pixiv.net/users/1980643" in result["source_url"]
+        parsed_url = urlsplit(result["source_url"])
+        assert parsed_url.hostname == "www.pixiv.net"
+        assert parsed_url.path == "/users/1980643"
 
     def test_parse_work_source(self, sample_pixiv_metadata):
         result = self.p.parse_work_source(sample_pixiv_metadata)
@@ -130,20 +134,23 @@ class TestXProvider:
         assert result["source"] == "x"
         assert result["source_creator_id"] == "111222333"
         assert result["display_name"] == "Artist Name"
-        assert "x.com/artist_handle" in result["source_url"]
+        parsed_url = urlsplit(result["source_url"])
+        assert parsed_url.hostname == "x.com"
+        assert parsed_url.path == "/artist_handle"
 
     def test_parse_work_source(self, sample_twitter_metadata):
         result = self.p.parse_work_source(sample_twitter_metadata)
         assert result["source"] == "x"
         assert result["source_work_id"] == "1234567890123456789"
         assert result["title"] == "Check out this artwork! #fanart"
-        assert "status/1234567890123456789" in result["source_url"]
+        assert urlsplit(result["source_url"]).path == "/artist_handle/status/1234567890123456789"
 
     def test_parse_assets_with_entities(self, sample_twitter_metadata):
         result = self.p.parse_assets(sample_twitter_metadata, [])
         assert len(result) == 1
         assert result[0]["source_asset_id"] == "media_001"
-        assert "twimg.com" in result[0]["source_url"]
+        hostname = urlsplit(result[0]["source_url"]).hostname
+        assert hostname == "twimg.com" or hostname.endswith(".twimg.com")
 
     def test_parse_assets_no_entities(self):
         meta = {"id_str": "123", "url": "https://example.com/img.jpg"}
