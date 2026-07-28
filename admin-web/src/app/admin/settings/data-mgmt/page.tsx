@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { PageHeader, ConfirmDialog } from "@/components";
+import { PageHeader, PageShell, ConfirmDialog } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import Link from "next/link";
@@ -133,7 +133,7 @@ export default function DataManagementPage() {
   ];
 
   return (
-    <main className="max-w-4xl mx-auto p-6">
+    <PageShell size="normal">
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("datamgmt.back")}</Link>
       </div>
@@ -184,6 +184,6 @@ export default function DataManagementPage() {
           isPending={actions.find((a) => a.key === confirmAction)?.mutation.isPending || false}
         />
       )}
-    </main>
+    </PageShell>
   );
 }

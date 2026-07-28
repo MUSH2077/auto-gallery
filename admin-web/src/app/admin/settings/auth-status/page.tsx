@@ -1,7 +1,7 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
+import { PageHeader, PageShell, EmptyState, ErrorState, SourceBadge } from "@/components";
 import { useT } from "@/lib/i18n";
 import Link from "next/link";
 
@@ -10,7 +10,7 @@ export default function AuthStatusPage() {
   const auth = useQuery({ queryKey: queryKeys.admin.authStatus, queryFn: api.getAuthStatus, refetchInterval: 30000 });
 
   return (
-    <main className="max-w-5xl mx-auto p-6">
+    <PageShell size="normal">
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("auth.back")}</Link>
       </div>
@@ -73,6 +73,6 @@ export default function AuthStatusPage() {
           </div>
         </>
       )}
-    </main>
+    </PageShell>
   );
 }

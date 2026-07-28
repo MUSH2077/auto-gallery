@@ -5,6 +5,7 @@ import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import { authChangePassword } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
+import PageShell from "@/components/PageShell";
 import Banner from "@/components/Banner";
 
 export default function ProfilePage() {
@@ -44,7 +45,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="p-4 sm:p-6 max-w-xl mx-auto">
+    <PageShell size="normal" className="max-w-xl">
       <PageHeader title={t("auth.profile")} />
 
       {/* User Info */}
@@ -119,6 +120,6 @@ export default function ProfilePage() {
           </button>
         </form>
       </div>
-    </div>
+    </PageShell>
   );
 }

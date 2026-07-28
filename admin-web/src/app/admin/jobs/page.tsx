@@ -1,12 +1,12 @@
 "use client";
 import Link from "next/link";
-import { Suspense, useState, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { Suspense, useState, useEffect, useMemo, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { useT, type TFunction } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, JobProgress, queryKeys, TaskRun } from "@/lib/api";
-import { PageHeader, PageShell, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, StatCard, PermissionGuard } from "@/components";
+import { PageHeader, PageShell, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, StatCard, PermissionGuard, CompactUrl, ErrorSummary, OverflowText, RowActionMenu } from "@/components";
 import { TaskDetailDrawer, JobDetailDrawer, shortId } from "@/components/JobDrawers";
 import { useJobWebSocket } from "@/lib/useWebSocket";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
@@ -118,20 +118,6 @@ function JobLifecycle({ status }: { status: string }) {
   );
 }
 
-function ErrorExcerpt({ value }: { value?: string | null }) {
-  if (!value) return null;
-  const firstLine = value.split("\n").find(Boolean) || value;
-  const isNoNewContent = /no new content since last sync|already archived or empty/i.test(firstLine);
-  const className = isNoNewContent
-    ? "line-clamp-1 rounded-md border border-border bg-subtle px-2 py-1 text-xs text-muted dark:border-border dark:bg-subtle dark:text-muted"
-    : "line-clamp-1 rounded-md border border-danger/20 bg-danger-subtle px-2 py-1 text-xs text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger";
-  return (
-    <div className={className}>
-      {firstLine.slice(0, 180)}
-    </div>
-  );
-}
-
 function operationLabel(t: TFunction, operationType?: string | null, kind?: string | null) {
   if (operationType === "admin-rebuild") return t("jobs.op_admin_rebuild");
   if (operationType === "admin-disk-import") return t("jobs.op_admin_disk_import");
@@ -192,7 +178,7 @@ function RowMeta({
 function RowActions({ children }: { children?: ReactNode }) {
   if (!children) return <div className="min-w-0" />;
   return (
-    <div className="flex min-w-0 flex-nowrap items-center justify-end gap-1 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+    <div className="flex min-w-0 flex-wrap items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
       {children}
     </div>
   );
@@ -264,27 +250,62 @@ function JobRowShell({
   onClick: () => void;
 }) {
   const progressOrTime = progress ? <RealProgressBar progress={progress} /> : activeSince ? <Elapsed since={activeSince} active /> : timestamp;
+  const detailNode = typeof detail === "string"
+    ? /^https?:\/\//i.test(detail)
+      ? <CompactUrl value={detail} />
+      : <OverflowText value={detail} className="text-xs text-muted" />
+    : detail || <span className="text-xs text-muted">—</span>;
+  const calmError = Boolean(error && /no new content since last sync|already archived or empty/i.test(error));
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onClick();
+    }
+  };
+
   return (
     <div className={entrance?.className} style={entrance?.style}>
       <div
+        role="button"
+        tabIndex={0}
+        aria-label={`${typeof typeLabel === "string" ? typeLabel : "Job"} ${shortId(id)}`}
         onClick={onClick}
-        className={`card grid min-h-[64px] w-full min-w-0 cursor-pointer grid-cols-[28px_minmax(78px,0.55fr)_minmax(78px,0.55fr)_60px_minmax(68px,0.45fr)_minmax(150px,1fr)_minmax(220px,1.25fr)_minmax(220px,0.9fr)_minmax(152px,max-content)] items-center gap-2 p-2 text-sm hover:border-accent/50 ${className}`}
+        onKeyDown={handleKeyDown}
+        className={`card min-h-[68px] w-full min-w-0 cursor-pointer p-3 text-sm transition-colors hover:border-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${className}`}
       >
-        <div className="flex items-center justify-center">{select || <span aria-hidden className="h-4 w-4" />}</div>
-        <div className="min-w-0"><StatusBadge status={status} /></div>
-        <div className="truncate text-xs font-medium text-fg" title={typeof typeLabel === "string" ? typeLabel : undefined}>{typeLabel}</div>
-        <span className="font-mono text-xs text-muted">{shortId(id)}</span>
-        <div className="min-w-0">{source || <span className="text-xs text-muted">—</span>}</div>
-        <RowMeta primary={primary} secondary={secondary} />
-        <div className="min-w-0 truncate text-xs text-muted" title={typeof detail === "string" ? detail : undefined}>{detail || "—"}</div>
-        <div className="flex min-w-0 justify-start text-xs text-muted">{progressOrTime || "—"}</div>
-        <RowActions>{actions}</RowActions>
-      </div>
-      {(error || result) && (
-        <div className="mt-1 w-full">
-          {error ? <ErrorExcerpt value={error} /> : <div className="line-clamp-1 rounded-md border border-border bg-subtle px-2 py-1 text-xs text-muted">{result}</div>}
+        <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 lg:grid-cols-[auto_minmax(11rem,0.8fr)_minmax(12rem,1.1fr)_minmax(10rem,0.8fr)_auto] lg:items-center">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center">{select || <span aria-hidden className="h-4 w-4" />}</span>
+            <StatusBadge status={status} />
+          </div>
+          <div className="min-w-0">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="truncate text-xs font-medium text-fg">{typeLabel}</span>
+              {source || <span className="text-xs text-muted">—</span>}
+              <span className="font-mono text-[10px] text-placeholder">{shortId(id)}</span>
+            </div>
+            <div className="mt-1"><RowMeta primary={primary} secondary={secondary} /></div>
+          </div>
+          <div className="col-span-3 min-w-0 border-t border-border pt-2 lg:col-span-1 lg:border-t-0 lg:pt-0">
+            {detailNode}
+          </div>
+          <div className="col-span-2 min-w-0 text-xs text-muted lg:col-span-1">
+            {progressOrTime || "—"}
+          </div>
+          <div className="min-w-0">
+            <RowActions>{actions}</RowActions>
+          </div>
         </div>
-      )}
+        {(error || result) && (
+          <div className="mt-3 border-t border-border pt-2" onClick={(event) => event.stopPropagation()}>
+            {error
+              ? <ErrorSummary value={error} calm={calmError} />
+              : <ErrorSummary value={typeof result === "string" ? result : String(result || "")} calm />}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -397,65 +418,104 @@ function JobsBatchToolbar({
   const [source, setSource] = useState("");
   const [status, setStatus] = useState("");
   const [action, setAction] = useState<BatchAction | "">("");
+  const [filterBatchOpen, setFilterBatchOpen] = useState(false);
   const actions = BATCH_ACTIONS_BY_TAB[activeTab];
   const statusOptions = activeTab === "imports" ? IMPORT_STATUS_OPTIONS : activeTab === "downloads" ? STATUS_OPTIONS : TASK_STATUS_OPTIONS;
   const canFilterBatch = activeTab === "downloads" || activeTab === "imports";
   const hasSourceFilter = activeTab === "downloads";
+  const showBatchControls = selectedCount > 0 || filterBatchOpen;
 
   useEffect(() => {
     setSource("");
     setStatus("");
+    setFilterBatchOpen(false);
     setAction((current) => current && !BATCH_ACTIONS_BY_TAB[activeTab].includes(current) ? "" : current);
   }, [activeTab]);
 
   return (
-    <div className="flex flex-wrap items-center justify-end gap-2">
-      <button onClick={onRefresh} className="btn-ghost text-xs">{t("jobs.refresh")}</button>
+    <div className="mb-4 rounded-lg border border-border bg-surface p-2.5">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <button onClick={onRefresh} className="btn-ghost text-xs">{t("jobs.refresh")}</button>
+        <span
+          className={`inline-flex h-9 items-center gap-1 rounded-full border px-3 text-xs ${
+            connected
+              ? "border-success/30 bg-success-subtle text-success"
+              : "border-border bg-subtle text-muted"
+          }`}
+          title={connected ? t("jobs.live_connected") : t("jobs.live_polling_title")}
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-current" : "animate-pulse bg-current"}`} />
+          {connected ? t("jobs.live_connected") : wsStatus === "connecting" ? t("jobs.live_connecting") : t("jobs.live_polling")}
+        </span>
       {selectedCount > 0 && (
         <span className="inline-flex h-9 items-center rounded-md border border-border bg-subtle px-3 text-xs font-medium text-fg">
           {t("common.selected_count", { count: selectedCount })}
         </span>
       )}
-      {hasSourceFilter && (
-        <select value={source} onChange={(e) => setSource(e.target.value)} className="select h-9 min-h-9 px-2 py-0 text-xs" aria-label={t("jobs.filter_all_source")}>
-          <option value="">{t("jobs.filter_all_source")}</option>
-          {SOURCE_OPTIONS.filter(Boolean).map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
+        <span className="min-w-2 flex-1" />
+        {selectedCount === 0 && canFilterBatch && (
+          <button
+            type="button"
+            onClick={() => setFilterBatchOpen((open) => !open)}
+            className="btn-ghost text-xs"
+            aria-expanded={filterBatchOpen}
+          >
+            {t("jobs.batch_filter_scope", "批量处理当前筛选")}
+          </button>
+        )}
+        {activeTab === "downloads" && (
+          <RowActionMenu
+            label={t("jobs.maintenance_actions", "维护操作")}
+            items={[
+              { label: t("jobs.clear_failed"), onSelect: () => onClear(["failed", "stale"]), tone: "danger", disabled: isClearing },
+              { label: t("jobs.clear_complete"), onSelect: () => onClear(["complete"]), disabled: isClearing },
+              { label: t("jobs.kill_stuck"), onSelect: onKillStuck, tone: "danger", disabled: isKillingStuck },
+              { label: t("jobs.retry_all_failed"), onSelect: onRetryAllFailed, disabled: isRetryingAll },
+            ]}
+          />
+        )}
+      </div>
+      {showBatchControls && (
+        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 border-t border-border pt-2">
+          <span className="badge shrink-0">
+            {selectedCount > 0
+              ? t("common.selected_count", { count: selectedCount })
+              : t("jobs.current_filter_scope", "当前筛选范围")}
+          </span>
+          {hasSourceFilter && selectedCount === 0 && (
+            <select value={source} onChange={(e) => setSource(e.target.value)} className="select h-9 min-h-9 px-2 py-0 text-xs" aria-label={t("jobs.filter_all_source")}>
+              <option value="">{t("jobs.filter_all_source")}</option>
+              {SOURCE_OPTIONS.filter(Boolean).map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          )}
+          {canFilterBatch && selectedCount === 0 && (
+            <select value={status} onChange={(e) => setStatus(e.target.value)} className="select h-9 min-h-9 px-2 py-0 text-xs" aria-label={t("jobs.filter_all_status")}>
+              <option value="">{t("jobs.filter_all_status")}</option>
+              {statusOptions.filter(Boolean).map((s) => <option key={s} value={s}>{statusLabel(t, s)}</option>)}
+            </select>
+          )}
+          <select value={action} onChange={(e) => setAction(e.target.value as BatchAction | "")} className="select h-9 min-h-9 min-w-0 px-2 py-0 text-xs" aria-label={t("jobs.batch_action")}>
+            <option value="">{t("jobs.batch_action_placeholder")}</option>
+            {actions.map((item) => (
+              <option key={item} value={item}>{t(`jobs.batch_action_${item}`)}</option>
+            ))}
+          </select>
+          <button
+            onClick={() => {
+              if (!action) return;
+              if (
+                selectedCount === 0
+                && !confirm(t("jobs.batch_filter_confirm", "确认对当前筛选匹配的全部任务执行此操作？"))
+              ) return;
+              onApply(action, { source, status });
+            }}
+            disabled={!action || isApplying}
+            className="btn-primary text-xs"
+          >
+            {isApplying ? t("jobs.batch_running") : t("jobs.batch_apply")}
+          </button>
+        </div>
       )}
-      {canFilterBatch && (
-        <select value={status} onChange={(e) => setStatus(e.target.value)} className="select h-9 min-h-9 px-2 py-0 text-xs" aria-label={t("jobs.filter_all_status")}>
-          <option value="">{t("jobs.filter_all_status")}</option>
-          {statusOptions.filter(Boolean).map((s) => <option key={s} value={s}>{statusLabel(t, s)}</option>)}
-        </select>
-      )}
-      <select value={action} onChange={(e) => setAction(e.target.value as BatchAction | "")} className="select h-9 min-h-9 px-2 py-0 text-xs" aria-label={t("jobs.batch_action")}>
-        <option value="">{t("jobs.batch_action_placeholder")}</option>
-        {actions.map((item) => (
-          <option key={item} value={item}>{t(`jobs.batch_action_${item}`)}</option>
-        ))}
-      </select>
-      <button onClick={() => action && onApply(action, { source, status })} disabled={!action || isApplying} className="btn-primary text-xs">
-        {isApplying ? t("jobs.batch_running") : t("jobs.batch_apply")}
-      </button>
-      {activeTab === "downloads" && (
-        <>
-          <button onClick={() => onClear(["failed", "stale"])} disabled={isClearing} className="btn-danger text-xs">{t("jobs.clear_failed")}</button>
-          <button onClick={() => onClear(["complete"])} disabled={isClearing} className="btn-ghost text-xs">{t("jobs.clear_complete")}</button>
-          <button onClick={onKillStuck} disabled={isKillingStuck} className="btn-ghost text-xs">{t("jobs.kill_stuck")}</button>
-          <button onClick={onRetryAllFailed} disabled={isRetryingAll} className="btn-primary text-xs">{t("jobs.retry_all_failed")}</button>
-        </>
-      )}
-      <span
-        className={`inline-flex h-9 items-center gap-1 rounded-full border px-3 text-xs ${
-          connected
-            ? "border-success/30 bg-success-subtle text-success dark:border-success/30 dark:bg-success-subtle dark:text-success"
-            : "border-border bg-subtle text-muted dark:border-border dark:bg-subtle dark:text-muted"
-        }`}
-        title={connected ? t("jobs.live_connected") : t("jobs.live_polling_title")}
-      >
-        <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-current" : "animate-pulse bg-current"}`} />
-        {connected ? t("jobs.live_connected") : wsStatus === "connecting" ? t("jobs.live_connecting") : t("jobs.live_polling")}
-      </span>
     </div>
   );
 }
@@ -1210,26 +1270,10 @@ function JobsContent() {
 
   return (
     <PageShell size="wide">
-      <PageHeader title={t("jobs.title")} description={t("jobs.desc")}>
-        <JobsBatchToolbar
-          activeTab={activeTab}
-          selectedCount={selected.size}
-          onRefresh={refreshAll}
-          onApply={(action, filters) => batchJobs.mutate({ action, filters })}
-          onClear={handleClear}
-          onKillStuck={() => killStuck.mutate()}
-          onRetryAllFailed={() => retryAllFailed.mutate()}
-          connected={connected}
-          wsStatus={wsStatus}
-          isApplying={batchJobs.isPending}
-          isClearing={clearDL.isPending}
-          isKillingStuck={killStuck.isPending}
-          isRetryingAll={retryAllFailed.isPending}
-        />
-      </PageHeader>
+      <PageHeader title={t("jobs.title")} description={t("jobs.desc")} />
 
       {workbench.data && (
-        <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-5">
+        <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
           <StatCard label={t("jobs.summary_active")} value={workbench.data.queue.active_download_count + workbench.data.queue.active_import_count} sub={t("jobs.summary_active_sub")} tone="active" />
           <StatCard label={t("jobs.summary_queued")} value={workbench.data.queue.default} sub={t("jobs.summary_queued_sub")} />
           <StatCard label={t("jobs.summary_importing")} value={workbench.data.queue.active_import_count} sub={t("jobs.summary_importing_sub")} tone={workbench.data.queue.active_import_count ? "active" : "neutral"} />
@@ -1237,6 +1281,22 @@ function JobsContent() {
           <StatCard label={t("jobs.summary_stale")} value={workbench.data.queue.stale_count} sub={t("jobs.summary_stale_sub")} tone={workbench.data.queue.stale_count ? "warning" : "neutral"} />
         </div>
       )}
+
+      <JobsBatchToolbar
+        activeTab={activeTab}
+        selectedCount={selected.size}
+        onRefresh={refreshAll}
+        onApply={(action, filters) => batchJobs.mutate({ action, filters })}
+        onClear={handleClear}
+        onKillStuck={() => killStuck.mutate()}
+        onRetryAllFailed={() => retryAllFailed.mutate()}
+        connected={connected}
+        wsStatus={wsStatus}
+        isApplying={batchJobs.isPending}
+        isClearing={clearDL.isPending}
+        isKillingStuck={killStuck.isPending}
+        isRetryingAll={retryAllFailed.isPending}
+      />
 
       <JobsFilterPanel
         activeTab={activeTab}
@@ -1353,8 +1413,7 @@ function JobsContent() {
                     onClick={() => openDownloadDetail(j.id)}
                     actions={(
                       <>
-                        <RowButton onClick={() => setExpandedImports(expandedImports === j.id ? null : j.id)}>{t("jobs.imports")}</RowButton>
-                        {["enqueued","downloading","downloaded","importing","failed","stale"].includes(j.status) && (
+                        {["enqueued","downloading","downloaded","importing"].includes(j.status) && (
                           <RowButton onClick={() => pauseDL.mutate(j.id)} disabled={pauseDL.isPending}>{t("jobs.pause")}</RowButton>
                         )}
                         {j.status === "paused" && (
@@ -1363,7 +1422,20 @@ function JobsContent() {
                         {(j.status === "failed" || j.status === "stale" || j.status === "complete") && (
                           <RowButton tone="primary" onClick={() => { setRetryId(j.id); retryDL.mutate(j.id); }} disabled={retryDL.isPending}>{t("jobs.retry")}</RowButton>
                         )}
-                        <RowButton tone="danger" onClick={() => { setDeleteId(j.id); setDeleteType("dl"); }}>{t("jobs.del")}</RowButton>
+                        <RowActionMenu
+                          label={t("common.more_actions", "更多操作")}
+                          items={[
+                            {
+                              label: t("jobs.imports"),
+                              onSelect: () => setExpandedImports(expandedImports === j.id ? null : j.id),
+                            },
+                            {
+                              label: t("jobs.del"),
+                              tone: "danger",
+                              onSelect: () => { setDeleteId(j.id); setDeleteType("dl"); },
+                            },
+                          ]}
+                        />
                       </>
                     )}
                   />
@@ -1425,9 +1497,21 @@ function JobsContent() {
                     onClick={() => openImportDetail(j.id)}
                     actions={(
                       <>
-                        <Link href={`/admin/jobs?tab=downloads&job=${j.download_job_id}`} className="inline-flex h-8 min-w-[46px] items-center justify-center rounded-md border border-border bg-surface px-2 text-xs font-medium text-fg hover:bg-subtle">{t("jobs.open_download")}</Link>
                         {(j.status === "failed" || j.status === "stale") && <RowButton tone="primary" onClick={() => { setRetryId(j.id); retryIM.mutate(j.id); }} disabled={retryIM.isPending}>{t("jobs.retry")}</RowButton>}
-                        <RowButton tone="danger" onClick={() => { setDeleteId(j.id); setDeleteType("im"); }}>{t("jobs.del")}</RowButton>
+                        <RowActionMenu
+                          label={t("common.more_actions", "更多操作")}
+                          items={[
+                            {
+                              label: t("jobs.open_download"),
+                              href: `/admin/jobs?tab=downloads&job=${j.download_job_id}`,
+                            },
+                            {
+                              label: t("jobs.del"),
+                              tone: "danger",
+                              onSelect: () => { setDeleteId(j.id); setDeleteType("im"); },
+                            },
+                          ]}
+                        />
                       </>
                     )}
                   />

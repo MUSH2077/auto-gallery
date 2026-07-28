@@ -48,12 +48,12 @@ function queueLabel(t: ReturnType<typeof useT>, key: string): string {
 function QueueRow({ name, stats }: { name: string; stats: QueueBreakdown }) {
   const t = useT();
   return (
-    <div className="grid grid-cols-[1.1fr_repeat(4,minmax(0,1fr))] items-center gap-3 border-t border-border px-3 py-2 text-sm dark:border-border">
-      <div className="font-mono text-xs font-medium text-fg">{queueLabel(t, name)}</div>
-      <div className="tabular text-xs text-muted">{stats.queued}</div>
-      <div className={`tabular text-xs ${stats.scheduled > 0 ? "font-semibold text-warning dark:text-warning" : "text-muted"}`}>{stats.scheduled}</div>
-      <div className="tabular text-xs text-muted">{stats.started}</div>
-      <div className={`tabular text-xs ${stats.failed > 0 ? "font-semibold text-danger dark:text-danger" : "text-muted"}`}>{stats.failed}</div>
+    <div className="grid grid-cols-2 items-center gap-3 border-t border-border px-3 py-3 text-sm sm:grid-cols-[1.1fr_repeat(4,minmax(0,1fr))] sm:py-2">
+      <div className="col-span-2 font-mono text-xs font-medium text-fg sm:col-span-1">{queueLabel(t, name)}</div>
+      <div className="tabular text-xs text-muted"><span className="mr-1 text-placeholder sm:hidden">{t("scheduler.queue_queued")}:</span>{stats.queued}</div>
+      <div className={`tabular text-xs ${stats.scheduled > 0 ? "font-semibold text-warning" : "text-muted"}`}><span className="mr-1 font-normal text-placeholder sm:hidden">{t("scheduler.queue_scheduled_count")}:</span>{stats.scheduled}</div>
+      <div className="tabular text-xs text-muted"><span className="mr-1 text-placeholder sm:hidden">{t("scheduler.queue_started")}:</span>{stats.started}</div>
+      <div className={`tabular text-xs ${stats.failed > 0 ? "font-semibold text-danger" : "text-muted"}`}><span className="mr-1 font-normal text-placeholder sm:hidden">{t("scheduler.queue_failed")}:</span>{stats.failed}</div>
     </div>
   );
 }
@@ -99,9 +99,9 @@ function AdminOperationsSection() {
 
   return (
     <section className="card mb-6 p-4">
-      <div className="flex items-center justify-between mb-3">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <h2 className="text-base font-semibold">{t("scheduler.admin_operations")}</h2>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {has("system") && (
             <button onClick={() => rebuild.mutate()} disabled={rebuild.isPending}
               className="btn-ghost px-3 py-1.5 text-xs">
@@ -302,7 +302,8 @@ export default function SchedulerPage() {
   return (
     <PermissionGuard module="tasks">
     <PageShell size="wide">
-      <PageHeader title={t("scheduler.title")} description={t("scheduler.explain_desc")}>
+      <PageHeader title={t("scheduler.title")} description={t("scheduler.explain_desc")} />
+      <div className="mb-4 flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-2.5">
         <button onClick={refreshAll} className="btn-ghost px-5 py-2.5">
           {t("scheduler.refresh")}
         </button>
@@ -317,13 +318,13 @@ export default function SchedulerPage() {
             {clearFailed.isPending ? "..." : t("scheduler.clear_all")}
           </button>
         )}
-      </PageHeader>
+      </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-border bg-white p-3 dark:border-border dark:bg-surface">
         <input
           value={search}
           onChange={(e) => updateParams({ q: e.target.value || null })}
-          className="input min-w-[240px] px-3 py-1.5 text-sm"
+          className="input w-full min-w-0 px-3 py-1.5 text-sm sm:w-auto sm:min-w-[240px]"
           placeholder={t("scheduler.search_placeholder")}
           aria-label={t("scheduler.search_placeholder")}
         />
@@ -338,7 +339,7 @@ export default function SchedulerPage() {
             </button>
           ))}
         </div>
-        <div className="ml-auto text-xs text-muted">
+        <div className="w-full text-xs text-muted sm:ml-auto sm:w-auto">
           {t("scheduler.last_updated", { time: lastUpdated ? fmt.time(new Date(lastUpdated).toISOString()) : "—" })}
         </div>
       </div>
@@ -372,7 +373,7 @@ export default function SchedulerPage() {
               <p className="mt-1 text-xs text-muted">{t("scheduler.queue_breakdown_desc")}</p>
             </div>
           </div>
-          <div className="grid grid-cols-[1.1fr_repeat(4,minmax(0,1fr))] gap-3 bg-subtle px-3 py-2 text-xs font-semibold uppercase text-muted dark:bg-subtle dark:text-muted">
+          <div className="hidden grid-cols-[1.1fr_repeat(4,minmax(0,1fr))] gap-3 bg-subtle px-3 py-2 text-xs font-semibold uppercase text-muted sm:grid">
             <span>{t("scheduler.queue_name")}</span>
             <span>{t("scheduler.queue_queued")}</span>
             <span>{t("scheduler.queue_scheduled_count")}</span>
@@ -455,7 +456,7 @@ export default function SchedulerPage() {
         {decisions.data && filteredItems.length === 0 && <EmptyState title={t("scheduler.no_sources")} description={t("scheduler.no_sources_desc")} />}
         {filteredItems.length > 0 && (
           <div className="table-shell overflow-hidden">
-            <div className="grid grid-cols-[auto_1.2fr_1fr_1fr_1fr_1fr] gap-3 border-b border-border bg-subtle px-4 py-2 text-xs font-semibold uppercase text-muted dark:border-border dark:bg-subtle dark:text-muted">
+            <div className="hidden grid-cols-[auto_1.2fr_1fr_1fr_1fr_1fr] gap-3 border-b border-border bg-subtle px-4 py-2 text-xs font-semibold uppercase text-muted lg:grid">
               <span className="flex items-center">
                 <input type="checkbox" checked={selectAll} onChange={handleSelectAll} className="w-4 h-4 rounded border-border" title={t("common.select_all")} />
               </span>

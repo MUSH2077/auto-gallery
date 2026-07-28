@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Debounced write-through of user preferences (theme/palette/lang/appearance)
+ * Debounced write-through of user preferences (theme/lang/appearance)
  * to the server, shared by theme.tsx, i18n.tsx, and appearance.tsx.
  *
  * Deliberately does NOT import from theme.tsx / i18n.tsx / appearance.tsx —
@@ -13,7 +13,6 @@
 import { api } from "@/lib/api";
 
 const THEME_KEY = "auto-gallery-theme";
-const PALETTE_KEY = "auto-gallery-palette";
 const LANG_KEY = "auto-gallery-lang";
 const APPEARANCE_KEY = "auto-gallery-appearance-v1";
 const SHOWCASE_KEY = "auto-gallery-showcase-v1";
@@ -34,7 +33,6 @@ function readFullPreferencesFromLocalStorage(): Record<string, unknown> {
     const showcaseRaw = localStorage.getItem(SHOWCASE_KEY);
     return {
       theme: localStorage.getItem(THEME_KEY) || "system",
-      palette: localStorage.getItem(PALETTE_KEY) || "github",
       lang: localStorage.getItem(LANG_KEY) || "zh",
       appearance: appearanceRaw ? JSON.parse(appearanceRaw) : {},
       showcase: showcaseRaw ? JSON.parse(showcaseRaw) : {},

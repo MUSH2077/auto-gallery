@@ -1,14 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { PageHeader } from "@/components";
+import { PageHeader, PageShell } from "@/components";
 import {
   type WorkPreviewDelayMs,
   type WorkPreviewSize,
   type WorkPreviewWheelSensitivity,
   useAppearanceSettings,
 } from "@/lib/appearance";
-import { PALETTES, PALETTE_LABELS, PALETTE_SWATCH, type Palette, type Theme, useTheme } from "@/lib/theme";
+import { type Theme, useTheme } from "@/lib/theme";
 import { useT } from "@/lib/i18n";
 
 function OptionButton<T extends string | number>({
@@ -56,7 +56,7 @@ function SettingRow({
 
 export default function AppearanceSettingsPage() {
   const t = useT();
-  const { theme, setTheme, palette, setPalette } = useTheme();
+  const { theme, setTheme } = useTheme();
   const { settings, updateSettings, resetSettings } = useAppearanceSettings();
 
   const themeOptions: { value: Theme; label: string }[] = [
@@ -76,7 +76,7 @@ export default function AppearanceSettingsPage() {
   ];
 
   return (
-    <main className="mx-auto max-w-4xl p-6 page-transition">
+    <PageShell size="normal" className="page-transition">
       <div className="mb-4">
         <Link href="/admin/settings" className="text-sm text-accent hover:underline">
           {t("common.back", "Back")}
@@ -92,24 +92,6 @@ export default function AppearanceSettingsPage() {
               <OptionButton key={option.value} value={option.value} activeValue={theme} onSelect={setTheme}>
                 {option.label}
               </OptionButton>
-            ))}
-          </div>
-        </SettingRow>
-        <SettingRow title={t("appearance.palette", "Palette")} description={t("appearance.palette_desc", "Select the accent palette for the admin UI.")}>
-          <div className="flex flex-wrap justify-end gap-1.5">
-            {PALETTES.map((p: Palette) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => setPalette(p)}
-                aria-pressed={p === palette}
-                className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-colors ${
-                  p === palette ? "border-accent bg-accent-subtle text-accent" : "border-border text-muted hover:bg-subtle hover:text-fg"
-                }`}
-              >
-                <span className="h-3.5 w-3.5 rounded-full border border-border" style={{ background: PALETTE_SWATCH[p] }} aria-hidden />
-                {PALETTE_LABELS[p]}
-              </button>
             ))}
           </div>
         </SettingRow>
@@ -171,6 +153,6 @@ export default function AppearanceSettingsPage() {
           {t("common.reset", "Reset")}
         </button>
       </section>
-    </main>
+    </PageShell>
   );
 }

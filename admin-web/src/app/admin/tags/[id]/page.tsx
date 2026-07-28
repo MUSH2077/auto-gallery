@@ -6,7 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { Breadcrumb } from "@/components/Breadcrumb";
-import { ConfirmDialog, ErrorState, EmptyState, Modal, type SlideItem } from "@/components";
+import { ConfirmDialog, ErrorState, EmptyState, Modal, PageShell, type SlideItem } from "@/components";
 import { useSlideshow } from "@/lib/useSlideshow";
 import { usePermissions } from "@/lib/usePermissions";
 
@@ -63,13 +63,13 @@ export default function TagDetailPage() {
     .filter((w) => !!w.thumbnail_asset_id)
     .map((w) => ({ assetId: w.thumbnail_asset_id as string, workId: w.id, title: w.title, creatorName: w.creator_name }));
 
-  if (tag.isLoading) return <main className="max-w-6xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded bg-subtle" /><div className="h-64 rounded bg-subtle" /></div></main>;
-  if (tag.error) return <main className="max-w-6xl mx-auto p-6"><ErrorState message={(tag.error as Error).message} onRetry={() => tag.refetch()} /></main>;
+  if (tag.isLoading) return <PageShell size="normal"><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded bg-subtle" /><div className="h-64 rounded bg-subtle" /></div></PageShell>;
+  if (tag.error) return <PageShell size="normal"><ErrorState message={(tag.error as Error).message} onRetry={() => tag.refetch()} /></PageShell>;
   if (!tag.data) return null;
   const td = tag.data;
 
   return (
-    <main className="max-w-6xl mx-auto p-6">
+    <PageShell size="normal">
       <Breadcrumb items={[
         { label: t("tags.title"), href: "/admin/tags" },
         { label: td.normalized_name },
@@ -197,6 +197,6 @@ export default function TagDetailPage() {
         error={(deleteTag.error as Error)?.message}
       />
       {slideshow.node}
-    </main>
+    </PageShell>
   );
 }

@@ -4,7 +4,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys, type ProviderInfo } from "@/lib/api";
-import { PageHeader, PermissionGuard } from "@/components";
+import { PageHeader, PageShell, PermissionGuard } from "@/components";
 import { useShowcaseConfig, type ShowcaseConfig } from "@/lib/showcase/config";
 import { useT } from "@/lib/i18n";
 
@@ -145,7 +145,7 @@ export default function ShowcaseSettingsPage() {
 
   return (
     <PermissionGuard module="system">
-      <main className="mx-auto max-w-4xl p-6 page-transition">
+      <PageShell size="normal" className="page-transition">
         <div className="mb-4">
           <Link href="/admin/settings" className="text-sm text-accent hover:underline">
             {t("common.back", "返回")}
@@ -297,7 +297,7 @@ export default function ShowcaseSettingsPage() {
             <ToggleButton checked={config.showStats} onToggle={() => update({ showStats: !config.showStats })} label={t("showcase_settings.show_stats", "显示统计数据")} />
           </SettingRow>
         </section>
-      </main>
+      </PageShell>
     </PermissionGuard>
   );
 }

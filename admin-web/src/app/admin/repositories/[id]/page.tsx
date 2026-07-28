@@ -6,7 +6,7 @@ import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import type { CreatorRepository, RepositoryDetailResponse, RepositoryGraphNode, RepositoryRecentJob, RepositoryRecentWork, SchedulerDecisionItem } from "@/lib/api";
-import { EmptyState, ErrorState, SourceBadge, TagBubbleChart } from "@/components";
+import { EmptyState, ErrorState, PageShell, SourceBadge, TagBubbleChart } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { scheduleModeLabel, schedulerDecisionLabel, statusLabel, useI18nFormat } from "@/lib/i18n-format";
@@ -331,10 +331,10 @@ export default function RepositoryDetailPage() {
   });
 
   if (detail.isLoading) {
-    return <main className="mx-auto max-w-7xl p-6"><div className="space-y-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-28 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div></main>;
+    return <PageShell><div className="space-y-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-28 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div></PageShell>;
   }
   if (detail.error) {
-    return <main className="mx-auto max-w-7xl p-6"><ErrorState message={(detail.error as Error).message} onRetry={() => detail.refetch()} /></main>;
+    return <PageShell><ErrorState message={(detail.error as Error).message} onRetry={() => detail.refetch()} /></PageShell>;
   }
   if (!detail.data || !repo) return null;
 
@@ -352,7 +352,7 @@ export default function RepositoryDetailPage() {
   ];
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+    <PageShell>
       <Link href={`/admin/creators/${creator.id}`} className="inline-flex items-center gap-1 text-sm text-accent hover:underline dark:text-accent">&larr; {t("repo_detail.back_to_creator")}</Link>
 
       <header className="mt-4 border-b border-border pb-5 dark:border-border">
@@ -495,6 +495,6 @@ export default function RepositoryDetailPage() {
         {tab === "activity" && <RepositoryGraph repositoryId={id} />}
         {tab === "config" && <ConfigRows detail={detail.data} decision={decision} />}
       </section>
-    </main>
+    </PageShell>
   );
 }

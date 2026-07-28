@@ -6,33 +6,30 @@
 @tailwind utilities;
 
 /* ──────────────────────────────────────────────────────────────────────────
-   THEMING
-   Palette tokens are RGB triplets ("R G B") so Tailwind opacity modifiers work
-   (e.g. ring-accent/40). A palette = one set of --ag-* for light + one for dark.
-   Switch the palette with `data-theme` on <html>; switch mode with the `dark`
-   class. Default (no data-theme) = github. Add a palette by copying a block.
+   NEUTRAL OPERATIONS THEME
+   Tokens are RGB triplets ("R G B") so Tailwind opacity modifiers work.
+   Light/dark is the only supported appearance axis.
    ────────────────────────────────────────────────────────────────────────── */
 @layer base {
-  /* ── github (default) ── */
-  :root, [data-theme="github"] {
-    --ag-bg: 246 248 250;        --ag-surface: 255 255 255;   --ag-subtle: 246 248 250;
-    --ag-border: 216 222 228;    --ag-muted: 87 96 106;       --ag-text: 36 41 47;
-    --ag-accent: 9 105 218;      --ag-success: 26 127 55;     --ag-warning: 154 103 0;
-    --ag-danger: 207 34 46;      --ag-focus: 9 105 218;
-    --ag-primary: 31 136 61;     --ag-primary-hover: 26 127 55;  --ag-on-primary: 255 255 255;
-    --ag-input: 255 255 255;     --ag-placeholder: 140 149 159;
-    --ag-nav: 36 41 47;          --ag-nav-fg: 255 255 255;
-    --ag-accent-subtle: 221 244 255;  --ag-danger-subtle: 255 235 233;  --ag-warning-subtle: 255 248 197;  --ag-success-subtle: 218 251 225;
+  :root {
+    --ag-bg: 243 246 250;        --ag-surface: 255 255 255;   --ag-subtle: 238 242 247;
+    --ag-border: 207 216 227;    --ag-muted: 79 91 109;       --ag-text: 23 33 48;
+    --ag-accent: 37 99 235;      --ag-success: 22 133 74;     --ag-warning: 180 104 3;
+    --ag-danger: 210 45 63;      --ag-focus: 37 99 235;
+    --ag-primary: 37 99 235;     --ag-primary-hover: 29 78 216;  --ag-on-primary: 255 255 255;
+    --ag-input: 255 255 255;     --ag-placeholder: 128 142 161;
+    --ag-nav: 23 33 48;          --ag-nav-fg: 255 255 255;
+    --ag-accent-subtle: 226 235 255;  --ag-danger-subtle: 255 233 236;  --ag-warning-subtle: 255 244 214;  --ag-success-subtle: 224 247 234;
   }
-  html.dark, html.dark[data-theme="github"] {
-    --ag-bg: 13 17 23;           --ag-surface: 22 27 34;      --ag-subtle: 33 38 45;
-    --ag-border: 48 54 61;       --ag-muted: 139 148 158;     --ag-text: 230 237 243;
-    --ag-accent: 88 166 255;     --ag-success: 63 185 80;     --ag-warning: 210 153 34;
-    --ag-danger: 248 81 73;      --ag-focus: 88 166 255;
-    --ag-primary: 35 134 54;     --ag-primary-hover: 46 160 67;  --ag-on-primary: 255 255 255;
-    --ag-input: 13 17 23;        --ag-placeholder: 110 118 129;
-    --ag-nav: 1 4 9;             --ag-nav-fg: 255 255 255;
-    --ag-accent-subtle: 16 31 55;  --ag-danger-subtle: 48 27 31;  --ag-warning-subtle: 39 34 21;  --ag-success-subtle: 18 38 30;
+  html.dark {
+    --ag-bg: 8 15 28;            --ag-surface: 15 24 39;      --ag-subtle: 24 35 53;
+    --ag-border: 48 62 83;       --ag-muted: 147 160 180;     --ag-text: 229 235 244;
+    --ag-accent: 96 165 250;     --ag-success: 74 222 128;    --ag-warning: 251 191 36;
+    --ag-danger: 251 113 133;    --ag-focus: 96 165 250;
+    --ag-primary: 37 99 235;     --ag-primary-hover: 59 130 246;  --ag-on-primary: 255 255 255;
+    --ag-input: 10 18 32;        --ag-placeholder: 102 119 143;
+    --ag-nav: 8 15 28;           --ag-nav-fg: 229 235 244;
+    --ag-accent-subtle: 20 42 78;  --ag-danger-subtle: 63 30 41;  --ag-warning-subtle: 60 47 20;  --ag-success-subtle: 22 54 40;
   }
 
   /* ── nord (cool arctic blue-grey) ── */
@@ -216,10 +213,9 @@
   .row-menu-trigger { min-width: 44px; }
 
 @layer components {
-  /* All component colors are token-driven (semantic Tailwind tokens backed by
-     --ag-*), so swapping the palette reskins everything. No dark: variants. */
+  /* Neutral operations-console primitives. */
   .card {
-    @apply rounded-md border border-border bg-surface shadow-sm;
+    @apply rounded-lg border border-border bg-surface;
   }
   .card-elevated { @apply card; }
   .card-interactive {
@@ -230,30 +226,30 @@
     transition-timing-function: ease-out;
   }
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium
+    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium
            bg-primary hover:bg-primary-hover text-on-primary
            shadow-sm disabled:opacity-50 disabled:cursor-not-allowed
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40;
   }
   .btn-ghost {
-    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium
+    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium
            border border-border text-fg bg-surface hover:bg-subtle
            disabled:opacity-50 disabled:cursor-not-allowed
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40;
   }
   .btn-danger {
-    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium
+    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium
            border border-danger/40 text-danger bg-surface hover:bg-danger/10
            disabled:opacity-50 disabled:cursor-not-allowed
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/30;
   }
   .btn-icon {
-    @apply inline-flex h-8 w-8 items-center justify-center rounded-md
+    @apply inline-flex h-8 w-8 items-center justify-center rounded-lg
            border border-transparent text-muted hover:bg-subtle hover:text-fg
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40;
   }
   .input, .select, .textarea {
-    @apply rounded-md border border-border bg-input px-3 py-2 text-sm text-fg
+    @apply rounded-lg border border-border bg-input px-3 py-2 text-sm text-fg
            placeholder:text-placeholder
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35;
   }
@@ -282,7 +278,7 @@
     @apply min-h-[84px];
   }
   .toolbar {
-    @apply flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface p-3;
+    @apply flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-3;
   }
   .segmented-control {
     @apply inline-flex gap-0.5 rounded-md border border-border bg-subtle p-0.5;
@@ -308,7 +304,7 @@
   /* Shared object-list anatomy. The outer list remains overflow-visible so
      per-row action menus are never clipped by the rounded surface. */
   .entity-list {
-    @apply rounded-md border border-border bg-surface;
+    @apply rounded-lg border border-border bg-surface;
   }
   .entity-list > [role="listitem"] + [role="listitem"] {
     @apply border-t border-border;
@@ -529,17 +525,17 @@
   /* App-shell sidebar items (GitHub ActionList style): hover wash, selected
      state with a 4px accent indicator hugging the sidebar edge. */
   .side-item {
-    @apply relative mx-0 my-px flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-fg;
+    @apply relative mx-0 my-px flex min-h-9 items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-fg;
     transition: background-color 120ms ease-out;
   }
   .side-item > svg { @apply text-muted; }
   .side-item:hover { background-color: rgb(var(--ag-muted) / 0.12); }
-  .side-item-active { @apply font-semibold; background-color: rgb(var(--ag-muted) / 0.14); }
+  .side-item-active { @apply font-semibold text-accent; background-color: rgb(var(--ag-accent-subtle)); }
   .side-item-active > svg { @apply text-fg; }
   .side-item-active::before {
     content: "";
     @apply absolute -left-2 rounded-r bg-accent;
-    top: 6px; bottom: 6px; width: 4px;
+    top: 7px; bottom: 7px; width: 3px;
   }
   /* One-shot state-change confirmation on job rows (WS status_change).
      Background-only on a single row — cheap paint, strong feedback. */

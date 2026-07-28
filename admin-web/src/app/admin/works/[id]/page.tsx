@@ -5,7 +5,7 @@ import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { AssetFilmstrip, AssetImage, PageHeader, SourceBadge, ErrorState, EmptyState, isArchiveAsset } from "@/components";
+import { AssetFilmstrip, AssetImage, PageHeader, PageShell, SourceBadge, ErrorState, EmptyState, isArchiveAsset } from "@/components";
 import { Breadcrumb } from "@/components/Breadcrumb";
 import { usePermissions } from "@/lib/usePermissions";
 import { FullImageLightbox, ArrowIcon, DisclosurePanel, type AssetData } from "@/components/WorkViewerParts";
@@ -186,8 +186,8 @@ export default function WorkDetailPage() {
     },
   });
 
-  if (work.isLoading) return <main className="page"><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded-md bg-subtle" /><div className="h-64 rounded-md bg-subtle" /></div></main>;
-  if (work.error) return <main className="page"><ErrorState message={(work.error as Error).message} onRetry={() => work.refetch()} /></main>;
+  if (work.isLoading) return <PageShell><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded-md bg-subtle" /><div className="h-64 rounded-md bg-subtle" /></div></PageShell>;
+  if (work.error) return <PageShell><ErrorState message={(work.error as Error).message} onRetry={() => work.refetch()} /></PageShell>;
   if (!work.data) return null;
   const w = work.data;
   const wsList: WorkSourceData[] = (sources.data || []) as WorkSourceData[];
@@ -213,7 +213,7 @@ export default function WorkDetailPage() {
   const visibility = w.curation_state?.visibility || "visible";
 
   return (
-    <main className="page">
+    <PageShell>
       <Breadcrumb items={[
         { label: t("works.title"), href: "/admin/works" },
         ...(w.creator_name && w.creator_id ? [{ label: w.creator_name, href: `/admin/creators/${w.creator_id}` }] : []),
@@ -378,7 +378,7 @@ export default function WorkDetailPage() {
           )}
         </aside>
       </div>
-    </main>
+    </PageShell>
   );
 }
 

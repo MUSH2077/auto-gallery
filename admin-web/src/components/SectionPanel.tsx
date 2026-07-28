@@ -21,7 +21,7 @@ export default function SectionPanel({
             {title && <h2 className="text-sm font-semibold text-fg">{title}</h2>}
             {description && <div className="mt-1 text-xs text-muted">{description}</div>}
           </div>
-          {actions && <div className="flex shrink-0 flex-wrap gap-2">{actions}</div>}
+          {actions && <div className="flex min-w-0 flex-wrap gap-2 sm:max-w-[60%] sm:justify-end">{actions}</div>}
         </div>
       )}
       <div className="p-4">{children}</div>

@@ -1130,7 +1130,7 @@ const zh: Record<string, string> = {
   // Settings main
   "settings.title": "设置",
   "settings.appearance": "外观",
-  "settings.appearance.desc": "主题、调色板与作品预览。",
+  "settings.appearance.desc": "浅色、深色与作品预览偏好。",
   "settings.gallerydl": "gallery-dl 配置",
   "settings.gallerydl.desc": "Pixiv、Twitter/X、Iwara 提取器设置、认证令牌、文件组织、速率限制。",
   "settings.dedup": "去重",
@@ -3135,7 +3135,7 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
 
     "settings.title": "Settings",
     "settings.appearance": "Appearance",
-    "settings.appearance.desc": "Theme, palette, and work previews.",
+    "settings.appearance.desc": "Light, dark, and work preview preferences.",
     "settings.gallerydl": "gallery-dl Config",
     "settings.gallerydl.desc": "Pixiv, Twitter/X, Iwara extractor settings, auth tokens, file organization, rate limiting.",
     "settings.dedup": "Deduplication",

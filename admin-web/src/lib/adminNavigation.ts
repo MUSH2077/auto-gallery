@@ -1,12 +1,39 @@
 export type AdminIconName =
-  | "home" | "image" | "tag" | "upload" | "branch" | "copy" | "merge"
-  | "globe" | "person" | "inbox" | "code" | "clock" | "calendar" | "bell"
-  | "database" | "pulse" | "gear" | "people";
+  | "home"
+  | "image"
+  | "tag"
+  | "upload"
+  | "branch"
+  | "copy"
+  | "merge"
+  | "globe"
+  | "person"
+  | "inbox"
+  | "code"
+  | "clock"
+  | "calendar"
+  | "bell"
+  | "database"
+  | "pulse"
+  | "gear"
+  | "people";
+
+export type AdminNavContext =
+  | "overview"
+  | "library"
+  | "source-management"
+  | "operations"
+  | "governance"
+  | "settings";
 
 export interface AdminNavLink {
   href: string;
   labelKey: string;
   icon: AdminIconName;
+  context: AdminNavContext;
+  keywords?: string[];
+  primary?: boolean;
+  adminOnly?: boolean;
 }
 
 export interface AdminNavGroup {
@@ -14,17 +41,18 @@ export interface AdminNavGroup {
   links: AdminNavLink[];
 }
 
-// Nav href -> permission module. Links with no entry (dashboard; users is
-// separately gated by is_admin) are always shown once logged in.
+// Route -> permission module. Missing entries are available to every signed-in
+// user; adminOnly links receive an additional is_admin check in consumers.
 export const ADMIN_LINK_MODULE: Record<string, string> = {
   "/admin/works": "library",
   "/admin/tags": "library",
-  "/admin/creators": "library",
   "/admin/search": "library",
   "/admin/upload": "upload",
   "/admin/curation": "curation",
   "/admin/dedup": "curation",
+  "/admin/merge-candidates": "curation",
   "/admin/sources": "subscriptions",
+  "/admin/creators": "library",
   "/admin/subscriptions": "subscriptions",
   "/admin/reference/danbooru": "subscriptions",
   "/admin/jobs": "tasks",
@@ -36,56 +64,95 @@ export const ADMIN_LINK_MODULE: Record<string, string> = {
   "/admin/settings": "system",
 };
 
-export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
-  {
-    labelKey: "nav.overview",
-    links: [{ href: "/admin", labelKey: "nav.dashboard", icon: "home" }],
-  },
-  {
-    labelKey: "nav.library",
-    links: [
-      { href: "/admin/works", labelKey: "nav.works", icon: "image" },
-      { href: "/admin/tags", labelKey: "nav.tags", icon: "tag" },
-      { href: "/admin/upload", labelKey: "nav.upload", icon: "upload" },
-      { href: "/admin/curation", labelKey: "nav.curation", icon: "branch" },
-      { href: "/admin/dedup", labelKey: "nav.dedup", icon: "copy" },
-    ],
-  },
-  {
-    labelKey: "nav.sources",
-    links: [
-      { href: "/admin/sources", labelKey: "nav.sources", icon: "globe" },
-      { href: "/admin/creators", labelKey: "nav.creators", icon: "person" },
-      { href: "/admin/subscriptions", labelKey: "nav.subscriptions", icon: "inbox" },
-      { href: "/admin/reference/danbooru", labelKey: "nav.danbooru", icon: "code" },
-    ],
-  },
-  {
-    labelKey: "nav.operations",
-    links: [
-      { href: "/admin/jobs", labelKey: "nav.jobs", icon: "clock" },
-      { href: "/admin/scheduler", labelKey: "nav.scheduler", icon: "calendar" },
-      { href: "/admin/notifications", labelKey: "notifications.title", icon: "bell" },
-    ],
-  },
-  {
-    labelKey: "nav.admin",
-    links: [
-      { href: "/admin/data-mgmt", labelKey: "nav.datamgmt", icon: "database" },
-      { href: "/admin/system", labelKey: "nav.system", icon: "pulse" },
-      { href: "/admin/settings", labelKey: "nav.settings", icon: "gear" },
-    ],
-  },
+const link = (
+  href: string,
+  labelKey: string,
+  icon: AdminIconName,
+  context: AdminNavContext,
+  options: Pick<AdminNavLink, "keywords" | "primary" | "adminOnly"> = {},
+): AdminNavLink => ({ href, labelKey, icon, context, ...options });
+
+export const ADMIN_NAV_LINKS: AdminNavLink[] = [
+  link("/admin", "nav.dashboard", "home", "overview", { primary: true, keywords: ["overview", "home", "概览"] }),
+  link("/admin/works", "nav.works", "image", "library", { primary: true, keywords: ["gallery", "images", "图库"] }),
+  link("/admin/tags", "nav.tags", "tag", "library", { primary: true, keywords: ["labels", "标签"] }),
+  link("/admin/creators", "nav.creators", "person", "source-management", { primary: true, keywords: ["artists", "作者"] }),
+  link("/admin/subscriptions", "nav.subscriptions", "inbox", "source-management", { primary: true, keywords: ["repositories", "repos", "订阅", "仓库"] }),
+  link("/admin/jobs", "nav.jobs", "clock", "operations", { primary: true, keywords: ["tasks", "queue", "任务", "队列"] }),
+  link("/admin/scheduler", "nav.scheduler", "calendar", "operations", { primary: true, keywords: ["schedule", "sync", "调度", "同步"] }),
+  link("/admin/data-mgmt", "nav.datamgmt", "database", "governance", { primary: true, keywords: ["storage", "governance", "数据", "存储"] }),
+  link("/admin/system", "nav.system", "pulse", "governance", { primary: true, keywords: ["health", "status", "健康"] }),
+  link("/admin/settings", "nav.settings", "gear", "settings", { primary: true, keywords: ["config", "preferences", "配置"] }),
+
+  link("/admin/upload", "nav.upload", "upload", "library", { keywords: ["import files", "上传"] }),
+  link("/admin/search", "nav.search", "image", "library", { keywords: ["find", "搜索"] }),
+  link("/admin/sources", "nav.sources", "globe", "source-management", { keywords: ["providers", "source", "来源"] }),
+  link("/admin/reference/danbooru", "nav.danbooru", "code", "source-management", { keywords: ["reference", "mapping"] }),
+  link("/admin/import-jobs", "nav.import", "branch", "operations", { keywords: ["imports", "导入任务"] }),
+  link("/admin/notifications", "notifications.title", "bell", "operations", { keywords: ["alerts", "通知"] }),
+  link("/admin/curation", "nav.curation", "branch", "governance", { keywords: ["history", "策展"] }),
+  link("/admin/dedup", "nav.dedup", "copy", "governance", { keywords: ["duplicates", "查重"] }),
+  link("/admin/merge-candidates", "nav.merge", "merge", "governance", { keywords: ["merge", "合并"] }),
+  link("/admin/users", "nav.users", "people", "settings", { adminOnly: true, keywords: ["accounts", "权限", "用户"] }),
 ];
 
-export const ADMIN_USERS_LINK: AdminNavLink = {
-  href: "/admin/users",
-  labelKey: "nav.users",
-  icon: "people",
+const byHref = (href: string) => ADMIN_NAV_LINKS.find((item) => item.href === href)!;
+
+export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
+  { labelKey: "nav.overview", links: [byHref("/admin")] },
+  { labelKey: "nav.library", links: [byHref("/admin/works"), byHref("/admin/tags")] },
+  { labelKey: "nav.sources", links: [byHref("/admin/creators"), byHref("/admin/subscriptions")] },
+  { labelKey: "nav.operations", links: [byHref("/admin/jobs"), byHref("/admin/scheduler")] },
+  { labelKey: "nav.admin", links: [byHref("/admin/data-mgmt"), byHref("/admin/system"), byHref("/admin/settings")] },
+];
+
+export const ADMIN_CONTEXT_LINKS: Record<AdminNavContext, AdminNavLink[]> = {
+  overview: [byHref("/admin")],
+  library: [
+    byHref("/admin/works"),
+    byHref("/admin/tags"),
+    byHref("/admin/upload"),
+  ],
+  "source-management": [
+    byHref("/admin/creators"),
+    byHref("/admin/subscriptions"),
+    byHref("/admin/sources"),
+    byHref("/admin/reference/danbooru"),
+  ],
+  operations: [
+    byHref("/admin/jobs"),
+    byHref("/admin/scheduler"),
+    byHref("/admin/notifications"),
+  ],
+  governance: [
+    byHref("/admin/data-mgmt"),
+    byHref("/admin/curation"),
+    byHref("/admin/dedup"),
+    byHref("/admin/merge-candidates"),
+    byHref("/admin/system"),
+  ],
+  settings: [
+    byHref("/admin/settings"),
+    byHref("/admin/users"),
+  ],
 };
 
-function pathnameMatches(pathname: string, href: string): boolean {
+export const ADMIN_USERS_LINK = byHref("/admin/users");
+
+export function pathnameMatches(pathname: string, href: string): boolean {
   return href === "/admin" ? pathname === "/admin" : pathname.startsWith(href);
+}
+
+export function findAdminNavLink(pathname: string): AdminNavLink | null {
+  let best: AdminNavLink | null = null;
+  for (const item of ADMIN_NAV_LINKS) {
+    if (pathnameMatches(pathname, item.href) && (!best || item.href.length > best.href.length)) {
+      best = item;
+    }
+  }
+  // Settings detail routes intentionally inherit the settings context.
+  if (!best && pathname.startsWith("/admin/settings/")) return byHref("/admin/settings");
+  return best;
 }
 
 /** Longest-prefix navigation match used by the top bar and page hierarchy. */
@@ -93,20 +160,14 @@ export function findAdminNavEntry(pathname: string): {
   groupKey: string;
   labelKey: string;
 } | null {
-  let best: { groupKey: string; labelKey: string; len: number } | null = null;
-  for (const group of ADMIN_NAV_GROUPS) {
-    const links = group.labelKey === "nav.admin"
-      ? [...group.links, ADMIN_USERS_LINK]
-      : group.links;
-    for (const link of links) {
-      if (pathnameMatches(pathname, link.href) && (!best || link.href.length > best.len)) {
-        best = {
-          groupKey: group.labelKey,
-          labelKey: link.labelKey,
-          len: link.href.length,
-        };
-      }
-    }
-  }
-  return best && { groupKey: best.groupKey, labelKey: best.labelKey };
+  const current = findAdminNavLink(pathname);
+  if (!current) return null;
+  const group = ADMIN_NAV_GROUPS.find((item) =>
+    item.links.some((candidate) => candidate.href === current.href)
+    || item.links.some((candidate) => candidate.context === current.context),
+  );
+  return {
+    groupKey: group?.labelKey || "nav.admin",
+    labelKey: current.labelKey,
+  };
 }

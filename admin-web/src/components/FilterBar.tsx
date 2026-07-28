@@ -1,4 +1,5 @@
 import { type ReactNode } from "react";
+import AdaptiveToolbar from "@/components/AdaptiveToolbar";
 
 export default function FilterBar({
   children,
@@ -10,9 +11,6 @@ export default function FilterBar({
   className?: string;
 }) {
   return (
-    <div className={`toolbar mb-4 ${className}`}>
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">{children}</div>
-      {meta && <div className="flex shrink-0 flex-wrap items-center gap-2 text-xs text-muted">{meta}</div>}
-    </div>
+    <AdaptiveToolbar leading={children} meta={meta} className={`mb-4 ${className}`} />
   );
 }

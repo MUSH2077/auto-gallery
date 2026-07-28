@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { usePresence } from "@/lib/motion";
@@ -9,7 +9,12 @@ import AppTopBar from "@/components/AppTopBar";
 
 export const dynamic = 'force-dynamic';
 
-const SIDEBAR_KEY = "auto-gallery-sidebar";
+const LEGACY_SIDEBAR_KEY = "auto-gallery-sidebar";
+const SIDEBAR_WIDE_KEY = "auto-gallery-sidebar-wide-v2";
+const SIDEBAR_MID_KEY = "auto-gallery-sidebar-mid-v2";
+
+type DesktopSidebarMode = "expanded" | "compact";
+type ViewportTier = "mobile" | "mid" | "wide";
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading, user } = useAuth();
@@ -46,27 +51,44 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 }
 
 function AppShell({ children }: { children: React.ReactNode }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [wideMode, setWideMode] = useState<DesktopSidebarMode>("expanded");
+  const [midMode, setMidMode] = useState<DesktopSidebarMode>("compact");
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [mobileViewport, setMobileViewport] = useState(false);
+  const [viewportTier, setViewportTier] = useState<ViewportTier>("wide");
   const { mounted: drawerMounted, closing: drawerClosing } = usePresence(mobileOpen);
   const sidebarTriggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     try {
-      if (localStorage.getItem(SIDEBAR_KEY) === "collapsed") setCollapsed(true);
+      const legacy = localStorage.getItem(LEGACY_SIDEBAR_KEY);
+      const storedWide = localStorage.getItem(SIDEBAR_WIDE_KEY);
+      const storedMid = localStorage.getItem(SIDEBAR_MID_KEY);
+      if (storedWide === "expanded" || storedWide === "compact") {
+        setWideMode(storedWide);
+      } else if (legacy === "collapsed") {
+        setWideMode("compact");
+      }
+      if (storedMid === "expanded" || storedMid === "compact") {
+        setMidMode(storedMid);
+      }
     } catch {}
   }, []);
 
   useEffect(() => {
-    const media = window.matchMedia("(max-width: 767px)");
+    const mobile = window.matchMedia("(max-width: 767px)");
+    const mid = window.matchMedia("(min-width: 768px) and (max-width: 1279px)");
     const syncViewport = () => {
-      setMobileViewport(media.matches);
-      if (!media.matches) setMobileOpen(false);
+      const tier: ViewportTier = mobile.matches ? "mobile" : mid.matches ? "mid" : "wide";
+      setViewportTier(tier);
+      if (tier !== "mobile") setMobileOpen(false);
     };
     syncViewport();
-    media.addEventListener("change", syncViewport);
-    return () => media.removeEventListener("change", syncViewport);
+    mobile.addEventListener("change", syncViewport);
+    mid.addEventListener("change", syncViewport);
+    return () => {
+      mobile.removeEventListener("change", syncViewport);
+      mid.removeEventListener("change", syncViewport);
+    };
   }, []);
 
   useEffect(() => {
@@ -107,25 +129,40 @@ function AppShell({ children }: { children: React.ReactNode }) {
     };
   }, [drawerMounted, mobileOpen]);
 
+  const desktopMode = viewportTier === "mid" ? midMode : wideMode;
+  const desktopCompact = desktopMode === "compact";
+  const sidebarWidth = desktopCompact ? 64 : 248;
+
   const toggleSidebar = () => {
-    if (mobileViewport) {
+    if (viewportTier === "mobile") {
       setMobileOpen((open) => !open);
       return;
     }
-    setCollapsed((c) => {
-      try { localStorage.setItem(SIDEBAR_KEY, c ? "open" : "collapsed"); } catch {}
-      return !c;
+    const setter = viewportTier === "mid" ? setMidMode : setWideMode;
+    const storageKey = viewportTier === "mid" ? SIDEBAR_MID_KEY : SIDEBAR_WIDE_KEY;
+    setter((current) => {
+      const next = current === "compact" ? "expanded" : "compact";
+      try { localStorage.setItem(storageKey, next); } catch {}
+      return next;
     });
   };
 
+  const shellStyle = useMemo(
+    () => ({ "--admin-sidebar-width": `${sidebarWidth}px` } as React.CSSProperties),
+    [sidebarWidth],
+  );
+
   return (
-    <div className="flex min-h-screen">
-      {/* Desktop sidebar — sticky full-height, collapse is instant by design */}
-      {!collapsed && (
-        <aside id="admin-sidebar" className="sticky top-0 hidden h-screen shrink-0 overflow-hidden border-r border-border bg-subtle md:block">
-          <AppSidebar />
-        </aside>
-      )}
+    <div
+      className="grid min-h-screen grid-cols-1 md:grid-cols-[var(--admin-sidebar-width)_minmax(0,1fr)]"
+      style={shellStyle}
+    >
+      <aside
+        id="admin-sidebar"
+        className="sticky top-0 hidden h-screen min-w-0 overflow-hidden border-r border-border bg-surface md:block"
+      >
+        <AppSidebar compact={desktopCompact} />
+      </aside>
       {/* Mobile drawer */}
       {drawerMounted && (
         <>
@@ -151,11 +188,11 @@ function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col">
         <AppTopBar
           onToggleSidebar={toggleSidebar}
-          sidebarExpanded={mobileViewport ? mobileOpen : !collapsed}
-          sidebarId={mobileViewport ? "admin-mobile-sidebar" : "admin-sidebar"}
+          sidebarExpanded={viewportTier === "mobile" ? mobileOpen : desktopMode === "expanded"}
+          sidebarId={viewportTier === "mobile" ? "admin-mobile-sidebar" : "admin-sidebar"}
           sidebarTriggerRef={sidebarTriggerRef}
         />
-        <main id="main-content" className="min-h-[calc(100vh-56px)]">{children}</main>
+        <main id="main-content" className="min-h-[calc(100vh-56px)] min-w-0">{children}</main>
       </div>
     </div>
   );

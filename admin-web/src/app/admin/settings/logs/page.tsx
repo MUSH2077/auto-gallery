@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { PageHeader, ErrorState } from "@/components";
+import { PageHeader, PageShell, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
 import { POLL_ACTIVE_MS } from "@/lib/polling";
 import Link from "next/link";
@@ -31,7 +31,7 @@ export default function SystemLogsPage() {
   });
 
   return (
-    <main className="max-w-6xl mx-auto p-6">
+    <PageShell size="normal">
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("logs.back")}</Link>
       </div>
@@ -72,6 +72,6 @@ export default function SystemLogsPage() {
           ))}
         </div>
       )}
-    </main>
+    </PageShell>
   );
 }

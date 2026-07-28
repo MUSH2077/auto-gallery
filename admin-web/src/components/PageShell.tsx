@@ -11,7 +11,7 @@ export default function PageShell({
 }) {
   const maxWidth = size === "full" ? "max-w-none" : size === "normal" ? "max-w-6xl" : "max-w-7xl";
   return (
-    <main className={`mx-auto w-full ${maxWidth} px-4 py-6 sm:px-6 ${className}`}>
+    <main className={`mx-auto w-full min-w-0 ${maxWidth} px-3 py-5 sm:px-5 sm:py-6 xl:px-6 ${className}`}>
       {children}
     </main>
   );

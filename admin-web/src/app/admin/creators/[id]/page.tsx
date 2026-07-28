@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
-import { GitlleryPanel, Modal, RepositoryCard, SourceBadge, StatusBadge, WorkGrid, type SlideItem } from "@/components";
+import { GitlleryPanel, Modal, PageShell, RepositoryCard, SourceBadge, StatusBadge, WorkGrid, type SlideItem } from "@/components";
 import { useSlideshow } from "@/lib/useSlideshow";
 import { POLL_IDLE_MS } from "@/lib/polling";
 import { Breadcrumb } from "@/components/Breadcrumb";
@@ -340,15 +340,15 @@ export default function CreatorDetailPage() {
   ], [t, overview.data?.summary.repository_count, legalRepos.length, st?.total_works, links.data?.length]);
 
   if (creator.isLoading) {
-    return <main className="mx-auto max-w-7xl p-6"><div className="space-y-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-28 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div></main>;
+    return <PageShell><div className="space-y-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-28 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div></PageShell>;
   }
   if (creator.error) {
-    return <main className="mx-auto max-w-7xl p-6"><div className="card p-5 text-danger">{(creator.error as Error).message}</div></main>;
+    return <PageShell><div className="card p-5 text-danger">{(creator.error as Error).message}</div></PageShell>;
   }
   if (!c) return null;
 
   return (
-    <main className="page-transition mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+    <PageShell className="page-transition">
       <Breadcrumb items={[
         { label: t("creators.title"), href: "/admin/creators" },
         { label: c.display_name || c.name },
@@ -608,7 +608,7 @@ export default function CreatorDetailPage() {
           </div>
         </div>
       </Modal>
-    </main>
+    </PageShell>
   );
 }
 

@@ -1,7 +1,7 @@
 "use client";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { ThemeProvider, useTheme, PALETTES, type Theme, type Palette } from "@/lib/theme";
+import { ThemeProvider, useTheme, type Theme } from "@/lib/theme";
 import { I18nProvider, useI18n, type Lang } from "@/lib/i18n";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { useAppearanceSettings, type AppearanceSettings } from "@/lib/appearance";
@@ -31,7 +31,7 @@ function isLang(v: unknown): v is Lang {
  */
 function PreferencesHydrator() {
   const { isAuthenticated } = useAuth();
-  const { setTheme, setPalette } = useTheme();
+  const { setTheme } = useTheme();
   const { setLang } = useI18n();
   const { updateSettings } = useAppearanceSettings();
   const appliedFor = useRef<string | null>(null);
@@ -49,15 +49,12 @@ function PreferencesHydrator() {
 
     const prefs = me.data.preferences || {};
     if (isTheme(prefs.theme)) setTheme(prefs.theme);
-    if (typeof prefs.palette === "string" && PALETTES.includes(prefs.palette as Palette)) {
-      setPalette(prefs.palette as Palette);
-    }
     if (isLang(prefs.lang)) setLang(prefs.lang);
     if (prefs.appearance && typeof prefs.appearance === "object") {
       updateSettings(prefs.appearance as Partial<AppearanceSettings>);
     }
     if (prefs.showcase) applyShowcasePreferences(prefs.showcase);
-  }, [me.data, setTheme, setPalette, setLang, updateSettings]);
+  }, [me.data, setTheme, setLang, updateSettings]);
 
   return null;
 }

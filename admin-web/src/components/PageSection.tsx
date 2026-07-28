@@ -21,7 +21,7 @@ export default function PageSection({
             {title && <h2 className="section-title">{title}</h2>}
             {description && <div className="mt-1 text-sm text-muted">{description}</div>}
           </div>
-          {actions && <div className="flex shrink-0 flex-wrap gap-2">{actions}</div>}
+          {actions && <div className="flex min-w-0 flex-wrap gap-2 sm:max-w-[60%] sm:justify-end">{actions}</div>}
         </div>
       )}
       {children}

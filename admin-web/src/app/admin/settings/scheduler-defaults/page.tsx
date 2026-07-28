@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, SubscriptionDefaults, DownloadDefaults } from "@/lib/api";
-import { PageHeader, ErrorState } from "@/components";
+import { PageHeader, PageShell, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import Link from "next/link";
@@ -53,15 +53,15 @@ export default function SchedulerDefaultsPage() {
   const sub = subLocal || settings.data?.subscription_defaults;
   const dl = dlLocal || settings.data?.download_defaults;
 
-  if (settings.isError) return <main className="max-w-4xl mx-auto p-6"><ErrorState message={settings.error?.message || t("common.error")} onRetry={() => settings.refetch()} /></main>;
-  if (!settings.data) return <main className="max-w-4xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded-md bg-subtle dark:bg-subtle" /><div className="h-48 rounded-md bg-subtle dark:bg-subtle" /></div></main>;
+  if (settings.isError) return <PageShell size="normal"><ErrorState message={settings.error?.message || t("common.error")} onRetry={() => settings.refetch()} /></PageShell>;
+  if (!settings.data) return <PageShell size="normal"><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded-md bg-subtle dark:bg-subtle" /><div className="h-48 rounded-md bg-subtle dark:bg-subtle" /></div></PageShell>;
   if (!sub || !dl) return null;
 
   const setSub = (k: keyof SubscriptionDefaults, v: any) => { if (subLocal) setSubLocal({ ...subLocal, [k]: v }); };
   const setDl = (k: keyof DownloadDefaults, v: any) => { if (dlLocal) setDlLocal({ ...dlLocal, [k]: v }); };
 
   return (
-    <main className="max-w-4xl mx-auto p-6">
+    <PageShell size="normal">
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("subdefaults.back")}</Link>
       </div>
@@ -174,6 +174,6 @@ export default function SchedulerDefaultsPage() {
         
         {save.error && <p className="text-red-600 text-sm">{(save.error as Error).message}</p>}
       </div>
-    </main>
+    </PageShell>
   );
 }

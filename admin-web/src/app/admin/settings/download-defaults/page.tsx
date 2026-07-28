@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, DownloadDefaults } from "@/lib/api";
-import { PageHeader, ErrorState } from "@/components";
+import { PageHeader, PageShell, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
 import Link from "next/link";
 
@@ -21,20 +21,20 @@ export default function DownloadDefaultsPage() {
 
   if (settings.isError) {
     return (
-      <main className="max-w-4xl mx-auto p-6">
+      <PageShell size="normal">
         <ErrorState message={settings.error?.message || t("dldefaults.failed")} onRetry={() => settings.refetch()} />
-      </main>
+      </PageShell>
     );
   }
 
   if (!settings.data) {
     return (
-      <main className="max-w-4xl mx-auto p-6">
+      <PageShell size="normal">
         <div className="animate-pulse space-y-4">
           <div className="h-8 rounded-md bg-subtle dark:bg-subtle w-1/3" />
           <div className="h-48 rounded-md bg-subtle dark:bg-subtle" />
         </div>
-      </main>
+      </PageShell>
     );
   }
 
@@ -48,7 +48,7 @@ export default function DownloadDefaultsPage() {
   };
 
   return (
-    <main className="max-w-4xl mx-auto p-6">
+    <PageShell size="normal">
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("dldefaults.back")}</Link>
       </div>
@@ -212,6 +212,6 @@ export default function DownloadDefaultsPage() {
           {save.error && <p className="text-danger text-sm mt-2">{(save.error as Error).message}</p>}
         </>
       )}
-    </main>
+    </PageShell>
   );
 }

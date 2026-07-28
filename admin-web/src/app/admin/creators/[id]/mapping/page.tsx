@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, CreatorLink as CreatorLinkType } from "@/lib/api";
-import { PageHeader, StatusBadge, SourceBadge, Modal, ConfirmDialog } from "@/components";
+import { PageHeader, PageShell, StatusBadge, SourceBadge, Modal, ConfirmDialog } from "@/components";
 import { useT } from "@/lib/i18n";
 
 function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () => void }) {
@@ -74,10 +74,10 @@ export default function MappingPage() {
   const verified = links.data?.filter((l: CreatorLinkType) => l.is_verified) || [];
   const suggested = links.data?.filter((l: CreatorLinkType) => !l.is_verified) || [];
 
-  if (creator.isLoading) return <main className="max-w-4xl mx-auto p-6"><div className="animate-pulse"><div className="mb-4 h-8 w-1/4 rounded-md bg-subtle dark:bg-subtle" /><div className="h-32 rounded-md bg-subtle dark:bg-subtle" /></div></main>;
+  if (creator.isLoading) return <PageShell size="normal"><div className="animate-pulse"><div className="mb-4 h-8 w-1/4 rounded-md bg-subtle dark:bg-subtle" /><div className="h-32 rounded-md bg-subtle dark:bg-subtle" /></div></PageShell>;
 
   return (
-    <main className="page-transition max-w-4xl mx-auto p-6">
+    <PageShell size="normal" className="page-transition">
       <PageHeader title={t("mapping.title").replace("{name}", creator.data?.display_name || creator.data?.name || "Creator")} description={t("mapping.desc")}>
         <div className="flex gap-2">
           <button onClick={() => router.push(`/admin/creators/${id}`)} className="btn-ghost">{t("mapping.back_to_creator")}</button>
@@ -139,6 +139,6 @@ export default function MappingPage() {
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title={t("mapping.add_link_title")}><AddLinkForm creatorId={id} onClose={() => setShowAdd(false)} /></Modal>
       {dialog?.action === "verify" && <ConfirmDialog open title={t("mapping.approve_title")} message={t("mapping.approve_msg")} onConfirm={() => verifyLink.mutate(dialog.linkId)} onCancel={() => setDialog(null)} isPending={verifyLink.isPending} error={(verifyLink.error as Error)?.message} />}
       {dialog?.action === "unverify" && <ConfirmDialog open title={t("mapping.unverify_title")} message={t("mapping.unverify_msg")} onConfirm={() => unverifyLink.mutate(dialog.linkId)} onCancel={() => setDialog(null)} isPending={unverifyLink.isPending} error={(unverifyLink.error as Error)?.message} />}
-    </main>
+    </PageShell>
   );
 }

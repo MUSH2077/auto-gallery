@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, ProxySettings } from "@/lib/api";
-import { PageHeader, ErrorState } from "@/components";
+import { PageHeader, PageShell, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import Link from "next/link";
@@ -93,14 +93,14 @@ export default function ProxySettingsPage() {
   const testProxy = useMutation({ mutationFn: () => api.testProxy() });
 
   const current = local || settings.data?.proxy;
-  if (settings.isError) return <main className="max-w-4xl mx-auto p-6"><ErrorState message={settings.error?.message || t("proxy.failed")} onRetry={() => settings.refetch()} /></main>;
-  if (!settings.data) return <main className="max-w-4xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded-md bg-subtle dark:bg-subtle" /><div className="h-48 rounded-md bg-subtle dark:bg-subtle" /></div></main>;
+  if (settings.isError) return <PageShell size="normal"><ErrorState message={settings.error?.message || t("proxy.failed")} onRetry={() => settings.refetch()} /></PageShell>;
+  if (!settings.data) return <PageShell size="normal"><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded-md bg-subtle dark:bg-subtle" /><div className="h-48 rounded-md bg-subtle dark:bg-subtle" /></div></PageShell>;
   if (!local && settings.data.proxy) setLocal({ ...settings.data.proxy });
 
   const setStr = (key: keyof ProxySettings, val: string) => { if (current) setLocal({ ...current, [key]: val }); };
 
   return (
-    <main className="max-w-4xl mx-auto p-6">
+    <PageShell size="normal">
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("proxy.back")}</Link>
       </div>
@@ -171,6 +171,6 @@ export default function ProxySettingsPage() {
           </div>
         </>
       )}
-    </main>
+    </PageShell>
   );
 }

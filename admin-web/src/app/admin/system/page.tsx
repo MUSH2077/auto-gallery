@@ -44,8 +44,35 @@ export default function SystemPage() {
 
       <section>
         <h2 className="text-lg font-semibold mb-3">{t("system_health.providers")}</h2>
-        <div className="table-shell">
-          <table className="w-full text-sm">
+        <div className="space-y-3 md:hidden">
+          {sources.data?.sources?.map((source) => (
+            <article key={source.source_name} className="card p-4">
+              <div className="mb-3 flex min-w-0 items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="truncate text-sm font-semibold">{source.display_name}</h3>
+                  <p className="mt-0.5 truncate font-mono text-xs text-muted">{source.source_name}</p>
+                </div>
+                <StatusBadge status={source.capabilities.can_download ? "up" : "down"} />
+              </div>
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
+                <div>
+                  <dt className="text-muted">{t("system_health.col_gallerydl")}</dt>
+                  <dd className="mt-1 font-medium">{source.capabilities.supports_gallerydl ? "✓" : "—"}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted">{t("system_health.col_tags")}</dt>
+                  <dd className="mt-1 font-medium">{source.capabilities.supports_tags ? "✓" : "—"}</dd>
+                </div>
+                <div className="col-span-2">
+                  <dt className="text-muted">{t("system_health.col_type")}</dt>
+                  <dd className="mt-1 font-medium">{source.capabilities.is_reference_only ? t("system_health.type_reference") : source.capabilities.can_import_local ? t("system_health.type_local") : t("system_health.type_api")}</dd>
+                </div>
+              </dl>
+            </article>
+          ))}
+        </div>
+        <div className="table-shell hidden md:block">
+          <table className="min-w-[48rem] w-full text-sm">
             <thead><tr className="table-head"><th className="text-left px-4 py-3">{t("system_health.col_name")}</th><th className="text-left px-4 py-3">{t("system_health.col_source")}</th><th className="text-left px-4 py-3">{t("system_health.col_download")}</th><th className="text-left px-4 py-3">{t("system_health.col_gallerydl")}</th><th className="text-left px-4 py-3">{t("system_health.col_tags")}</th><th className="text-left px-4 py-3">{t("system_health.col_type")}</th></tr></thead>
             <tbody>
               {sources.data?.sources?.map((s) => (
