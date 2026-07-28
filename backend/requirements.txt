@@ -97,7 +97,7 @@ pillow==10.4.0
     #   imagehash
 pluggy==1.6.0
     # via pytest
-pyasn1==0.6.3
+pyasn1==0.6.4
     # via
     #   python-jose
     #   rsa
