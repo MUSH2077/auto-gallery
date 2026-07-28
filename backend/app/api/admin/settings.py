@@ -886,8 +886,9 @@ async def update_settings(data: AdminSettingsUpdate, db: AsyncSession = Depends(
 @router.post("/proxy/test")
 async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
     """Test connectivity through the configured proxy to key external sites."""
-    import urllib.request
     import urllib.error
+    import urllib.parse
+    import urllib.request
     import ssl
     import time
 
@@ -924,18 +925,22 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
     if enabled:
         proxy_url = config.get("http_proxy") or config.get("https_proxy", "")
         if proxy_url:
-            import socket, re
-            m = re.match(r'https?://([^:/]+):?(\d+)?', proxy_url)
-            if m:
-                host = m.group(1)
-                port = int(m.group(2)) if m.group(2) else 7890
+            import socket
+            parsed_proxy = urllib.parse.urlsplit(proxy_url)
+            if parsed_proxy.hostname:
+                host = parsed_proxy.hostname
+                port = parsed_proxy.port or 7890
                 try:
                     sock = socket.create_connection((host, port), timeout=5)
                     sock.close()
                     proxy_reachable = True
-                except Exception as e:
+                except Exception:
+                    logger.warning(
+                        "Configured proxy endpoint is unreachable",
+                        exc_info=True,
+                    )
                     proxy_reachable = False
-                    proxy_reachable_error = f"Cannot connect to {host}:{port} — {e}"
+                    proxy_reachable_error = "Cannot connect to the configured proxy endpoint."
 
     direct_opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl_ctx))
 
@@ -966,10 +971,15 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
             d_ms = int((time.monotonic() - start) * 1000)
         except urllib.error.HTTPError as e:
             d_err, d_ok = f"HTTP {e.code}", e.code < 500
-        except urllib.error.URLError as e:
-            d_err = str(e.reason)[:120] if e.reason else str(e)[:120]
-        except Exception as e:
-            d_err = str(e)[:120]
+        except urllib.error.URLError as exc:
+            d_err = (
+                "Connection timed out"
+                if isinstance(exc.reason, TimeoutError)
+                else f"Connection failed ({type(exc.reason).__name__})"
+            )
+        except Exception:
+            logger.warning("Direct connectivity probe failed for %s", name, exc_info=True)
+            d_err = "Connection test failed"
 
         # Proxy
         p_ok, p_ms, p_err = False, 0, ""
@@ -982,10 +992,15 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
                 p_ms = int((time.monotonic() - start) * 1000)
             except urllib.error.HTTPError as e:
                 p_err, p_ok = f"HTTP {e.code}", e.code < 500
-            except urllib.error.URLError as e:
-                p_err = str(e.reason)[:120] if e.reason else str(e)[:120]
-            except Exception as e:
-                p_err = str(e)[:120]
+            except urllib.error.URLError as exc:
+                p_err = (
+                    "Connection timed out"
+                    if isinstance(exc.reason, TimeoutError)
+                    else f"Connection failed ({type(exc.reason).__name__})"
+                )
+            except Exception:
+                logger.warning("Proxy connectivity probe failed for %s", name, exc_info=True)
+                p_err = "Connection test failed"
 
         return {"name": name, "url": url,
                 "direct_ok": d_ok, "direct_ms": d_ms, "direct_error": d_err,

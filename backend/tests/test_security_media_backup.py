@@ -12,10 +12,12 @@ def test_validate_backup_filename_accepts_only_backup_names(tmp_path, monkeypatc
     backup_dir = tmp_path / "backups"
     backup_dir.mkdir()
     monkeypatch.setattr(admin, "BACKUP_DIR", backup_dir)
+    expected = backup_dir / "auto-gallery-backup_20260610_120000.tar.gz"
+    expected.touch()
 
     target = admin._validate_backup_filename("auto-gallery-backup_20260610_120000.tar.gz")
 
-    assert target == (backup_dir / "auto-gallery-backup_20260610_120000.tar.gz").resolve()
+    assert target == expected.resolve()
 
 
 @pytest.mark.parametrize("filename", ["../auto-gallery-backup_x.tar.gz", "/tmp/auto-gallery-backup_x.tar.gz", r"..\\auto-gallery-backup_x.tar.gz", "notes.tar.gz"])
@@ -29,6 +31,23 @@ def test_validate_backup_filename_rejects_traversal_and_non_backup_names(tmp_pat
 
     assert exc.value.status_code == 400
     assert exc.value.detail == "Invalid filename"
+
+
+def test_validate_backup_filename_rejects_missing_and_symlinked_files(tmp_path, monkeypatch):
+    from app.api import admin
+
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    monkeypatch.setattr(admin, "BACKUP_DIR", backup_dir)
+    outside = tmp_path / "auto-gallery-backup_20260610_120000.tar.gz"
+    outside.touch()
+    (backup_dir / outside.name).symlink_to(outside)
+
+    with pytest.raises(HTTPException) as exc:
+        admin._validate_backup_filename(outside.name)
+
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Backup not found"
 
 
 def test_pg_env_uses_pgpass_file_not_pgpassword(tmp_path, monkeypatch):

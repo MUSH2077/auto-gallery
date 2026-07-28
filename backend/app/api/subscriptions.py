@@ -69,8 +69,9 @@ async def batch_delete_subscriptions(data: dict, db: AsyncSession = Depends(get_
         try:
             await svc.delete_subscription(UUID(sid))
             results.append({"id": sid, "status": "deleted"})
-        except Exception as e:
-            results.append({"id": sid, "status": "error", "error": str(e)})
+        except Exception:
+            logger.warning("batch subscription delete failed for %s", sid, exc_info=True)
+            results.append({"id": sid, "status": "error", "error": "internal_error"})
     invalidate_creator_subscription_caches()
     return {"status": "ok", "results": results}
 
@@ -86,8 +87,9 @@ async def batch_toggle_sync(data: dict, db: AsyncSession = Depends(get_db)):
         try:
             await svc.update_subscription(UUID(sid), {"sync_enabled": enabled})
             results.append({"id": sid, "status": "updated", "sync_enabled": enabled})
-        except Exception as e:
-            results.append({"id": sid, "status": "error", "error": str(e)})
+        except Exception:
+            logger.warning("batch subscription update failed for %s", sid, exc_info=True)
+            results.append({"id": sid, "status": "error", "error": "internal_error"})
     invalidate_api_caches("subscriptions", "creators")
     return {"status": "ok", "results": results}
 

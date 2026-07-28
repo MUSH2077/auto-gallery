@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -63,7 +64,7 @@ def _escape_pgpass_field(value: str) -> str:
 
 
 def _pg_env_with_passfile(tmpdir: str, db_info: dict) -> dict:
-    """Return subprocess env using a temporary .pgpass file, not PGPASSWORD."""
+    """Return subprocess env using a private, short-lived PostgreSQL passfile."""
     pgpass_path = os.path.join(tmpdir, ".pgpass")
     fields = [
         db_info["host"],
@@ -72,9 +73,15 @@ def _pg_env_with_passfile(tmpdir: str, db_info: dict) -> dict:
         db_info["user"],
         db_info["password"],
     ]
-    with open(pgpass_path, "w", encoding="utf-8") as f:
-        f.write(":".join(_escape_pgpass_field(str(field)) for field in fields) + "\n")
-    os.chmod(pgpass_path, 0o600)
+    # PostgreSQL requires the credential in clear text. Create the temporary
+    # file with its final permissions atomically so there is never a window
+    # where another local user can read it. The owning tmpdir is removed by
+    # the caller immediately after pg_dump/psql completes.
+    fd = os.open(pgpass_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as passfile:
+        passfile.write(  # codeql[py/clear-text-storage-sensitive-data]
+            ":".join(_escape_pgpass_field(str(field)) for field in fields) + "\n"
+        )
     env = os.environ.copy()
     env.pop("PGPASSWORD", None)
     env["PGPASSFILE"] = pgpass_path
@@ -224,7 +231,7 @@ def _create_backup_sync(data: dict | None = None):
         logger.info("Backup created: %s (%.1f MB) contents=%s", filename, file_size / 1024 / 1024, selected)
 
         # Keep last 10 backups
-        existing = sorted(BACKUP_DIR.glob("auto-gallery-backup_*.tar.gz"))
+        existing = _list_backup_files()
         for old in existing[:-10]:
             old.unlink()
 
@@ -245,32 +252,44 @@ def _create_backup_sync(data: dict | None = None):
 # and confirm=DELETE-EVERYTHING guard.  See the second definition in this file.
 
 
+BACKUP_NAME_PATTERN = re.compile(r"auto-gallery-backup_[0-9]{8}_[0-9]{6}\.tar\.gz")
+
+
+def _list_backup_files() -> list[Path]:
+    """Return only regular, non-symlink backup files contained by BACKUP_DIR."""
+    root = BACKUP_DIR.resolve()
+    files: list[Path] = []
+    for candidate in BACKUP_DIR.glob("auto-gallery-backup_*.tar.gz"):
+        if candidate.is_symlink() or not candidate.is_file():
+            continue
+        resolved = candidate.resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            continue
+        if BACKUP_NAME_PATTERN.fullmatch(resolved.name):
+            files.append(resolved)
+    return sorted(files)
+
+
 def _validate_backup_filename(filename: str) -> Path:
-    """Resolve and validate a backup filename stays within BACKUP_DIR."""
-    if "/" in filename or "\\" in filename:
+    """Select an existing server-discovered backup by its strict basename."""
+    if not BACKUP_NAME_PATTERN.fullmatch(filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
-    if Path(filename).name != filename:
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    if not (filename.startswith("auto-gallery-backup_") and filename.endswith(".tar.gz")):
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    target = (BACKUP_DIR / filename).resolve()
-    try:
-        target.relative_to(BACKUP_DIR.resolve())
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    return target
+    for target in _list_backup_files():
+        if target.name == filename:
+            return target
+    raise HTTPException(status_code=404, detail="Backup not found")
 
 
 @router.get("/backup/download")
 async def download_backup(filename: str | None = None):
     """Download a backup file. If filename not specified, returns the latest."""
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    existing = sorted(BACKUP_DIR.glob("auto-gallery-backup_*.tar.gz"))
+    existing = _list_backup_files()
     if not existing:
         return {"status": "error", "message": "No backups available"}
     target = _validate_backup_filename(filename) if filename else existing[-1]
-    if not target.exists():
-        return {"status": "error", "message": f"Backup not found: {filename}"}
     return FileResponse(
         str(target), media_type="application/gzip", filename=target.name,
         headers={"Content-Disposition": f'attachment; filename="{target.name}"'})
@@ -281,8 +300,6 @@ async def delete_backup(filename: str):
     """Delete a specific backup file."""
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     target = _validate_backup_filename(filename)
-    if not target.exists():
-        raise HTTPException(status_code=404, detail=f"Backup not found: {filename}")
     target.unlink()
     return {"status": "ok", "message": f"Deleted {filename}"}
 
@@ -291,7 +308,7 @@ async def delete_backup(filename: str):
 async def list_backups():
     """List available backup files."""
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    existing = sorted(BACKUP_DIR.glob("auto-gallery-backup_*.tar.gz"), reverse=True)
+    existing = list(reversed(_list_backup_files()))
     result = []
     for f in existing:
         stat = f.stat()
@@ -410,8 +427,11 @@ async def restore_backup(file: UploadFile = File(...), confirm: str = ""):
         # subprocesses, copytree) — run off the event loop.
         return await asyncio.to_thread(_do_restore, upload_path, tmpdir)
 
-    except Exception as e:
+    except Exception:
         logger.exception("Restore failed")
-        return {"status": "error", "message": str(e)}
+        return {
+            "status": "error",
+            "message": "Restore failed. Check the backend logs for the request details.",
+        }
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
