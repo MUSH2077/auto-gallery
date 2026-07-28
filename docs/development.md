@@ -95,6 +95,8 @@ pip-compile --allow-unsafe --generate-hashes \
 ```
 
 Run provider tests and the Docker Compose smoke path after dependency updates.
+Dependabot groups minor and patch updates, but keeps each major update in a
+separate pull request so migration and compatibility work remains reviewable.
 
 ### Database migrations
 
