@@ -52,6 +52,11 @@ jobs:
       - name: Install Python dependencies
         working-directory: backend
         run: pip install -r requirements.txt
+      - name: Audit Python dependencies
+        working-directory: backend
+        run: |
+          pip install pip-audit==2.10.1
+          pip-audit -r requirements.txt
       - name: Lint backend
         working-directory: backend
         run: ruff check app tests
@@ -76,6 +81,9 @@ jobs:
       - name: Install dependencies
         working-directory: admin-web
         run: npm ci
+      - name: Audit npm dependencies
+        working-directory: admin-web
+        run: npm audit --audit-level=high --registry=https://registry.npmjs.org
       - name: Typecheck admin web
         working-directory: admin-web
         run: npm run typecheck
@@ -108,6 +116,7 @@ jobs:
       - name: Check release metadata
         run: |
           test -f LICENSE
+          test -f NOTICE.md
           test -f CODE_OF_CONDUCT.md
           test -f CONTRIBUTING.md
           test -f CONTRIBUTING.zh.md
@@ -120,6 +129,7 @@ jobs:
           test -f .github/rulesets/release-tags.json
           grep -q "AGPL-3.0-only" README.md
           grep -q "AGPL-3.0-only" README.zh.md
+          grep -q "AGPL-3.0-only" NOTICE.md
           grep -q '^.env$' .gitignore
           test -f .env.ci
           if test -f package-lock.json && ! test -f package.json; then

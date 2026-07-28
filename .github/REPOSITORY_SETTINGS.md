@@ -25,20 +25,18 @@ after ownership, the default branch, or the maintainer team changes.
 
 ## Rulesets
 
-Import both JSON files from **Settings → Rules → Rulesets → New ruleset →
-Import a ruleset**:
+Keep the active repository rulesets synchronized with:
 
 - `.github/rulesets/default-branch.json`
 - `.github/rulesets/release-tags.json`
 
-GitHub Free does not offer repository rulesets or branch protection for a
-private personal repository. If the API returns `403`, keep the repository
-private, complete the other controls first, and import these rulesets
-immediately after the planned public visibility change.
+The rulesets were first activated after the repository became public. Forks
+must import their own copies; versioned JSON is the portable source of truth.
 
 The default-branch ruleset intentionally requires zero approvals while there
 is only one maintainer. It still requires a pull request, resolved review
-threads, a current branch, linear history, and all four blocking CI checks.
+threads, a current branch, linear history, and the blocking build, integration,
+dependency-review, and CodeQL checks.
 Requiring one approval now would prevent the sole maintainer from merging their
 own changes.
 
@@ -67,9 +65,9 @@ Enable:
 If GitHub enables CodeQL default setup automatically, keep only one setup:
 disable default setup before relying on `.github/workflows/codeql.yml`.
 
-Set the repository variable `GHAS_ENABLED=true` only when Dependency Review is
-available and enabled. Leaving it unset intentionally skips that CI job without
-creating a false pass.
+Public repositories run Dependency Review and CodeQL without a
+`GHAS_ENABLED` variable. Set `GHAS_ENABLED=true` only for an eligible private
+repository after GitHub Code Security is enabled.
 
 ## Actions
 

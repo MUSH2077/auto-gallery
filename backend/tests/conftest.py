@@ -47,7 +47,7 @@ os.environ["DATABASE_URL"] = _MAIN_TEST_URL
 # Isolate Redis to a separate logical db so tests can't flush production keys.
 _REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 os.environ["REDIS_URL"] = urlunparse(urlparse(_REDIS_URL)._replace(path="/15"))
-os.environ.setdefault("SECRET_KEY", "test-secret-key")
+os.environ.setdefault("SECRET_KEY", "test-secret-key-with-at-least-32-bytes")
 os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
 os.environ.setdefault("APP_CONFIG_ROOT", "/tmp/auto-gallery-test-config")
 # Never let tests create or mutate the runtime gallery-dl config mount.

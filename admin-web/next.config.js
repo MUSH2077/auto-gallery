@@ -1,6 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
+  // Playwright and LAN development use the loopback IP rather than localhost.
+  // Next 16 blocks cross-origin development assets unless this is explicit.
+  allowedDevOrigins: ['127.0.0.1'],
 
   // API proxying is handled by Next.js rewrites (server-side proxy).
   // Do NOT add a catch-all route handler under src/app/api/v1/ — rewrites

@@ -48,6 +48,15 @@
           },
           {
             "context": "Docker Compose smoke"
+          },
+          {
+            "context": "Dependency review"
+          },
+          {
+            "context": "CodeQL (python)"
+          },
+          {
+            "context": "CodeQL (javascript-typescript)"
           }
         ]
       }

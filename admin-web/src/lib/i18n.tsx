@@ -38,6 +38,7 @@ const zh: Record<string, string> = {
   "sidebar.running": "下载 {downloads} · 导入 {imports} 运行中",
   "sidebar.idle": "队列空闲",
   "sidebar.disk": "磁盘 {percent}%",
+  "sidebar.source_code": "查看源代码",
   "nav.upload": "上传",
 
   // Auth
@@ -2108,6 +2109,7 @@ function buildEn(zh: Record<string, string>): Record<string, string> {
     "sidebar.running": "Downloads {downloads} · Imports {imports} running",
     "sidebar.idle": "Queue idle",
     "sidebar.disk": "Disk {percent}%",
+    "sidebar.source_code": "View source code",
     "nav.upload": "Upload",
 
     // Auth

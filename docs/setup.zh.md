@@ -28,6 +28,15 @@ NEXT_PUBLIC_WS_URL=wss://autogallery.example.com/api/v1/ws
 
 如果 WebSocket 不可用，任务页会自动降级为 3 秒轮询，状态仍会更新。跨端口连接需要降级鉴权时，前端会通过普通 API 申请 30 秒一次性票据，不会把长期登录 JWT 放进 WebSocket URL。
 
+管理界面会提供 AGPL 网络使用所需的对应源代码入口。官方构建默认指向上游仓库；
+Fork 或修改版部署必须把这个构建时变量设置为实际运行版本的源代码地址：
+
+```bash
+NEXT_PUBLIC_SOURCE_CODE_URL=https://github.com/your-name/your-fork
+```
+
+修改任何 `NEXT_PUBLIC_*` 值后都需要重新构建 `admin-web`。
+
 ## 安装步骤
 
 ### 1. 目录结构
