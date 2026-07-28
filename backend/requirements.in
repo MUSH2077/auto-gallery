@@ -11,6 +11,8 @@ rq==2.1.0
 httpx==0.28.1
 gallery-dl==1.32.4
 pyvips==2.2.3
+# pyvips discovers this build dependency when libvips-dev is present.
+pkgconfig==1.6.0
 imagehash==4.3.1
 Pillow==12.3.0
 python-multipart==0.0.32
