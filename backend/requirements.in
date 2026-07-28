@@ -11,7 +11,7 @@ httpx==0.28.1
 gallery-dl==1.32.0
 pyvips==2.2.3
 imagehash==4.3.1
-Pillow==10.4.0
+Pillow==12.3.0
 python-multipart==0.0.19
 python-jose[cryptography]==3.3.0
 bcrypt==4.2.1

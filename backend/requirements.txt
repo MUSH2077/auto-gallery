@@ -91,7 +91,7 @@ numpy==2.4.6
     #   scipy
 packaging==26.2
     # via pytest
-pillow==10.4.0
+pillow==12.3.0
     # via
     #   -r requirements.in
     #   imagehash
