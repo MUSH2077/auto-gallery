@@ -131,7 +131,7 @@ python-dotenv==1.2.2
     #   uvicorn
 python-jose[cryptography]==3.3.0
     # via -r requirements.in
-python-multipart==0.0.19
+python-multipart==0.0.31
     # via -r requirements.in
 pyvips==2.2.3
     # via -r requirements.in
