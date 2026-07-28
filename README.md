@@ -6,50 +6,57 @@
 [![CodeQL](https://github.com/MUSH2077/auto-gallery/actions/workflows/codeql.yml/badge.svg)](https://github.com/MUSH2077/auto-gallery/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/MUSH2077/auto-gallery/badge)](https://securityscorecards.dev/viewer/?uri=github.com/MUSH2077/auto-gallery)
 [![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
-[![Status: public beta](https://img.shields.io/badge/status-public%20beta-f59e0b)](CHANGELOG.md)
+[![Status: pre-1.0 beta](https://img.shields.io/badge/status-pre--1.0%20beta-f59e0b)](CHANGELOG.md)
 
-Self-hosted, LAN-first media archiving for creator-based collections.
+Self-hosted media archiving and curation for creator-based collections.
 
 auto-gallery downloads, imports, indexes, and manages media from multiple
 sources through a Docker Compose stack. It is designed for personal NAS and
-Linux hosts and includes an accessible admin UI for creators, repositories,
-works, subscriptions, jobs, search, scheduling, deduplication, and gallery-dl
-configuration.
+Linux hosts. The responsive admin workspace covers creators, source
+repositories, works, tags, subscriptions, queues, scheduling, search, storage,
+curation history, and gallery-dl configuration.
 
 > [!WARNING]
-> auto-gallery is a public beta for trusted self-hosted environments. Do not
+> auto-gallery is a pre-1.0 beta for trusted self-hosted environments. Do not
 > expose the admin web or backend API directly to the internet. Use a reverse
 > proxy, TLS, access controls, and a threat model appropriate for your network.
 
 ## Why auto-gallery?
 
 - **Creator-first organization.** One canonical creator can link identities
-  and repositories from multiple platforms.
-- **Independent repository sync.** Every supported gallery-dl subscription URL
-  is an observable, independently scheduled sync unit.
+  and source repositories from multiple platforms.
+- **Repository-shaped sync.** Every supported gallery-dl subscription URL is
+  an observable, independently scheduled repository with jobs, tags, works,
+  health, and history.
 - **Original media preservation.** Downloads remain the source of truth while
   PostgreSQL, thumbnails, and Meilisearch provide a browsable library index.
-- **Background processing.** Download, import, and maintenance work run in
-  isolated workers instead of API request handlers.
-- **Operational visibility.** Health, schedules, queues, storage, logs,
-  backups, source authentication, and data checks are available in the admin UI.
-- **Cross-source asset deduplication.** Visual assets are compared across
-  sources, with ambiguous matches routed to review instead of silently merged.
-- **Bilingual and accessible.** Chinese and English UI, keyboard navigation,
-  responsive layouts, dark mode, and reduced-motion support.
+- **Durable operations.** Download, import, recovery, backup, and maintenance
+  work run in isolated workers with queue, scheduler, health, and storage
+  visibility.
+- **Auditable curation.** Reversible curation commits are projected into a
+  content-addressed `.gitllery` history for integrity checks and recovery.
+- **Cross-source asset deduplication.** Images are compared only across
+  different sources and Works. Visual evidence is the hard gate; creator and
+  posting-time metadata can raise confidence, while ambiguous cases go to
+  human review.
+- **Visual exploration.** Responsive work grids, creator storage trees, tag
+  bubbles, search, slideshows, and an optional showcase help browse large
+  collections.
+- **Accessible administration.** Chinese and English UI, module permissions,
+  keyboard navigation, touch targets, responsive layouts, dark mode, and
+  reduced-motion support.
 
 ## Screenshots
 
-| Dashboard | Creator detail |
+![Current admin dashboard with fictional operational data](docs/assets/admin-dashboard.png)
+
+| Tag distribution | Cross-source asset review |
 |---|---|
-| ![Sanitized dashboard demo](docs/assets/dashboard.svg) | ![Sanitized creator detail demo](docs/assets/creator-detail.svg) |
+| ![Current tag bubble chart with fictional tags](docs/assets/tag-bubbles.png) | ![Current image asset deduplication review with generated placeholders](docs/assets/asset-dedup-review.png) |
 
-| Repositories | Work detail | gallery-dl settings |
-|---|---|---|
-| ![Sanitized repositories demo](docs/assets/repositories.svg) | ![Sanitized work detail demo](docs/assets/works-detail.svg) | ![Sanitized gallery-dl settings demo](docs/assets/gallerydl-settings.svg) |
-
-These SVGs use fictional data. They contain no credentials, local paths,
-private creators, or downloaded media.
+These screenshots are rendered from the current admin web with intercepted,
+fictional fixtures and generated geometric placeholders. They contain no
+credentials, local paths, private creators, or downloaded media.
 
 ## Supported sources
 
@@ -67,7 +74,7 @@ changes. See the [provider guide](docs/providers.md) for current limitations.
 | Pinterest | gallery-dl | Public content | Supported |
 | LOFTER | gallery-dl | Public content | Supported |
 | Manual upload | Admin web | Admin user | Supported |
-| Local folder | Direct import | Local path | Experimental |
+| Local folder | Direct import | Local path | Planned |
 
 ## Quick start
 
@@ -110,8 +117,11 @@ Sources
 
 Core models are source-agnostic: creators, works, assets, tags, and subscription
 sources. Provider modules own URL validation and normalization, gallery-dl
-configuration, and metadata parsing. Read the
-[architecture guide](docs/architecture.md) before changing these boundaries.
+configuration, and metadata parsing. Curation changes stay authoritative in
+PostgreSQL and are projected to per-repository `.gitllery` histories; asset
+reconciliation preserves Works and source records while selecting a visual
+representative. Read the [architecture guide](docs/architecture.md) before
+changing these boundaries.
 
 ## Documentation
 
@@ -142,8 +152,8 @@ Known limitations:
 
 The near-term roadmap is tracked through
 [GitHub issues](https://github.com/MUSH2077/auto-gallery/issues) and focuses on
-provider compatibility tests, restore validation, local-folder import, and a
-stable first tagged beta.
+provider compatibility fixtures, restore drills, local-folder import, public
+deployment hardening, and a stable first tagged beta.
 
 ## Responsible use
 
