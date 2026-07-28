@@ -4,7 +4,8 @@ from typing import Any, Optional
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
+import jwt
+from jwt import InvalidTokenError
 
 from app.config import settings
 
@@ -39,7 +40,7 @@ def decode_access_token_payload(token: str) -> Optional[dict[str, Any]]:
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
         return payload
-    except JWTError:
+    except InvalidTokenError:
         return None
 
 

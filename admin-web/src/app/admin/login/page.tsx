@@ -6,6 +6,7 @@ import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import { ThemeToggle, LangToggle } from "@/lib/theme";
 import { SHOWCASE_STORAGE_KEY, DEFAULT_SHOWCASE_CONFIG } from "@/lib/showcase/config";
+import SourceCodeLink from "@/components/SourceCodeLink";
 
 /**
  * Decide the post-login destination. The server-side preference
@@ -125,6 +126,9 @@ export default function LoginPage() {
         <p className="mt-5 text-center text-xs text-muted">
           v0.1.0 · secure admin access
         </p>
+        <div className="mt-1 flex justify-center">
+          <SourceCodeLink />
+        </div>
       </section>
     </main>
   );

@@ -135,6 +135,10 @@ test("desktop sidebar, contextual navigation, and command palette remain usable"
   await expect(page.locator("[data-nextjs-dialog-overlay]")).toHaveCount(0);
   await expect(page.locator("aside").first()).toHaveCSS("width", "248px");
   await expect(page.locator("aside nav a")).toHaveCount(10);
+  await expect(page.getByTestId("source-code-link")).toHaveAttribute(
+    "href",
+    "https://github.com/MUSH2077/auto-gallery",
+  );
   await expectNoPageOverflow(page);
 
   await page.keyboard.press("Control+k");

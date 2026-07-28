@@ -34,6 +34,16 @@ polling and still updates task status. When cross-port auth fallback is needed,
 admin-web requests a 30-second one-time ticket over the normal API and never
 puts the long-lived login JWT in the WebSocket URL.
 
+The admin interface links to the Corresponding Source for AGPL network use.
+Official builds use the upstream repository. Forks and modified deployments
+must set this build-time value to the source for the version they operate:
+
+```bash
+NEXT_PUBLIC_SOURCE_CODE_URL=https://github.com/your-name/your-fork
+```
+
+Rebuild `admin-web` after changing any `NEXT_PUBLIC_*` value.
+
 ## Installation
 
 ### 1. Directory Structure

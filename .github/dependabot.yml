@@ -2,6 +2,12 @@ version: 2
 updates:
   - package-ecosystem: "npm"
     directory: "/admin-web"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "javascript"
+    commit-message:
+      prefix: "build(deps)"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -14,6 +20,12 @@ updates:
 
   - package-ecosystem: "pip"
     directory: "/backend"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "build(deps)"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -26,6 +38,12 @@ updates:
 
   - package-ecosystem: "github-actions"
     directory: "/"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "github_actions"
+    commit-message:
+      prefix: "build(deps)"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -38,6 +56,12 @@ updates:
 
   - package-ecosystem: "docker"
     directory: "/backend"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "build(deps)"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -46,6 +70,12 @@ updates:
 
   - package-ecosystem: "docker"
     directory: "/admin-web"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "build(deps)"
     schedule:
       interval: "weekly"
       day: "monday"

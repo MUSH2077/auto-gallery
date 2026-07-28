@@ -164,5 +164,11 @@ auto-gallery 仍处于 1.0 之前。数据库迁移、Provider 行为和部署�
 [行为准则](CODE_OF_CONDUCT.md)。安全问题必须按 [SECURITY.md](SECURITY.md)
 中的私密流程报告。
 
-auto-gallery 使用
-[GNU Affero General Public License v3.0 only](LICENSE)。
+Copyright (C) 2026 MUSH2077。除非文件另有说明，auto-gallery 的源代码、项目原创
+文档和随附演示 fixture 均采用
+[GNU Affero General Public License v3.0 only](LICENSE)
+（`AGPL-3.0-only`）。许可范围、网络使用义务和第三方内容排除项见
+[NOTICE.md](NOTICE.md)。
+
+auto-gallery 不会改变运营者下载、导入、索引或管理的媒体原有权利状态；运营者仍需
+自行确认归档内容的授权和来源平台条款。

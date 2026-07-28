@@ -35,6 +35,7 @@ import {
 } from "@/lib/adminNavigation";
 import { useT } from "@/lib/i18n";
 import { usePermissions } from "@/lib/usePermissions";
+import SourceCodeLink from "@/components/SourceCodeLink";
 
 const ICONS: Record<AdminIconName, LucideIcon> = {
   home: Home,
@@ -216,6 +217,7 @@ export default function AppSidebar({
         })}
       </nav>
       <SidebarStatus enabled={canSeeStatus} compact={compact} />
+      <SourceCodeLink compact={compact} className="mx-2 mb-2" />
     </div>
   );
 }

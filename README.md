@@ -186,5 +186,13 @@ Please read the [contribution guide](CONTRIBUTING.md) and
 [Code of Conduct](CODE_OF_CONDUCT.md) before participating. Security issues
 must be reported through the private process in [SECURITY.md](SECURITY.md).
 
-auto-gallery is licensed under
-[GNU Affero General Public License v3.0 only](LICENSE).
+Copyright (C) 2026 MUSH2077. Unless otherwise noted, auto-gallery source code,
+project-authored documentation, and bundled demonstration fixtures are
+licensed under the
+[GNU Affero General Public License v3.0 only](LICENSE)
+(`AGPL-3.0-only`). See [NOTICE.md](NOTICE.md) for the license scope, network-use
+requirements, and third-party exclusions.
+
+Media downloaded, imported, indexed, or managed by an operator is not
+relicensed by auto-gallery. Operators remain responsible for the rights and
+platform terms that apply to their archived content.

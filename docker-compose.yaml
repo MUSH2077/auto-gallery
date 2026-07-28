@@ -272,6 +272,7 @@ services:
       args:
         NPM_REGISTRY: ${NPM_REGISTRY:-}
         NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-}
+        NEXT_PUBLIC_SOURCE_CODE_URL: ${NEXT_PUBLIC_SOURCE_CODE_URL:-https://github.com/MUSH2077/auto-gallery}
     ports:
       - "${ADMIN_WEB_PORT:-13000}:3000"
     environment:
