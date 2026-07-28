@@ -1,55 +1,66 @@
 # Distribution and Privacy
 
-auto-gallery is LAN-first software for personal media archives. Treat the
-repository as public by default before publishing, opening issues, or building
-release archives.
+auto-gallery is LAN-first software for personal media archives. Treat every
+tracked file, commit, pull request, workflow log, artifact, and release archive
+as public before changing repository visibility.
 
-## Remote Repository
+The official repository is:
 
-Use a neutral organization or project namespace for public distribution:
-
-```bash
-git remote set-url origin git@github.com:<neutral-org>/auto-gallery.git
-git remote -v
+```text
+https://github.com/MUSH2077/auto-gallery
 ```
 
-Do not hard-code personal GitHub usernames, local hostnames, or local home
-paths in tracked files. If a personal remote was used during development,
-rewrite it only in your local Git config; do not document the personal URL.
+The official repository owner and URLs are public project metadata, not private
+identifiers. Local usernames, hostnames, home paths, unrelated personal
+remotes, private source accounts, and runtime media remain prohibited.
 
-## Privacy Checklist
+## Privacy checklist
 
-Before pushing or publishing a release:
+Before every public push or release:
 
 ```bash
-scripts/privacy-scan.sh
-scripts/package-release.sh
+bash scripts/privacy-scan.sh
+bash scripts/package-release.sh
 ```
 
 Never commit or attach:
 
 - `.env`, cookies, refresh tokens, API keys, passwords, SSH keys, or database
-  dumps.
-- `data/`, `downloads/`, `library/`, `app-config/`, `gallerydl-config/`, logs,
-  backups, or Meilisearch/PostgreSQL/Redis volumes.
-- Private creator URLs, downloaded media, screenshots with real creators, or
-  Playwright debug snapshots.
-- Local-only paths such as `/home/<user>/...`.
+  dumps
+- `data/`, `downloads/`, `library/`, app configuration, gallery-dl
+  configuration, logs, backups, or service volumes
+- private creator URLs, downloaded media, private account names, or browser
+  debugging snapshots
+- local paths such as `/home/<user>/...` or `/Users/<user>/...`
 
-Use `.env.example` for placeholders only. Use sanitized SVG screenshots under
-`docs/assets/` for public documentation.
+Use `.env.example` for placeholders and `docs/assets/` for fictional or fully
+sanitized documentation images.
 
-## Release Package
+## History and visibility review
 
-The release package script uses tracked files and removes local collaboration
-context and runtime paths:
+A clean working tree is not enough: Git history and GitHub Actions history can
+still contain removed data. Before making a private repository public:
+
+1. Search all Git objects for accidentally tracked environment files,
+   credentials, dumps, keys, large media, and local account data.
+2. Review Actions logs, artifacts, caches, release assets, and old pull requests.
+3. Rotate any credential that may ever have been committed or printed. Deleting
+   a file or rewriting history does not make an exposed secret safe.
+4. Ask collaborators to remove stale clones after any required history rewrite.
+5. Verify the repository while logged out after the visibility change.
+
+History rewriting is disruptive and should only be performed after the exact
+paths and coordination plan are reviewed.
+
+## Release package
+
+The release script starts from tracked files and removes collaboration context,
+environment files, runtime paths, caches, and logs:
 
 ```bash
-scripts/package-release.sh v0.1.0
-tar -tzf dist/auto-gallery-v0.1.0.tar.gz | less
+bash scripts/package-release.sh v0.1.0-beta.1
+tar -tzf dist/auto-gallery-v0.1.0-beta.1.tar.gz | less
 ```
 
-The package intentionally excludes `.claude/`, `.playwright-mcp/`, `.env*`,
-runtime data directories, caches, and logs. Docker Compose remains the v1
-distribution target; Helm charts, hosted installers, and cloud deployment
-templates are out of scope for now.
+Docker Compose is the current distribution target. Hosted installers and cloud
+deployment templates are outside the beta scope.

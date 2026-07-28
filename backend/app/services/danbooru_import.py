@@ -15,12 +15,28 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.creator import Creator
 from app.models.creator_link import CreatorLink
+from app.models.source_creator import SourceCreator
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.services import danbooru as danbooru_svc
 from app.services.cache import invalidate_creator_subscription_caches
 from app.services.creator_dedup import find_existing_creator
 from app.services.subscription import get_subscription_defaults
+
+
+def _extract_source_creator_id(source: str, url: str) -> str | None:
+    """Extract the platform-native creator ID from a URL, if possible.
+
+    Returns None when the ID cannot be reliably determined from the URL
+    alone (e.g. Twitter numeric ID vs screen-name, or search/pool URLs).
+    """
+    if source == "pixiv":
+        m = re.search(r"pixiv\.net/(?:en/)?users/(\d+)", url)
+        return m.group(1) if m else None
+    if source == "bilibili":
+        m = re.search(r"space\.bilibili\.com/(\d+)", url)
+        return m.group(1) if m else None
+    return None
 
 
 def _get_auto_enable_sources() -> set[str]:
@@ -109,16 +125,8 @@ async def import_all_danbooru_artist(data: dict, db: AsyncSession) -> dict:
 
     if creator.danbooru_artist_id is None:
         creator.danbooru_artist_id = artist.get("id")
-    if not creator.description:
-        parts = []
-        other_names = artist.get("other_names", [])
-        if other_names:
-            parts.append(f"Danbooru aliases: {', '.join(other_names)}")
-        notes = artist.get("notes")
-        if notes:
-            parts.append(notes)
-        if parts:
-            creator.description = "\n".join(parts)
+    # description is left for the admin to write — keep creator pages
+    # identical regardless of which import path created them.
 
     links_created = 0
     for link_data in links:
@@ -171,10 +179,12 @@ async def import_all_danbooru_artist(data: dict, db: AsyncSession) -> dict:
         if existing_ss.scalar_one_or_none():
             continue
         source = danbooru_svc._classify_url(raw_url)
+        sc_id = _extract_source_creator_id(source, raw_url)
         db.add(SubscriptionSource(
             subscription_id=subscription.id,
             source=source,
             source_url=raw_url,
+            source_creator_id=sc_id,
             is_enabled=_is_source_auto_enabled(source),
         ))
         sources_created += 1
@@ -191,9 +201,66 @@ async def import_all_danbooru_artist(data: dict, db: AsyncSession) -> dict:
             subscription_id=subscription.id,
             source="danbooru",
             source_url=danbooru_posts_url,
+            source_creator_id=artist["name"],
             is_enabled=False,
         ))
         sources_created += 1
+
+    # ── Pre-populate SourceCreator records ──────────────────────────
+    # The mapping from platform identity → auto-gallery Creator is known
+    # at Danbooru import time.  Create SourceCreator rows now so the
+    # download importer only needs to look them up, never guess.
+    source_creators_created = 0
+    seen_sc = set()
+
+    # 1) From downloadable URLs (Pixiv user ID, etc.)
+    for artist_url in artist.get("urls", []):
+        raw_url = artist_url.get("normalized_url") or artist_url.get("url", "")
+        if not raw_url or not artist_url.get("is_active", True):
+            continue
+        source = danbooru_svc._classify_url(raw_url)
+        sc_id = _extract_source_creator_id(source, raw_url)
+        if sc_id is None:
+            continue
+        key = (source, sc_id)
+        if key in seen_sc:
+            continue
+        seen_sc.add(key)
+        existing = await db.execute(
+            select(SourceCreator).where(
+                SourceCreator.source == source,
+                SourceCreator.source_creator_id == sc_id,
+            )
+        )
+        if existing.scalar_one_or_none():
+            continue
+        db.add(SourceCreator(
+            source=source,
+            source_creator_id=sc_id,
+            source_url=raw_url,
+            display_name=None,
+            creator_id=creator_id,
+        ))
+        source_creators_created += 1
+
+    # 2) Danbooru artist name → SourceCreator (covers tag-search downloads)
+    danbooru_sc_key = ("danbooru", artist["name"])
+    if danbooru_sc_key not in seen_sc:
+        existing_ds_sc = await db.execute(
+            select(SourceCreator).where(
+                SourceCreator.source == "danbooru",
+                SourceCreator.source_creator_id == artist["name"],
+            )
+        )
+        if not existing_ds_sc.scalar_one_or_none():
+            db.add(SourceCreator(
+                source="danbooru",
+                source_creator_id=artist["name"],
+                source_url=danbooru_posts_url,
+                display_name=None,
+                creator_id=creator_id,
+            ))
+            source_creators_created += 1
 
     await db.commit()
     invalidate_creator_subscription_caches()
@@ -205,5 +272,6 @@ async def import_all_danbooru_artist(data: dict, db: AsyncSession) -> dict:
         "artist_name": artist["name"],
         "links_imported": links_created,
         "sources_created": sources_created,
+        "source_creators_created": source_creators_created,
         "subscription_id": str(subscription.id),
     }

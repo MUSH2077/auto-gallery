@@ -15,6 +15,7 @@ STATS_TTL = 60
 
 # ── Per-endpoint TTL registry (single source of truth) ──
 TTL = {
+    "gitllery:status": 30,
     "creators:list": INTERACTIVE_LIST_TTL,
     "creators:count": INTERACTIVE_LIST_TTL,
     "creators:stats": STATS_TTL,

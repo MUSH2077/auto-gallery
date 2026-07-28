@@ -3,6 +3,7 @@ from datetime import datetime, timezone, timedelta
 from uuid import UUID
 
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -11,7 +12,8 @@ from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.providers import registry
 from app.services.job_manifest import append_manifest_event, update_manifest
-from app.services.job_state import DOWNLOAD_RUNNING_STATUSES, transition_download_job
+from app.models.task_state import DOWNLOAD_RUNNING_STATUSES, transition_download_job
+from app.services.job_progress import apply_download_progress
 from app.services.locks import redis_lock
 from app.services.redis_client import get_redis
 from app.services.settings import get_download_defaults
@@ -89,6 +91,8 @@ async def enqueue_subscription_source_sync(
     subscription_source_id: UUID,
     trigger: str = "manual",
     force: bool = False,
+    parent_task_id: UUID | None = None,
+    force_reason: str | None = None,
 ) -> dict:
     now = datetime.now(timezone.utc)
     ss = await db.get(SubscriptionSource, subscription_source_id)
@@ -102,6 +106,14 @@ async def enqueue_subscription_source_sync(
         return skip_result(ss.id, "source_disabled")
     if not force and ss.auth_healthy is False:
         return skip_result(ss.id, "auth_unhealthy", auth_status=ss.auth_status, auth_error_reason=ss.auth_error_reason)
+    if not force:
+        try:
+            r_ph = get_redis()
+            ph = r_ph.hgetall(f"proxy:health:{ss.source}")
+            if ph and ph.get(b"status", b"").decode() == "degraded":
+                return skip_result(ss.id, "proxy_degraded", warnings=ph.get(b"warnings", b"").decode())
+        except Exception:
+            pass
     if not ss.source_url:
         return skip_result(ss.id, "source_url_empty")
 
@@ -111,6 +123,17 @@ async def enqueue_subscription_source_sync(
         return skip_result(ss.id, "unknown_provider", source=ss.source)
     if not provider.capabilities.can_download:
         return skip_result(ss.id, "provider_not_downloadable", source=ss.source)
+
+    if not force:
+        try:
+            from app.services.backpressure import download_backpressure_reason
+            pressure = await download_backpressure_reason(db)
+            if pressure:
+                return skip_result(ss.id, pressure.pop("code"), **pressure)
+        except Exception:
+            # During a rolling migration the ledger table may not exist yet;
+            # availability checks must not prevent the migration from settling.
+            logger.warning("Unable to evaluate download backpressure", exc_info=True)
 
     normalized_url = provider.normalize_url(ss.source_url) or ss.source_url
     if not provider.validate_url(normalized_url):
@@ -152,10 +175,17 @@ async def enqueue_subscription_source_sync(
             subscription_source_id=ss.id,
             source=ss.source,
             source_url=normalized_url,
-            status="pending",
+            status="enqueued",
+        )
+        apply_download_progress(
+            job,
+            "enqueued",
+            "Queued; waiting for download worker",
+            publish=False,
         )
         update_manifest(job,
             trigger=trigger,
+            force_reason=force_reason,
             subscription_source_id=str(ss.id),
             subscription_id=str(sub.id),
             source=ss.source,
@@ -164,15 +194,36 @@ async def enqueue_subscription_source_sync(
         append_manifest_event(job, "created", trigger=trigger)
         ss.last_attempted_at = now
         db.add(job)
-        await db.flush()
+        try:
+            await db.flush()
+        except IntegrityError:
+            await db.rollback()
+            running = await db.execute(
+                select(DownloadJob).where(
+                    DownloadJob.subscription_source_id == ss.id,
+                    DownloadJob.status.in_(RUNNING_STATUSES),
+                ).order_by(DownloadJob.created_at.desc()).limit(1)
+            )
+            running_job = running.scalar_one_or_none()
+            if running_job:
+                return skip_result(ss.id, "already_running", job_id=str(running_job.id))
+            raise
 
         try:
             from rq import Queue
+            from app.services.tasks import TaskService
+            task = await TaskService(db).ensure_download_task(job, parent_task_id=parent_task_id)
 
-            Queue(name="downloads", connection=get_redis()).enqueue(
+            queue_name = f"downloads:{job.source}"
+            Queue(name=queue_name, connection=get_redis()).enqueue(
                 "app.jobs.download.run_download_job",
                 str(job.id),
                 job_timeout=RQ_JOB_TIMEOUT,
+            )
+            apply_download_progress(
+                job,
+                "enqueued",
+                "Queued; waiting for download worker",
             )
             append_manifest_event(job, "enqueued", queue="downloads")
         except Exception as exc:
@@ -193,5 +244,6 @@ async def enqueue_subscription_source_sync(
             "status": "enqueued",
             "source_id": str(ss.id),
             "job_id": str(job.id),
+            "task_id": str(task.id),
             "source_url": normalized_url,
         }

@@ -94,9 +94,12 @@ tmp/
 temp/
 .cache/
 .playwright-mcp/
+.superpowers/
+admin-web/test-results/
 
 # --- gallery-dl ---
 # Ignore runtime configs with auth tokens
 gallery-dl/cookies/
 gallery-dl/jobs/
 !gallery-dl/config.example.json
+.claude/worktrees/

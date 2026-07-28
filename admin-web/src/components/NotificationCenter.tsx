@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
 import { api, queryKeys } from "@/lib/api";
+import { usePresence, useStaggeredEntrance } from "@/lib/motion";
 
 type ActivityStatus = "running" | "completed" | "error" | "pending";
 
@@ -31,7 +32,7 @@ export interface BatchJobState {
 
 export interface OperationJobState {
   jobId: string;
-  kind: "admin-clear" | "danbooru-import-all";
+  kind: "admin-clear" | "admin-rebuild" | "admin-disk-import" | "danbooru-import-all" | string;
   title: string;
   startedAt: number;
   status: "running" | "completed" | "error";
@@ -127,6 +128,18 @@ function refreshOperationQueries(
       refetches.push(qc.refetchQueries({ queryKey: queryKeys.subscriptions.sources(subscriptionId), type: "all" }));
     }
     void Promise.all(refetches);
+    return;
+  }
+
+  qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+
+  if (kind === "admin-rebuild" || kind === "admin-disk-import") {
+    qc.invalidateQueries({ queryKey: queryKeys.workbench });
+    qc.invalidateQueries({ queryKey: queryKeys.works.all });
+    qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+    qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
+    qc.invalidateQueries({ queryKey: ["storage-breakdown"] });
+    qc.invalidateQueries({ queryKey: ["system-info"] });
     return;
   }
 
@@ -395,7 +408,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     if (!operationJob || !operationStatusQuery.data) return;
     const data = operationStatusQuery.data;
 
-    if (data.status === "queued" || data.status === "running") {
+    if (data.status === "queued" || data.status === "enqueued" || data.status === "running") {
       setOperationJob((prev) => prev && prev.jobId === operationJob.jobId
         ? { ...prev, progress: data.progress || prev.progress, status: "running" }
         : prev);
@@ -435,16 +448,43 @@ export function useNotifications(): NotificationCtx {
 }
 
 // ─── Notification Bell ───
+
+// Map a server task_run status onto the bell's visual status set.
+function taskActivityStatus(status?: string | null): ActivityStatus {
+  if (status === "running" || status === "downloading" || status === "importing" || status === "enqueued") return "running";
+  if (status === "complete" || status === "completed") return "completed";
+  if (status === "failed" || status === "cancelled" || status === "stale") return "error";
+  return "pending";
+}
+
+function bellTaskLink(task: { kind?: string; id?: string }): string | null {
+  if ((task.kind === "download" || task.kind === "import") && task.id) {
+    return `/admin/jobs?tab=${task.kind}&task=${task.id}`;
+  }
+  return null;
+}
+
 export function NotificationBell() {
   const t = useT();
   const router = useRouter();
   const {
-    items, removeActivity, clearRecent,
+    clearRecent,
     clearBatchJob, batchJob,
     clearOperationJob, operationJob,
   } = useNotifications();
   const [open, setOpen] = useState(false);
+  const { mounted, closing } = usePresence(open);
   const ref = useRef<HTMLDivElement>(null);
+
+  // Recent tasks come from the same server feed as /admin/notifications.
+  const recent = useQuery({
+    queryKey: [...queryKeys.tasks.all, "bell-recent"],
+    queryFn: () => api.listTasks({ limit: 10 }),
+    enabled: open,
+    staleTime: 10_000,
+  });
+  const serverItems = recent.data?.items ?? [];
+  const itemEntrance = useStaggeredEntrance(serverItems.map((task) => task.id));
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -456,22 +496,22 @@ export function NotificationBell() {
 
   const activeCount = (batchJob?.status === "running" ? 1 : 0)
     + (operationJob?.status === "running" ? 1 : 0)
-    + items.filter((a) => a.status === "running").length;
-  const hasRecent = items.length > 0 || !!batchJob || !!operationJob;
+    + serverItems.filter((task) => taskActivityStatus(task.status) === "running").length;
+  const hasRecent = serverItems.length > 0 || !!batchJob || !!operationJob;
 
   const statusIcon = (status: ActivityStatus) => {
     if (status === "running") {
-      return <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse shrink-0" />;
+      return <span className="w-2 h-2 rounded-full bg-accent animate-pulse shrink-0" />;
     }
     if (status === "completed") {
       return (
-        <svg className="w-4 h-4 text-green-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <svg className="w-4 h-4 text-success shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M20 6L9 17l-5-5" />
         </svg>
       );
     }
     return (
-      <svg className="w-4 h-4 text-red-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <svg className="w-4 h-4 text-danger shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
         <path d="M18 6L6 18M6 6l12 12" />
       </svg>
     );
@@ -491,7 +531,7 @@ export function NotificationBell() {
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="p-1.5 rounded hover:bg-white/10 transition-colors relative"
+        className="p-1.5 rounded-md hover:bg-subtle text-muted hover:text-fg transition-colors relative"
         title={t("notification.bell_label")}
         aria-label={t("notification.bell_label")}
       >
@@ -500,24 +540,24 @@ export function NotificationBell() {
           <path d="M10.3 21a1.94 1.94 0 003.4 0" />
         </svg>
         {activeCount > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-0.5 leading-none">
+          <span className="absolute -top-0.5 -right-0.5 bg-danger text-white text-[10px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-0.5 leading-none">
             {activeCount}
           </span>
         )}
       </button>
 
-      {open && (
-        <div className="absolute right-0 z-50 mt-2 max-h-[480px] w-80 overflow-hidden rounded-md border border-[#d8dee4] bg-white text-[#24292f] shadow-xl dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#e6edf3]">
-          <div className="flex items-center justify-between border-b border-[#d8dee4] px-4 py-2.5 dark:border-[#30363d]">
+      {mounted && (
+        <div className={`popover ${closing ? "popover-exit" : ""} absolute right-0 z-50 mt-2 max-h-[480px] w-80 overflow-hidden rounded-md border border-border bg-white text-fg shadow-overlay dark:shadow-overlay-dark dark:border-border dark:bg-surface dark:text-fg`}>
+          <div className="flex items-center justify-between border-b border-border px-4 py-2.5 dark:border-border">
             <span className="text-sm font-semibold">{t("notification.recent")}</span>
             <div className="flex items-center gap-3">
               <button onClick={() => { setOpen(false); router.push("/admin/notifications"); }}
-                className="text-xs text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-colors">
+                className="text-xs text-accent hover:text-accent dark:hover:text-accent transition-colors">
                 {t("notifications.title")} →
               </button>
-              {(items.length > 0 || batchJob || operationJob) && (
+              {(batchJob || operationJob) && (
                 <button onClick={() => { clearRecent(); }}
-                  className="text-xs text-[#57606a] transition-colors hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3]">
+                  className="text-xs text-muted transition-colors hover:text-fg dark:text-muted dark:hover:text-fg">
                   {t("notification.clear_all")}
                 </button>
               )}
@@ -525,13 +565,13 @@ export function NotificationBell() {
           </div>
           <div className="overflow-y-auto max-h-[420px]">
             {!hasRecent ? (
-              <div className="px-4 py-8 text-center text-sm text-[#57606a] dark:text-[#8b949e]">
+              <div className="px-4 py-8 text-center text-sm text-muted">
                 {t("notification.empty")}
               </div>
             ) : (
               <>
                 {batchJob && (
-                  <div className="cursor-pointer border-b border-[#d8dee4] px-4 py-2.5 transition-colors hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]"
+                  <div className="cursor-pointer border-b border-border px-4 py-2.5 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle"
                     onClick={() => { setOpen(false); router.push("/admin/reference/danbooru"); }}>
                     <div className="flex items-start gap-2.5">
                       <div className="mt-0.5">{statusIcon(batchJob.status)}</div>
@@ -540,30 +580,30 @@ export function NotificationBell() {
                           {batchJob.importType === "pixiv" ? t("notification.batch_import") : "URL Batch Import"}
                         </p>
                         {batchJob.status === "error" && (
-                          <p className="text-xs text-red-400 mt-0.5">Job expired or failed</p>
+                          <p className="text-xs text-danger mt-0.5">Job expired or failed</p>
                         )}
                         {batchJob.progress && (
                           <>
-                            <p className="mt-0.5 text-xs text-[#57606a] dark:text-[#8b949e]">
+                            <p className="mt-0.5 text-xs text-muted">
                               {batchJob.progress.current}/{batchJob.progress.total} · {batchJob.progress.imported} imported
                             </p>
-                            <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
-                              <div className="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
-                                style={{ width: `${(batchJob.progress.current / batchJob.progress.total) * 100}%` }} />
+                            <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-subtle dark:bg-border">
+                              <div className="h-full w-full bg-accent rounded-full transition-transform duration-slow ease-out"
+                                style={{ transform: `scaleX(${batchJob.progress.current / batchJob.progress.total})`, transformOrigin: "left" }} />
                             </div>
                           </>
                         )}
                         {batchJob.result && (
-                          <p className="mt-0.5 text-xs text-[#57606a] dark:text-[#8b949e]">
+                          <p className="mt-0.5 text-xs text-muted">
                             Done: {batchJob.result.imported_count || batchJob.result.imported?.length || 0} imported
                           </p>
                         )}
-                        <span className="text-[10px] text-[#57606a] dark:text-[#8b949e]">{timeAgo(batchJob.startedAt)}</span>
+                        <span className="text-[10px] text-muted">{timeAgo(batchJob.startedAt)}</span>
                       </div>
                       {batchJob.status !== "running" && (
                         <button
                           onClick={(e) => { e.stopPropagation(); clearBatchJob(); }}
-                          className="mt-0.5 shrink-0 text-[#8b949e] hover:text-[#57606a] dark:hover:text-[#e6edf3]"
+                          className="mt-0.5 shrink-0 text-muted hover:text-muted dark:hover:text-fg"
                           aria-label="Dismiss"
                         >
                           <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
@@ -575,40 +615,40 @@ export function NotificationBell() {
                   </div>
                 )}
                 {operationJob && (
-                  <div className="cursor-pointer border-b border-[#d8dee4] px-4 py-2.5 transition-colors hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]"
+                  <div className="cursor-pointer border-b border-border px-4 py-2.5 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle"
                     onClick={() => {
                       setOpen(false);
-                      router.push(operationJob.kind === "danbooru-import-all" ? "/admin/reference/danbooru" : "/admin/data-mgmt");
+                      router.push(operationJob.kind === "danbooru-import-all" ? "/admin/reference/danbooru" : `/admin/jobs?tab=admin&task=${operationJob.jobId}`);
                     }}>
                     <div className="flex items-start gap-2.5">
                       <div className="mt-0.5">{statusIcon(operationJob.status)}</div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium truncate">{operationJob.title}</p>
                         {operationJob.status === "error" && (
-                          <p className="text-xs text-red-400 mt-0.5 truncate">{operationJob.error || "Operation failed"}</p>
+                          <p className="text-xs text-danger mt-0.5 truncate">{operationJob.error || "Operation failed"}</p>
                         )}
                         {operationJob.progress?.label && operationJob.status === "running" && (
-                          <p className="mt-0.5 text-xs text-[#57606a] dark:text-[#8b949e] truncate">
+                          <p className="mt-0.5 text-xs text-muted truncate">
                             {operationJob.progress.label}
                           </p>
                         )}
                         {operationJob.progress?.total && operationJob.progress.current !== undefined && (
-                          <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
-                            <div className="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
-                              style={{ width: `${(operationJob.progress.current / operationJob.progress.total) * 100}%` }} />
+                          <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-subtle dark:bg-border">
+                            <div className="h-full w-full bg-accent rounded-full transition-transform duration-slow ease-out"
+                              style={{ transform: `scaleX(${operationJob.progress.current / operationJob.progress.total})`, transformOrigin: "left" }} />
                           </div>
                         )}
                         {operationJob.result && (
-                          <p className="mt-0.5 text-xs text-[#57606a] dark:text-[#8b949e] truncate">
+                          <p className="mt-0.5 text-xs text-muted truncate">
                             {operationResultMessage(operationJob)}
                           </p>
                         )}
-                        <span className="text-[10px] text-[#57606a] dark:text-[#8b949e]">{timeAgo(operationJob.startedAt)}</span>
+                        <span className="text-[10px] text-muted">{timeAgo(operationJob.startedAt)}</span>
                       </div>
                       {operationJob.status !== "running" && (
                         <button
                           onClick={(e) => { e.stopPropagation(); clearOperationJob(); }}
-                          className="mt-0.5 shrink-0 text-[#8b949e] hover:text-[#57606a] dark:hover:text-[#e6edf3]"
+                          className="mt-0.5 shrink-0 text-muted hover:text-muted dark:hover:text-fg"
                           aria-label="Dismiss"
                         >
                           <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
@@ -619,34 +659,27 @@ export function NotificationBell() {
                     </div>
                   </div>
                 )}
-                {items.map((a) => (
-                  <div key={a.id}
-                    className={`border-b border-[#d8dee4] px-4 py-2.5 transition-colors hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d] ${a.link ? "cursor-pointer" : "cursor-default"}`}
-                    onClick={() => { if (a.link) { setOpen(false); router.push(a.link); } }}>
-                    <div className="flex items-start gap-2.5">
-                      <div className="mt-0.5">{statusIcon(a.status)}</div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className={`text-sm truncate ${a.status === "running" ? "font-medium" : ""}`}>{a.title}</p>
-                          <span className="shrink-0 text-[10px] text-[#57606a] dark:text-[#8b949e]">{timeAgo(a.timestamp)}</span>
-                        </div>
-                        {a.message && <p className="mt-0.5 truncate text-xs text-[#57606a] dark:text-[#8b949e]">{a.message}</p>}
-                        {a.status === "running" && a.progress !== undefined && (
-                          <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
-                            <div className="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
-                              style={{ width: `${a.progress}%` }} />
+                {serverItems.map((task, index) => {
+                  const st = taskActivityStatus(task.status);
+                  const link = bellTaskLink(task);
+                  const entrance = itemEntrance(task.id, index);
+                  return (
+                    <div key={task.id}
+                      className={`${entrance.className} border-b border-border px-4 py-2.5 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle ${link ? "cursor-pointer" : "cursor-default"}`}
+                      style={entrance.style}
+                      onClick={() => { if (link) { setOpen(false); router.push(link); } }}>
+                      <div className="flex items-start gap-2.5">
+                        <div className="mt-0.5">{statusIcon(st)}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className={`text-sm truncate ${st === "running" ? "font-medium" : ""}`}>{task.title || task.operation_type || task.kind}</p>
+                            <span className="shrink-0 text-[10px] text-muted">{task.created_at ? timeAgo(new Date(task.created_at).getTime()) : ""}</span>
                           </div>
-                        )}
+                        </div>
                       </div>
-                      <button onClick={(e) => { e.stopPropagation(); removeActivity(a.id); }}
-                        className="mt-0.5 shrink-0 text-[#8b949e] hover:text-[#57606a] dark:hover:text-[#e6edf3]" aria-label="Dismiss">
-                        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                          <path d="M18 6L6 18M6 6l12 12" />
-                        </svg>
-                      </button>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </>
             )}
           </div>

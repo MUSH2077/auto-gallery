@@ -9,15 +9,21 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.jobs.import_outcome import DEFAULT_IMPORT_SKIP_THRESHOLD, clamp_threshold
 from app.models.system_setting import SystemSetting
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_SYNC_INTERVAL_HOURS = 6
 DEFAULT_SCAN_MINUTES = 60
-DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 600
-DEFAULT_MAX_RETRIES = 3
+DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 6000
+DEFAULT_STALL_TIMEOUT_SECONDS = 120
+DEFAULT_MAX_RETRIES = 4
 DEFAULT_BACKOFF_BASE_SECONDS = 60
+DEFAULT_GALLERYDL_RETRIES = 3
+DEFAULT_GALLERYDL_TIMEOUT = 30
+DEFAULT_GALLERYDL_ABORT = 5
+DEFAULT_DOWNLOAD_CONCURRENCY = 3
 
 GALLERYDL_METADATA_POSTPROCESSOR = {
     "name": "metadata",
@@ -37,7 +43,7 @@ DEFAULT_GALLERYDL_CONFIG = {
             "captions": False,
             "comments": False,
             "sanity": False,
-            "directory": ["pixiv", "{user[account]}", "{id}"],
+            "directory": ["pixiv", "{user[id]}", "{id}"],
             "filename": "{id}_p{num}.{extension}",
         },
         "twitter": {
@@ -65,7 +71,7 @@ DEFAULT_GALLERYDL_CONFIG = {
             "auto-enable-on-import": False,
             "external": False,
             "metadata": False,
-            "directory": ["danbooru", "{artist[name]}"],
+            "directory": ["danbooru", "{artist[name]}", "{date}"],
             "filename": "{id}_{num}.{extension}",
         },
         "pinterest": {
@@ -73,7 +79,7 @@ DEFAULT_GALLERYDL_CONFIG = {
             "stories": True,
             "videos": True,
             "sections": True,
-            "directory": ["pinterest", "{category}", "{user}", "{board[name]}"],
+            "directory": ["pinterest", "{user}", "{date}"],
             "filename": "{id}_{num}.{extension}",
         },
         "lofter": {
@@ -89,14 +95,14 @@ DEFAULT_GALLERYDL_CONFIG = {
             "livephoto": False,
             "movies": False,
             "text": False,
-            "directory": ["weibo", "{user[screen_name]}"],
+            "directory": ["weibo", "{user[screen_name]}", "{date}"],
             "filename": "{id}_{num}.{extension}",
         },
         "bilibili": {
             "auto-enable-on-import": False,
             "livephoto": True,
             "sleep-request": "3.0-6.0",
-            "directory": ["bilibili", "{user[name]}", "{id}"],
+            "directory": ["bilibili", "{user[name]}", "{date}"],
             "filename": "{id}_{num}.{extension}",
         },
     },
@@ -139,8 +145,16 @@ async def get_download_defaults(db: AsyncSession) -> dict:
     defaults = await get_system_setting(db, "download_defaults")
     return {
         "timeout_seconds": int(defaults.get("timeout_seconds", DEFAULT_DOWNLOAD_TIMEOUT_SECONDS)),
+        "stall_timeout_seconds": int(defaults.get("stall_timeout_seconds", DEFAULT_STALL_TIMEOUT_SECONDS)),
         "max_retries": int(defaults.get("max_retries", DEFAULT_MAX_RETRIES)),
         "retry_backoff_base_seconds": int(defaults.get("retry_backoff_base_seconds", DEFAULT_BACKOFF_BASE_SECONDS)),
+        "gallerydl_retries": int(defaults.get("gallerydl_retries", DEFAULT_GALLERYDL_RETRIES)),
+        "gallerydl_timeout": int(defaults.get("gallerydl_timeout", DEFAULT_GALLERYDL_TIMEOUT)),
+        "gallerydl_abort": int(defaults.get("gallerydl_abort", DEFAULT_GALLERYDL_ABORT)),
+        "import_skip_threshold": clamp_threshold(
+            float(defaults.get("import_skip_threshold", DEFAULT_IMPORT_SKIP_THRESHOLD))),
+        "download_concurrency": max(1, min(5, int(
+            defaults.get("download_concurrency", DEFAULT_DOWNLOAD_CONCURRENCY)))),
         **defaults,
     }
 

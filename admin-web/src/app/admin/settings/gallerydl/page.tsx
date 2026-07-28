@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import type { PixivSourceConfig, TwitterSourceConfig, IwaraSourceConfig, DanbooruSourceConfig, PinterestSourceConfig, LofterSourceConfig, WeiboSourceConfig, BilibiliSourceConfig, GalleryDLSourceMeta } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
-import { PageHeader, ErrorState } from "@/components";
+import { PageHeader, ErrorState, PageShell } from "@/components";
 import Link from "next/link";
 
 type TabKey = "pixiv" | "twitter" | "iwara" | "danbooru" | "pinterest" | "lofter" | "weibo" | "bilibili";
@@ -76,11 +76,12 @@ const NAMING_REFERENCE: Record<TabKey, NamingReference> = {
   },
   danbooru: {
     title: "Danbooru",
-    defaultDirectory: "danbooru/{artist[name]}",
+    defaultDirectory: "danbooru/{artist[name]}/{date}",
     defaultFilename: "{id}_{num}.{extension}",
-    treeExample: "danbooru/ask/1234567_1.jpg",
+    treeExample: "danbooru/ask/2024-01-15/1234567_1.jpg",
     tokens: [
       { token: "{artist[name]}", description: "艺术家名称", example: "ask" },
+      { token: "{date}", description: "发布日期", example: "2024-01-15" },
       { token: "{id}", description: "Post ID", example: "1234567" },
       { token: "{num}", description: "文件序号", example: "1" },
       { token: "{extension}", description: "文件扩展名", example: "jpg" },
@@ -88,13 +89,12 @@ const NAMING_REFERENCE: Record<TabKey, NamingReference> = {
   },
   pinterest: {
     title: "Pinterest",
-    defaultDirectory: "pinterest/{category}/{user}/{board[name]}",
+    defaultDirectory: "pinterest/{user}/{date}",
     defaultFilename: "{id}_{num}.{extension}",
-    treeExample: "pinterest/pinterest/test_user/illustration-board/12345_1.jpg",
+    treeExample: "pinterest/test_user/2024-01-15/12345_1.jpg",
     tokens: [
-      { token: "{category}", description: "来源分类", example: "pinterest" },
       { token: "{user}", description: "用户名", example: "test_user" },
-      { token: "{board[name]}", description: "Board 名称", example: "illustration-board" },
+      { token: "{date}", description: "发布日期", example: "2024-01-15" },
       { token: "{id}", description: "Pin ID", example: "12345" },
       { token: "{num}", description: "媒体序号", example: "1" },
       { token: "{extension}", description: "文件扩展名", example: "jpg" },
@@ -102,25 +102,26 @@ const NAMING_REFERENCE: Record<TabKey, NamingReference> = {
   },
   lofter: {
     title: "LOFTER",
-    defaultDirectory: "lofter/{blog_name}/{id}",
+    defaultDirectory: "lofter/{blog_name}/{date}",
     defaultFilename: "{id}_{num}.{extension}",
-    treeExample: "lofter/agemoagm14574/312dae80_1ccaa179b/312dae80_1ccaa179b_1.jpg",
+    treeExample: "lofter/agemoagm14574/2024-01-15/312dae80_1ccaa179b_1.jpg",
     tokens: [
       { token: "{blog_name}", description: "博客名", example: "agemoagm14574" },
+      { token: "{date}", description: "发布日期", example: "2024-01-15" },
       { token: "{id}", description: "帖子 ID", example: "312dae80_1ccaa179b" },
       { token: "{num}", description: "图片序号", example: "1" },
       { token: "{extension}", description: "文件扩展名", example: "jpg" },
     ],
-    notes: ["目录模板应包含 {id} 子目录，否则多个帖子可能合并到同一作品目录。"],
   },
   weibo: {
     title: "Weibo",
-    defaultDirectory: "weibo/{user[screen_name]}",
+    defaultDirectory: "weibo/{user[screen_name]}/{date}",
     defaultFilename: "{id}_{num}.{extension}",
-    treeExample: "weibo/Artist/MCq3x9abc_1.jpg",
+    treeExample: "weibo/Artist/2024-01-15/MCq3x9abc_1.jpg",
     tokens: [
       { token: "{user[id]}", description: "用户数字 ID", example: "1234567890" },
       { token: "{user[screen_name]}", description: "用户昵称", example: "Artist" },
+      { token: "{date}", description: "发布日期", example: "2024-01-15" },
       { token: "{id}", description: "微博 ID", example: "MCq3x9abc" },
       { token: "{num}", description: "媒体序号", example: "1" },
       { token: "{extension}", description: "文件扩展名", example: "jpg" },
@@ -128,12 +129,13 @@ const NAMING_REFERENCE: Record<TabKey, NamingReference> = {
   },
   bilibili: {
     title: "Bilibili",
-    defaultDirectory: "bilibili/{user[name]}/{id}",
+    defaultDirectory: "bilibili/{user[name]}/{date}",
     defaultFilename: "{id}_{num}.{extension}",
-    treeExample: "bilibili/UP Name/cv123456/123456_1.jpg",
+    treeExample: "bilibili/UP Name/2024-01-15/cv123456_1.jpg",
     tokens: [
       { token: "{user[id]}", description: "UP 主 ID", example: "987654" },
       { token: "{user[name]}", description: "UP 主名称", example: "UP Name" },
+      { token: "{date}", description: "发布日期", example: "2024-01-15" },
       { token: "{id}", description: "动态 / 内容 ID", example: "cv123456" },
       { token: "{num}", description: "媒体序号", example: "1" },
       { token: "{extension}", description: "文件扩展名", example: "jpg" },
@@ -163,12 +165,12 @@ function ToggleField({ label, desc, value, onChange }: {
     <div className="flex items-center justify-between py-2">
       <div>
         <span className="text-sm font-medium">{label}</span>
-        {desc && <p className="text-xs text-gray-500 dark:text-gray-400">{desc}</p>}
+        {desc && <p className="text-xs text-muted">{desc}</p>}
       </div>
       <button
         onClick={() => onChange(!value)}
         className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${
-          value ? "bg-green-600" : "bg-gray-300"
+          value ? "bg-success" : "bg-subtle"
         }`}
       >
         <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
@@ -186,7 +188,7 @@ function TextField({ label, desc, value, onChange, type, placeholder }: {
   return (
     <div>
       <label className="block text-sm font-medium mb-1">{label}</label>
-      {desc && <p className="text-xs text-gray-400 dark:text-gray-500 mb-1">{desc}</p>}
+      {desc && <p className="text-xs text-muted mb-1">{desc}</p>}
       <input type={type || "text"} value={value} onChange={(e) => onChange(e.target.value)}
         className="input w-full font-mono" placeholder={placeholder} />
     </div>
@@ -199,7 +201,7 @@ function NumberField({ label, desc, value, onChange, placeholder }: {
   return (
     <div>
       <label className="block text-sm font-medium mb-1">{label}</label>
-      {desc && <p className="text-xs text-gray-400 dark:text-gray-500 mb-1">{desc}</p>}
+      {desc && <p className="text-xs text-muted mb-1">{desc}</p>}
       <input type="text" value={value} onChange={(e) => onChange(e.target.value)}
         className="input w-32 font-mono" placeholder={placeholder} />
     </div>
@@ -213,7 +215,7 @@ function SelectField({ label, desc, value, onChange, options }: {
   return (
     <div>
       <label className="block text-sm font-medium mb-1">{label}</label>
-      {desc && <p className="text-xs text-gray-400 dark:text-gray-500 mb-1">{desc}</p>}
+      {desc && <p className="text-xs text-muted mb-1">{desc}</p>}
       <select value={value} onChange={(e) => onChange(e.target.value)}
         className="select w-full">
         {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -239,9 +241,10 @@ function NamingReferencePanel({
   onDirectoryChange: (value: string) => void;
   onFilenameChange: (value: string) => void;
 }) {
+  const t = useT();
   const [target, setTarget] = useState<PatternTarget>("directory");
   const reference = NAMING_REFERENCE[source];
-  const targetLabel = target === "directory" ? "Directory" : "Filename";
+  const targetLabel = target === "directory" ? t("gallerydl.directory", "目录") : t("gallerydl.filename", "文件名");
 
   const insertToken = (token: string) => {
     if (target === "directory") {
@@ -252,13 +255,13 @@ function NamingReferencePanel({
   };
 
   return (
-    <section className="rounded-md border border-[#d0d7de] bg-[#f6f8fa] text-sm dark:border-[#30363d] dark:bg-[#161b22]">
-      <div className="flex flex-col gap-3 border-b border-[#d0d7de] px-4 py-3 dark:border-[#30363d] md:flex-row md:items-center md:justify-between">
+    <section className="rounded-md border border-border bg-subtle text-sm dark:border-border dark:bg-surface">
+      <div className="flex flex-col gap-3 border-b border-border px-4 py-3 dark:border-border md:flex-row md:items-center md:justify-between">
         <div>
-          <h5 className="font-semibold text-[#24292f] dark:text-[#f0f6fc]">{reference.title} 命名规范</h5>
-          <p className="mt-1 text-xs text-[#57606a] dark:text-[#8b949e]">常用变量来自本项目已验证的 gallery-dl 配置；点击 token 会追加到当前目标输入框末尾。</p>
+          <h5 className="font-semibold text-fg dark:text-fg">{reference.title} 命名规范</h5>
+          <p className="mt-1 text-xs text-muted">常用变量来自本项目已验证的 gallery-dl 配置；点击 token 会追加到当前目标输入框末尾。</p>
         </div>
-        <div className="inline-flex h-8 w-fit overflow-hidden rounded-md border border-[#d0d7de] bg-white dark:border-[#30363d] dark:bg-[#0d1117]">
+        <div className="inline-flex h-8 w-fit overflow-hidden rounded-md border border-border bg-white dark:border-border dark:bg-canvas">
           {(["directory", "filename"] as PatternTarget[]).map((item) => (
             <button
               key={item}
@@ -266,11 +269,11 @@ function NamingReferencePanel({
               onClick={() => setTarget(item)}
               className={`px-3 text-xs font-medium transition-colors ${
                 target === item
-                  ? "bg-[#0969da] text-white"
-                  : "text-[#57606a] hover:bg-[#f3f4f6] dark:text-[#8b949e] dark:hover:bg-[#21262d]"
+                  ? "bg-accent text-white"
+                  : "text-muted hover:bg-subtle dark:text-muted dark:hover:bg-subtle"
               }`}
             >
-              {item === "directory" ? "Directory" : "Filename"}
+              {item === "directory" ? t("gallerydl.directory", "目录") : t("gallerydl.filename", "文件名")}
             </button>
           ))}
         </div>
@@ -279,7 +282,7 @@ function NamingReferencePanel({
       <div className="space-y-4 p-4">
         <div className="grid gap-3 md:grid-cols-2">
           <div>
-            <label className="mb-1 block text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">Directory pattern</label>
+            <label className="mb-1 block text-xs font-semibold uppercase text-muted">{t("gallerydl.directory_pattern", "目录模板")}</label>
             <input
               type="text"
               value={directory}
@@ -289,7 +292,7 @@ function NamingReferencePanel({
             />
           </div>
           <div>
-            <label className="mb-1 block text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">Filename pattern</label>
+            <label className="mb-1 block text-xs font-semibold uppercase text-muted">{t("gallerydl.filename_pattern", "文件名模板")}</label>
             <input
               type="text"
               value={filename}
@@ -301,68 +304,68 @@ function NamingReferencePanel({
         </div>
 
         <div className="grid gap-3 md:grid-cols-2">
-          <div className="rounded-md border border-[#d0d7de] bg-white p-3 dark:border-[#30363d] dark:bg-[#0d1117]">
+          <div className="rounded-md border border-border bg-white p-3 dark:border-border dark:bg-canvas">
             <div className="flex items-center justify-between gap-3">
-              <span className="text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">Directory template</span>
+              <span className="text-xs font-semibold uppercase text-muted">{t("gallerydl.directory_template", "目录默认模板")}</span>
               <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => onDirectoryChange(reference.defaultDirectory)}>
-                使用目录模板
+                {t("gallerydl.use_directory_template", "使用目录模板")}
               </button>
             </div>
-            <code className="mt-2 block break-all rounded-md bg-[#f6f8fa] px-2 py-1.5 font-mono text-xs text-[#24292f] dark:bg-[#161b22] dark:text-[#f0f6fc]">
+            <code className="mt-2 block break-all rounded-md bg-subtle px-2 py-1.5 font-mono text-xs text-fg dark:bg-surface dark:text-fg">
               {reference.defaultDirectory}
             </code>
           </div>
-          <div className="rounded-md border border-[#d0d7de] bg-white p-3 dark:border-[#30363d] dark:bg-[#0d1117]">
+          <div className="rounded-md border border-border bg-white p-3 dark:border-border dark:bg-canvas">
             <div className="flex items-center justify-between gap-3">
-              <span className="text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">Filename template</span>
+              <span className="text-xs font-semibold uppercase text-muted">{t("gallerydl.filename_template", "文件名默认模板")}</span>
               <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => onFilenameChange(reference.defaultFilename)}>
-                使用文件名模板
+                {t("gallerydl.use_filename_template", "使用文件名模板")}
               </button>
             </div>
-            <code className="mt-2 block break-all rounded-md bg-[#f6f8fa] px-2 py-1.5 font-mono text-xs text-[#24292f] dark:bg-[#161b22] dark:text-[#f0f6fc]">
+            <code className="mt-2 block break-all rounded-md bg-subtle px-2 py-1.5 font-mono text-xs text-fg dark:bg-surface dark:text-fg">
               {reference.defaultFilename}
             </code>
           </div>
         </div>
 
         <div>
-          <div className="mb-1 text-xs font-semibold uppercase text-[#57606a] dark:text-[#8b949e]">File tree preview</div>
-          <pre className="overflow-x-auto rounded-md border border-[#d0d7de] bg-white px-3 py-2 font-mono text-xs text-[#24292f] dark:border-[#30363d] dark:bg-[#0d1117] dark:text-[#f0f6fc]">{reference.treeExample}</pre>
+          <div className="mb-1 text-xs font-semibold uppercase text-muted">{t("gallerydl.file_tree_preview", "文件树预览")}</div>
+          <pre className="overflow-x-auto rounded-md border border-border bg-white px-3 py-2 font-mono text-xs text-fg dark:border-border dark:bg-canvas dark:text-fg">{reference.treeExample}</pre>
         </div>
 
         {reference.notes && reference.notes.length > 0 && (
-          <div className="rounded-md border border-[#d29922]/40 bg-[#fff8c5] px-3 py-2 text-xs text-[#9a6700] dark:bg-[#d29922]/15 dark:text-[#f2cc60]">
+          <div className="rounded-md border border-warning/40 bg-warning-subtle px-3 py-2 text-xs text-warning dark:bg-warning/15 dark:text-warning">
             {reference.notes.map((note) => <p key={note}>{note}</p>)}
           </div>
         )}
 
-        <div className="overflow-hidden rounded-md border border-[#d0d7de] dark:border-[#30363d]">
-          <table className="min-w-full divide-y divide-[#d0d7de] text-left dark:divide-[#30363d]">
-            <thead className="bg-white dark:bg-[#0d1117]">
+        <div className="overflow-hidden rounded-md border border-border dark:border-border">
+          <table className="min-w-full divide-y divide-border text-left dark:divide-border">
+            <thead className="bg-white dark:bg-canvas">
               <tr>
-                <th className="px-3 py-2 text-xs font-semibold text-[#57606a] dark:text-[#8b949e]">Token</th>
-                <th className="px-3 py-2 text-xs font-semibold text-[#57606a] dark:text-[#8b949e]">说明</th>
-                <th className="px-3 py-2 text-xs font-semibold text-[#57606a] dark:text-[#8b949e]">示例值</th>
-                <th className="px-3 py-2 text-right text-xs font-semibold text-[#57606a] dark:text-[#8b949e]">插入到 {targetLabel}</th>
+                <th className="px-3 py-2 text-xs font-semibold text-muted">Token</th>
+                <th className="px-3 py-2 text-xs font-semibold text-muted">{t("gallerydl.description", "说明")}</th>
+                <th className="px-3 py-2 text-xs font-semibold text-muted">{t("gallerydl.example_value", "示例值")}</th>
+                <th className="px-3 py-2 text-right text-xs font-semibold text-muted">{t("gallerydl.insert_to", "插入到")} {targetLabel}</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#d0d7de] bg-white dark:divide-[#30363d] dark:bg-[#0d1117]">
+            <tbody className="divide-y divide-border bg-white dark:divide-border dark:bg-canvas">
               {reference.tokens.map((item) => (
-                <tr key={item.token} className="hover:bg-[#f6f8fa] dark:hover:bg-[#161b22]">
+                <tr key={item.token} className="hover:bg-subtle dark:hover:bg-surface">
                   <td className="px-3 py-2">
                     <button
                       type="button"
                       onClick={() => insertToken(item.token)}
-                      className="rounded-md border border-[#d0d7de] bg-[#f6f8fa] px-2 py-1 font-mono text-xs text-[#0969da] hover:border-[#0969da] dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#58a6ff]"
+                      className="rounded-md border border-border bg-subtle px-2 py-1 font-mono text-xs text-accent hover:border-accent dark:border-border dark:bg-surface dark:text-accent"
                     >
                       {item.token}
                     </button>
                   </td>
-                  <td className="px-3 py-2 text-xs text-[#24292f] dark:text-[#f0f6fc]">{item.description}</td>
-                  <td className="px-3 py-2 font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{item.example}</td>
+                  <td className="px-3 py-2 text-xs text-fg dark:text-fg">{item.description}</td>
+                  <td className="px-3 py-2 font-mono text-xs text-muted">{item.example}</td>
                   <td className="px-3 py-2 text-right">
                     <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => insertToken(item.token)}>
-                      插入
+                      {t("gallerydl.insert", "插入")}
                     </button>
                   </td>
                 </tr>
@@ -523,33 +526,33 @@ export default function GalleryDLConfigPage() {
   });
 
   if (config.isError) {
-    return <main className="max-w-4xl mx-auto p-6">
+    return <PageShell size="normal">
       <ErrorState message={config.error?.message || t("gallerydl.failed")} onRetry={() => config.refetch()} />
-    </main>;
+    </PageShell>;
   }
   if (!config.data) {
-    return <main className="max-w-4xl mx-auto p-6">
-      <div className="animate-pulse space-y-4"><div className="h-8 bg-gray-200 rounded w-1/3" /><div className="h-64 bg-gray-200 rounded" /></div>
-    </main>;
+    return <PageShell size="normal">
+      <div className="animate-pulse space-y-4"><div className="h-8 bg-subtle rounded w-1/3" /><div className="h-64 bg-subtle rounded" /></div>
+    </PageShell>;
   }
 
   const meta = config.data.sources || {} as Record<string, GalleryDLSourceMeta>;
   const currentMeta = meta[activeTab];
 
   return (
-    <main className="max-w-4xl mx-auto p-6">
+    <PageShell size="normal">
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("gallerydl.back")}</Link>
+        <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("gallerydl.back")}</Link>
       </div>
       <PageHeader title={t("gallerydl.title")} description={t("gallerydl.desc")} />
 
       {/* Tabs */}
-      <div className="flex border-b dark:border-slate-700 mb-6">
+      <div className="flex border-b border-border mb-6">
         {tabs.map((tab) => (
           <button key={tab.key}
             onClick={() => setActiveTab(tab.key)}
             className={`px-5 py-3 text-sm font-medium border-b-2 -mb-px transition-colors
-              ${activeTab === tab.key ? `${tab.color} text-slate-900 dark:text-white` : "border-transparent text-gray-500 hover:text-gray-700"}`}>
+              ${activeTab === tab.key ? `${tab.color} text-fg dark:text-white` : "border-transparent text-muted hover:text-fg"}`}>
             {tab.label}
           </button>
         ))}
@@ -557,7 +560,7 @@ export default function GalleryDLConfigPage() {
 
       {/* Unsupported banner */}
       {currentMeta && !currentMeta.supported && (
-        <div className="mb-6 rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm text-[#9a6700] dark:border-[#d29922]/30 dark:bg-[#d29922]/15 dark:text-[#f2cc60]">
+        <div className="mb-6 rounded-md border border-warning-subtle bg-warning-subtle p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-warning">
           <strong>{currentMeta.name} {t("gallerydl.unsupported")}</strong> {currentMeta.description}
         </div>
       )}
@@ -579,25 +582,25 @@ export default function GalleryDLConfigPage() {
             {save.isPending ? t("common.saving") : saved === activeTab ? t("common.saved") : `${t("gallerydl.save")} (${tabs.find(tab => tab.key === activeTab)?.label})`}
           </button>
         </div>
-        {save.error && <p className="text-red-600 text-sm mt-2">{(save.error as Error).message}</p>}
+        {save.error && <p className="text-danger text-sm mt-2">{(save.error as Error).message}</p>}
 
         {/* Test Connection */}
         <div className="flex items-center gap-3 pt-2 border-t mt-4">
           <button
             onClick={() => testConn.mutate(activeTab)}
             disabled={testConn.isPending}
-            className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+            className="px-3 py-1.5 text-xs bg-accent text-white rounded hover:bg-accent/90 disabled:opacity-50"
           >
             {testConn.isPending ? t("gallerydl.testing") : t("gallerydl.test_connection")}
           </button>
           {testResult && (
-            <span className={`text-xs ${testResult.success ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
+            <span className={`text-xs ${testResult.success ? "text-success" : "text-danger"}`}>
               {testResult.success ? "✓" : "✗"} {testResult.message}
             </span>
           )}
         </div>
       </div>
-    </main>
+    </PageShell>
   );
 }
 
@@ -608,11 +611,11 @@ function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: P
   const set = (k: keyof PixivSourceConfig, v: any) => onChange({ ...data, [k]: v });
   return (
     <>
-      <div className="border-b dark:border-slate-700 pb-3 mb-3">
+      <div className="border-b border-border pb-3 mb-3">
         <ToggleField label={t("gallerydl.auto_enable_on_import")} desc={t("gallerydl.auto_enable_on_import.desc")}
           value={data.auto_enable_on_import ?? true} onChange={(v) => set("auto_enable_on_import", v)} />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.auth")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.auth")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label={t("gallerydl.refresh_token")} desc={t("gallerydl.refresh_token.desc")} value={str(data.refresh_token)} onChange={(v) => set("refresh_token", v || undefined)} type="password" />
         <TextField label={t("gallerydl.cookies_path")} desc={t("gallerydl.cookies_path.desc")} value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/pixiv.txt" />
@@ -622,9 +625,9 @@ function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: P
         <textarea value={str(data.cookie_content)} onChange={(e) => set("cookie_content", e.target.value || undefined)}
           rows={3} className="textarea w-full font-mono text-xs"
           placeholder="Paste cookie text here. Auto-saved to /gallerydl-config/cookies/pixiv.txt" />
-        <p className="text-xs text-gray-400 mt-1">{t("gallerydl.cookies_help")}</p>
+        <p className="text-xs text-muted mt-1">{t("gallerydl.cookies_help")}</p>
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.content")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.content")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <SelectField label={t("gallerydl.include")} desc={t("gallerydl.include.desc")} value={str(data.include, "artworks")} onChange={(v) => set("include", v)}
           options={[{ value: "artworks", label: t("gallerydl.artworks") }, { value: "favorites", label: t("gallerydl.favorites") }, { value: "bookmarks", label: t("gallerydl.bookmarks") }]} />
@@ -637,7 +640,7 @@ function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: P
             { value: "gif", label: t("gallerydl.gif_format") },
           ]} />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.file_org")}</h4>
       <NamingReferencePanel
         source="pixiv"
         directory={str(data.directory)}
@@ -645,11 +648,11 @@ function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: P
         onDirectoryChange={(v) => set("directory", v || undefined)}
         onFilenameChange={(v) => set("filename", v || undefined)}
       />
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.rate_limit")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.rate_limit")}</h4>
       <div className="w-64">
         <NumberField label={t("gallerydl.sleep_seconds")} desc={t("gallerydl.sleep_seconds.desc")} value={numStr(data.sleep_request)} onChange={(v) => set("sleep_request", parseFloat(v) || undefined)} placeholder="0" />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.metadata_section")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.metadata_section")}</h4>
       <div className="space-y-1">
         <ToggleField label={t("gallerydl.metadata")} desc={t("gallerydl.metadata.desc")} value={data.metadata ?? false} onChange={(v) => set("metadata", v)} />
         <ToggleField label={t("gallerydl.metadata_bookmark")} desc={t("gallerydl.metadata_bookmark.desc")} value={data.metadata_bookmark ?? false} onChange={(v) => set("metadata_bookmark", v)} />
@@ -668,11 +671,11 @@ function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (
   const set = (k: keyof TwitterSourceConfig, v: any) => onChange({ ...data, [k]: v });
   return (
     <>
-      <div className="border-b dark:border-slate-700 pb-3 mb-3">
+      <div className="border-b border-border pb-3 mb-3">
         <ToggleField label={t("gallerydl.auto_enable_on_import")} desc={t("gallerydl.auto_enable_on_import.desc")}
           value={data.auto_enable_on_import ?? false} onChange={(v) => set("auto_enable_on_import", v)} />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.auth")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.auth")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label={t("gallerydl.cookies_path")} value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/twitter.txt" />
       </div>
@@ -681,9 +684,9 @@ function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (
         <textarea value={str(data.cookie_content)} onChange={(e) => set("cookie_content", e.target.value || undefined)}
           rows={3} className="textarea w-full font-mono text-xs"
           placeholder="Paste cookie text here. Auto-saved to /gallerydl-config/cookies/twitter.txt" />
-        <p className="text-xs text-gray-400 mt-1">{t("gallerydl.cookies_help")}</p>
+        <p className="text-xs text-muted mt-1">{t("gallerydl.cookies_help")}</p>
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.content")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.content")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <SelectField label={t("gallerydl.strategy")} desc={t("gallerydl.strategy.desc")} value={str(data.strategy, "tweets")} onChange={(v) => set("strategy", v)}
           options={[
@@ -698,7 +701,7 @@ function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (
           ]} />
         <NumberField label={t("gallerydl.max_posts")} desc={t("gallerydl.max_posts.desc")} value={numStr(data.max_posts)} onChange={(v) => set("max_posts", parseInt(v) || undefined)} placeholder="Unlimited" />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.filters")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.filters")}</h4>
       <div className="space-y-1">
         <ToggleField label={t("gallerydl.retweets")} desc={t("gallerydl.include_retweets")} value={data.retweets ?? false} onChange={(v) => set("retweets", v)} />
         <ToggleField label={t("gallerydl.replies")} desc={t("gallerydl.include_replies")} value={data.replies ?? false} onChange={(v) => set("replies", v)} />
@@ -710,7 +713,7 @@ function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (
         <ToggleField label={t("gallerydl.previews")} desc={t("gallerydl.previews.desc")} value={data.previews ?? false} onChange={(v) => set("previews", v)} />
         <ToggleField label={t("gallerydl.articles")} desc={t("gallerydl.articles.desc")} value={data.articles ?? false} onChange={(v) => set("articles", v)} />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.file_org")}</h4>
       <NamingReferencePanel
         source="twitter"
         directory={str(data.directory)}
@@ -729,11 +732,11 @@ function IwaraTab({ data, onChange }: { data: IwaraSourceConfig; onChange: (d: I
   const set = (k: keyof IwaraSourceConfig, v: any) => onChange({ ...data, [k]: v });
   return (
     <>
-      <div className="border-b dark:border-slate-700 pb-3 mb-3">
+      <div className="border-b border-border pb-3 mb-3">
         <ToggleField label={t("gallerydl.auto_enable_on_import")} desc={t("gallerydl.auto_enable_on_import.desc")}
           value={data.auto_enable_on_import ?? false} onChange={(v) => set("auto_enable_on_import", v)} />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.auth")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.auth")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label={t("gallerydl.username")} desc={t("gallerydl.username.desc")} value={str(data.username)} onChange={(v) => set("username", v || undefined)} placeholder="Iwara account username/email" />
         <TextField label={t("gallerydl.password")} desc={t("gallerydl.password.desc")} value={str(data.password)} onChange={(v) => set("password", v || undefined)} type="password" placeholder="Iwara account password" />
@@ -744,12 +747,12 @@ function IwaraTab({ data, onChange }: { data: IwaraSourceConfig; onChange: (d: I
         <textarea value={str(data.cookie_content)} onChange={(e) => set("cookie_content", e.target.value || undefined)}
           rows={3} className="textarea w-full font-mono text-xs"
           placeholder="Paste cookie text here. Auto-saved to /gallerydl-config/cookies/iwara.txt" />
-        <p className="text-xs text-gray-400 mt-1">{t("gallerydl.cookies_help")}</p>
+        <p className="text-xs text-muted mt-1">{t("gallerydl.cookies_help")}</p>
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.video_quality")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2 pt-4">{t("gallerydl.video_quality")}</h4>
       <TextField label={t("gallerydl.format")} value={str(data.format)} onChange={(v) => set("format", v || undefined)} placeholder="Source, 540, 360" />
-      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">{t("gallerydl.format.desc")}</p>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.content")}</h4>
+      <p className="text-xs text-muted mt-2">{t("gallerydl.format.desc")}</p>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2 pt-4">{t("gallerydl.content")}</h4>
       <div className="w-64">
         <SelectField label={t("gallerydl.include")} desc={t("gallerydl.iwara_include.desc")} value={str(data.include, "user-videos")} onChange={(v) => set("include", v || undefined)}
           options={[
@@ -758,7 +761,7 @@ function IwaraTab({ data, onChange }: { data: IwaraSourceConfig; onChange: (d: I
             { value: "user-playlists", label: t("gallerydl.user_playlists") },
           ]} />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.file_org")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2 pt-4">{t("gallerydl.file_org")}</h4>
       <NamingReferencePanel
         source="iwara"
         directory={str(data.directory)}
@@ -777,11 +780,11 @@ function DanbooruTab({ data, onChange }: { data: DanbooruSourceConfig; onChange:
   const set = (k: keyof DanbooruSourceConfig, v: any) => onChange({ ...data, [k]: v });
   return (
     <>
-      <div className="border-b dark:border-slate-700 pb-3 mb-3">
+      <div className="border-b border-border pb-3 mb-3">
         <ToggleField label={t("gallerydl.auto_enable_on_import")} desc={t("gallerydl.auto_enable_on_import.desc")}
           value={data.auto_enable_on_import ?? false} onChange={(v) => set("auto_enable_on_import", v)} />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.auth")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.auth")}</h4>
       <div className="grid grid-cols-3 gap-4">
         <TextField label={t("gallerydl.danbooru.username")} value={str(data.username)} onChange={(v) => set("username", v || undefined)} placeholder="Danbooru username" />
         <TextField label={t("gallerydl.danbooru.password")} value={str(data.password)} onChange={(v) => set("password", v || undefined)} type="password" placeholder="Danbooru password" />
@@ -795,19 +798,19 @@ function DanbooruTab({ data, onChange }: { data: DanbooruSourceConfig; onChange:
         <textarea value={str(data.cookie_content)} onChange={(e) => set("cookie_content", e.target.value || undefined)}
           rows={3} className="textarea w-full font-mono text-xs"
           placeholder="Paste cookie text here. Auto-saved to /gallerydl-config/cookies/danbooru.txt" />
-        <p className="text-xs text-gray-400 mt-1">{t("gallerydl.danbooru.cookies_help")}</p>
+        <p className="text-xs text-muted mt-1">{t("gallerydl.danbooru.cookies_help")}</p>
       </div>
 
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.content")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2 pt-4">{t("gallerydl.content")}</h4>
       <div className="space-y-3">
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.metadata_section")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2 pt-4">{t("gallerydl.metadata_section")}</h4>
       <div className="space-y-1">
         <ToggleField label={t("gallerydl.danbooru.external")} desc={t("gallerydl.danbooru.external.desc")} value={data.external ?? false} onChange={(v) => set("external", v)} />
         <ToggleField label={t("gallerydl.metadata")} desc={t("gallerydl.metadata.desc")} value={data.metadata ?? false} onChange={(v) => set("metadata", v)} />
       </div>
 
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2 pt-4">{t("gallerydl.file_org")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2 pt-4">{t("gallerydl.file_org")}</h4>
       <NamingReferencePanel
         source="danbooru"
         directory={str(data.directory)}
@@ -839,12 +842,12 @@ function PinterestTab({ data, onChange }: { data: PinterestSourceConfig; onChang
 
   return (
     <div className="space-y-5 text-sm">
-      <p className="text-xs text-gray-400 dark:text-gray-500">{t("gallerydl.public_api_no_auth")}</p>
-      <div className="border-b dark:border-slate-700 pb-3 mb-3">
+      <p className="text-xs text-muted">{t("gallerydl.public_api_no_auth")}</p>
+      <div className="border-b border-border pb-3 mb-3">
         <ToggleField label={t("gallerydl.auto_enable_on_import")} desc={t("gallerydl.auto_enable_on_import.desc")}
           value={data.auto_enable_on_import ?? false} onChange={(v) => set("auto_enable_on_import", v)} />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.content")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.content")}</h4>
       <div className="space-y-1">
         <ToggleField label={t("gallerydl.stories")} desc={t("gallerydl.stories.desc")}
           value={data.stories ?? true} onChange={(v) => bool("stories", v)} />
@@ -853,11 +856,11 @@ function PinterestTab({ data, onChange }: { data: PinterestSourceConfig; onChang
         <ToggleField label={t("gallerydl.sections")} desc={t("gallerydl.sections.desc")}
           value={data.sections ?? true} onChange={(v) => bool("sections", v)} />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.section_network")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.section_network")}</h4>
       <TextField label={t("gallerydl.domain")} value={data.domain || ""}
         onChange={(v) => set("domain", v || undefined)} placeholder="auto" />
-      <p className="text-xs text-gray-400 dark:text-gray-500">{t("gallerydl.domain.desc")}</p>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
+      <p className="text-xs text-muted">{t("gallerydl.domain.desc")}</p>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.file_org")}</h4>
       <NamingReferencePanel
         source="pinterest"
         directory={data.directory || ""}
@@ -875,12 +878,12 @@ function LofterTab({ data, onChange }: { data: LofterSourceConfig; onChange: (d:
 
   return (
     <div className="space-y-5 text-sm">
-      <p className="text-xs text-gray-400 dark:text-gray-500">{t("gallerydl.public_api_no_auth")}</p>
-      <div className="border-b dark:border-slate-700 pb-3 mb-3">
+      <p className="text-xs text-muted">{t("gallerydl.public_api_no_auth")}</p>
+      <div className="border-b border-border pb-3 mb-3">
         <ToggleField label={t("gallerydl.auto_enable_on_import")} desc={t("gallerydl.auto_enable_on_import.desc")}
           value={data.auto_enable_on_import ?? false} onChange={(v) => set("auto_enable_on_import", v)} />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.file_org")}</h4>
       <NamingReferencePanel
         source="lofter"
         directory={data.directory || ""}
@@ -897,11 +900,11 @@ function WeiboTab({ data, onChange }: { data: WeiboSourceConfig; onChange: (d: W
   const set = (k: string, v: any) => onChange({ ...data, [k]: v });
   return (
     <div className="space-y-5 text-sm">
-      <div className="border-b dark:border-slate-700 pb-3 mb-3">
+      <div className="border-b border-border pb-3 mb-3">
         <ToggleField label={t("gallerydl.auto_enable_on_import")} desc={t("gallerydl.auto_enable_on_import.desc")}
           value={data.auto_enable_on_import ?? false} onChange={(v) => set("auto_enable_on_import", v)} />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.auth")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.auth")}</h4>
       <div className="grid grid-cols-2 gap-4">
         <TextField label={t("gallerydl.cookies_path")} value={str(data.cookies_path)} onChange={(v) => set("cookies_path", v || undefined)} placeholder="/gallerydl-config/cookies/weibo.txt" />
       </div>
@@ -910,9 +913,9 @@ function WeiboTab({ data, onChange }: { data: WeiboSourceConfig; onChange: (d: W
         <textarea value={str(data.cookie_content)} onChange={(e) => set("cookie_content", e.target.value || undefined)}
           rows={3} className="textarea w-full font-mono text-xs"
           placeholder="Paste cookie text here. Auto-saved to /gallerydl-config/cookies/weibo.txt" />
-        <p className="text-xs text-gray-400 mt-1">{t("gallerydl.cookies_help")}</p>
+        <p className="text-xs text-muted mt-1">{t("gallerydl.cookies_help")}</p>
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.filters")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.filters")}</h4>
       <div className="space-y-1">
         <ToggleField label={t("gallerydl.videos")} desc={t("gallerydl.videos.desc")} value={data.videos ?? true} onChange={(v) => set("videos", v)} />
         <ToggleField label={t("gallerydl.retweets")} desc={t("gallerydl.include_retweets")} value={data.retweets ?? false} onChange={(v) => set("retweets", v)} />
@@ -921,7 +924,7 @@ function WeiboTab({ data, onChange }: { data: WeiboSourceConfig; onChange: (d: W
         <ToggleField label={t("gallerydl.movies")} desc={t("gallerydl.movies.desc")} value={data.movies ?? false} onChange={(v) => set("movies", v)} />
         <ToggleField label={t("gallerydl.text_posts")} desc={t("gallerydl.text_posts.desc")} value={data.text ?? false} onChange={(v) => set("text", v)} />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.file_org")}</h4>
       <NamingReferencePanel
         source="weibo"
         directory={str(data.directory)}
@@ -938,23 +941,23 @@ function BilibiliTab({ data, onChange }: { data: BilibiliSourceConfig; onChange:
   const set = (k: string, v: any) => onChange({ ...data, [k]: v });
   return (
     <div className="space-y-5 text-sm">
-      <p className="text-xs text-gray-400 dark:text-gray-500">公开内容无需登录认证。No authentication required for public content.</p>
-      <div className="border-b dark:border-slate-700 pb-3 mb-3">
+      <p className="text-xs text-muted">公开内容无需登录认证。No authentication required for public content.</p>
+      <div className="border-b border-border pb-3 mb-3">
         <ToggleField label={t("gallerydl.auto_enable_on_import")} desc={t("gallerydl.auto_enable_on_import.desc")}
           value={data.auto_enable_on_import ?? false} onChange={(v) => set("auto_enable_on_import", v)} />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.content")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.content")}</h4>
       <div className="space-y-1">
         <ToggleField label={t("gallerydl.bilibili.livephoto")} desc={t("gallerydl.bilibili.livephoto.desc")}
           value={data.livephoto ?? true} onChange={(v) => set("livephoto", v)} />
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.rate_limit")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.rate_limit")}</h4>
       <div className="w-64">
         <TextField label={t("gallerydl.bilibili.sleep_request")} value={str(data.sleep_request, "3.0-6.0")}
           onChange={(v) => set("sleep_request", v || undefined)} placeholder="3.0-6.0" />
-        <p className="text-xs text-gray-400 mt-1">{t("gallerydl.bilibili.sleep_request.desc")}</p>
+        <p className="text-xs text-muted mt-1">{t("gallerydl.bilibili.sleep_request.desc")}</p>
       </div>
-      <h4 className="font-medium text-sm text-gray-700 dark:text-gray-300 border-b dark:border-slate-700 pb-2">{t("gallerydl.file_org")}</h4>
+      <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.file_org")}</h4>
       <NamingReferencePanel
         source="bilibili"
         directory={str(data.directory)}
