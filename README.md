@@ -50,12 +50,27 @@ curation history, and gallery-dl configuration.
 
 ![Current admin dashboard with fictional operational data](docs/assets/admin-dashboard.png)
 
+### Media library and creators
+
+| Works library | Creator management |
+|---|---|
+| ![Responsive works library with fictional generated media](docs/assets/works-library.png) | ![Creator list with fictional identities and repository summaries](docs/assets/creators.png) |
+
+### Repositories and operations
+
+| Repository detail | Job operations |
+|---|---|
+| ![Repository overview with sync state, recent jobs, and fictional works](docs/assets/repository-detail.png) | ![Download operations with active, completed, and failed fictional jobs](docs/assets/jobs-operations.png) |
+
+### Exploration and curation
+
 | Tag distribution | Cross-source asset review |
 |---|---|
-| ![Current tag bubble chart with fictional tags](docs/assets/tag-bubbles.png) | ![Current image asset deduplication review with generated placeholders](docs/assets/asset-dedup-review.png) |
+| ![Current tag bubble chart with fictional tags](docs/assets/tag-bubbles.png) | ![Current image asset deduplication review with generated fictional media](docs/assets/asset-dedup-review.png) |
 
 These screenshots are rendered from the current admin web with intercepted,
-fictional fixtures and generated geometric placeholders. They contain no
+fictional fixtures and three generated, copyright-neutral media illustrations.
+They contain no
 credentials, local paths, private creators, or downloaded media.
 
 ## Supported sources

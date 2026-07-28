@@ -14,6 +14,14 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
+  webServer: process.env.PLAYWRIGHT_MANAGE_SERVER
+    ? {
+        command: "npm run dev -- --port 13000",
+        url: "http://127.0.0.1:13000",
+        reuseExistingServer: false,
+        timeout: 120_000,
+      }
+    : undefined,
   projects: [
     {
       name: "chromium",

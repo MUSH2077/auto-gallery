@@ -50,6 +50,7 @@ export const api = {
   health: () => request<T.HealthResponse>("/api/v1/system/health"),
 
   workbench: () => request<T.WorkbenchSummary>("/api/v1/system/workbench"),
+  refreshWorkbench: () => request<T.WorkbenchSummary>("/api/v1/system/workbench?refresh=true"),
 
   schedulerDecisions: () => request<T.SchedulerDecisionsResponse>("/api/v1/system/scheduler-decisions"),
 

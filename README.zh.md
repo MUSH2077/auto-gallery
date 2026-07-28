@@ -39,12 +39,26 @@ NAS 和 Linux 主机。响应式管理工作台覆盖创作者、来源仓库、
 
 ![使用虚构运维数据的当前管理仪表盘](docs/assets/admin-dashboard.png)
 
+### 媒体库与创作者
+
+| 作品库 | 创作者管理 |
+|---|---|
+| ![使用生成式虚构媒体的响应式作品库](docs/assets/works-library.png) | ![使用虚构身份和仓库摘要的创作者列表](docs/assets/creators.png) |
+
+### 仓库与任务
+
+| 仓库详情 | 任务运维 |
+|---|---|
+| ![包含同步状态、最近任务与虚构作品的仓库概览](docs/assets/repository-detail.png) | ![包含运行、完成与失败虚构任务的下载运维页](docs/assets/jobs-operations.png) |
+
+### 探索与策展
+
 | 标签分布 | 跨来源图片资产审核 |
 |---|---|
-| ![使用虚构标签的当前标签气泡图](docs/assets/tag-bubbles.png) | ![使用生成式几何占位图的当前图片资产去重审核页](docs/assets/asset-dedup-review.png) |
+| ![使用虚构标签的当前标签气泡图](docs/assets/tag-bubbles.png) | ![使用生成式虚构媒体的当前图片资产去重审核页](docs/assets/asset-dedup-review.png) |
 
-这些截图由当前管理前端配合拦截式虚构数据和程序生成的几何占位图渲染，不包含凭据、
-本地路径、真实创作者或已下载媒体。
+这些截图由当前管理前端配合拦截式虚构数据和三张无版权人物的生成式媒体插画渲染，
+不包含凭据、本地路径、真实创作者或已下载媒体。
 
 ## 支持的来源
 

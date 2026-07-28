@@ -456,7 +456,12 @@ export interface WorkbenchSummary {
       subscription_source_id?: string | null;
       source: string;
       source_url: string;
+      creator_id?: string | null;
+      creator_name?: string | null;
+      subscription_name?: string | null;
       status: string;
+      pipeline_stage?: string | null;
+      progress_data?: JobProgress | null;
       created_at?: string | null;
       updated_at?: string | null;
       error_log_excerpt?: string | null;
@@ -464,7 +469,17 @@ export interface WorkbenchSummary {
     import_jobs: {
       id: string;
       download_job_id: string;
+      source?: string | null;
+      source_url?: string | null;
+      subscription_id?: string | null;
+      subscription_name?: string | null;
+      creator_id?: string | null;
+      creator_name?: string | null;
       status: string;
+      progress_stage?: string | null;
+      progress_works_done?: number | null;
+      progress_works_total?: number | null;
+      progress_data?: JobProgress | null;
       created_at?: string | null;
       updated_at?: string | null;
       error_log_excerpt?: string | null;
@@ -473,6 +488,8 @@ export interface WorkbenchSummary {
       id: string;
       title?: string | null;
       thumbnail_asset_id?: string | null;
+      source?: string | null;
+      creator_name?: string | null;
       created_at?: string | null;
     }[];
     successful_syncs: {

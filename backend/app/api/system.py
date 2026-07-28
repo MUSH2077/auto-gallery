@@ -6,7 +6,7 @@ import urllib.request
 import time
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from app.auth import RequirePermission
 from sqlalchemy import and_, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,9 +17,11 @@ from app.jobs.subscription_sync import schedule_decision_snapshot
 from app.models.creator import Creator
 from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
+from app.models.source_creator import SourceCreator
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.models.work import Work
+from app.models.work_source import WorkSource
 from app.providers import registry
 from app.services.settings import get_download_defaults, get_scheduler_config
 
@@ -312,15 +314,22 @@ async def _count_active_rebuilds() -> int:
 
 _workbench_cache: dict | None = None
 _workbench_cache_ts: float = 0.0
-_WORKBENCH_CACHE_TTL = 120.0
+_WORKBENCH_CACHE_TTL = 10.0
 
 
 @router.get("/system/workbench")
-async def workbench_summary(db: AsyncSession = Depends(get_db)):
+async def workbench_summary(
+    refresh: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+):
     """Read-only dashboard aggregation for the live admin workbench."""
     global _workbench_cache, _workbench_cache_ts
     _now_mono = time.monotonic()
-    if _workbench_cache is not None and (_now_mono - _workbench_cache_ts) < _WORKBENCH_CACHE_TTL:
+    if (
+        not refresh
+        and _workbench_cache is not None
+        and (_now_mono - _workbench_cache_ts) < _WORKBENCH_CACHE_TTL
+    ):
         return _workbench_cache
 
     now = datetime.now(timezone.utc)
@@ -367,15 +376,52 @@ async def workbench_summary(db: AsyncSession = Depends(get_db)):
     )
     auth_unhealthy_count = int(auth_unhealthy_rows.scalar() or 0)
 
-    latest_downloads = list((await db.execute(
-        select(DownloadJob).order_by(DownloadJob.created_at.desc()).limit(5)
-    )).scalars().all())
-    latest_imports = list((await db.execute(
-        select(ImportJob).order_by(ImportJob.created_at.desc()).limit(5)
-    )).scalars().all())
+    latest_download_rows = list((await db.execute(
+        select(DownloadJob, Subscription, Creator)
+        .join(Subscription, DownloadJob.subscription_id == Subscription.id)
+        .join(Creator, Subscription.creator_id == Creator.id)
+        .order_by(DownloadJob.created_at.desc())
+        .limit(5)
+    )).all())
+    latest_import_rows = list((await db.execute(
+        select(ImportJob, DownloadJob, Subscription, Creator)
+        .join(DownloadJob, ImportJob.download_job_id == DownloadJob.id)
+        .join(Subscription, DownloadJob.subscription_id == Subscription.id)
+        .join(Creator, Subscription.creator_id == Creator.id)
+        .order_by(ImportJob.created_at.desc())
+        .limit(5)
+    )).all())
     latest_works = list((await db.execute(
         select(Work).order_by(Work.created_at.desc()).limit(5)
     )).scalars().all())
+    work_context: dict = {}
+    if latest_works:
+        work_context_rows = list((await db.execute(
+            select(
+                WorkSource.work_id,
+                WorkSource.source,
+                Creator.display_name,
+                Creator.name,
+            )
+            .outerjoin(
+                SourceCreator,
+                and_(
+                    SourceCreator.source == WorkSource.source,
+                    SourceCreator.source_creator_id == WorkSource.source_creator_id,
+                ),
+            )
+            .outerjoin(Creator, Creator.id == SourceCreator.creator_id)
+            .where(WorkSource.work_id.in_([work.id for work in latest_works]))
+            .order_by(WorkSource.created_at.asc())
+        )).all())
+        for work_id, source, creator_display_name, creator_name in work_context_rows:
+            work_context.setdefault(
+                work_id,
+                {
+                    "source": source,
+                    "creator_name": creator_display_name or creator_name,
+                },
+            )
     successful_sync_rows = list((await db.execute(
         select(SubscriptionSource, Subscription, Creator)
         .join(Subscription, SubscriptionSource.subscription_id == Subscription.id)
@@ -385,7 +431,7 @@ async def workbench_summary(db: AsyncSession = Depends(get_db)):
         .limit(5)
     )).all())
 
-    return {
+    payload = {
         "updated_at": now.isoformat(),
         "queue": {
             "default": queue_payload["default_queue"],
@@ -434,23 +480,40 @@ async def workbench_summary(db: AsyncSession = Depends(get_db)):
                 "subscription_source_id": str(j.subscription_source_id) if j.subscription_source_id else None,
                 "source": j.source,
                 "source_url": j.source_url,
+                "creator_id": str(creator.id),
+                "creator_name": creator.display_name or creator.name,
+                "subscription_name": sub.name,
                 "status": j.status,
+                "pipeline_stage": j.pipeline_stage,
+                "progress_data": j.progress_data,
                 "created_at": _iso(j.created_at),
                 "updated_at": _iso(j.updated_at),
                 "error_log_excerpt": _excerpt(j.error_log),
-            } for j in latest_downloads],
+            } for j, sub, creator in latest_download_rows],
             "import_jobs": [{
                 "id": str(j.id),
                 "download_job_id": str(j.download_job_id),
+                "source": download.source,
+                "source_url": download.source_url,
+                "subscription_id": str(sub.id),
+                "subscription_name": sub.name,
+                "creator_id": str(creator.id),
+                "creator_name": creator.display_name or creator.name,
                 "status": j.status,
+                "progress_stage": j.progress_stage,
+                "progress_works_done": j.progress_works_done,
+                "progress_works_total": j.progress_works_total,
+                "progress_data": j.progress_data,
                 "created_at": _iso(j.created_at),
                 "updated_at": _iso(j.updated_at),
                 "error_log_excerpt": _excerpt(j.error_log),
-            } for j in latest_imports],
+            } for j, download, sub, creator in latest_import_rows],
             "works": [{
                 "id": str(w.id),
                 "title": w.title,
                 "thumbnail_asset_id": str(w.thumbnail_asset_id) if w.thumbnail_asset_id else None,
+                "source": (work_context.get(w.id) or {}).get("source"),
+                "creator_name": (work_context.get(w.id) or {}).get("creator_name"),
                 "created_at": _iso(w.created_at),
             } for w in latest_works],
             "successful_syncs": [{
@@ -464,6 +527,9 @@ async def workbench_summary(db: AsyncSession = Depends(get_db)):
             } for ss, sub, creator in successful_sync_rows],
         },
     }
+    _workbench_cache = payload
+    _workbench_cache_ts = time.monotonic()
+    return payload
 
 
 @tasks_ops_router.get("/system/scheduler-decisions")
