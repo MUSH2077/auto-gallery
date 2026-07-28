@@ -88,7 +88,7 @@ gallery-dl 等 Provider 敏感依赖必须固定版本。
 ```bash
 cd backend
 python -m pip install pip-tools
-pip-compile --resolver=backtracking --allow-unsafe --generate-hashes \
+pip-compile --allow-unsafe --generate-hashes \
   --no-emit-index-url --no-strip-extras \
   --output-file requirements.txt requirements.in
 ```
