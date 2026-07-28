@@ -11,7 +11,7 @@ body:
     id: provider
     attributes:
       label: Provider name
-      placeholder: Example: Pixiv, X/Twitter, Weibo
+      placeholder: "Example: Pixiv, X/Twitter, Weibo"
     validations:
       required: true
   - type: textarea

@@ -5,42 +5,145 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ──────────────────────────────────────────────────────────────────────────
+   NEUTRAL OPERATIONS THEME
+   Tokens are RGB triplets ("R G B") so Tailwind opacity modifiers work.
+   Light/dark is the only supported appearance axis.
+   ────────────────────────────────────────────────────────────────────────── */
 @layer base {
   :root {
-    --ag-bg: #f6f8fa;
-    --ag-surface: #ffffff;
-    --ag-subtle: #f6f8fa;
-    --ag-border: #d8dee4;
-    --ag-muted: #57606a;
-    --ag-text: #24292f;
-    --ag-accent: #0969da;
-    --ag-success: #1a7f37;
-    --ag-warning: #9a6700;
-    --ag-danger: #cf222e;
-    --ag-focus: #0969da;
+    --ag-bg: 243 246 250;        --ag-surface: 255 255 255;   --ag-subtle: 238 242 247;
+    --ag-border: 207 216 227;    --ag-muted: 79 91 109;       --ag-text: 23 33 48;
+    --ag-accent: 37 99 235;      --ag-success: 22 133 74;     --ag-warning: 180 104 3;
+    --ag-danger: 210 45 63;      --ag-focus: 37 99 235;
+    --ag-primary: 37 99 235;     --ag-primary-hover: 29 78 216;  --ag-on-primary: 255 255 255;
+    --ag-input: 255 255 255;     --ag-placeholder: 128 142 161;
+    --ag-nav: 23 33 48;          --ag-nav-fg: 255 255 255;
+    --ag-accent-subtle: 226 235 255;  --ag-danger-subtle: 255 233 236;  --ag-warning-subtle: 255 244 214;  --ag-success-subtle: 224 247 234;
   }
   html.dark {
-    --ag-bg: #0d1117;
-    --ag-surface: #161b22;
-    --ag-subtle: #21262d;
-    --ag-border: #30363d;
-    --ag-muted: #8b949e;
-    --ag-text: #e6edf3;
-    --ag-accent: #58a6ff;
-    --ag-success: #3fb950;
-    --ag-warning: #d29922;
-    --ag-danger: #f85149;
-    --ag-focus: #58a6ff;
+    --ag-bg: 8 15 28;            --ag-surface: 15 24 39;      --ag-subtle: 24 35 53;
+    --ag-border: 48 62 83;       --ag-muted: 147 160 180;     --ag-text: 229 235 244;
+    --ag-accent: 96 165 250;     --ag-success: 74 222 128;    --ag-warning: 251 191 36;
+    --ag-danger: 251 113 133;    --ag-focus: 96 165 250;
+    --ag-primary: 37 99 235;     --ag-primary-hover: 59 130 246;  --ag-on-primary: 255 255 255;
+    --ag-input: 10 18 32;        --ag-placeholder: 102 119 143;
+    --ag-nav: 8 15 28;           --ag-nav-fg: 229 235 244;
+    --ag-accent-subtle: 20 42 78;  --ag-danger-subtle: 63 30 41;  --ag-warning-subtle: 60 47 20;  --ag-success-subtle: 22 54 40;
   }
+
+  /* ── nord (cool arctic blue-grey) ── */
+  [data-theme="nord"] {
+    --ag-bg: 236 239 244;        --ag-surface: 255 255 255;   --ag-subtle: 229 233 240;
+    --ag-border: 216 222 233;    --ag-muted: 76 86 106;       --ag-text: 46 52 64;
+    --ag-accent: 94 129 172;     --ag-success: 122 162 110;   --ag-warning: 191 144 42;
+    --ag-danger: 191 97 106;     --ag-focus: 94 129 172;
+    --ag-primary: 94 129 172;    --ag-primary-hover: 76 110 148; --ag-on-primary: 255 255 255;
+    --ag-input: 255 255 255;     --ag-placeholder: 123 136 161;
+    --ag-nav: 46 52 64;          --ag-nav-fg: 236 239 244;
+    --ag-accent-subtle: 221 230 240;  --ag-danger-subtle: 243 223 225;  --ag-warning-subtle: 246 236 213;  --ag-success-subtle: 227 235 218;
+  }
+  html.dark[data-theme="nord"] {
+    --ag-bg: 46 52 64;           --ag-surface: 59 66 82;      --ag-subtle: 67 76 94;
+    --ag-border: 76 86 106;      --ag-muted: 154 165 184;     --ag-text: 236 239 244;
+    --ag-accent: 136 192 208;    --ag-success: 163 190 140;   --ag-warning: 235 203 139;
+    --ag-danger: 191 97 106;     --ag-focus: 136 192 208;
+    --ag-primary: 129 161 193;   --ag-primary-hover: 143 173 204; --ag-on-primary: 46 52 64;
+    --ag-input: 46 52 64;        --ag-placeholder: 107 118 137;
+    --ag-accent-subtle: 54 66 86;  --ag-danger-subtle: 65 56 60;  --ag-warning-subtle: 66 61 48;  --ag-success-subtle: 58 66 56;
+  }
+
+  /* ── rose (rose-pine: muted mauve/rose) ── */
+  [data-theme="rose"] {
+    --ag-bg: 250 244 237;        --ag-surface: 255 250 243;   --ag-subtle: 242 233 225;
+    --ag-border: 223 218 217;    --ag-muted: 121 117 147;     --ag-text: 87 82 121;
+    --ag-accent: 144 122 169;    --ag-success: 86 148 159;    --ag-warning: 234 157 52;
+    --ag-danger: 180 99 122;     --ag-focus: 144 122 169;
+    --ag-primary: 40 105 131;    --ag-primary-hover: 31 84 104;  --ag-on-primary: 255 250 243;
+    --ag-input: 255 250 243;     --ag-placeholder: 152 147 165;
+    --ag-nav: 31 29 46;          --ag-nav-fg: 224 222 244;
+    --ag-accent-subtle: 236 230 240;  --ag-danger-subtle: 245 226 231;  --ag-warning-subtle: 247 236 213;  --ag-success-subtle: 224 236 236;
+  }
+  html.dark[data-theme="rose"] {
+    --ag-bg: 25 23 36;           --ag-surface: 31 29 46;      --ag-subtle: 38 35 58;
+    --ag-border: 64 61 82;       --ag-muted: 144 140 170;     --ag-text: 224 222 244;
+    --ag-accent: 196 167 231;    --ag-success: 156 207 216;   --ag-warning: 246 193 119;
+    --ag-danger: 235 111 146;    --ag-focus: 196 167 231;
+    --ag-primary: 49 116 143;    --ag-primary-hover: 62 138 168; --ag-on-primary: 224 222 244;
+    --ag-input: 25 23 36;        --ag-placeholder: 110 106 138;
+    --ag-accent-subtle: 42 36 64;  --ag-danger-subtle: 58 37 48;  --ag-warning-subtle: 58 51 36;  --ag-success-subtle: 31 51 56;
+  }
+
+  /* ── solarized (ethan schoonover: teal base + amber/blue) ── */
+  [data-theme="solarized"] {
+    --ag-bg: 253 246 227;        --ag-surface: 253 246 227;   --ag-subtle: 238 232 213;
+    --ag-border: 221 214 193;    --ag-muted: 101 123 131;     --ag-text: 88 110 117;
+    --ag-accent: 38 139 210;     --ag-success: 133 153 0;     --ag-warning: 181 137 0;
+    --ag-danger: 220 50 47;      --ag-focus: 38 139 210;
+    --ag-primary: 133 153 0;     --ag-primary-hover: 113 127 0;  --ag-on-primary: 253 246 227;
+    --ag-input: 253 246 227;     --ag-placeholder: 147 161 161;
+    --ag-nav: 7 54 66;           --ag-nav-fg: 238 232 213;
+    --ag-accent-subtle: 214 233 245;  --ag-danger-subtle: 247 218 217;  --ag-warning-subtle: 245 234 208;  --ag-success-subtle: 232 237 208;
+  }
+  html.dark[data-theme="solarized"] {
+    --ag-bg: 0 43 54;            --ag-surface: 7 54 66;       --ag-subtle: 10 65 80;
+    --ag-border: 20 70 84;       --ag-muted: 122 138 140;     --ag-text: 147 161 161;
+    --ag-accent: 38 139 210;     --ag-success: 133 153 0;     --ag-warning: 181 137 0;
+    --ag-danger: 220 50 47;      --ag-focus: 38 139 210;
+    --ag-primary: 133 153 0;     --ag-primary-hover: 154 174 0;  --ag-on-primary: 0 43 54;
+    --ag-input: 0 43 54;         --ag-placeholder: 88 110 117;
+    --ag-nav: 0 33 43;           --ag-nav-fg: 147 161 161;
+    --ag-accent-subtle: 6 48 74;  --ag-danger-subtle: 58 31 36;  --ag-warning-subtle: 51 51 15;  --ag-success-subtle: 31 51 21;
+  }
+
+  /* ── gruvbox (warm retro) ── */
+  [data-theme="gruvbox"] {
+    --ag-bg: 251 241 199;        --ag-surface: 251 241 199;   --ag-subtle: 235 219 178;
+    --ag-border: 213 196 161;    --ag-muted: 124 111 100;     --ag-text: 60 56 54;
+    --ag-accent: 69 133 136;     --ag-success: 152 151 26;    --ag-warning: 181 118 20;
+    --ag-danger: 204 36 29;      --ag-focus: 69 133 136;
+    --ag-primary: 152 151 26;    --ag-primary-hover: 121 116 14; --ag-on-primary: 251 241 199;
+    --ag-input: 251 241 199;     --ag-placeholder: 168 153 132;
+    --ag-nav: 60 56 54;          --ag-nav-fg: 235 219 178;
+    --ag-accent-subtle: 211 224 224;  --ag-danger-subtle: 241 211 204;  --ag-warning-subtle: 240 226 192;  --ag-success-subtle: 227 227 192;
+  }
+  html.dark[data-theme="gruvbox"] {
+    --ag-bg: 40 40 40;           --ag-surface: 50 48 47;      --ag-subtle: 60 56 54;
+    --ag-border: 80 73 69;       --ag-muted: 168 153 132;     --ag-text: 235 219 178;
+    --ag-accent: 131 165 152;    --ag-success: 184 187 38;    --ag-warning: 250 189 47;
+    --ag-danger: 251 73 52;      --ag-focus: 131 165 152;
+    --ag-primary: 184 187 38;    --ag-primary-hover: 152 151 26; --ag-on-primary: 40 40 40;
+    --ag-input: 40 40 40;        --ag-placeholder: 146 131 116;
+    --ag-nav: 29 32 33;          --ag-nav-fg: 235 219 178;
+    --ag-accent-subtle: 40 50 58;  --ag-danger-subtle: 58 36 32;  --ag-warning-subtle: 58 49 32;  --ag-success-subtle: 47 51 32;
+  }
+
+  /* ── catppuccin (latte / mocha pastel) ── */
+  [data-theme="catppuccin"] {
+    --ag-bg: 239 241 245;        --ag-surface: 255 255 255;   --ag-subtle: 230 233 239;
+    --ag-border: 204 208 218;    --ag-muted: 108 111 133;     --ag-text: 76 79 105;
+    --ag-accent: 30 102 245;     --ag-success: 64 160 43;     --ag-warning: 223 142 29;
+    --ag-danger: 210 15 57;      --ag-focus: 30 102 245;
+    --ag-primary: 136 57 239;    --ag-primary-hover: 122 47 216; --ag-on-primary: 255 255 255;
+    --ag-input: 255 255 255;     --ag-placeholder: 156 160 176;
+    --ag-nav: 76 79 105;         --ag-nav-fg: 239 241 245;
+    --ag-accent-subtle: 217 227 253;  --ag-danger-subtle: 246 212 220;  --ag-warning-subtle: 247 230 207;  --ag-success-subtle: 217 236 212;
+  }
+  html.dark[data-theme="catppuccin"] {
+    --ag-bg: 30 30 46;           --ag-surface: 49 50 68;      --ag-subtle: 69 71 90;
+    --ag-border: 88 91 112;      --ag-muted: 166 173 200;     --ag-text: 205 214 244;
+    --ag-accent: 137 180 250;    --ag-success: 166 227 161;   --ag-warning: 249 226 175;
+    --ag-danger: 243 139 168;    --ag-focus: 137 180 250;
+    --ag-primary: 203 166 247;   --ag-primary-hover: 180 142 240; --ag-on-primary: 30 30 46;
+    --ag-input: 30 30 46;        --ag-placeholder: 108 112 134;
+    --ag-nav: 24 24 37;          --ag-nav-fg: 205 214 244;
+    --ag-accent-subtle: 35 42 64;  --ag-danger-subtle: 58 37 50;  --ag-warning-subtle: 58 53 39;  --ag-success-subtle: 36 58 44;
+  }
+
   html { @apply transition-colors duration-300; }
-  html.dark body {
-    background: var(--ag-bg);
-    color: var(--ag-text);
-    @apply antialiased min-h-screen;
-  }
   body {
-    background: var(--ag-bg);
-    color: var(--ag-text);
+    background: rgb(var(--ag-bg));
+    color: rgb(var(--ag-text));
     @apply antialiased min-h-screen;
   }
   h1, h2, h3 { font-family: inherit; }
@@ -64,141 +167,218 @@
     outline: 1px solid rgba(0,0,0,0.08);
     outline-offset: -1px;
   }
-  @media (prefers-color-scheme: dark) {
-    img:not(.no-outline) { outline-color: rgba(255,255,255,0.08); }
-  }
+  html.dark img:not(.no-outline) { outline-color: rgba(255,255,255,0.08); }
 
   .btn-primary, .btn-ghost, .btn-danger, .btn-icon, .clickable { min-height: 32px; }
+
+  /* Tactile press (P3 motion primitive). Unlayered so it cleanly extends the
+     @layer components transition-property to include transform — no cancel. */
+  .btn-primary, .btn-ghost, .btn-danger, .btn-icon, .clickable {
+    transition-property: color, background-color, border-color, box-shadow, opacity, transform;
+    transition-duration: 150ms;
+    transition-timing-function: ease-out;
+  }
+  .btn-primary:active, .btn-ghost:active, .btn-danger:active, .btn-icon:active, .clickable:active {
+    transform: scale(0.97);
+  }
+  .no-press:active { transform: none; }
 
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
       animation-duration: 0.01ms !important;
+      animation-delay: 0ms !important;
       animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
     }
+    .page-item {
+      opacity: 1 !important;
+      animation: none !important;
+    }
+    .tag-bubble-enter {
+      opacity: 1 !important;
+      animation: none !important;
+    }
   }
 
+  /* Touch ergonomics (P2): comfortable 44px hit areas on coarse pointers,
+     keeping the dense 32px desktop sizing for mouse users. */
+  @media (pointer: coarse) {
+    .btn-primary, .btn-ghost, .btn-danger, .btn-icon, .clickable,
+    .input, .select, .textarea { min-height: 44px; }
+    .btn-icon { min-width: 44px; }
+    .row-menu-item { min-height: 44px; }
+  }
+  .row-menu-trigger,
+  .row-menu-item { min-height: 44px; }
+  .row-menu-trigger { min-width: 44px; }
+
 @layer components {
+  /* Neutral operations-console primitives. */
   .card {
-    @apply bg-white dark:bg-[#161b22]
-           border border-[#d8dee4] dark:border-[#30363d]
-           rounded-md shadow-sm dark:shadow-none;
+    @apply rounded-lg border border-border bg-surface;
   }
-  .card-elevated {
-    @apply card;
-  }
+  .card-elevated { @apply card; }
   .card-interactive {
-    transition-property: background-color, border-color;
+    @apply card hover:bg-subtle hover:border-accent/50 hover:-translate-y-px hover:shadow-md
+           active:translate-y-0 active:scale-[0.99];
+    transition-property: background-color, border-color, transform, box-shadow;
     transition-duration: 150ms;
     transition-timing-function: ease-out;
-    @apply card
-           hover:bg-[#f6f8fa] hover:border-[#0969da]/50
-           dark:hover:bg-[#21262d] dark:hover:border-[#58a6ff]/50;
   }
   .btn-primary {
-    transition-property: background-color, box-shadow, opacity;
-    transition-duration: 150ms;
-    transition-timing-function: ease-out;
-    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium
-           bg-[#1f883d] hover:bg-[#1a7f37] text-white
+    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium
+           bg-primary hover:bg-primary-hover text-on-primary
            shadow-sm disabled:opacity-50 disabled:cursor-not-allowed
-           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0969da]/40 dark:focus-visible:ring-[#58a6ff]/40;
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40;
   }
   .btn-ghost {
-    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium
-           border border-[#d8dee4] dark:border-[#30363d]
-           text-[#24292f] dark:text-[#e6edf3]
-           bg-white dark:bg-[#161b22]
-           hover:bg-[#f6f8fa] dark:hover:bg-[#21262d]
+    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium
+           border border-border text-fg bg-surface hover:bg-subtle
            disabled:opacity-50 disabled:cursor-not-allowed
-           transition-colors duration-150
-           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0969da]/40 dark:focus-visible:ring-[#58a6ff]/40;
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40;
   }
   .btn-danger {
-    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium
-           border border-[#cf222e]/40 text-[#cf222e] bg-white hover:bg-[#ffebe9]
-           dark:border-[#f85149]/40 dark:text-[#f85149] dark:bg-[#161b22] dark:hover:bg-[#f8514926]
-           disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150
-           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#cf222e]/30 dark:focus-visible:ring-[#f85149]/30;
+    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium
+           border border-danger/40 text-danger bg-surface hover:bg-danger/10
+           disabled:opacity-50 disabled:cursor-not-allowed
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/30;
   }
   .btn-icon {
-    @apply inline-flex h-8 w-8 items-center justify-center rounded-md
-           border border-transparent text-[#57606a] hover:bg-[#f6f8fa] hover:text-[#24292f]
-           dark:text-[#8b949e] dark:hover:bg-[#21262d] dark:hover:text-[#e6edf3]
-           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0969da]/40 dark:focus-visible:ring-[#58a6ff]/40;
+    @apply inline-flex h-8 w-8 items-center justify-center rounded-lg
+           border border-transparent text-muted hover:bg-subtle hover:text-fg
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40;
   }
   .input, .select, .textarea {
-    @apply rounded-md border border-[#d8dee4] bg-white px-3 py-2 text-sm text-[#24292f]
-           placeholder:text-[#8c959f]
-           dark:border-[#30363d] dark:bg-[#0d1117] dark:text-[#e6edf3]
-           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0969da]/35 dark:focus-visible:ring-[#58a6ff]/35;
-    color-scheme: light;
-  }
-  html.dark .input, html.dark .select, html.dark .textarea {
-    color-scheme: dark;
+    @apply rounded-lg border border-border bg-input px-3 py-2 text-sm text-fg
+           placeholder:text-placeholder
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35;
   }
   .input:disabled, .select:disabled, .textarea:disabled {
-    @apply cursor-not-allowed bg-[#f6f8fa] text-[#8c959f] opacity-70
-           dark:bg-[#21262d] dark:text-[#6e7681];
+    @apply cursor-not-allowed bg-subtle text-placeholder opacity-70;
   }
   .input:invalid, .select:invalid, .textarea:invalid {
-    @apply border-[#cf222e]/60 dark:border-[#f85149]/60;
+    @apply border-danger/60;
   }
   .input:-webkit-autofill,
   .select:-webkit-autofill,
   .textarea:-webkit-autofill {
-    -webkit-text-fill-color: var(--ag-text);
-    box-shadow: 0 0 0 1000px var(--ag-surface) inset;
+    -webkit-text-fill-color: rgb(var(--ag-text));
+    box-shadow: 0 0 0 1000px rgb(var(--ag-input)) inset;
     transition: background-color 9999s ease-out;
   }
-  html.dark .input:-webkit-autofill,
-  html.dark .select:-webkit-autofill,
-  html.dark .textarea:-webkit-autofill {
-    box-shadow: 0 0 0 1000px #0d1117 inset;
-  }
-  input[type="checkbox"], input[type="radio"] {
-    accent-color: var(--ag-accent);
-  }
-  input[type="range"] {
-    accent-color: var(--ag-accent);
+  input[type="checkbox"], input[type="radio"], input[type="range"] {
+    accent-color: rgb(var(--ag-accent));
   }
   input[type="checkbox"]:focus-visible,
   input[type="radio"]:focus-visible,
   input[type="range"]:focus-visible {
-    @apply outline-none ring-2 ring-[#0969da]/35 dark:ring-[#58a6ff]/35;
+    @apply outline-none ring-2 ring-accent/35;
   }
   .textarea {
     @apply min-h-[84px];
   }
   .toolbar {
-    @apply flex flex-wrap items-center gap-2 rounded-md border border-[#d8dee4] bg-white p-3
-           dark:border-[#30363d] dark:bg-[#161b22];
+    @apply flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-3;
   }
   .segmented-control {
-    @apply inline-flex gap-0.5 rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-0.5
-           dark:border-[#30363d] dark:bg-[#161b22];
+    @apply inline-flex gap-0.5 rounded-md border border-border bg-subtle p-0.5;
   }
   .segment {
-    @apply rounded px-3 py-1 text-xs font-medium text-[#57606a] transition-colors
-           hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3];
+    @apply rounded px-3 py-1 text-xs font-medium text-muted transition-colors hover:text-fg;
   }
   .segment-active {
-    @apply bg-white text-[#24292f] shadow-sm dark:bg-[#30363d] dark:text-[#e6edf3];
+    @apply bg-surface text-fg shadow-sm;
   }
   .badge {
     @apply inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium;
   }
   .table-shell {
-    @apply overflow-x-auto rounded-md border border-[#d8dee4] bg-white dark:border-[#30363d] dark:bg-[#161b22];
+    @apply overflow-x-auto rounded-md border border-border bg-surface;
   }
   .table-head {
-    @apply border-b border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e];
+    @apply border-b border-border bg-subtle text-muted;
   }
   .table-row {
-    @apply border-b border-[#d8dee4] last:border-b-0 hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d];
+    @apply border-b border-border last:border-b-0 hover:bg-subtle;
+  }
+  /* Shared object-list anatomy. The outer list remains overflow-visible so
+     per-row action menus are never clipped by the rounded surface. */
+  .entity-list {
+    @apply rounded-lg border border-border bg-surface;
+  }
+  .entity-list > [role="listitem"] + [role="listitem"] {
+    @apply border-t border-border;
+  }
+  .entity-row {
+    @apply relative flex min-h-[76px] w-full min-w-0 cursor-pointer items-center gap-3 p-4
+           transition-colors hover:bg-subtle
+           focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2
+           focus-visible:ring-inset focus-visible:ring-accent/40;
+  }
+  .entity-row-selected {
+    @apply bg-accent-subtle;
+  }
+  .entity-row-selected:hover {
+    background-color: rgb(var(--ag-accent-subtle));
+  }
+  .entity-avatar {
+    @apply flex h-10 w-10 shrink-0 items-center justify-center rounded-full
+           border border-border bg-accent text-sm font-semibold text-white;
+  }
+  .entity-main {
+    @apply min-w-0 flex-1;
+  }
+  .entity-title-line {
+    @apply flex flex-wrap items-center gap-x-2 gap-y-1;
+  }
+  .entity-title {
+    @apply min-w-0 truncate text-sm font-semibold text-accent;
+  }
+  .entity-supporting {
+    @apply mt-1 line-clamp-1 text-xs text-muted;
+  }
+  .entity-meta {
+    @apply mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted;
+  }
+  .entity-actions {
+    @apply ml-auto flex shrink-0 items-center gap-1.5;
+  }
+  .row-menu-trigger {
+    @apply min-h-11 min-w-11 border-border bg-surface text-muted;
+  }
+  .row-menu-item {
+    @apply flex min-h-11 w-full items-center px-3 py-1.5 text-left text-sm
+           transition-colors hover:bg-subtle
+           focus-visible:bg-subtle focus-visible:outline-none
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .row-menu-item-danger {
+    @apply text-danger hover:bg-danger-subtle focus-visible:bg-danger-subtle;
+  }
+  .page-section {
+    @apply border-t border-border pt-5;
+  }
+  @media (max-width: 639px) {
+    .entity-row {
+      @apply flex-wrap items-start p-3;
+    }
+    .entity-main {
+      flex-basis: calc(100% - 5rem);
+    }
+    .entity-actions {
+      @apply w-full justify-end border-t border-border pt-2;
+    }
   }
   .divider {
-    @apply border-t border-[#d8dee4] dark:border-[#30363d];
+    @apply border-t border-border;
+  }
+  /* Page containers (P2): consistent gutters + max line-length across pages.
+     Adopt opportunistically in place of per-page max-width / padding wrappers. */
+  .page {
+    @apply mx-auto w-full max-w-7xl px-4 py-6 sm:px-6;
+  }
+  .page-narrow {
+    @apply mx-auto w-full max-w-3xl px-4 py-6 sm:px-6;
   }
   .section-title {
     @apply text-base font-semibold tracking-normal;
@@ -211,24 +391,162 @@
     from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: translateY(0); }
   }
-  @keyframes shimmer {
-    0% { background-position: -200% 0; }
-    100% { background-position: 200% 0; }
-  }
-  .skeleton {
-    background: linear-gradient(90deg, transparent 0%, rgba(87,96,106,0.10) 50%, transparent 100%);
-    background-size: 200% 100%;
-    animation: shimmer 1.5s infinite;
-  }
+  /* Skeletons: Tailwind animate-pulse is the single skeleton treatment
+     (the old .skeleton/shimmer pair had zero consumers and was removed). */
   .page-item {
     opacity: 0;
-    animation: fadeUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation: fadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     animation-delay: var(--delay, 0ms);
   }
+  @keyframes bubblePop {
+    0% { opacity: 0; transform: scale(0.35); }
+    72% { opacity: 1; transform: scale(1.04); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  .tag-bubble {
+    --bubble-hue: 210;
+    border-color: hsl(var(--bubble-hue) 42% 78%);
+    background: hsl(var(--bubble-hue) 58% 91%);
+    color: hsl(var(--bubble-hue) 45% 23%);
+    transition: filter 150ms ease-out, border-color 150ms ease-out, transform 150ms ease-out;
+  }
+  .tag-bubble:hover {
+    border-color: hsl(var(--bubble-hue) 50% 62%);
+    filter: saturate(1.08) brightness(0.99);
+  }
+  .tag-bubble:active { transform: scale(0.97); }
+  .tag-bubble-enter {
+    opacity: 0;
+    animation: bubblePop 400ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation-delay: var(--bubble-delay, 0ms);
+  }
+  .dark .tag-bubble {
+    border-color: hsl(var(--bubble-hue) 36% 38%);
+    background: hsl(var(--bubble-hue) 34% 22%);
+    color: hsl(var(--bubble-hue) 55% 88%);
+  }
+  .dark .tag-bubble:hover {
+    border-color: hsl(var(--bubble-hue) 48% 56%);
+    filter: saturate(1.12) brightness(1.08);
+  }
+  /* Bar entrance — transform-only (scaleX, never width: layout is banned from
+     animation). Durations/easings mirror src/lib/motion/tokens.ts. */
   @keyframes barGrow {
-    from { width: 0% !important; }
+    from { transform: scaleX(0); }
   }
   .animate-bar-grow {
-    animation: barGrow 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+    animation: barGrow 400ms cubic-bezier(0.16, 1, 0.3, 1);
+    transform-origin: left;
   }
+  /* Overlay enter/exit: dropdowns / menus / popovers fade + scale. Exit needs
+     usePresence (src/lib/motion/hooks.ts) to keep the node mounted 120ms. */
+  @keyframes popIn {
+    from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes popOut {
+    from { opacity: 1; transform: translateY(0) scale(1); }
+    to   { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  }
+  .popover {
+    animation: popIn 120ms cubic-bezier(0.16, 1, 0.3, 1);
+    transform-origin: top;
+  }
+  .popover-exit {
+    animation: popOut 120ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    pointer-events: none;
+  }
+  /* Centered dialogs (Modal / ConfirmDialog): backdrop fades, panel lands
+     softly. Exit phases are driven by usePresence like .popover-exit. */
+  @keyframes overlayFadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes overlayFadeOut { from { opacity: 1; } to { opacity: 0; } }
+  @keyframes dialogIn {
+    from { opacity: 0; transform: translateY(8px) scale(0.98); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes dialogOut {
+    from { opacity: 1; transform: translateY(0) scale(1); }
+    to   { opacity: 0; transform: translateY(4px) scale(0.98); }
+  }
+  /* Opacity-only entrance for swapped-in content (keyed images etc.). */
+  .fade-in { animation: overlayFadeIn 150ms ease-out; }
+  .overlay-backdrop { animation: overlayFadeIn 150ms ease-out; }
+  .overlay-backdrop-exit { animation: overlayFadeOut 120ms ease-out forwards; pointer-events: none; }
+  .overlay-panel { animation: dialogIn 240ms cubic-bezier(0.16, 1, 0.3, 1); }
+  .overlay-panel-exit { animation: dialogOut 120ms cubic-bezier(0.16, 1, 0.3, 1) forwards; pointer-events: none; }
+  /* Slideshow (Task 6): Ken Burns pan/zoom on the active layer — transform
+     only, per the motion red lines. Runs as a CSS `animation`, so it is
+     independent of `.slide-layer`'s `transition` below (different property,
+     no collision) and collapses automatically under the global
+     prefers-reduced-motion kill-switch above. */
+  @keyframes kenBurns {
+    from { transform: scale(1) translate3d(0, 0, 0); }
+    to   { transform: scale(1.08) translate3d(-1.5%, -1%, 0); }
+  }
+  .slide-kenburns { animation: kenBurns var(--slide-dwell, 5000ms) ease-out forwards; }
+  /* Showcase low-end/WebGL fallback: two identical image strips move by one
+     strip width for a seamless loop. Transform-only; reduced motion is routed
+     to the static grid before this class mounts, and the global kill-switch is
+     a second line of defense. */
+  @keyframes galleryDrift {
+    from { transform: translate3d(0, 0, 0); }
+    to   { transform: translate3d(-50%, 0, 0); }
+  }
+  .gallery-drift {
+    animation: galleryDrift var(--drift-duration, 60s) linear infinite;
+  }
+  /* Two stacked layers crossfade via this shared opacity transition (240ms
+     mirrors motionTokens.duration.slow — see src/lib/motion/tokens.ts);
+     toggling opacity-0/opacity-100 on each layer drives the fade. */
+  .slide-layer { transition: opacity 240ms cubic-bezier(0.16, 1, 0.3, 1); }
+  /* Right-edge slide-over drawers (task/job detail). Exit driven by
+     usePresence, same contract as .popover-exit. */
+  @keyframes drawerIn {
+    from { transform: translateX(100%); }
+    to   { transform: translateX(0); }
+  }
+  @keyframes drawerOut {
+    from { transform: translateX(0); }
+    to   { transform: translateX(100%); }
+  }
+  .drawer-panel { animation: drawerIn 240ms cubic-bezier(0.16, 1, 0.3, 1); }
+  .drawer-panel-exit { animation: drawerOut 150ms cubic-bezier(0.4, 0, 0.2, 1) forwards; pointer-events: none; }
+  /* Left-edge variant for the mobile app-shell sidebar. */
+  @keyframes drawerLeftIn {
+    from { transform: translateX(-100%); }
+    to   { transform: translateX(0); }
+  }
+  @keyframes drawerLeftOut {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-100%); }
+  }
+  .drawer-left { animation: drawerLeftIn 240ms cubic-bezier(0.16, 1, 0.3, 1); }
+  .drawer-left-exit { animation: drawerLeftOut 150ms cubic-bezier(0.4, 0, 0.2, 1) forwards; pointer-events: none; }
+  /* App-shell sidebar items (GitHub ActionList style): hover wash, selected
+     state with a 4px accent indicator hugging the sidebar edge. */
+  .side-item {
+    @apply relative mx-0 my-px flex min-h-9 items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-fg;
+    transition: background-color 120ms ease-out;
+  }
+  .side-item > svg { @apply text-muted; }
+  .side-item:hover { background-color: rgb(var(--ag-muted) / 0.12); }
+  .side-item-active { @apply font-semibold text-accent; background-color: rgb(var(--ag-accent-subtle)); }
+  .side-item-active > svg { @apply text-fg; }
+  .side-item-active::before {
+    content: "";
+    @apply absolute -left-2 rounded-r bg-accent;
+    top: 7px; bottom: 7px; width: 3px;
+  }
+  /* One-shot state-change confirmation on job rows (WS status_change).
+     Background-only on a single row — cheap paint, strong feedback. */
+  @keyframes rowFlash {
+    from { background-color: rgb(var(--ag-accent-subtle)); }
+    to   { background-color: transparent; }
+  }
+  .row-flash { animation: rowFlash 1s ease-out; }
+  /* Merge feedback: the merged group collapses before the list refetches. */
+  @keyframes mergeCollapse {
+    to { opacity: 0; transform: scale(0.95); }
+  }
+  .merge-collapse { animation: mergeCollapse 240ms cubic-bezier(0.16, 1, 0.3, 1) forwards; pointer-events: none; }
 }

@@ -150,4 +150,5 @@ async def test_bootstrap_admin_uses_configured_default_password(monkeypatch) -> 
     assert admin.username == "admin"
     assert verify_password("change-me-admin", admin.password_hash)
     assert admin.must_change_password is True
+    assert admin.is_admin is True
     assert session.commits == 1

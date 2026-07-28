@@ -1,100 +1,232 @@
 "use client";
-import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys, DedupSettings } from "@/lib/api";
-import { PageHeader, ErrorState } from "@/components";
+
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, DedupSettings, queryKeys } from "@/lib/api";
+import { ErrorState, PageHeader, PageShell } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import Link from "next/link";
 
-function Toggle({ checked, onChange }: { checked: boolean; onChange: () => void }) {
+function NumberSetting({
+  label,
+  description,
+  value,
+  min,
+  max,
+  step,
+  suffix,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  suffix: string;
+  onChange: (value: number) => void;
+}) {
   return (
-    <button onClick={onChange}
-      className={"relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 " + (checked ? "bg-green-600" : "bg-gray-300 dark:bg-gray-600")}>
-      <span className={"inline-block h-4 w-4 transform rounded-full bg-white transition-transform " + (checked ? "translate-x-6" : "translate-x-1")} />
-    </button>
+    <div className="flex flex-col gap-3 border-b border-border py-4 last:border-0 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <div className="text-sm font-medium text-fg">{label}</div>
+        <p className="mt-1 max-w-2xl text-xs leading-5 text-muted">{description}</p>
+      </div>
+      <label className="flex shrink-0 items-center gap-2">
+        <input
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(event) => {
+            const next = Number(event.target.value);
+            if (Number.isFinite(next)) onChange(next);
+          }}
+          className="input w-24 text-center font-mono"
+        />
+        <span className="w-10 text-xs text-muted">{suffix}</span>
+      </label>
+    </div>
   );
 }
 
 export default function DedupSettingsPage() {
   const t = useT();
   const toast = useToast();
-  const qc = useQueryClient();
-  const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
+  const queryClient = useQueryClient();
+  const settings = useQuery({
+    queryKey: queryKeys.admin.settings,
+    queryFn: api.getAdminSettings,
+  });
   const [local, setLocal] = useState<DedupSettings | null>(null);
-  
+
+  useEffect(() => {
+    if (settings.data?.dedup) setLocal({ ...settings.data.dedup });
+  }, [settings.data?.dedup]);
 
   const save = useMutation({
-    mutationFn: (data: DedupSettings) => api.updateAdminSettings({ dedup: data }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.admin.settings }); toast.success({ message: t("notification.saved") }); },
+    mutationFn: (data: DedupSettings) =>
+      api.updateAdminSettings({ dedup: data }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.admin.settings });
+      toast.success({ message: t("notification.saved") });
+    },
   });
 
-  const current = local || settings.data?.dedup;
-
-  if (settings.isError) return <main className="max-w-4xl mx-auto p-6"><ErrorState message={settings.error?.message || t("dedup.failed")} onRetry={() => settings.refetch()} /></main>;
-  if (!settings.data) return <main className="max-w-4xl mx-auto p-6"><div className="animate-pulse space-y-4"><div className="h-8 rounded-md bg-[#eaeef2] dark:bg-[#21262d] w-1/3" /><div className="h-64 rounded-md bg-[#eaeef2] dark:bg-[#21262d]" /></div></main>;
-  if (!local && settings.data.dedup) setLocal({ ...settings.data.dedup });
-
-  const toggle = (key: keyof DedupSettings) => {
-    if (!current) return;
-    const next = { ...current };
-    if (typeof next[key] === "boolean") (next as any)[key] = !next[key];
-    setLocal(next);
-  };
+  if (settings.isError) {
+    return (
+      <PageShell size="normal">
+        <ErrorState
+          message={settings.error?.message || t("dedup.failed")}
+          onRetry={() => settings.refetch()}
+        />
+      </PageShell>
+    );
+  }
+  if (!local) {
+    return (
+      <PageShell size="normal">
+        <div className="space-y-4 animate-pulse">
+          <div className="h-8 w-1/3 rounded-md bg-subtle" />
+          <div className="h-96 rounded-md bg-subtle" />
+        </div>
+      </PageShell>
+    );
+  }
 
   return (
-    <main className="max-w-4xl mx-auto p-6">
-      <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("dedup.back")}</Link>
-      </div>
+    <PageShell size="normal">
+      <Link
+        href="/admin/settings"
+        className="mb-5 inline-flex min-h-11 items-center text-sm text-blue-600 hover:underline"
+      >
+        {t("dedup.back")}
+      </Link>
       <PageHeader title={t("dedup.title")} description={t("dedup.desc")} />
 
-      {current && (
-        <>
-          <div className="card p-6 space-y-1">
-            {([
-              ["source_level_enabled", t("dedup.source_level.desc")],
-              ["cross_source_enabled", t("dedup.cross_source.desc")],
-              ["auto_merge", t("dedup.auto_merge.desc")],
-            ] as [keyof DedupSettings, string][]).map(([key, desc]) => (
-              <div key={key} className="flex items-center justify-between py-3.5 border-b dark:border-slate-700 last:border-0">
-                <div>
-                  <span className="font-medium text-sm dark:text-white">{t("dedup." + key as any)}</span>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{desc}</p>
-                </div>
-                <Toggle checked={!!current[key]} onChange={() => toggle(key)} />
-              </div>
-            ))}
-
-            <div className="flex items-center justify-between py-3.5">
-              <div>
-                <span className="font-medium text-sm dark:text-white">{t("dedup.phash")}</span>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{t("dedup.phash.desc")}</p>
-              </div>
-              <div className="flex items-center gap-1">
-                <input type="number" min={0} max={64} value={current.phash_threshold}
-                  onChange={(e) => setLocal({ ...current, phash_threshold: parseInt(e.target.value) || 0 })}
-                  className="input w-16 px-2 py-1.5 text-center font-mono" />
-                <span className="text-xs text-gray-500 dark:text-gray-400 pr-2">bits</span>
-              </div>
+      <section className="card p-5">
+        <div className="flex items-center justify-between border-b border-border pb-4">
+          <div>
+            <div className="text-sm font-medium text-fg">
+              {t("dedup.auto_group")}
             </div>
+            <p className="mt-1 text-xs leading-5 text-muted">
+              {t("dedup.auto_group.desc")}
+            </p>
           </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={local.auto_group_enabled}
+            onClick={() =>
+              setLocal({
+                ...local,
+                auto_group_enabled: !local.auto_group_enabled,
+              })
+            }
+            className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors ${
+              local.auto_group_enabled ? "bg-success" : "bg-subtle"
+            }`}
+          >
+            <span
+              className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                local.auto_group_enabled ? "translate-x-6" : "translate-x-1"
+              }`}
+            />
+          </button>
+        </div>
 
-          <div className="mt-4 rounded-md border border-[#fff8c5] bg-[#fff8c5] p-4 text-sm text-[#9a6700] dark:border-[#d29922]/30 dark:bg-[#d29922]/15 dark:text-[#f2cc60]">
-            <strong>&#9888; {t("dedup.warning")}</strong>
-            {current.auto_merge && <span className="block mt-1 text-red-600 dark:text-red-400 font-medium">{t("dedup.warning_auto")}</span>}
-          </div>
+        <NumberSetting
+          label={t("dedup.phash")}
+          description={t("dedup.phash.desc")}
+          value={local.phash_threshold}
+          min={0}
+          max={4}
+          step={1}
+          suffix="bits"
+          onChange={(value) => setLocal({ ...local, phash_threshold: value })}
+        />
+        <NumberSetting
+          label={t("dedup.ssim")}
+          description={t("dedup.ssim.desc")}
+          value={local.ssim_threshold}
+          min={0.9}
+          max={1}
+          step={0.001}
+          suffix=""
+          onChange={(value) => setLocal({ ...local, ssim_threshold: value })}
+        />
+        <NumberSetting
+          label={t("dedup.aspect")}
+          description={t("dedup.aspect.desc")}
+          value={local.aspect_ratio_tolerance}
+          min={0}
+          max={0.05}
+          step={0.001}
+          suffix=""
+          onChange={(value) =>
+            setLocal({ ...local, aspect_ratio_tolerance: value })
+          }
+        />
+        <NumberSetting
+          label={t("dedup.auto_score")}
+          description={t("dedup.auto_score.desc")}
+          value={local.auto_group_score}
+          min={70}
+          max={100}
+          step={1}
+          suffix="/100"
+          onChange={(value) =>
+            setLocal({
+              ...local,
+              auto_group_score: value,
+              review_score: Math.min(local.review_score, value),
+            })
+          }
+        />
+        <NumberSetting
+          label={t("dedup.review_score")}
+          description={t("dedup.review_score.desc")}
+          value={local.review_score}
+          min={0}
+          max={local.auto_group_score}
+          step={1}
+          suffix="/100"
+          onChange={(value) => setLocal({ ...local, review_score: value })}
+        />
+        <NumberSetting
+          label={t("dedup.quarantine")}
+          description={t("dedup.quarantine.desc")}
+          value={local.quarantine_days}
+          min={1}
+          max={365}
+          step={1}
+          suffix={t("dedup.days")}
+          onChange={(value) => setLocal({ ...local, quarantine_days: value })}
+        />
+      </section>
 
-          <div className="mt-4 flex justify-end items-center">
-            
-            {save.error && <span className="mr-3 text-red-600 text-sm">{(save.error as Error).message}</span>}
-            <button onClick={() => save.mutate(current)} disabled={save.isPending}
-              className="btn-primary px-6">
-              {save.isPending ? t("common.saving") : t("dedup.save")}
-            </button>
-          </div>
-        </>
-      )}
-    </main>
+      <div className="mt-4 rounded-md border border-border bg-subtle/40 p-4 text-sm leading-6 text-muted">
+        {t("dedup.safety_note")}
+      </div>
+
+      <div className="mt-5 flex items-center justify-end">
+        {save.error && (
+          <span className="mr-3 text-sm text-danger">
+            {(save.error as Error).message}
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => save.mutate(local)}
+          disabled={save.isPending}
+          className="btn-primary min-h-11 px-6"
+        >
+          {save.isPending ? t("common.saving") : t("dedup.save")}
+        </button>
+      </div>
+    </PageShell>
   );
 }

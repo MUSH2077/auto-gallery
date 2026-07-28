@@ -38,7 +38,7 @@ export function middleware(request: NextRequest) {
 
   if (isPublicPath(pathname)) {
     if (pathname === LOGIN && token) {
-      return NextResponse.redirect(new URL("/admin", request.url));
+      return NextResponse.redirect(new URL("/", request.url));
     }
     return NextResponse.next();
   }
@@ -53,5 +53,9 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/admin/:path*"],
+  // "/" is included explicitly: the homepage now renders real content
+  // (Task 4) instead of an unconditional server redirect into "/admin", so
+  // it needs the same ag_token gate every /admin/* route gets — without
+  // this the root path bypasses the middleware function entirely.
+  matcher: ["/", "/admin/:path*"],
 };

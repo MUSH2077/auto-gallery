@@ -1,8 +1,9 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
+import { enterHeatmap } from "@/lib/motion";
 
 interface DayData {
   date: string;
@@ -34,6 +35,16 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
   const fmt = useI18nFormat();
   const [selectedDay, setSelectedDay] = useState<DayData | null>(null);
   const [yearOffset, setYearOffset] = useState(0);
+  const svgRef = useRef<SVGSVGElement>(null);
+  // Enter-once guard: the heatmap staggers in on first data render only —
+  // never again on refetch/year-switch re-renders (motion red-line #1).
+  const enterPlayed = useRef(false);
+
+  useEffect(() => {
+    if (enterPlayed.current || loading || !data?.days?.length || !svgRef.current) return;
+    enterPlayed.current = true;
+    enterHeatmap(svgRef.current.querySelectorAll("rect"));
+  }, [data, loading]);
 
   const { weeks, months, dayMap } = useMemo(() => {
     if (!data?.days?.length) return { weeks: [], months: [], dayMap: new Map<string, DayData>() };
@@ -68,7 +79,7 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
     return { weeks, months: monthLabels, dayMap };
   }, [data, yearOffset, fmt.locale]);
 
-  if (loading) return <div className="animate-pulse"><div className="h-32 rounded-md bg-[#eaeef2] dark:bg-[#21262d]" /></div>;
+  if (loading) return <div className="animate-pulse"><div className="h-32 rounded-md bg-subtle dark:bg-subtle" /></div>;
   if (!data?.days?.length) return null;
 
   const cellSize = 11, gap = 2, step = cellSize + gap;
@@ -81,13 +92,13 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
           <span className="text-sm font-medium dark:text-white">{new Date(Date.UTC(new Date().getUTCFullYear() + yearOffset, 0, 1)).getUTCFullYear()}</span>
           <button onClick={() => setYearOffset(yearOffset + 1)} className="btn-ghost px-2 py-0.5 text-xs">→</button>
         </div>
-        <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("workgrid.work_count", { count: data.total })}</span>
+        <span className="text-xs text-muted">{t("workgrid.work_count", { count: data.total })}</span>
       </div>
 
       <div className="overflow-x-auto">
-        <svg width={weeks.length * step + 40} height={7 * step + 20} className="text-xs">
+        <svg ref={svgRef} width={weeks.length * step + 40} height={7 * step + 20} className="text-xs">
           {months.map((m, i) => (
-            <text key={i} x={m.col * step + 10} y={10} className="fill-[#57606a] dark:fill-[#8b949e]" fontSize="9">{m.label}</text>
+            <text key={i} x={m.col * step + 10} y={10} className="fill-muted dark:fill-muted" fontSize="9">{m.label}</text>
           ))}
           {weeks.map((week, wi) =>
             week.map((day, di) => {
@@ -111,25 +122,25 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
       </div>
 
       <div className="flex items-center gap-3 mt-3 text-xs flex-wrap">
-        <span className="text-[#57606a] dark:text-[#8b949e]">{t("common.less")}</span>
+        <span className="text-muted">{t("common.less")}</span>
         {[0, 1, 2, 3, 4].map((lvl) => (
           <div key={lvl} className="w-3 h-3 rounded-sm" style={{ backgroundColor: lvl === 0 ? "rgba(128,128,128,0.08)" : `rgba(100,100,100,${[0,0.2,0.4,0.65,1][lvl]})` }} />
         ))}
-        <span className="text-[#57606a] dark:text-[#8b949e]">{t("common.more")}</span>
-        <span className="mx-2 text-[#d8dee4] dark:text-[#30363d]">|</span>
+        <span className="text-muted">{t("common.more")}</span>
+        <span className="mx-2 text-border dark:text-border">|</span>
         {data.sources.map((s) => (
           <span key={s} className="flex items-center gap-1">
             <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: sourceColor(s) }} />
-            <span className="text-[#57606a] dark:text-[#8b949e]">{s}</span>
+            <span className="text-muted">{s}</span>
           </span>
         ))}
       </div>
 
       {selectedDay && (
-        <div className="mt-3 rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-3 text-sm dark:border-[#30363d] dark:bg-[#0d1117]">
+        <div className="mt-3 rounded-md border border-border bg-subtle p-3 text-sm dark:border-border dark:bg-canvas">
           <div className="flex items-center justify-between">
             <span className="font-medium dark:text-white">{selectedDay.date}</span>
-            <button onClick={() => setSelectedDay(null)} className="text-[#57606a] hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3]">×</button>
+            <button onClick={() => setSelectedDay(null)} className="text-muted hover:text-fg dark:text-muted dark:hover:text-fg">×</button>
           </div>
           {data.sources.map((s) => {
             const cnt = (selectedDay[s] as number) || 0;
@@ -145,11 +156,11 @@ export default function WorkGrid({ data, loading }: { data?: TimelineData; loadi
                   <div className="flex flex-wrap gap-1 ml-4">
                     {ids.slice(0, 20).map((wid) => (
                       <Link key={wid} href={`/admin/works/${wid}`}
-                        className="rounded-md border border-[#d8dee4] bg-white px-2 py-0.5 font-mono text-xs transition-colors hover:border-[#0969da] hover:text-[#0969da] dark:border-[#30363d] dark:bg-[#161b22] dark:hover:border-[#58a6ff] dark:hover:text-[#58a6ff]">
+                        className="rounded-md border border-border bg-white px-2 py-0.5 font-mono text-xs transition-colors hover:border-accent hover:text-accent dark:border-border dark:bg-surface dark:hover:border-accent dark:hover:text-accent">
                         {wid.length > 12 ? wid.slice(0, 8) + "..." + wid.slice(-4) : wid}
                       </Link>
                     ))}
-                    {ids.length > 20 && <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("common.more_count", { count: ids.length - 20 })}</span>}
+                    {ids.length > 20 && <span className="text-xs text-muted">{t("common.more_count", { count: ids.length - 20 })}</span>}
                   </div>
                 )}
               </div>

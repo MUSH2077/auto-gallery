@@ -16,6 +16,24 @@
 
 Both ports are configurable via `BACKEND_PORT` and `ADMIN_WEB_PORT` in `.env`.
 
+The Jobs page uses WebSocket for live progress. By default it connects to the
+current site's `/api/v1/ws`; if your NAS reverse proxy does not forward
+WebSocket upgrades, or you access the UI directly through the `admin-web` port,
+set the public endpoint in `.env` and rebuild admin-web:
+
+```bash
+# Direct backend port
+NEXT_PUBLIC_WS_URL=ws://192.0.2.10:8818/api/v1/ws
+
+# HTTPS reverse proxy
+NEXT_PUBLIC_WS_URL=wss://autogallery.example.com/api/v1/ws
+```
+
+If WebSocket is unavailable, the Jobs page automatically falls back to 3-second
+polling and still updates task status. When cross-port auth fallback is needed,
+admin-web requests a 30-second one-time ticket over the normal API and never
+puts the long-lived login JWT in the WebSocket URL.
+
 ## Installation
 
 ### 1. Directory Structure
@@ -78,7 +96,7 @@ HOST_MEILISEARCH=/volume1/auto-gallery/docker/meilisearch
 docker compose up -d
 ```
 
-This starts all services: postgres, redis, meilisearch, backend, worker, scheduler, and admin-web. The backend automatically runs database migrations on startup, so no separate migration step is needed.
+This starts all services: postgres, redis, meilisearch, backend, worker-download (per-source queues), worker-import (the single durable RQ import pipeline), worker-operations, scheduler, and admin-web. The backend automatically runs database migrations on startup, so no separate migration step is needed.
 
 Wait for health checks:
 
@@ -93,10 +111,15 @@ If you need to start only the infrastructure services for local development:
 docker compose up -d postgres redis meilisearch
 ```
 
+**Tip:** For rapid redeploys after code changes, use `bash scripts/deploy.sh` — it detects changed sources, rebuilds only when needed, and waits for all containers to report healthy.
+
 ### 4. Verify
 
 ```bash
-# Health check
+# Quick health summary (container status, disk, queue depth)
+bash scripts/debug.sh quick
+
+# Or manually:
 curl http://localhost:8818/api/v1/system/health
 
 # Expected response:

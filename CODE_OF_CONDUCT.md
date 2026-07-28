@@ -21,3 +21,15 @@ respectful.
 
 Maintainers may edit, hide, lock, or remove content and may restrict
 participation when needed to keep the project safe and useful.
+
+## Reporting and Enforcement
+
+For routine moderation, use GitHub's report and block tools where available.
+For a confidential report involving this community, use the private reporting
+path in [SECURITY.md](SECURITY.md) and prefix the title with `[Conduct]`.
+
+Maintainers will review the available context, avoid public disclosure of the
+reporter where possible, and choose a proportionate response. Enforcement may
+include a clarification, warning, content removal, temporary restriction, or
+permanent ban. Maintainers must recuse themselves from reports in which they
+are directly involved.

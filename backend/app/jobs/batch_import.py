@@ -149,16 +149,8 @@ async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
                     db.add(creator)
                     await db.flush()
                     was_merged = False
-
-                    parts = []
-                    other_names = artist.get("other_names", [])
-                    if other_names:
-                        parts.append(f"Danbooru aliases: {', '.join(other_names)}")
-                    notes = artist.get("notes")
-                    if notes:
-                        parts.append(notes)
-                    if parts:
-                        creator.description = "\n".join(parts)
+                    # description is left for the admin to write — keep creator
+                    # pages identical regardless of which import path created them.
 
                 links_count = 0
                 for link_data in links:
