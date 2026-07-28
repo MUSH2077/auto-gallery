@@ -1,76 +1,56 @@
 # Release Checklist
 
-Use this checklist before changing repository visibility and before every
-public tag.
+Use this checklist before tagging a public release.
 
-## Release content
+## Version and Changelog
 
-- [ ] Choose a SemVer tag such as `v0.1.0-beta.1`.
-- [ ] Update `CHANGELOG.md` and move relevant Unreleased items into the release.
-- [ ] Document database migrations, backfills, reindexing, configuration
-      changes, and provider compatibility changes.
-- [ ] Verify `README.md`, `README.zh.md`, setup, provider, and development docs.
-- [ ] Confirm screenshots use fictional or fully sanitized data.
-- [ ] Confirm `.env.example` describes every required deployment variable.
+- Choose a version tag, for example `v0.1.0-beta.1`.
+- Update `CHANGELOG.md`.
+- Confirm whether the release includes database migrations.
+- Call out provider compatibility changes.
 
-## Source and privacy
+## Documentation
 
-- [ ] Run `bash scripts/privacy-scan.sh`.
-- [ ] Review Git history for tracked secrets, environment files, database
-      dumps, private media, local account data, and oversized objects.
-- [ ] Review old pull requests, workflow logs, artifacts, caches, and release
-      assets before making a private repository public.
-- [ ] Rotate any credential that may have appeared in Git or CI history.
-- [ ] Build the source archive and inspect its file list:
+- Verify `README.md` and `README.zh.md` describe the current UI and providers.
+- Confirm `docs/assets/` screenshots are sanitized demo or sanitized real
+  screenshots with no private creators, credentials, local paths, account
+  names, or downloaded media.
+- Confirm README screenshot alt text and captions describe the assets as
+  sanitized demo or sanitized real screenshots.
+- Confirm the Sources admin page descriptions match provider capabilities.
+- Confirm `.env.example` includes every required deployment variable.
+- Confirm legal and safety notes are visible in the README.
 
-  ```bash
-  archive="$(bash scripts/package-release.sh v0.1.0-beta.1)"
-  tar -tzf "$archive" | less
-  ```
-
-## Verification
+## Local Checks
 
 ```bash
-docker compose run --rm -T --volume "$PWD/backend:/app" \
-  -e PYTHONDONTWRITEBYTECODE=1 backend \
-  ruff check app tests
-docker compose run --rm -T --volume "$PWD/backend:/app" \
-  -e PYTHONDONTWRITEBYTECODE=1 backend \
-  python -m pytest
+cd backend
+python -m pytest
+ruff check app tests
 
-cd admin-web
+cd ../admin-web
 npm ci
 npm run typecheck
 npm run build
-npm run test:e2e
 
 cd ..
 docker compose --env-file .env.ci config --quiet
-docker compose --env-file .env.ci build backend admin-web
-docker compose --env-file .env.ci up -d
-COMPOSE_ENV_FILE=.env.ci bash scripts/verify-runtime.sh
-docker compose --env-file .env.ci down -v
+docker compose build backend admin-web
+docker compose up -d
+scripts/verify-runtime.sh
+curl -I http://localhost:13000/admin
 ```
 
-- [ ] All services become healthy.
-- [ ] Admin login, a small authorized sync, import, search, media preview,
-      backup creation, and restore validation were exercised.
-- [ ] Upgrade and rollback were tested when the release contains migrations.
+Expected result:
 
-## GitHub controls
+- All Compose services are healthy.
+- `http://localhost:13000/admin` returns `200`.
+- No `.env`, cookies, private media, database dumps, or local runtime data are tracked.
+- Release package dry run only includes tracked files and excludes runtime/cache paths.
 
-- [ ] CI, CodeQL, and Scorecard are green on the default branch.
-- [ ] Default-branch and immutable-release-tag rulesets are active.
-- [ ] Required status-check names match the live workflow check names.
-- [ ] Dependabot alerts, secret scanning, push protection, and private
-      vulnerability reporting are enabled.
-- [ ] About text, topics, license, issue forms, CODEOWNERS, and social preview
-      render correctly.
+## Publishing
 
-## Publish and observe
-
-- [ ] Create the signed or annotated release tag from the protected default branch.
-- [ ] Publish release notes from `CHANGELOG.md` with upgrade and rollback steps.
-- [ ] Attach only inspected artifacts and their checksums.
-- [ ] Verify the release and documentation in a logged-out browser.
-- [ ] Monitor installation, migration, and provider reports after publishing.
+- Tag the release.
+- Attach release notes from `CHANGELOG.md`.
+- Mention known limitations and any migration steps.
+- Ask users to report deployment issues with sanitized logs only.

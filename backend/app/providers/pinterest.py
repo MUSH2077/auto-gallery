@@ -64,15 +64,11 @@ class PinterestProvider(BaseProvider):
 
     def parse_work_source(self, raw_metadata: dict) -> dict:
         pin_id = str(raw_metadata.get("id", ""))
-        user = raw_metadata.get("user", "")
-        board = raw_metadata.get("board", {})
-        username = board.get("owner", {}).get("username", "") if isinstance(board, dict) else ""
-        creator_id = username or user or ""
         return {
             "source": self.source_name,
             "source_work_id": pin_id,
             "source_url": f"https://www.pinterest.com/pin/{pin_id}",
-            "source_creator_id": creator_id,
+            "source_creator_id": raw_metadata.get("user", ""),
             "title": None,
             "description": raw_metadata.get("description") or raw_metadata.get("closeup_description"),
             "posted_at": None,
@@ -92,13 +88,3 @@ class PinterestProvider(BaseProvider):
 
     def parse_source_tags(self, raw_metadata: dict) -> list[dict]:
         return []
-
-    def get_creator_dir_from_url(self, source_url: str) -> str | None:
-        # Pinterest user/board URLs: pinterest.com/{username}/pins/ or
-        # pinterest.com/{username}/{board-name}/
-        # Pinterest usernames are alphanumeric + underscores only (no dots).
-        m = re.search(r'pinterest\.\w+/([\w]+)/(?:pins|[\w.-]+)', source_url)
-        username = m.group(1) if m else None
-        if username and (".." in username or username.startswith("/")):
-            return None
-        return username

@@ -70,12 +70,3 @@ class AssetStorageState(TimestampMixin, Base):
     purged_by_commit_id: Mapped[UUID | None] = mapped_column(ForeignKey("curation_commits.id"))
     bytes_reclaimed: Mapped[int] = mapped_column(default=0, nullable=False)
     missing_files: Mapped[list | None] = mapped_column(JSONB)
-    served_by_asset_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("assets.id", ondelete="SET NULL")
-    )
-    dedup_kind: Mapped[str | None] = mapped_column(String(30))
-    quarantine_path: Mapped[str | None] = mapped_column(String(2000))
-    quarantine_sha256: Mapped[str | None] = mapped_column(String(64))
-    quarantined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    purge_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -1,13 +1,14 @@
 from uuid import UUID
 
 from sqlalchemy import select, or_, and_, func
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Subscription, SubscriptionSource, Creator, DownloadJob
-from app.repositories.base import BaseRepository
 
 
-class SubscriptionRepository(BaseRepository[Subscription]):
-    model = Subscription
+class SubscriptionRepository:
+    def __init__(self, session: AsyncSession):
+        self.session = session
 
     async def list_all(self, offset: int = 0, limit: int = 50,
                        search: str | None = None,
@@ -56,50 +57,9 @@ class SubscriptionRepository(BaseRepository[Subscription]):
             .correlate(Subscription)
             .scalar_subquery()
         )
-        latest_job_id = (
-            select(DownloadJob.id)
-            .where(DownloadJob.subscription_id == Subscription.id)
-            .order_by(DownloadJob.created_at.desc())
-            .limit(1)
-            .correlate(Subscription)
-            .scalar_subquery()
-        )
-        latest_job_created_at = (
-            select(DownloadJob.created_at)
-            .where(DownloadJob.subscription_id == Subscription.id)
-            .order_by(DownloadJob.created_at.desc())
-            .limit(1)
-            .correlate(Subscription)
-            .scalar_subquery()
-        )
-        running_job_count = (
-            select(func.count(DownloadJob.id))
-            .where(DownloadJob.subscription_id == Subscription.id)
-            .where(DownloadJob.status.in_(("enqueued", "downloading", "downloaded", "importing")))
-            .correlate(Subscription)
-            .scalar_subquery()
-        )
-        failed_job_count = (
-            select(func.count(DownloadJob.id))
-            .where(DownloadJob.subscription_id == Subscription.id)
-            .where(DownloadJob.status.in_(("failed", "stale")))
-            .correlate(Subscription)
-            .scalar_subquery()
-        )
 
         stmt = (
-            select(
-                Subscription,
-                Creator.name,
-                Creator.display_name,
-                source_count,
-                enabled_source_count,
-                latest_job_status,
-                latest_job_id,
-                latest_job_created_at,
-                running_job_count,
-                failed_job_count,
-            )
+            select(Subscription, Creator.name, Creator.display_name, source_count, enabled_source_count, latest_job_status)
             .join(Creator, Creator.id == Subscription.creator_id)
             .offset(offset).limit(limit)
             .order_by(Subscription.created_at.desc())
@@ -120,10 +80,6 @@ class SubscriptionRepository(BaseRepository[Subscription]):
             sub.source_count = row[3] or 0
             sub.enabled_source_count = row[4] or 0
             sub.latest_job_status = row[5]
-            sub.latest_job_id = row[6]
-            sub.latest_job_created_at = row[7]
-            sub.running_job_count = row[8] or 0
-            sub.failed_job_count = row[9] or 0
             subs.append(sub)
         return subs
 
@@ -144,6 +100,23 @@ class SubscriptionRepository(BaseRepository[Subscription]):
         sub.creator_display_name = _creator_name or None
         sub.creator_name = _creator_name or _creator_base or f"Creator {sub.creator_id}"
         return sub
+
+    async def create(self, data: dict) -> Subscription:
+        sub = Subscription(**data)
+        self.session.add(sub)
+        await self.session.flush()
+        return sub
+
+    async def update(self, sub: Subscription, data: dict) -> Subscription:
+        for key, value in data.items():
+            if value is not None:
+                setattr(sub, key, value)
+        await self.session.flush()
+        return sub
+
+    async def delete(self, sub: Subscription) -> None:
+        await self.session.delete(sub)
+        await self.session.flush()
 
     async def add_source(self, data: dict) -> SubscriptionSource:
         ss = SubscriptionSource(**data)

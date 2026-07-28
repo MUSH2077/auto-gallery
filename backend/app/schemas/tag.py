@@ -22,13 +22,3 @@ class TagRead(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
-
-
-class CreatorRef(BaseModel):
-    creator_id: UUID
-    creator_name: str
-    work_count: int
-
-
-class TagDetail(TagRead):
-    top_creators: list[CreatorRef] = []

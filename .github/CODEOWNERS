@@ -1,3 +1,0 @@
-# Default review owner. Add directory-specific owners as the maintainer team
-# grows, then enable required code-owner review in the default-branch ruleset.
-* @MUSH2077

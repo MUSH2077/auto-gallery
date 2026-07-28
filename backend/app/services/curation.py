@@ -19,8 +19,6 @@ from app.models import (
     CurationCommit,
     SourceCreator,
     SubscriptionSource,
-    VisualAssetGroup,
-    VisualAssetMember,
     Work,
     WorkCurationState,
     WorkSource,
@@ -170,56 +168,6 @@ class CurationService:
         self.db.add(change)
         await self.db.flush()
         return change
-
-    async def record_asset_dedup_decision(
-        self,
-        *,
-        case_id: UUID,
-        left_asset_id: UUID,
-        right_asset_id: UUID,
-        action: str,
-        actor_type: str,
-        actor_id: str | None,
-        evidence: dict,
-        previous_status: str,
-        representative_asset_id: UUID | None = None,
-        group_id: UUID | None = None,
-        reason: str | None = None,
-        dedupe_key: str,
-    ) -> CurationCommit:
-        """Record one asset-level reconciliation decision in the curation ledger."""
-        commit = await self._create_commit(
-            message=f"Asset dedup decision: {action}",
-            trigger="asset_dedup",
-            actor_type=actor_type,
-            actor_id=actor_id,
-            metadata={"reason": reason, "case_id": str(case_id)},
-            dedupe_key=dedupe_key,
-        )
-        await self._add_change(
-            commit,
-            subject_type="asset_dedup_case",
-            subject_id=str(case_id),
-            action=f"asset_dedup_{action}",
-            before_state={"status": previous_status},
-            after_state={
-                "status": "merged" if action == "merge" else action,
-                "representative_asset_id": (
-                    str(representative_asset_id) if representative_asset_id else None
-                ),
-                "group_id": str(group_id) if group_id else None,
-            },
-            impact={
-                "left_asset_id": str(left_asset_id),
-                "right_asset_id": str(right_asset_id),
-                "evidence": evidence,
-            },
-        )
-        commit.stats = {
-            "asset_count": 2,
-            "group_count": 1 if group_id else 0,
-        }
-        return commit
 
     @staticmethod
     def _diff(before: dict, after: dict) -> dict:
@@ -534,8 +482,7 @@ class CurationService:
         return list(rows.scalars().all())
 
     async def backfill_status(self) -> dict:
-        # count_only: we only need the number of groups here, not their works.
-        expected_groups = await self._baseline_work_groups(count_only=True)
+        expected_groups = await self._baseline_work_groups()
         expected = {
             "creators": await self._count_rows(Creator),
             "repositories": await self._count_rows(SubscriptionSource),
@@ -640,22 +587,24 @@ class CurationService:
                 },
             )
             for item in works:
+                work = item["work"]
+                work_source = item["work_source"]
                 await self._add_change(
                     commit,
                     subject_type="work",
-                    subject_id=item["work_id"],
+                    subject_id=str(work.id),
                     action="work_added",
                     before_state=None,
                     after_state={
-                        **item["snapshot"],
-                        "source": item["source"],
-                        "source_work_id": item["source_work_id"],
-                        "source_creator_id": item["source_creator_id"],
+                        **self._work_snapshot(work, None),
+                        "source": work_source.source,
+                        "source_work_id": work_source.source_work_id,
+                        "source_creator_id": work_source.source_creator_id,
                     },
                     impact={
                         "repository_id": str(group["repository_id"]) if group["repository_id"] else None,
-                        "source": item["source"],
-                        "source_work_id": item["source_work_id"],
+                        "source": work_source.source,
+                        "source_work_id": work_source.source_work_id,
                     },
                 )
             if group["repository_id"]:
@@ -704,20 +653,16 @@ class CurationService:
                 lookup.setdefault((repo.source, repo.source_creator_id), repo)
         return lookup
 
-    async def _baseline_work_groups(self, count_only: bool = False) -> list[dict]:
-        # Streamed with a server-side cursor and, for count_only callers
-        # (backfill_status), the per-group work lists are not retained — the
-        # old .all() materialized every Work+WorkSource ORM object at once,
-        # O(library) resident memory on the event loop.
+    async def _baseline_work_groups(self) -> list[dict]:
         repo_lookup = await self._repository_lookup()
-        result = await self.db.stream(
+        rows = await self.db.execute(
             select(Work, WorkSource)
             .join(WorkSource, WorkSource.work_id == Work.id)
             .order_by(Work.created_at, WorkSource.created_at)
         )
         groups: dict[str, dict] = {}
         seen_works: set[UUID] = set()
-        async for work, work_source in result:
+        for work, work_source in rows.all():
             if work.id in seen_works:
                 continue
             seen_works.add(work.id)
@@ -746,17 +691,7 @@ class CurationService:
             })
             if occurred_at < group["occurred_at"]:
                 group["occurred_at"] = occurred_at
-            if not count_only:
-                # Lightweight dict, not ORM objects: holding every Work +
-                # WorkSource instance made the group list O(library) resident
-                # memory. The snapshot is computed here while the row is in hand.
-                group["works"].append({
-                    "work_id": str(work.id),
-                    "snapshot": self._work_snapshot(work, None),
-                    "source": work_source.source,
-                    "source_work_id": work_source.source_work_id,
-                    "source_creator_id": work_source.source_creator_id,
-                })
+            group["works"].append({"work": work, "work_source": work_source})
         return sorted(groups.values(), key=lambda g: (g["occurred_at"], g["dedupe_key"]))
 
     async def purge_preview(self, work_ids: list[UUID] | None = None) -> dict:
@@ -765,7 +700,7 @@ class CurationService:
         return {
             "work_count": len(works),
             "asset_count": len(assets),
-            "bytes_reclaimable": await self._purge_reclaimable_bytes(assets),
+            "bytes_reclaimable": sum(a.file_size or 0 for a in assets),
             "works": [
                 {
                     "id": str(w.id),
@@ -804,19 +739,14 @@ class CurationService:
             )
         for asset in assets:
             before = {"id": str(asset.id), "file_name": asset.file_name, "storage_state": "available"}
-            storage_state = await self._ensure_asset_state(asset.id)
-            reclaimed, missing = await self._delete_asset_files(asset, storage_state)
+            reclaimed, missing = await self._delete_asset_files(asset)
             bytes_reclaimed += reclaimed
+            storage_state = await self._ensure_asset_state(asset.id)
             storage_state.storage_state = PURGED
             storage_state.purged_at = _now()
             storage_state.purged_by_commit_id = commit.id
-            storage_state.bytes_reclaimed = max(
-                storage_state.bytes_reclaimed,
-                reclaimed,
-            )
+            storage_state.bytes_reclaimed = reclaimed
             storage_state.missing_files = missing
-            storage_state.quarantine_path = None
-            storage_state.quarantine_sha256 = None
             after = {"id": str(asset.id), "file_name": asset.file_name, "storage_state": PURGED, "bytes_reclaimed": reclaimed}
             await self._add_change(
                 commit,
@@ -862,42 +792,6 @@ class CurationService:
                 .where((WorkCurationState.visibility.is_(None)) | (WorkCurationState.visibility == VISIBLE))
             )
             if (visible_refs.scalar() or 0) == 0:
-                representative_group_id = (
-                    await self.db.execute(
-                        select(VisualAssetGroup.id).where(
-                            VisualAssetGroup.representative_asset_id == asset.id
-                        )
-                    )
-                ).scalar_one_or_none()
-                if representative_group_id:
-                    group_visible_refs = (
-                        await self.db.execute(
-                            select(func.count(func.distinct(WorkSource.work_id)))
-                            .select_from(VisualAssetMember)
-                            .join(
-                                AssetSource,
-                                AssetSource.asset_id
-                                == VisualAssetMember.asset_id,
-                            )
-                            .join(
-                                WorkSource,
-                                WorkSource.id == AssetSource.work_source_id,
-                            )
-                            .outerjoin(
-                                WorkCurationState,
-                                WorkCurationState.work_id
-                                == WorkSource.work_id,
-                            )
-                            .where(
-                                VisualAssetMember.group_id
-                                == representative_group_id,
-                                (WorkCurationState.visibility.is_(None))
-                                | (WorkCurationState.visibility == VISIBLE),
-                            )
-                        )
-                    ).scalar_one()
-                    if group_visible_refs:
-                        continue
                 eligible.append(asset)
         return eligible
 
@@ -910,77 +804,16 @@ class CurationService:
             await self.db.flush()
         return state
 
-    @staticmethod
-    def _asset_file_roots(
-        asset: Asset,
-        storage_state: AssetStorageState | None,
-    ) -> list[tuple[Path, str | None]]:
+    async def _delete_asset_files(self, asset: Asset) -> tuple[int, list[str]]:
         roots = [
             (Path(settings.download_root), asset.file_path),
             (Path(settings.library_root), asset.thumb_sm_path),
             (Path(settings.library_root), asset.thumb_md_path),
             (Path(settings.library_root), asset.thumb_lg_path),
         ]
-        if storage_state and storage_state.quarantine_path:
-            roots.append(
-                (Path(settings.download_root), storage_state.quarantine_path)
-            )
-        return roots
-
-    async def _purge_reclaimable_bytes(self, assets: list[Asset]) -> int:
-        if not assets:
-            return 0
-        states = {
-            state.asset_id: state
-            for state in (
-                (
-                    await self.db.execute(
-                        select(AssetStorageState).where(
-                            AssetStorageState.asset_id.in_(
-                                [asset.id for asset in assets]
-                            )
-                        )
-                    )
-                ).scalars()
-            )
-        }
-        inodes: dict[tuple[int, int], dict] = {}
-        for asset in assets:
-            for root, relative in self._asset_file_roots(
-                asset,
-                states.get(asset.id),
-            ):
-                path = _safe_path(root, relative)
-                if not path or not path.exists():
-                    continue
-                try:
-                    stat = path.stat()
-                except OSError:
-                    continue
-                entry = inodes.setdefault(
-                    (stat.st_dev, stat.st_ino),
-                    {
-                        "size": stat.st_size,
-                        "link_count": stat.st_nlink,
-                        "paths": set(),
-                    },
-                )
-                entry["paths"].add(str(path))
-        return sum(
-            entry["size"]
-            for entry in inodes.values()
-            if len(entry["paths"]) >= entry["link_count"]
-        )
-
-    async def _delete_asset_files(
-        self,
-        asset: Asset,
-        storage_state: AssetStorageState | None = None,
-    ) -> tuple[int, list[str]]:
         reclaimed = 0
         missing: list[str] = []
-        seen_paths: set[Path] = set()
-        for root, relative in self._asset_file_roots(asset, storage_state):
+        for root, relative in roots:
             path = _safe_path(root, relative)
             if not path:
                 if relative:
@@ -989,13 +822,8 @@ class CurationService:
             if not path.exists():
                 missing.append(relative or str(path))
                 continue
-            if path in seen_paths:
-                continue
-            seen_paths.add(path)
             try:
-                stat = path.stat()
-                if stat.st_nlink <= 1:
-                    reclaimed += stat.st_size
+                reclaimed += path.stat().st_size
                 path.unlink()
             except OSError:
                 missing.append(relative or str(path))

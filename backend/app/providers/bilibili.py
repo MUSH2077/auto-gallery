@@ -121,16 +121,16 @@ class BilibiliProvider(BaseProvider):
                 if isinstance(tag, str) and tag.strip():
                     result.append({
                         "source": self.source_name,
-                        "original_name": tag.strip(),
-                        "category": "general",
+                        "name": tag.strip(),
+                        "raw": tag,
                     })
                 elif isinstance(tag, dict):
                     name = tag.get("tag") or tag.get("name") or ""
                     if name.strip():
                         result.append({
                             "source": self.source_name,
-                            "original_name": name.strip(),
-                            "category": "general",
+                            "name": name.strip(),
+                            "raw": tag,
                         })
         return result
 

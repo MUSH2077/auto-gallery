@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DownloadJob, ImportJob
 from app.services.job_manifest import append_manifest_event
-from app.models.task_state import transition_download_job
+from app.services.job_state import transition_download_job
 
 
 class DownloadJobRepository:
@@ -61,19 +61,6 @@ class DownloadJobRepository:
         old_status = job.status
         transition_download_job(job, status, error_log)
         append_manifest_event(job, "status_changed", from_status=old_status, to_status=status, error_log=error_log)
-        try:
-            from app.services.tasks import TaskService
-            task_svc = TaskService(self.session)
-            await task_svc.ensure_download_task(job)
-            await task_svc.update_subject(
-                "download_job",
-                job.id,
-                status=job.status,
-                progress=job.progress_data,
-                error=job.error_log,
-            )
-        except Exception:
-            pass
         await self.session.flush()
         return job
 
@@ -107,11 +94,6 @@ class DownloadJobRepository:
         job = ImportJob(**data)
         self.session.add(job)
         await self.session.flush()
-        try:
-            from app.services.tasks import TaskService
-            await TaskService(self.session).ensure_import_task(job)
-        except Exception:
-            pass
         return job
 
     async def get_import(self, job_id: UUID) -> ImportJob | None:

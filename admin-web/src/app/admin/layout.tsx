@@ -1,20 +1,133 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
+import { useT } from "@/lib/i18n";
+import { ThemeToggle, LangToggle } from "@/lib/theme";
 import { useAuth } from "@/lib/auth";
-import { usePresence } from "@/lib/motion";
 import ErrorBoundary from "@/components/ErrorBoundary";
-import AppSidebar from "@/components/AppSidebar";
-import AppTopBar from "@/components/AppTopBar";
+import { NotificationBell } from "@/components/NotificationCenter";
 
 export const dynamic = 'force-dynamic';
 
-const LEGACY_SIDEBAR_KEY = "auto-gallery-sidebar";
-const SIDEBAR_WIDE_KEY = "auto-gallery-sidebar-wide-v2";
-const SIDEBAR_MID_KEY = "auto-gallery-sidebar-mid-v2";
+function UserMenu() {
+  const t = useT();
+  const { user, logout } = useAuth();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
 
-type DesktopSidebarMode = "expanded" | "compact";
-type ViewportTier = "mobile" | "mid" | "wide";
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-[#21262d] transition-colors text-sm"
+        title={user?.display_name || user?.username}
+      >
+        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="8" r="4" />
+          <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
+        </svg>
+        <span className="hidden sm:inline max-w-[100px] truncate">{user?.display_name || user?.username}</span>
+      </button>
+      {open && (
+        <div className="absolute right-0 mt-1 w-44 bg-white dark:bg-[#161b22] border border-[#d8dee4] dark:border-[#30363d] rounded-md shadow-lg z-50 text-[#24292f] dark:text-[#e6edf3] text-sm overflow-hidden">
+          <Link
+            href="/admin/settings/profile"
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-2 px-3 py-2 hover:bg-[#f6f8fa] dark:hover:bg-[#21262d] transition-colors"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
+            </svg>
+            {t("auth.change_password")}
+          </Link>
+          <button
+            onClick={() => { setOpen(false); logout(); }}
+            className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[#f6f8fa] dark:hover:bg-[#21262d] transition-colors text-left text-[#cf222e] dark:text-[#f85149]"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" />
+            </svg>
+            {t("auth.logout")}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AdminNav() {
+  const t = useT();
+  const pathname = usePathname();
+  const [open, setOpen] = useState(false);
+  const links = [
+    ["/admin", t("nav.dashboard")],
+    ["/admin/sources", t("nav.sources")],
+    ["/admin/creators", t("nav.creators")],
+    ["/admin/subscriptions", t("nav.subscriptions")],
+    ["/admin/jobs", t("nav.jobs")],
+    ["/admin/notifications", t("notifications.title")],
+    ["/admin/works", t("nav.works")],
+    ["/admin/curation", t("nav.curation", "Curation")],
+    ["/admin/tags", t("nav.tags")],
+    ["/admin/scheduler", t("nav.scheduler")],
+    ["/admin/reference/danbooru", t("nav.danbooru")],
+    ["/admin/data-mgmt", t("nav.datamgmt")],
+    ["/admin/settings", t("nav.settings")],
+  ];
+
+  return (
+    <nav className="bg-[#24292f] dark:bg-[#010409] text-white px-4 sm:px-6 py-3 border-b border-[#57606a]/30 dark:border-[#30363d]">
+      <div className="flex items-center gap-4 text-sm">
+        <Link href="/admin" className="font-semibold text-base shrink-0 tracking-tight">auto-gallery</Link>
+        {/* Desktop links */}
+        <div className="hidden md:flex items-center gap-3 flex-1 flex-wrap">
+          {links.map(([href, label]) => (
+            <Link key={href} href={href}
+                className={`rounded-md px-2 py-1 transition-colors ${pathname === href || (href !== "/admin" && pathname.startsWith(href)) ? "bg-white/10 text-white font-medium" : "text-gray-300 hover:bg-white/10 hover:text-white"}`}>{label}</Link>
+          ))}
+        </div>
+        <div className="flex items-center gap-1 shrink-0 ml-auto">
+          <Link href="/admin/search" className="p-1.5 rounded-md hover:bg-white/10 transition-colors" title={t("nav.search")} aria-label={t("nav.search")}>
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8" />
+              <path d="M21 21l-4.3-4.3" />
+            </svg>
+          </Link>
+          <NotificationBell />
+          <LangToggle />
+          <ThemeToggle />
+          <UserMenu />
+          {/* Hamburger — mobile only */}
+          <button onClick={() => setOpen(!open)} className="md:hidden p-1.5 rounded-md hover:bg-white/10" aria-label="Toggle navigation menu">
+            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              {open ? <path d="M18 6L6 18M6 6l12 12" /> : <path d="M4 6h16M4 12h16M4 18h16" />}
+            </svg>
+          </button>
+        </div>
+      </div>
+      {/* Mobile menu */}
+      {open && (
+        <div className="md:hidden mt-3 pt-3 border-t border-[#57606a]/40 flex flex-col gap-1 pb-1">
+          {links.map(([href, label]) => (
+            <Link key={href} href={href} onClick={() => setOpen(false)}
+              className="hover:bg-white/10 hover:text-white rounded-md transition-colors px-2 py-1 text-sm">{label}</Link>
+          ))}
+          <Link href="/admin/search" onClick={() => setOpen(false)}
+            className="hover:bg-white/10 hover:text-white rounded-md transition-colors px-2 py-1 text-sm">{t("nav.search")}</Link>
+        </div>
+      )}
+    </nav>
+  );
+}
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading, user } = useAuth();
@@ -39,8 +152,8 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-subtle">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-border" />
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-slate-600" />
       </div>
     );
   }
@@ -48,154 +161,6 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated && pathname !== "/admin/login") return null;
 
   return <>{children}</>;
-}
-
-function AppShell({ children }: { children: React.ReactNode }) {
-  const [wideMode, setWideMode] = useState<DesktopSidebarMode>("expanded");
-  const [midMode, setMidMode] = useState<DesktopSidebarMode>("compact");
-  const [mobileOpen, setMobileOpen] = useState(false);
-  const [viewportTier, setViewportTier] = useState<ViewportTier>("wide");
-  const { mounted: drawerMounted, closing: drawerClosing } = usePresence(mobileOpen);
-  const sidebarTriggerRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    try {
-      const legacy = localStorage.getItem(LEGACY_SIDEBAR_KEY);
-      const storedWide = localStorage.getItem(SIDEBAR_WIDE_KEY);
-      const storedMid = localStorage.getItem(SIDEBAR_MID_KEY);
-      if (storedWide === "expanded" || storedWide === "compact") {
-        setWideMode(storedWide);
-      } else if (legacy === "collapsed") {
-        setWideMode("compact");
-      }
-      if (storedMid === "expanded" || storedMid === "compact") {
-        setMidMode(storedMid);
-      }
-    } catch {}
-  }, []);
-
-  useEffect(() => {
-    const mobile = window.matchMedia("(max-width: 767px)");
-    const mid = window.matchMedia("(min-width: 768px) and (max-width: 1279px)");
-    const syncViewport = () => {
-      const tier: ViewportTier = mobile.matches ? "mobile" : mid.matches ? "mid" : "wide";
-      setViewportTier(tier);
-      if (tier !== "mobile") setMobileOpen(false);
-    };
-    syncViewport();
-    mobile.addEventListener("change", syncViewport);
-    mid.addEventListener("change", syncViewport);
-    return () => {
-      mobile.removeEventListener("change", syncViewport);
-      mid.removeEventListener("change", syncViewport);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!mobileOpen || !drawerMounted) return;
-    const previousFocus = document.activeElement as HTMLElement | null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    window.requestAnimationFrame(() => {
-      document.querySelector<HTMLElement>("#admin-mobile-sidebar button, #admin-mobile-sidebar a")?.focus();
-    });
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setMobileOpen(false);
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const drawer = document.querySelector<HTMLElement>("#admin-mobile-sidebar");
-      const focusable = Array.from(drawer?.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      ) || []).filter((element) => !element.hasAttribute("hidden"));
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      document.body.style.overflow = previousOverflow;
-      (sidebarTriggerRef.current || previousFocus)?.focus();
-    };
-  }, [drawerMounted, mobileOpen]);
-
-  const desktopMode = viewportTier === "mid" ? midMode : wideMode;
-  const desktopCompact = desktopMode === "compact";
-  const sidebarWidth = desktopCompact ? 64 : 248;
-
-  const toggleSidebar = () => {
-    if (viewportTier === "mobile") {
-      setMobileOpen((open) => !open);
-      return;
-    }
-    const setter = viewportTier === "mid" ? setMidMode : setWideMode;
-    const storageKey = viewportTier === "mid" ? SIDEBAR_MID_KEY : SIDEBAR_WIDE_KEY;
-    setter((current) => {
-      const next = current === "compact" ? "expanded" : "compact";
-      try { localStorage.setItem(storageKey, next); } catch {}
-      return next;
-    });
-  };
-
-  const shellStyle = useMemo(
-    () => ({ "--admin-sidebar-width": `${sidebarWidth}px` } as React.CSSProperties),
-    [sidebarWidth],
-  );
-
-  return (
-    <div
-      className="grid min-h-screen grid-cols-1 md:grid-cols-[var(--admin-sidebar-width)_minmax(0,1fr)]"
-      style={shellStyle}
-    >
-      <aside
-        id="admin-sidebar"
-        className="sticky top-0 hidden h-screen min-w-0 overflow-hidden border-r border-border bg-surface md:block"
-      >
-        <AppSidebar compact={desktopCompact} />
-      </aside>
-      {/* Mobile drawer */}
-      {drawerMounted && (
-        <>
-          <div
-            className={`fixed inset-0 z-50 bg-black/30 md:hidden ${drawerClosing ? "overlay-backdrop-exit" : "overlay-backdrop"}`}
-            onClick={() => setMobileOpen(false)}
-            aria-hidden
-          />
-          <aside
-            id="admin-mobile-sidebar"
-            role="dialog"
-            aria-modal="true"
-            aria-label="auto-gallery"
-            className={`fixed inset-y-0 left-0 z-[60] border-r border-border bg-subtle md:hidden ${drawerClosing ? "drawer-left-exit" : "drawer-left"}`}
-          >
-            <AppSidebar
-              onNavigate={() => setMobileOpen(false)}
-              onDismiss={() => setMobileOpen(false)}
-            />
-          </aside>
-        </>
-      )}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <AppTopBar
-          onToggleSidebar={toggleSidebar}
-          sidebarExpanded={viewportTier === "mobile" ? mobileOpen : desktopMode === "expanded"}
-          sidebarId={viewportTier === "mobile" ? "admin-mobile-sidebar" : "admin-sidebar"}
-          sidebarTriggerRef={sidebarTriggerRef}
-        />
-        <main id="main-content" className="min-h-[calc(100vh-56px)] min-w-0">{children}</main>
-      </div>
-    </div>
-  );
 }
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -209,8 +174,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   return (
     <ErrorBoundary>
       <AuthGuard>
-        <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-subtle focus:text-fg focus:rounded">Skip to content</a>
-        <AppShell>{children}</AppShell>
+        <div>
+          <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-slate-900 focus:text-white focus:rounded">Skip to content</a>
+          <AdminNav />
+          <main id="main-content" className="min-h-[calc(100vh-52px)]">{children}</main>
+        </div>
       </AuthGuard>
     </ErrorBoundary>
   );

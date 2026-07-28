@@ -97,7 +97,6 @@ class IwaraProvider(BaseProvider):
         return str(user.get("id") or user.get("name", "unknown"))
 
     def get_creator_dir_from_url(self, source_url: str) -> str | None:
-        # Iwara profile/user URLs contain the username, which matches
-        # the gallery-dl template: ["iwara", "{user[name]}"]
-        m = re.search(r'iwara\.tv/(?:profile|users)/([\w-]+)', source_url)
-        return m.group(1) if m else None
+        # Iwara profile URL uses username but template uses user.id (numeric)
+        # Cannot reliably map without an API call; return None to use full source scan.
+        return None

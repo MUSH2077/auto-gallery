@@ -1,74 +1,41 @@
 # Security Policy
 
-auto-gallery is designed for trusted, self-hosted, LAN-first deployments. Do
-not expose the admin web or backend API directly to the public internet without
-a reverse proxy, TLS, access controls, network restrictions, and a threat model
-you understand.
+auto-gallery is designed for self-hosted, LAN-first deployments. Do not expose
+the admin web or backend API directly to the public internet without a reverse
+proxy, TLS, access controls, and a threat model you understand.
 
-## Supported versions
+## Supported Versions
 
-Until the first stable release, security fixes are applied to the default
-branch and the newest published beta only. Older commits and unmaintained
-provider configurations are not supported.
+The project is currently in beta. Security fixes are applied to the default
+branch until tagged releases are introduced.
 
-| Version | Supported |
-|---|---|
-| Default branch | Yes |
-| Latest tagged beta | Yes |
-| Older tags and commits | No |
+## Reporting a Vulnerability
 
-## Report a vulnerability
+Please report security issues privately to the maintainer before opening a
+public issue. Include:
 
-Do not open a public issue.
+- Affected version or commit
+- Deployment shape, without secrets
+- Reproduction steps
+- Impact and any known workaround
 
-Use GitHub's private vulnerability reporting:
+Do not include real cookies, refresh tokens, API keys, passwords, or private
+creator URLs in public issues, screenshots, logs, or pull requests.
 
-1. Open the repository's **Security** tab.
-2. Select **Advisories**.
-3. Select **Report a vulnerability**.
+## Sensitive Data
 
-Include the affected version or commit, deployment shape without secrets,
-reproduction steps, impact, and any known workaround. A minimal sanitized
-proof of concept is useful; real credentials and private media are not.
+auto-gallery can store gallery-dl cookies, site credentials, downloaded media,
+metadata, and personal archive paths. Treat the following as secrets:
 
-If private vulnerability reporting is temporarily unavailable, open a public
-issue that contains no vulnerability details and asks a maintainer to provide a
-private channel.
-
-The project has no guaranteed response SLA. Maintainers will acknowledge a
-valid report as capacity allows, coordinate remediation privately, and credit
-reporters unless anonymity is requested.
-
-## Sensitive data
-
-auto-gallery can store gallery-dl cookies, platform credentials, source URLs,
-downloaded media, metadata, and local archive paths. Treat these as secrets:
-
-- `.env` and service credentials
-- gallery-dl cookies and configuration files
-- database dumps, backups, and search indexes
+- `.env`
+- gallery-dl cookies and config files
+- database dumps and backups
 - logs containing source URLs or authentication failures
-- screenshots containing private creators, paths, or account names
+- screenshots that show private creators, paths, or account names
 
-Never include them in public issues, discussions, pull requests, CI artifacts,
-or reproduction repositories.
+## Scope
 
-## Security scope
-
-In scope:
-
-- Authentication, authorization, and session handling
-- Secret exposure through APIs, logs, exports, or UI
-- Path traversal, command injection, SSRF, and unsafe file processing
-- Cross-user access or unintended media disclosure
-- Docker Compose defaults and dependency vulnerabilities with a practical
-  impact on auto-gallery
-
-Usually handled as compatibility or support issues:
-
-- Third-party source downtime or gallery-dl extractor breakage
-- Platform account restrictions and rate limiting
-- Deployments that intentionally disable documented access controls
-- Vulnerabilities that only exist in unsupported, modified deployments
-
-The final classification depends on demonstrated impact to auto-gallery users.
+Security reports are in scope for the application code and Docker Compose
+deployment files. Third-party site behavior, gallery-dl extractor breakage, and
+platform account restrictions are handled as provider compatibility issues
+unless they expose auto-gallery user data.

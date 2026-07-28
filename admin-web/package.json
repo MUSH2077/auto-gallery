@@ -7,24 +7,16 @@
     "build": "next build",
     "generate:api-types": "openapi-typescript http://localhost:8818/openapi.json -o src/lib/api/types.generated.ts",
     "typecheck": "tsc --noEmit",
-    "test:e2e": "playwright test",
-    "screenshots:readme": "UPDATE_README_SCREENSHOTS=1 PLAYWRIGHT_MANAGE_SERVER=1 playwright test tests/e2e/readme-screenshots.spec.ts --project=chromium --workers=1",
     "start": "next start --port 3000"
   },
   "dependencies": {
     "@tanstack/react-query": "5.62.0",
-    "animejs": "^4.5.0",
-    "d3-hierarchy": "^3.1.2",
-    "lucide-react": "^0.468.0",
     "next": "14.2.18",
-    "ogl": "^1.0.11",
     "playwright-core": "^1.60.0",
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.0",
-    "@types/d3-hierarchy": "^3.1.7",
     "@types/node": "22.10.0",
     "@types/react": "18.3.12",
     "@types/react-dom": "18.3.1",

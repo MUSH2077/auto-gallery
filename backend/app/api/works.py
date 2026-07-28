@@ -1,8 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from app.auth import RequirePermission
-from app.models.user import User
+from app.auth import RequireAdmin
 from app.models.work import Work
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
@@ -21,22 +20,8 @@ from app.models.tag import Tag
 from app.models.work_tag import WorkTag
 from app.services.media_signing import signed_media_url
 from app.services.curation import CurationService
-from app.services.gitllery import project_commit_safe
 
-# Reused as-is (same closure) for both the router-level gate and the
-# per-route parameter below — FastAPI's per-request dependency cache keys on
-# the callable identity, so declaring it as a route parameter too does not
-# trigger a second permission check/DB query; it just captures the User
-# already resolved by the router-level dependency.
-_require_library = RequirePermission("library")
-_require_curation = RequirePermission("curation")
-
-router = APIRouter(dependencies=[_require_library])
-# Write/mutation routes on the `work` library entity belong to the
-# `curation` module per spec §A2 (favorite/trash/restore/batch-curate/
-# batch-tag are curation operations, not library browsing). Included with
-# the same "/works" prefix in app/api/__init__.py, so URLs are unchanged.
-curation_router = APIRouter(dependencies=[_require_curation])
+router = APIRouter(dependencies=[RequireAdmin])
 
 
 @router.get("", response_model=WorkListResponse)
@@ -52,28 +37,17 @@ async def list_works(
     curation_visibility: str = "visible",
     sort_by: str = "created_at",
     sort_order: str = "desc",
-    user: User = _require_library,
     db: AsyncSession = Depends(get_db),
 ):
-    force_sfw = not user.nsfw_visible
     ck = cache_key("works:list", offset=offset, limit=limit,
                    search=search, source=source, creator_id=creator_id, tag=tag,
         is_nsfw=is_nsfw, is_favorite=is_favorite,
         is_ai_generated=is_ai_generated,
         curation_visibility=curation_visibility,
-        sort_by=sort_by, sort_order=sort_order, force_sfw=force_sfw)
+        sort_by=sort_by, sort_order=sort_order)
     cached = cache_get(ck)
     if cached is not None:
         return cached
-    # The total count is a full scan of the filtered set and is identical across
-    # pages of the same filter — cache it separately (filters only, no offset/
-    # sort) so deep paging doesn't re-run the COUNT for every page.
-    count_ck = cache_key("works:count",
-                         search=search, source=source, creator_id=creator_id, tag=tag,
-                         is_nsfw=is_nsfw, is_favorite=is_favorite,
-                         is_ai_generated=is_ai_generated,
-                         curation_visibility=curation_visibility, force_sfw=force_sfw)
-    cached_total = cache_get(count_ck)
     repo = WorkRepository(db)
     works, total = await repo.list_all(
         offset=offset, limit=limit,
@@ -82,11 +56,7 @@ async def list_works(
         is_ai_generated=is_ai_generated,
         curation_visibility=curation_visibility,
         sort_by=sort_by, sort_order=sort_order,
-        precomputed_total=cached_total,
-        force_sfw=force_sfw,
     )
-    if cached_total is None:
-        cache_set(count_ck, total, 300)
     items = [WorkList.model_validate(w, from_attributes=True) for w in works]
     data = {"total": total, "items": items}
     cache_set(ck, data, 300)
@@ -94,9 +64,9 @@ async def list_works(
 
 
 @router.get("/{work_id}", response_model=WorkRead)
-async def get_work(work_id: UUID, user: User = _require_library, db: AsyncSession = Depends(get_db)):
+async def get_work(work_id: UUID, db: AsyncSession = Depends(get_db)):
     repo = WorkRepository(db)
-    work = await repo.get(work_id, force_sfw=not user.nsfw_visible)
+    work = await repo.get(work_id)
     if not work:
         raise HTTPException(status_code=404, detail="Work not found")
     svc = CurationService(db)
@@ -104,10 +74,10 @@ async def get_work(work_id: UUID, user: User = _require_library, db: AsyncSessio
     return work
 
 
-@curation_router.post("/{work_id}/favorite", response_model=WorkRead)
-async def toggle_work_favorite(work_id: UUID, user: User = _require_curation, db: AsyncSession = Depends(get_db)):
+@router.post("/{work_id}/favorite", response_model=WorkRead)
+async def toggle_work_favorite(work_id: UUID, db: AsyncSession = Depends(get_db)):
     repo = WorkRepository(db)
-    work = await repo.get(work_id, force_sfw=not user.nsfw_visible)
+    work = await repo.get(work_id)
     if not work:
         raise HTTPException(status_code=404, detail="Work not found")
     before = bool(work.is_favorite)
@@ -116,27 +86,19 @@ async def toggle_work_favorite(work_id: UUID, user: User = _require_curation, db
     commit = await svc.record_work_favorite(work, before, bool(work.is_favorite))
     commit.stats = {"work_count": 1}
     await db.commit()
-    await project_commit_safe(db, commit.id)
     await db.refresh(work)
     work.curation_state = svc.work_state_payload(await svc.work_state(work_id))
     return work
 
 
 @router.get("/{work_id}/sources")
-async def get_work_sources(work_id: UUID, user: User = _require_library, db: AsyncSession = Depends(get_db)):
+async def get_work_sources(work_id: UUID, db: AsyncSession = Depends(get_db)):
     repo = WorkRepository(db)
-    work = await repo.get(work_id, force_sfw=not user.nsfw_visible)
-    if not work:
-        raise HTTPException(status_code=404, detail="Work not found")
     return await repo.get_sources(work_id)
 
 
 @router.get("/{work_id}/tags")
-async def get_work_tags(work_id: UUID, user: User = _require_library, db: AsyncSession = Depends(get_db)):
-    repo = WorkRepository(db)
-    work = await repo.get(work_id, force_sfw=not user.nsfw_visible)
-    if not work:
-        raise HTTPException(status_code=404, detail="Work not found")
+async def get_work_tags(work_id: UUID, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Tag).join(WorkTag, WorkTag.tag_id == Tag.id)
         .where(WorkTag.work_id == work_id)
@@ -146,11 +108,7 @@ async def get_work_tags(work_id: UUID, user: User = _require_library, db: AsyncS
 
 
 @router.get("/{work_id}/assets")
-async def get_work_assets(work_id: UUID, user: User = _require_library, db: AsyncSession = Depends(get_db)):
-    repo = WorkRepository(db)
-    work = await repo.get(work_id, force_sfw=not user.nsfw_visible)
-    if not work:
-        raise HTTPException(status_code=404, detail="Work not found")
+async def get_work_assets(work_id: UUID, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Asset).join(AssetSource, AssetSource.asset_id == Asset.id)
         .join(WorkSource, WorkSource.id == AssetSource.work_source_id)
@@ -169,19 +127,18 @@ async def get_work_assets(work_id: UUID, user: User = _require_library, db: Asyn
     } for a in assets]
 
 
-@curation_router.delete("/{work_id}", status_code=204)
+@router.delete("/{work_id}", status_code=204)
 async def delete_work(work_id: UUID, db: AsyncSession = Depends(get_db)):
     """Move a work to trash. Does NOT delete database rows or files from disk."""
     work = await db.get(Work, work_id)
     if not work:
         raise HTTPException(status_code=404, detail="Work not found")
     svc = CurationService(db)
-    commit = await svc.trash_works([work_id], message=f"Move work to trash: {work.title or work_id}")
-    await project_commit_safe(db, commit.id)
+    await svc.trash_works([work_id], message=f"Move work to trash: {work.title or work_id}")
     cache_delete_pattern("works:*")
 
 
-@curation_router.post("/batch-delete")
+@router.post("/batch-delete")
 async def batch_delete_works(data: dict, db: AsyncSession = Depends(get_db)):
     """Move multiple works to trash by ID list."""
     ids = data.get("ids", [])
@@ -189,7 +146,6 @@ async def batch_delete_works(data: dict, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail="ids list is required")
     svc = CurationService(db)
     commit = await svc.trash_works([UUID(wid) for wid in ids], message=f"Move {len(ids)} works to trash")
-    await project_commit_safe(db, commit.id)
     cache_delete_pattern("works:*")
     return {
         "status": "ok",
@@ -199,7 +155,7 @@ async def batch_delete_works(data: dict, db: AsyncSession = Depends(get_db)):
     }
 
 
-@curation_router.post("/batch-curate", response_model=CurationCommitRead)
+@router.post("/batch-curate", response_model=CurationCommitRead)
 async def batch_curate_works(data: BatchCurateRequest, db: AsyncSession = Depends(get_db)):
     svc = CurationService(db)
     if data.action == "trash":
@@ -208,12 +164,11 @@ async def batch_curate_works(data: BatchCurateRequest, db: AsyncSession = Depend
         commit = await svc.restore_works(data.ids, reason=data.reason, message=data.message)
     else:
         raise HTTPException(status_code=400, detail="action must be trash or restore")
-    await project_commit_safe(db, commit.id)
     cache_delete_pattern("works:*")
     return await svc.commit_payload(commit.id)
 
 
-@curation_router.post("/batch-tag")
+@router.post("/batch-tag")
 async def batch_tag_works(data: dict, db: AsyncSession = Depends(get_db)):
     """Add or remove tags on multiple works."""
     ids = data.get("ids", [])

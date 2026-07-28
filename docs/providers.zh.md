@@ -183,10 +183,10 @@ downloadable = registry.list_downloadable()
 - 处理：目录扫描、从文件结构推断元数据
 
 ### 手动上传 (`manual.py`)
-- **状态**：已通过带权限控制的管理端上传页支持
+- **状态**：计划中
 - `capabilities.can_download`：False
 - `capabilities.can_import_local`：True
-- 处理：管理端上传的图片和压缩包、手动元数据与标签、创作者指派、配额限制和上传者归属
+- 处理：管理员上传文件并手动填写元数据
 
 ## 添加新 Provider
 

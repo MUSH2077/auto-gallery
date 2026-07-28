@@ -3,8 +3,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys, ProviderInfo } from "@/lib/api";
 import { getSourceColor } from "@/lib/sourceColors";
-import { useStaggeredEntrance } from "@/lib/motion";
-import { PageHeader, PageShell, EmptyState, PermissionGuard } from "@/components";
+import { PageHeader, EmptyState } from "@/components";
 import { useT } from "@/lib/i18n";
 
 const DEFAULT_URLS: Record<string, string> = {
@@ -141,21 +140,21 @@ function ProviderCard({ s }: { s: ProviderInfo }) {
     <div className="card p-4">
       <div className="flex items-center justify-between mb-2">
         <span className="w-3 h-3 rounded-full inline-block mr-2 shrink-0" style={{ backgroundColor: getSourceColor(s.source_name) }} /><span className="font-medium text-lg">{s.display_name}</span>
-        <span className="font-mono text-xs text-muted">{s.source_name}</span>
+        <span className="font-mono text-xs text-[#57606a] dark:text-[#8b949e]">{s.source_name}</span>
       </div>
-      <p className="mb-3 text-xs leading-relaxed text-muted">{SOURCE_DESCRIPTIONS[s.source_name] || t("sources.no_desc")}</p>
+      <p className="mb-3 text-xs leading-relaxed text-[#57606a] dark:text-[#8b949e]">{SOURCE_DESCRIPTIONS[s.source_name] || t("sources.no_desc")}</p>
       <div className="flex gap-2 flex-wrap mb-3">
         {s.capabilities.can_download
-          ? <span className="badge border-success-subtle bg-success-subtle text-success dark:border-primary/30 dark:bg-primary/15 dark:text-success">{t("sources.download_available")}</span>
+          ? <span className="badge border-[#dafbe1] bg-[#dafbe1] text-[#1a7f37] dark:border-[#238636]/30 dark:bg-[#238636]/15 dark:text-[#56d364]">{t("sources.download_available")}</span>
           : <span className="badge">{t("sources.download_placeholder")}</span>}
-        {s.capabilities.supports_gallerydl && <span className="badge border-accent-subtle bg-accent-subtle text-accent dark:border-accent/30 dark:bg-accent/15 dark:text-accent">{t("sources.gallerydl")}</span>}
+        {s.capabilities.supports_gallerydl && <span className="badge border-[#ddf4ff] bg-[#ddf4ff] text-[#0969da] dark:border-[#1f6feb]/30 dark:bg-[#1f6feb]/15 dark:text-[#58a6ff]">{t("sources.gallerydl")}</span>}
         {s.capabilities.supports_tags && <span className="badge">{t("sources.tags")}</span>}
-        {s.capabilities.is_reference_only && <span className="badge border-warning-subtle bg-warning-subtle text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-warning">{t("sources.reference_only")}</span>}
-        {s.capabilities.can_import_local && <span className="badge border-success-subtle bg-success-subtle text-success dark:border-primary/30 dark:bg-primary/15 dark:text-success">{t("sources.local_import")}</span>}
+        {s.capabilities.is_reference_only && <span className="badge border-[#fff8c5] bg-[#fff8c5] text-[#9a6700] dark:border-[#d29922]/30 dark:bg-[#d29922]/15 dark:text-[#f2cc60]">{t("sources.reference_only")}</span>}
+        {s.capabilities.can_import_local && <span className="badge border-[#dafbe1] bg-[#dafbe1] text-[#1a7f37] dark:border-[#238636]/30 dark:bg-[#238636]/15 dark:text-[#56d364]">{t("sources.local_import")}</span>}
       </div>
 
-      <div className="border-t border-border pt-3 dark:border-border">
-        <label className="mb-1 block text-xs text-muted">{t("sources.test_validation")}</label>
+      <div className="border-t border-[#d8dee4] pt-3 dark:border-[#30363d]">
+        <label className="mb-1 block text-xs text-[#57606a] dark:text-[#8b949e]">{t("sources.test_validation")}</label>
         <div className="flex gap-2 mb-2">
           <input type="text" value={url} onChange={(e) => setUrl(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleTest()}
@@ -165,10 +164,10 @@ function ProviderCard({ s }: { s: ProviderInfo }) {
         </div>
         <button onClick={() => setUrl(DEFAULT_URLS[s.source_name] || "")}
           className="text-xs text-blue-600 hover:underline mb-2 block">
-          {t("sources.try_default")} <span className="font-mono text-muted">{DEFAULT_URLS[s.source_name]?.slice(0, 40)}{(DEFAULT_URLS[s.source_name]?.length || 0) > 40 ? "..." : ""}</span>
+          {t("sources.try_default")} <span className="font-mono text-[#57606a] dark:text-[#8b949e]">{DEFAULT_URLS[s.source_name]?.slice(0, 40)}{(DEFAULT_URLS[s.source_name]?.length || 0) > 40 ? "..." : ""}</span>
         </button>
         {validResult && (
-          <div className={`rounded-md border p-2 text-xs ${validResult.ok ? "border-success-subtle bg-success-subtle text-success dark:border-primary/30 dark:bg-primary/15 dark:text-success" : "border-danger/40 bg-danger-subtle text-danger dark:border-danger/40 dark:bg-danger/15 dark:text-danger"}`}>
+          <div className={`rounded-md border p-2 text-xs ${validResult.ok ? "border-[#dafbe1] bg-[#dafbe1] text-[#1a7f37] dark:border-[#238636]/30 dark:bg-[#238636]/15 dark:text-[#56d364]" : "border-[#ff8182]/40 bg-[#ffebe9] text-[#cf222e] dark:border-[#da3633]/40 dark:bg-[#da3633]/15 dark:text-[#ff7b72]"}`}>
             {validResult.ok ? "✓ " : "✗ "}{validResult.msg}
           </div>
         )}
@@ -183,31 +182,21 @@ export default function SourcesPage() {
   const downloadable = sources.data?.sources?.filter((s) => s.capabilities.can_download).length || 0;
   const reference = sources.data?.sources?.filter((s) => s.capabilities.is_reference_only).length || 0;
   const total = sources.data?.sources?.length || 0;
-  const sourceItems = sources.data?.sources || [];
-  const sourceEntrance = useStaggeredEntrance(sourceItems.map((source) => source.source_name));
 
   return (
-    <PermissionGuard module="subscriptions">
-    <PageShell size="normal">
+    <main className="max-w-6xl mx-auto p-6">
       <PageHeader title={t("sources.title")} description={t("sources.desc", { total, downloadable, reference })} />
 
-      {sources.isLoading && <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="card p-4 animate-pulse"><div className="mb-2 h-4 w-1/2 rounded bg-subtle dark:bg-subtle" /><div className="mb-4 h-3 w-3/4 rounded bg-subtle dark:bg-subtle" /><div className="h-16 rounded bg-subtle dark:bg-subtle" /></div>)}</div>}
+      {sources.isLoading && <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="card p-4 animate-pulse"><div className="mb-2 h-4 w-1/2 rounded bg-[#eaeef2] dark:bg-[#21262d]" /><div className="mb-4 h-3 w-3/4 rounded bg-[#eaeef2] dark:bg-[#21262d]" /><div className="h-16 rounded bg-[#eaeef2] dark:bg-[#21262d]" /></div>)}</div>}
 
-      {sources.error && <div className="rounded-md border border-danger/40 bg-danger-subtle p-4 text-sm text-danger dark:border-danger/40 dark:bg-danger/15 dark:text-danger">{(sources.error as Error).message}</div>}
+      {sources.error && <div className="rounded-md border border-[#ff8182]/40 bg-[#ffebe9] p-4 text-sm text-[#cf222e] dark:border-[#da3633]/40 dark:bg-[#da3633]/15 dark:text-[#ff7b72]">{(sources.error as Error).message}</div>}
 
       {sources.data && !sources.data.sources.length && <EmptyState title={t("sources.no_providers")} description={t("sources.no_providers_desc")} />}
 
       {sources.data && sources.data.sources.length > 0 && (
         <>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-            {sources.data.sources.map((s, index) => {
-              const entrance = sourceEntrance(s.source_name, index);
-              return (
-                <div key={s.source_name} className={entrance.className} style={entrance.style}>
-                  <ProviderCard s={s} />
-                </div>
-              );
-            })}
+            {sources.data.sources.map((s) => <ProviderCard key={s.source_name} s={s} />)}
           </div>
 
           <details className="card p-4 text-sm">
@@ -224,7 +213,7 @@ export default function SourcesPage() {
                       <td className="text-center py-2 px-2">{s.capabilities.supports_tags ? "✓" : "—"}</td>
                       <td className="text-center py-2 px-2">{s.capabilities.is_reference_only ? "✓" : "—"}</td>
                       <td className="text-center py-2 px-2">{s.capabilities.can_import_local ? "✓" : "—"}</td>
-                      <td className="py-2 px-2 text-xs text-muted">{s.source_name === "pixiv" ? t("sources.auth_oauth") : s.source_name === "x" ? t("sources.auth_oauth_future") : s.source_name === "danbooru" ? t("sources.auth_basic") : t("sources.auth_na")}</td>
+                      <td className="py-2 px-2 text-xs text-[#57606a] dark:text-[#8b949e]">{s.source_name === "pixiv" ? t("sources.auth_oauth") : s.source_name === "x" ? t("sources.auth_oauth_future") : s.source_name === "danbooru" ? t("sources.auth_basic") : t("sources.auth_na")}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -233,7 +222,6 @@ export default function SourcesPage() {
           </details>
         </>
       )}
-    </PageShell>
-    </PermissionGuard>
+    </main>
   );
 }

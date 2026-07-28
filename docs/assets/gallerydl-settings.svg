@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">auto-gallery gallery-dl settings sanitized demo screenshot</title>
+  <desc id="desc">A fictional gallery-dl settings page with provider tabs and naming reference.</desc>
+  <rect width="1200" height="720" fill="#f6f8fa"/>
+  <rect width="1200" height="56" fill="#24292f"/>
+  <text x="36" y="36" fill="#ffffff" font-family="Arial, sans-serif" font-size="18" font-weight="700">auto-gallery</text>
+  <rect x="56" y="88" width="1088" height="584" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <g font-family="Arial, sans-serif">
+    <text x="92" y="132" fill="#24292f" font-size="24" font-weight="700">gallery-dl configuration</text>
+    <text x="92" y="158" fill="#57606a" font-size="13">Credentials, download behavior, and file organization per provider.</text>
+    <rect x="92" y="190" width="1016" height="42" rx="6" fill="#f6f8fa" stroke="#d8dee4"/>
+    <rect x="100" y="198" width="86" height="26" rx="4" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="126" y="216" fill="#24292f" font-size="12" font-weight="700">Pixiv</text>
+    <text x="214" y="216" fill="#57606a" font-size="12">Twitter</text>
+    <text x="302" y="216" fill="#57606a" font-size="12">Iwara</text>
+    <text x="390" y="216" fill="#57606a" font-size="12">Danbooru</text>
+    <text x="500" y="216" fill="#57606a" font-size="12">Weibo</text>
+    <text x="586" y="216" fill="#57606a" font-size="12">Bilibili</text>
+    <rect x="92" y="262" width="480" height="258" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="122" y="298" fill="#24292f" font-size="16" font-weight="700">Authentication</text>
+    <text x="122" y="332" fill="#57606a" font-size="12">Refresh token</text>
+    <rect x="122" y="344" width="390" height="34" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="142" y="366" fill="#8c959f" font-size="12">stored securely in local config volume</text>
+    <text x="122" y="414" fill="#57606a" font-size="12">Cookies path</text>
+    <rect x="122" y="426" width="390" height="34" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="142" y="448" fill="#8c959f" font-size="12">/gallerydl-config/cookies/pixiv.txt</text>
+    <rect x="122" y="476" width="118" height="32" rx="6" fill="#1f883d"/>
+    <text x="146" y="497" fill="#ffffff" font-size="13" font-weight="700">Save config</text>
+    <rect x="604" y="262" width="504" height="258" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="634" y="298" fill="#24292f" font-size="16" font-weight="700">Naming reference</text>
+    <text x="634" y="326" fill="#57606a" font-size="13">Directory</text>
+    <rect x="634" y="340" width="404" height="32" rx="6" fill="#f6f8fa" stroke="#d8dee4"/>
+    <text x="652" y="361" fill="#24292f" font-size="12" font-family="Courier New, monospace">pixiv/{user[account]}/{id}</text>
+    <text x="634" y="404" fill="#57606a" font-size="13">Filename</text>
+    <rect x="634" y="418" width="404" height="32" rx="6" fill="#f6f8fa" stroke="#d8dee4"/>
+    <text x="652" y="439" fill="#24292f" font-size="12" font-family="Courier New, monospace">{id}_p{num}.{extension}</text>
+    <rect x="634" y="470" width="92" height="24" rx="12" fill="#ddf4ff" stroke="#0969da"/>
+    <text x="652" y="487" fill="#0969da" font-size="12">{user[id]}</text>
+    <rect x="736" y="470" width="126" height="24" rx="12" fill="#ddf4ff" stroke="#0969da"/>
+    <text x="754" y="487" fill="#0969da" font-size="12">{user[account]}</text>
+    <rect x="872" y="470" width="54" height="24" rx="12" fill="#ddf4ff" stroke="#0969da"/>
+    <text x="890" y="487" fill="#0969da" font-size="12">{id}</text>
+    <rect x="92" y="548" width="1016" height="56" rx="6" fill="#f6f8fa" stroke="#d8dee4"/>
+    <text x="122" y="582" fill="#57606a" font-size="13">Tree preview: pixiv/atlas_ink/demo-38362603/demo-38362603_p0.jpg</text>
+  </g>
+</svg>

@@ -41,8 +41,6 @@ class WorkRead(BaseModel):
     is_nsfw: bool
     is_ai_generated: bool = False
     is_favorite: bool
-    creator_id: UUID | None = None
-    creator_name: str | None = None
     curation_state: CurationStateRead | None = None
     created_at: datetime
     updated_at: datetime

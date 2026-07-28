@@ -2,7 +2,6 @@ import json
 import logging
 import re
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -15,15 +14,6 @@ UA = "auto-gallery/0.1 (reference provider)"
 REQUEST_TIMEOUT = 15
 MAX_RETRIES = 3
 RETRY_BACKOFF = 2  # seconds, doubles each retry
-
-
-class DanbooruUnavailableError(Exception):
-    """Danbooru API unreachable (network/proxy failure) — NOT a lookup miss.
-
-    Callers must never record "not found" for a request that never reached
-    Danbooru; an empty search result is a 200 with [], and a missing artist
-    detail is a 404 (both return None/[] from this module without raising).
-    """
 
 
 def _get_opener():
@@ -51,12 +41,7 @@ _opener = None
 
 
 def _get(path: str) -> dict | list | None:
-    """GET request to Danbooru API with retry on transient errors.
-
-    Returns None only for HTTP 404 (resource genuinely absent). Raises
-    DanbooruUnavailableError once retries are exhausted so callers can
-    distinguish "Danbooru is down" from "no such artist".
-    """
+    """GET request to Danbooru API with retry on transient errors."""
     global _opener
     url = f"{DANBOORU_BASE}{path}"
     req = urllib.request.Request(url, headers={"User-Agent": UA})
@@ -68,24 +53,20 @@ def _get(path: str) -> dict | list | None:
                 _opener = _get_opener()
             with _opener.open(req, timeout=REQUEST_TIMEOUT) as resp:
                 return json.loads(resp.read())  # type: ignore[no-any-return]
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                return None
-            last_error = e
         except Exception as e:
             last_error = e
-        if attempt < MAX_RETRIES - 1:
-            wait = RETRY_BACKOFF * (2 ** attempt)
-            logger.debug("Danbooru API attempt %d/%d failed, retrying in %ds: %s",
-                         attempt + 1, MAX_RETRIES, wait, last_error)
-            time.sleep(wait)
-            # Reset opener on SSL errors so it reconnects fresh
-            if "SSL" in str(last_error) or "ssl" in str(last_error).lower():
-                _opener = None
+            if attempt < MAX_RETRIES - 1:
+                wait = RETRY_BACKOFF * (2 ** attempt)
+                logger.debug("Danbooru API attempt %d/%d failed, retrying in %ds: %s",
+                             attempt + 1, MAX_RETRIES, wait, e)
+                time.sleep(wait)
+                # Reset opener on SSL errors so it reconnects fresh
+                if "SSL" in str(e) or "ssl" in str(e).lower():
+                    _opener = None
 
-    logger.warning("Danbooru API unavailable after %d attempts: %s %s",
+    logger.warning("Danbooru API request failed after %d attempts: %s %s",
                    MAX_RETRIES, url, last_error)
-    raise DanbooruUnavailableError(f"{url}: {last_error}")
+    return None
 
 
 def search_by_url(source_url: str) -> list[dict]:
@@ -121,10 +102,7 @@ def get_artist(artist_id: int) -> dict | None:
     artist = _get(f"/artists/{artist_id}.json")
     if not isinstance(artist, dict):
         return None
-    try:
-        urls = _get(f"/artists/{artist_id}.json?only=urls")
-    except DanbooruUnavailableError:
-        urls = None  # keep the detail we already fetched; URLs are optional
+    urls = _get(f"/artists/{artist_id}.json?only=urls")
     if isinstance(urls, dict) and "urls" in urls:
         artist["urls"] = urls["urls"]
     else:
@@ -306,12 +284,7 @@ def search_and_extract(source_url: str | None = None,
     # Get full detail of the best match (first result)
     best = candidates[0]
     artist_id = best["id"]
-    try:
-        artist = get_artist(artist_id)
-    except DanbooruUnavailableError:
-        # The search itself succeeded — a transient failure fetching detail
-        # must not discard the match. Listing data is enough for linking.
-        artist = None
+    artist = get_artist(artist_id)
     if not artist:
         # Fall back to listing data if detail fails
         artist = best

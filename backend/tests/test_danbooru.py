@@ -1,11 +1,6 @@
-"""Tests for Danbooru service — URL classification, parsing, error classification."""
+"""Tests for Danbooru service — URL classification and parsing."""
 
-import urllib.error
-
-import pytest
-
-import app.services.danbooru as danbooru_svc
-from app.services.danbooru import DanbooruUnavailableError, _classify_url, is_downloadable_url
+from app.services.danbooru import _classify_url, is_downloadable_url
 
 
 class TestURLClassification:
@@ -98,75 +93,3 @@ class TestDownloadableURL:
     def test_non_downloadable(self):
         assert is_downloadable_url("https://youtube.com/@channel") is False
         assert is_downloadable_url("https://danbooru.donmai.us/posts/123") is False  # individual post, not tag search
-
-
-class _RaisingOpener:
-    def __init__(self, exc_factory):
-        self.exc_factory = exc_factory
-        self.calls = 0
-
-    def open(self, req, timeout=None):
-        self.calls += 1
-        raise self.exc_factory(req)
-
-
-class TestErrorClassification:
-    """Network failures must raise DanbooruUnavailableError, never masquerade as 'not found'."""
-
-    def test_get_raises_unavailable_after_retries(self, monkeypatch):
-        opener = _RaisingOpener(lambda req: ConnectionResetError("Remote end closed connection"))
-        monkeypatch.setattr(danbooru_svc, "_opener", opener)
-        monkeypatch.setattr(danbooru_svc.time, "sleep", lambda s: None)
-        with pytest.raises(DanbooruUnavailableError):
-            danbooru_svc._get("/artists.json?limit=1")
-        assert opener.calls == danbooru_svc.MAX_RETRIES
-
-    def test_get_returns_none_on_404_without_retry(self, monkeypatch):
-        opener = _RaisingOpener(
-            lambda req: urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
-        )
-        monkeypatch.setattr(danbooru_svc, "_opener", opener)
-        monkeypatch.setattr(danbooru_svc.time, "sleep", lambda s: None)
-        assert danbooru_svc._get("/artists/999999999.json") is None
-        assert opener.calls == 1
-
-    def test_search_propagates_unavailable(self, monkeypatch):
-        def _raise(path):
-            raise DanbooruUnavailableError("net down")
-
-        monkeypatch.setattr(danbooru_svc, "_get", _raise)
-        with pytest.raises(DanbooruUnavailableError):
-            danbooru_svc.search_by_url("https://www.pixiv.net/users/75220791")
-        with pytest.raises(DanbooruUnavailableError):
-            danbooru_svc.search_by_name("yosei_bin")
-
-    def test_search_and_extract_falls_back_when_detail_unavailable(self, monkeypatch):
-        best = {"id": 240355, "name": "yosei_bin"}
-        monkeypatch.setattr(danbooru_svc, "search_by_url", lambda url: [best])
-
-        def _raise(artist_id):
-            raise DanbooruUnavailableError("detail fetch failed")
-
-        monkeypatch.setattr(danbooru_svc, "get_artist", _raise)
-        artist, links = danbooru_svc.search_and_extract(source_url="https://www.pixiv.net/users/75220791")
-        assert artist is best
-        assert links and links[0]["link_type"] == "danbooru"
-
-    async def test_disk_import_enrichment_reports_error_not_not_found(self, monkeypatch):
-        from app.services import disk_identity as di
-
-        def _raise(**kwargs):
-            raise DanbooruUnavailableError("net down")
-
-        monkeypatch.setattr(di.danbooru_svc, "search_and_extract", _raise)
-        identity = di.MetadataIdentity(
-            source="pixiv",
-            source_creator_id="75220791",
-            source_url="https://www.pixiv.net/users/75220791",
-            display_name="yosei",
-            raw_metadata={},
-            creator_dir="yosei",
-        )
-        artist, links, status = await di._try_danbooru_enrichment(identity)
-        assert artist is None and links == []
-        assert status == "danbooru_error:DanbooruUnavailableError"

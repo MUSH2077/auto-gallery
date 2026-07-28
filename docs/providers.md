@@ -183,11 +183,10 @@ downloadable = registry.list_downloadable()
 - Handles: directory scanning, metadata inference from file structure
 
 ### Manual Upload (`manual.py`)
-- **Status**: Supported through the permission-gated admin upload page
+- **Status**: Planned
 - `capabilities.can_download`: False
 - `capabilities.can_import_local`: True
-- Handles: admin-uploaded images and archives with manual metadata, tags,
-  creator targeting, quota enforcement, and attribution
+- Handles: admin-uploaded files with manual metadata entry
 
 ## Adding a New Provider
 
