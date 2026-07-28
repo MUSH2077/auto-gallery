@@ -922,7 +922,6 @@ async def run_import_job(import_job_id: str):
                     try:
                         from rq import Queue
                         from datetime import timedelta
-                        from app.services.redis_client import get_redis
                         backoff_seconds = 60 * retry_count
                         Queue(name="imports", connection=get_redis()).enqueue_in(
                             timedelta(seconds=backoff_seconds),

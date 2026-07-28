@@ -34,37 +34,6 @@ from app.services.admin_data import ENTITIES, clear_entity_data
 
 from ._routers import router, _clear_files
 
-def _job_is_sync_scan(job) -> bool:
-    return "sync_subscriptions" in (getattr(job, "func_name", "") or str(job))
-
-
-def _reschedule_subscription_sync_scan(config: dict) -> dict:
-    """Replace pending subscription sync scan jobs with one using current config."""
-    import redis as redis_lib
-    from rq import Queue
-    from rq.registry import ScheduledJobRegistry
-    from app.jobs.subscription_sync import sync_subscriptions
-
-    interval = max(int(config.get("scheduler_scan_interval_minutes", 60)), 5)
-    r = redis_lib.from_url(settings.redis_url)
-    q = Queue(name="scheduled", connection=r)
-    scheduled_registry = ScheduledJobRegistry(queue=q)
-
-    removed = 0
-    for job_id in list(scheduled_registry.get_job_ids()):
-        job = q.fetch_job(job_id)
-        if job and _job_is_sync_scan(job):
-            scheduled_registry.remove(job_id, delete_job=True)
-            removed += 1
-
-    for job in list(q.get_jobs()):
-        if _job_is_sync_scan(job):
-            q.remove(job.id)
-            removed += 1
-
-    job = q.enqueue_in(timedelta(minutes=interval), sync_subscriptions)
-    return {"removed": removed, "job_id": job.id, "interval_minutes": interval}
-
 
 DEFAULT_DEDUP = {
     "auto_group_enabled": True,

@@ -32,6 +32,13 @@ from app.services.operations import get_operation_status, set_operation_status
 from ._routers import router
 
 BACKUP_DIR = Path(settings.download_root) / ".backups"
+ALL_BACKUP_CONTENTS = [
+    "database",
+    "gallerydl-config",
+    "app-config",
+    "download-archives",
+    "library-metadata",
+]
 
 def _parse_db_url(url: str) -> dict:
     """Parse DATABASE_URL into pg_dump-compatible components.
