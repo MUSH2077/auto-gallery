@@ -67,8 +67,15 @@ async def batch_delete_subscriptions(data: dict, db: AsyncSession = Depends(get_
     results = []
     for sid in ids:
         try:
-            await svc.delete_subscription(UUID(sid))
+            subscription_id = UUID(sid)
+        except (TypeError, ValueError):
+            results.append({"id": sid, "status": "error", "error": "invalid_id"})
+            continue
+        try:
+            await svc.delete_subscription(subscription_id)
             results.append({"id": sid, "status": "deleted"})
+        except ValueError:
+            results.append({"id": sid, "status": "error", "error": "not_found"})
         except Exception:
             logger.warning("batch subscription delete failed for %s", sid, exc_info=True)
             results.append({"id": sid, "status": "error", "error": "internal_error"})
@@ -85,8 +92,15 @@ async def batch_toggle_sync(data: dict, db: AsyncSession = Depends(get_db)):
     results = []
     for sid in ids:
         try:
-            await svc.update_subscription(UUID(sid), {"sync_enabled": enabled})
+            subscription_id = UUID(sid)
+        except (TypeError, ValueError):
+            results.append({"id": sid, "status": "error", "error": "invalid_id"})
+            continue
+        try:
+            await svc.update_subscription(subscription_id, {"sync_enabled": enabled})
             results.append({"id": sid, "status": "updated", "sync_enabled": enabled})
+        except ValueError:
+            results.append({"id": sid, "status": "error", "error": "not_found"})
         except Exception:
             logger.warning("batch subscription update failed for %s", sid, exc_info=True)
             results.append({"id": sid, "status": "error", "error": "internal_error"})

@@ -84,8 +84,15 @@ async def batch_delete_creators(data: dict, db: AsyncSession = Depends(get_db)):
     results = []
     for cid in ids:
         try:
-            await svc.delete_creator(UUID(cid))
+            creator_id = UUID(cid)
+        except (TypeError, ValueError):
+            results.append({"id": cid, "status": "error", "error": "invalid_id"})
+            continue
+        try:
+            await svc.delete_creator(creator_id)
             results.append({"id": cid, "status": "deleted"})
+        except ValueError:
+            results.append({"id": cid, "status": "error", "error": "not_found"})
         except Exception:
             logger.warning("batch_delete_creators failed for %s", cid, exc_info=True)
             results.append({"id": cid, "status": "error", "error": "internal_error"})
@@ -111,15 +118,32 @@ async def merge_creators_endpoint(data: dict, db: AsyncSession = Depends(get_db)
     """
     from app.services.creator_dedup import merge_creators
 
-    target_id = UUID(data["target_id"])
+    try:
+        target_id = UUID(data["target_id"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid target_id")
     source_ids = data.get("source_ids", [])
     results = []
     for source_id_str in source_ids:
-        source_id = UUID(source_id_str)
+        try:
+            source_id = UUID(source_id_str)
+        except (TypeError, ValueError):
+            results.append({
+                "source_id": source_id_str,
+                "status": "error",
+                "error": "invalid_id",
+            })
+            continue
         try:
             stats = await merge_creators(db, target_id, source_id)
             results.append({"source_id": source_id_str, "status": "merged", **stats})
         except ValueError:
+            results.append({
+                "source_id": source_id_str,
+                "status": "error",
+                "error": "merge_rejected",
+            })
+        except Exception:
             logger.warning(
                 "merge_creators failed for source=%s target=%s",
                 source_id_str,

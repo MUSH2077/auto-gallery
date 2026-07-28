@@ -65,12 +65,75 @@ async def test_subscription_batch_errors_use_stable_public_code(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_subscription_batch_expected_errors_use_public_codes(monkeypatch):
+    from app.api import subscriptions
+
+    class MissingSubscriptionService:
+        def __init__(self, _db):
+            pass
+
+        async def delete_subscription(self, _subscription_id):
+            raise ValueError("Subscription not found")
+
+        async def update_subscription(self, _subscription_id, _data):
+            raise ValueError("Subscription not found")
+
+    monkeypatch.setattr(subscriptions, "SubscriptionService", MissingSubscriptionService)
+    missing_id = str(uuid4())
+
+    result = await subscriptions.batch_delete_subscriptions(
+        {"ids": ["not-a-uuid", missing_id]},
+        db=object(),
+    )
+
+    assert result["results"] == [
+        {"id": "not-a-uuid", "status": "error", "error": "invalid_id"},
+        {"id": missing_id, "status": "error", "error": "not_found"},
+    ]
+
+    update_result = await subscriptions.batch_toggle_sync(
+        {"ids": ["not-a-uuid", missing_id], "sync_enabled": False},
+        db=object(),
+    )
+
+    assert update_result["results"] == [
+        {"id": "not-a-uuid", "status": "error", "error": "invalid_id"},
+        {"id": missing_id, "status": "error", "error": "not_found"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_creator_batch_expected_errors_use_public_codes(monkeypatch):
+    from app.api import creators
+
+    class MissingCreatorService:
+        def __init__(self, _db):
+            pass
+
+        async def delete_creator(self, _creator_id):
+            raise ValueError("Creator not found")
+
+    monkeypatch.setattr(creators, "CreatorService", MissingCreatorService)
+    missing_id = str(uuid4())
+
+    result = await creators.batch_delete_creators(
+        {"ids": ["not-a-uuid", missing_id]},
+        db=object(),
+    )
+
+    assert result["results"] == [
+        {"id": "not-a-uuid", "status": "error", "error": "invalid_id"},
+        {"id": missing_id, "status": "error", "error": "not_found"},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_creator_merge_errors_use_stable_public_code(monkeypatch):
     from app.api import creators
     from app.services import creator_dedup
 
     async def fail_merge(*_args, **_kwargs):
-        raise ValueError("creator storage path is private")
+        raise RuntimeError("creator storage path is private")
 
     monkeypatch.setattr(creator_dedup, "merge_creators", fail_merge)
 
@@ -84,3 +147,28 @@ async def test_creator_merge_errors_use_stable_public_code(monkeypatch):
 
     assert result["results"][0]["error"] == "merge_failed"
     assert "storage path" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_creator_merge_expected_errors_use_public_codes(monkeypatch):
+    from app.api import creators
+    from app.services import creator_dedup
+
+    async def reject_merge(*_args, **_kwargs):
+        raise ValueError("Cannot merge a creator into itself")
+
+    monkeypatch.setattr(creator_dedup, "merge_creators", reject_merge)
+    valid_source_id = str(uuid4())
+
+    result = await creators.merge_creators_endpoint(
+        {
+            "target_id": str(uuid4()),
+            "source_ids": ["not-a-uuid", valid_source_id],
+        },
+        db=object(),
+    )
+
+    assert result["results"] == [
+        {"source_id": "not-a-uuid", "status": "error", "error": "invalid_id"},
+        {"source_id": valid_source_id, "status": "error", "error": "merge_rejected"},
+    ]
