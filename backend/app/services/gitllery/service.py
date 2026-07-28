@@ -481,7 +481,14 @@ def _advance_checkpoint(created_at: datetime, commit_id) -> bool:
     try:
         now = datetime.now(timezone.utc)
         ts = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
-        if ts > now - timedelta(seconds=_CHECKPOINT_CLAMP_SECONDS):
+        # A non-positive value explicitly disables the clamp (used by tests
+        # and controlled maintenance). Without the guard, tiny database/app
+        # clock skew can still reject a checkpoint when the configured window
+        # is zero.
+        if (
+            _CHECKPOINT_CLAMP_SECONDS > 0
+            and ts > now - timedelta(seconds=_CHECKPOINT_CLAMP_SECONDS)
+        ):
             return False
         import json
         from app.services.redis_client import get_redis

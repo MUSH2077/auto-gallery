@@ -50,6 +50,8 @@ os.environ["REDIS_URL"] = urlunparse(urlparse(_REDIS_URL)._replace(path="/15"))
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
 os.environ.setdefault("APP_CONFIG_ROOT", "/tmp/auto-gallery-test-config")
+# Never let tests create or mutate the runtime gallery-dl config mount.
+os.environ["GALLERYDL_CONFIG_ROOT"] = "/tmp/auto-gallery-test-gallerydl-config"
 
 
 def _provision_main_test_database() -> None:
