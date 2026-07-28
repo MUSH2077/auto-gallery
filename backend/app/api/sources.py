@@ -1,9 +1,8 @@
 from fastapi import APIRouter
 
-from app.auth import RequirePermission
 from app.providers import registry
 
-router = APIRouter(dependencies=[RequirePermission("subscriptions")])
+router = APIRouter()
 
 
 @router.get("")

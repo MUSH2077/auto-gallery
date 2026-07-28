@@ -54,9 +54,7 @@ def test_list_works_passes_curation_visibility_to_repository(monkeypatch):
     monkeypatch.setattr(works, "cache_get", lambda _key: None)
     monkeypatch.setattr(works, "cache_set", lambda *_args, **_kwargs: None)
 
-    result = asyncio.run(works.list_works(
-        curation_visibility="trashed", user=SimpleNamespace(nsfw_visible=True), db=object(),
-    ))
+    result = asyncio.run(works.list_works(curation_visibility="trashed", db=object()))
 
     assert result == {"total": 0, "items": []}
     assert captured["kwargs"]["curation_visibility"] == "trashed"
@@ -159,21 +157,18 @@ def test_backfill_status_and_run_use_curation_service(monkeypatch):
             calls.append("status")
             return {"is_complete": False, "expected": {}, "existing": {}, "missing": {}}
 
+        async def run_backfill(self):
+            calls.append("run")
+            return {"status": "ok", "created": {}, "skipped": {}, "expected": {}}
+
     monkeypatch.setattr(curation, "CurationService", FakeCurationService)
 
-    # run_backfill is queued work now — the endpoint only enqueues.
-    async def fake_enqueue(**kwargs):
-        calls.append(("enqueue", kwargs["operation_type"]))
-        return {"status": "enqueued", "job_id": "job-1"}
-
-    monkeypatch.setattr("app.services.operations.enqueue_admin_operation", fake_enqueue)
-
     status = asyncio.run(curation.curation_backfill_status(db=object()))
-    run = asyncio.run(curation.run_curation_backfill())
+    run = asyncio.run(curation.run_curation_backfill(db=object()))
 
     assert status["is_complete"] is False
-    assert run["status"] == "enqueued"
-    assert calls == ["status", ("enqueue", "admin-curation-backfill")]
+    assert run["status"] == "ok"
+    assert calls == ["status", "run"]
 
 
 def test_revert_rejects_baseline_commit():
@@ -340,9 +335,6 @@ def test_clear_all_deletes_curation_tables_before_works(monkeypatch):
             return Result()
 
         async def commit(self):
-            pass
-
-        async def flush(self):
             pass
 
     class FakeSearchService:

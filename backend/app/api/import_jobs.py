@@ -1,81 +1,17 @@
 import logging
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
-from app.auth import RequirePermission, get_admin_key
+from app.auth import RequireAdmin
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, cast, String, or_
 
 from app.database import get_db
 from app.models.import_job import ImportJob
-from app.models.download_job import DownloadJob
-from app.models.subscription import Subscription
-from app.models.creator import Creator
-from app.schemas.import_job import ImportJobRead
-from app.models.task_state import transition_import_job
-from app.services.job_progress import import_progress_from_job
-from app.services.progress import ProgressTracker
-from app.services.task_engine import TaskEngine, TaskEngineError
+from app.services.job_state import transition_import_job
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(dependencies=[RequirePermission("tasks")])
-
-
-def _import_job_payload(job: ImportJob) -> dict:
-    payload = ImportJobRead.model_validate(job).model_dump(mode="json")
-    progress = ProgressTracker.get(str(job.id))
-    if progress:
-        payload["progress_data"] = progress
-    else:
-        payload["progress_data"] = import_progress_from_job(job)
-    return payload
-
-
-async def _enrich_import_context(db: AsyncSession, jobs: list[ImportJob]) -> dict:
-    """Resolve parent download-job context (source/url/subscription/creator) for a
-    batch of import jobs so the import list can show the same info as downloads."""
-    dj_ids = {j.download_job_id for j in jobs if j.download_job_id}
-    if not dj_ids:
-        return {}
-    dj_rows = (await db.execute(
-        select(DownloadJob.id, DownloadJob.source, DownloadJob.source_url, DownloadJob.subscription_id)
-        .where(DownloadJob.id.in_(dj_ids))
-    )).all()
-    dj = {r.id: r for r in dj_rows}
-
-    sub_ids = {r.subscription_id for r in dj_rows if r.subscription_id}
-    sub_ctx: dict = {}
-    if sub_ids:
-        sub_rows = (await db.execute(
-            select(Subscription.id, Subscription.name, Subscription.creator_id,
-                   Creator.display_name, Creator.name)
-            .join(Creator, Creator.id == Subscription.creator_id)
-            .where(Subscription.id.in_(sub_ids))
-        )).all()
-        sub_ctx = {
-            sid: {
-                "subscription_name": sname,
-                "creator_id": str(cid) if cid else None,
-                "creator_name": cdisplay or cname,
-            }
-            for sid, sname, cid, cdisplay, cname in sub_rows
-        }
-
-    ctx: dict = {}
-    for j in jobs:
-        d = dj.get(j.download_job_id)
-        if not d:
-            continue
-        s = sub_ctx.get(d.subscription_id, {})
-        ctx[j.id] = {
-            "source": d.source,
-            "source_url": d.source_url,
-            "subscription_id": str(d.subscription_id) if d.subscription_id else None,
-            "subscription_name": s.get("subscription_name"),
-            "creator_id": s.get("creator_id"),
-            "creator_name": s.get("creator_name"),
-        }
-    return ctx
+router = APIRouter(dependencies=[RequireAdmin])
 
 
 @router.post("/scan")
@@ -154,13 +90,7 @@ async def list_import_jobs(
     stmt = stmt.order_by(ImportJob.created_at.desc()).offset(offset).limit(limit)
     result = await db.execute(stmt)
     jobs = list(result.scalars().all())
-    ctx = await _enrich_import_context(db, jobs)
-    items = []
-    for j in jobs:
-        payload = _import_job_payload(j)
-        payload.update(ctx.get(j.id, {}))
-        items.append(payload)
-    return {"total": total, "items": items}
+    return {"total": total, "items": [{"id": str(j.id), "download_job_id": str(j.download_job_id), "status": j.status, "error_log": j.error_log, "created_at": j.created_at.isoformat(), "updated_at": j.updated_at.isoformat()} for j in jobs]}
 
 
 @router.get("/{job_id}")
@@ -169,89 +99,41 @@ async def get_import_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
     job = result.scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="Import job not found")
-    return _import_job_payload(job)
+    return {"id": str(job.id), "download_job_id": str(job.download_job_id), "status": job.status, "error_log": job.error_log, "created_at": job.created_at.isoformat(), "updated_at": job.updated_at.isoformat()}
 
 
 @router.post("/{job_id}/retry")
-async def retry_import_job(
-    job_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    operator: str = Depends(get_admin_key),
-):
-    engine = TaskEngine(db)
+async def retry_import_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(ImportJob).where(ImportJob.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Import job not found")
+    if job.status not in ("failed", "stale"):
+        raise HTTPException(status_code=400, detail=f"Cannot retry job with status '{job.status}'")
+    transition_import_job(job, "pending")
+    job.error_log = None
+    await db.commit()
+
     try:
-        result = await engine.retry_import(job_id, operator=operator)
-        await db.commit()
-        return result
-    except TaskEngineError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        import redis as redis_lib
+        from rq import Queue
+        from app.config import settings
+        r = redis_lib.from_url(settings.redis_url)
+        Queue(name="imports", connection=r).enqueue("app.jobs.import_runner.run_import_job", str(job_id), job_timeout=7200)
+    except Exception:
+        logger.warning("Failed to enqueue retry for import job %s", job_id, exc_info=True)
+
+    return {"status": "ok", "message": f"Retry triggered for import job {job_id}"}
 
 
 @router.delete("/{job_id}")
 async def delete_import_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
-    engine = TaskEngine(db)
-    try:
-        await engine.delete_import(job_id)
-        return {"status": "ok"}
-    except TaskEngineError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-# ── Task Engine endpoints ─────────────────────────────────────────
-
-
-@router.post("/{job_id}/cancel")
-async def cancel_import_job(
-    job_id: UUID,
-    data: dict | None = None,
-    db: AsyncSession = Depends(get_db),
-    operator: str = Depends(get_admin_key),
-):
-    engine = TaskEngine(db)
-    try:
-        note = data.get("note") if data else None
-        result = await engine.cancel_import(job_id, note=note, operator=operator)
-        await db.commit()
-        return result
-    except TaskEngineError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.post("/{job_id}/priority")
-async def set_import_priority(
-    job_id: UUID,
-    data: dict,
-    db: AsyncSession = Depends(get_db),
-    operator: str = Depends(get_admin_key),
-):
-    priority = data.get("priority", 10)
-    engine = TaskEngine(db)
-    try:
-        result = await engine.set_priority_import(job_id, priority, operator=operator)
-        await db.commit()
-        return result
-    except TaskEngineError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-
-@router.post("/batch-by-filter")
-async def batch_import_by_filter(
-    data: dict,
-    db: AsyncSession = Depends(get_db),
-    operator: str = Depends(get_admin_key),
-):
-    filters = data.get("filters", {})
-    action = data.get("action", "")
-    note = data.get("note")
-    engine = TaskEngine(db)
-    try:
-        return await engine.batch_by_filter("import", filters, action, operator=operator, note=note)
-    except TaskEngineError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.get("/{job_id}/progress")
-async def get_import_progress(job_id: UUID):
-    progress = ProgressTracker.get(str(job_id))
-    if not progress:
-        raise HTTPException(status_code=404, detail="No progress data available")
-    return {"job_id": str(job_id), **progress}
+    result = await db.execute(select(ImportJob).where(ImportJob.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Import job not found")
+    if job.status in ("pending", "running"):
+        raise HTTPException(status_code=400, detail=f"Cannot delete job with status '{job.status}'")
+    await db.delete(job)
+    await db.commit()
+    return {"status": "ok"}

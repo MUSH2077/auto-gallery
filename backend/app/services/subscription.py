@@ -1,11 +1,11 @@
 import logging
 from uuid import UUID
 
-from sqlalchemy import select, delete as sql_delete, update as sql_update, and_
+from sqlalchemy import select, delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.subscription import SubscriptionRepository
-from app.models import SubscriptionSource, DownloadJob, ImportJob, CreatorLink, Subscription, SourceCreator
+from app.models import SubscriptionSource, DownloadJob, ImportJob, CreatorLink, Subscription
 from app.providers import registry
 from app.services.settings import get_subscription_defaults
 
@@ -42,43 +42,7 @@ class SubscriptionService:
 
     async def update_subscription(self, sub_id: UUID, data: dict):
         sub = await self.get_subscription(sub_id)
-        old_creator_id = sub.creator_id
-        new_creator_id = data.get("creator_id")
-
         sub = await self.repo.update(sub, data)
-
-        # When creator_id changes, propagate to SourceCreators that were
-        # previously linked to the old creator_id AND match this
-        # subscription's sources.  This prevents works from being split
-        # across two Creator records while avoiding cross-subscription
-        # mutation.
-        if (
-            new_creator_id is not None
-            and old_creator_id is not None
-            and str(new_creator_id) != str(old_creator_id)
-        ):
-            # Collect the sources (e.g. "pixiv", "x") of this subscription
-            ss_result = await self.db.execute(
-                select(SubscriptionSource.source).where(
-                    SubscriptionSource.subscription_id == sub_id
-                )
-            )
-            sub_sources = [row[0] for row in ss_result.all()]
-            if sub_sources:
-                await self.db.execute(
-                    sql_update(SourceCreator)
-                    .where(
-                        SourceCreator.creator_id == old_creator_id,
-                        SourceCreator.source.in_(sub_sources),
-                    )
-                    .values(creator_id=new_creator_id)
-                )
-                logger.info(
-                    "Propagated creator_id change: moved SourceCreators "
-                    "from %s to %s (sources: %s)",
-                    old_creator_id, new_creator_id, sub_sources,
-                )
-
         await self.db.commit()
         return sub
 
@@ -159,94 +123,63 @@ class SubscriptionService:
 
     async def _enrich_creator_from_danbooru(self, creator_id: UUID, source_url: str) -> int:
         """Query Danbooru for this source URL and create CreatorLink suggestions."""
-        from app.services.creator_enrichment import fetch_and_link_danbooru_artist
-        result = await fetch_and_link_danbooru_artist(
-            self.db, creator_id, source_url=source_url, reraise_unavailable=False,
-        )
-        if result:
-            logger.info("Danbooru enrichment: %d links created for creator %s from URL %s",
-                        result, creator_id, source_url)
-        return result
+        try:
+            from app.services import danbooru as danbooru_svc
+            from app.models import Creator
+            import asyncio
 
-    async def trigger_sync(self, subscription_id: UUID) -> dict:
-        from app.services.tasks import TaskService
-        from app.services.subscription_enqueue import enqueue_subscription_source_sync
-        from app.services.cache import invalidate_api_caches
+            # Danbooru HTTP is synchronous (urllib); run in thread to avoid
+            # blocking the FastAPI event loop during API calls.
+            artist, links = await asyncio.to_thread(
+                danbooru_svc.search_and_extract, source_url=source_url
+            )
+            if not links:
+                return 0
 
-        sub = await self.db.get(Subscription, subscription_id)
-        if not sub:
-            raise ValueError("Subscription not found")
+            # Enrich creator record with Danbooru data
+            c = await self.db.get(Creator, creator_id)
+            if c and artist:
+                if c.danbooru_artist_id is None:
+                    c.danbooru_artist_id = artist.get("id")
+                # Populate description with aliases if empty
+                if not c.description:
+                    parts = []
+                    other_names = artist.get("other_names", [])
+                    if other_names:
+                        parts.append(f"Danbooru aliases: {', '.join(other_names)}")
+                    notes = artist.get("notes")
+                    if notes:
+                        parts.append(notes)
+                    if parts:
+                        c.description = "\n".join(parts)
+                await self.db.flush()
 
-        sources = await self.db.execute(
-            select(SubscriptionSource).where(
-                and_(
-                    SubscriptionSource.subscription_id == subscription_id,
-                    SubscriptionSource.is_enabled == True,
+            created = 0
+            for link_data in links:
+                existing = await self.db.execute(
+                    select(CreatorLink).where(
+                        CreatorLink.creator_id == creator_id,
+                        CreatorLink.url == link_data["url"],
+                    )
                 )
-            )
-        )
-        sub_sources = sources.scalars().all()
-        if not sub_sources:
-            return {"status": "ok", "message": "No enabled sources", "job_ids": []}
+                if existing.scalar_one_or_none():
+                    continue
+                self.db.add(CreatorLink(
+                    creator_id=creator_id,
+                    url=link_data["url"],
+                    link_type=link_data["link_type"],
+                    source=link_data["source"],
+                    confidence=link_data["confidence"],
+                    is_verified=link_data["is_verified"],
+                    notes=link_data.get("notes"),
+                ))
+                created += 1
 
-        task_service = TaskService(self.db)
-        parent_task = await task_service.create_task(
-            kind="admin",
-            operation_type="subscription-sync-batch",
-            title=f"Sync subscription {subscription_id}",
-            status="running",
-            queue_name="downloads",
-            progress={"phase": "scanning", "label": "Checking subscription sources", "current": 0, "total": len(sub_sources)},
-            meta={"subscription_id": str(subscription_id), "scope": "subscription"},
-        )
-
-        job_ids = []
-        task_ids = []
-        skipped = []
-        errors = []
-
-        for index, ss in enumerate(sub_sources, start=1):
-            result = await enqueue_subscription_source_sync(
-                self.db,
-                ss.id,
-                trigger="manual_subscription",
-                force=False,
-                parent_task_id=parent_task.id,
-                force_reason="subscription_sync_now",
-            )
-            if result["status"] == "enqueued":
-                job_ids.append(result["job_id"])
-                if result.get("task_id"):
-                    task_ids.append(result["task_id"])
-            elif result["status"] == "error":
-                errors.append(result)
-            else:
-                skipped.append(result)
-            await task_service.update_task(
-                parent_task,
-                progress={"phase": "enqueuing", "label": "Enqueuing source downloads", "current": index, "total": len(sub_sources)},
-            )
-
-        summary = {
-            "enqueued_count": len(job_ids),
-            "skipped_count": len(skipped),
-            "error_count": len(errors),
-            "job_ids": job_ids,
-            "task_ids": task_ids,
-            "skipped": skipped,
-            "errors": errors,
-        }
-
-        if errors and not job_ids:
-            await task_service.update_task(parent_task, status="failed", result=summary, error="All enqueue attempts failed")
-            await self.db.commit()
-            return {"status": "error", "message": "All enqueue attempts failed", "task_id": str(parent_task.id), **summary}
-        if errors:
-            invalidate_api_caches("subscriptions", "creators")
-            await task_service.update_task(parent_task, status="complete", result=summary, progress={"phase": "complete", "label": "Subscription sync enqueued", "current": len(sub_sources), "total": len(sub_sources)})
-            await self.db.commit()
-            return {"status": "partial_error", "message": f"Enqueued {len(job_ids)} jobs, {len(errors)} failed", "task_id": str(parent_task.id), **summary}
-        invalidate_api_caches("subscriptions", "creators")
-        await task_service.update_task(parent_task, status="complete", result=summary, progress={"phase": "complete", "label": "Subscription sync enqueued", "current": len(sub_sources), "total": len(sub_sources)})
-        await self.db.commit()
-        return {"status": "ok", "message": f"Enqueued {len(job_ids)} download jobs", "task_id": str(parent_task.id), **summary}
+            if created or (c and c.danbooru_artist_id):
+                await self.db.commit()
+                logger.info("Danbooru enrichment: %d links created for creator %s from URL %s",
+                            created, creator_id, source_url)
+            return created
+        except Exception as e:
+            logger.warning("Danbooru enrichment failed for creator %s: %s", creator_id, e)
+            return 0

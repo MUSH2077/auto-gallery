@@ -18,10 +18,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    # noeviction: this redis also backs RQ job queues — evicting keys under
-    # memory pressure would silently drop queued jobs. Overflow must error
-    # loudly instead. 96mb keeps headroom under the 128M container limit.
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD} --maxmemory 96mb --maxmemory-policy noeviction
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD} --maxmemory 64mb --maxmemory-policy allkeys-lru
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
     volumes:
@@ -41,10 +38,6 @@ services:
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
       MEILI_ENV: ${MEILI_ENV:-production}
       MEILI_HTTP_ADDR: ${MEILI_HTTP_ADDR:-meilisearch:7700}
-      # Self-throttle indexing instead of getting OOM-killed: bulk reindex
-      # at 256M container limit died with exit 137 (2026-07-07).
-      MEILI_MAX_INDEXING_MEMORY: ${MEILI_MAX_INDEXING_MEMORY:-256Mb}
-      MEILI_MAX_INDEXING_THREADS: ${MEILI_MAX_INDEXING_THREADS:-2}
     volumes:
       - ${HOST_MEILISEARCH:-./data/docker/meilisearch}:/meili_data
     healthcheck:
@@ -54,9 +47,6 @@ services:
       retries: 5
       start_period: 20s
     restart: unless-stopped
-    # 8GB-NAS cap. 256M OOM-killed bulk indexing (2026-07-07); 512M still ran
-    # at 76% RSS on a 711-doc library — raised for headroom as the library grows.
-    mem_limit: 768M
 
   backend:
     build:
@@ -75,7 +65,7 @@ services:
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
       SECRET_KEY: ${SECRET_KEY}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
-      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
       DOWNLOAD_ROOT: /downloads
       LIBRARY_ROOT: /library
       GALLERYDL_CONFIG_ROOT: /gallerydl-config
@@ -83,10 +73,6 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       TIMEZONE: ${TIMEZONE:-UTC}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:13000}
-      # Backend serves concurrent HTTP — larger pool than the worker default
-      # (2+3). 10+10 = 20 max; 7 processes stay well under pg max_connections 100.
-      DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
-      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
     volumes:
       - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
       - ${HOST_LIBRARY:-./data/library}:/library
@@ -103,20 +89,17 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/api/v1/system/ready"]
-      interval: 30s
-      timeout: 10s
+      interval: 15s
+      timeout: 5s
       retries: 3
       start_period: 30s
     restart: unless-stopped
-    # Never actually OOM-killed here (checked dmesg/RestartCount 2026-07-07),
-    # but 768M felt tight under load — 1G gives real headroom without
-    # blowing the 8GB-NAS budget (postgres/redis/OS still need ~3G).
-    mem_limit: 1g
+    mem_limit: 512M
 
   worker-download:
     image: auto-gallery-backend:latest
     pull_policy: never
-    command: python worker_entrypoint.py downloads,downloads:pixiv,downloads:danbooru,downloads:iwara,downloads:weibo,downloads:bilibili,downloads:pinterest,downloads:lofter,downloads:x 3 --with-scheduler
+    command: python worker_entrypoint.py downloads 2 --with-scheduler
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -135,8 +118,6 @@ services:
       - ${HOST_LIBRARY:-./data/library}:/library
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "python3", "-c", "import os, shutil, redis; assert redis.from_url(os.environ['REDIS_URL']).ping(); assert shutil.which('gallery-dl')"]
       interval: 30s
@@ -149,52 +130,12 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-    mem_limit: 512M
+    mem_limit: 768M
 
   worker-import:
     image: auto-gallery-backend:latest
     pull_policy: never
-    # Single import worker: pyvips thumbnail bursts are the biggest memory
-    # spike — keep the ceiling NAS-safe (8GB box) at the cost of throughput.
     command: python worker_entrypoint.py imports 1 --with-scheduler
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      MEILI_URL: http://meilisearch:7700
-      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
-      SECRET_KEY: ${SECRET_KEY}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
-      DOWNLOAD_ROOT: /downloads
-      LIBRARY_ROOT: /library
-      GALLERYDL_CONFIG_ROOT: /gallerydl-config
-      APP_CONFIG_ROOT: /app-config
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      TIMEZONE: ${TIMEZONE:-UTC}
-    volumes:
-      - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
-      - ${HOST_LIBRARY:-./data/library}:/library
-      - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
-      - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import os, redis; assert redis.from_url(os.environ['REDIS_URL']).ping()"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-    mem_limit: 1g
-
-  worker-operations:
-    image: auto-gallery-backend:latest
-    pull_policy: never
-    command: python worker_entrypoint.py operations 1
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -249,8 +190,6 @@ services:
       - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
       - ${HOST_LIBRARY:-./data/library}:/library
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "python3", "-c", "import os, redis; assert redis.from_url(os.environ['REDIS_URL']).ping()"]
       interval: 30s
@@ -271,7 +210,6 @@ services:
       dockerfile: Dockerfile
       args:
         NPM_REGISTRY: ${NPM_REGISTRY:-}
-        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-}
     ports:
       - "${ADMIN_WEB_PORT:-13000}:3000"
     environment:

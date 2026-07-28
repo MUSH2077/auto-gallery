@@ -1,6 +1,5 @@
 "use client";
 import { useT } from "@/lib/i18n";
-import { usePresence } from "@/lib/motion";
 
 export default function ConfirmDialog({ open, title, message, onConfirm, onCancel, isPending, error }: {
   open: boolean;
@@ -12,17 +11,16 @@ export default function ConfirmDialog({ open, title, message, onConfirm, onCance
   error?: string | null;
 }) {
   const t = useT();
-  const { mounted, closing } = usePresence(open);
-  if (!mounted) return null;
+  if (!open) return null;
   return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 ${closing ? "overlay-backdrop-exit" : "overlay-backdrop"}`}>
-      <div className={`w-full max-w-md rounded-md border border-border bg-white shadow-xl dark:border-border dark:bg-surface ${closing ? "overlay-panel-exit" : "overlay-panel"}`}>
-        <div className="border-b border-border px-4 py-3 dark:border-border">
-          <h3 className="text-base font-semibold text-fg">{title}</h3>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+      <div className="w-full max-w-md rounded-md border border-[#d8dee4] bg-white shadow-xl dark:border-[#30363d] dark:bg-[#161b22]">
+        <div className="border-b border-[#d8dee4] px-4 py-3 dark:border-[#30363d]">
+          <h3 className="text-base font-semibold text-[#24292f] dark:text-[#e6edf3]">{title}</h3>
         </div>
         <div className="px-4 py-4">
-        <p className="mb-4 text-sm leading-6 text-muted">{message}</p>
-        {error && <p className="mb-3 rounded-md border border-danger/30 bg-danger-subtle p-2 text-sm text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">{error}</p>}
+        <p className="mb-4 text-sm leading-6 text-[#57606a] dark:text-[#8b949e]">{message}</p>
+        {error && <p className="mb-3 rounded-md border border-[#cf222e]/30 bg-[#ffebe9] p-2 text-sm text-[#cf222e] dark:border-[#f85149]/30 dark:bg-[#f8514926] dark:text-[#f85149]">{error}</p>}
         <div className="flex justify-end gap-3">
           <button onClick={onCancel} disabled={isPending} className="btn-ghost">{t("common.cancel")}</button>
           <button onClick={onConfirm} disabled={isPending}

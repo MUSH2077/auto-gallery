@@ -1,25 +1,24 @@
 "use client";
-import { useState, useMemo, useEffect, useRef, Suspense } from "react";
-import Link from "next/link";
+import { useState, useMemo, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
 import { api, queryKeys, WorkListItem } from "@/lib/api";
-import type { WorkAsset } from "@/lib/api/endpoints/works";
-import { useAppearanceSettings } from "@/lib/appearance";
-import { useStaggeredEntrance, type StaggeredEntranceProps } from "@/lib/motion";
-import { AssetImage, PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, WorkPreviewOverlay, PermissionGuard, type SlideItem } from "@/components";
-import { useSlideshow } from "@/lib/useSlideshow";
-import { usePermissions } from "@/lib/usePermissions";
+import { PageHeader, EmptyState, ErrorState, SourceBadge } from "@/components";
 
-type PreviewState = {
-  work: WorkListItem;
-  anchor: DOMRect;
-  assetIds: string[];
-  pageIndex: number;
-};
+function Img({ assetId, alt, className }: { assetId: string | undefined; alt: string; className?: string }) {
+  const t = useT();
+  const [err, setErr] = useState(false);
+  if (!assetId || err) {
+    return <div className={`${className || ""} flex items-center justify-center text-gray-400 text-xs bg-gray-100 dark:bg-slate-700`}>{t("works.na")}</div>;
+  }
+  return (
+    <img src={api.mediaUrl(assetId, "thumb")} alt={alt} className={className} loading="lazy"
+      onError={() => setErr(true)} />
+  );
+}
 
-function WorkCard({
+function GridCard({
   w,
   onToggleFavorite,
   trashMode,
@@ -28,15 +27,6 @@ function WorkCard({
   selectable,
   selected,
   onToggleSelect,
-  entrance,
-  previewEnabled,
-  previewDelayMs,
-  wheelThreshold,
-  onOpenPreview,
-  onScheduleClosePreview,
-  onCancelClosePreview,
-  onPreviewPage,
-  canCurate,
 }: {
   w: WorkListItem;
   onToggleFavorite: (id: string) => void;
@@ -46,69 +36,21 @@ function WorkCard({
   selectable?: boolean;
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
-  entrance?: StaggeredEntranceProps;
-  previewEnabled: boolean;
-  previewDelayMs: number;
-  wheelThreshold: number;
-  onOpenPreview: (preview: PreviewState) => void;
-  onScheduleClosePreview: () => void;
-  onCancelClosePreview: () => void;
-  onPreviewPage: (workId: string, pageIndex: number) => void;
-  canCurate: boolean;
 }) {
   const t = useT();
   const router = useRouter();
-  const cardRef = useRef<HTMLDivElement | null>(null);
-  const hoverTimer = useRef<number | null>(null);
-  const wheelDelta = useRef(0);
   const [pageIdx, setPageIdx] = useState(0);
   const assetIds = w.preview_asset_ids?.length ? w.preview_asset_ids : (w.thumbnail_asset_id ? [w.thumbnail_asset_id] : []);
   const hasMultiple = assetIds.length > 1;
   const currentId = assetIds[pageIdx] || assetIds[0];
 
-  const updatePage = (next: number) => {
-    if (!assetIds.length) return;
-    const normalized = (next + assetIds.length) % assetIds.length;
-    setPageIdx(normalized);
-    onPreviewPage(w.id, normalized);
-  };
-
-  const openPreview = () => {
-    if (!previewEnabled || !cardRef.current || !assetIds.length || window.matchMedia("(pointer: coarse)").matches) return;
-    onOpenPreview({ work: w, anchor: cardRef.current.getBoundingClientRect(), assetIds, pageIndex: pageIdx });
-  };
-
-  const clearHoverTimer = () => {
-    if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
-    hoverTimer.current = null;
-  };
+  const prevPage = (e: React.MouseEvent) => { e.stopPropagation(); setPageIdx((pageIdx - 1 + assetIds.length) % assetIds.length); };
+  const nextPage = (e: React.MouseEvent) => { e.stopPropagation(); setPageIdx((pageIdx + 1) % assetIds.length); };
 
   return (
-    <div
-      ref={cardRef}
-      className={`card-interactive ${entrance?.className || ""} overflow-hidden cursor-pointer group ${selected ? "ring-2 ring-accent" : ""}`}
-      style={entrance?.style}
-      onClick={() => router.push(`/admin/works/${w.id}`)}
-      onMouseEnter={() => {
-        onCancelClosePreview();
-        clearHoverTimer();
-        hoverTimer.current = window.setTimeout(openPreview, previewDelayMs);
-      }}
-      onMouseLeave={() => {
-        clearHoverTimer();
-        onScheduleClosePreview();
-      }}
-      onWheel={(event) => {
-        if (!hasMultiple) return;
-        wheelDelta.current += event.deltaY;
-        if (Math.abs(wheelDelta.current) < wheelThreshold) return;
-        event.preventDefault();
-        updatePage(pageIdx + (wheelDelta.current > 0 ? 1 : -1));
-        wheelDelta.current = 0;
-      }}
-    >
-      <div className="h-32 relative flex items-center justify-center overflow-hidden bg-subtle text-xs text-muted">
-        <AssetImage assetId={currentId} alt={w.title || ""} className="h-full w-full object-cover" fallback={t("works.na")} />
+    <div className={`bg-white dark:bg-slate-800 rounded-lg shadow overflow-hidden cursor-pointer hover:shadow-md transition-shadow group ${selected ? "ring-2 ring-[#0969da] dark:ring-[#58a6ff]" : ""}`} onClick={() => router.push(`/admin/works/${w.id}`)}>
+      <div className="h-32 bg-gray-100 dark:bg-slate-700 flex items-center justify-center text-gray-400 text-xs overflow-hidden relative">
+        <Img assetId={currentId} alt={w.title || ""} className="w-full h-full object-cover" />
         {selectable && (
           <label className="absolute left-1 top-1 z-20 flex h-7 w-7 items-center justify-center rounded bg-black/60 text-white shadow-sm">
             <span className="sr-only">{t("works.select_work")}</span>
@@ -121,47 +63,52 @@ function WorkCard({
             />
           </label>
         )}
-        {canCurate && (
-          <button onClick={(e) => { e.stopPropagation(); onToggleFavorite(w.id); }}
-            className={`absolute top-1 right-1 z-10 text-base ${w.is_favorite ? "text-warning" : "text-white/60 hover:text-warning"} drop-shadow`}
-            title={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}
-            aria-label={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}>
-            {w.is_favorite ? "★" : "☆"}
-          </button>
-        )}
+        <button onClick={(e) => { e.stopPropagation(); onToggleFavorite(w.id); }}
+          className={`absolute top-1 right-1 text-base z-10 ${w.is_favorite ? "text-yellow-400" : "text-white/60 hover:text-yellow-300"} drop-shadow`}
+          title={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}
+          aria-label={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}>
+          {w.is_favorite ? "★" : "☆"}
+        </button>
         {w.asset_count > 1 && (
           <span className="absolute bottom-1 left-1 bg-black/70 text-white text-xs px-1.5 py-0.5 rounded font-medium">{w.asset_count}p</span>
         )}
         {w.is_ai_generated && (
-          <span className="absolute top-1 left-1 rounded bg-warning px-1.5 py-0.5 text-xs text-on-primary">{t("works.ai_badge")}</span>
+          <span className="absolute top-1 left-1 bg-yellow-500 text-white text-xs px-1.5 py-0.5 rounded">{t("works.ai_badge")}</span>
         )}
         {w.has_ugoira && (
-          <span className="absolute bottom-1 right-1 rounded bg-accent px-1.5 py-0.5 text-[10px] font-medium text-on-primary">{t("works.gif_badge")}</span>
+          <span className="absolute bottom-1 right-1 bg-purple-600/90 text-white text-[10px] px-1.5 py-0.5 rounded font-medium">{t("works.gif_badge")}</span>
+        )}
+        {hasMultiple && (
+          <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-between px-0.5">
+            <button onClick={prevPage} className="bg-black/60 hover:bg-black/80 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs leading-none transition-colors">&#9664;</button>
+            <button onClick={nextPage} className="bg-black/60 hover:bg-black/80 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs leading-none transition-colors">&#9654;</button>
+          </div>
+        )}
+        {hasMultiple && (
+          <div className="absolute bottom-1 left-1 flex gap-0.5">
+            {assetIds.slice(0, 10).map((_, i) => (
+              <span key={i} className={`w-1 h-1 rounded-full ${i === pageIdx ? "bg-white" : "bg-white/40"}`} />
+            ))}
+          </div>
         )}
         {trashMode && !selectable && (
-          <span className="absolute left-1 top-1 rounded bg-danger/90 px-1.5 py-0.5 text-xs font-medium text-white">Trash</span>
+          <span className="absolute left-1 top-1 rounded bg-[#cf222e]/90 px-1.5 py-0.5 text-xs font-medium text-white">Trash</span>
         )}
       </div>
       <div className="p-3">
-        <div className="text-sm font-medium truncate text-fg">{w.title || t("works.untitled")}</div>
+        <div className="text-sm font-medium truncate dark:text-white">{w.title || t("works.untitled")}</div>
         <div className="flex items-center gap-1.5 mt-1">
-          {w.source && <SourceBadge source={w.source} href={`/admin/works?source=${w.source}`} />}
-          {w.has_ugoira && <span className="rounded bg-accent-subtle px-1 text-[10px] text-accent">{t("works.gif_badge")}</span>}
-          {w.creator_name && w.creator_id && (
-  <Link href={`/admin/creators/${w.creator_id}`}
-    className="text-xs text-accent hover:underline truncate"
-    onClick={(e) => e.stopPropagation()}>
-    {w.creator_name}
-  </Link>
-)}
+          {w.source && <SourceBadge source={w.source} />}
+          {w.has_ugoira && <span className="text-[10px] bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 px-1 rounded">{t("works.gif_badge")}</span>}
+          {w.creator_name && <span className="text-xs text-gray-400 dark:text-gray-500 truncate">{w.creator_name}</span>}
         </div>
-        <div className="text-xs text-muted mt-0.5">
+        <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
           {w.posted_at ? new Date(w.posted_at).toLocaleDateString() : t("works.no_date")}
         </div>
-        {trashMode && canCurate && (
+        {trashMode && (
           <div className="mt-3 flex gap-2">
-            <button onClick={(e) => { e.stopPropagation(); onRestore?.(w.id); }} className="rounded border border-border px-2 py-1 text-xs hover:bg-subtle dark:border-border dark:hover:bg-subtle">{t("works.restore")}</button>
-            <button onClick={(e) => { e.stopPropagation(); onPurge?.(w.id); }} className="rounded bg-danger px-2 py-1 text-xs text-white hover:bg-danger">{t("works.purge")}</button>
+            <button onClick={(e) => { e.stopPropagation(); onRestore?.(w.id); }} className="rounded border border-[#d8dee4] px-2 py-1 text-xs hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">{t("works.restore")}</button>
+            <button onClick={(e) => { e.stopPropagation(); onPurge?.(w.id); }} className="rounded bg-[#cf222e] px-2 py-1 text-xs text-white hover:bg-[#a40e26]">{t("works.purge")}</button>
           </div>
         )}
       </div>
@@ -178,15 +125,8 @@ function WorksContent() {
   const qc = useQueryClient();
   const sp = useSearchParams();
   const pathname = usePathname();
-  const { has } = usePermissions();
-  const canCurate = has("curation");
-  const { settings: appearance, updateSettings } = useAppearanceSettings();
   const [selectedWorkIds, setSelectedWorkIds] = useState<Set<string>>(new Set());
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [preview, setPreview] = useState<PreviewState | null>(null);
-  const closePreviewTimer = useRef<number | null>(null);
-  const previewEnabled = appearance.workPreviewEnabled;
-  const wheelThreshold = appearance.workPreviewWheelSensitivity === "relaxed" ? 120 : 70;
 
   const SORT_OPTIONS: { key: SortKey; label: string }[] = [
     { key: "created_at", label: t("works.sort_imported") },
@@ -222,7 +162,7 @@ function WorksContent() {
   const aiFilter = (sp.get("ai") as "all" | "human" | "ai") ?? "all";
   const curationVisibility = sp.get("curation") === "trashed" ? "trashed" : "visible";
   const viewMode = (sp.get("view") as ViewMode) ?? "grid";
-  const limit = 30;
+  const limit = 25;
 
   // Local input for search field — debounced 300ms before writing to URL
   const [inputVal, setInputVal] = useState(search);
@@ -253,21 +193,6 @@ function WorksContent() {
     setInputVal("");
     router.replace(p.toString() ? `${pathname}?${p.toString()}` : pathname, { scroll: false });
   }
-
-  const scheduleClosePreview = () => {
-    if (closePreviewTimer.current) window.clearTimeout(closePreviewTimer.current);
-    closePreviewTimer.current = window.setTimeout(() => setPreview(null), 140);
-  };
-
-  const cancelClosePreview = () => {
-    if (closePreviewTimer.current) window.clearTimeout(closePreviewTimer.current);
-    closePreviewTimer.current = null;
-  };
-
-  const setPreviewPreference = (enabled: boolean) => {
-    updateSettings({ workPreviewEnabled: enabled });
-    if (!enabled) setPreview(null);
-  };
 
   const filters = useMemo(() => ({
     search: search || undefined,
@@ -311,33 +236,6 @@ function WorksContent() {
       return api.listWorks(page * limit, limit, filters);
     },
   });
-
-  const slideshow = useSlideshow();
-  const slideItems: SlideItem[] = (works.data?.items || [])
-    .filter((w): w is WorkListItem & { thumbnail_asset_id: string } => !!w.thumbnail_asset_id)
-    .map((w) => ({ assetId: w.thumbnail_asset_id, workId: w.id, title: w.title, creatorName: w.creator_name }));
-
-  const workItems = works.data?.items || [];
-  const workEntrance = useStaggeredEntrance(workItems.map((work) => work.id));
-
-  const previewAssets = useQuery({
-    queryKey: ["works", preview?.work.id, "assets"],
-    queryFn: () => api.getWorkAssets(preview!.work.id),
-    enabled: !!preview && previewEnabled,
-    staleTime: 60000,
-  });
-
-  useEffect(() => {
-    if (!preview || !previewAssets.data?.length || !preview.assetIds.length) return;
-    const byId = new Map<string, WorkAsset>(previewAssets.data.map((asset) => [asset.id, asset]));
-    [preview.pageIndex, preview.pageIndex - 1, preview.pageIndex + 1].forEach((idx) => {
-      const id = preview.assetIds[(idx + preview.assetIds.length) % preview.assetIds.length];
-      const src = (id ? byId.get(id) : undefined)?.original_url;
-      if (!src) return;
-      const img = new Image();
-      img.src = src;
-    });
-  }, [preview, previewAssets.data]);
 
   useEffect(() => {
     setSelectedWorkIds(new Set());
@@ -407,54 +305,48 @@ function WorksContent() {
   };
 
   return (
-    <PageShell>
-      <PageHeader title={t("works.title")} description={t("works.count", "0 works").replace("{count}", String(works.data?.total ?? 0))}>
-        {slideItems.length > 0 && (
-          <button type="button" onClick={() => slideshow.open(slideItems)} className="btn-ghost">
-            {t("slideshow.open")}
-          </button>
-        )}
-      </PageHeader>
+    <main className="max-w-7xl mx-auto p-6">
+      <PageHeader title={t("works.title")} description={t("works.count", "0 works").replace("{count}", String(works.data?.total ?? 0))} />
 
       {/* Search & Filters */}
       <div className="mb-3 flex flex-wrap items-center gap-2 md:hidden">
         <button
           onClick={() => setFiltersOpen((value) => !value)}
-          className="rounded-md border border-border px-3 py-1.5 text-sm font-medium dark:border-border"
+          className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-sm font-medium dark:border-[#30363d]"
           aria-expanded={filtersOpen}
           aria-controls="works-filter-panel"
         >
-          {t("works.filters")} {activeFilterCount > 0 && <span className="ml-1 rounded-full bg-accent px-1.5 py-0.5 text-xs text-white">{activeFilterCount}</span>}
+          {t("works.filters")} {activeFilterCount > 0 && <span className="ml-1 rounded-full bg-[#0969da] px-1.5 py-0.5 text-xs text-white">{activeFilterCount}</span>}
         </button>
         {activeFilterCount > 0 && (
-          <button onClick={clearFilters} className="rounded-md border border-border px-3 py-1.5 text-sm dark:border-border">
+          <button onClick={clearFilters} className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-sm dark:border-[#30363d]">
             {t("works.clear_filters")}
           </button>
         )}
       </div>
 
-      <div id="works-filter-panel" className={`${filtersOpen ? "flex" : "hidden"} mb-4 flex-col gap-2 rounded-md border border-border bg-surface p-3 md:flex md:flex-row md:flex-wrap md:items-center md:border-0 md:bg-transparent md:p-0`}>
-        <div className="flex gap-0.5 bg-subtle rounded p-0.5">
+      <div id="works-filter-panel" className={`${filtersOpen ? "flex" : "hidden"} mb-4 flex-col gap-2 rounded-md border border-[#d8dee4] bg-white p-3 dark:border-[#30363d] dark:bg-slate-800 md:flex md:flex-row md:flex-wrap md:items-center md:border-0 md:bg-transparent md:p-0 md:dark:bg-transparent`}>
+        <div className="flex gap-0.5 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
           <button onClick={() => updateParams({ curation: null })}
             aria-label={t("works.gallery")}
-            className={`px-2.5 py-1 text-xs rounded transition-colors ${curationVisibility === "visible" ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
+            className={`px-2.5 py-1 text-xs rounded transition-colors ${curationVisibility === "visible" ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
             {t("works.gallery")}
           </button>
           <button onClick={() => updateParams({ curation: "trashed" })}
             aria-label={t("works.trash")}
-            className={`px-2.5 py-1 text-xs rounded transition-colors ${curationVisibility === "trashed" ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
+            className={`px-2.5 py-1 text-xs rounded transition-colors ${curationVisibility === "trashed" ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
             {t("works.trash")}
           </button>
         </div>
 
         <input value={inputVal} onChange={(e) => setInputVal(e.target.value)}
           aria-label={t("works.search_title")}
-          placeholder={t("works.search_title")} className="input w-48 py-1.5 text-sm" />
+          placeholder={t("works.search_title")} className="border rounded px-3 py-1.5 text-sm w-48 dark:bg-slate-700 dark:text-white dark:border-slate-600" />
 
         {/* Source filter — dropdown */}
         <select value={sourceFilter} onChange={(e) => updateParams({ source: e.target.value || null })}
           aria-label={t("works.filter_source")}
-          className="select px-2 py-1.5 text-xs">
+          className="border rounded px-2 py-1.5 text-xs dark:bg-slate-700 dark:text-white dark:border-slate-600">
           {SOURCE_FILTERS.map((f) => (
             <option key={f.key} value={f.key}>{f.label}</option>
           ))}
@@ -464,7 +356,7 @@ function WorksContent() {
         {(creators.data?.items.length || 0) > 0 && (
           <select value={creatorFilter} onChange={(e) => updateParams({ creator: e.target.value || null })}
             aria-label={t("works.filter_creator")}
-            className="select px-2 py-1.5 text-xs">
+            className="border rounded px-2 py-1.5 text-xs dark:bg-slate-700 dark:text-white dark:border-slate-600">
             <option value="">{t("works.filter_all_creators")}</option>
             {creators.data?.items.map((c) => (
               <option key={c.id} value={c.id}>{c.display_name || c.name}</option>
@@ -473,11 +365,11 @@ function WorksContent() {
         )}
 
         {/* NSFW filter */}
-        <div className="flex gap-0.5 bg-subtle rounded p-0.5">
+        <div className="flex gap-0.5 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
           {NSFW_FILTERS.map((f) => (
             <button key={f.key} onClick={() => updateParams({ nsfw: f.key === "all" ? null : f.key })}
               aria-label={f.label}
-              className={`px-2.5 py-1 text-xs rounded transition-colors ${nsfwFilter === f.key ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
+              className={`px-2.5 py-1 text-xs rounded transition-colors ${nsfwFilter === f.key ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
               {f.label}
             </button>
           ))}
@@ -486,12 +378,12 @@ function WorksContent() {
         {/* Favorites filter */}
         <button onClick={() => updateParams({ fav: isFavoriteFilter ? null : "1" })}
           aria-label={t("works.filter_favorites")}
-          className={`px-2.5 py-1 text-xs rounded transition-colors ${isFavoriteFilter ? "bg-warning-subtle text-warning font-medium" : "text-muted hover:text-fg"}`}>
+          className={`px-2.5 py-1 text-xs rounded transition-colors ${isFavoriteFilter ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
           {"★"} {t("works.filter_favorites")}
         </button>
 
         {/* AI filter */}
-        <div className="flex gap-0.5 bg-subtle rounded p-0.5">
+        <div className="flex gap-0.5 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
           {[
             { key: "all", label: t("works.ai_filter_all") },
             { key: "human", label: t("works.ai_filter_human") },
@@ -499,14 +391,14 @@ function WorksContent() {
           ].map((f) => (
             <button key={f.key} onClick={() => updateParams({ ai: f.key === "all" ? null : f.key })}
               aria-label={f.label}
-              className={`px-2.5 py-1 text-xs rounded transition-colors ${aiFilter === f.key ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
+              className={`px-2.5 py-1 text-xs rounded transition-colors ${aiFilter === f.key ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
               {f.label}
             </button>
           ))}
         </div>
 
         {/* Sort — click same field toggles direction */}
-        <div className="flex gap-0.5 bg-subtle rounded p-0.5">
+        <div className="flex gap-0.5 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
           {SORT_OPTIONS.map((s) => {
             const active = sortBy === s.key;
             const dir = active ? sortOrder : "desc";
@@ -518,7 +410,7 @@ function WorksContent() {
                   order: nextDir === "desc" ? null : nextDir,
                 })}
                 aria-label={t("works.sort_by", { sort: s.label })}
-                className={`px-2.5 py-1 text-xs rounded transition-colors ${active ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
+                className={`px-2.5 py-1 text-xs rounded transition-colors ${active ? "bg-white dark:bg-slate-600 shadow-sm font-medium" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}>
                 {s.label} {active ? (dir === "desc" ? "↓" : "↑") : ""}
               </button>
             );
@@ -528,72 +420,58 @@ function WorksContent() {
         <div className="flex-1" />
 
         {activeFilterCount > 0 && (
-          <button onClick={clearFilters} className="hidden rounded-md border border-border px-2.5 py-1.5 text-xs hover:bg-subtle dark:border-border dark:hover:bg-subtle md:inline-flex">
+          <button onClick={clearFilters} className="hidden rounded-md border border-[#d8dee4] px-2.5 py-1.5 text-xs hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d] md:inline-flex">
             {t("works.clear_filters")}
           </button>
         )}
 
         {/* View toggle */}
-        <div className="flex gap-0.5 bg-subtle rounded p-0.5">
+        <div className="flex gap-0.5 bg-gray-100 dark:bg-slate-700 rounded p-0.5">
           <button onClick={() => updateParams({ view: null }, false)}
             aria-label={t("works.view_grid")}
-            className={`px-2.5 py-1 rounded text-xs ${viewMode === "grid" ? "bg-surface shadow-sm" : "text-muted"}`}>
+            className={`px-2.5 py-1 rounded text-xs ${viewMode === "grid" ? "bg-white dark:bg-slate-600 shadow-sm" : "text-gray-500"}`}>
             {t("works.view_grid")}
           </button>
           <button onClick={() => updateParams({ view: "list" }, false)}
             aria-label={t("works.view_list")}
-            className={`px-2.5 py-1 rounded text-xs ${viewMode === "list" ? "bg-surface shadow-sm" : "text-muted"}`}>
+            className={`px-2.5 py-1 rounded text-xs ${viewMode === "list" ? "bg-white dark:bg-slate-600 shadow-sm" : "text-gray-500"}`}>
             {t("works.view_list")}
           </button>
         </div>
-
-        {viewMode === "grid" && (
-          <button
-            onClick={() => setPreviewPreference(!previewEnabled)}
-            className={`rounded-md border border-border px-2.5 py-1.5 text-xs transition-colors ${previewEnabled ? "bg-accent-subtle text-accent" : "bg-surface text-muted hover:bg-subtle"}`}
-          >
-            {previewEnabled ? t("works.preview_on", "Preview on") : t("works.preview_off", "Preview off")}
-          </button>
-        )}
       </div>
 
-      {canCurate && works.data && works.data.items?.length > 0 && curationVisibility === "visible" && (
-        selectedCount > 0 ? (
-          <SelectionBar
-            count={selectedCount}
-            label={t("works.selected_count", { count: selectedCount })}
-            clearLabel={t("works.clear_selection")}
-            onClear={() => setSelectedWorkIds(new Set())}
-          >
-            <button onClick={toggleSelectPage} className="btn-ghost text-xs">
-              {pageAllSelected ? t("works.deselect_page") : t("works.select_page")}
-            </button>
-            <button onClick={moveSelectedToTrash} disabled={batchTrash.isPending} className="btn-danger text-xs disabled:opacity-50">
-              {batchTrash.isPending ? t("works.moving_to_trash") : t("works.move_to_trash")}
-            </button>
-          </SelectionBar>
-        ) : (
-          <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface px-3 py-2" aria-live="polite">
-            <button onClick={toggleSelectPage} className="btn-ghost text-xs">
-              {pageAllSelected ? t("works.deselect_page") : t("works.select_page")}
-            </button>
-          </div>
-        )
+      {works.data && works.data.items?.length > 0 && curationVisibility === "visible" && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-[#d8dee4] bg-white px-3 py-2 dark:border-[#30363d] dark:bg-slate-800" aria-live="polite">
+          <button onClick={toggleSelectPage} className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-xs font-medium hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
+            {pageAllSelected ? t("works.deselect_page") : t("works.select_page")}
+          </button>
+          {selectedCount > 0 && (
+            <>
+              <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("works.selected_count", { count: selectedCount })}</span>
+              <button onClick={() => setSelectedWorkIds(new Set())} className="rounded-md border border-[#d8dee4] px-3 py-1.5 text-xs hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">
+                {t("works.clear_selection")}
+              </button>
+              <button onClick={moveSelectedToTrash} disabled={batchTrash.isPending} className="rounded-md bg-[#cf222e] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#a40e26] disabled:opacity-50">
+                {batchTrash.isPending ? t("works.moving_to_trash") : t("works.move_to_trash")}
+              </button>
+            </>
+          )}
+        </div>
       )}
 
       {/* Loading */}
       {works.isLoading && viewMode === "grid" && (
-        <div className="overflow-x-auto grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+        <div className="overflow-x-auto grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
           {Array.from({ length: 10 }).map((_, i) => (
-            <div key={i} className="rounded-md bg-surface p-3 shadow-sm animate-pulse">
-              <div className="h-32 bg-subtle rounded mb-2" />
-              <div className="h-3 bg-subtle rounded w-3/4" />
+            <div key={i} className="bg-white dark:bg-slate-800 rounded-lg shadow p-3 animate-pulse">
+              <div className="h-32 bg-gray-200 dark:bg-slate-700 rounded mb-2" />
+              <div className="h-3 bg-gray-200 dark:bg-slate-700 rounded w-3/4" />
             </div>
           ))}
         </div>
       )}
       {works.isLoading && viewMode === "list" && (
-        <div className="space-y-1">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-12 bg-subtle rounded animate-pulse" />)}</div>
+        <div className="space-y-1">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-12 bg-gray-100 dark:bg-slate-700 rounded animate-pulse" />)}</div>
       )}
 
       {/* Error */}
@@ -606,21 +484,13 @@ function WorksContent() {
 
       {/* Grid View */}
       {works.data && works.data.items?.length > 0 && viewMode === "grid" && (
-        <div className="overflow-x-auto grid gap-4 mb-6 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-          {works.data.items.map((w: WorkListItem, i: number) => (
-            <WorkCard
+        <div className="overflow-x-auto grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-6">
+          {works.data.items.map((w: WorkListItem) => (
+            <GridCard
               key={w.id}
-              entrance={workEntrance(w.id, i)}
               w={w}
-              previewEnabled={previewEnabled}
-              previewDelayMs={appearance.workPreviewDelayMs}
-              wheelThreshold={wheelThreshold}
-              onOpenPreview={setPreview}
-              onScheduleClosePreview={scheduleClosePreview}
-              onCancelClosePreview={cancelClosePreview}
-              onPreviewPage={(workId, pageIndex) => setPreview((current) => current?.work.id === workId ? { ...current, pageIndex } : current)}
               trashMode={curationVisibility === "trashed"}
-              selectable={canCurate && curationVisibility === "visible"}
+              selectable={curationVisibility === "visible"}
               selected={selectedWorkIds.has(w.id)}
               onToggleSelect={toggleSelectWork}
               onToggleFavorite={(id) => toggleFavorite.mutate(id)}
@@ -628,7 +498,6 @@ function WorksContent() {
               onPurge={(id) => {
                 if (window.confirm(t("works.purge_confirm"))) purgeWork.mutate(id);
               }}
-              canCurate={canCurate}
             />
           ))}
         </div>
@@ -637,109 +506,67 @@ function WorksContent() {
       {/* List View */}
       {works.data && works.data.items?.length > 0 && viewMode === "list" && (
         <div className="space-y-1 mb-6">
-          {works.data.items.map((w: WorkListItem, index: number) => {
-            const entrance = workEntrance(w.id, index);
-            return (
-            <div
-              key={w.id}
-              className={`${entrance.className} flex cursor-pointer items-center gap-3 rounded-md border border-border bg-surface p-3 shadow-sm transition-shadow hover:shadow-md ${selectedWorkIds.has(w.id) ? "ring-2 ring-accent" : ""}`}
-              style={entrance.style}
-              onClick={() => router.push(`/admin/works/${w.id}`)}
-            >
-              {canCurate && curationVisibility === "visible" && (
+          {works.data.items.map((w: WorkListItem) => (
+            <div key={w.id} className={`bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 flex items-center gap-3 cursor-pointer hover:shadow-md transition-shadow ${selectedWorkIds.has(w.id) ? "ring-2 ring-[#0969da] dark:ring-[#58a6ff]" : ""}`} onClick={() => router.push(`/admin/works/${w.id}`)}>
+              {curationVisibility === "visible" && (
                 <input
                   type="checkbox"
                   checked={selectedWorkIds.has(w.id)}
                   onClick={(e) => e.stopPropagation()}
                   onChange={(e) => { e.stopPropagation(); toggleSelectWork(w.id); }}
                   aria-label={t("works.select_work")}
-                  className="h-4 w-4 shrink-0 rounded border-border"
+                  className="h-4 w-4 shrink-0 rounded border-gray-300"
                 />
               )}
-              <div className="w-12 h-12 bg-subtle rounded overflow-hidden shrink-0">
-                <AssetImage assetId={w.thumbnail_asset_id} alt={w.title || ""} className="w-full h-full object-cover" fallback={t("works.na")} />
+              <div className="w-12 h-12 bg-gray-100 dark:bg-slate-700 rounded overflow-hidden shrink-0">
+                <Img assetId={w.thumbnail_asset_id} alt={w.title || ""} className="w-full h-full object-cover" />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-fg truncate">{w.title || t("works.untitled")}</span>
-                  {w.is_nsfw && <span className="rounded bg-danger-subtle px-1 text-xs text-danger">{t("works.nsfw_badge")}</span>}
-                  {w.asset_count > 1 && <span className="text-xs text-muted">{w.asset_count}p</span>}
-                  {w.has_ugoira && <span className="rounded bg-accent-subtle px-1 text-xs text-accent">{t("works.gif_badge")}</span>}
+                  <span className="text-sm font-medium dark:text-white truncate">{w.title || t("works.untitled")}</span>
+                  {w.is_nsfw && <span className="text-xs bg-red-100 dark:bg-red-900/30 text-red-600 px-1 rounded">{t("works.nsfw_badge")}</span>}
+                  {w.asset_count > 1 && <span className="text-xs text-gray-400">{w.asset_count}p</span>}
+                  {w.has_ugoira && <span className="text-xs bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 px-1 rounded">{t("works.gif_badge")}</span>}
                 </div>
-                <div className="flex items-center gap-2 text-xs text-muted mt-0.5">
-                  {w.source && <SourceBadge source={w.source} href={`/admin/works?source=${w.source}`} />}
-                  {w.creator_name && w.creator_id && (
-  <Link href={`/admin/creators/${w.creator_id}`} onClick={(e) => e.stopPropagation()} className="text-accent hover:underline">{w.creator_name}</Link>
-)}
+                <div className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                  {w.source && <SourceBadge source={w.source} />}
+                  {w.creator_name && <span>{w.creator_name}</span>}
                   <span>{w.posted_at ? new Date(w.posted_at).toLocaleDateString() : "—"}</span>
                 </div>
               </div>
-              {canCurate && (
-                <button onClick={(e) => { e.stopPropagation(); toggleFavorite.mutate(w.id); }}
-                  className={`text-lg shrink-0 ${w.is_favorite ? "text-warning" : "text-muted hover:text-warning"}`}
-                  title={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}
-                  aria-label={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}>
-                  {w.is_favorite ? "★" : "☆"}
-                </button>
-              )}
-              {canCurate && curationVisibility === "trashed" && (
+              <button onClick={(e) => { e.stopPropagation(); toggleFavorite.mutate(w.id); }}
+                className={`text-lg shrink-0 ${w.is_favorite ? "text-yellow-500" : "text-gray-300 dark:text-gray-600 hover:text-yellow-400"}`}
+                title={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}
+                aria-label={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}>
+                {w.is_favorite ? "★" : "☆"}
+              </button>
+              {curationVisibility === "trashed" && (
                 <div className="flex shrink-0 gap-2">
-                  <button onClick={(e) => { e.stopPropagation(); restoreWork.mutate(w.id); }} className="rounded border border-border px-2 py-1 text-xs hover:bg-subtle dark:border-border dark:hover:bg-subtle">{t("works.restore")}</button>
-                  <button onClick={(e) => { e.stopPropagation(); if (window.confirm(t("works.purge_confirm"))) purgeWork.mutate(w.id); }} className="rounded bg-danger px-2 py-1 text-xs text-white hover:bg-danger">{t("works.purge")}</button>
+                  <button onClick={(e) => { e.stopPropagation(); restoreWork.mutate(w.id); }} className="rounded border border-[#d8dee4] px-2 py-1 text-xs hover:bg-[#f6f8fa] dark:border-[#30363d] dark:hover:bg-[#21262d]">{t("works.restore")}</button>
+                  <button onClick={(e) => { e.stopPropagation(); if (window.confirm(t("works.purge_confirm"))) purgeWork.mutate(w.id); }} className="rounded bg-[#cf222e] px-2 py-1 text-xs text-white hover:bg-[#a40e26]">{t("works.purge")}</button>
                 </div>
               )}
             </div>
-            );
-          })}
+          ))}
         </div>
-      )}
-
-      {preview && previewEnabled && (
-        <WorkPreviewOverlay
-          anchor={preview.anchor}
-          title={preview.work.title}
-          creatorName={preview.work.creator_name}
-          source={preview.work.source}
-          assetIds={preview.assetIds}
-          assets={previewAssets.data}
-          isLoading={previewAssets.isLoading || (previewAssets.isFetching && !previewAssets.data)}
-          isError={previewAssets.isError}
-          previewSize={appearance.workPreviewSize}
-          pageIndex={preview.pageIndex}
-          assetCount={preview.work.asset_count}
-          onMouseEnter={cancelClosePreview}
-          onMouseLeave={scheduleClosePreview}
-          onWheelPage={(delta) => {
-            if (preview.assetIds.length <= 1) return;
-            setPreview((current) => {
-              if (!current) return current;
-              const next = (current.pageIndex + delta + current.assetIds.length) % current.assetIds.length;
-              return { ...current, pageIndex: next };
-            });
-          }}
-          onRefreshAssets={() => previewAssets.refetch()}
-        />
       )}
 
       {/* Pagination */}
       {(works.data?.total ?? 0) > 0 && (
         <div className="flex gap-2 justify-center">
-          <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-border dark:text-muted">{t("works.prev")}</button>
-          <span className="px-3 py-1 text-sm text-muted">{t("works.page").replace("{page}", String(page + 1))}</span>
-          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!works.data || (page + 1) * limit >= works.data.total} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-border dark:text-muted">{t("works.next")}</button>
+          <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("works.prev")}</button>
+          <span className="px-3 py-1 text-sm text-gray-500 dark:text-gray-400">{t("works.page").replace("{page}", String(page + 1))}</span>
+          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!works.data || (page + 1) * limit >= works.data.total} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-slate-600 dark:text-gray-300">{t("works.next")}</button>
         </div>
       )}
-      {slideshow.node}
-    </PageShell>
+    </main>
   );
 }
 
 export default function WorksPage() {
   return (
-    <PermissionGuard module="library">
-      <Suspense>
-        <WorksContent />
-      </Suspense>
-    </PermissionGuard>
+    <Suspense>
+      <WorksContent />
+    </Suspense>
   );
 }

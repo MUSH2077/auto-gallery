@@ -27,7 +27,7 @@ class Settings(BaseSettings):
 
     secret_key: str = ""
     admin_password: str = ""
-    access_token_expire_minutes: int = 10080  # 7 days (NAS single-user)
+    access_token_expire_minutes: int = 480  # 8 hours (NAS LAN environment)
 
     download_root: str = "/downloads"
     library_root: str = "/library"
@@ -38,23 +38,6 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     timezone: str = "UTC"
-    min_download_free_gb: float = 5.0
-    max_pending_artifacts: int = 50000
-
-    # DB connection pool, per Python process. Defaults are worker-sized (a worker
-    # handles one job at a time). The backend serves concurrent HTTP and overrides
-    # these via env (DB_POOL_SIZE / DB_MAX_OVERFLOW) — the old 2+2 ceiling caused
-    # QueuePool timeouts under normal dashboard fan-out. Worst-case connections =
-    # (pool + overflow) x processes, kept well under postgres max_connections (100).
-    db_pool_size: int = 2
-    db_max_overflow: int = 3
-    db_pool_timeout: int = 10
-
-    # Memory monitor: log backend RSS every N seconds, WARN past the threshold.
-    # Set memory_warn_mb below the container mem_limit so the logs capture the
-    # climb (and the last activity) BEFORE the OOM killer fires.
-    memory_warn_mb: int = 700
-    memory_log_interval_seconds: int = 60
 
     model_config = {"env_prefix": "", "case_sensitive": False}
 

@@ -1,5 +1,4 @@
 import logging
-import os
 import sqlite3
 import asyncio
 from datetime import datetime, timezone, timedelta
@@ -235,22 +234,21 @@ def schedule_decision_snapshot(
 
 
 def sync_subscriptions():
-    return asyncio.run(sync_subscriptions_async())
+    asyncio.run(sync_subscriptions_async())
 
 
-async def sync_subscriptions_async(parent_task_id=None):
+async def sync_subscriptions_async():
     async with redis_lock("lock:subscription-sync-scan", ttl_seconds=300) as acquired:
         if not acquired:
             logger.info("Subscription auto-sync scan already running; skipping")
-            return {"created": 0, "skipped": 1, "errors": 0, "rescheduled_at": None, "status": "skipped", "reason": "lock_busy"}
-        return await _sync_subscriptions_locked(parent_task_id=parent_task_id)
+            return
+        await _sync_subscriptions_locked()
 
 
-async def _sync_subscriptions_locked(parent_task_id=None):
+async def _sync_subscriptions_locked():
     logger.info("Starting subscription auto-sync scan")
     jobs_created = 0
     skipped_count = 0
-    error_count = 0
 
     async with async_session() as db:
         config = await get_scheduler_config(db)
@@ -307,62 +305,38 @@ async def _sync_subscriptions_locked(parent_task_id=None):
                     logger.debug("Auto-sync skipped source: not due", extra={**log_context, **decision})
                     continue
 
-                result = await enqueue_subscription_source_sync(db, ss.id, trigger="scheduler", parent_task_id=parent_task_id)
+                result = await enqueue_subscription_source_sync(db, ss.id, trigger="scheduler")
                 if result["status"] == "enqueued":
                     jobs_created += 1
                     logger.info("Auto-sync created download job",
                                 extra={**log_context, **decision, "job_id": result["job_id"], "source_url": result.get("source_url")})
                 else:
                     skipped_count += 1
-                    if result.get("status") == "error":
-                        error_count += 1
                     logger.debug("Auto-sync skipped source after enqueue check",
                                  extra={**log_context, **decision, "skip_reason": result.get("skip_reason") or result})
 
-    # Stale job detection: check Redis heartbeat keys set by HeartbeatPublisher.
-    # The heartbeat thread publishes to Redis pub/sub AND sets a TTL key
-    # ``task:{job_id}:heartbeat_ts`` (90s TTL). If the key exists the worker
-    # is alive; if missing, the worker has died or stalled.
+    # Stale job detection: mark download jobs stuck "downloading" for too long
     try:
         async with async_session() as stale_db:
             dl_defaults = await get_download_defaults(stale_db)
             dl_timeout = int(dl_defaults.get("timeout_seconds", 600))
-            now = datetime.now(timezone.utc)
-            created_at_fallback_cutoff = now - timedelta(seconds=dl_timeout * 2)
-
-            # Find all jobs currently "downloading"
-            result = await stale_db.execute(
-                select(DownloadJob).where(DownloadJob.status == "downloading")
+            stale_cutoff = datetime.now(timezone.utc) - timedelta(seconds=dl_timeout * 2)
+            stale_result = await stale_db.execute(
+                select(DownloadJob).where(
+                    DownloadJob.status == "downloading",
+                    DownloadJob.created_at < stale_cutoff,
+                )
             )
-            candidates = result.scalars().all()
-
-            # Check Redis heartbeat keys for each candidate
-            r = get_redis()
-            stale_jobs = []
-            if candidates:
-                for job in candidates:
-                    hb_key = f"task:{str(job.id)}:heartbeat_ts"
-                    try:
-                        if r.exists(hb_key):
-                            continue  # heartbeat key exists → worker is alive
-                    except Exception:
-                        pass  # Redis error → fall through to created_at check
-
-                    # No heartbeat key → check created_at fallback
-                    created = job.created_at
-                    if created is not None and created < created_at_fallback_cutoff:
-                        stale_jobs.append(job)
-
+            stale_jobs = stale_result.scalars().all()
+            stale_repo = DownloadJobRepository(stale_db)
+            for sj in stale_jobs:
+                if sj.error_log:
+                    error_log = sj.error_log + "\n[auto] Marked stale: stuck downloading for > 2x timeout"
+                else:
+                    error_log = "[auto] Marked stale: stuck downloading for > 2x timeout"
+                await stale_repo.update_status(sj, "stale", error_log)
+                logger.warning("Marked download job %s as stale (stuck downloading)", sj.id)
             if stale_jobs:
-                stale_repo = DownloadJobRepository(stale_db)
-                for sj in stale_jobs:
-                    if sj.error_log:
-                        error_log = sj.error_log + "\n[auto] Marked stale: lost heartbeat (stuck downloading)"
-                    else:
-                        error_log = "[auto] Marked stale: lost heartbeat (stuck downloading)"
-                    await stale_repo.update_status(sj, "stale", error_log)
-                    logger.warning("Marked download job %s as stale (no heartbeat key in Redis)",
-                                  sj.id)
                 await stale_db.commit()
     except Exception:
         logger.debug("Stale job detection skipped", exc_info=True)
@@ -381,50 +355,16 @@ async def _sync_subscriptions_locked(parent_task_id=None):
     except Exception:
         logger.debug("Archive maintenance skipped", exc_info=True)
 
-    # Vacuum file index alongside download archives
-    try:
-        from app.services.file_index import FileIndex, get_file_index
-        fi_path = os.path.join(str(settings.download_root), ".file-index.sqlite3")
-        if os.path.exists(fi_path):
-            FileIndex(fi_path).vacuum()
-            logger.debug("VACUUMed file index")
-    except Exception:
-        logger.debug("File index VACUUM skipped", exc_info=True)
-
     mode = config.get("schedule_mode", "interval")
     logger.info("Auto-sync scan complete: %d jobs created, %d skipped (enabled=%s, mode=%s, timezone=%s, scan_every=%dm, default_interval=%dh)",
                 jobs_created, skipped_count, config.get("scheduler_enabled", True), mode, config.get("timezone", "UTC"), scan_minutes, default_interval)
 
-    # Self-heal: link any orphaned source_creators to their creator so imported
-    # works always surface on the creator page (cheap; usually 0 rows).
-    try:
-        from app.services.creator_reconcile import reconcile_unlinked_source_creators
-        async with async_session() as relink_db:
-            res = await reconcile_unlinked_source_creators(relink_db)
-            if res["linked"]:
-                await relink_db.commit()
-                logger.info("Auto-sync relinked %d orphaned source_creators", res["linked"])
-    except Exception:
-        logger.debug("source_creator reconcile skipped", exc_info=True)
-
     # Re-schedule for next scan
     try:
         from rq import Queue
-        next_scan_at = datetime.now(timezone.utc) + timedelta(minutes=max(scan_minutes, 5))
         Queue(name="scheduled", connection=get_redis()).enqueue_in(
             timedelta(minutes=max(scan_minutes, 5)),
             sync_subscriptions,
         )
-        rescheduled_at = next_scan_at.isoformat()
     except Exception as e:
         logger.error("Failed to re-schedule auto-sync: %s", e)
-        error_count += 1
-        rescheduled_at = None
-
-    return {
-        "created": jobs_created,
-        "skipped": skipped_count,
-        "errors": error_count,
-        "rescheduled_at": rescheduled_at,
-        "status": "ok" if error_count == 0 else "partial_error",
-    }

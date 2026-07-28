@@ -8,7 +8,7 @@ export class ApiError extends Error {
   }
 }
 
-export function clearAuthOn401() {
+function clearAuthOn401() {
   if (typeof window === "undefined") return;
   try {
     localStorage.removeItem("ag_token");

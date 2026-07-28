@@ -1,7 +1,5 @@
-import asyncio
 import logging
 import os
-import time
 from contextlib import asynccontextmanager
 
 import httpx
@@ -16,45 +14,23 @@ from app.api import api_router
 from app.api.media import router as media_router
 from app.config import settings
 from app.database import async_session, engine
-from app.services.danbooru import DanbooruUnavailableError
 
-# Configure stdlib logging from settings.
-# NOTE: do NOT use logging.basicConfig() here — it is a no-op once the root
-# logger already has a handler, which silently left the root level at WARNING
-# (dropping every INFO log) and added no stdout handler (so `docker compose
-# logs backend` showed nothing from the app). We configure the root logger
-# explicitly instead.
-import logging.handlers, os as _os, sys as _sys
-
-_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-_log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
-_root_logger = logging.getLogger()
-_root_logger.setLevel(_log_level)
-
-# 1. stdout — this is what `docker compose logs backend` captures. Primary
-#    place to read/copy logs.
-_stream_handler = logging.StreamHandler(_sys.stdout)
-_stream_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
-_root_logger.addHandler(_stream_handler)
-
-# 2. rotating file for persistence across restarts (under APP_CONFIG_ROOT/logs).
+# Configure stdlib logging from settings
+# File-based log persistence with rotation
+import logging.handlers, os as _os
+_log_dir = _os.path.join(settings.app_config_root, "logs")
 try:
-    _log_dir = _os.path.join(settings.app_config_root, "logs")
     _os.makedirs(_log_dir, exist_ok=True)
     _file_handler = logging.handlers.RotatingFileHandler(
         _os.path.join(_log_dir, "backend.log"), maxBytes=10 * 1024 * 1024, backupCount=5
     )
-    _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
-    _root_logger.addHandler(_file_handler)
+    _file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    logging.getLogger().addHandler(_file_handler)
 except OSError:
     pass
 
-# 3. Route uvicorn's own loggers through the root handlers so access/error
-#    lines land in the same stream + file at the same level.
-for _uv_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
-    _uv_logger = logging.getLogger(_uv_name)
-    _uv_logger.handlers = []
-    _uv_logger.propagate = True
+logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO),
+                    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 # Install in-memory ring buffer for log API
 from app.services.log_buffer import install as install_log_buffer
@@ -97,143 +73,9 @@ async def lifespan(app: FastAPI):
         await ensure_admin_user()
     except Exception as e:
         logger.warning("ensure_admin_user failed (may be first run before migration)", error=str(e))
-
-    # Operation state is intentionally retained across API restarts. Workers
-    # own terminal transitions and long-running rebuilds resume from checkpoints.
-
-    # ── Start WebSocket Redis listener ──
-    from app.services.ws_manager import manager as ws_manager
-    ws_task = asyncio.create_task(ws_manager.start_redis_listener())
-    logger.info("WebSocket Redis listener started")
-
-    # ── Start stale detection background task ──
-    async def stale_detection_loop():
-        while True:
-            await asyncio.sleep(30)
-            try:
-                async with async_session() as db:
-                    from app.services.task_engine import TaskEngine
-                    engine = TaskEngine(db)
-                    count = await engine.detect_stale_tasks()
-                    if count:
-                        logger.info("Stale detection: marked %d tasks as stale", count)
-            except Exception:
-                logger.warning("Stale detection cycle failed", exc_info=True)
-
-    stale_task = asyncio.create_task(stale_detection_loop())
-    logger.info("Stale detection background task started")
-
-    async def import_recovery_loop():
-        while True:
-            await asyncio.sleep(120)
-            try:
-                async with async_session() as db:
-                    from app.services.import_recovery import recover_import_pipeline
-                    from app.services.redis_client import get_redis
-                    result = await recover_import_pipeline(db, redis_client=get_redis())
-                    if result.get("imports_enqueued") or result.get("imports_marked_stale"):
-                        logger.info("Import recovery repaired pipeline gap", **result)
-            except Exception:
-                logger.warning("Import recovery cycle failed", exc_info=True)
-
-    import_recovery_task = asyncio.create_task(import_recovery_loop())
-    logger.info("Import recovery background task started")
-
-    async def asset_dedup_outbox_loop():
-        # PostgreSQL is authoritative for pending storage effects. This small
-        # recovery loop closes the gap when an RQ enqueue is lost during an API
-        # or worker restart; file hashing itself runs off the event loop.
-        while True:
-            await asyncio.sleep(60)
-            try:
-                from app.jobs.asset_dedup import process_asset_dedup_outbox
-
-                result = await process_asset_dedup_outbox(limit=20)
-                if result["processed"] or result["failed"]:
-                    logger.info("Asset dedup outbox drained", **result)
-            except Exception:
-                logger.warning("Asset dedup outbox recovery failed", exc_info=True)
-
-    asset_dedup_task = asyncio.create_task(asset_dedup_outbox_loop())
-    logger.info("Asset dedup outbox recovery started")
-
-    # ── Memory monitor — logs RSS so an OOM leaves a visible climb in the
-    #    logs + the last thing that was happening. WARNs past a threshold. ──
-    async def memory_monitor_loop():
-        warned = False
-        while True:
-            await asyncio.sleep(settings.memory_log_interval_seconds)
-            try:
-                rss = _process_rss_mb()
-                if rss is None:
-                    continue
-                if rss >= settings.memory_warn_mb:
-                    logger.warning(
-                        "High backend memory: RSS=%.0fMB (warn threshold=%dMB). "
-                        "GET /api/v1/admin/memory for a top-object census.",
-                        rss, settings.memory_warn_mb)
-                    warned = True
-                else:
-                    if warned:
-                        logger.info("Backend memory back to normal: RSS=%.0fMB", rss)
-                        warned = False
-                    logger.info("Backend memory: RSS=%.0fMB", rss)
-            except Exception:
-                logger.warning("Memory monitor cycle failed", exc_info=True)
-
-    memory_task = asyncio.create_task(memory_monitor_loop())
-    logger.info("Memory monitor background task started (warn>=%dMB, every %ds)",
-                settings.memory_warn_mb, settings.memory_log_interval_seconds)
-
     yield
-
-    # ── Cleanup ──
-    ws_task.cancel()
-    stale_task.cancel()
-    import_recovery_task.cancel()
-    asset_dedup_task.cancel()
-    memory_task.cancel()
-    try:
-        await ws_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await stale_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await import_recovery_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await asset_dedup_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await memory_task
-    except asyncio.CancelledError:
-        pass
     await engine.dispose()
     logger.info("backend stopped")
-
-
-def _process_rss_mb() -> float | None:
-    """Current resident set size of this process in MB, or None if unavailable.
-    Reads /proc/self/status (Linux/containers); this is what the OOM killer
-    weighs against the container memory limit."""
-    try:
-        with open("/proc/self/status") as f:
-            for line in f:
-                if line.startswith("VmRSS:"):
-                    return int(line.split()[1]) / 1024  # kB -> MB
-    except Exception:
-        pass
-    try:
-        import resource
-        # ru_maxrss is peak, in kB on Linux — fallback only.
-        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-    except Exception:
-        return None
 
 
 app = FastAPI(title="auto-gallery", version="0.1.0", lifespan=lifespan)
@@ -267,16 +109,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     logger.error("Validation error on %s %s: %s | body: %s",
                  request.method, request.url.path, exc.errors(), safe_body)
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
-
-
-@app.exception_handler(DanbooruUnavailableError)
-async def danbooru_unavailable_handler(request: Request, exc: DanbooruUnavailableError):
-    logger.warning("Danbooru unavailable during %s %s: %s", request.method, request.url.path, exc)
-    return JSONResponse(
-        status_code=503,
-        content={"detail": "Danbooru API is unreachable; try again later.",
-                 "error_code": "danbooru_unavailable"},
-    )
 
 app.include_router(api_router)
 app.include_router(media_router)
@@ -313,21 +145,9 @@ async def _service_readiness() -> dict[str, str]:
     return services
 
 
-_readiness_cache: dict | None = None
-_readiness_cache_ts: float = 0.0
-_READINESS_CACHE_TTL = 15.0
-
-
 @app.get("/api/v1/system/ready")
 async def ready():
-    global _readiness_cache, _readiness_cache_ts
-    now_mono = time.monotonic()
-    if _readiness_cache is not None and (now_mono - _readiness_cache_ts) < _READINESS_CACHE_TTL:
-        services = _readiness_cache
-    else:
-        services = await _service_readiness()
-        _readiness_cache = services
-        _readiness_cache_ts = now_mono
+    services = await _service_readiness()
     all_up = all(v == "up" for v in services.values())
     return JSONResponse(
         status_code=200 if all_up else 503,
@@ -339,7 +159,7 @@ async def ready():
 async def health():
     services = await _service_readiness()
 
-    # Disk space check (cached)
+    # Disk space check
     disk = "unknown"
     try:
         import shutil

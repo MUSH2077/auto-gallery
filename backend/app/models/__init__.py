@@ -14,8 +14,6 @@ from app.models.subscription_source import SubscriptionSource
 from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
 from app.models.system_setting import SystemSetting
-from app.models.storage_artifact import StorageArtifact
-from app.models.task_run import TaskEvent, TaskRun
 from app.models.user import User
 from app.models.curation import (
     AssetStorageState,
@@ -23,15 +21,6 @@ from app.models.curation import (
     CurationChange,
     CurationCommit,
     WorkCurationState,
-)
-from app.models.asset_dedup import (
-    AssetDedupCase,
-    AssetDedupDecision,
-    AssetDedupEvidence,
-    AssetDedupOutbox,
-    AssetDedupScan,
-    VisualAssetGroup,
-    VisualAssetMember,
 )
 
 __all__ = [
@@ -52,20 +41,10 @@ __all__ = [
     "DownloadJob",
     "ImportJob",
     "SystemSetting",
-    "StorageArtifact",
-    "TaskEvent",
-    "TaskRun",
     "User",
     "AssetStorageState",
     "CreatorCurationState",
     "CurationChange",
     "CurationCommit",
     "WorkCurationState",
-    "AssetDedupCase",
-    "AssetDedupDecision",
-    "AssetDedupEvidence",
-    "AssetDedupOutbox",
-    "AssetDedupScan",
-    "VisualAssetGroup",
-    "VisualAssetMember",
 ]

@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { PageHeader, PageShell, ConfirmDialog } from "@/components";
+import { PageHeader, ConfirmDialog } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import Link from "next/link";
@@ -52,6 +52,16 @@ export default function DataManagementPage() {
     onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
   });
 
+  const clearDownloads = useMutation({
+    mutationFn: async () => {
+      await api.clearEntity("downloads");
+      await api.clearFailedJobs();
+      return { message: "Download history and Redis failed jobs cleared" };
+    },
+    onSuccess: (d) => { toast.success({ message: d.message }); clearCacheThenRefetch(); setConfirmAction(null); },
+    onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
+  });
+
   const clearJobs = useMutation({
     mutationFn: async () => {
       await api.clearEntity("jobs");
@@ -64,12 +74,6 @@ export default function DataManagementPage() {
 
   const clearTags = useMutation({
     mutationFn: () => api.clearEntity("tags"),
-    onSuccess: (d) => { toast.success({ message: d.message }); clearCacheThenRefetch(); setConfirmAction(null); },
-    onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
-  });
-
-  const clearLibrary = useMutation({
-    mutationFn: () => api.clearEntity("library"),
     onSuccess: (d) => { toast.success({ message: d.message }); clearCacheThenRefetch(); setConfirmAction(null); },
     onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
   });
@@ -103,6 +107,13 @@ export default function DataManagementPage() {
       mutation: clearCreators,
     },
     {
+      key: "downloads",
+      title: t("datamgmt.clear_downloads"),
+      desc: t("datamgmt.clear_downloads.desc"),
+      color: "yellow",
+      mutation: clearDownloads,
+    },
+    {
       key: "jobs",
       title: t("datamgmt.clear_jobs"),
       desc: t("datamgmt.clear_jobs.desc"),
@@ -117,13 +128,6 @@ export default function DataManagementPage() {
       mutation: clearTags,
     },
     {
-      key: "library",
-      title: t("datamgmt.clear_library"),
-      desc: t("datamgmt.clear_library.desc"),
-      color: "yellow",
-      mutation: clearLibrary,
-    },
-    {
       key: "settings",
       title: t("datamgmt.reset_settings"),
       desc: t("datamgmt.reset_settings.desc"),
@@ -133,14 +137,14 @@ export default function DataManagementPage() {
   ];
 
   return (
-    <PageShell size="normal">
+    <main className="max-w-4xl mx-auto p-6">
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("datamgmt.back")}</Link>
+        <Link href="/admin/settings" className="text-sm text-blue-600 hover:underline">&larr; {t("datamgmt.back")}</Link>
       </div>
       <PageHeader title={t("datamgmt.title")} description={t("datamgmt.desc")} />
 
       {result && (
-        <div className={`mb-4 p-3 rounded-lg text-sm ${result.ok ? "bg-success-subtle border border-success/30 text-success" : "bg-danger-subtle border border-danger/30 text-danger"}`}>
+        <div className={`mb-4 p-3 rounded-lg text-sm ${result.ok ? "bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400" : "bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400"}`}>
           {result.msg}
           <button onClick={() => setResult(null)} className="ml-3 text-xs underline">{t("datamgmt.dismiss")}</button>
         </div>
@@ -149,20 +153,20 @@ export default function DataManagementPage() {
       <div className="space-y-3">
         {actions.map((a) => (
           <div key={a.key} className={`card p-4 flex items-center justify-between border-l-4 ${
-            a.color === "red" ? "border-danger/30" : a.color === "orange" ? "border-orange-500" : a.color === "yellow" ? "border-warning/30" : "border-accent/30"
+            a.color === "red" ? "border-red-500" : a.color === "orange" ? "border-orange-500" : a.color === "yellow" ? "border-yellow-500" : "border-blue-500"
           }`}>
             <div>
               <h3 className="font-medium text-sm dark:text-white">{a.title}</h3>
-              <p className="text-xs text-muted mt-1">{a.desc}</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{a.desc}</p>
             </div>
             <button
               onClick={() => setConfirmAction(a.key)}
               disabled={a.mutation.isPending}
               className={`shrink-0 ml-4 btn-primary ${
-                a.color === "red" ? "bg-danger hover:bg-danger/90" :
+                a.color === "red" ? "bg-red-600 hover:bg-red-700" :
                 a.color === "orange" ? "bg-orange-600 hover:bg-orange-700" :
-                a.color === "yellow" ? "bg-warning hover:bg-warning/90" :
-                "bg-accent hover:bg-accent/90"
+                a.color === "yellow" ? "bg-yellow-600 hover:bg-yellow-700" :
+                "bg-blue-600 hover:bg-blue-700"
               }`}
             >
               {a.mutation.isPending ? t("datamgmt.processing") : a.key === "settings" ? t("datamgmt.reset") : t("datamgmt.clear")}
@@ -184,6 +188,6 @@ export default function DataManagementPage() {
           isPending={actions.find((a) => a.key === confirmAction)?.mutation.isPending || false}
         />
       )}
-    </PageShell>
+    </main>
   );
 }

@@ -1,149 +1,150 @@
 "use client";
-import { useMemo, useState } from "react";
-import { useInfiniteQuery } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
-import { api, queryKeys } from "@/lib/api";
-import type { TaskRun } from "@/lib/api/types";
-import { useStaggeredEntrance } from "@/lib/motion";
-import { PageHeader, PageShell, EmptyState, ErrorState, StatusBadge, SourceBadge, PermissionGuard } from "@/components";
+import { useNotifications, type BatchJobState } from "@/components/NotificationCenter";
+import { useRouter } from "next/navigation";
+import { PageHeader, EmptyState } from "@/components";
 
-type Filter = "all" | "tasks" | "account";
-const PAGE_SIZE = 50;
+function BatchJobCard({ job, t }: { job: BatchJobState; t: (k: string) => string }) {
+  const router = useRouter();
+  const { clearBatchJob } = useNotifications();
 
-// "tasks" = the long-running pipeline kinds; "account" = audit events.
-const TASK_KINDS = ["download", "import", "admin"];
+  const statusBadge = () => {
+    switch (job.status) {
+      case "running":
+        return <span className="badge border-[#ddf4ff] bg-[#ddf4ff] text-[#0969da] dark:border-[#1f6feb]/30 dark:bg-[#1f6feb]/15 dark:text-[#58a6ff] animate-pulse">{t("notification.running")}</span>;
+      case "completed":
+        return <span className="badge border-[#dafbe1] bg-[#dafbe1] text-[#1a7f37] dark:border-[#238636]/30 dark:bg-[#238636]/15 dark:text-[#56d364]">{t("notification.completed")}</span>;
+      case "error":
+        return <span className="badge border-[#ffebe9] bg-[#ffebe9] text-[#cf222e] dark:border-[#da3633]/30 dark:bg-[#da3633]/15 dark:text-[#ff7b72]">{t("notification.error")}</span>;
+      default:
+        return <span className="badge">{job.status}</span>;
+    }
+  };
 
-function taskLink(task: TaskRun): string | null {
-  if (task.kind === "download" || task.kind === "import") {
-    return `/admin/jobs?tab=${task.kind}&task=${task.id}`;
-  }
-  return null;
-}
+  const timeStr = new Date(job.startedAt).toLocaleString();
 
-function timeStr(iso?: string | null): string {
-  if (!iso) return "";
-  return new Date(iso).toLocaleString();
+  return (
+    <div className="card p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <h3 className="text-sm font-semibold dark:text-white">
+              {job.importType === "pixiv" ? t("notification.batch_import") : "URL Batch Import"}
+            </h3>
+            {statusBadge()}
+          </div>
+          <p className="text-xs text-[#57606a] dark:text-[#8b949e]">{timeStr}</p>
+          {job.progress && (
+            <div className="mt-3">
+              <div className="mb-1 flex justify-between text-xs text-[#57606a] dark:text-[#8b949e]">
+                <span>{job.progress.current}/{job.progress.total}</span>
+                <span>{job.progress.imported} imported</span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
+                <div className="bg-blue-500 h-2 rounded-full transition-all duration-500"
+                  style={{ width: `${(job.progress.current / job.progress.total) * 100}%` }} />
+              </div>
+            </div>
+          )}
+          {job.result && (
+            <div className="mt-3 grid grid-cols-4 gap-2">
+              <div className="bg-green-50 dark:bg-green-900/20 rounded p-2 text-center">
+                <div className="text-lg font-bold text-green-700 dark:text-green-400">{job.result.imported_count || job.result.imported?.length || 0}</div>
+                <div className="text-[10px] text-green-600">{t("danbooru.batch_result_imported")}</div>
+              </div>
+              <div className="bg-yellow-50 dark:bg-yellow-900/20 rounded p-2 text-center">
+                <div className="text-lg font-bold text-yellow-700 dark:text-yellow-400">{job.result.low_confidence_count || job.result.low_confidence?.length || 0}</div>
+                <div className="text-[10px] text-yellow-600">{t("danbooru.batch_result_low_confidence")}</div>
+              </div>
+              <div className="bg-red-50 dark:bg-red-900/20 rounded p-2 text-center">
+                <div className="text-lg font-bold text-red-700 dark:text-red-400">{job.result.not_found_count || job.result.not_found?.length || 0}</div>
+                <div className="text-[10px] text-red-600">{t("danbooru.batch_result_not_found")}</div>
+              </div>
+              <div className="rounded-md border border-[#d8dee4] bg-[#f6f8fa] p-2 text-center dark:border-[#30363d] dark:bg-[#0d1117]">
+                <div className="text-lg font-bold text-[#57606a] dark:text-[#8b949e]">{job.result.error_count || job.result.errors?.length || 0}</div>
+                <div className="text-[10px] text-[#57606a] dark:text-[#8b949e]">{t("danbooru.batch_result_errors")}</div>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <button onClick={() => router.push("/admin/reference/danbooru")}
+            className="btn-ghost px-3 py-1 text-xs">
+            {t("common.view")}
+          </button>
+          {job.status !== "running" && (
+            <button onClick={() => clearBatchJob()}
+              className="btn-danger px-3 py-1 text-xs">
+              {t("common.close")}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function NotificationsPage() {
   const t = useT();
   const router = useRouter();
-  const [filter, setFilter] = useState<Filter>("all");
+  const { items, batchJob, removeActivity, clearRecent } = useNotifications();
 
-  // Account is a single-kind server filter; "tasks" has no single kind param,
-  // so it fetches all and filters client-side. "all" fetches everything.
-  const kindParam = filter === "account" ? "account" : undefined;
-
-  const query = useInfiniteQuery({
-    queryKey: [...queryKeys.tasks.all, "feed", filter],
-    queryFn: ({ pageParam = 0 }) =>
-      api.listTasks({ kind: kindParam, offset: pageParam as number, limit: PAGE_SIZE }),
-    initialPageParam: 0,
-    getNextPageParam: (lastPage, pages) => {
-      const loaded = pages.reduce((n, p) => n + p.items.length, 0);
-      return loaded < lastPage.total ? loaded : undefined;
-    },
-  });
-
-  const items = useMemo(() => {
-    const all = query.data?.pages.flatMap((p) => p.items) ?? [];
-    if (filter === "tasks") return all.filter((task) => TASK_KINDS.includes(task.kind));
-    return all;
-  }, [query.data, filter]);
-  const itemEntrance = useStaggeredEntrance(items.map((task) => task.id));
-
-  const filters: { key: Filter; label: string }[] = [
-    { key: "all", label: t("notifications.filter_all", "全部") },
-    { key: "tasks", label: t("notifications.filter_tasks", "任务") },
-    { key: "account", label: t("notifications.filter_account", "账户") },
-  ];
+  const allEmpty = items.length === 0 && !batchJob;
 
   return (
-    <PermissionGuard module="tasks">
-    <PageShell size="normal" className="page-transition">
-      <PageHeader title={t("notifications.title")} description={t("notifications.desc")} />
-
-      <div className="mb-4 flex gap-1">
-        {filters.map((f) => (
-          <button
-            key={f.key}
-            onClick={() => setFilter(f.key)}
-            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-              filter === f.key
-                ? "bg-accent-subtle text-accent"
-                : "text-muted hover:bg-subtle hover:text-fg"
-            }`}
-          >
-            {f.label}
-          </button>
-        ))}
-      </div>
-
-      {query.isError ? (
-        <ErrorState message={t("notifications.load_error", "加载通知失败")} onRetry={() => query.refetch()} />
-      ) : query.isLoading ? (
-        <div className="space-y-3">
-          {[0, 1, 2].map((i) => (
-            <div key={i} className="card h-20 animate-pulse" />
-          ))}
-        </div>
-      ) : items.length === 0 ? (
+    <main className="max-w-3xl mx-auto p-6 md:p-10 page-transition">
+      <PageHeader
+        title={t("notifications.title")}
+        description={t("notifications.desc")}
+      />
+      {allEmpty ? (
         <EmptyState title={t("notification.empty")} />
       ) : (
         <div className="space-y-3">
-          {items.map((task, index) => {
-            const link = taskLink(task);
-            const entrance = itemEntrance(task.id, index);
-            const pct =
-              task.progress_total && task.progress_current !== undefined && task.progress_total > 0
-                ? Math.round(((task.progress_current ?? 0) / task.progress_total) * 100)
-                : null;
-            return (
-              <div
-                key={task.id}
-                className={`card p-4 ${entrance.className} ${link ? "cursor-pointer hover:border-accent/50" : ""}`}
-                style={entrance.style}
-                onClick={() => link && router.push(link)}
-              >
-                <div className="flex items-start gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="mb-1 flex items-center gap-2">
-                      <StatusBadge status={task.status} />
-                      {task.source && <SourceBadge source={task.source} />}
-                      <h3 className="truncate text-sm font-semibold">
-                        {task.title || task.operation_type || task.kind}
-                      </h3>
-                    </div>
-                    {pct !== null && task.status !== "complete" && (
-                      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-subtle dark:bg-border">
-                        <div
-                          className="h-full w-full rounded-full bg-accent transition-transform duration-slow"
-                          style={{ transform: `scaleX(${pct / 100})`, transformOrigin: "left" }}
-                        />
-                      </div>
-                    )}
-                    <p className="mt-1 text-[10px] text-muted tabular">{timeStr(task.created_at)}</p>
+          {batchJob && <BatchJobCard job={batchJob} t={t} />}
+          {items.map((a) => (
+            <div key={a.id} className="card p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <h3 className="text-sm font-semibold dark:text-white">{a.title}</h3>
+                    {a.status === "running" && <span className="badge border-[#ddf4ff] bg-[#ddf4ff] text-[#0969da] dark:border-[#1f6feb]/30 dark:bg-[#1f6feb]/15 dark:text-[#58a6ff] animate-pulse">{t("notification.running")}</span>}
+                    {a.status === "completed" && <span className="badge border-[#dafbe1] bg-[#dafbe1] text-[#1a7f37] dark:border-[#238636]/30 dark:bg-[#238636]/15 dark:text-[#56d364]">{t("notification.completed")}</span>}
+                    {a.status === "error" && <span className="badge border-[#ffebe9] bg-[#ffebe9] text-[#cf222e] dark:border-[#da3633]/30 dark:bg-[#da3633]/15 dark:text-[#ff7b72]">{t("notification.error")}</span>}
                   </div>
+                  {a.message && <p className="mt-0.5 text-xs text-[#57606a] dark:text-[#8b949e]">{a.message}</p>}
+                  <p className="mt-1 text-[10px] text-[#57606a] dark:text-[#8b949e]">{new Date(a.timestamp).toLocaleString()}</p>
+                  {a.status === "running" && a.progress !== undefined && (
+                    <div className="mt-2 h-1.5 w-full rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
+                      <div className="bg-blue-500 h-1.5 rounded-full transition-all duration-500" style={{ width: `${a.progress}%` }} />
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  {a.link && (
+                    <button onClick={() => router.push(a.link!)}
+                      className="btn-ghost px-3 py-1 text-xs">
+                      {t("common.view")}
+                    </button>
+                  )}
+                  <button onClick={() => removeActivity(a.id)}
+                    className="btn-danger px-3 py-1 text-xs">
+                    {t("common.close")}
+                  </button>
                 </div>
               </div>
-            );
-          })}
-
-          {query.hasNextPage && (
-            <div className="flex justify-center pt-2">
-              <button
-                onClick={() => query.fetchNextPage()}
-                disabled={query.isFetchingNextPage}
-                className="btn-ghost px-4 py-1.5 text-xs"
-              >
-                {t("notifications.load_more", "加载更多")}
+            </div>
+          ))}
+          {items.length > 0 && (
+            <div className="flex justify-end pt-2">
+              <button onClick={clearRecent}
+                className="btn-ghost px-4 py-1.5 text-xs">
+                {t("notification.clear_all")}
               </button>
             </div>
           )}
         </div>
       )}
-    </PageShell>
-    </PermissionGuard>
+    </main>
   );
 }

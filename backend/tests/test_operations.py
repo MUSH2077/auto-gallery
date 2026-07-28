@@ -84,9 +84,6 @@ def test_clear_entity_data_invalidates_related_cache_domains(monkeypatch):
         async def commit(self):
             pass
 
-        async def flush(self):
-            pass
-
     calls = []
     async def fake_clear_search(_db, _entity):
         return None

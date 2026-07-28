@@ -30,14 +30,5 @@ class DownloadJobRead(BaseModel):
     manifest: dict | None = None
     created_at: datetime
     updated_at: datetime
-    # Task Engine fields
-    priority: int = 10
-    user_note: str | None = None
-    operator_name: str | None = None
-    operator_action: str | None = None
-    last_heartbeat_at: datetime | None = None
-    worker_pid: int | None = None
-    pipeline_stage: str | None = None
-    progress_data: dict | None = None
 
     model_config = {"from_attributes": True}

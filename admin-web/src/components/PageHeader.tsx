@@ -1,59 +1,15 @@
-"use client";
+import { ReactNode } from "react";
 
-import { type ReactNode } from "react";
-import { usePathname } from "next/navigation";
-
-import { findAdminNavEntry } from "@/lib/adminNavigation";
-import { useT } from "@/lib/i18n";
-import PageContextNav from "@/components/PageContextNav";
-
-export default function PageHeader({
-  title,
-  description,
-  meta,
-  primaryAction,
-  secondaryActions,
-  children,
-}: {
-  title: string;
-  description?: ReactNode;
-  meta?: ReactNode;
-  primaryAction?: ReactNode;
-  secondaryActions?: ReactNode;
-  children?: ReactNode;
-}) {
-  const pathname = usePathname();
-  const t = useT();
-  const navEntry = findAdminNavEntry(pathname);
-
-  const actions = primaryAction || secondaryActions || children;
-
+export default function PageHeader({ title, description, children }: { title: string; description?: ReactNode; children?: ReactNode }) {
   return (
-    <header className="mb-6 min-w-0 border-b border-border pb-4">
-      <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div className="min-w-0 lg:min-w-[16rem] lg:flex-1">
-          {navEntry && navEntry.groupKey !== navEntry.labelKey && (
-            <div className="mb-1.5 flex min-w-0 items-center gap-1.5 text-xs font-medium text-muted">
-              <span className="truncate">{t(navEntry.groupKey)}</span>
-              <span aria-hidden>/</span>
-              <span className="truncate">{t(navEntry.labelKey)}</span>
-            </div>
-          )}
-          <h1 className="max-w-full text-2xl font-semibold leading-tight tracking-[-0.015em] text-fg [overflow-wrap:normal]">
-            {title}
-          </h1>
-          {description && <div className="mt-1.5 max-w-[70ch] text-sm leading-5 text-muted">{description}</div>}
-          {meta && <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">{meta}</div>}
-        </div>
-        {actions && (
-          <div className="flex w-full min-w-0 flex-wrap items-center gap-2 lg:max-w-[65%] lg:flex-1 lg:justify-end [&>*]:max-w-full">
-            {secondaryActions}
-            {primaryAction}
-            {!primaryAction && !secondaryActions ? children : null}
-          </div>
-        )}
+    <div className="mb-6 flex flex-col gap-3 border-b border-[#d8dee4] pb-4 dark:border-[#30363d] sm:flex-row sm:items-end sm:justify-between">
+      <div className="min-w-0">
+        <h1 className="truncate text-2xl font-semibold tracking-normal text-[#24292f] dark:text-[#e6edf3]">
+          {title}
+        </h1>
+        {description && <div className="text-sm text-[#57606a] dark:text-[#8b949e] mt-1.5">{description}</div>}
       </div>
-      <PageContextNav />
-    </header>
+      {children && <div className="flex flex-wrap gap-2 shrink-0">{children}</div>}
+    </div>
   );
 }

@@ -16,20 +16,17 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
 ┌──────────────────▼──────────────────────────────┐
 │  后端 (FastAPI)                                  │
 │  Routes → Services → Repositories → SQLAlchemy   │
-│  Providers: Pixiv · X · Iwara · Danbooru ·      │
-│   Weibo · Bilibili · Pinterest · LOFTER          │
-│   (+ Danbooru reference；local/manual 计划中)    │
+│  Providers: Pixiv, Iwara, X, Danbooru,          │
+│             Pinterest, LOFTER, local, manual     │
 │  端口 8818（主机）← 8000（容器）                  │
 │  JWT 认证（access + refresh token）              │
 └──────┬────────────┬──────────────┬──────────────┘
        │            │              │
-       │   ┌────────▼────────────┐ │
-       │   │  Workers (RQ)       │ │
-       │   │  worker-download    │ │  gallery-dl 子进程
-       │   │  worker-import      │ │  元数据 → DB 管线
-       │   │  worker-operations  │ │  备份 / 重建索引 / 磁盘导入
-       │   │  scheduler          │ │  订阅同步循环
-       │   └────────┬────────────┘ │
+       │   ┌────────▼────────┐     │
+       │   │  Worker (RQ)    │     │
+       │   │  gallery-dl     │     │
+       │   │  导入管线       │     │
+       │   └────────┬────────┘     │
        │            │              │
 ┌──────▼────────────▼──────────────▼──────────────┐
 │  数据层                                          │
@@ -60,10 +57,6 @@ user ──< subscription ──< subscription_source
 user ──< album ──< album_work ── work
 user ──< download_job
 import_job（通过 subscription 继承隔离）
-
-（运维 / 横切）
-task_run ──< task_event        # 统一任务信封 —— 见"统一任务系统"
-storage_artifact               # 下载 → 导入账本 —— 见"任务队列"
 ```
 
 ### 关键关系
@@ -105,24 +98,11 @@ Provider 绝不访问数据库。它们接收原始元数据字典并返回数�
 
 ## 任务队列 (RQ)
 
-auto-gallery 使用 RQ（Redis Queue）做下载与批量导入，并配合一个 `operations` 队列做管理操作（备份、重建索引、磁盘导入）。关键设计决策：
+auto-gallery 使用 RQ（Redis Queue）作为任务队列后端。关键设计决策：
 
 - **为什么用 RQ**：比 Celery 更简单，使用已有的 Redis。`download_job`/`import_job` 数据库表是真实数据源，队列后端可替换。
-- **逐来源下载队列**：每个来源有独立的 RQ 队列（`downloads:pixiv`、`downloads:danbooru` 等）以隔离——一个慢来源不会阻塞另一个。`worker-download` 容器监听所有来源队列。
-- **持久化 RQ 导入**：下载产物记录在 PostgreSQL 中，单一 RQ 导入管线以租约（lease）认领工作，实现无竞争消费者的可重启恢复。
 - **任务超时**：所有入队调用使用 `job_timeout=7200`（2 小时），防止 RQ 杀掉长时间运行的下载任务（默认 180s）。
-- **代理预检**：启动 gallery-dl 前，worker 先做 DNS 解析 + 代理连通性检查（非阻塞诊断）。
-- **状态机**（权威来源：`backend/app/models/task_state.py`）：`enqueued → downloading → downloaded → importing → complete`，非终态可转入 `paused`、`cancelled`、`failed`、`stale`。旧状态串（`pending` → `enqueued`）通过向后兼容映射接受。存在 `downloaded → complete` 短路：当下载未产生新元数据（内容已在归档中）时直接完成，避免卡在等待导入。暂停任务跳过执行；`cancelled` 为终态但保留数据库记录以便审计。僵死检测使用 Redis 心跳键（`task:{job_id}:heartbeat_ts`，90s TTL）。超时/失败时支持部分导入恢复。`TaskEngine`（`services/task_engine.py`）是校验所有状态转换的唯一权威。
-
-## 统一任务系统 (`task_runs`)
-
-下载、导入、管理操作（备份、重建索引、磁盘导入）都通过一个面向用户的任务信封呈现，使管理端**任务**页（`/admin/jobs`）拥有统一的队列/进度/历史视图。
-
-- **`task_run`**（`models/task_run.py`）：每个可追踪工作单元一行。`kind`（`download` / `import` / `admin`）加 `subject_type` + `subject_id` 以松耦合方式引用权威领域行（`download_job`、`import_job` 等）——无外键，因此任务可以先于或晚于其领域记录存在。携带展示字段（`title`、`source`、`source_url`）、进度快照（`progress_current`/`progress_total`/`progress_data`）、`priority`、`attempts`，以及用于僵死检测的 `last_heartbeat_at`。`parent_task_id` 用于归组批量/子任务。
-- **`task_event`**：某次运行状态转换的追加式审计轨迹；随父记录级联删除（`ON DELETE CASCADE`）。
-- **`TaskService`**（`services/tasks.py`）：写入路径——创建运行、记录事件、规范化状态，并把下载/导入领域行合并进统一列表。
-- **`TaskEngine`**（`services/task_engine.py`）：状态转换的唯一权威（暂停 / 恢复 / 取消 / 重试 / 优先级 / 按筛选批处理），并通过 Redis pub/sub 发布变更以驱动 WebSocket 实时更新。
-- **权威载荷仍在领域表**：`task_run` 是信封；`download_jobs` / `import_jobs` 仍是各自字段的真实数据源。清空任务（数据管理）会同时删除 `task_runs` **和**领域任务表。
+- **状态机**：`pending → downloading → downloaded → importing → complete | failed | stale | paused`。暂停任务跳过执行。僵死检测在超过 2x 超时后标记卡住的下载任务。超时/失败时支持部分导入恢复。
 
 ## 数据流
 
@@ -168,46 +148,6 @@ Worker 取走 import_job
   → 创建 creator_link 建议（状态=待审核）
   → 管理员审核：通过 → 绑定到 creator，拒绝 → 丢弃
 ```
-
-## 可靠性与恢复
-
-由于 gallery-dl 直接写盘，且下载 → 导入交接跨越两个队列，系统提供若干恢复路径让数据库与磁盘实际内容保持一致。它们全部幂等，绝不删除或重新下载。
-
-- **磁盘导入**（`services/disk_import.py`，`POST /api/v1/admin/library/import-from-disk`）：扫描 `DOWNLOAD_ROOT/{source}/`，把磁盘上存在但从未入库（账本状态 ≠ `done`）的文件以一个合成 `recovery` download_job 导入。`services/disk_identity.py` 会先从本地元数据补建真实的 `creator → subscription → subscription_source → source_creator` 链（Danbooru 富化为尽力而为，并带纯元数据兜底），使恢复的作品挂到正确创作者。运行在 `operations` 队列；Redis 锁（`library:disk-import:active`）防止并发运行。
-- **导入管线恢复**（`services/import_recovery.py`）：对安全缺口的保守式自动修复——例如为已有待处理元数据的 `downloaded` 任务重新入队导入。只读健康状态由 `services/pipeline_health.py` 报告。
-- **创作者自动重链**（`services/creator_reconcile.py`）：每次订阅同步扫描时，按身份匹配把孤立的 `source_creators`（`creator_id IS NULL`）链接到其订阅的创作者。它沿用 `import_runner` 的自动链接规则，因此身份模糊的收藏/转发源绝不会被错链。
-- **Worker 启动孤儿对账**：启动时把卡在 `downloading`/`importing` 的任务标记为 `stale`，并把磁盘上无对应任务的目录重新拾取导入。
-
-## Gitllery —— 磁盘上的策展历史
-
-一个单向、与 git 同构的投影，把权威的策展 DAG（`curation_commits` + `curation_changes`，以及各 `*_curation_state` 表）按每个 source-creator 投影到磁盘。**PostgreSQL 始终是权威数据源**——磁盘仓库只是一个面向读取优化的镜像，绝不是回写数据库的路径。每次策展提交（如 `purge`、`revert`、`curate_creator`）之后，以尽力而为（best-effort）、同步的方式写入；失败会被吞掉并记录日志（`project_commit_safe`），因此磁盘写入的偶发故障绝不会破坏策展 API 的响应。追赶投影（catch-up）和校验机制负责补齐任何缺口。
-
-- **目录结构**：`LIBRARY_ROOT/{source}/{creator_dir}/.gitllery/` —— 与该创作者既有的 library 文件同级，绝不是 library 根目录本身（路径包含关系通过 `Path.relative_to` 校验，与 `LIBRARY_ROOT` 下其他规则一致）。包含：
-  - `HEAD` —— 符号引用，固定为 `ref: refs/heads/main`
-  - `refs/heads/main` —— 当前提交哈希
-  - `objects/{aa}/{rest}` —— 内容寻址对象库，采用 git 风格的 2 字符分片前缀
-  - `logs/HEAD` —— 追加写入的引用日志（reflog，每次 `set_head` 写一行 JSON：旧/新哈希、actor、时间戳、message）
-  - `index.json` —— 物化的工作区状态，用于快速状态检查（`head`、`tree`、`tree_entries`、`entities`）
-  - `config.json` —— 仓库元数据（`schema_version`、`repository_id`、`source`、`creator_id`、`source_creator_id`、`creator_dir`、哈希/压缩算法）
-  - `description` —— 初始化时写入的可读标签
-
-- **对象模型**：每个对象都是规范化 JSON（按 key 排序、紧凑分隔符）经 zlib 压缩后存储，以**未压缩**规范字节的 sha256 寻址。
-  - **blob** —— 单个实体状态快照（`subject_type`、`subject_id`、`state`）
-  - **tree** —— 工作区清单：`{subject_type}/{subject_id}` → blob 哈希 的映射
-  - **commit** —— 一次被投影的策展提交：`tree` 哈希、仓库本地的 `parent` 哈希（链表结构，并非数据库提交的 parent）、`db_commit_id`（关联回 `curation_commits.id`）、actor/message/trigger/dedupe_key/reverts/occurred_at/stats，以及本次应用的完整变更列表
-
-- **操作**（`GitlleryService`，`backend/app/services/gitllery/`）：
-  - **`status`** —— 每个仓库的 `behind`（尚未投影的待处理 DB 提交数）、`object_integrity_ok`（从 HEAD 经 tree 到 blob 的哈希链校验）、`drift`（磁盘快照与当前 `*_curation_state` 不一致的实体，例如 `visibility`/`storage_state` 在投影之外被修改）
-  - **`reconcile`** —— 对缺失的提交运行追赶投影（`project_pending`），然后返回刷新后的 `status`
-  - **`backfill`** —— 确保每个 source-creator 仓库存在，然后从头投影整个策展 DAG（用于首次同步 / 历史数据回填）
-  - 同一仓库的写入通过 Redis 锁（`gitllery:{repository_id}`）串行化，避免并发投影在同一个 `.gitllery` 目录上产生竞态
-
-- **API**：所有端点都挂在策展路由下（需要 `RequireAdmin`），路径为 `/api/v1/curation/gitllery/...`：
-  - `GET /gitllery/status`、`GET /repositories/{repository_id}/gitllery/status`
-  - `POST /gitllery/reconcile`、`POST /gitllery/backfill`
-  - `GET /repositories/{repository_id}/gitllery/log`
-
-  管理端的 **GitlleryPanel** 组件展示干净/落后状态，并提供一键 reconcile 操作。
 
 ## 认证
 
@@ -311,7 +251,6 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 | `ADMIN_WEB_PORT` | `13000` | 管理端主机端口（映射容器 3000） |
 | `CORS_ORIGINS` | `http://localhost:13000` | 允许的 CORS 来源 |
 | `BACKEND_INTERNAL_URL` | `http://backend:8000` | admin-web SSR 访问后端的内部 URL |
-| `NEXT_PUBLIC_WS_URL` | 当前站点 `/api/v1/ws` | 浏览器连接实时任务 WebSocket 的公开地址 |
 | `DATABASE_URL` | （必需） | PostgreSQL 连接字符串 |
 | `REDIS_URL` | （必需） | Redis 连接字符串 |
 | `SECRET_KEY` | （必需） | JWT 签名密钥 |
@@ -355,8 +294,7 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 - `GET /import-progress` — 实时导入进度轮询
 - `POST /proxy/test` — 测试代理与 gallery-dl 连接
 - `POST /scheduler/sync-now` — 立即触发订阅同步
-- `POST /library/import-from-disk` — 幂等地把磁盘上的下载文件入库，无需重新下载（operations 队列）
-- `POST /clear/{entity}` — 清除指定实体类型的所有记录（`jobs`/`all` 同时清除 `task_runs`）
+- `POST /clear/{entity}` — 清除指定实体类型的所有记录
 - `GET /dedup` / `PUT /dedup` — 去重设置
 - `GET /merge-candidates` — 列出标记为潜在合并的作品
 - `POST /reindex` — 触发 Meilisearch 全量重建索引
@@ -411,23 +349,14 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 - `POST /{id}/pause` — 暂停任务
 - `POST /{id}/resume` — 恢复暂停的任务
 - `POST /{id}/retry` — 重试特定失败任务
-- `POST /{id}/cancel` — 取消任务（终态，保留记录）— TaskEngine
-- `POST /{id}/priority` — 调整队列优先级 — TaskEngine
-- `POST /batch-by-filter` — 对匹配筛选条件的所有任务执行操作 — TaskEngine
-- `GET /{id}/progress` — 实时进度快照
-- `GET /{id}/pipeline` — 逐阶段管线视图
 
 ### `/api/v1/import-jobs`
-导入任务队列和导入后扫描。列表条目会用父下载任务的上下文（来源、URL、订阅/创作者）富化，使其与下载列表对齐。
+导入任务队列和导入后扫描。
 
 端点包括：
-- `GET /` — 列出导入任务（富化来源/订阅/创作者）
+- `GET /` — 列出导入任务
 - `GET /{id}` — 导入任务详情（含错误信息）
 - `POST /{id}/retry` — 重试失败的导入
-- `POST /{id}/cancel` — 取消导入 — TaskEngine
-- `POST /{id}/priority` — 调整队列优先级 — TaskEngine
-- `POST /batch-by-filter` — 对匹配筛选条件的所有导入执行操作 — TaskEngine
-- `GET /{id}/progress` — 实时进度快照
 - `POST /scan` — 扫描未导入的下载并创建导入任务
 
 ### `/api/v1/works`

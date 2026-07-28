@@ -1,17 +1,17 @@
 from uuid import UUID
 
 from sqlalchemy import select, or_, and_, func
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Creator, SourceCreator, CreatorLink, Subscription, SubscriptionSource
-from app.repositories.base import BaseRepository
 
 
-class CreatorRepository(BaseRepository[Creator]):
-    model = Creator
+class CreatorRepository:
+    def __init__(self, session: AsyncSession):
+        self.session = session
 
     async def list_all(self, offset: int = 0, limit: int = 50,
                        search: str | None = None,
-                       search_ids: list[UUID] | None = None,
                        is_active: bool | None = None,
                        has_danbooru: bool | None = None,
                        has_subscription: bool | None = None,
@@ -19,17 +19,32 @@ class CreatorRepository(BaseRepository[Creator]):
         # ── Filter conditions ──────────────────────────────────────────
         conditions = []
 
-        if search and search_ids:
-            conditions.append(or_(
-                Creator.id.in_(search_ids),
-                Creator.name.ilike(f"%{search}%"),
-                Creator.display_name.ilike(f"%{search}%"),
-            ))
-        elif search:
-            conditions.append(or_(
-                Creator.name.ilike(f"%{search}%"),
-                Creator.display_name.ilike(f"%{search}%"),
-            ))
+        if search:
+            # Try Meilisearch first for fast fuzzy search, with ILIKE fallback
+            meili_ids: list[str] | None = None
+            try:
+                from app.services.search import _client, CREATORS_INDEX
+                client = _client()
+                result = client.index(CREATORS_INDEX).search(search, limit=500)
+                hits = getattr(result, "hits", []) or []
+                meili_ids = [h["id"] for h in hits if h.get("id")]
+            except Exception:
+                pass
+
+            if meili_ids:
+                # Combine Meilisearch rank + ILIKE fallback (handles stale index)
+                from uuid import UUID as _UUID
+                id_list = [_UUID(uid) for uid in meili_ids]
+                conditions.append(or_(
+                    Creator.id.in_(id_list),
+                    Creator.name.ilike(f"%{search}%"),
+                    Creator.display_name.ilike(f"%{search}%"),
+                ))
+            else:
+                conditions.append(or_(
+                    Creator.name.ilike(f"%{search}%"),
+                    Creator.display_name.ilike(f"%{search}%"),
+                ))
         if is_active is not None:
             conditions.append(Creator.is_active == is_active)
         if has_danbooru is not None:
@@ -85,7 +100,7 @@ class CreatorRepository(BaseRepository[Creator]):
             )
             .outerjoin(sub_agg, sub_agg.c.creator_id == Creator.id)
             .outerjoin(sc_agg, sc_agg.c.creator_id == Creator.id)
-            .order_by(Creator.created_at.desc())
+            .order_by(Creator.name)
         )
 
         if conditions:
@@ -111,6 +126,26 @@ class CreatorRepository(BaseRepository[Creator]):
             creators.append(creator)
 
         return creators, total
+
+    async def get(self, creator_id: UUID) -> Creator | None:
+        return await self.session.get(Creator, creator_id)
+
+    async def create(self, data: dict) -> Creator:
+        creator = Creator(**data)
+        self.session.add(creator)
+        await self.session.flush()
+        return creator
+
+    async def update(self, creator: Creator, data: dict) -> Creator:
+        for key, value in data.items():
+            if value is not None:
+                setattr(creator, key, value)
+        await self.session.flush()
+        return creator
+
+    async def delete(self, creator: Creator) -> None:
+        await self.session.delete(creator)
+        await self.session.flush()
 
     async def add_source_creator(self, data: dict) -> SourceCreator:
         sc = SourceCreator(**data)

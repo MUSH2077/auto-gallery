@@ -1,6 +1,4 @@
 import logging
-import os
-import uuid
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -27,21 +25,14 @@ def generate_thumbnail(source_path: str, library_dir: Path, name: str = "thumbna
         w, h = image.width, image.height
         target_w = 400
         thumb_path = library_dir / f"{name}.webp"
-        temp_path = library_dir / f".{name}.{uuid.uuid4().hex}.tmp.webp"
         thumb_path.parent.mkdir(parents=True, exist_ok=True)
         if w > target_w:
             thumb = image.thumbnail_image(target_w, height=target_w * 1000)
-            thumb.webpsave(str(temp_path), Q=80)
+            thumb.webpsave(str(thumb_path), Q=80)
         else:
-            image.webpsave(str(temp_path), Q=80)
-        os.replace(temp_path, thumb_path)
+            image.webpsave(str(thumb_path), Q=80)
         return str(thumb_path)
     except Exception:
-        try:
-            if "temp_path" in locals() and temp_path.exists():
-                temp_path.unlink()
-        except OSError:
-            pass
         logger.warning("Failed to generate thumbnail for %s", source_path, exc_info=True)
         return None
     finally:

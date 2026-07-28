@@ -5,10 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
-import { GitlleryPanel, Modal, PageShell, RepositoryCard, SourceBadge, StatusBadge, WorkGrid, type SlideItem } from "@/components";
-import { useSlideshow } from "@/lib/useSlideshow";
-import { POLL_IDLE_MS } from "@/lib/polling";
-import { Breadcrumb } from "@/components/Breadcrumb";
+import { Modal, RepositoryCard, SourceBadge, StatusBadge, WorkGrid } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
@@ -41,13 +38,13 @@ function HorizontalBarChart({ data, maxKey, labelKey, colorFn, onItemClick }: {
           type="button"
           onClick={() => onItemClick?.(item)}
           disabled={!onItemClick}
-          className={`flex w-full items-center gap-2 text-xs ${onItemClick ? "rounded-md px-1 py-0.5 text-left hover:bg-subtle dark:hover:bg-subtle" : ""}`}
+          className={`flex w-full items-center gap-2 text-xs ${onItemClick ? "rounded-md px-1 py-0.5 text-left hover:bg-[#f6f8fa] dark:hover:bg-[#21262d]" : ""}`}
         >
-          <span className="w-24 truncate text-right text-muted">{String(item[labelKey])}</span>
-          <div className="h-2 flex-1 overflow-hidden rounded-full bg-subtle dark:bg-border">
+          <span className="w-24 truncate text-right text-[#57606a] dark:text-[#8b949e]">{String(item[labelKey])}</span>
+          <div className="h-2 flex-1 overflow-hidden rounded-full bg-[#eaeef2] dark:bg-[#30363d]">
             <div className="h-full rounded-full" style={{ width: `${((item[maxKey] as number) / max) * 100}%`, backgroundColor: colorFn(item, i) }} />
           </div>
-          <span className="w-10 shrink-0 text-right font-mono text-muted">{fmt.number(item[maxKey] as number)}</span>
+          <span className="w-10 shrink-0 text-right font-mono text-[#57606a] dark:text-[#8b949e]">{fmt.number(item[maxKey] as number)}</span>
         </button>
       ))}
     </div>
@@ -61,7 +58,7 @@ function MonthStrip({ data }: { data: { month: string; count: number }[] }) {
     <div className="flex h-12 items-end gap-[2px]">
       {data.slice(-48).map((d) => (
         <div key={d.month}
-          className="min-w-[3px] flex-1 rounded-t-sm bg-accent transition-opacity hover:opacity-75"
+          className="min-w-[3px] flex-1 rounded-t-sm bg-[#0969da] transition-opacity hover:opacity-75"
           style={{ height: `${Math.max(2, (d.count / max) * 100)}%`, opacity: 0.3 + (d.count / max) * 0.7 }}
           title={`${d.month}: ${d.count} works`} />
       ))}
@@ -74,17 +71,17 @@ function WorkPreviewCard({ work }: { work: WorkListItem }) {
   const fmt = useI18nFormat();
   const assetId = work.preview_asset_ids?.[0] || work.thumbnail_asset_id;
   return (
-    <Link href={`/admin/works/${work.id}`} className="group overflow-hidden rounded-md border border-border bg-white transition-colors hover:border-accent/50 dark:border-border dark:bg-surface dark:hover:border-accent/50">
-      <div className="aspect-[4/3] bg-subtle">
+    <Link href={`/admin/works/${work.id}`} className="group overflow-hidden rounded-md border border-[#d8dee4] bg-white transition-colors hover:border-[#0969da]/50 dark:border-[#30363d] dark:bg-[#161b22] dark:hover:border-[#58a6ff]/50">
+      <div className="aspect-[4/3] bg-[#f6f8fa] dark:bg-[#21262d]">
         {assetId ? (
-          <img src={api.mediaUrl(assetId, "thumb")} alt={work.title || t("creator_detail.untitled")} className="h-full w-full object-cover" loading="lazy" decoding="async" />
+          <img src={api.mediaUrl(assetId, "thumb")} alt={work.title || t("creator_detail.untitled")} className="h-full w-full object-cover" loading="lazy" />
         ) : (
-          <div className="flex h-full items-center justify-center text-xs text-muted">{t("works.na")}</div>
+          <div className="flex h-full items-center justify-center text-xs text-[#57606a] dark:text-[#8b949e]">{t("works.na")}</div>
         )}
       </div>
       <div className="p-3">
-        <div className="truncate text-sm font-medium group-hover:text-accent dark:group-hover:text-accent">{work.title || t("creator_detail.untitled")}</div>
-        <div className="mt-1 flex items-center gap-2 text-xs text-muted">
+        <div className="truncate text-sm font-medium group-hover:text-[#0969da] dark:group-hover:text-[#58a6ff]">{work.title || t("creator_detail.untitled")}</div>
+        <div className="mt-1 flex items-center gap-2 text-xs text-[#57606a] dark:text-[#8b949e]">
           {work.source && <SourceBadge source={work.source} />}
           <span>{work.posted_at ? fmt.date(work.posted_at) : t("works.no_date")}</span>
         </div>
@@ -119,29 +116,17 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
     }),
   });
 
-  const slideshow = useSlideshow();
-  const slideItems: SlideItem[] = (filteredWorks.data?.items || [])
-    .filter((w): w is WorkListItem & { thumbnail_asset_id: string } => !!w.thumbnail_asset_id)
-    .map((w) => ({ assetId: w.thumbnail_asset_id, workId: w.id, title: w.title, creatorName: w.creator_name }));
-
   return (
     <div className="space-y-4">
-      <div className="rounded-md border border-border bg-white p-4 dark:border-border dark:bg-surface">
+      <div className="rounded-md border border-[#d8dee4] bg-white p-4 dark:border-[#30363d] dark:bg-[#161b22]">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <h2 className="text-base font-semibold">{t("creator_detail.works_title")}</h2>
-            <p className="mt-1 text-sm text-muted">{t("creator_detail.works_filter_hint")}</p>
+            <p className="mt-1 text-sm text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.works_filter_hint")}</p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {slideItems.length > 0 && (
-              <button type="button" onClick={() => slideshow.open(slideItems)} className="btn-ghost">
-                {t("slideshow.open")}
-              </button>
-            )}
-            <Link href={`/admin/works?creator=${creatorId}${selectedTag ? `&tag=${encodeURIComponent(selectedTag)}` : ""}`} className="btn-ghost">
-              {t("creator_detail.open_full_gallery")}
-            </Link>
-          </div>
+          <Link href={`/admin/works?creator=${creatorId}${selectedTag ? `&tag=${encodeURIComponent(selectedTag)}` : ""}`} className="btn-ghost">
+            {t("creator_detail.open_full_gallery")}
+          </Link>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <input
@@ -154,7 +139,7 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
             <button
               type="button"
               onClick={() => onTagChange("")}
-              className="inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent-subtle px-3 py-1.5 text-sm font-medium text-accent hover:bg-[#b6e3ff] dark:border-accent/40 dark:bg-accent-subtle dark:text-accent"
+              className="inline-flex items-center gap-2 rounded-full border border-[#0969da]/30 bg-[#ddf4ff] px-3 py-1.5 text-sm font-medium text-[#0969da] hover:bg-[#b6e3ff] dark:border-[#58a6ff]/40 dark:bg-[#1f6feb26] dark:text-[#58a6ff]"
               title={t("creator_detail.clear_tag_filter", { tag: selectedTag })}
             >
               <span className="max-w-[14rem] truncate">#{selectedTag}</span>
@@ -166,12 +151,12 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
 
       {filteredWorks.isLoading && (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-          {Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-48 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}
+          {Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-48 animate-pulse rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />)}
         </div>
       )}
-      {filteredWorks.error && <div className="card p-5 text-sm text-danger">{(filteredWorks.error as Error).message}</div>}
+      {filteredWorks.error && <div className="card p-5 text-sm text-[#cf222e]">{(filteredWorks.error as Error).message}</div>}
       {filteredWorks.data && filteredWorks.data.items.length === 0 && (
-        <div className="card p-8 text-center text-sm text-muted">
+        <div className="card p-8 text-center text-sm text-[#57606a] dark:text-[#8b949e]">
           {selectedTag ? t("creator_detail.no_tagged_works", { tag: selectedTag }) : t("creator_detail.no_creator_works")}
         </div>
       )}
@@ -184,7 +169,7 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
             <button disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))} className="btn-ghost disabled:opacity-40">
               {t("works.prev")}
             </button>
-            <span className="px-3 py-1 text-sm text-muted">
+            <span className="px-3 py-1 text-sm text-[#57606a] dark:text-[#8b949e]">
               {t("works.page", { page: page + 1 })}
             </span>
             <button disabled={(page + 1) * limit >= filteredWorks.data.total} onClick={() => setPage((p) => p + 1)} className="btn-ghost disabled:opacity-40">
@@ -193,7 +178,6 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
           </div>
         </>
       )}
-      {slideshow.node}
     </div>
   );
 }
@@ -215,8 +199,8 @@ export default function CreatorDetailPage() {
 
   const creator = useQuery({ queryKey: queryKeys.creators.detail(id), queryFn: () => api.getCreator(id) });
   const links = useQuery({ queryKey: queryKeys.creators.links(id), queryFn: () => api.listCreatorLinks(id) });
-  const timeline = useQuery({ queryKey: ["creator-timeline", id], queryFn: () => api.getCreatorTimeline(id), refetchInterval: POLL_IDLE_MS, staleTime: POLL_IDLE_MS });
-  const stats = useQuery({ queryKey: ["creator-stats", id], queryFn: () => api.getCreatorStats(id), refetchInterval: POLL_IDLE_MS, staleTime: POLL_IDLE_MS });
+  const timeline = useQuery({ queryKey: ["creator-timeline", id], queryFn: () => api.getCreatorTimeline(id), refetchInterval: 15000 });
+  const stats = useQuery({ queryKey: ["creator-stats", id], queryFn: () => api.getCreatorStats(id), refetchInterval: 15000 });
   const works = useQuery({
     queryKey: ["creator-latest-works", id],
     queryFn: () => api.listWorks(0, 6, { creator_id: id, sort_by: "posted_at", sort_order: "desc" }),
@@ -340,41 +324,37 @@ export default function CreatorDetailPage() {
   ], [t, overview.data?.summary.repository_count, legalRepos.length, st?.total_works, links.data?.length]);
 
   if (creator.isLoading) {
-    return <PageShell><div className="space-y-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-28 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div></PageShell>;
+    return <main className="mx-auto max-w-7xl p-6"><div className="space-y-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-28 animate-pulse rounded-md bg-[#eaeef2] dark:bg-[#21262d]" />)}</div></main>;
   }
   if (creator.error) {
-    return <PageShell><div className="card p-5 text-danger">{(creator.error as Error).message}</div></PageShell>;
+    return <main className="mx-auto max-w-7xl p-6"><div className="card p-5 text-[#cf222e]">{(creator.error as Error).message}</div></main>;
   }
   if (!c) return null;
 
   return (
-    <PageShell className="page-transition">
-      <Breadcrumb items={[
-        { label: t("creators.title"), href: "/admin/creators" },
-        { label: c.display_name || c.name },
-      ]} />
-      <div className="mb-6 flex flex-col gap-4 border-b border-border pb-5 dark:border-border md:flex-row md:items-end md:justify-between">
+    <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mb-6 flex flex-col gap-4 border-b border-[#d8dee4] pb-5 dark:border-[#30363d] md:flex-row md:items-end md:justify-between">
         <div className="flex min-w-0 items-center gap-4">
-          <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full border border-border bg-gradient-to-br from-accent to-[#8250df] text-2xl font-semibold text-white dark:border-border">
+          <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full border border-[#d8dee4] bg-gradient-to-br from-[#0969da] to-[#8250df] text-2xl font-semibold text-white dark:border-[#30363d]">
             {initials(c.display_name || c.name)}
           </div>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="truncate text-2xl font-semibold tracking-normal text-fg">{c.display_name || c.name}</h1>
-              {c.is_favorite && <span className="rounded-full border border-warning/30 bg-warning-subtle px-2 py-0.5 text-xs text-warning dark:bg-warning-subtle dark:text-warning">{t("creator_detail.favorite")}</span>}
-              {creatorVisibility !== "visible" && <span className="rounded-full border border-danger/25 bg-danger-subtle px-2 py-0.5 text-xs text-danger dark:bg-danger-subtle">{creatorVisibility}</span>}
+              <h1 className="truncate text-2xl font-semibold tracking-normal text-[#24292f] dark:text-[#e6edf3]">{c.display_name || c.name}</h1>
+              {c.is_favorite && <span className="rounded-full border border-[#bf8700]/30 bg-[#fff8c5] px-2 py-0.5 text-xs text-[#9a6700] dark:bg-[#bb800926] dark:text-[#d29922]">{t("creator_detail.favorite")}</span>}
+              {creatorVisibility !== "visible" && <span className="rounded-full border border-[#cf222e]/25 bg-[#ffebe9] px-2 py-0.5 text-xs text-[#cf222e] dark:bg-[#da363326]">{creatorVisibility}</span>}
             </div>
-            {c.display_name && c.display_name !== c.name && <p className="mt-0.5 font-mono text-sm text-muted">{c.name}</p>}
-            <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-muted">
+            {c.display_name && c.display_name !== c.name && <p className="mt-0.5 font-mono text-sm text-[#57606a] dark:text-[#8b949e]">{c.name}</p>}
+            <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-[#57606a] dark:text-[#8b949e]">
               <StatusBadge status={c.is_active ? "up" : "down"} />
               {c.danbooru_artist_id && (
                 <a href={`https://danbooru.donmai.us/artists/${c.danbooru_artist_id}`} target="_blank" rel="noopener noreferrer"
-                  className="font-mono text-accent hover:underline dark:text-accent">
+                  className="font-mono text-[#0969da] hover:underline dark:text-[#58a6ff]">
                   danbooru #{c.danbooru_artist_id}
                 </a>
               )}
               <span>{t("creator_detail.repositories_count", { count: overview.data?.summary.repository_count ?? 0 })}</span>
-              {overview.data?.summary.running_job_count ? <span className="text-accent">{t("creator_detail.running_count", { count: overview.data.summary.running_job_count })}</span> : null}
+              {overview.data?.summary.running_job_count ? <span className="text-[#0969da] dark:text-[#58a6ff]">{t("creator_detail.running_count", { count: overview.data.summary.running_job_count })}</span> : null}
             </div>
           </div>
         </div>
@@ -399,53 +379,51 @@ export default function CreatorDetailPage() {
           <section className="card p-4">
             <h2 className="mb-2 text-sm font-semibold">{t("creator_detail.profile")}</h2>
             {c.description ? (
-              <p className="whitespace-pre-wrap text-sm leading-6 text-fg">{c.description}</p>
+              <p className="whitespace-pre-wrap text-sm leading-6 text-[#24292f] dark:text-[#e6edf3]">{c.description}</p>
             ) : (
-              <p className="text-sm text-muted">{t("creator_detail.no_description")}</p>
+              <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.no_description")}</p>
             )}
-            <dl className="mt-4 space-y-2 border-t border-border pt-4 text-sm dark:border-border">
-              <div className="flex justify-between gap-3"><dt className="text-muted">{t("creator_detail.stat_works")}</dt><dd className="font-semibold">{st?.total_works != null ? fmt.number(st.total_works) : "-"}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted">{t("creator_detail.stat_assets")}</dt><dd className="font-semibold">{st?.total_assets != null ? fmt.number(st.total_assets) : "-"}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted">{t("creator_detail.stat_sources")}</dt><dd className="font-semibold">{st?.source_breakdown?.length ?? "-"}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted">{t("creator_detail.created")}</dt><dd>{fmt.date(c.created_at)}</dd></div>
+            <dl className="mt-4 space-y-2 border-t border-[#d8dee4] pt-4 text-sm dark:border-[#30363d]">
+              <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.stat_works")}</dt><dd className="font-semibold">{st?.total_works != null ? fmt.number(st.total_works) : "-"}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.stat_assets")}</dt><dd className="font-semibold">{st?.total_assets != null ? fmt.number(st.total_assets) : "-"}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.stat_sources")}</dt><dd className="font-semibold">{st?.source_breakdown?.length ?? "-"}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.created")}</dt><dd>{fmt.date(c.created_at)}</dd></div>
             </dl>
           </section>
 
           <section className="card p-4">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-sm font-semibold">Curation</h2>
-              <Link href={`/admin/curation?subject_type=creator&subject_id=${id}`} className="text-sm text-accent hover:underline dark:text-accent">Open</Link>
+              <Link href={`/admin/curation?subject_type=creator&subject_id=${id}`} className="text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">Open</Link>
             </div>
             {curationHistory.data?.items.length ? (
               <div className="space-y-3">
                 {curationHistory.data.items.map((commit) => (
-                  <div key={commit.id} className="border-l-2 border-accent pl-3 text-xs dark:border-accent">
-                    <div className="font-medium text-fg">{commit.message}</div>
-                    <div className="mt-0.5 text-muted">{commit.trigger} · {new Date(commit.occurred_at).toLocaleDateString()}</div>
+                  <div key={commit.id} className="border-l-2 border-[#0969da] pl-3 text-xs dark:border-[#58a6ff]">
+                    <div className="font-medium text-[#24292f] dark:text-[#e6edf3]">{commit.message}</div>
+                    <div className="mt-0.5 text-[#57606a] dark:text-[#8b949e]">{commit.trigger} · {new Date(commit.occurred_at).toLocaleDateString()}</div>
                   </div>
                 ))}
               </div>
-            ) : <p className="text-sm text-muted">No curation commits yet.</p>}
+            ) : <p className="text-sm text-[#57606a] dark:text-[#8b949e]">No curation commits yet.</p>}
           </section>
-
-          <GitlleryPanel />
 
           <section className="card p-4">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-sm font-semibold">{t("creator_detail.external_links")}</h2>
-              <button onClick={() => setShowAddLink(true)} className="text-sm text-accent hover:underline dark:text-accent">{t("creator_detail.add")}</button>
+              <button onClick={() => setShowAddLink(true)} className="text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("creator_detail.add")}</button>
             </div>
             {links.data?.length ? (
               <div className="space-y-2">
                 {links.data.slice(0, 8).map((l: CreatorLinkType) => (
                   <a key={l.id} href={l.url} target="_blank" rel="noopener noreferrer"
-                    className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-sm hover:bg-subtle dark:hover:bg-subtle">
+                    className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-sm hover:bg-[#f6f8fa] dark:hover:bg-[#21262d]">
                     <SourceBadge source={l.link_type} />
-                    <span className="truncate text-accent">{l.url}</span>
+                    <span className="truncate text-[#0969da] dark:text-[#58a6ff]">{l.url}</span>
                   </a>
                 ))}
               </div>
-            ) : <p className="text-sm text-muted">{t("creator_detail.no_links")}</p>}
+            ) : <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.no_links")}</p>}
           </section>
 
           {c.danbooru_artist_id && (
@@ -455,11 +433,11 @@ export default function CreatorDetailPage() {
         </aside>
 
         <section className="min-w-0">
-          <nav className="mb-4 flex gap-1 overflow-x-auto border-b border-border" aria-label="Creator sections">
+          <nav className="mb-4 flex gap-1 overflow-x-auto border-b border-[#d8dee4] dark:border-[#30363d]" aria-label="Creator sections">
             {tabs.map((tab) => (
               <button key={tab.key} onClick={() => setActiveTab(tab.key)}
-                className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${activeTab === tab.key ? "border-danger font-semibold text-fg" : "border-transparent text-muted hover:text-fg dark:text-muted dark:hover:text-fg"}`}>
-                {tab.label}{tab.count !== undefined && <span className="ml-2 rounded-full bg-subtle px-2 py-0.5 text-xs font-medium text-muted dark:bg-border dark:text-muted">{tab.count}</span>}
+                className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${activeTab === tab.key ? "border-[#fd8c73] font-semibold text-[#24292f] dark:text-[#e6edf3]" : "border-transparent text-[#57606a] hover:text-[#24292f] dark:text-[#8b949e] dark:hover:text-[#e6edf3]"}`}>
+                {tab.label}{tab.count !== undefined && <span className="ml-2 rounded-full bg-[#eaeef2] px-2 py-0.5 text-xs font-medium text-[#57606a] dark:bg-[#30363d] dark:text-[#8b949e]">{tab.count}</span>}
               </button>
             ))}
           </nav>
@@ -469,7 +447,7 @@ export default function CreatorDetailPage() {
               <section className="card p-4">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <h2 className="text-base font-semibold">{t("creator_detail.works_timeline")}</h2>
-                  <Link href={`/admin/works?creator=${id}`} className="text-sm text-accent hover:underline dark:text-accent">{t("creator_detail.view_all_works")}</Link>
+                  <Link href={`/admin/works?creator=${id}`} className="text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("creator_detail.view_all_works")}</Link>
                 </div>
                 <WorkGrid data={timeline.data} loading={timeline.isLoading} />
               </section>
@@ -497,7 +475,7 @@ export default function CreatorDetailPage() {
                           key={item.tag}
                           type="button"
                           onClick={() => openWorksTag(item.tag)}
-                          className="rounded-full border border-border bg-subtle px-2.5 py-1 text-xs font-medium text-accent hover:border-accent/40 hover:bg-accent-subtle dark:border-border dark:bg-subtle dark:text-accent dark:hover:bg-accent-subtle"
+                          className="rounded-full border border-[#d8dee4] bg-[#f6f8fa] px-2.5 py-1 text-xs font-medium text-[#0969da] hover:border-[#0969da]/40 hover:bg-[#ddf4ff] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#58a6ff] dark:hover:bg-[#1f6feb26]"
                           title={t("creator_detail.search_tag_title", { tag: item.tag })}
                         >
                           #{item.tag}
@@ -512,7 +490,7 @@ export default function CreatorDetailPage() {
                 <section className="card p-4">
                   <div className="mb-3 flex items-center justify-between">
                     <h2 className="text-base font-semibold">{t("creator_detail.posting_frequency")}</h2>
-                    <span className="text-xs text-muted">{t("creator_detail.months_count", { count: st.monthly_frequency.length })}</span>
+                    <span className="text-xs text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.months_count", { count: st.monthly_frequency.length })}</span>
                   </div>
                   <MonthStrip data={st.monthly_frequency} />
                 </section>
@@ -521,23 +499,23 @@ export default function CreatorDetailPage() {
               <section className="card p-4">
                 <div className="mb-4 flex items-center justify-between">
                   <h2 className="text-base font-semibold">{t("creator_detail.latest_works")}</h2>
-                  <Link href={`/admin/works?creator=${id}`} className="text-sm text-accent hover:underline dark:text-accent">{t("creator_detail.open_works")}</Link>
+                  <Link href={`/admin/works?creator=${id}`} className="text-sm text-[#0969da] hover:underline dark:text-[#58a6ff]">{t("creator_detail.open_works")}</Link>
                 </div>
                 {works.data?.items?.length ? (
                   <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
                     {works.data.items.map((w) => <WorkPreviewCard key={w.id} work={w} />)}
                   </div>
-                ) : <p className="text-sm text-muted">{t("creator_detail.no_imported_works")}</p>}
+                ) : <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.no_imported_works")}</p>}
               </section>
             </div>
           )}
 
           {activeTab === "repositories" && (
             <div className="space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-white p-3 dark:border-border dark:bg-surface">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-[#d8dee4] bg-white p-3 dark:border-[#30363d] dark:bg-[#161b22]">
                 <div>
                   <h2 className="text-base font-semibold">{t("creator_detail.repositories_title")}</h2>
-                  <p className="text-sm text-muted">{t("creator_detail.repositories_desc")}</p>
+                  <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.repositories_desc")}</p>
                 </div>
                 <Link href={subscriptionHref} className="btn-primary">{t("creator_detail.manage_subscription")}</Link>
               </div>
@@ -550,9 +528,9 @@ export default function CreatorDetailPage() {
                   [t("creator_detail.last_success"), repoSummary.lastSuccess ? fmt.dateTime(repoSummary.lastSuccess) : t("creator_detail.never"), t("creator_detail.source_sync")],
                 ].map(([label, value, sub]) => (
                   <div key={label} className="card p-3">
-                    <div className="truncate text-sm font-semibold text-fg">{value}</div>
-                    <div className="mt-1 text-[11px] font-medium uppercase text-muted">{label}</div>
-                    <div className="mt-0.5 text-xs text-placeholder dark:text-muted">{sub}</div>
+                    <div className="truncate text-sm font-semibold text-[#24292f] dark:text-[#e6edf3]">{value}</div>
+                    <div className="mt-1 text-[11px] font-medium uppercase text-[#57606a] dark:text-[#8b949e]">{label}</div>
+                    <div className="mt-0.5 text-xs text-[#8c959f] dark:text-[#6e7681]">{sub}</div>
                   </div>
                 ))}
               </div>
@@ -560,7 +538,7 @@ export default function CreatorDetailPage() {
                 <RepositoryCard key={repo.id} repo={repo} decision={decisionBySource.get(repo.id)} onSync={(r) => syncRepo.mutate(r as CreatorRepository)} onToggle={(r) => toggleRepo.mutate(r as CreatorRepository)}
                   syncPending={syncRepo.isPending} togglePending={toggleRepo.isPending} />
               )) : (
-                <div className="card p-8 text-center text-sm text-muted">
+                <div className="card p-8 text-center text-sm text-[#57606a] dark:text-[#8b949e]">
                   {t("creator_detail.no_subscription_urls")}
                 </div>
               )}
@@ -573,22 +551,22 @@ export default function CreatorDetailPage() {
 
           {activeTab === "links" && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between rounded-md border border-border bg-white p-3 dark:border-border dark:bg-surface">
+              <div className="flex items-center justify-between rounded-md border border-[#d8dee4] bg-white p-3 dark:border-[#30363d] dark:bg-[#161b22]">
                 <div>
                   <h2 className="text-base font-semibold">{t("creator_detail.external_links")}</h2>
-                  <p className="text-sm text-muted">{t("creator_detail.links_desc")}</p>
+                  <p className="text-sm text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.links_desc")}</p>
                 </div>
                 <button onClick={() => setShowAddLink(true)} className="btn-primary">{t("creator_detail.add_link_short")}</button>
               </div>
               {links.data?.length ? links.data.map((l: CreatorLinkType) => (
-                <div key={l.id} className="rounded-md border border-border bg-white p-4 dark:border-border dark:bg-surface">
+                <div key={l.id} className="rounded-md border border-[#d8dee4] bg-white p-4 dark:border-[#30363d] dark:bg-[#161b22]">
                   <div className="flex items-center gap-2">
                     <SourceBadge source={l.link_type} />
-                    <a href={l.url} target="_blank" rel="noopener noreferrer" className="truncate text-sm font-medium text-accent hover:underline dark:text-accent">{l.url}</a>
+                    <a href={l.url} target="_blank" rel="noopener noreferrer" className="truncate text-sm font-medium text-[#0969da] hover:underline dark:text-[#58a6ff]">{l.url}</a>
                   </div>
-                  <div className="mt-2 text-xs text-muted">{t("creator_detail.confidence_state", { value: l.confidence.toFixed(1), state: l.is_verified ? t("creator_detail.verified") : t("creator_detail.unverified") })}</div>
+                  <div className="mt-2 text-xs text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.confidence_state", { value: l.confidence.toFixed(1), state: l.is_verified ? t("creator_detail.verified") : t("creator_detail.unverified") })}</div>
                 </div>
-              )) : <div className="card p-8 text-center text-sm text-muted">{t("creator_detail.no_links")}</div>}
+              )) : <div className="card p-8 text-center text-sm text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.no_links")}</div>}
             </div>
           )}
         </section>
@@ -608,7 +586,7 @@ export default function CreatorDetailPage() {
           </div>
         </div>
       </Modal>
-    </PageShell>
+    </main>
   );
 }
 
@@ -623,13 +601,13 @@ function DanbooruAliases({ artistId, currentDisplay, onSelectAlias }: {
   });
 
   if (aliases.isLoading) {
-    return <div className="card p-4"><div className="h-12 animate-pulse rounded-md bg-subtle dark:bg-subtle" /></div>;
+    return <div className="card p-4"><div className="h-12 animate-pulse rounded-md bg-[#eaeef2] dark:bg-[#21262d]" /></div>;
   }
   if (!aliases.data?.artist) {
     return (
       <div className="card p-4">
         <h3 className="mb-2 text-sm font-semibold">{t("creator_detail.danbooru_ref")}</h3>
-        <p className="text-xs text-muted">Danbooru #{artistId}</p>
+        <p className="text-xs text-[#57606a] dark:text-[#8b949e]">Danbooru #{artistId}</p>
       </div>
     );
   }
@@ -644,7 +622,7 @@ function DanbooruAliases({ artistId, currentDisplay, onSelectAlias }: {
   return (
     <div className="card p-4">
       <h3 className="mb-2 text-sm font-semibold">{t("creator_detail.danbooru_ref")}</h3>
-      <p className="mb-3 text-xs text-muted">{t("creator_detail.danbooru_aliases_hint")}</p>
+      <p className="mb-3 text-xs text-[#57606a] dark:text-[#8b949e]">{t("creator_detail.danbooru_aliases_hint")}</p>
       <div className="flex flex-wrap gap-1.5">
         {names.map(({ label, type }) => {
           const isActive = currentDisplay === label;
@@ -653,10 +631,10 @@ function DanbooruAliases({ artistId, currentDisplay, onSelectAlias }: {
               title={t("creator_detail.set_display_name_as", { name: label })}
               className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
                 isActive
-                  ? "border-accent bg-accent-subtle text-accent dark:border-accent dark:bg-accent-subtle dark:text-accent"
+                  ? "border-[#0969da] bg-[#ddf4ff] text-[#0969da] dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#58a6ff]"
                   : type === "pixiv"
                     ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300"
-                    : "border-border bg-subtle text-muted hover:bg-subtle dark:border-border dark:bg-subtle dark:text-muted"
+                    : "border-[#d8dee4] bg-[#f6f8fa] text-[#57606a] hover:bg-[#eaeef2] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#8b949e]"
               }`}>
               {label}
             </button>

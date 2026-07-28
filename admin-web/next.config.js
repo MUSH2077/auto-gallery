@@ -1,10 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
-
-  // API proxying is handled by Next.js rewrites (server-side proxy).
-  // Do NOT add a catch-all route handler under src/app/api/v1/ — rewrites
-  // intercept those paths first, so any manual proxy there would be dead code.
   async rewrites() {
     return [
       {

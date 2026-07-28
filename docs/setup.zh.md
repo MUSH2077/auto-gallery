@@ -16,18 +16,6 @@
 
 两个端口均可通过 `.env` 中的 `BACKEND_PORT` 和 `ADMIN_WEB_PORT` 配置。
 
-任务页实时进度使用 WebSocket。默认会连接当前站点的 `/api/v1/ws`；如果你的 NAS 反向代理没有转发 WebSocket upgrade，或你直接通过 `admin-web` 端口访问页面，请在 `.env` 中设置公开地址后重新构建 admin-web：
-
-```bash
-# 直连 backend 端口
-NEXT_PUBLIC_WS_URL=ws://192.0.2.10:8818/api/v1/ws
-
-# HTTPS 反代
-NEXT_PUBLIC_WS_URL=wss://autogallery.example.com/api/v1/ws
-```
-
-如果 WebSocket 不可用，任务页会自动降级为 3 秒轮询，状态仍会更新。跨端口连接需要降级鉴权时，前端会通过普通 API 申请 30 秒一次性票据，不会把长期登录 JWT 放进 WebSocket URL。
-
 ## 安装步骤
 
 ### 1. 目录结构

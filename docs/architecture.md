@@ -16,20 +16,17 @@ auto-gallery is a layered Docker Compose application that downloads media from m
 ┌──────────────────▼──────────────────────────────┐
 │  Backend (FastAPI)                               │
 │  Routes → Services → Repositories → SQLAlchemy   │
-│  Providers: Pixiv · X · Iwara · Danbooru ·      │
-│   Weibo · Bilibili · Pinterest · LOFTER          │
-│   (+ Danbooru reference; local/manual planned)   │
+│  Providers: Pixiv, Iwara, X, Danbooru,          │
+│             Pinterest, LOFTER, local, manual     │
 │  Port 8818 (host) ← 8000 (container)             │
 │  JWT auth (access + refresh tokens)              │
 └──────┬────────────┬──────────────┬──────────────┘
        │            │              │
-       │   ┌────────▼────────────┐ │
-       │   │  Workers (RQ)       │ │
-       │   │  worker-download    │ │  gallery-dl subprocess
-       │   │  worker-import      │ │  metadata → DB pipeline
-       │   │  worker-operations  │ │  backup / reindex / disk-import
-       │   │  scheduler          │ │  subscription sync loop
-       │   └────────┬────────────┘ │
+       │   ┌────────▼────────┐     │
+       │   │  Worker (RQ)    │     │
+       │   │  gallery-dl     │     │
+       │   │  Import pipeline│     │
+       │   └────────┬────────┘     │
        │            │              │
 ┌──────▼────────────▼──────────────▼──────────────┐
 │  Data Layer                                      │
@@ -60,10 +57,6 @@ user ──< subscription ──< subscription_source
 user ──< album ──< album_work ── work
 user ──< download_job
 import_job (inherits scope via subscription)
-
-(operational / cross-cutting)
-task_run ──< task_event        # unified task envelope — see "Unified Task System"
-storage_artifact               # download → import ledger — see "Job Queue"
 ```
 
 ### Key relationships
@@ -103,27 +96,13 @@ Every provider implements:
 
 Providers never access the database. They receive raw metadata dicts and return data dicts. The service layer handles persistence.
 
-## Job Queue (RQ + Redis Stream)
+## Job Queue (RQ)
 
-auto-gallery uses RQ (Redis Queue) for downloads and batch imports, plus Redis Stream for event-driven imports. Key design choices:
+auto-gallery uses RQ (Redis Queue) as the job queue backend. Key design choices:
 
 - **Why RQ**: Simpler than Celery, uses Redis already in the stack. `download_job`/`import_job` database tables are the source of truth; the queue backend is replaceable.
-- **Per-source download queues**: Each source has its own RQ queue (`downloads:pixiv`, `downloads:danbooru`, etc.) for isolation — one slow source never blocks another. The `worker-download` container listens on all source queues.
-- **Durable RQ imports**: Download artifacts are recorded in PostgreSQL and a single RQ import pipeline claims work with leases, enabling restart-safe recovery without competing consumers.
 - **Job timeout**: `job_timeout=7200` (2 hours) on all enqueue calls to prevent RQ from killing long-running downloads (default is 180s).
-- **State machine** (canonical source: `backend/app/models/task_state.py`): `enqueued → downloading → downloaded → importing → complete`, with `paused`, `cancelled`, `failed`, and `stale` reachable from the non-terminal states. Old status strings (`pending` → `enqueued`) are accepted via a backward-compat map. A `downloaded → complete` short-circuit exists for jobs whose download produced no new metadata (all content already in the archive), so they never get stuck waiting on an import. Paused jobs skip execution; `cancelled` is terminal but keeps the DB record for audit. Stale detection uses Redis heartbeat keys (`task:{job_id}:heartbeat_ts` with 90s TTL) — if the key is absent and the job is past its retry grace period, it's marked stale. Partial import recovery on timeout/failure. `TaskEngine` (`services/task_engine.py`) is the single authority that validates every transition.
-- **Adaptive timeouts**: Retry count increments the stall and deadline timeouts (1.0x → 1.5x → 2.0x) to give later attempts more headroom.
-- **Proxy pre-flight**: Before launching gallery-dl, the worker runs DNS resolution + proxy connectivity checks (non-blocking diagnostics).
-
-## Unified Task System (`task_runs`)
-
-Downloads, imports, and admin operations (backup, reindex, disk import) are all surfaced through one user-facing task envelope so the admin **Tasks** page (`/admin/jobs`) has a single queue/progress/history view.
-
-- **`task_run`** (`models/task_run.py`): one row per trackable unit of work. `kind` (`download` / `import` / `admin`) and `subject_type` + `subject_id` loosely reference the authoritative domain row (`download_job`, `import_job`, …) — there is no FK, so a task can outlive or precede its domain record. Carries display fields (`title`, `source`, `source_url`), a progress snapshot (`progress_current`/`progress_total`/`progress_data`), `priority`, `attempts`, and `last_heartbeat_at` for stale detection. `parent_task_id` groups batch/child runs.
-- **`task_event`**: append-only audit trail of status transitions for a run; cascade-deleted with its parent (`ON DELETE CASCADE`).
-- **`TaskService`** (`services/tasks.py`): the write path — creates runs, records events, normalizes statuses, and merges download/import domain rows into the unified list.
-- **`TaskEngine`** (`services/task_engine.py`): the single authority for valid state transitions (pause / resume / cancel / retry / priority / batch-by-filter), publishing changes over Redis pub/sub for live WebSocket updates.
-- **Authoritative payloads stay in domain tables**: `task_run` is the envelope; `download_jobs` / `import_jobs` remain the source of truth for their own fields. Clearing tasks (Data Management) deletes `task_runs` **and** the domain job tables together.
+- **State machine**: `pending → downloading → downloaded → importing → complete | failed | stale | paused`. Paused jobs skip execution. Stale detection marks stuck downloading jobs after 2x timeout. Partial import recovery on timeout/failure.
 
 ## Data Flow
 
@@ -132,55 +111,34 @@ Downloads, imports, and admin operations (backup, reindex, disk import) are all 
 Scheduler (timezone-aware, configurable interval or daily schedule)
   → Check each subscription_source: is sync due?
     → create download_job (pending)
-      → Enqueue to per-source queue (downloads:{source})
       → Worker picks up job (downloading)
-        → Proxy/DNS pre-flight checks
         → Provider.build_gallerydl_config()
-        → subprocess.Popen(["gallery-dl", ...], shell=False)
-            with stall detection polling loop
+        → subprocess.run(["gallery-dl", "--write-metadata",
+            "--range", "1-{max_posts}", ...], shell=False)
         → Files land in DOWNLOAD_ROOT/{source}/{creator_name}/{source_work_id}/
-        → FileIndex registration (SQLite)
         → Job status = downloaded
-        → PostgreSQL storage_artifacts → RQ import job
+        → Enqueue import_job
 ```
 
 Key download details:
 - `--write-metadata`: Required flag — without it, import runner has no JSON metadata to parse.
 - `--range`: Limits download to the most recent N posts for incremental syncs. Configurable per subscription.
 - **Scheduler**: Timezone-aware via the `TIMEZONE` env var (defaults to UTC). Supports interval mode (sync every N hours) or scheduled mode (sync at specific times daily).
-- **Stall detection**: Polling loop checks progress every 4s; kills gallery-dl if no file output for `stall_timeout` seconds (default 120s, after 30s grace period). Adaptive timeout on retries.
-- **Three-layer timeout**: (1) gallery-dl internal `--retries`/`--abort`, (2) stall detection kills frozen subprocess, (3) overall deadline timeout.
 
 ### Import Flow
-
-**Event-driven (primary):**
 ```
-Download job completes → storage_artifacts batch UPSERT
-  → worker-import claims work with a lease
-  → FileIndex.query() finds new files by work_id (O(log n), not rglob)
-  → Provider.parse_work_source() → group files by source_work_id
+Worker picks up import_job
+  → Scan DOWNLOAD_ROOT/{source}/ for *.json metadata files (--write-metadata output)
+  → Provider.parse_work_source() → group JSONs by source_work_id
   → Provider.parse_source_creator() → upsert source_creator
   → Provider.parse_work_source() → upsert work_source
   → Create Asset + AssetSource from image files in work directory
   → Provider.parse_source_tags() → upsert tags + work_source_tags
   → Generate thumbnails (pyvips WebP) in LIBRARY_ROOT/{source}/{creator_name}/{source_work_id}/
   → Write metadata.json to LIBRARY_ROOT/{source}/{creator_name}/{source_work_id}/
-  → FileIndex.mark_imported()
-  → mark artifact work done/failed
-```
-
-**Batch import (RQ, for Danbooru reference):**
-```
-Worker picks up import_job from imports queue
-  → FileIndex.query_unimported() → new files since last scan
-  → Same parse → upsert → thumbnail → metadata.json pipeline
+  → Delete processed JSON files (image files remain in DOWNLOAD_ROOT)
   → Job status = complete
 ```
-
-Key details:
-- JSON metadata files are deleted after processing; image files remain in DOWNLOAD_ROOT.
-- FileIndex (SQLite) replaces rglob scans — O(log n) lookups by work_id instead of O(n) filesystem traversal.
-- Consumer group `import-workers` ensures at-least-once delivery: if a consumer crashes mid-import, the pending message is reclaimed by another consumer.
 
 ### Danbooru Reference Flow
 ```
@@ -190,46 +148,6 @@ Admin triggers Danbooru artist import
   → Create creator_link suggestions (status=pending)
   → Admin reviews: approve → bind to creator, reject → discard
 ```
-
-## Reliability & Recovery
-
-Because gallery-dl writes directly to disk and the download → import handoff spans two queues, several recovery paths keep the database in sync with what is actually on disk. All are idempotent and never delete or re-download.
-
-- **Import from disk** (`services/disk_import.py`, `POST /api/v1/admin/library/import-from-disk`): scans `DOWNLOAD_ROOT/{source}/` and imports files that exist on disk but were never recorded (ledger state ≠ `done`), under a synthetic `recovery` download_job. `services/disk_identity.py` first provisions a real `creator → subscription → subscription_source → source_creator` chain from local metadata (Danbooru enrichment is best-effort, with a metadata-only fallback) so recovered works attach to the right creator. Runs on the `operations` queue; a Redis lock (`library:disk-import:active`) prevents concurrent runs.
-- **Import pipeline recovery** (`services/import_recovery.py`): conservative auto-repair of safe gaps — e.g. re-enqueues an import for `downloaded` jobs that already have pending metadata. Read-only health is reported by `services/pipeline_health.py`.
-- **Creator auto-relink** (`services/creator_reconcile.py`): each subscription-sync scan links orphaned `source_creators` (`creator_id IS NULL`) to their subscription's creator by identity match. It mirrors `import_runner`'s auto-link rules, so an ambiguous bookmark/repost feed is never mislinked.
-- **Worker startup orphan reconciliation**: on startup, jobs stuck in `downloading`/`importing` are marked `stale`, and on-disk directories with no matching job are picked up for import.
-
-## Gitllery — On-Disk Curation History
-
-A one-way, git-isomorphic projection of the authoritative curation DAG (`curation_commits` + `curation_changes`, plus the `*_curation_state` tables) onto disk, per source-creator. **PostgreSQL stays authoritative** — the on-disk repo is a read-optimized mirror, never a write path back into the DB. Written best-effort, synchronously, after each curation commit (e.g. `purge`, `revert`, `curate_creator`); failures are swallowed and logged (`project_commit_safe`) so a disk-write hiccup never breaks the curation API response. Catch-up and verification close any gap.
-
-- **Layout**: `LIBRARY_ROOT/{source}/{creator_dir}/.gitllery/` — sibling of that creator's existing library files, never the library root itself (path containment via `Path.relative_to`, same rule as the rest of `LIBRARY_ROOT`). Contains:
-  - `HEAD` — symbolic ref, always `ref: refs/heads/main`
-  - `refs/heads/main` — current commit hash
-  - `objects/{aa}/{rest}` — content-addressed object store, git-style 2-char shard prefix
-  - `logs/HEAD` — append-only reflog (one JSON line per `set_head`: old/new hash, actor, timestamp, message)
-  - `index.json` — materialized worktree state for fast status checks (`head`, `tree`, `tree_entries`, `entities`)
-  - `config.json` — repo metadata (`schema_version`, `repository_id`, `source`, `creator_id`, `source_creator_id`, `creator_dir`, hash/compression algorithm)
-  - `description` — human-readable label written at init
-
-- **Object model**: every object is canonical JSON (sorted keys, compact separators) compressed with zlib, addressed by the sha256 of the *uncompressed* canonical bytes.
-  - **blob** — one entity-state snapshot (`subject_type`, `subject_id`, `state`)
-  - **tree** — worktree manifest: map of `{subject_type}/{subject_id}` → blob hash
-  - **commit** — one projected curation commit: `tree` hash, repo-local `parent` hash (linked list, not the DB commit's parent), `db_commit_id` (links back to `curation_commits.id`), actor/message/trigger/dedupe_key/reverts/occurred_at/stats, and the full list of changes applied
-
-- **Operations** (`GitlleryService`, `backend/app/services/gitllery/`):
-  - **`status`** — per-repository `behind` (pending DB commits not yet projected), `object_integrity_ok` (hash-chain verification from HEAD through tree and blobs), and `drift` (entity states where the on-disk snapshot disagrees with current `*_curation_state`, e.g. a `visibility`/`storage_state` changed outside the projection)
-  - **`reconcile`** — runs catch-up projection (`project_pending`) for missing commits, then returns the refreshed `status`
-  - **`backfill`** — ensures every source-creator repo exists, then projects the entire curation DAG from scratch (used for first-sync / historical seeding)
-  - Per-repository writes are serialized with a Redis lock (`gitllery:{repository_id}`) so concurrent projection attempts never race on the same `.gitllery` directory
-
-- **API**: all endpoints live under the curation router (`RequireAdmin`), at `/api/v1/curation/gitllery/...`:
-  - `GET /gitllery/status`, `GET /repositories/{repository_id}/gitllery/status`
-  - `POST /gitllery/reconcile`, `POST /gitllery/backfill`
-  - `GET /repositories/{repository_id}/gitllery/log`
-
-  The admin-web **GitlleryPanel** surfaces clean/behind state and a one-click reconcile action.
 
 ## Authentication
 
@@ -333,7 +251,6 @@ Key environment variables used by the application:
 | `ADMIN_WEB_PORT` | `13000` | Host port for admin web (maps to container 3000) |
 | `CORS_ORIGINS` | `http://localhost:13000` | Allowed CORS origins |
 | `BACKEND_INTERNAL_URL` | `http://backend:8000` | Internal URL for admin-web SSR to reach backend |
-| `NEXT_PUBLIC_WS_URL` | current site `/api/v1/ws` | Public browser WebSocket URL for live job updates |
 | `DATABASE_URL` | (required) | PostgreSQL connection string |
 | `REDIS_URL` | (required) | Redis connection string |
 | `SECRET_KEY` | (required) | JWT signing secret |
@@ -377,8 +294,7 @@ Endpoints include:
 - `GET /import-progress` — real-time import progress polling
 - `POST /proxy/test` — test proxy connectivity with gallery-dl
 - `POST /scheduler/sync-now` — trigger immediate subscription sync
-- `POST /library/import-from-disk` — idempotently import on-disk download files into the DB without re-downloading (operations queue)
-- `POST /clear/{entity}` — clear all records of a given entity type (`jobs`/`all` also clear `task_runs`)
+- `POST /clear/{entity}` — clear all records of a given entity type
 - `GET /dedup` / `PUT /dedup` — deduplication settings
 - `GET /merge-candidates` — list works flagged for potential merge
 - `POST /reindex` — trigger full Meilisearch reindex
@@ -433,23 +349,14 @@ Endpoints include:
 - `POST /{id}/pause` — pause a job
 - `POST /{id}/resume` — resume a paused job
 - `POST /{id}/retry` — retry a specific failed job
-- `POST /{id}/cancel` — cancel a job (terminal, keeps record) — TaskEngine
-- `POST /{id}/priority` — change queue priority — TaskEngine
-- `POST /batch-by-filter` — apply an action to all jobs matching a filter — TaskEngine
-- `GET /{id}/progress` — live progress snapshot
-- `GET /{id}/pipeline` — per-stage pipeline view
 
 ### `/api/v1/import-jobs`
-Import job queue and post-import scanning. List entries are enriched with parent download-job context (source, url, subscription/creator) so they align with the download list.
+Import job queue and post-import scanning.
 
 Endpoints include:
-- `GET /` — list import jobs (enriched with source/subscription/creator)
+- `GET /` — list import jobs
 - `GET /{id}` — import job detail with errors
 - `POST /{id}/retry` — retry a failed import
-- `POST /{id}/cancel` — cancel an import — TaskEngine
-- `POST /{id}/priority` — change queue priority — TaskEngine
-- `POST /batch-by-filter` — apply an action to all imports matching a filter — TaskEngine
-- `GET /{id}/progress` — live progress snapshot
 - `POST /scan` — scan for unimported downloads and create import jobs
 
 ### `/api/v1/works`
