@@ -71,8 +71,8 @@ repository after GitHub Code Security is enabled.
 
 ## Actions
 
-- Allow actions from GitHub and verified creators, plus actions explicitly
-  used by this repository.
+- Allow GitHub-owned actions and only the explicitly allow-listed third-party
+  actions used by this repository.
 - Require every action to be pinned to a full-length commit SHA.
 - Require approval for workflows from first-time external contributors.
 - Keep the default workflow token read-only.
