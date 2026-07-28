@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
         env:
           POSTGRES_USER: autogallery
           POSTGRES_PASSWORD: test-db
@@ -32,7 +32,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       redis:
-        image: redis:7
+        image: redis:7@sha256:595cc6f2bb3af6e03347b90deb6123c6aa2c81dea05ce08128de8a174b6ac67b
         ports:
           - 6379:6379
         options: >-
@@ -51,12 +51,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvips-dev ffmpeg
       - name: Install Python dependencies
         working-directory: backend
-        run: pip install -r requirements.txt
+        run: pip install --require-hashes -r requirements.txt
       - name: Audit Python dependencies
-        working-directory: backend
-        run: |
-          pip install pip-audit==2.10.1
-          pip-audit -r requirements.txt
+        uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
+        with:
+          inputs: backend/requirements.txt
+          require-hashes: true
       - name: Lint backend
         working-directory: backend
         run: ruff check app tests

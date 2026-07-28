@@ -58,7 +58,7 @@ docker compose up -d postgres redis meilisearch
 cd backend
 python -m venv venv
 source venv/bin/activate
-python -m pip install -r requirements.txt
+python -m pip install --require-hashes -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -89,7 +89,8 @@ Keep provider-sensitive packages such as gallery-dl pinned.
 ```bash
 cd backend
 python -m pip install pip-tools
-pip-compile --resolver=backtracking --allow-unsafe \
+pip-compile --resolver=backtracking --allow-unsafe --generate-hashes \
+  --no-emit-index-url --no-strip-extras \
   --output-file requirements.txt requirements.in
 ```
 

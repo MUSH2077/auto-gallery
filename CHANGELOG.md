@@ -35,5 +35,7 @@ practical pre-1.0 semantic versioning.
 
 - Added privacy-safe release checks, private vulnerability reporting guidance,
   CodeQL analysis, Dependabot coverage, and protected-branch templates.
+- Pinned container bases and CI service images by digest, enforced hashed Python
+  dependency installs, and narrowed Scorecard write permissions to its job.
 
 [Unreleased]: https://github.com/MUSH2077/auto-gallery/commits/master

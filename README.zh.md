@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/MUSH2077/auto-gallery/actions/workflows/ci.yml/badge.svg)](https://github.com/MUSH2077/auto-gallery/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/MUSH2077/auto-gallery/actions/workflows/codeql.yml/badge.svg)](https://github.com/MUSH2077/auto-gallery/actions/workflows/codeql.yml)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/MUSH2077/auto-gallery/badge)](https://securityscorecards.dev/viewer/?uri=github.com/MUSH2077/auto-gallery)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/MUSH2077/auto-gallery/badge)](https://scorecard.dev/viewer/?uri=github.com/MUSH2077/auto-gallery)
 [![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
 [![Status: pre-1.0 beta](https://img.shields.io/badge/status-pre--1.0%20beta-f59e0b)](CHANGELOG.md)
 

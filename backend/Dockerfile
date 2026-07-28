@@ -1,4 +1,4 @@
-ARG PYTHON_BASE=python:3.12.13-slim-bookworm
+ARG PYTHON_BASE=python:3.12.13-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
 FROM ${PYTHON_BASE}
 
 WORKDIR /app
@@ -15,9 +15,9 @@ RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.l
 COPY requirements.txt .
 ARG PIP_INDEX_URL
 RUN if [ -n "$PIP_INDEX_URL" ]; then \
-      pip install --no-cache-dir -i "$PIP_INDEX_URL" -r requirements.txt; \
+      pip install --no-cache-dir --require-hashes -i "$PIP_INDEX_URL" -r requirements.txt; \
     else \
-      pip install --no-cache-dir -r requirements.txt; \
+      pip install --no-cache-dir --require-hashes -r requirements.txt; \
     fi
 
 # Patch gallery-dl twitter extractor: disable SearchTimeline fallback (query ID broken as of 2025)

@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-autogallery}
       POSTGRES_USER: ${POSTGRES_USER:-autogallery}
@@ -17,7 +17,7 @@ services:
     mem_limit: 384M
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     # noeviction: this redis also backs RQ job queues — evicting keys under
     # memory pressure would silently drop queued jobs. Overflow must error
     # loudly instead. 96mb keeps headroom under the 128M container limit.
@@ -36,7 +36,7 @@ services:
     mem_limit: 128M
 
   meilisearch:
-    image: getmeili/meilisearch:v1.12
+    image: getmeili/meilisearch:v1.12@sha256:c9fac23131cca4db95173d41cc50fd5639121ee381795528fdd7522d7978a7b8
     environment:
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
       MEILI_ENV: ${MEILI_ENV:-production}

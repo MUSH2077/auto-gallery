@@ -81,3 +81,17 @@ updates:
       day: "monday"
       time: "05:20"
       timezone: "UTC"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "build(deps)"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:40"
+      timezone: "UTC"

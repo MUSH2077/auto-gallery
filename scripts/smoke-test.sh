@@ -19,10 +19,15 @@ echo "=== auto-gallery Smoke Test ==="
 echo "  Target: $BASE"
 
 # ── Auth ──
-TOKEN=$(curl -sf -X POST "$BASE/api/v1/auth/login" \
+LOGIN_PAYLOAD="$(SMOKE_ADMIN_PASS="$ADMIN_PASS" python3 -c \
+    'import json, os; print(json.dumps({"username": "admin", "password": os.environ["SMOKE_ADMIN_PASS"]}))')"
+LOGIN_RESPONSE="$(curl -sf -X POST "$BASE/api/v1/auth/login" \
     -H 'Content-Type: application/json' \
-    -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}" 2>/dev/null \
-    | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || true)
+    -d "$LOGIN_PAYLOAD" 2>/dev/null || true)"
+TOKEN="$(python3 -c \
+    'import json, sys; print(json.load(sys.stdin).get("access_token", ""))' \
+    2>/dev/null <<< "$LOGIN_RESPONSE" || true)"
+unset LOGIN_PAYLOAD LOGIN_RESPONSE
 
 if [ -z "$TOKEN" ]; then
     fail "Login" "bad password — set SMOKE_PASS or check .env"
