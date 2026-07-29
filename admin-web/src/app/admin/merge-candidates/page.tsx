@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
 export default function LegacyMergeCandidatesPage() {
-  redirect("/admin/dedup");
+  redirect("/admin/dedup?status=pending");
 }

@@ -380,7 +380,7 @@ Endpoints include:
 - `POST /library/import-from-disk` — idempotently import on-disk download files into the DB without re-downloading (operations queue)
 - `POST /clear/{entity}` — clear all records of a given entity type (`jobs`/`all` also clear `task_runs`)
 - `GET /dedup` / `PUT /dedup` — deduplication settings
-- `GET /merge-candidates` — list works flagged for potential merge
+- `GET /merge-candidates` — deprecated compatibility alias returning pending asset-reconciliation cases; new clients use `/api/v1/admin/dedup/cases`
 - `POST /reindex` — trigger full Meilisearch reindex
 
 ### `/api/v1/creators`

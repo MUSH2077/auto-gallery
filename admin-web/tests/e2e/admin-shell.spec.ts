@@ -74,6 +74,31 @@ const longDownloadJob = {
   error_log: null,
 };
 
+const providerFixtures = [
+  {
+    source_name: "pixiv",
+    display_name: "Pixiv",
+    capabilities: {
+      can_download: true,
+      can_import_local: false,
+      supports_gallerydl: true,
+      supports_tags: true,
+      is_reference_only: false,
+    },
+  },
+  {
+    source_name: "danbooru_reference",
+    display_name: "Danbooru Reference",
+    capabilities: {
+      can_download: false,
+      can_import_local: false,
+      supports_gallerydl: false,
+      supports_tags: false,
+      is_reference_only: true,
+    },
+  },
+] as const;
+
 const REPRESENTATIVE_ROUTES = [
   "/admin",
   "/admin/creators",
@@ -344,7 +369,14 @@ async function installFixtureRoutes(context: BrowserContext) {
     } else if (path === "/api/v1/users") {
       await route.fulfill({ json: [] });
     } else if (path === "/api/v1/system/health") {
-      await route.fulfill({ json: { services: {}, version: "test" } });
+      await route.fulfill({
+        json: {
+          status: "ok",
+          services: { postgres: "up", redis: "up", meilisearch: "up" },
+          version: "test",
+          business: {},
+        },
+      });
     } else if (path === "/api/v1/admin/auth-status") {
       await route.fulfill({ json: { summary: { total: 0, healthy: 0, unhealthy: 0, unknown: 0 }, sources: [] } });
     } else if (path === "/api/v1/admin/settings") {
@@ -381,6 +413,10 @@ async function installFixtureRoutes(context: BrowserContext) {
           pinterest: {}, lofter: {}, weibo: {}, bilibili: {}, sources: {},
         },
       });
+    } else if (path === "/api/v1/admin/dedup/cases") {
+      await route.fulfill({
+        json: { items: [], total: 0, offset: 0, limit: 25 },
+      });
     } else if (path === "/api/v1/curation/commits") {
       await route.fulfill({ json: { items: [], total: 0 } });
     } else if (path === "/api/v1/curation/purge/preview") {
@@ -405,7 +441,7 @@ async function installFixtureRoutes(context: BrowserContext) {
     } else if (path === "/api/v1/tags") {
       await route.fulfill({ json: [] });
     } else if (path === "/api/v1/sources") {
-      await route.fulfill({ json: { sources: [] } });
+      await route.fulfill({ json: { sources: providerFixtures } });
     } else if (path === "/api/v1/system/logs") {
       await route.fulfill({ json: { entries: [], total: 0, levels: ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] } });
     } else if (path.includes("/notifications")) {
@@ -466,6 +502,11 @@ test("desktop sidebar, contextual navigation, and command palette remain usable"
   await expect(dialog).toBeVisible();
   await dialog.getByRole("textbox").fill("creator");
   await expect(dialog.getByRole("option").first()).toBeVisible();
+  await dialog.getByRole("textbox").fill("merge candidate");
+  await expect(dialog.getByRole("option", { name: /^Asset Deduplication\b/ })).toBeVisible();
+  await expect(dialog.getByRole("option", { name: /^Merge Candidates\b/ })).toHaveCount(0);
+  await dialog.getByRole("textbox").fill("source provider");
+  await expect(dialog.getByRole("option", { name: /^System & Sources\b/ })).toBeVisible();
   await dialog.getByRole("textbox").fill("notifications");
   await expect(dialog.getByRole("option", { name: /^Notifications\b/ })).toHaveCount(0);
   await page.screenshot({ path: "/tmp/auto-gallery-command-palette.png", fullPage: false });
@@ -551,6 +592,10 @@ for (const route of QUALITY_ROUTES) {
     await expect(page.locator("#main-content")).toBeVisible();
     await expect(page.getByRole("main")).toHaveCount(1);
     await expect(page.locator("[data-nextjs-dialog-overlay]")).toHaveCount(0);
+    if (route === "/admin/sources") {
+      await expect(page.getByRole("heading", { level: 3, name: "Pixiv" })).toBeVisible();
+      await expect(page.locator("#main-content .page-item").last()).toHaveCSS("opacity", "1");
+    }
     expect(pageErrors, `${route} should not throw a framework error`).toEqual([]);
     const mainText = (await page.locator("#main-content").innerText()).replaceAll("中文", "");
     expect(mainText, `${route} should not leak Chinese copy in English mode`).not.toMatch(/[\u3400-\u9fff]/u);
@@ -588,6 +633,10 @@ for (const route of QUALITY_ROUTES) {
     await expect(page.locator("#main-content")).toBeVisible();
     await expect(page.getByRole("main")).toHaveCount(1);
     await expect(page.locator("[data-nextjs-dialog-overlay]")).toHaveCount(0);
+    if (route === "/admin/sources") {
+      await expect(page.getByRole("heading", { level: 3, name: "Pixiv" })).toBeVisible();
+      await expect(page.locator("#main-content .page-item").last()).toHaveCSS("opacity", "1");
+    }
     expect(pageErrors, `${route} should not throw a framework error`).toEqual([]);
     expect(missingTranslations, `${route} should not use raw translation keys`).toEqual([]);
     if (route === "/admin/settings/logs") {
@@ -607,13 +656,147 @@ for (const route of QUALITY_ROUTES) {
   });
 }
 
-test("legacy task and dedup routes redirect to their maintained destinations", async ({ page }) => {
+test("system and source tabs fetch only their active data and retain provider tools", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  let healthRequests = 0;
+  let sourceRequests = 0;
+  await page.route("**/api/v1/system/health", async (route) => {
+    healthRequests += 1;
+    await route.fulfill({
+      json: {
+        status: "ok",
+        services: { postgres: "up", redis: "up", meilisearch: "up" },
+        version: "test",
+        business: {},
+      },
+    });
+  });
+  await page.route("**/api/v1/sources", async (route) => {
+    sourceRequests += 1;
+    await route.fulfill({ json: { sources: providerFixtures } });
+  });
+
+  await page.goto("/admin/system");
+  await expect(page.getByRole("heading", { level: 1, name: "System & Sources" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Service Status" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Sources" })).toBeVisible();
+  await expect.poll(() => healthRequests).toBeGreaterThan(0);
+  expect(sourceRequests).toBe(0);
+  await page.screenshot({ path: "/tmp/auto-gallery-system-services.png", fullPage: false });
+
+  await page.getByRole("tab", { name: "Sources" }).click();
+  await expect(page).toHaveURL(/\/admin\/system\?tab=sources$/);
+  await expect(page.getByRole("tab", { name: "Sources" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("heading", { level: 3, name: "Pixiv" })).toBeVisible();
+  await expect.poll(() => sourceRequests).toBeGreaterThan(0);
+
+  const pixivCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Pixiv" }) });
+  await pixivCard.getByRole("button", { name: /Try default URL/ }).click();
+  await pixivCard.getByRole("textbox", { name: "Test URL Validation" }).press("Enter");
+  await expect(pixivCard.getByRole("status")).toContainText("matches expected Pixiv pattern");
+
+  const healthRequestsBeforeRefresh = healthRequests;
+  const sourceRequestsBeforeRefresh = sourceRequests;
+  const refreshButton = page.getByRole("button", { name: "Refresh" });
+  await refreshButton.click();
+  await expect.poll(() => sourceRequests).toBeGreaterThan(sourceRequestsBeforeRefresh);
+  await expect(refreshButton).toBeEnabled();
+  expect(healthRequests).toBe(healthRequestsBeforeRefresh);
+
+  const axe = await new AxeBuilder({ page })
+    .include("#main-content")
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+    .analyze();
+  expect(axe.violations).toEqual([]);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: "/tmp/auto-gallery-system-sources.png", fullPage: true });
+});
+
+test("system and source tabs preserve module-level permissions", async ({ page }) => {
+  let healthRequests = 0;
+  let sourceRequests = 0;
+  await page.route("**/api/v1/system/health", async (route) => {
+    healthRequests += 1;
+    await route.fulfill({ json: { status: "ok", services: {}, version: "test", business: {} } });
+  });
+  await page.route("**/api/v1/sources", async (route) => {
+    sourceRequests += 1;
+    await route.fulfill({ json: { sources: providerFixtures } });
+  });
+
+  await page.route("**/api/v1/auth/me", (route) => route.fulfill({
+    json: {
+      ...me,
+      is_admin: false,
+      permissions: ["system"],
+      modules: { system: true, subscriptions: false },
+    },
+  }));
+  await page.goto("/admin/system?tab=sources");
+  await expect(page).toHaveURL(/\/admin\/system\?tab=services$/);
+  await expect(page.getByRole("tab", { name: "Service Status" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Sources" })).toHaveCount(0);
+  await expect.poll(() => healthRequests).toBeGreaterThan(0);
+  expect(sourceRequests).toBe(0);
+
+  await page.route("**/api/v1/auth/me", (route) => route.fulfill({
+    json: {
+      ...me,
+      is_admin: false,
+      permissions: ["subscriptions"],
+      modules: { system: false, subscriptions: true },
+    },
+  }));
+  await page.goto("/admin/sources");
+  await expect(page).toHaveURL(/\/admin\/system\?tab=sources$/);
+  await expect(page.getByRole("tab", { name: "Sources" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Service Status" })).toHaveCount(0);
+  await expect(page.locator("#admin-sidebar").getByRole("link", { name: "System & Sources" })).toBeVisible();
+  const healthRequestsBeforeSourceOnly = healthRequests;
+  await expect.poll(() => sourceRequests).toBeGreaterThan(0);
+  expect(healthRequests).toBe(healthRequestsBeforeSourceOnly);
+});
+
+for (const viewport of [
+  { name: "tablet", width: 768, height: 1024 },
+  { name: "mobile", width: 390, height: 844 },
+] as const) {
+  test(`source registry reflows at ${viewport.name} width`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/admin/system?tab=sources");
+    await expect(page.getByRole("tab", { name: "Sources" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("heading", { level: 3, name: "Pixiv" })).toBeVisible();
+    await expectNoPageOverflow(page);
+    if (viewport.name === "mobile") {
+      await page.screenshot({ path: "/tmp/auto-gallery-system-sources-mobile.png", fullPage: true });
+    }
+  });
+}
+
+test("dedup status is addressable and browser history restores the selected review queue", async ({ page }) => {
+  await page.goto("/admin/dedup?status=deferred");
+  await expect(page.getByText("0 candidates in the current view")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Deferred" })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "Pending" }).click();
+  await expect(page).toHaveURL(/\/admin\/dedup\?status=pending$/);
+  await expect(page.getByRole("tab", { name: "Pending" })).toHaveAttribute("aria-selected", "true");
+  await page.goBack();
+  await expect(page).toHaveURL(/\/admin\/dedup\?status=deferred$/);
+  await expect(page.getByRole("tab", { name: "Deferred" })).toHaveAttribute("aria-selected", "true");
+});
+
+test("legacy task, source, and merge routes redirect to their maintained destinations", async ({ page }) => {
   await page.goto("/admin/import-jobs");
   await expect(page).toHaveURL(/\/admin\/jobs\?tab=imports$/);
   await expect(page.locator("[data-page-shell]")).toBeVisible();
 
+  await page.goto("/admin/sources");
+  await expect(page).toHaveURL(/\/admin\/system\?tab=sources$/);
+  await expect(page.getByRole("tab", { name: "Sources" })).toHaveAttribute("aria-selected", "true");
+
   await page.goto("/admin/merge-candidates");
-  await expect(page).toHaveURL(/\/admin\/dedup$/);
+  await expect(page).toHaveURL(/\/admin\/dedup\?status=pending$/);
+  await expect(page.getByRole("tab", { name: "Pending" })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator("[data-page-shell]")).toBeVisible();
 });
 
@@ -625,6 +808,11 @@ test("restricted direct access renders the standard shell permission state", asy
   await expect(page.locator("[data-page-shell]")).toBeVisible();
   await expect(page.getByRole("heading", { name: "You don't have permission to access this page" })).toBeVisible();
   await expect(page.getByRole("main")).toHaveCount(1);
+
+  await page.goto("/admin/system");
+  await expect(page.locator("[data-page-shell]")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "You don't have permission to access this page" })).toBeVisible();
+  await expect(page.getByRole("tab")).toHaveCount(0);
 });
 
 test("route changes focus main content and dismissible menus restore trigger focus", async ({ page }) => {

@@ -7,6 +7,7 @@ import { ArrowRight, Search } from "lucide-react";
 import {
   ADMIN_LINK_MODULE,
   ADMIN_NAV_LINKS,
+  hasAdminPermission,
   type AdminNavLink,
 } from "@/lib/adminNavigation";
 import { useT } from "@/lib/i18n";
@@ -33,8 +34,7 @@ export default function CommandPalette({
   const availableLinks = useMemo(() => ADMIN_NAV_LINKS.filter((item) => {
     if (item.topbarOnly) return false;
     if (item.adminOnly && !isAdmin) return false;
-    const module = ADMIN_LINK_MODULE[item.href];
-    return !module || has(module);
+    return hasAdminPermission(ADMIN_LINK_MODULE[item.href], has);
   }), [has, isAdmin]);
 
   const items = useMemo<PaletteItem[]>(() => {

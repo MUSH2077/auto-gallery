@@ -14,13 +14,21 @@ import { useT } from "@/lib/i18n";
  * While the `me` query is loading, renders nothing to avoid a 403 flash for
  * users who do have access.
  */
-export default function PermissionGuard({ module, children }: { module: string; children: ReactNode }) {
+type PermissionGuardProps = {
+  children: ReactNode;
+} & (
+  | { module: string; anyOf?: never }
+  | { module?: never; anyOf: readonly string[] }
+);
+
+export default function PermissionGuard({ module, anyOf, children }: PermissionGuardProps) {
   const t = useT();
   const { has, isLoading } = usePermissions();
+  const requirements = anyOf || (module ? [module] : []);
 
   if (isLoading) return null;
 
-  if (!has(module)) {
+  if (!requirements.some((requirement) => has(requirement))) {
     return (
       <PageShell>
         <EmptyState

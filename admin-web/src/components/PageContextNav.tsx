@@ -8,6 +8,7 @@ import {
   ADMIN_CONTEXT_LINKS,
   ADMIN_LINK_MODULE,
   findAdminNavLink,
+  hasAdminPermission,
   pathnameMatches,
 } from "@/lib/adminNavigation";
 import { useT } from "@/lib/i18n";
@@ -22,8 +23,7 @@ export default function PageContextNav() {
 
   const links = ADMIN_CONTEXT_LINKS[current.context].filter((item) => {
     if (item.adminOnly && !isAdmin) return false;
-    const module = ADMIN_LINK_MODULE[item.href];
-    return !module || has(module);
+    return hasAdminPermission(ADMIN_LINK_MODULE[item.href], has);
   });
   if (links.length <= 1) return null;
 

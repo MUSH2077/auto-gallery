@@ -78,6 +78,52 @@ Validation:
 
 final result: passed
 
+# System and sources consolidation QA
+
+## Scope and evidence
+
+- Unified route: `/admin/system?tab=services|sources`.
+- Compatibility routes: `/admin/sources` and `/admin/merge-candidates`.
+- Permission profiles: administrator, `system` only, `subscriptions` only,
+  and a library-only user with neither module.
+- Viewports: 1440×960, 768×1024, and 390×844.
+- Theme and locale combinations: English dark theme and Chinese light theme.
+- All API and media requests used fictional, intercepted fixtures.
+
+## Route and interaction matrix
+
+| Area | Result | Notes |
+|---|---|---|
+| Service Status | Passed | Shows Backend, Postgres, Redis, Meilisearch, version, and update time without loading source data. |
+| Sources | Passed | Retains provider cards, translated descriptions, capability badges, URL examples, Enter/button validation, and the collapsible matrix. |
+| Permission isolation | Passed | `system` users only receive the service tab and health request; `subscriptions` users only receive the sources tab and providers request; invalid or unauthorized deep links select the first permitted tab. |
+| Refresh isolation | Passed | Refresh only refetches the active tab's query. |
+| Legacy source route | Passed | `/admin/sources` resolves to `/admin/system?tab=sources` and remains usable through browser history. |
+| Asset deduplication | Passed | Status tabs are URL-addressable, history restores the selected queue, and the header reports the filtered candidate total. |
+| Legacy merge route | Passed | `/admin/merge-candidates` resolves to `/admin/dedup?status=pending`; no duplicate command or context-navigation entry remains. |
+| Responsive layout | Passed | Provider cards stack without root overflow at tablet and mobile widths; the capability matrix keeps its own horizontal scroll boundary. |
+| Accessibility | Passed | The full route matrix reports zero automated Axe A/AA violations; tab semantics, labels, status announcements, keyboard validation, and 44px primary targets pass. |
+| Localization | Passed | Provider explanations and navigation labels render from key-equivalent English and Chinese dictionaries without raw keys or cross-language fallback. |
+
+- P1: Dark-mode primary-button hover used a lighter blue with only 3.67:1
+  white-text contrast. The hover token now uses the accessible darker blue and
+  the refreshing control preserves its accessible fill instead of reducing
+  opacity; both loading and focused hover-state Axe checks pass.
+
+No open P0, P1, or P2 findings remain.
+
+Validation:
+
+- `npm run check:i18n`
+- `npm run typecheck`
+- `npm run build`
+- complete Playwright suite: 103 passed, 1 documentation screenshot test
+  skipped by its explicit environment gate
+- `scripts/privacy-scan.sh`
+- `git diff --check`
+
+final result: passed
+
 # Primary admin navigation and layout QA
 
 ## Scope and evidence

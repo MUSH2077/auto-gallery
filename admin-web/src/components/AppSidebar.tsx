@@ -12,8 +12,6 @@ import {
   Copy,
   Database,
   GitBranch,
-  GitMerge,
-  Globe2,
   Home,
   Image,
   Inbox,
@@ -30,6 +28,7 @@ import { api, queryKeys } from "@/lib/api";
 import {
   ADMIN_LINK_MODULE,
   ADMIN_NAV_GROUPS,
+  hasAdminPermission,
   pathnameMatches,
   type AdminIconName,
 } from "@/lib/adminNavigation";
@@ -44,8 +43,6 @@ const ICONS: Record<AdminIconName, LucideIcon> = {
   upload: Upload,
   branch: GitBranch,
   copy: Copy,
-  merge: GitMerge,
-  globe: Globe2,
   person: UserRound,
   inbox: Inbox,
   code: Code2,
@@ -144,8 +141,7 @@ export default function AppSidebar({
     .map((group) => ({
       ...group,
       links: group.links.filter(({ href }) => {
-        const module = ADMIN_LINK_MODULE[href];
-        return !module || has(module);
+        return hasAdminPermission(ADMIN_LINK_MODULE[href], has);
       }),
     }))
     .filter((group) => group.links.length > 0);

@@ -5,8 +5,6 @@ export type AdminIconName =
   | "upload"
   | "branch"
   | "copy"
-  | "merge"
-  | "globe"
   | "person"
   | "inbox"
   | "code"
@@ -44,17 +42,17 @@ export interface AdminNavGroup {
   links: AdminNavLink[];
 }
 
+export type AdminPermissionRequirement = string | readonly string[];
+
 // Route -> permission module. Missing entries are available to every signed-in
 // user; adminOnly links receive an additional is_admin check in consumers.
-export const ADMIN_LINK_MODULE: Record<string, string> = {
+export const ADMIN_LINK_MODULE: Record<string, AdminPermissionRequirement> = {
   "/admin/works": "library",
   "/admin/tags": "library",
   "/admin/search": "library",
   "/admin/upload": "upload",
   "/admin/curation": "curation",
   "/admin/dedup": "curation",
-  "/admin/merge-candidates": "curation",
-  "/admin/sources": "subscriptions",
   "/admin/creators": "library",
   "/admin/subscriptions": "subscriptions",
   "/admin/reference/danbooru": "subscriptions",
@@ -63,9 +61,18 @@ export const ADMIN_LINK_MODULE: Record<string, string> = {
   "/admin/scheduler": "tasks",
   "/admin/notifications": "tasks",
   "/admin/data-mgmt": "system",
-  "/admin/system": "system",
+  "/admin/system": ["system", "subscriptions"],
   "/admin/settings": "system",
 };
+
+export function hasAdminPermission(
+  requirement: AdminPermissionRequirement | undefined,
+  has: (module: string) => boolean,
+): boolean {
+  if (!requirement) return true;
+  if (typeof requirement === "string") return has(requirement);
+  return requirement.some((module) => has(module));
+}
 
 const link = (
   href: string,
@@ -86,19 +93,22 @@ export const ADMIN_NAV_LINKS: AdminNavLink[] = [
   link("/admin/jobs", "nav.jobs", "clock", "operations", { primary: true, keywords: ["tasks", "queue", "任务", "队列"] }),
   link("/admin/scheduler", "nav.scheduler", "calendar", "operations", { primary: true, keywords: ["schedule", "sync", "调度", "同步"] }),
   link("/admin/data-mgmt", "nav.datamgmt", "database", "governance", { primary: true, keywords: ["storage", "governance", "数据", "存储"] }),
-  link("/admin/system", "nav.system", "pulse", "governance", { primary: true, keywords: ["health", "status", "健康"] }),
+  link("/admin/system", "nav.system", "pulse", "governance", {
+    primary: true,
+    keywords: ["health", "status", "source", "provider", "健康", "数据源"],
+  }),
   link("/admin/settings", "nav.settings", "gear", "settings", { primary: true, keywords: ["config", "preferences", "配置"] }),
 
   link("/admin/search", "nav.search", "image", "library", { keywords: ["find", "搜索"] }),
-  link("/admin/sources", "nav.sources", "globe", "source-management", { keywords: ["providers", "source", "来源"] }),
   link("/admin/import-jobs", "nav.import", "branch", "operations", { keywords: ["imports", "导入任务"] }),
   link("/admin/notifications", "notifications.title", "bell", "notifications", {
     keywords: ["alerts", "通知"],
     topbarOnly: true,
   }),
   link("/admin/curation", "nav.curation", "branch", "governance", { keywords: ["history", "策展"] }),
-  link("/admin/dedup", "nav.dedup", "copy", "governance", { keywords: ["duplicates", "查重"] }),
-  link("/admin/merge-candidates", "nav.merge", "merge", "governance", { keywords: ["merge", "合并"] }),
+  link("/admin/dedup", "nav.dedup", "copy", "governance", {
+    keywords: ["duplicates", "merge", "candidate", "查重", "合并候选"],
+  }),
   link("/admin/users", "nav.users", "people", "settings", { adminOnly: true, keywords: ["accounts", "权限", "用户"] }),
 ];
 
@@ -125,7 +135,6 @@ export const ADMIN_CONTEXT_LINKS: Record<AdminNavContext, AdminNavLink[]> = {
   "source-management": [
     byHref("/admin/creators"),
     byHref("/admin/subscriptions"),
-    byHref("/admin/sources"),
   ],
   operations: [
     byHref("/admin/jobs"),
@@ -136,7 +145,6 @@ export const ADMIN_CONTEXT_LINKS: Record<AdminNavContext, AdminNavLink[]> = {
     byHref("/admin/data-mgmt"),
     byHref("/admin/curation"),
     byHref("/admin/dedup"),
-    byHref("/admin/merge-candidates"),
     byHref("/admin/system"),
   ],
   settings: [

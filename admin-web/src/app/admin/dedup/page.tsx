@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, AssetDedupCase, queryKeys } from "@/lib/api";
 import { formatBytes } from "@/lib/format";
@@ -18,6 +19,8 @@ import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 
 const PAGE_SIZE = 25;
+const DEDUP_STATUSES = ["pending", "merged", "separate", "deferred"] as const;
+type DedupStatus = typeof DEDUP_STATUSES[number];
 
 function Metric({
   label,
@@ -193,14 +196,38 @@ function EvidencePanel({ item }: { item: AssetDedupCase }) {
 
 export default function DedupPage() {
   const t = useT();
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
-  const [status, setStatus] = useState("pending");
+  const requestedStatus = searchParams.get("status");
+  const status: DedupStatus = DEDUP_STATUSES.includes(requestedStatus as DedupStatus)
+    ? requestedStatus as DedupStatus
+    : "pending";
+  const paramsKey = searchParams.toString();
   const [page, setPage] = useState(0);
   const [confirm, setConfirm] = useState<{
     item: AssetDedupCase;
     representativeId: string;
   } | null>(null);
   const [scanId, setScanId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!requestedStatus || requestedStatus === status) return;
+    const next = new URLSearchParams(paramsKey);
+    next.set("status", status);
+    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+  }, [paramsKey, pathname, requestedStatus, router, status]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [status]);
+
+  const selectStatus = (nextStatus: DedupStatus) => {
+    const next = new URLSearchParams(paramsKey);
+    next.set("status", nextStatus);
+    router.push(`${pathname}?${next.toString()}`, { scroll: false });
+  };
 
   const cases = useQuery({
     queryKey: queryKeys.dedup.cases(status, page),
@@ -265,6 +292,7 @@ export default function DedupPage() {
         <PageHeader
           title={t("asset_dedup.title")}
           description={t("asset_dedup.desc")}
+          meta={cases.data ? t("asset_dedup.filtered_count", { count: cases.data.total }) : undefined}
         >
           <button
             type="button"
@@ -289,16 +317,18 @@ export default function DedupPage() {
           role="tablist"
           aria-label={t("asset_dedup.status_filter")}
         >
-          {(["pending", "merged", "separate", "deferred"] as const).map(
+          {DEDUP_STATUSES.map(
             (value) => (
               <button
+                id={`dedup-tab-${value}`}
                 key={value}
                 type="button"
                 role="tab"
                 aria-selected={status === value}
+                aria-controls="dedup-cases-panel"
                 onClick={() => {
-                  setStatus(value);
                   setPage(0);
+                  selectStatus(value);
                 }}
                 className={
                   status === value ? "btn-primary min-h-11" : "btn-ghost min-h-11"
@@ -310,6 +340,11 @@ export default function DedupPage() {
           )}
         </div>
 
+        <div
+          id="dedup-cases-panel"
+          role="tabpanel"
+          aria-labelledby={`dedup-tab-${status}`}
+        >
         {(cases.error || scan.error || scanStatus.error) && (
           <ErrorState
             message={
@@ -433,6 +468,7 @@ export default function DedupPage() {
             </button>
           </div>
         )}
+        </div>
 
         <ConfirmDialog
           open={!!confirm}

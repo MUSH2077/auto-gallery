@@ -358,7 +358,7 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 - `POST /library/import-from-disk` — 幂等地把磁盘上的下载文件入库，无需重新下载（operations 队列）
 - `POST /clear/{entity}` — 清除指定实体类型的所有记录（`jobs`/`all` 同时清除 `task_runs`）
 - `GET /dedup` / `PUT /dedup` — 去重设置
-- `GET /merge-candidates` — 列出标记为潜在合并的作品
+- `GET /merge-candidates` — 已废弃的兼容别名，返回待审核图片资产候选；新客户端使用 `/api/v1/admin/dedup/cases`
 - `POST /reindex` — 触发 Meilisearch 全量重建索引
 
 ### `/api/v1/creators`
