@@ -78,6 +78,56 @@ Validation:
 
 final result: passed
 
+# Initial admin shell stability QA
+
+## Scope and evidence
+
+- Reproduced with a stored compact desktop sidebar on hard loads of Creators
+  and Subscriptions.
+- Compared Creators, Subscriptions, and System & Sources against the Jobs page
+  at 1440×960 with fully intercepted fictional API responses.
+- Sampled the page-shell x-position and width for 180 animation frames from
+  document start and recorded `LayoutShift` sources through the Performance
+  Observer API.
+
+Before the fix, the first render used the 248px expanded-sidebar default and
+hydration later restored the stored 64px compact mode. The main content column
+moved from x=244/width=1181 to x=60/width=1365 and produced approximately
+0.1245 CLS. This was a shell hydration mismatch rather than a Creators or
+Subscriptions list-layout defect.
+
+## Results
+
+| Area | Result | Notes |
+|---|---|---|
+| Pre-hydration sidebar state | Passed | A parser-time bootstrap restores the correct wide or mid sidebar mode before the admin grid is painted. |
+| React state reconciliation | Passed | Layout effects reconcile storage and media-query state without overwriting the pre-hydration CSS variable with the expanded default. |
+| Creator and subscription shell | Passed | Sampled x-position and width remain stable within 1px from first paint; no horizontal main-column `LayoutShift` source remains. |
+| Async list height | Passed | A stable root scrollbar gutter prevents list loading from changing the centered page-shell geometry. |
+| Cross-page proportion | Passed | Creators, Subscriptions, and System & Sources match the Jobs page-shell x-position and width within 1px. |
+| System service layout | Passed | Backend, Postgres, Redis, and Meilisearch form one balanced four-column row at the desktop reference width, then reflow to two and one columns. |
+| Runtime quality | Passed | Focused page quality, Axe, locale, mobile/tablet reflow, and first-paint regression checks pass without framework errors. |
+
+The three long route-matrix checks are allowed 60 seconds because each one
+intentionally hard-loads 11 primary routes. Under the complete 16-worker
+matrix they could exhaust the former 30-second aggregate timeout even though
+every per-route assertion passed when run with one worker.
+
+No open P0, P1, or P2 findings remain.
+
+Validation:
+
+- `npm run check:i18n`
+- `npm run typecheck`
+- `npm run build`
+- focused first-paint Playwright regression
+- complete Playwright suite: 104 passed, 1 documentation screenshot test
+  skipped by its explicit environment gate
+- `scripts/privacy-scan.sh`
+- `git diff --check`
+
+final result: passed
+
 # System and sources consolidation QA
 
 ## Scope and evidence

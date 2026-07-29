@@ -463,6 +463,130 @@ test.beforeEach(async ({ context }) => {
   await installFixtureRoutes(context);
 });
 
+test("stored compact sidebar keeps primary page shells stable and aligned from first paint", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.addInitScript(() => {
+    window.localStorage.setItem("auto-gallery-sidebar-wide-v2", "compact");
+    const samples: Array<{ x: number; width: number }> = [];
+    const debugWindow = window as typeof window & {
+      __adminShellSamples?: Array<{ x: number; width: number }>;
+      __adminLayoutShift?: number;
+      __adminLayoutShiftSources?: Array<{
+        value: number;
+        targets: string[];
+        rects: Array<{ previousX: number; previousWidth: number; currentX: number; currentWidth: number }>;
+      }>;
+    };
+    debugWindow.__adminShellSamples = samples;
+    debugWindow.__adminLayoutShift = 0;
+    debugWindow.__adminLayoutShiftSources = [];
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        const shift = entry as PerformanceEntry & {
+          hadRecentInput?: boolean;
+          value?: number;
+          sources?: Array<{
+            node?: Node | null;
+            previousRect?: DOMRectReadOnly;
+            currentRect?: DOMRectReadOnly;
+          }>;
+        };
+        if (!shift.hadRecentInput) {
+          debugWindow.__adminLayoutShift! += shift.value || 0;
+          debugWindow.__adminLayoutShiftSources!.push({
+            value: shift.value || 0,
+            targets: (shift.sources || []).map((source) => {
+              const element = source.node instanceof Element ? source.node : null;
+              if (!element) return "unknown";
+              return `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}${element.className ? `.${String(element.className).split(" ").join(".")}` : ""}`;
+            }),
+            rects: (shift.sources || []).map((source) => ({
+              previousX: source.previousRect?.x || 0,
+              previousWidth: source.previousRect?.width || 0,
+              currentX: source.currentRect?.x || 0,
+              currentWidth: source.currentRect?.width || 0,
+            })),
+          });
+        }
+      }
+    }).observe({ type: "layout-shift", buffered: true });
+    let frames = 0;
+    const sample = () => {
+      const shell = document.querySelector<HTMLElement>("[data-page-shell]");
+      if (shell) {
+        const box = shell.getBoundingClientRect();
+        samples.push({ x: box.x, width: box.width });
+      }
+      frames += 1;
+      if (frames < 180) window.requestAnimationFrame(sample);
+    };
+    window.requestAnimationFrame(sample);
+  });
+
+  const inspectFirstPaint = async (route: string, heading: string) => {
+    await page.goto(route);
+    await expect(page.getByRole("heading", { level: 1, name: heading })).toBeVisible();
+    await page.waitForTimeout(750);
+
+    const result = await page.evaluate(() => {
+      const debugWindow = window as typeof window & {
+        __adminShellSamples?: Array<{ x: number; width: number }>;
+        __adminLayoutShift?: number;
+        __adminLayoutShiftSources?: Array<{
+          value: number;
+          targets: string[];
+          rects: Array<{ previousX: number; previousWidth: number; currentX: number; currentWidth: number }>;
+        }>;
+      };
+      const shell = document.querySelector<HTMLElement>("[data-page-shell]")!.getBoundingClientRect();
+      return {
+        samples: debugWindow.__adminShellSamples || [],
+        layoutShift: debugWindow.__adminLayoutShift || 0,
+        layoutShiftSources: debugWindow.__adminLayoutShiftSources || [],
+        shell: { x: shell.x, width: shell.width },
+      };
+    });
+
+    expect(result.samples.length).toBeGreaterThan(1);
+    const xValues = result.samples.map((sample) => sample.x);
+    const widthValues = result.samples.map((sample) => sample.width);
+    const mainColumnShifts = result.layoutShiftSources.filter((shift) => (
+      shift.targets.some((target) => target.includes("div.flex.min-w-0.flex-1.flex-col"))
+      && shift.rects.some((rect) => (
+        Math.abs(rect.currentX - rect.previousX) > 1
+        || Math.abs(rect.currentWidth - rect.previousWidth) > 1
+      ))
+    ));
+    expect(mainColumnShifts, `${route}: total CLS ${result.layoutShift}`).toEqual([]);
+    expect(Math.max(...xValues) - Math.min(...xValues), `${route} shell x`).toBeLessThanOrEqual(1);
+    expect(Math.max(...widthValues) - Math.min(...widthValues), `${route} shell width`).toBeLessThanOrEqual(1);
+    return result.shell;
+  };
+
+  const creatorsShell = await inspectFirstPaint("/admin/creators", "Creators");
+  await page.screenshot({ path: "/tmp/auto-gallery-creators-stable-shell.png", fullPage: false });
+  const subscriptionsShell = await inspectFirstPaint("/admin/subscriptions", "Subscriptions");
+  await page.screenshot({ path: "/tmp/auto-gallery-subscriptions-stable-shell.png", fullPage: false });
+  const systemShell = await inspectFirstPaint("/admin/system", "System & Sources");
+  const serviceCards = page.locator("#system-panel-services article");
+  await expect(serviceCards).toHaveCount(4);
+  const serviceCardY = await serviceCards.evaluateAll((cards) => (
+    cards.map((card) => card.getBoundingClientRect().y)
+  ));
+  expect(Math.max(...serviceCardY) - Math.min(...serviceCardY)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: "/tmp/auto-gallery-system-balanced-grid.png", fullPage: false });
+  const jobsShell = await inspectFirstPaint("/admin/jobs?tab=downloads", "Jobs");
+
+  for (const [name, shell] of [
+    ["creators", creatorsShell],
+    ["subscriptions", subscriptionsShell],
+    ["system", systemShell],
+  ] as const) {
+    expect(Math.abs(shell.x - jobsShell.x), `${name} shell x should match Jobs`).toBeLessThanOrEqual(1);
+    expect(Math.abs(shell.width - jobsShell.width), `${name} shell width should match Jobs`).toBeLessThanOrEqual(1);
+  }
+});
+
 test("desktop sidebar, contextual navigation, and command palette remain usable", async ({ page }) => {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
@@ -524,6 +648,7 @@ test("desktop sidebar, contextual navigation, and command palette remain usable"
 });
 
 test("top-level page headers share the task page alignment and works has no creator picker", async ({ page }) => {
+  test.setTimeout(60_000);
   await page.setViewportSize({ width: 1440, height: 960 });
 
   const shellBox = async (path: string) => {
@@ -565,6 +690,7 @@ for (const viewport of [
   { name: "mobile", width: 390, height: 844 },
 ] as const) {
   test(`primary admin routes keep their hierarchy and reflow at ${viewport.name} width`, async ({ page }) => {
+    test.setTimeout(60_000);
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     for (const route of PRIMARY_ADMIN_ROUTES) {
       await page.goto(route);

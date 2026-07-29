@@ -12,6 +12,7 @@
    ────────────────────────────────────────────────────────────────────────── */
 @layer base {
   :root {
+    --admin-sidebar-width: 248px;
     --ag-bg: 243 246 250;        --ag-surface: 255 255 255;   --ag-subtle: 238 242 247;
     --ag-border: 207 216 227;    --ag-muted: 79 91 109;       --ag-text: 23 33 48;
     --ag-accent: 29 78 216;      --ag-success: 15 105 55;     --ag-warning: 139 79 0;
@@ -140,7 +141,10 @@
     --ag-accent-subtle: 35 42 64;  --ag-danger-subtle: 58 37 50;  --ag-warning-subtle: 58 53 39;  --ag-success-subtle: 36 58 44;
   }
 
-  html { @apply transition-colors duration-300; }
+  html {
+    scrollbar-gutter: stable;
+    @apply transition-colors duration-300;
+  }
   body {
     background: rgb(var(--ag-bg));
     color: rgb(var(--ag-text));

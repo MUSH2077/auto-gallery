@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { usePresence } from "@/lib/motion";
@@ -7,12 +7,15 @@ import ErrorBoundary from "@/components/ErrorBoundary";
 import AppSidebar from "@/components/AppSidebar";
 import AppTopBar from "@/components/AppTopBar";
 import { useT } from "@/lib/i18n";
+import {
+  ADMIN_SIDEBAR_COMPACT_WIDTH,
+  ADMIN_SIDEBAR_EXPANDED_WIDTH,
+  LEGACY_SIDEBAR_KEY,
+  SIDEBAR_MID_KEY,
+  SIDEBAR_WIDE_KEY,
+} from "@/lib/adminSidebar";
 
 export const dynamic = 'force-dynamic';
-
-const LEGACY_SIDEBAR_KEY = "auto-gallery-sidebar";
-const SIDEBAR_WIDE_KEY = "auto-gallery-sidebar-wide-v2";
-const SIDEBAR_MID_KEY = "auto-gallery-sidebar-mid-v2";
 
 type DesktopSidebarMode = "expanded" | "compact";
 type ViewportTier = "mobile" | "mid" | "wide";
@@ -61,13 +64,14 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const [midMode, setMidMode] = useState<DesktopSidebarMode>("compact");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [viewportTier, setViewportTier] = useState<ViewportTier>("wide");
+  const [sidebarReady, setSidebarReady] = useState(false);
   const { mounted: drawerMounted, closing: drawerClosing } = usePresence(mobileOpen);
   const sidebarTriggerRef = useRef<HTMLButtonElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const previousPathRef = useRef(pathname);
   const restoreDrawerFocusRef = useRef(true);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     try {
       const legacy = localStorage.getItem(LEGACY_SIDEBAR_KEY);
       const storedWide = localStorage.getItem(SIDEBAR_WIDE_KEY);
@@ -83,7 +87,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
     } catch {}
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const mobile = window.matchMedia("(max-width: 767px)");
     const mid = window.matchMedia("(min-width: 768px) and (max-width: 1279px)");
     const syncViewport = () => {
@@ -92,6 +96,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
       if (tier !== "mobile") setMobileOpen(false);
     };
     syncViewport();
+    setSidebarReady(true);
     mobile.addEventListener("change", syncViewport);
     mid.addEventListener("change", syncViewport);
     return () => {
@@ -153,7 +158,14 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
   const desktopMode = viewportTier === "mid" ? midMode : wideMode;
   const desktopCompact = desktopMode === "compact";
-  const sidebarWidth = desktopCompact ? 64 : 248;
+  const sidebarWidth = desktopCompact
+    ? ADMIN_SIDEBAR_COMPACT_WIDTH
+    : ADMIN_SIDEBAR_EXPANDED_WIDTH;
+
+  useLayoutEffect(() => {
+    if (!sidebarReady) return;
+    document.documentElement.style.setProperty("--admin-sidebar-width", `${sidebarWidth}px`);
+  }, [sidebarReady, sidebarWidth]);
 
   const toggleSidebar = () => {
     if (viewportTier === "mobile") {
@@ -172,15 +184,9 @@ function AppShell({ children }: { children: React.ReactNode }) {
     });
   };
 
-  const shellStyle = useMemo(
-    () => ({ "--admin-sidebar-width": `${sidebarWidth}px` } as React.CSSProperties),
-    [sidebarWidth],
-  );
-
   return (
     <div
       className="grid min-h-screen grid-cols-1 md:grid-cols-[var(--admin-sidebar-width)_minmax(0,1fr)]"
-      style={shellStyle}
     >
       <aside
         id="admin-sidebar"
