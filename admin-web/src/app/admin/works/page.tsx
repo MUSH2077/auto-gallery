@@ -379,11 +379,6 @@ function WorksContent() {
     },
   });
 
-  const creators = useQuery({
-    queryKey: queryKeys.creators.all,
-    queryFn: () => api.listCreators(),
-  });
-
   const pageWorkIds = works.data?.items.map((w) => w.id) || [];
   const selectedCount = selectedWorkIds.size;
   const pageAllSelected = pageWorkIds.length > 0 && pageWorkIds.every((id) => selectedWorkIds.has(id));
@@ -459,18 +454,6 @@ function WorksContent() {
             <option key={f.key} value={f.key}>{f.label}</option>
           ))}
         </select>
-
-        {/* Creator filter */}
-        {(creators.data?.items.length || 0) > 0 && (
-          <select value={creatorFilter} onChange={(e) => updateParams({ creator: e.target.value || null })}
-            aria-label={t("works.filter_creator")}
-            className="select px-2 py-1.5 text-xs">
-            <option value="">{t("works.filter_all_creators")}</option>
-            {creators.data?.items.map((c) => (
-              <option key={c.id} value={c.id}>{c.display_name || c.name}</option>
-            ))}
-          </select>
-        )}
 
         {/* NSFW filter */}
         <div className="flex gap-0.5 bg-subtle rounded p-0.5">

@@ -31,6 +31,7 @@ export default function CommandPalette({
   const [activeIndex, setActiveIndex] = useState(0);
 
   const availableLinks = useMemo(() => ADMIN_NAV_LINKS.filter((item) => {
+    if (item.topbarOnly) return false;
     if (item.adminOnly && !isAdmin) return false;
     const module = ADMIN_LINK_MODULE[item.href];
     return !module || has(module);

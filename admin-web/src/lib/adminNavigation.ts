@@ -21,8 +21,10 @@ export type AdminIconName =
 export type AdminNavContext =
   | "overview"
   | "library"
+  | "ingestion"
   | "source-management"
   | "operations"
+  | "notifications"
   | "governance"
   | "settings";
 
@@ -34,6 +36,7 @@ export interface AdminNavLink {
   keywords?: string[];
   primary?: boolean;
   adminOnly?: boolean;
+  topbarOnly?: boolean;
 }
 
 export interface AdminNavGroup {
@@ -69,13 +72,15 @@ const link = (
   labelKey: string,
   icon: AdminIconName,
   context: AdminNavContext,
-  options: Pick<AdminNavLink, "keywords" | "primary" | "adminOnly"> = {},
+  options: Pick<AdminNavLink, "keywords" | "primary" | "adminOnly" | "topbarOnly"> = {},
 ): AdminNavLink => ({ href, labelKey, icon, context, ...options });
 
 export const ADMIN_NAV_LINKS: AdminNavLink[] = [
   link("/admin", "nav.dashboard", "home", "overview", { primary: true, keywords: ["overview", "home", "概览"] }),
   link("/admin/works", "nav.works", "image", "library", { primary: true, keywords: ["gallery", "images", "图库"] }),
   link("/admin/tags", "nav.tags", "tag", "library", { primary: true, keywords: ["labels", "标签"] }),
+  link("/admin/upload", "nav.upload", "upload", "ingestion", { primary: true, keywords: ["import files", "上传"] }),
+  link("/admin/reference/danbooru", "nav.danbooru", "code", "ingestion", { primary: true, keywords: ["reference", "mapping"] }),
   link("/admin/creators", "nav.creators", "person", "source-management", { primary: true, keywords: ["artists", "作者"] }),
   link("/admin/subscriptions", "nav.subscriptions", "inbox", "source-management", { primary: true, keywords: ["repositories", "repos", "订阅", "仓库"] }),
   link("/admin/jobs", "nav.jobs", "clock", "operations", { primary: true, keywords: ["tasks", "queue", "任务", "队列"] }),
@@ -84,12 +89,13 @@ export const ADMIN_NAV_LINKS: AdminNavLink[] = [
   link("/admin/system", "nav.system", "pulse", "governance", { primary: true, keywords: ["health", "status", "健康"] }),
   link("/admin/settings", "nav.settings", "gear", "settings", { primary: true, keywords: ["config", "preferences", "配置"] }),
 
-  link("/admin/upload", "nav.upload", "upload", "library", { keywords: ["import files", "上传"] }),
   link("/admin/search", "nav.search", "image", "library", { keywords: ["find", "搜索"] }),
   link("/admin/sources", "nav.sources", "globe", "source-management", { keywords: ["providers", "source", "来源"] }),
-  link("/admin/reference/danbooru", "nav.danbooru", "code", "source-management", { keywords: ["reference", "mapping"] }),
   link("/admin/import-jobs", "nav.import", "branch", "operations", { keywords: ["imports", "导入任务"] }),
-  link("/admin/notifications", "notifications.title", "bell", "operations", { keywords: ["alerts", "通知"] }),
+  link("/admin/notifications", "notifications.title", "bell", "notifications", {
+    keywords: ["alerts", "通知"],
+    topbarOnly: true,
+  }),
   link("/admin/curation", "nav.curation", "branch", "governance", { keywords: ["history", "策展"] }),
   link("/admin/dedup", "nav.dedup", "copy", "governance", { keywords: ["duplicates", "查重"] }),
   link("/admin/merge-candidates", "nav.merge", "merge", "governance", { keywords: ["merge", "合并"] }),
@@ -101,6 +107,7 @@ const byHref = (href: string) => ADMIN_NAV_LINKS.find((item) => item.href === hr
 export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
   { labelKey: "nav.overview", links: [byHref("/admin")] },
   { labelKey: "nav.library", links: [byHref("/admin/works"), byHref("/admin/tags")] },
+  { labelKey: "nav.ingestion", links: [byHref("/admin/upload"), byHref("/admin/reference/danbooru")] },
   { labelKey: "nav.sources", links: [byHref("/admin/creators"), byHref("/admin/subscriptions")] },
   { labelKey: "nav.operations", links: [byHref("/admin/jobs"), byHref("/admin/scheduler")] },
   { labelKey: "nav.admin", links: [byHref("/admin/data-mgmt"), byHref("/admin/system"), byHref("/admin/settings")] },
@@ -111,19 +118,21 @@ export const ADMIN_CONTEXT_LINKS: Record<AdminNavContext, AdminNavLink[]> = {
   library: [
     byHref("/admin/works"),
     byHref("/admin/tags"),
+  ],
+  ingestion: [
     byHref("/admin/upload"),
+    byHref("/admin/reference/danbooru"),
   ],
   "source-management": [
     byHref("/admin/creators"),
     byHref("/admin/subscriptions"),
     byHref("/admin/sources"),
-    byHref("/admin/reference/danbooru"),
   ],
   operations: [
     byHref("/admin/jobs"),
     byHref("/admin/scheduler"),
-    byHref("/admin/notifications"),
   ],
+  notifications: [byHref("/admin/notifications")],
   governance: [
     byHref("/admin/data-mgmt"),
     byHref("/admin/curation"),
@@ -167,7 +176,7 @@ export function findAdminNavEntry(pathname: string): {
     || item.links.some((candidate) => candidate.context === current.context),
   );
   return {
-    groupKey: group?.labelKey || "nav.admin",
+    groupKey: group?.labelKey || current.labelKey,
     labelKey: current.labelKey,
   };
 }

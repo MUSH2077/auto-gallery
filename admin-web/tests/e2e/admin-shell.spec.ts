@@ -98,6 +98,10 @@ async function installFixtureRoutes(context: BrowserContext) {
       await route.fulfill({ json: { items: [], total: 0, offset: 0, limit: 50 } });
     } else if (path === "/api/v1/import-jobs") {
       await route.fulfill({ json: { items: [], total: 0, offset: 0, limit: 50 } });
+    } else if (path === "/api/v1/works") {
+      await route.fulfill({ json: { items: [], total: 0 } });
+    } else if (path === "/api/v1/tags") {
+      await route.fulfill({ json: [] });
     } else if (path === "/api/v1/sources") {
       await route.fulfill({ json: { sources: [] } });
     } else if (path.includes("/notifications")) {
@@ -134,7 +138,16 @@ test("desktop sidebar, contextual navigation, and command palette remain usable"
   await expect(page.locator("body")).not.toHaveText("");
   await expect(page.locator("[data-nextjs-dialog-overlay]")).toHaveCount(0);
   await expect(page.locator("aside").first()).toHaveCSS("width", "248px");
-  await expect(page.locator("aside nav a")).toHaveCount(10);
+  const sidebar = page.locator("#admin-sidebar");
+  await expect(sidebar.locator("nav a")).toHaveCount(12);
+  await expect(sidebar.getByRole("heading", { name: "Upload & Import" })).toBeVisible();
+  await expect(sidebar.getByRole("link", { name: "Upload" })).toBeVisible();
+  await expect(sidebar.getByRole("link", { name: "Danbooru" })).toBeVisible();
+  await expect(sidebar.getByRole("link", { name: "Notifications" })).toHaveCount(0);
+  const contextNav = page.locator("#main-content header nav");
+  await expect(contextNav.getByRole("link", { name: "Jobs" })).toBeVisible();
+  await expect(contextNav.getByRole("link", { name: "Scheduler" })).toBeVisible();
+  await expect(contextNav.getByRole("link", { name: "Notifications" })).toHaveCount(0);
   await expect(page.getByTestId("source-code-link")).toHaveAttribute(
     "href",
     "https://github.com/MUSH2077/auto-gallery",
@@ -146,11 +159,52 @@ test("desktop sidebar, contextual navigation, and command palette remain usable"
   await expect(dialog).toBeVisible();
   await dialog.getByRole("textbox").fill("creator");
   await expect(dialog.getByRole("option").first()).toBeVisible();
+  await dialog.getByRole("textbox").fill("notifications");
+  await expect(dialog.getByRole("option", { name: /^Notifications\b/ })).toHaveCount(0);
   await page.screenshot({ path: "/tmp/auto-gallery-command-palette.png", fullPage: false });
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
+
+  const notificationBell = page.locator('header button[aria-label="Notifications"]');
+  await notificationBell.click();
+  await page.getByRole("button", { name: /Notifications\s*→/ }).click();
+  await expect(page).toHaveURL(/\/admin\/notifications$/);
+  await expect(page.locator("#main-content").getByRole("heading", { level: 1, name: "Notifications" })).toBeVisible();
+  await expect(page.locator("#main-content header nav")).toHaveCount(0);
   expect(pageErrors).toEqual([]);
   expect(consoleErrors.filter((message) => !message.includes("WebSocket"))).toEqual([]);
+});
+
+test("top-level page headers share the task page alignment and works has no creator picker", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+
+  const headingX = async (path: string, name: string) => {
+    await page.goto(path);
+    const heading = page.locator("#main-content").getByRole("heading", { level: 1, name });
+    await expect(heading).toBeVisible();
+    const box = await heading.boundingBox();
+    expect(box).not.toBeNull();
+    return box!.x;
+  };
+
+  const taskX = await headingX("/admin/jobs?tab=downloads", "Jobs");
+  const pages = [
+    ["/admin/works", "Works"],
+    ["/admin/tags", "Tags"],
+    ["/admin/upload", "Upload"],
+    ["/admin/reference/danbooru", "Danbooru Reference Mapping"],
+    ["/admin/notifications", "Notifications"],
+  ] as const;
+
+  for (const [path, name] of pages) {
+    const x = await headingX(path, name);
+    expect(Math.abs(x - taskX), `${name} heading should align with Jobs`).toBeLessThanOrEqual(1);
+  }
+
+  await page.goto("/admin/works?creator=creator-atlas");
+  await expect(page.getByRole("combobox", { name: "Filter creator" })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: "/tmp/auto-gallery-page-alignment.png", fullPage: false });
 });
 
 test("compact tablet sidebar and long job metadata do not create root overflow", async ({ page }) => {
