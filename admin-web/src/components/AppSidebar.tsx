@@ -152,16 +152,28 @@ export default function AppSidebar({
 
   return (
     <div className={`flex h-full flex-col ${compact ? "w-16" : "w-[248px]"}`}>
-      <div className={`flex h-14 shrink-0 items-center border-b border-border ${compact ? "justify-center px-2" : "gap-2 px-4"}`}>
-        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent text-[11px] font-bold tracking-tight text-white">
-          ag
-        </span>
-        {!compact && <span className="min-w-0 truncate text-sm font-semibold tracking-tight text-fg">auto-gallery</span>}
+      <div className={`flex h-14 shrink-0 items-center border-b border-border ${compact ? "justify-center px-2" : "gap-1 px-2"}`}>
+        <Link
+          href="/admin"
+          onClick={onNavigate}
+          aria-current={pathname === "/admin" ? "page" : undefined}
+          aria-label={t("nav.home_dashboard")}
+          title={compact ? t("nav.home_dashboard") : undefined}
+          data-sidebar-brand
+          className={`flex min-h-11 min-w-0 items-center rounded-lg text-fg transition-colors hover:bg-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+            compact ? "w-11 justify-center" : "flex-1 gap-2 px-2"
+          }`}
+        >
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent text-[11px] font-bold tracking-tight text-white">
+            ag
+          </span>
+          {!compact && <span className="min-w-0 truncate text-sm font-semibold tracking-tight">auto-gallery</span>}
+        </Link>
         {onDismiss && !compact && (
           <button
             type="button"
             onClick={onDismiss}
-            className="btn-icon ml-auto"
+            className="btn-icon shrink-0"
             aria-label={t("nav.close_sidebar")}
             title={t("nav.close_sidebar")}
           >

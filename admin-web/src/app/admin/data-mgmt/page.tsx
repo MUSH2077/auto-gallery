@@ -227,7 +227,7 @@ export default function DataManagementPage() {
       )}
 
       {/* ═══ Stats Cards ═══ */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-6">
+      <div data-page-primary-content className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-7">
         {[
           { label: t("datamgmt.stats_works"), value: dbStats?.works ?? "-", color: "blue" },
           { label: t("datamgmt.stats_assets"), value: dbStats?.assets ?? "-", color: "indigo" },
@@ -522,7 +522,7 @@ export default function DataManagementPage() {
                 <p className="text-xs text-muted">{t("datamgmt.cleanup_reindex_desc")}</p>
               </div>
               <button onClick={() => rebuildLibrary.mutate()} disabled={rebuildLibrary.isPending}
-                className="shrink-0 ml-3 px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50">
+                className="btn-primary ml-3 shrink-0 text-xs">
                 {rebuildLibrary.isPending ? "..." : t("datamgmt.cleanup_reindex_btn")}
               </button>
             </div>

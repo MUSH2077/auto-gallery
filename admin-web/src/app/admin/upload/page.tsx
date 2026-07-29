@@ -307,6 +307,7 @@ function UploadPageContent() {
     <PageShell>
       <PageHeader title={t("upload.title")} description={t("upload.description")} />
 
+      <div data-page-primary-content>
       {me.data && (
         <Banner tone={overQuota ? "warning" : "info"} title={t("upload.quota_title")} className="mb-4">
           <span className="font-mono">
@@ -419,6 +420,7 @@ function UploadPageContent() {
             {isSubmitting ? t("upload.submitting") : t("upload.submit", { count: queuedRows.length })}
           </button>
         </div>
+      </div>
       </div>
     </PageShell>
   );

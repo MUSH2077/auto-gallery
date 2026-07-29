@@ -409,33 +409,35 @@ function WorksContent() {
 
   return (
     <PageShell>
-      <PageHeader title={t("works.title")} description={t("works.count").replace("{count}", String(works.data?.total ?? 0))}>
-        {slideItems.length > 0 && (
+      <PageHeader
+        title={t("works.title")}
+        description={t("works.count").replace("{count}", String(works.data?.total ?? 0))}
+        secondaryActions={slideItems.length > 0 ? (
           <button type="button" onClick={() => slideshow.open(slideItems)} className="btn-ghost">
             {t("slideshow.open")}
           </button>
-        )}
-      </PageHeader>
+        ) : undefined}
+      />
 
       {/* Search & Filters */}
-      <div className="mb-3 flex flex-wrap items-center gap-2 md:hidden">
+      <div data-page-primary-content className="mb-3 flex flex-wrap items-center gap-2 md:hidden">
         <button
           onClick={() => setFiltersOpen((value) => !value)}
-          className="rounded-md border border-border px-3 py-1.5 text-sm font-medium dark:border-border"
+          className="btn-ghost"
           aria-expanded={filtersOpen}
           aria-controls="works-filter-panel"
         >
           {t("works.filters")} {activeFilterCount > 0 && <span className="ml-1 rounded-full bg-accent px-1.5 py-0.5 text-xs text-white">{activeFilterCount}</span>}
         </button>
         {activeFilterCount > 0 && (
-          <button onClick={clearFilters} className="rounded-md border border-border px-3 py-1.5 text-sm dark:border-border">
+          <button onClick={clearFilters} className="btn-ghost">
             {t("works.clear_filters")}
           </button>
         )}
       </div>
 
-      <div id="works-filter-panel" className={`${filtersOpen ? "flex" : "hidden"} mb-4 flex-col gap-2 rounded-md border border-border bg-surface p-3 md:flex md:flex-row md:flex-wrap md:items-center md:border-0 md:bg-transparent md:p-0`}>
-        <div className="flex gap-0.5 bg-subtle rounded p-0.5">
+      <div data-page-primary-content id="works-filter-panel" className={`${filtersOpen ? "flex" : "hidden"} toolbar mb-4 flex-col md:flex md:flex-row md:flex-wrap md:items-center`}>
+        <div className="segmented-control">
           <button onClick={() => updateParams({ curation: null })}
             aria-label={t("works.gallery")}
             className={`px-2.5 py-1 text-xs rounded transition-colors ${curationVisibility === "visible" ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
@@ -462,7 +464,7 @@ function WorksContent() {
         </select>
 
         {/* NSFW filter */}
-        <div className="flex gap-0.5 bg-subtle rounded p-0.5">
+        <div className="segmented-control">
           {NSFW_FILTERS.map((f) => (
             <button key={f.key} onClick={() => updateParams({ nsfw: f.key === "all" ? null : f.key })}
               aria-label={f.label}
@@ -481,7 +483,7 @@ function WorksContent() {
         </button>
 
         {/* AI filter */}
-        <div className="flex gap-0.5 bg-subtle rounded p-0.5">
+        <div className="segmented-control">
           {[
             { key: "all", label: t("works.ai_filter_all") },
             { key: "human", label: t("works.ai_filter_human") },
@@ -496,7 +498,7 @@ function WorksContent() {
         </div>
 
         {/* Sort — click same field toggles direction */}
-        <div className="flex gap-0.5 bg-subtle rounded p-0.5">
+        <div className="segmented-control">
           {SORT_OPTIONS.map((s) => {
             const active = sortBy === s.key;
             const dir = active ? sortOrder : "desc";
@@ -524,7 +526,7 @@ function WorksContent() {
         )}
 
         {/* View toggle */}
-        <div className="flex gap-0.5 bg-subtle rounded p-0.5">
+        <div className="segmented-control">
           <button onClick={() => updateParams({ view: null }, false)}
             aria-label={t("works.view_grid")}
             className={`px-2.5 py-1 rounded text-xs ${viewMode === "grid" ? "bg-surface shadow-sm" : "text-muted"}`}>

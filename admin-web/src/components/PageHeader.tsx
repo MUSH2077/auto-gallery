@@ -29,7 +29,7 @@ export default function PageHeader({
   const actions = primaryAction || secondaryActions || children;
 
   return (
-    <header className="mb-6 min-w-0 border-b border-border pb-4">
+    <header data-page-header className="mb-6 min-w-0 border-b border-border pb-4">
       <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0 lg:min-w-[16rem] lg:flex-1">
           {navEntry && navEntry.groupKey !== navEntry.labelKey && (

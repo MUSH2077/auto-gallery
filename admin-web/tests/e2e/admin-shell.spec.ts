@@ -121,6 +121,20 @@ const DYNAMIC_ROUTES = [
 
 const QUALITY_ROUTES = [...REPRESENTATIVE_ROUTES, ...DYNAMIC_ROUTES] as const;
 
+const PRIMARY_ADMIN_ROUTES = [
+  "/admin/works",
+  "/admin/tags",
+  "/admin/upload",
+  "/admin/reference/danbooru",
+  "/admin/creators",
+  "/admin/subscriptions",
+  "/admin/jobs?tab=downloads",
+  "/admin/scheduler",
+  "/admin/data-mgmt",
+  "/admin/system",
+  "/admin/settings",
+] as const;
+
 async function installFixtureRoutes(context: BrowserContext) {
   await context.addCookies([{
     name: "ag_token",
@@ -429,7 +443,10 @@ test("desktop sidebar, contextual navigation, and command palette remain usable"
   await expect(page.locator("[data-nextjs-dialog-overlay]")).toHaveCount(0);
   await expect(page.locator("aside").first()).toHaveCSS("width", "248px");
   const sidebar = page.locator("#admin-sidebar");
-  await expect(sidebar.locator("nav a")).toHaveCount(12);
+  await expect(sidebar.locator("nav a")).toHaveCount(11);
+  await expect(sidebar.locator("nav").getByRole("link", { name: "Dashboard", exact: true })).toHaveCount(0);
+  await expect(sidebar.locator("[data-sidebar-brand]")).toHaveAttribute("href", "/admin");
+  await expect(sidebar.locator("[data-sidebar-brand]")).toHaveAccessibleName("Go to dashboard");
   await expect(sidebar.getByRole("heading", { name: "Upload & Import" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "Upload" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "Danbooru" })).toBeVisible();
@@ -468,31 +485,32 @@ test("desktop sidebar, contextual navigation, and command palette remain usable"
 test("top-level page headers share the task page alignment and works has no creator picker", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
 
-  const shellBox = async (path: string, name: string) => {
+  const shellBox = async (path: string) => {
     await page.goto(path);
-    const heading = page.locator("#main-content").getByRole("heading", { level: 1, name });
+    const heading = page.locator("#main-content").getByRole("heading", { level: 1 });
     await expect(heading).toBeVisible();
-    const box = await page.locator("[data-page-shell]").first().boundingBox();
-    expect(box).not.toBeNull();
-    return box!;
+    const shell = await page.locator("[data-page-shell]").first().boundingBox();
+    const header = await page.locator("[data-page-header]").first().boundingBox();
+    const primary = await page.locator("[data-page-primary-content]:visible").first().boundingBox();
+    const headingBox = await heading.boundingBox();
+    expect(shell).not.toBeNull();
+    expect(header).not.toBeNull();
+    expect(primary).not.toBeNull();
+    expect(headingBox).not.toBeNull();
+    expect(
+      Math.abs(primary!.y - (header!.y + header!.height)),
+      `${path} primary content should follow the standard 24px header margin`,
+    ).toBeGreaterThanOrEqual(23);
+    expect(Math.abs(primary!.y - (header!.y + header!.height))).toBeLessThanOrEqual(25);
+    return { shell: shell!, heading: headingBox! };
   };
 
-  const taskShell = await shellBox("/admin/jobs?tab=downloads", "Jobs");
-  const pages = [
-    ["/admin/works", "Works"],
-    ["/admin/tags", "Tags"],
-    ["/admin/upload", "Upload"],
-    ["/admin/reference/danbooru", "Danbooru Reference Mapping"],
-    ["/admin/dedup", "Asset Deduplication"],
-    ["/admin/notifications", "Notifications"],
-    ["/admin/settings", "Settings"],
-    ["/admin/settings/logs", "System Logs"],
-  ] as const;
-
-  for (const [path, name] of pages) {
-    const box = await shellBox(path, name);
-    expect(Math.abs(box.x - taskShell.x), `${name} shell should align with Jobs`).toBeLessThanOrEqual(1);
-    expect(Math.abs(box.width - taskShell.width), `${name} shell should match Jobs width`).toBeLessThanOrEqual(1);
+  const taskPage = await shellBox("/admin/jobs?tab=downloads");
+  for (const path of PRIMARY_ADMIN_ROUTES.filter((route) => !route.startsWith("/admin/jobs"))) {
+    const current = await shellBox(path);
+    expect(Math.abs(current.shell.x - taskPage.shell.x), `${path} shell should align with Jobs`).toBeLessThanOrEqual(1);
+    expect(Math.abs(current.shell.width - taskPage.shell.width), `${path} shell should match Jobs width`).toBeLessThanOrEqual(1);
+    expect(Math.abs(current.heading.y - taskPage.heading.y), `${path} heading should share the Jobs baseline`).toBeLessThanOrEqual(1);
   }
 
   await page.goto("/admin/works?creator=creator-atlas");
@@ -500,6 +518,29 @@ test("top-level page headers share the task page alignment and works has no crea
   await expectNoPageOverflow(page);
   await page.screenshot({ path: "/tmp/auto-gallery-page-alignment.png", fullPage: false });
 });
+
+for (const viewport of [
+  { name: "tablet", width: 768, height: 1024 },
+  { name: "mobile", width: 390, height: 844 },
+] as const) {
+  test(`primary admin routes keep their hierarchy and reflow at ${viewport.name} width`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    for (const route of PRIMARY_ADMIN_ROUTES) {
+      await page.goto(route);
+      const main = page.locator("#main-content");
+      await expect(main.getByRole("heading", { level: 1 })).toBeVisible();
+      await expect(page.locator("[data-page-shell]").first()).toBeVisible();
+      await expect(page.locator("[data-page-header]").first()).toBeVisible();
+      await expect(page.locator("[data-page-primary-content]:visible").first()).toBeVisible();
+      await expect.poll(() => page.evaluate(() => {
+        const heading = document.querySelector("#main-content h1")?.getBoundingClientRect();
+        const topbar = document.querySelector("header.sticky")?.getBoundingClientRect();
+        return Boolean(heading && topbar && heading.top >= topbar.bottom);
+      })).toBe(true);
+      await expectNoPageOverflow(page);
+    }
+  });
+}
 
 for (const route of QUALITY_ROUTES) {
   test(`route quality: ${route}`, async ({ page }) => {
@@ -605,6 +646,43 @@ test("route changes focus main content and dismissible menus restore trigger foc
   await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe("main-content");
 });
 
+test("pathname navigation resets the viewport without hiding the page heading", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto("/admin/upload");
+  await expect(page.getByRole("heading", { level: 1, name: "Upload" })).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+
+  await page.locator("#admin-sidebar").getByRole("link", { name: "Tags" }).click();
+  await expect(page).toHaveURL(/\/admin\/tags$/);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe("main-content");
+
+  await page.locator("#admin-sidebar").getByRole("link", { name: "Upload" }).click();
+  await expect(page).toHaveURL(/\/admin\/upload$/);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await expect.poll(() => page.evaluate(() => {
+    const heading = document.querySelector("h1")?.getBoundingClientRect();
+    const topbar = document.querySelector("header.sticky")?.getBoundingClientRect();
+    return Boolean(heading && topbar && heading.top >= topbar.bottom);
+  })).toBe(true);
+  await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe("main-content");
+  await page.screenshot({ path: "/tmp/auto-gallery-upload-top-fixed.png", fullPage: false });
+});
+
+test("query-only task navigation preserves the current viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 600 });
+  await page.goto("/admin/jobs?tab=downloads");
+  await expect(page.getByText("xianyuliangryo-with-a-very-long-creator-name")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight)).toBe(true);
+  await page.evaluate(() => window.scrollTo(0, 260));
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  const retainedY = await page.evaluate(() => window.scrollY);
+  await page.getByRole("tab", { name: "Import" }).evaluate((element: HTMLElement) => element.click());
+  await expect(page).toHaveURL(/\/admin\/jobs\?tab=imports$/);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(retainedY);
+});
+
 test("shared dialogs trap focus, close with Escape, and restore their trigger", async ({ page }) => {
   await page.goto("/admin/settings/data-mgmt");
   const trigger = page.getByRole("button", { name: "Clear" }).first();
@@ -656,6 +734,18 @@ test("mobile drawer is discoverable, dismissible, and the task page stays in bou
   await page.keyboard.press("Escape");
   await expect(page.locator("#admin-mobile-sidebar")).toBeHidden();
   await expect(trigger).toBeFocused();
+  await trigger.click();
+  await expect(page.locator("#admin-mobile-sidebar")).toBeVisible();
+  await page.locator("#admin-mobile-sidebar").evaluate((element) => {
+    for (const animation of element.getAnimations()) animation.finish();
+  });
+  const mobileBrand = page.locator("#admin-mobile-sidebar [data-sidebar-brand]");
+  await expect(mobileBrand).toHaveAccessibleName("Go to dashboard");
+  await page.screenshot({ path: "/tmp/auto-gallery-sidebar-brand-mobile.png", fullPage: false });
+  await mobileBrand.click();
+  await expect(page).toHaveURL(/\/admin$/);
+  await expect(page.locator("#admin-mobile-sidebar")).toBeHidden();
+  await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe("main-content");
   await expectNoPageOverflow(page);
   await page.screenshot({ path: "/tmp/auto-gallery-jobs-mobile.png", fullPage: true });
 });

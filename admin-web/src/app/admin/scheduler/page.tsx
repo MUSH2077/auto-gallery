@@ -9,7 +9,7 @@ import { useT } from "@/lib/i18n";
 import { pollInterval, hasActiveTask } from "@/lib/polling";
 import { scheduleModeLabel, schedulerDecisionLabel, useI18nFormat } from "@/lib/i18n-format";
 import { useStaggeredEntrance } from "@/lib/motion";
-import { PageHeader, PageShell, EmptyState, ErrorState, SourceBadge, StatusBadge, PermissionGuard, SelectionBar, RowActionMenu } from "@/components";
+import { AdaptiveToolbar, FilterBar, PageHeader, PageShell, EmptyState, ErrorState, SourceBadge, StatCard, StatusBadge, PermissionGuard, SelectionBar, RowActionMenu } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useNotifications } from "@/components/NotificationCenter";
 import { usePermissions } from "@/lib/usePermissions";
@@ -23,16 +23,6 @@ function decisionTone(item: SchedulerDecisionItem): string {
     return "border-warning/30 bg-warning-subtle text-warning dark:bg-warning-subtle dark:text-warning";
   }
   return "border-border bg-subtle text-muted dark:border-border dark:bg-subtle dark:text-muted";
-}
-
-function SummaryTile({ label, value, sub, danger }: { label: string; value: string | number; sub?: string; danger?: boolean }) {
-  return (
-    <div className="card p-4">
-      <div className={`tabular text-2xl font-semibold ${danger ? "text-danger dark:text-danger" : "text-fg"}`}>{value}</div>
-      <div className="mt-1 text-xs font-medium uppercase text-muted">{label}</div>
-      {sub && <div className="mt-1 text-xs text-placeholder dark:text-muted">{sub}</div>}
-    </div>
-  );
 }
 
 function queueLabel(t: ReturnType<typeof useT>, key: string): string {
@@ -303,24 +293,31 @@ export default function SchedulerPage() {
     <PermissionGuard module="tasks">
     <PageShell>
       <PageHeader title={t("scheduler.title")} description={t("scheduler.explain_desc")} />
-      <div className="mb-4 flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-2.5">
-        <button onClick={refreshAll} className="btn-ghost px-5 py-2.5">
-          {t("scheduler.refresh")}
-        </button>
-        <button onClick={() => runDueScan.mutate()} disabled={runDueScan.isPending} className="btn-ghost px-5 py-2.5">
-          {runDueScan.isPending ? t("scheduler.scanning") : t("scheduler.run_due_scan")}
-        </button>
-        <button onClick={() => syncNow.mutate()} disabled={syncNow.isPending} className="btn-primary px-5 py-2.5">
-          {syncNow.isPending ? t("scheduler.syncing") : t("scheduler.sync_eligible_now")}
-        </button>
-        {queue.data && queue.data.failed_jobs > 0 && (
-          <button onClick={() => clearFailed.mutate()} disabled={clearFailed.isPending} className="btn-danger px-5 py-2.5">
-            {clearFailed.isPending ? "..." : t("scheduler.clear_all")}
-          </button>
-        )}
+      <div data-page-primary-content>
+        <AdaptiveToolbar
+          className="mb-4"
+          leading={
+            <>
+              <button onClick={refreshAll} className="btn-ghost px-5 py-2.5">
+                {t("scheduler.refresh")}
+              </button>
+              <button onClick={() => runDueScan.mutate()} disabled={runDueScan.isPending} className="btn-ghost px-5 py-2.5">
+                {runDueScan.isPending ? t("scheduler.scanning") : t("scheduler.run_due_scan")}
+              </button>
+              <button onClick={() => syncNow.mutate()} disabled={syncNow.isPending} className="btn-primary px-5 py-2.5">
+                {syncNow.isPending ? t("scheduler.syncing") : t("scheduler.sync_eligible_now")}
+              </button>
+              {queue.data && queue.data.failed_jobs > 0 && (
+                <button onClick={() => clearFailed.mutate()} disabled={clearFailed.isPending} className="btn-danger px-5 py-2.5">
+                  {clearFailed.isPending ? "..." : t("scheduler.clear_all")}
+                </button>
+              )}
+            </>
+          }
+        />
       </div>
 
-      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-border bg-white p-3 dark:border-border dark:bg-surface">
+      <FilterBar meta={t("scheduler.last_updated", { time: lastUpdated ? fmt.time(new Date(lastUpdated).toISOString()) : "—" })}>
         <input
           value={search}
           onChange={(e) => updateParams({ q: e.target.value || null })}
@@ -328,28 +325,25 @@ export default function SchedulerPage() {
           placeholder={t("scheduler.search_placeholder")}
           aria-label={t("scheduler.search_placeholder")}
         />
-        <div className="flex flex-wrap gap-1">
+        <div className="segmented-control flex-wrap">
           {filterOptions.map(([key, label]) => (
             <button
               key={key}
               onClick={() => updateParams({ filter: key || null })}
-              className={`rounded-md border px-2.5 py-1.5 text-xs font-medium ${filter === key ? "border-accent bg-accent-subtle text-accent dark:border-accent dark:bg-accent-subtle dark:text-accent" : "border-border hover:bg-subtle dark:border-border dark:hover:bg-subtle"}`}
+              className={`segment ${filter === key ? "segment-active" : ""}`}
             >
               {label}
             </button>
           ))}
         </div>
-        <div className="w-full text-xs text-muted sm:ml-auto sm:w-auto">
-          {t("scheduler.last_updated", { time: lastUpdated ? fmt.time(new Date(lastUpdated).toISOString()) : "—" })}
-        </div>
-      </div>
+      </FilterBar>
 
       {queue.data && (
         <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
-          <SummaryTile label={t("scheduler.queued")} value={queue.data.default_queue} sub={t("scheduler.default_queue_short")} />
-          <SummaryTile label={t("scheduler.scheduled")} value={queue.data.scheduled_queue} sub={queue.data.next_sync_scan_at ? fmt.dateTime(queue.data.next_sync_scan_at) : t("scheduler.no_scan")} />
-          <SummaryTile label={t("dashboard.failed")} value={queue.data.failed_jobs} danger={queue.data.failed_jobs > 0} />
-          <SummaryTile label={t("dashboard.auto_sync")} value={queue.data.scheduler_enabled === false ? t("common.off") : t("common.on")} danger={queue.data.scheduler_enabled === false} sub={`${scheduleModeLabel(t, queue.data.scheduler_mode)} · ${queue.data.scheduler_timezone || "UTC"}`} />
+          <StatCard label={t("scheduler.queued")} value={queue.data.default_queue} sub={t("scheduler.default_queue_short")} />
+          <StatCard label={t("scheduler.scheduled")} value={queue.data.scheduled_queue} sub={queue.data.next_sync_scan_at ? fmt.dateTime(queue.data.next_sync_scan_at) : t("scheduler.no_scan")} />
+          <StatCard label={t("dashboard.failed")} value={queue.data.failed_jobs} tone={queue.data.failed_jobs > 0 ? "danger" : "neutral"} />
+          <StatCard label={t("dashboard.auto_sync")} value={queue.data.scheduler_enabled === false ? t("common.off") : t("common.on")} tone={queue.data.scheduler_enabled === false ? "danger" : "neutral"} sub={`${scheduleModeLabel(t, queue.data.scheduler_mode)} · ${queue.data.scheduler_timezone || "UTC"}`} />
         </div>
       )}
 

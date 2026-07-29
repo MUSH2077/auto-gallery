@@ -223,17 +223,20 @@ function CreatorsContent() {
 
   return (
     <PageShell>
-      <PageHeader title={t("creators.title")} description={t("creators.count").replace("{count}", String(creatorCount.data?.count ?? 0))}>
-        <div className="flex gap-2">
+      <PageHeader
+        title={t("creators.title")}
+        description={t("creators.count").replace("{count}", String(creatorCount.data?.count ?? 0))}
+        secondaryActions={
           <button onClick={() => router.push("/admin/creators/duplicates")} className="btn-ghost">{t("creators.duplicates")}</button>
-          {canCurate && <button onClick={() => setShowCreate(true)} className="btn-primary">{t("creators.new")}</button>}
-        </div>
-      </PageHeader>
+        }
+        primaryAction={canCurate ? <button onClick={() => setShowCreate(true)} className="btn-primary">{t("creators.new")}</button> : undefined}
+      />
 
       {/* Toolbar */}
+      <div data-page-primary-content>
       <FilterBar>
         <input value={inputVal} onChange={(e) => handleSearchChange(e.target.value)} placeholder={t("creators.search")} className="input w-56 py-1.5" />
-        <div className="segmented-control">
+        <div className="segmented-control max-w-full flex-wrap">
           {FILTERS.map((f) => (
             <button key={f.key} onClick={() => handleFilterChange(f.key)}
               className={`segment ${filter === f.key ? "segment-active" : ""}`}>
@@ -242,8 +245,9 @@ function CreatorsContent() {
           ))}
         </div>
       </FilterBar>
+      </div>
 
-      <PageSection className="mt-5">
+      <PageSection>
       {canCurate && (
         <SelectionBar
           count={selected.size}

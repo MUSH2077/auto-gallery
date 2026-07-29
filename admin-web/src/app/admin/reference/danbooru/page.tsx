@@ -5,7 +5,7 @@ import { api, queryKeys } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useT } from "@/lib/i18n";
-import { PageHeader, PageShell, EmptyState, ErrorState, SourceBadge, PermissionGuard } from "@/components";
+import { Banner, PageHeader, PageShell, EmptyState, ErrorState, SourceBadge, PermissionGuard, SectionPanel } from "@/components";
 import { Check, Copy } from "lucide-react";
 
 function CopyButton({ text }: { text: string }) {
@@ -464,19 +464,22 @@ export default function DanbooruReferencePage() {
     <PageShell>
       <PageHeader title={t("danbooru.title")} description={t("danbooru.desc")} />
 
-      <div className="bg-accent-subtle border border-accent/30 rounded-lg p-4 text-sm mb-6">
-        <p className="font-medium text-accent mb-1">{t("danbooru.search_info")}</p>
+      <div data-page-primary-content>
+      <Banner tone="info" title={t("danbooru.search_info")} className="mb-6">
         <p className="text-accent">{t("danbooru.search_info_desc")}</p>
+      </Banner>
       </div>
 
       {/* URL Batch Import */}
-      <div className="card p-4 mb-6">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-medium text-sm">{t("danbooru.url_batch_title")}</h3>
-          <button onClick={() => setShowUrlBatch(!showUrlBatch)} className="text-xs text-accent hover:underline">
+      <SectionPanel
+        className="mb-6"
+        title={t("danbooru.url_batch_title")}
+        actions={
+          <button onClick={() => setShowUrlBatch(!showUrlBatch)} className="btn-ghost text-xs">
             {showUrlBatch ? t("danbooru.batch_collapse") : t("danbooru.batch_expand")}
           </button>
-        </div>
+        }
+      >
         {!showUrlBatch && (
           <p className="text-xs text-muted">{t("danbooru.url_batch_desc")}</p>
         )}
@@ -493,14 +496,14 @@ export default function DanbooruReferencePage() {
             />
 
             {urlPreview && (
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-150 dark:border-indigo-900 rounded p-2">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded border border-accent/30 bg-accent-subtle p-2 text-xs">
                 <span className="text-muted">{t("danbooru.input_count", { count: urlPreview.total })}</span>
                 <span className="text-muted">→</span>
                 <span className="font-medium">{t("danbooru.unique_count", { count: urlPreview.unique_count })}</span>
                 {urlPreview.duplicates_removed > 0 && (
                   <span className="text-warning">{t("danbooru.duplicate_count", { count: urlPreview.duplicates_removed })}</span>
                 )}
-                <span className="ml-auto font-semibold text-indigo-700 dark:text-indigo-300">
+                <span className="ml-auto font-semibold text-accent">
                   {t("danbooru.ready_count", { count: urlPreview.unique_count })}
                 </span>
               </div>
@@ -510,7 +513,7 @@ export default function DanbooruReferencePage() {
               <button
                 onClick={handleUrlBatchSubmit}
                 disabled={urlBatchImport.isPending || !urlBatchInput.trim()}
-                className="px-4 py-2 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700 disabled:opacity-50"
+                className="btn-primary"
               >
                 {urlBatchImport.isPending ? t("danbooru.processing") : t("danbooru.url_batch_import")}
               </button>
@@ -529,17 +532,19 @@ export default function DanbooruReferencePage() {
             )}
           </div>
         )}
-      </div>
+      </SectionPanel>
 
       {/* Batch Import */}
-      <div className="card p-4 mb-6">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-medium text-sm">{t("danbooru.batch_title")}</h3>
+      <SectionPanel
+        className="mb-6"
+        title={t("danbooru.batch_title")}
+        actions={
           <button onClick={() => setShowBatch(!showBatch)}
-            className="text-xs text-accent hover:underline">
+            className="btn-ghost text-xs">
             {showBatch ? t("danbooru.batch_collapse") : t("danbooru.batch_expand")}
           </button>
-        </div>
+        }
+      >
         {!showBatch && (
           <p className="text-xs text-muted">{t("danbooru.batch_desc")}</p>
         )}
@@ -593,7 +598,7 @@ export default function DanbooruReferencePage() {
               <button
                 onClick={handleBatchSubmit}
                 disabled={enqueueBatch.isPending || (!!batchJob?.jobId && !displayBatchResult) || !batchInput.trim()}
-                className="px-4 py-2 bg-accent text-white rounded text-sm hover:bg-accent/90 disabled:opacity-50"
+                className="btn-primary"
               >
                 {enqueueBatch.isPending ? "..." : (!!batchJob?.jobId && !displayBatchResult) ? t("danbooru.processing") : t("danbooru.batch_import")}
               </button>
@@ -703,7 +708,7 @@ export default function DanbooruReferencePage() {
             )}
           </div>
         )}
-      </div>
+      </SectionPanel>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div className="card p-4">

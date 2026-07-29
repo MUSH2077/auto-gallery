@@ -227,14 +227,17 @@ function SubscriptionsContent() {
 
   return (
     <PageShell>
-      <PageHeader title={t("subscriptions.title")} description={t("subscriptions.count").replace("{count}", String(subsCount.data?.count ?? 0))}>
-        <button onClick={() => setShowCreate(true)} className="btn-primary">{t("subscriptions.new")}</button>
-      </PageHeader>
+      <PageHeader
+        title={t("subscriptions.title")}
+        description={t("subscriptions.count").replace("{count}", String(subsCount.data?.count ?? 0))}
+        primaryAction={<button onClick={() => setShowCreate(true)} className="btn-primary">{t("subscriptions.new")}</button>}
+      />
 
       {/* Toolbar */}
+      <div data-page-primary-content>
       <FilterBar>
         <input value={inputVal} onChange={(e) => { setInputVal(e.target.value); }} placeholder={t("subscriptions.search")} className="input w-56 py-1.5" />
-        <div className="segmented-control">
+        <div className="segmented-control max-w-full flex-wrap">
           {FILTERS.map((f) => (
             <button key={f.key} onClick={() => updateParams({ filter: f.key === "all" ? null : f.key })}
               className={`segment ${filter === f.key ? "segment-active" : ""}`}>
@@ -243,8 +246,9 @@ function SubscriptionsContent() {
           ))}
         </div>
       </FilterBar>
+      </div>
 
-      <PageSection className="mt-5">
+      <PageSection>
       <SelectionBar
         count={selected.size}
         label={t("subscriptions.delete_selected").replace("{count}", String(selected.size))}

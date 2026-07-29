@@ -16,7 +16,10 @@ export default function SystemPage() {
   return (
     <PermissionGuard module="system">
     <PageShell>
-      <PageHeader title={t("system_health.title")} description={t("system_health.desc")}>
+      <PageHeader
+        title={t("system_health.title")}
+        description={t("system_health.desc")}
+        primaryAction={
         <button
           onClick={() => { setRefreshing(true); health.refetch().then(() => setRefreshing(false)); sources.refetch(); }}
           disabled={refreshing}
@@ -24,11 +27,13 @@ export default function SystemPage() {
         >
           {refreshing ? t("system_health.refreshing") : t("system_health.refresh")}
         </button>
-      </PageHeader>
+        }
+      />
 
+      <div data-page-primary-content>
       {health.error && <div className="mb-4 rounded-md border border-danger/40 bg-danger-subtle p-4 text-sm text-danger dark:border-danger/40 dark:bg-danger/15 dark:text-danger">{(health.error as Error).message}</div>}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-8">
+      <div className="mb-8 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
         {health.data ? Object.entries(health.data.services).map(([name, status]) => (
           <div key={name} className="card p-4">
             <div className="flex items-center justify-between mb-2">
@@ -93,6 +98,7 @@ export default function SystemPage() {
       </section>
 
       {health.data && <p className="mt-4 text-xs text-muted">{t("system_health.version")} {health.data.version} · {t("system_health.last_update")} {fmt.time(new Date().toISOString())}</p>}
+      </div>
     </PageShell>
     </PermissionGuard>
   );

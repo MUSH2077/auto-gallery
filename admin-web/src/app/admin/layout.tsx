@@ -65,6 +65,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const sidebarTriggerRef = useRef<HTMLButtonElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const previousPathRef = useRef(pathname);
+  const restoreDrawerFocusRef = useRef(true);
 
   useEffect(() => {
     try {
@@ -110,6 +111,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        restoreDrawerFocusRef.current = true;
         setMobileOpen(false);
         return;
       }
@@ -133,14 +135,20 @@ function AppShell({ children }: { children: React.ReactNode }) {
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
       document.body.style.overflow = previousOverflow;
-      (sidebarTriggerRef.current || previousFocus)?.focus();
+      if (restoreDrawerFocusRef.current) {
+        (sidebarTriggerRef.current || previousFocus)?.focus();
+      }
     };
   }, [drawerMounted, mobileOpen]);
 
   useEffect(() => {
     if (previousPathRef.current === pathname) return;
     previousPathRef.current = pathname;
-    window.requestAnimationFrame(() => mainRef.current?.focus());
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      mainRef.current?.focus({ preventScroll: true });
+    });
   }, [pathname]);
 
   const desktopMode = viewportTier === "mid" ? midMode : wideMode;
@@ -149,7 +157,10 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
   const toggleSidebar = () => {
     if (viewportTier === "mobile") {
-      setMobileOpen((open) => !open);
+      setMobileOpen((open) => {
+        restoreDrawerFocusRef.current = true;
+        return !open;
+      });
       return;
     }
     const setter = viewportTier === "mid" ? setMidMode : setWideMode;
@@ -182,7 +193,10 @@ function AppShell({ children }: { children: React.ReactNode }) {
         <>
           <div
             className={`fixed inset-0 z-50 bg-black/30 md:hidden ${drawerClosing ? "overlay-backdrop-exit" : "overlay-backdrop"}`}
-            onClick={() => setMobileOpen(false)}
+            onClick={() => {
+              restoreDrawerFocusRef.current = true;
+              setMobileOpen(false);
+            }}
             aria-hidden
           />
           <aside
@@ -193,8 +207,14 @@ function AppShell({ children }: { children: React.ReactNode }) {
             className={`fixed inset-y-0 left-0 z-[60] border-r border-border bg-subtle md:hidden ${drawerClosing ? "drawer-left-exit" : "drawer-left"}`}
           >
             <AppSidebar
-              onNavigate={() => setMobileOpen(false)}
-              onDismiss={() => setMobileOpen(false)}
+              onNavigate={() => {
+                restoreDrawerFocusRef.current = false;
+                setMobileOpen(false);
+              }}
+              onDismiss={() => {
+                restoreDrawerFocusRef.current = true;
+                setMobileOpen(false);
+              }}
             />
           </aside>
         </>

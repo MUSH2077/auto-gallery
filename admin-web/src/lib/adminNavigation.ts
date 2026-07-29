@@ -105,7 +105,6 @@ export const ADMIN_NAV_LINKS: AdminNavLink[] = [
 const byHref = (href: string) => ADMIN_NAV_LINKS.find((item) => item.href === href)!;
 
 export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
-  { labelKey: "nav.overview", links: [byHref("/admin")] },
   { labelKey: "nav.library", links: [byHref("/admin/works"), byHref("/admin/tags")] },
   { labelKey: "nav.ingestion", links: [byHref("/admin/upload"), byHref("/admin/reference/danbooru")] },
   { labelKey: "nav.sources", links: [byHref("/admin/creators"), byHref("/admin/subscriptions")] },

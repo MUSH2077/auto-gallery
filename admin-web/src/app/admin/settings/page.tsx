@@ -41,7 +41,7 @@ export default function SettingsPage() {
       <PageHeader title={t("settings.title")} description={t("settings.desc_default")} />
 
       {/* Config Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+      <div data-page-primary-content className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-2">
         {cards.map((c) => (
           <Link key={c.href} href={c.href}
             className="card-interactive p-6 block">
