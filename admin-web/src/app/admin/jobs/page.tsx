@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { Suspense, useState, useEffect, useMemo, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { Suspense, useState, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { useT, type TFunction } from "@/lib/i18n";
@@ -105,7 +105,7 @@ function JobLifecycle({ status }: { status: string }) {
         return (
           <div key={`${step}-${index}`} className="flex min-w-0 flex-1 items-center gap-1">
             <span
-              title={t(`jobs.lifecycle_${step}`, step)}
+              title={t(`jobs.lifecycle_${step}`)}
               className={`h-2 w-2 shrink-0 rounded-full transition-colors duration-slow ${
                 danger ? "bg-danger" : active ? "animate-pulse bg-accent" : done ? "bg-success" : "bg-border dark:bg-border"
               }`}
@@ -257,22 +257,10 @@ function JobRowShell({
     : detail || <span className="text-xs text-muted">—</span>;
   const calmError = Boolean(error && /no new content since last sync|already archived or empty/i.test(error));
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.target !== event.currentTarget) return;
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      onClick();
-    }
-  };
-
   return (
     <div className={entrance?.className} style={entrance?.style}>
       <div
-        role="button"
-        tabIndex={0}
-        aria-label={`${typeof typeLabel === "string" ? typeLabel : "Job"} ${shortId(id)}`}
         onClick={onClick}
-        onKeyDown={handleKeyDown}
         className={`card min-h-[68px] w-full min-w-0 cursor-pointer p-3 text-sm transition-colors hover:border-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${className}`}
       >
         <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 lg:grid-cols-[auto_minmax(11rem,0.8fr)_minmax(12rem,1.1fr)_minmax(10rem,0.8fr)_auto] lg:items-center">
@@ -284,7 +272,7 @@ function JobRowShell({
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
               <span className="truncate text-xs font-medium text-fg">{typeLabel}</span>
               {source || <span className="text-xs text-muted">—</span>}
-              <span className="font-mono text-[10px] text-placeholder">{shortId(id)}</span>
+              <span className="font-mono text-[10px] text-muted">{shortId(id)}</span>
             </div>
             <div className="mt-1"><RowMeta primary={primary} secondary={secondary} /></div>
           </div>
@@ -359,12 +347,12 @@ function JobsFilterPanel({
 
       <div className="flex flex-wrap items-center gap-2">
         <input value={search} onChange={(e) => onUpdateParams({ q: e.target.value || null })} className="input h-9 min-h-9 min-w-[220px] px-3 py-0 text-xs" placeholder={t("jobs.search_placeholder")} aria-label={t("jobs.search_placeholder")} />
-        <select value={status} onChange={(e) => onUpdateParams({ status: e.target.value || null })} className="select h-9 min-h-9 px-2 py-0 text-xs">
+        <select aria-label={t("jobs.filter_all_status")} value={status} onChange={(e) => onUpdateParams({ status: e.target.value || null })} className="select h-9 min-h-9 px-2 py-0 text-xs">
           <option value="">{t("jobs.filter_all_status")}</option>
           {statusOptions.filter(Boolean).map((s) => <option key={s} value={s}>{statusLabel(t, s)}</option>)}
         </select>
         {activeTab !== "imports" && activeTab !== "admin" && (
-          <select value={dlSource} onChange={(e) => onUpdateParams({ source: e.target.value || null })} className="select h-9 min-h-9 px-2 py-0 text-xs">
+          <select aria-label={t("jobs.filter_all_source")} value={dlSource} onChange={(e) => onUpdateParams({ source: e.target.value || null })} className="select h-9 min-h-9 px-2 py-0 text-xs">
             <option value="">{t("jobs.filter_all_source")}</option>
             {SOURCE_OPTIONS.filter(Boolean).map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
@@ -372,7 +360,7 @@ function JobsFilterPanel({
         {subscriptionSourceId && <span className="rounded-md border border-border px-2 py-1 text-xs font-mono dark:border-border">{t("jobs.repository")} {shortId(subscriptionSourceId)}</span>}
         {downloadJobId && <span className="rounded-md border border-border px-2 py-1 text-xs font-mono dark:border-border">{t("jobs.download_job")} {shortId(downloadJobId)}</span>}
         {activeTab === "downloads" && (
-          <select value={`${dlSort}-${dlOrder}`} onChange={(e) => { const [k, o] = e.target.value.split("-"); onUpdateParams({ sort: k === "created_at" && o === "desc" ? null : k, order: o === "desc" ? null : o }); }} className="select h-9 min-h-9 px-2 py-0 text-xs">
+          <select aria-label={t("jobs.sort_label")} value={`${dlSort}-${dlOrder}`} onChange={(e) => { const [k, o] = e.target.value.split("-"); onUpdateParams({ sort: k === "created_at" && o === "desc" ? null : k, order: o === "desc" ? null : o }); }} className="select h-9 min-h-9 px-2 py-0 text-xs">
             <option value="created_at-desc">{t("jobs.sort_newest")}</option>
             <option value="created_at-asc">{t("jobs.sort_oldest")}</option>
             <option value="status-asc">{t("jobs.sort_status")}</option>
@@ -460,12 +448,12 @@ function JobsBatchToolbar({
             className="btn-ghost text-xs"
             aria-expanded={filterBatchOpen}
           >
-            {t("jobs.batch_filter_scope", "批量处理当前筛选")}
+            {t("jobs.batch_filter_scope")}
           </button>
         )}
         {activeTab === "downloads" && (
           <RowActionMenu
-            label={t("jobs.maintenance_actions", "维护操作")}
+            label={t("jobs.maintenance_actions")}
             items={[
               { label: t("jobs.clear_failed"), onSelect: () => onClear(["failed", "stale"]), tone: "danger", disabled: isClearing },
               { label: t("jobs.clear_complete"), onSelect: () => onClear(["complete"]), disabled: isClearing },
@@ -480,7 +468,7 @@ function JobsBatchToolbar({
           <span className="badge shrink-0">
             {selectedCount > 0
               ? t("common.selected_count", { count: selectedCount })
-              : t("jobs.current_filter_scope", "当前筛选范围")}
+              : t("jobs.current_filter_scope")}
           </span>
           {hasSourceFilter && selectedCount === 0 && (
             <select value={source} onChange={(e) => setSource(e.target.value)} className="select h-9 min-h-9 px-2 py-0 text-xs" aria-label={t("jobs.filter_all_source")}>
@@ -505,7 +493,7 @@ function JobsBatchToolbar({
               if (!action) return;
               if (
                 selectedCount === 0
-                && !confirm(t("jobs.batch_filter_confirm", "确认对当前筛选匹配的全部任务执行此操作？"))
+                && !confirm(t("jobs.batch_filter_confirm"))
               ) return;
               onApply(action, { source, status });
             }}
@@ -619,7 +607,7 @@ function TaskRunRow({
         entrance={entrance}
         status={task.status}
         typeLabel={operationLabel(t, task.operation_type, task.kind)}
-        select={<input type="checkbox" checked={selected.has(task.id)} onClick={(e) => e.stopPropagation()} onChange={() => onToggleSelect(task.id)} className="h-4 w-4 shrink-0 rounded border-border" aria-label={t("jobs.select_task", { id: shortId(task.id) })} />}
+        select={<input type="checkbox" checked={selected.has(task.id)} onClick={(e) => e.stopPropagation()} onChange={() => onToggleSelect(task.id)} className="h-6 w-6 shrink-0 rounded border-border" aria-label={t("jobs.select_task", { id: shortId(task.id) })} />}
         source={task.source ? <SourceBadge source={task.source} /> : undefined}
         primary={task.title || task.operation_type || task.kind}
         secondary={task.subject_type && task.subject_id ? `${task.subject_type} · ${shortId(task.subject_id)}` : task.queue_name || task.rq_job_id}
@@ -1269,7 +1257,7 @@ function JobsContent() {
       : TASK_STATUS_OPTIONS;
 
   return (
-    <PageShell size="wide">
+    <PageShell>
       <PageHeader title={t("jobs.title")} description={t("jobs.desc")} />
 
       {workbench.data && (
@@ -1370,13 +1358,13 @@ function JobsContent() {
                     id={j.id}
                     status={j.status}
                     typeLabel={operationLabel(t, j.operation_type, "download")}
-                    select={<input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="h-4 w-4 shrink-0 rounded border-border" aria-label={t("jobs.select_download", { id: shortId(j.id) })} />}
+                    select={<input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="h-6 w-6 shrink-0 rounded border-border" aria-label={t("jobs.select_download", { id: shortId(j.id) })} />}
                     source={j.source ? <SourceBadge source={j.source} /> : undefined}
                     primary={j.subscription_id ? (
                       <Link
                         href={`/admin/subscriptions/${j.subscription_id}`}
                         onClick={(e) => e.stopPropagation()}
-                        className="text-accent hover:underline dark:text-accent"
+                        className="inline-flex min-h-6 items-center text-accent hover:underline dark:text-accent"
                         title={j.creator_name || j.subscription_name || j.subscription_id}
                       >
                         {subscriptionLabel}
@@ -1386,7 +1374,7 @@ function JobsContent() {
                       <Link
                         href={`/admin/subscriptions/${j.subscription_id}`}
                         onClick={(e) => e.stopPropagation()}
-                        className="text-muted hover:underline dark:text-muted"
+                        className="inline-flex min-h-6 items-center text-muted hover:underline dark:text-muted"
                         title={j.subscription_name || j.subscription_id}
                       >
                         {subscriptionSecondary}
@@ -1423,7 +1411,7 @@ function JobsContent() {
                           <RowButton tone="primary" onClick={() => { setRetryId(j.id); retryDL.mutate(j.id); }} disabled={retryDL.isPending}>{t("jobs.retry")}</RowButton>
                         )}
                         <RowActionMenu
-                          label={t("common.more_actions", "更多操作")}
+                          label={t("common.more_actions")}
                           items={[
                             {
                               label: t("jobs.imports"),
@@ -1473,10 +1461,10 @@ function JobsContent() {
                     id={j.id}
                     status={j.status}
                     typeLabel={operationLabel(t, j.operation_type, "import")}
-                    select={<input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="h-4 w-4 shrink-0 rounded border-border" aria-label={t("jobs.select_import", { id: shortId(j.id) })} />}
+                    select={<input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="h-6 w-6 shrink-0 rounded border-border" aria-label={t("jobs.select_import", { id: shortId(j.id) })} />}
                     source={j.source ? <SourceBadge source={j.source} /> : undefined}
                     primary={j.subscription_id ? (
-                      <Link href={`/admin/subscriptions/${j.subscription_id}`} onClick={(e) => e.stopPropagation()} className="text-accent hover:underline dark:text-accent" title={j.creator_name || j.subscription_name || undefined}>
+                      <Link href={`/admin/subscriptions/${j.subscription_id}`} onClick={(e) => e.stopPropagation()} className="inline-flex min-h-6 items-center text-accent hover:underline dark:text-accent" title={j.creator_name || j.subscription_name || undefined}>
                         {j.creator_name || j.subscription_name || shortId(j.subscription_id)}
                       </Link>
                     ) : "—"}
@@ -1499,7 +1487,7 @@ function JobsContent() {
                       <>
                         {(j.status === "failed" || j.status === "stale") && <RowButton tone="primary" onClick={() => { setRetryId(j.id); retryIM.mutate(j.id); }} disabled={retryIM.isPending}>{t("jobs.retry")}</RowButton>}
                         <RowActionMenu
-                          label={t("common.more_actions", "更多操作")}
+                          label={t("common.more_actions")}
                           items={[
                             {
                               label: t("jobs.open_download"),

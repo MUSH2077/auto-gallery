@@ -6,6 +6,7 @@ import { usePresence } from "@/lib/motion";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import AppSidebar from "@/components/AppSidebar";
 import AppTopBar from "@/components/AppTopBar";
+import { useT } from "@/lib/i18n";
 
 export const dynamic = 'force-dynamic';
 
@@ -17,6 +18,7 @@ type DesktopSidebarMode = "expanded" | "compact";
 type ViewportTier = "mobile" | "mid" | "wide";
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
+  const t = useT();
   const { isAuthenticated, isLoading, user } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
@@ -40,7 +42,10 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-subtle">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-border" />
+        <div role="status" className="flex items-center gap-3 text-sm text-muted">
+          <span aria-hidden="true" className="animate-spin rounded-full h-8 w-8 border-b-2 border-border" />
+          <span className="sr-only">{t("common.loading")}</span>
+        </div>
       </div>
     );
   }
@@ -51,12 +56,15 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 }
 
 function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const [wideMode, setWideMode] = useState<DesktopSidebarMode>("expanded");
   const [midMode, setMidMode] = useState<DesktopSidebarMode>("compact");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [viewportTier, setViewportTier] = useState<ViewportTier>("wide");
   const { mounted: drawerMounted, closing: drawerClosing } = usePresence(mobileOpen);
   const sidebarTriggerRef = useRef<HTMLButtonElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  const previousPathRef = useRef(pathname);
 
   useEffect(() => {
     try {
@@ -129,6 +137,12 @@ function AppShell({ children }: { children: React.ReactNode }) {
     };
   }, [drawerMounted, mobileOpen]);
 
+  useEffect(() => {
+    if (previousPathRef.current === pathname) return;
+    previousPathRef.current = pathname;
+    window.requestAnimationFrame(() => mainRef.current?.focus());
+  }, [pathname]);
+
   const desktopMode = viewportTier === "mid" ? midMode : wideMode;
   const desktopCompact = desktopMode === "compact";
   const sidebarWidth = desktopCompact ? 64 : 248;
@@ -192,13 +206,21 @@ function AppShell({ children }: { children: React.ReactNode }) {
           sidebarId={viewportTier === "mobile" ? "admin-mobile-sidebar" : "admin-sidebar"}
           sidebarTriggerRef={sidebarTriggerRef}
         />
-        <main id="main-content" className="min-h-[calc(100vh-56px)] min-w-0">{children}</main>
+        <main
+          ref={mainRef}
+          id="main-content"
+          tabIndex={-1}
+          className="min-h-[calc(100vh-56px)] min-w-0 outline-none"
+        >
+          {children}
+        </main>
       </div>
     </div>
   );
 }
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
+  const t = useT();
   const pathname = usePathname();
   const isLoginPage = pathname === "/admin/login";
 
@@ -209,7 +231,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   return (
     <ErrorBoundary>
       <AuthGuard>
-        <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-subtle focus:text-fg focus:rounded">Skip to content</a>
+        <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-subtle focus:text-fg focus:rounded">{t("common.skip_to_content")}</a>
         <AppShell>{children}</AppShell>
       </AuthGuard>
     </ErrorBoundary>

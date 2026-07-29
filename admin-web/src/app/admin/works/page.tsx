@@ -11,6 +11,8 @@ import { useStaggeredEntrance, type StaggeredEntranceProps } from "@/lib/motion"
 import { AssetImage, PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, WorkPreviewOverlay, PermissionGuard, type SlideItem } from "@/components";
 import { useSlideshow } from "@/lib/useSlideshow";
 import { usePermissions } from "@/lib/usePermissions";
+import { useI18nFormat } from "@/lib/i18n-format";
+import { Star } from "lucide-react";
 
 type PreviewState = {
   work: WorkListItem;
@@ -57,8 +59,8 @@ function WorkCard({
   canCurate: boolean;
 }) {
   const t = useT();
-  const router = useRouter();
-  const cardRef = useRef<HTMLDivElement | null>(null);
+  const fmt = useI18nFormat();
+  const cardRef = useRef<HTMLElement | null>(null);
   const hoverTimer = useRef<number | null>(null);
   const wheelDelta = useRef(0);
   const [pageIdx, setPageIdx] = useState(0);
@@ -84,11 +86,10 @@ function WorkCard({
   };
 
   return (
-    <div
+    <article
       ref={cardRef}
-      className={`card-interactive ${entrance?.className || ""} overflow-hidden cursor-pointer group ${selected ? "ring-2 ring-accent" : ""}`}
+      className={`card-interactive relative ${entrance?.className || ""} overflow-hidden group ${selected ? "ring-2 ring-accent" : ""}`}
       style={entrance?.style}
-      onClick={() => router.push(`/admin/works/${w.id}`)}
       onMouseEnter={() => {
         onCancelClosePreview();
         clearHoverTimer();
@@ -107,10 +108,15 @@ function WorkCard({
         wheelDelta.current = 0;
       }}
     >
-      <div className="h-32 relative flex items-center justify-center overflow-hidden bg-subtle text-xs text-muted">
+      <Link
+        href={`/admin/works/${w.id}`}
+        aria-label={t("common.open_item", { name: w.title || t("works.untitled") })}
+        className="absolute inset-0 z-0 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+      />
+      <div className="pointer-events-none relative z-10 flex h-32 items-center justify-center overflow-hidden bg-subtle text-xs text-muted">
         <AssetImage assetId={currentId} alt={w.title || ""} className="h-full w-full object-cover" fallback={t("works.na")} />
         {selectable && (
-          <label className="absolute left-1 top-1 z-20 flex h-7 w-7 items-center justify-center rounded bg-black/60 text-white shadow-sm">
+          <label className="pointer-events-auto absolute left-1 top-1 z-20 flex h-7 w-7 items-center justify-center rounded bg-black/60 text-white shadow-sm">
             <span className="sr-only">{t("works.select_work")}</span>
             <input
               type="checkbox"
@@ -123,10 +129,10 @@ function WorkCard({
         )}
         {canCurate && (
           <button onClick={(e) => { e.stopPropagation(); onToggleFavorite(w.id); }}
-            className={`absolute top-1 right-1 z-10 text-base ${w.is_favorite ? "text-warning" : "text-white/60 hover:text-warning"} drop-shadow`}
+            className={`pointer-events-auto absolute right-0 top-0 z-10 flex h-11 w-11 items-center justify-center text-base ${w.is_favorite ? "text-warning" : "text-white/60 hover:text-warning"} drop-shadow`}
             title={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}
             aria-label={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}>
-            {w.is_favorite ? "★" : "☆"}
+            <Star className="h-5 w-5" fill={w.is_favorite ? "currentColor" : "none"} aria-hidden="true" />
           </button>
         )}
         {w.asset_count > 1 && (
@@ -139,33 +145,32 @@ function WorkCard({
           <span className="absolute bottom-1 right-1 rounded bg-accent px-1.5 py-0.5 text-[10px] font-medium text-on-primary">{t("works.gif_badge")}</span>
         )}
         {trashMode && !selectable && (
-          <span className="absolute left-1 top-1 rounded bg-danger/90 px-1.5 py-0.5 text-xs font-medium text-white">Trash</span>
+          <span className="absolute left-1 top-1 rounded bg-danger/90 px-1.5 py-0.5 text-xs font-medium text-white">{t("works.trash_badge")}</span>
         )}
       </div>
-      <div className="p-3">
+      <div className="pointer-events-none relative z-10 p-3">
         <div className="text-sm font-medium truncate text-fg">{w.title || t("works.untitled")}</div>
         <div className="flex items-center gap-1.5 mt-1">
           {w.source && <SourceBadge source={w.source} href={`/admin/works?source=${w.source}`} />}
           {w.has_ugoira && <span className="rounded bg-accent-subtle px-1 text-[10px] text-accent">{t("works.gif_badge")}</span>}
           {w.creator_name && w.creator_id && (
   <Link href={`/admin/creators/${w.creator_id}`}
-    className="text-xs text-accent hover:underline truncate"
-    onClick={(e) => e.stopPropagation()}>
+    className="pointer-events-auto relative z-10 truncate text-xs text-accent hover:underline">
     {w.creator_name}
   </Link>
 )}
         </div>
         <div className="text-xs text-muted mt-0.5">
-          {w.posted_at ? new Date(w.posted_at).toLocaleDateString() : t("works.no_date")}
+          {w.posted_at ? fmt.date(w.posted_at) : t("works.no_date")}
         </div>
         {trashMode && canCurate && (
           <div className="mt-3 flex gap-2">
-            <button onClick={(e) => { e.stopPropagation(); onRestore?.(w.id); }} className="rounded border border-border px-2 py-1 text-xs hover:bg-subtle dark:border-border dark:hover:bg-subtle">{t("works.restore")}</button>
-            <button onClick={(e) => { e.stopPropagation(); onPurge?.(w.id); }} className="rounded bg-danger px-2 py-1 text-xs text-white hover:bg-danger">{t("works.purge")}</button>
+            <button onClick={(e) => { e.stopPropagation(); onRestore?.(w.id); }} className="pointer-events-auto rounded border border-border px-2 py-1 text-xs hover:bg-subtle dark:border-border dark:hover:bg-subtle">{t("works.restore")}</button>
+            <button onClick={(e) => { e.stopPropagation(); onPurge?.(w.id); }} className="pointer-events-auto rounded bg-danger px-2 py-1 text-xs text-white hover:bg-danger">{t("works.purge")}</button>
           </div>
         )}
       </div>
-    </div>
+    </article>
   );
 }
 
@@ -174,6 +179,7 @@ type ViewMode = "grid" | "list";
 
 function WorksContent() {
   const t = useT();
+  const fmt = useI18nFormat();
   const router = useRouter();
   const qc = useQueryClient();
   const sp = useSearchParams();
@@ -208,7 +214,7 @@ function WorksContent() {
     { key: "danbooru", label: "Danbooru" },
     { key: "pinterest", label: "Pinterest" },
     { key: "lofter", label: "Lofter" },
-    { key: "weibo", label: "微博 (Weibo)" },
+    { key: "weibo", label: t("works.source_weibo") },
   ];
   // All filter state derived from URL — preserves filters on back/forward and supports sharing links
   const search = sp.get("q") ?? "";
@@ -403,7 +409,7 @@ function WorksContent() {
 
   return (
     <PageShell>
-      <PageHeader title={t("works.title")} description={t("works.count", "0 works").replace("{count}", String(works.data?.total ?? 0))}>
+      <PageHeader title={t("works.title")} description={t("works.count").replace("{count}", String(works.data?.total ?? 0))}>
         {slideItems.length > 0 && (
           <button type="button" onClick={() => slideshow.open(slideItems)} className="btn-ghost">
             {t("slideshow.open")}
@@ -470,7 +476,8 @@ function WorksContent() {
         <button onClick={() => updateParams({ fav: isFavoriteFilter ? null : "1" })}
           aria-label={t("works.filter_favorites")}
           className={`px-2.5 py-1 text-xs rounded transition-colors ${isFavoriteFilter ? "bg-warning-subtle text-warning font-medium" : "text-muted hover:text-fg"}`}>
-          {"★"} {t("works.filter_favorites")}
+          <Star className="mr-1 inline h-3.5 w-3.5" fill={isFavoriteFilter ? "currentColor" : "none"} aria-hidden="true" />
+          {t("works.filter_favorites")}
         </button>
 
         {/* AI filter */}
@@ -535,7 +542,7 @@ function WorksContent() {
             onClick={() => setPreviewPreference(!previewEnabled)}
             className={`rounded-md border border-border px-2.5 py-1.5 text-xs transition-colors ${previewEnabled ? "bg-accent-subtle text-accent" : "bg-surface text-muted hover:bg-subtle"}`}
           >
-            {previewEnabled ? t("works.preview_on", "Preview on") : t("works.preview_off", "Preview off")}
+            {previewEnabled ? t("works.preview_on") : t("works.preview_off")}
           </button>
         )}
       </div>
@@ -654,15 +661,15 @@ function WorksContent() {
                   {w.creator_name && w.creator_id && (
   <Link href={`/admin/creators/${w.creator_id}`} onClick={(e) => e.stopPropagation()} className="text-accent hover:underline">{w.creator_name}</Link>
 )}
-                  <span>{w.posted_at ? new Date(w.posted_at).toLocaleDateString() : "—"}</span>
+                  <span>{w.posted_at ? fmt.date(w.posted_at) : "—"}</span>
                 </div>
               </div>
               {canCurate && (
                 <button onClick={(e) => { e.stopPropagation(); toggleFavorite.mutate(w.id); }}
-                  className={`text-lg shrink-0 ${w.is_favorite ? "text-warning" : "text-muted hover:text-warning"}`}
+                  className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-md ${w.is_favorite ? "text-warning" : "text-muted hover:bg-subtle hover:text-warning"}`}
                   title={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}
                   aria-label={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}>
-                  {w.is_favorite ? "★" : "☆"}
+                  <Star className="h-5 w-5" fill={w.is_favorite ? "currentColor" : "none"} aria-hidden="true" />
                 </button>
               )}
               {canCurate && curationVisibility === "trashed" && (

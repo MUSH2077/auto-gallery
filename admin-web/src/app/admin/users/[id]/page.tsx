@@ -8,15 +8,16 @@ import { Breadcrumb } from "@/components/Breadcrumb";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { formatBytes } from "@/lib/format";
+import { userModuleLabel } from "@/lib/i18n-format";
 
 function initials(name: string) {
   return name.trim().slice(0, 2).toUpperCase();
 }
 
-function ToggleSwitch({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+function ToggleSwitch({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
   return (
-    <label className={`relative inline-flex items-center ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}>
-      <input type="checkbox" aria-label="Toggle" checked={checked} disabled={disabled}
+    <label className={`relative inline-flex min-h-11 min-w-11 items-center justify-center ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}>
+      <input type="checkbox" aria-label={label} checked={checked} disabled={disabled}
         onChange={(e) => onChange(e.target.checked)} className="sr-only peer" />
       <div className="w-9 h-5 bg-subtle peer-focus:outline-none rounded-full peer dark:bg-subtle peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-border after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-border peer-checked:bg-accent dark:peer-checked:bg-accent"></div>
     </label>
@@ -87,13 +88,13 @@ export default function UserDetailPage() {
 
   if (user.isLoading) {
     return (
-      <PageShell size="normal">
+      <PageShell>
         <div className="space-y-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-24 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div>
       </PageShell>
     );
   }
   if (user.error) {
-    return <PageShell size="normal"><ErrorState message={(user.error as Error).message} onRetry={() => user.refetch()} /></PageShell>;
+    return <PageShell><ErrorState message={(user.error as Error).message} onRetry={() => user.refetch()} /></PageShell>;
   }
   const u = user.data;
   if (!u) return null;
@@ -107,7 +108,7 @@ export default function UserDetailPage() {
   const quotaDirty = !quotaInvalid && quotaBytes !== (u.upload_quota_bytes ?? null);
 
   return (
-    <PageShell size="normal">
+    <PageShell>
       <Breadcrumb items={[{ label: t("users.title"), href: "/admin/users" }, { label: u.display_name || u.username }]} />
       <PageHeader
         title={u.display_name || u.username}
@@ -131,9 +132,9 @@ export default function UserDetailPage() {
         <SectionPanel title={t("user_detail.account_section")}>
           <div className="space-y-4">
             <div>
-              <label className="mb-1 block text-sm font-medium">{t("user_detail.display_name_field")}</label>
+              <label htmlFor="user-display-name" className="mb-1 block text-sm font-medium">{t("user_detail.display_name_field")}</label>
               <div className="flex gap-2">
-                <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="input flex-1" />
+                <input id="user-display-name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="input flex-1" />
                 <button onClick={() => update.mutate({ display_name: displayName.trim() === "" ? null : displayName.trim() })} disabled={!displayNameDirty || update.isPending} className="btn-primary shrink-0">
                   {update.isPending ? t("common.saving") : t("common.save")}
                 </button>
@@ -141,14 +142,14 @@ export default function UserDetailPage() {
             </div>
             <div className="flex items-center justify-between border-t border-border pt-4 dark:border-border">
               <span className="text-sm font-medium">{t("user_detail.active_toggle")}</span>
-              <ToggleSwitch checked={u.is_active} onChange={(v) => update.mutate({ is_active: v })} disabled={update.isPending} />
+              <ToggleSwitch label={t("user_detail.active_toggle")} checked={u.is_active} onChange={(v) => update.mutate({ is_active: v })} disabled={update.isPending} />
             </div>
             <div className="flex items-center justify-between border-t border-border pt-4 dark:border-border">
               <div>
                 <span className="text-sm font-medium">{t("user_detail.admin_toggle")}</span>
                 <p className="mt-1 text-xs text-muted">{t("user_detail.admin_hint")}</p>
               </div>
-              <ToggleSwitch checked={u.is_admin} onChange={(v) => update.mutate({ is_admin: v })} disabled={update.isPending} />
+              <ToggleSwitch label={t("user_detail.admin_toggle")} checked={u.is_admin} onChange={(v) => update.mutate({ is_admin: v })} disabled={update.isPending} />
             </div>
             {u.must_change_password && <p className="text-xs text-warning dark:text-warning">{t("user_detail.must_change_password")}</p>}
           </div>
@@ -161,7 +162,7 @@ export default function UserDetailPage() {
                 <input type="checkbox" className="rounded" disabled={u.is_admin || update.isPending}
                   checked={u.is_admin || u.permissions.includes(key)}
                   onChange={() => togglePermission(key)} />
-                {t(`users.module_${key}`, modules[key])}
+                {userModuleLabel(t, key)}
               </label>
             ))}
           </div>
@@ -170,9 +171,9 @@ export default function UserDetailPage() {
         <SectionPanel title={t("user_detail.quota_section")}>
           <div className="space-y-3">
             <div>
-              <label className="mb-1 block text-sm font-medium">{t("user_detail.quota_mb_label")}</label>
+              <label htmlFor="user-upload-quota" className="mb-1 block text-sm font-medium">{t("user_detail.quota_mb_label")}</label>
               <div className="flex gap-2">
-                <input type="number" min={0} value={quotaMb} onChange={(e) => setQuotaMb(e.target.value)} placeholder={t("user_detail.quota_no_limit")} className="input w-40" />
+                <input id="user-upload-quota" type="number" min={0} value={quotaMb} onChange={(e) => setQuotaMb(e.target.value)} placeholder={t("user_detail.quota_no_limit")} className="input w-40" />
                 <button onClick={() => update.mutate({ upload_quota_bytes: quotaBytes })} disabled={!quotaDirty || update.isPending} className="btn-primary shrink-0">
                   {update.isPending ? t("common.saving") : t("common.save")}
                 </button>
@@ -195,7 +196,7 @@ export default function UserDetailPage() {
               <span className="text-sm font-medium">{t("user_detail.nsfw_toggle")}</span>
               <p className="mt-1 text-xs text-muted">{t("user_detail.nsfw_hint")}</p>
             </div>
-            <ToggleSwitch checked={u.nsfw_visible} onChange={(v) => update.mutate({ nsfw_visible: v })} disabled={update.isPending} />
+            <ToggleSwitch label={t("user_detail.nsfw_toggle")} checked={u.nsfw_visible} onChange={(v) => update.mutate({ nsfw_visible: v })} disabled={update.isPending} />
           </div>
         </SectionPanel>
 

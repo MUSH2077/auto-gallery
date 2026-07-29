@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, DownloadDefaults } from "@/lib/api";
 import { PageHeader, PageShell, ErrorState } from "@/components";
@@ -12,6 +12,12 @@ export default function DownloadDefaultsPage() {
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
   const [local, setLocal] = useState<DownloadDefaults | null>(null);
 
+  useEffect(() => {
+    if (settings.data?.download_defaults) {
+      setLocal((current) => current ?? { ...settings.data!.download_defaults });
+    }
+  }, [settings.data]);
+
   const save = useMutation({
     mutationFn: (data: DownloadDefaults) => api.updateAdminSettings({ download_defaults: data }),
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.admin.settings }),
@@ -21,7 +27,7 @@ export default function DownloadDefaultsPage() {
 
   if (settings.isError) {
     return (
-      <PageShell size="normal">
+      <PageShell>
         <ErrorState message={settings.error?.message || t("dldefaults.failed")} onRetry={() => settings.refetch()} />
       </PageShell>
     );
@@ -29,7 +35,7 @@ export default function DownloadDefaultsPage() {
 
   if (!settings.data) {
     return (
-      <PageShell size="normal">
+      <PageShell>
         <div className="animate-pulse space-y-4">
           <div className="h-8 rounded-md bg-subtle dark:bg-subtle w-1/3" />
           <div className="h-48 rounded-md bg-subtle dark:bg-subtle" />
@@ -38,17 +44,13 @@ export default function DownloadDefaultsPage() {
     );
   }
 
-  if (!local && settings.data.download_defaults) {
-    setLocal({ ...settings.data.download_defaults });
-  }
-
   const setNum = (key: keyof DownloadDefaults, val: number) => {
     if (!current) return;
     setLocal({ ...current, [key]: val });
   };
 
   return (
-    <PageShell size="normal">
+    <PageShell>
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("dldefaults.back")}</Link>
       </div>
@@ -63,6 +65,7 @@ export default function DownloadDefaultsPage() {
                 <p className="text-xs text-muted mt-1">{t("dldefaults.timeout.desc")}</p>
               </div>
               <input
+                aria-label={t("dldefaults.timeout")}
                 type="number" min={60} max={3600} step={60}
                 value={current.timeout_seconds}
                 onChange={(e) => setNum("timeout_seconds", parseInt(e.target.value) || 600)}
@@ -76,6 +79,7 @@ export default function DownloadDefaultsPage() {
                 <p className="text-xs text-muted mt-1">{t("dldefaults.stall_timeout.desc")}</p>
               </div>
               <input
+                aria-label={t("dldefaults.stall_timeout")}
                 type="number" min={30} max={600} step={30}
                 value={current.stall_timeout_seconds}
                 onChange={(e) => setNum("stall_timeout_seconds", parseInt(e.target.value) || 120)}
@@ -89,6 +93,7 @@ export default function DownloadDefaultsPage() {
                 <p className="text-xs text-muted mt-1">{t("dldefaults.retries.desc")}</p>
               </div>
               <input
+                aria-label={t("dldefaults.retries")}
                 type="number" min={0} max={10}
                 value={current.max_retries}
                 onChange={(e) => setNum("max_retries", parseInt(e.target.value) || 3)}
@@ -102,6 +107,7 @@ export default function DownloadDefaultsPage() {
                 <p className="text-xs text-muted mt-1">{t("dldefaults.backoff.desc")}</p>
               </div>
               <input
+                aria-label={t("dldefaults.backoff")}
                 type="number" min={10} max={600} step={10}
                 value={current.retry_backoff_base_seconds}
                 onChange={(e) => setNum("retry_backoff_base_seconds", parseInt(e.target.value) || 60)}
@@ -115,6 +121,7 @@ export default function DownloadDefaultsPage() {
                 <p className="text-xs text-muted mt-1">{t("dldefaults.gallerydl_retries.desc")}</p>
               </div>
               <input
+                aria-label={t("dldefaults.gallerydl_retries")}
                 type="number" min={1} max={10}
                 value={current.gallerydl_retries}
                 onChange={(e) => setNum("gallerydl_retries", parseInt(e.target.value) || 3)}
@@ -128,6 +135,7 @@ export default function DownloadDefaultsPage() {
                 <p className="text-xs text-muted mt-1">{t("dldefaults.gallerydl_timeout.desc")}</p>
               </div>
               <input
+                aria-label={t("dldefaults.gallerydl_timeout")}
                 type="number" min={10} max={120} step={5}
                 value={current.gallerydl_timeout}
                 onChange={(e) => setNum("gallerydl_timeout", parseInt(e.target.value) || 30)}
@@ -141,6 +149,7 @@ export default function DownloadDefaultsPage() {
                 <p className="text-xs text-muted mt-1">{t("dldefaults.gallerydl_abort.desc")}</p>
               </div>
               <input
+                aria-label={t("dldefaults.gallerydl_abort")}
                 type="number" min={1} max={20}
                 value={current.gallerydl_abort}
                 onChange={(e) => setNum("gallerydl_abort", parseInt(e.target.value) || 5)}
@@ -171,6 +180,7 @@ export default function DownloadDefaultsPage() {
                 <p className="text-xs text-muted mt-1">{t("dldefaults.max_posts.desc")}</p>
               </div>
               <input
+                aria-label={t("dldefaults.max_posts")}
                 type="number" min={10} max={10000} step={10}
                 value={current.max_posts}
                 onChange={(e) => setNum("max_posts", parseInt(e.target.value) || 200)}
@@ -184,7 +194,7 @@ export default function DownloadDefaultsPage() {
                 <p className="text-xs text-muted mt-1">{t("dldefaults.skip_ai.desc")}</p>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
-                <input type="checkbox" aria-label="Select item"
+                <input type="checkbox" aria-label={t("dldefaults.skip_ai")}
                   checked={current.skip_ai_generated}
                   onChange={(e) => { if (current) setLocal({ ...current, skip_ai_generated: e.target.checked }); }}
                   className="sr-only peer"

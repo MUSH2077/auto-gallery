@@ -7,7 +7,7 @@ import { useStaggeredEntrance } from "@/lib/motion";
 import { PageHeader, PageShell, EmptyState, ErrorState, ConfirmDialog, Modal, EntityList, EntityRow, RowActionMenu } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
-import { useI18nFormat } from "@/lib/i18n-format";
+import { useI18nFormat, userModuleLabel } from "@/lib/i18n-format";
 
 function CreateForm({ isPending, error, modules, onSubmit, onClose }: {
   isPending: boolean;
@@ -54,7 +54,7 @@ function CreateForm({ isPending, error, modules, onSubmit, onClose }: {
             <label key={key} className={`flex items-center gap-2 text-sm ${isAdmin ? "opacity-50" : ""}`}>
               <input type="checkbox" className="rounded" disabled={isAdmin}
                 checked={permissions.includes(key)} onChange={() => togglePermission(key)} />
-              {t(`users.module_${key}`, modules[key])}
+                    {userModuleLabel(t, key)}
             </label>
           ))}
         </div>
@@ -110,7 +110,7 @@ export default function UsersPage() {
   });
 
   return (
-    <PageShell size="normal">
+    <PageShell>
       <PageHeader title={t("users.title")} description={t("users.count", { count: users.data?.length ?? 0 })}>
         <button onClick={() => setShowCreate(true)} className="btn-primary">{t("users.new")}</button>
       </PageHeader>

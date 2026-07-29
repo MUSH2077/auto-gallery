@@ -14,10 +14,10 @@
   :root {
     --ag-bg: 243 246 250;        --ag-surface: 255 255 255;   --ag-subtle: 238 242 247;
     --ag-border: 207 216 227;    --ag-muted: 79 91 109;       --ag-text: 23 33 48;
-    --ag-accent: 37 99 235;      --ag-success: 22 133 74;     --ag-warning: 180 104 3;
-    --ag-danger: 210 45 63;      --ag-focus: 37 99 235;
+    --ag-accent: 29 78 216;      --ag-success: 15 105 55;     --ag-warning: 139 79 0;
+    --ag-danger: 185 28 48;      --ag-focus: 29 78 216;
     --ag-primary: 37 99 235;     --ag-primary-hover: 29 78 216;  --ag-on-primary: 255 255 255;
-    --ag-input: 255 255 255;     --ag-placeholder: 128 142 161;
+    --ag-input: 255 255 255;     --ag-placeholder: 83 97 116;
     --ag-nav: 23 33 48;          --ag-nav-fg: 255 255 255;
     --ag-accent-subtle: 226 235 255;  --ag-danger-subtle: 255 233 236;  --ag-warning-subtle: 255 244 214;  --ag-success-subtle: 224 247 234;
   }
@@ -170,6 +170,7 @@
   html.dark img:not(.no-outline) { outline-color: rgba(255,255,255,0.08); }
 
   .btn-primary, .btn-ghost, .btn-danger, .btn-icon, .clickable { min-height: 32px; }
+  button, [role="button"] { min-height: 24px; }
 
   /* Tactile press (P3 motion primitive). Unlayered so it cleanly extends the
      @layer components transition-property to include transform — no cancel. */
@@ -203,6 +204,7 @@
   /* Touch ergonomics (P2): comfortable 44px hit areas on coarse pointers,
      keeping the dense 32px desktop sizing for mouse users. */
   @media (pointer: coarse) {
+    button, [role="button"] { min-height: 44px; min-width: 44px; }
     .btn-primary, .btn-ghost, .btn-danger, .btn-icon, .clickable,
     .input, .select, .textarea { min-height: 44px; }
     .btn-icon { min-width: 44px; }
@@ -383,9 +385,6 @@
   .section-title {
     @apply text-base font-semibold tracking-normal;
     font-family: inherit;
-  }
-  .page-transition {
-    animation: fadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
   }
   @keyframes fadeUp {
     from { opacity: 0; transform: translateY(12px); }

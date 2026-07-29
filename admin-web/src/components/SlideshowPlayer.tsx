@@ -38,6 +38,7 @@ import { usePresence, motionTokens } from "@/lib/motion";
 import { useShowcaseConfig } from "@/lib/showcase/config";
 import { useT } from "@/lib/i18n";
 import { ArrowIcon } from "@/components/WorkViewerParts";
+import { Pause, Play, X } from "lucide-react";
 
 export interface SlideItem {
   assetId: string;
@@ -62,27 +63,15 @@ async function fetchPreviewUrl(workId: string, assetId: string): Promise<string 
 }
 
 function PlayIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden>
-      <path d="M8 5v14l11-7z" />
-    </svg>
-  );
+  return <Play className="h-5 w-5" fill="currentColor" aria-hidden="true" />;
 }
 
 function PauseIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden>
-      <path d="M6 5h4v14H6zM14 5h4v14h-4z" />
-    </svg>
-  );
+  return <Pause className="h-5 w-5" fill="currentColor" aria-hidden="true" />;
 }
 
 function CloseIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-      <path d="M6 6l12 12M18 6L6 18" />
-    </svg>
-  );
+  return <X className="h-5 w-5" aria-hidden="true" />;
 }
 
 function SlideLayer({ item, gen, front, kenBurns, dwellMs }: {

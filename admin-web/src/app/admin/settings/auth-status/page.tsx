@@ -4,13 +4,15 @@ import { api, queryKeys } from "@/lib/api";
 import { PageHeader, PageShell, EmptyState, ErrorState, SourceBadge } from "@/components";
 import { useT } from "@/lib/i18n";
 import Link from "next/link";
+import { useI18nFormat } from "@/lib/i18n-format";
 
 export default function AuthStatusPage() {
   const t = useT();
+  const fmt = useI18nFormat();
   const auth = useQuery({ queryKey: queryKeys.admin.authStatus, queryFn: api.getAuthStatus, refetchInterval: 30000 });
 
   return (
-    <PageShell size="normal">
+    <PageShell>
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("auth.back")}</Link>
       </div>
@@ -62,7 +64,7 @@ export default function AuthStatusPage() {
                   {s.auth_healthy === true && <span className="inline-flex items-center gap-1 text-xs text-success bg-success-subtle px-2 py-0.5 rounded"><span className="w-2 h-2 bg-success rounded-full" /> {t("auth.healthy")}</span>}
                   {s.auth_healthy === false && <span className="inline-flex items-center gap-1 text-xs text-danger bg-danger-subtle px-2 py-0.5 rounded"><span className="w-2 h-2 bg-danger rounded-full" /> {t("auth.unhealthy")}</span>}
                   {s.auth_healthy === null && <span className="badge inline-flex items-center gap-1"><span className="w-2 h-2 bg-muted rounded-full" /> {t("auth.unknown")}</span>}
-                  {s.last_successful_auth && <span className="text-xs text-muted">{t("auth.last_success")} {new Date(s.last_successful_auth).toLocaleString()}</span>}
+                  {s.last_successful_auth && <span className="text-xs text-muted">{t("auth.last_success")} {fmt.dateTime(s.last_successful_auth)}</span>}
                 </div>
               </div>
             </div>

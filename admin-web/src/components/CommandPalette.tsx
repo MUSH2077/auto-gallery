@@ -153,7 +153,7 @@ export default function CommandPalette({
           ))}
         </div>
         <div className="flex items-center gap-3 border-t border-border bg-subtle px-4 py-2 text-[10px] text-muted">
-          <span>↑↓ {t("common.select", "选择")}</span>
+          <span>↑↓ {t("common.select")}</span>
           <span>↵ {t("common.open")}</span>
           <span className="ml-auto">Ctrl/⌘ K</span>
         </div>

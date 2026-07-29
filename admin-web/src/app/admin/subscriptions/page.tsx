@@ -179,13 +179,16 @@ function SubscriptionsContent() {
       qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
       qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
       if (data.status === "error" || data.status === "partial_error") {
-        toast.warning({ message: (data as any).message || "Sync partially failed" });
+        toast.warning({
+          title: t("subscriptions.sync_partial_failed"),
+          message: (data as any).message || t("subscriptions.sync_partial_failed_desc"),
+        });
       } else if (data.job_ids.length === 0) {
         toast.warning({ message: t("subscriptions.sync_no_jobs") });
       } else {
         toast.success({
           message: t("subscriptions.sync_result", { count: data.job_ids.length, skipped: data.skipped_count ?? 0 }),
-          action: data.task_id ? { label: t("jobs.open_task", "View task"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${data.task_id}`) } : undefined,
+          action: data.task_id ? { label: t("jobs.open_task"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${data.task_id}`) } : undefined,
         });
       }
     },
@@ -223,8 +226,8 @@ function SubscriptionsContent() {
   };
 
   return (
-    <PageShell size="normal">
-      <PageHeader title={t("subscriptions.title")} description={t("subscriptions.count", "0 subscriptions").replace("{count}", String(subsCount.data?.count ?? 0))}>
+    <PageShell>
+      <PageHeader title={t("subscriptions.title")} description={t("subscriptions.count").replace("{count}", String(subsCount.data?.count ?? 0))}>
         <button onClick={() => setShowCreate(true)} className="btn-primary">{t("subscriptions.new")}</button>
       </PageHeader>
 
@@ -322,7 +325,7 @@ function SubscriptionsContent() {
                     />
                     <StatusBadge
                       status={s.latest_job_status || "unknown"}
-                      label={s.latest_job_status ? undefined : t("subscriptions.no_jobs", "No jobs")}
+                      label={s.latest_job_status ? undefined : t("subscriptions.no_jobs")}
                       className="py-0 text-[10px]"
                     />
                     {due > 0 && <span className="rounded-full bg-accent-subtle px-2 py-0.5 text-[10px] font-medium text-accent">{t("subscriptions.due_sources", { count: due })}</span>}
@@ -358,7 +361,7 @@ function SubscriptionsContent() {
                     disabled={syncNow.isPending}
                     className="btn-primary text-xs"
                   >
-                    {syncingSubId === s.id ? t("subscriptions.syncing") : t("subscriptions.sync_all", "Sync all")}
+                    {syncingSubId === s.id ? t("subscriptions.syncing") : t("subscriptions.sync_all")}
                   </button>
                   <RowActionMenu
                     label={t("common.more_actions")}

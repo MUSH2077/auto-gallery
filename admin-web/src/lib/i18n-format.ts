@@ -3,6 +3,21 @@
 import { useMemo } from "react";
 import { TFunction, useI18n } from "@/lib/i18n";
 
+const STATUS_KEYS = new Set([
+  "auto_recovering", "cancelled", "complete", "completed", "down", "downloaded",
+  "downloading", "enqueued", "failed", "importing", "paused", "pending", "retrying",
+  "running", "stale", "unknown", "up",
+]);
+const SCHEDULER_REASON_KEYS = new Set([
+  "already_attempted_in_window", "already_synced_in_window", "auth_unhealthy",
+  "fixed_time_window_due", "interval_due", "interval_not_due", "manual_mode",
+  "never_synced_interval", "no_decision", "outside_fixed_time_window",
+  "provider_not_downloadable", "scheduler_disabled", "source_disabled",
+  "subscription_inactive", "subscription_sync_disabled", "unknown_provider", "url_invalid",
+]);
+const SCHEDULE_MODE_KEYS = new Set(["fixed_time", "interval", "manual"]);
+const USER_MODULE_KEYS = new Set(["library", "curation", "upload", "subscriptions", "tasks", "system"]);
+
 export function useI18nFormat() {
   const { lang, t } = useI18n();
   const locale = lang === "zh" ? "zh-CN" : "en-US";
@@ -69,16 +84,27 @@ export function useI18nFormat() {
 }
 
 export function statusLabel(t: TFunction, status?: string | null): string {
-  const key = `status.${(status || "unknown").toLowerCase()}`;
-  return t(key, status || t("common.unknown"));
+  const normalized = (status || "unknown").toLowerCase();
+  return STATUS_KEYS.has(normalized) ? t(`status.${normalized}`) : t("common.unknown");
 }
 
 export function schedulerDecisionLabel(t: TFunction, reason?: string | null, due?: boolean): string {
-  const key = due ? "scheduler.reason.due_now" : `scheduler.reason.${reason || "no_decision"}`;
-  return t(key, reason ? reason.replaceAll("_", " ") : t("scheduler.reason.no_decision"));
+  if (due) return t("scheduler.reason.due_now");
+  const normalized = reason || "no_decision";
+  return SCHEDULER_REASON_KEYS.has(normalized)
+    ? t(`scheduler.reason.${normalized}`)
+    : t("scheduler.reason.no_decision");
 }
 
 export function scheduleModeLabel(t: TFunction, mode?: string | null): string {
   const normalized = (mode || "interval").toLowerCase();
-  return t(`scheduler.mode.${normalized}`, mode || "interval");
+  return SCHEDULE_MODE_KEYS.has(normalized)
+    ? t(`scheduler.mode.${normalized}`)
+    : t("scheduler.mode.interval");
+}
+
+export function userModuleLabel(t: TFunction, module: string): string {
+  return USER_MODULE_KEYS.has(module)
+    ? t(`users.module_${module}`)
+    : t("common.unknown");
 }

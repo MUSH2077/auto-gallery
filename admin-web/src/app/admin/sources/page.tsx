@@ -188,7 +188,7 @@ export default function SourcesPage() {
 
   return (
     <PermissionGuard module="subscriptions">
-    <PageShell size="normal">
+    <PageShell>
       <PageHeader title={t("sources.title")} description={t("sources.desc", { total, downloadable, reference })} />
 
       {sources.isLoading && <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="card p-4 animate-pulse"><div className="mb-2 h-4 w-1/2 rounded bg-subtle dark:bg-subtle" /><div className="mb-4 h-3 w-3/4 rounded bg-subtle dark:bg-subtle" /><div className="h-16 rounded bg-subtle dark:bg-subtle" /></div>)}</div>}

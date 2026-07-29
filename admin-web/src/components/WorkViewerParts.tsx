@@ -1,4 +1,5 @@
 "use client";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useT } from "@/lib/i18n";
@@ -26,22 +27,51 @@ export function FullImageLightbox({ asset, onClose }: { asset: AssetData | null;
   // Keep the last asset around through the exit fade — `asset` is already
   // null while the overlay is animating out.
   const lastAsset = useRef<AssetData | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
   if (open) lastAsset.current = asset;
   const shown = open ? asset : lastAsset.current;
 
   useEffect(() => {
     if (!asset) return;
+    previousFocus.current = document.activeElement as HTMLElement;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.requestAnimationFrame(() => closeRef.current?.focus());
+
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      ));
+      if (!focusable.length) return;
+      if (event.shiftKey && document.activeElement === focusable[0]) {
+        event.preventDefault();
+        focusable[focusable.length - 1].focus();
+      } else if (!event.shiftKey && document.activeElement === focusable[focusable.length - 1]) {
+        event.preventDefault();
+        focusable[0].focus();
+      }
     };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previousOverflow;
+      previousFocus.current?.focus();
+    };
   }, [asset, onClose]);
 
   if (!mounted || !shown) return null;
 
   return (
     <div
+      ref={dialogRef}
       className={`fixed inset-0 z-50 flex flex-col bg-black/95 ${closing ? "overlay-backdrop-exit" : "overlay-backdrop"}`}
       role="dialog"
       aria-modal="true"
@@ -58,13 +88,13 @@ export function FullImageLightbox({ asset, onClose }: { asset: AssetData | null;
             href={shown.original_url || ""}
             target="_blank"
             rel="noopener noreferrer"
-            className="rounded-md border border-white/20 px-3 py-1.5 text-sm text-white hover:bg-white/10"
+            className="inline-flex min-h-11 items-center rounded-md border border-white/20 px-3 py-1.5 text-sm text-white hover:bg-white/10"
             onClick={(e) => e.stopPropagation()}
           >
             {t("work_detail.open_original")}
           </a>
-          <button onClick={onClose} className="rounded-md border border-white/20 px-3 py-1.5 text-sm text-white hover:bg-white/10" aria-label={t("common.close")}>
-            {t("common.close")}
+          <button ref={closeRef} type="button" onClick={onClose} className="inline-flex h-11 w-11 items-center justify-center rounded-md border border-white/20 text-white hover:bg-white/10" aria-label={t("common.close")}>
+            <X className="h-5 w-5" aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -80,11 +110,9 @@ export function FullImageLightbox({ asset, onClose }: { asset: AssetData | null;
 }
 
 export function ArrowIcon({ direction }: { direction: "left" | "right" }) {
-  return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      {direction === "left" ? <path d="m15 18-6-6 6-6" /> : <path d="m9 18 6-6-6-6" />}
-    </svg>
-  );
+  return direction === "left"
+    ? <ChevronLeft className="h-5 w-5" aria-hidden="true" />
+    : <ChevronRight className="h-5 w-5" aria-hidden="true" />;
 }
 
 export function DisclosurePanel({
@@ -117,16 +145,22 @@ export function DisclosurePanel({
   };
   return (
     <section className="rounded-md border border-border bg-surface">
-      <button type="button" onClick={toggle} className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        aria-controls={`${storageKey}-content`}
+        className="flex min-h-11 w-full items-center justify-between gap-3 px-4 py-3 text-left"
+      >
         <span className="text-sm font-semibold">{title}{count !== undefined ? <span className="ml-2 text-xs font-normal text-muted">({count})</span> : null}</span>
         <span className={`text-muted transition-transform ${open ? "rotate-90" : ""}`} aria-hidden>
           <ArrowIcon direction="right" />
         </span>
-        <span className="sr-only">{open ? t("common.close") : t("common.open", "Open")}</span>
+        <span className="sr-only">{open ? t("common.close") : t("common.open")}</span>
       </button>
       {/* grid-template-rows 0fr→1fr: animatable collapse without touching
           height (layout-anim red line); content clips via overflow-hidden. */}
-      <div className={`grid transition-[grid-template-rows] duration-slow ease-expo ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
+      <div id={`${storageKey}-content`} className={`grid transition-[grid-template-rows] duration-slow ease-expo ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
         <div className="overflow-hidden">
           {everOpen && <div className="border-t border-border px-4 py-3">{children}</div>}
         </div>

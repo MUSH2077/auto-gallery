@@ -1,6 +1,7 @@
 "use client";
 
 import { useT } from "@/lib/i18n";
+import { statusLabel } from "@/lib/i18n-format";
 
 interface ProgressData {
   stage?: string;
@@ -9,6 +10,12 @@ interface ProgressData {
   percent?: number;
   message?: string;
 }
+
+const KNOWN_PROGRESS_STAGES = new Set([
+  "processing", "enqueued", "configuring", "downloading", "post_download",
+  "enqueuing_import", "downloaded", "importing", "running", "import_indexing",
+  "complete", "paused", "cancelled", "failed", "stale",
+]);
 
 export function RealProgressBar({ progress }: { progress: ProgressData | null }) {
   const t = useT();
@@ -22,7 +29,7 @@ export function RealProgressBar({ progress }: { progress: ProgressData | null })
   const hasPercent = computedPercent != null;
   const pct = hasPercent ? Math.round(Math.min(100, Math.max(0, computedPercent ?? 0))) : null;
   const stage = progress.stage ?? "processing";
-  const stageLabel = t(`progress.stage.${stage}`, t(`status.${stage}`, stage.replaceAll("_", " ")));
+  const stageLabel = KNOWN_PROGRESS_STAGES.has(stage) ? t(`progress.stage.${stage}`) : statusLabel(t, stage);
   const detail = progress.message || stageLabel;
   const hasCount = progress.current != null && progress.total != null;
 

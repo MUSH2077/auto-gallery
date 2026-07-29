@@ -304,7 +304,7 @@ function UploadPageContent() {
   }
 
   return (
-    <PageShell size="normal">
+    <PageShell>
       <PageHeader title={t("upload.title")} description={t("upload.description")} />
 
       {me.data && (

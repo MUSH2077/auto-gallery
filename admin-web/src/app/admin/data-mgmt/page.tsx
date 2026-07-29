@@ -3,13 +3,14 @@ import { Fragment, useState } from "react";
 import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { PageHeader, ConfirmDialog, PageShell, StatCard, StatusBadge, PermissionGuard } from "@/components";
+import { PageHeader, ConfirmDialog, Modal, PageShell, StatCard, StatusBadge, PermissionGuard } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useStaggeredEntrance } from "@/lib/motion";
 import { useRouter } from "next/navigation";
 import { getSourceColor } from "@/lib/sourceColors";
+import { useI18nFormat } from "@/lib/i18n-format";
 
 type Severity = "error" | "warning" | "info";
 
@@ -40,6 +41,7 @@ function severityBadge(s: string, t: (k: string) => string) {
 
 export default function DataManagementPage() {
   const t = useT();
+  const fmt = useI18nFormat();
   const router = useRouter();
   const qc = useQueryClient();
   const notify = useNotifications();
@@ -121,7 +123,10 @@ export default function DataManagementPage() {
 
   const createBackupMut = useMutation({
     mutationFn: () => api.createBackup(),
-    onSuccess: (d: any) => { setResult({ ok: true, msg: "Backup: " + d.filename + " (" + d.size_mb + " MB)" }); backups.refetch(); },
+    onSuccess: (d: any) => {
+      setResult({ ok: true, msg: t("backup.created", { filename: d.filename, size: d.size_mb }) });
+      backups.refetch();
+    },
     onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
   });
 
@@ -145,7 +150,7 @@ export default function DataManagementPage() {
       setActiveAction(vars.key);
     },
     onSuccess: (data, vars) => {
-      setResult({ ok: true, msg: `${vars.title} queued` });
+      setResult({ ok: true, msg: t("datamgmt.action_queued", { action: vars.title }) });
       notify.startOperationJob(data.job_id, "admin-clear", vars.title, { entity: vars.entity });
       if (vars.entity === "creators" || vars.entity === "all") {
         qc.setQueryData(queryKeys.creators.count, { count: 0 });
@@ -193,7 +198,7 @@ export default function DataManagementPage() {
 
   return (
     <PermissionGuard module="system">
-    <PageShell size="normal">
+    <PageShell>
       <PageHeader title={t("datamgmt.title")} description={t("datamgmt.desc")} />
 
       {result && (
@@ -216,7 +221,7 @@ export default function DataManagementPage() {
             <StatusBadge status={clearOperation.status} className="uppercase" />
           </div>
           <div className="mt-1 text-xs opacity-80">
-            {clearOperation.error || clearOperation.result?.message || clearOperation.progress?.label || "Queued in the background"}
+            {clearOperation.error || clearOperation.result?.message || clearOperation.progress?.label || t("datamgmt.queued_background")}
           </div>
         </div>
       )}
@@ -261,7 +266,7 @@ export default function DataManagementPage() {
                   );
                 })}
               <div className="pt-2 border-t text-xs text-muted flex justify-between">
-                <span>Total</span>
+                <span>{t("common.total")}</span>
                 <span className="font-medium">{formatSize(totalSourceSize)}</span>
               </div>
             </div>
@@ -282,7 +287,7 @@ export default function DataManagementPage() {
                     <th className="text-left py-1.5 font-medium">{t("datamgmt.storage_creator_col")}</th>
                     <th className="text-left py-1.5 font-medium">{t("datamgmt.storage_repositories_label")}</th>
                     <th className="text-right py-1.5 font-medium">{t("datamgmt.storage_works_label")}</th>
-                    <th className="text-right py-1.5 font-medium">Size</th>
+                    <th className="text-right py-1.5 font-medium">{t("common.size")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -451,7 +456,7 @@ export default function DataManagementPage() {
 
             {integrity.data.checked_at && (
               <p className="text-xs text-muted mt-3">
-                {t("datamgmt.integrity_checked_at")}: {new Date(integrity.data.checked_at).toLocaleString()}
+                {t("datamgmt.integrity_checked_at")}: {fmt.dateTime(integrity.data.checked_at)}
               </p>
             )}
           </>
@@ -463,16 +468,13 @@ export default function DataManagementPage() {
 
         {/* Integrity items modal */}
         {integrityItems && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setIntegrityItems(null)}>
-            <div className="card-elevated p-4 max-w-xl w-full mx-4 max-h-[70vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="font-medium text-sm">
-                  {t("datamgmt.integrity_items_modal_title")
-                    .replace("{type}", integrityItems.description)
-                    .replace("{count}", String(integrityItems.count))}
-                </h3>
-                <button onClick={() => setIntegrityItems(null)} className="text-muted hover:text-muted text-lg">&times;</button>
-              </div>
+          <Modal
+            open
+            onClose={() => setIntegrityItems(null)}
+            title={t("datamgmt.integrity_items_modal_title")
+              .replace("{type}", integrityItems.description)
+              .replace("{count}", String(integrityItems.count))}
+          >
               <div className="space-y-1 max-h-96 overflow-auto">
                 {integrityItems.items.map((item, i) => {
                   const itemKey = integrityItemKeys[i];
@@ -495,8 +497,7 @@ export default function DataManagementPage() {
                   );
                 })}
               </div>
-            </div>
-          </div>
+          </Modal>
         )}
       </div>
 
@@ -511,7 +512,7 @@ export default function DataManagementPage() {
                 <p className="text-xs text-muted">{t("datamgmt.cleanup_json_desc")}</p>
               </div>
               <button onClick={() => cleanupJSON.mutate()} disabled={cleanupJSON.isPending}
-                className="shrink-0 ml-3 px-3 py-1.5 text-xs bg-warning text-white rounded hover:bg-warning/90 disabled:opacity-50">
+                className="btn-ghost ml-3 min-h-11 shrink-0 text-xs text-warning">
                 {cleanupJSON.isPending ? "..." : t("datamgmt.cleanup_json_btn")}
               </button>
             </div>
@@ -562,7 +563,7 @@ export default function DataManagementPage() {
                 <div className="text-xs text-muted">{t("datamgmt.backup_recent")}</div>
                 <div className="text-sm font-medium mt-0.5">
                   {lastBackup
-                    ? new Date(lastBackup.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+                    ? fmt.dateTime(lastBackup.created_at)
                     : t("datamgmt.backup_none")}
                 </div>
               </div>

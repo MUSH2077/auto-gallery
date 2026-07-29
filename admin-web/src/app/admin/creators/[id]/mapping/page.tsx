@@ -74,10 +74,10 @@ export default function MappingPage() {
   const verified = links.data?.filter((l: CreatorLinkType) => l.is_verified) || [];
   const suggested = links.data?.filter((l: CreatorLinkType) => !l.is_verified) || [];
 
-  if (creator.isLoading) return <PageShell size="normal"><div className="animate-pulse"><div className="mb-4 h-8 w-1/4 rounded-md bg-subtle dark:bg-subtle" /><div className="h-32 rounded-md bg-subtle dark:bg-subtle" /></div></PageShell>;
+  if (creator.isLoading) return <PageShell><div className="animate-pulse"><div className="mb-4 h-8 w-1/4 rounded-md bg-subtle dark:bg-subtle" /><div className="h-32 rounded-md bg-subtle dark:bg-subtle" /></div></PageShell>;
 
   return (
-    <PageShell size="normal" className="page-transition">
+    <PageShell>
       <PageHeader title={t("mapping.title").replace("{name}", creator.data?.display_name || creator.data?.name || "Creator")} description={t("mapping.desc")}>
         <div className="flex gap-2">
           <button onClick={() => router.push(`/admin/creators/${id}`)} className="btn-ghost">{t("mapping.back_to_creator")}</button>

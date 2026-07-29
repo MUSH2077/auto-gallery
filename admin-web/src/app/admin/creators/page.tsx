@@ -10,6 +10,7 @@ import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { useToast } from "@/components/Toast";
 import { usePermissions } from "@/lib/usePermissions";
+import { Star } from "lucide-react";
 
 type FilterMode = "all" | "active" | "inactive" | "has_danbooru" | "has_subscription" | "no_subscription" | "favorites";
 
@@ -45,11 +46,11 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
   return (
     <div className="space-y-4">
       <div>
-        <label className="block text-sm font-medium mb-1">{t("creators.source_url_label") || "来源 URL"}</label>
+        <label className="block text-sm font-medium mb-1">{t("creators.source_url_label")}</label>
         <input value={urlInput} onChange={(e) => handleUrlPaste(e.target.value)}
           className="input w-full font-mono"
-          placeholder="https://www.pixiv.net/users/123456 或 https://x.com/username" />
-        <p className="mt-1 text-xs text-muted">粘贴 URL 自动提取创作者名。支持 Pixiv / X / Iwara / Danbooru / Weibo / Lofter / Bilibili。</p>
+          placeholder={t("creators.source_url_placeholder")} />
+        <p className="mt-1 text-xs text-muted">{t("creators.source_url_hint")}</p>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
@@ -58,7 +59,7 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">{t("creators.display_name_label")}</label>
-          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="input w-full" placeholder="可选显示名" />
+          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="input w-full" placeholder={t("creators.display_name_placeholder")} />
         </div>
       </div>
       <div><label className="block text-sm font-medium mb-1">{t("creators.description_label")}</label><textarea value={description} onChange={(e) => setDescription(e.target.value)} className="textarea w-full" rows={2} /></div>
@@ -221,8 +222,8 @@ function CreatorsContent() {
   };
 
   return (
-    <PageShell size="normal">
-      <PageHeader title={t("creators.title")} description={t("creators.count", "0 creators").replace("{count}", String(creatorCount.data?.count ?? 0))}>
+    <PageShell>
+      <PageHeader title={t("creators.title")} description={t("creators.count").replace("{count}", String(creatorCount.data?.count ?? 0))}>
         <div className="flex gap-2">
           <button onClick={() => router.push("/admin/creators/duplicates")} className="btn-ghost">{t("creators.duplicates")}</button>
           {canCurate && <button onClick={() => setShowCreate(true)} className="btn-primary">{t("creators.new")}</button>}
@@ -325,7 +326,7 @@ function CreatorsContent() {
                     title={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}
                     aria-label={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}
                   >
-                    {c.is_favorite ? "★" : "☆"}
+                    <Star className="h-5 w-5" fill={c.is_favorite ? "currentColor" : "none"} aria-hidden="true" />
                   </button>
                 )}
                 {canCurate && (

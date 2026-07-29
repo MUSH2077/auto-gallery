@@ -15,6 +15,7 @@ import {
   SourceBadge,
 } from "@/components";
 import { useT } from "@/lib/i18n";
+import { useI18nFormat } from "@/lib/i18n-format";
 
 const PAGE_SIZE = 25;
 
@@ -47,6 +48,7 @@ function AssetPanel({
   actionable: boolean;
 }) {
   const t = useT();
+  const fmt = useI18nFormat();
   return (
     <section className="min-w-0 rounded-md border border-border bg-subtle/40 p-3">
       <div className="relative aspect-square overflow-hidden rounded-md bg-black/5 dark:bg-black/20">
@@ -71,7 +73,7 @@ function AssetPanel({
       </div>
       <div className="mt-1 truncate text-xs text-muted">
         {asset.creator_name || t("asset_dedup.unknown_creator")}
-        {asset.posted_at ? ` · ${new Date(asset.posted_at).toLocaleString()}` : ""}
+        {asset.posted_at ? ` · ${fmt.dateTime(asset.posted_at)}` : ""}
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2">
         <Metric
@@ -259,7 +261,7 @@ export default function DedupPage() {
 
   return (
     <PermissionGuard module="curation">
-      <PageShell size="wide">
+      <PageShell>
         <PageHeader
           title={t("asset_dedup.title")}
           description={t("asset_dedup.desc")}

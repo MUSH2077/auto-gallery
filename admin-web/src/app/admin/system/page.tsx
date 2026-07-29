@@ -4,16 +4,18 @@ import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { StatusBadge, PageHeader, PageShell, PermissionGuard } from "@/components";
 import { useT } from "@/lib/i18n";
+import { useI18nFormat } from "@/lib/i18n-format";
 
 export default function SystemPage() {
   const t = useT();
+  const fmt = useI18nFormat();
   const [refreshing, setRefreshing] = useState(false);
   const health = useQuery({ queryKey: queryKeys.health, queryFn: api.health, refetchInterval: 15000 });
   const sources = useQuery({ queryKey: queryKeys.sources, queryFn: api.sources });
 
   return (
     <PermissionGuard module="system">
-    <PageShell size="normal">
+    <PageShell>
       <PageHeader title={t("system_health.title")} description={t("system_health.desc")}>
         <button
           onClick={() => { setRefreshing(true); health.refetch().then(() => setRefreshing(false)); sources.refetch(); }}
@@ -90,7 +92,7 @@ export default function SystemPage() {
         </div>
       </section>
 
-      {health.data && <p className="mt-4 text-xs text-muted">{t("system_health.version")} {health.data.version} · {t("system_health.last_update")} {new Date().toLocaleTimeString()}</p>}
+      {health.data && <p className="mt-4 text-xs text-muted">{t("system_health.version")} {health.data.version} · {t("system_health.last_update")} {fmt.time(new Date().toISOString())}</p>}
     </PageShell>
     </PermissionGuard>
   );

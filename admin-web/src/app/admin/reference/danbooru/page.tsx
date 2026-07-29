@@ -6,15 +6,19 @@ import { useToast } from "@/components/Toast";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useT } from "@/lib/i18n";
 import { PageHeader, PageShell, EmptyState, ErrorState, SourceBadge, PermissionGuard } from "@/components";
+import { Check, Copy } from "lucide-react";
 
 function CopyButton({ text }: { text: string }) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
   return (
     <button
+      type="button"
       onClick={() => { navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}
-      className="text-xs px-2 py-1 rounded border border-border hover:bg-subtle dark:hover:bg-subtle transition-colors inline-flex items-center gap-1"
+      className="inline-flex min-h-11 items-center gap-1.5 rounded border border-border px-3 py-1 text-xs transition-colors hover:bg-subtle dark:hover:bg-subtle"
     >
-      {copied ? "✓ Copied" : "📋 Copy"}
+      {copied ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
+      {copied ? t("common.copied") : t("common.copy")}
     </button>
   );
 }
@@ -59,7 +63,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
       setSubscribingUrl(null);
-      toast.success({ title: t("notification.created"), message: "Subscription source created! Trigger a sync from the Subscriptions page." });
+      toast.success({ title: t("notification.created"), message: t("danbooru.subscription_created") });
     },
     onError: (err) => {
       toast.error({ message: (err as Error).message });
@@ -98,18 +102,18 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
       {/* One-Click Import All & Subscribe */}
       <div className="bg-accent-subtle border border-accent/30 rounded-lg p-4">
         <p className="text-sm text-accent font-medium mb-1">{t("danbooru.one_click_import")}</p>
-        <p className="text-xs text-accent mb-3">Creates Creator + Subscription + Sources + Links in one step.</p>
+        <p className="text-xs text-accent mb-3">{t("danbooru.one_click_import_desc")}</p>
         <div className="mb-3">
           <label className="block text-xs font-medium text-accent mb-1">
-            创建者名称
-            <span className="font-normal text-accent ml-1">（留空则自动使用 Danbooru 标签名）</span>
+            {t("danbooru.creator_name")}
+            <span className="font-normal text-accent ml-1">{t("danbooru.creator_name_hint")}</span>
           </label>
           {/* Clickable name chips: Pixiv display name + Danbooru aliases */}
           {(artist.pixiv_display_name || artist.other_names.length > 0) && (
             <div className="flex flex-wrap gap-1 mb-2">
               {artist.pixiv_display_name && (
                 <button key="__pixiv__" type="button" onClick={() => setImportName(artist.pixiv_display_name!)}
-                  title="Pixiv 用户名"
+                  title={t("danbooru.pixiv_name")}
                   className={`text-xs px-2 py-0.5 rounded-full border transition-colors cursor-pointer flex items-center gap-1
                     ${importName === artist.pixiv_display_name
                       ? "bg-accent text-white border-accent/30"
@@ -119,7 +123,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
               )}
               {artist.other_names.map((n) => (
                 <button key={n} type="button" onClick={() => setImportName(n)}
-                  title="Danbooru 别名"
+                  title={t("danbooru.danbooru_alias")}
                   className={`text-xs px-2 py-0.5 rounded-full border transition-colors cursor-pointer
                     ${importName === n
                       ? "bg-accent text-white border-accent/30"
@@ -130,7 +134,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
             </div>
           )}
           <input type="text" value={importName} onChange={(e) => setImportName(e.target.value)}
-            placeholder="留空则自动使用 Danbooru 标签名"
+            placeholder={t("danbooru.creator_name_placeholder")}
             className="input w-full px-2 py-1 text-xs" />
         </div>
         <div className="flex items-center gap-2">
@@ -197,7 +201,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
             <div className="space-y-1">
               {artist.urls.filter(u => !DOWNLOADABLE_SOURCES.includes(classifyUrl(u.normalized_url))).map((u, i) => (
                 <div key={i} className="flex items-center gap-2 text-xs">
-                  {!u.is_active && <span className="text-warning">[inactive]</span>}
+                  {!u.is_active && <span className="text-warning">{t("danbooru.inactive")}</span>}
                   <a href={u.normalized_url} target="_blank" rel="noopener noreferrer"
                     className="text-accent hover:underline truncate max-w-lg">{u.normalized_url}</a>
                 </div>
@@ -215,14 +219,14 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
       {links.length > 0 && (
         <div className="card p-4">
           <h3 className="font-medium mb-2">{t("danbooru.import_links_count").replace("{count}", String(links.length))}</h3>
-          <p className="text-xs text-muted mb-3">Creates creator_link records for all of this artist's associated URLs in Danbooru.</p>
+          <p className="text-xs text-muted mb-3">{t("danbooru.import_links_desc")}</p>
           <div className="space-y-2 mb-4">
             {links.map((l, i) => (
               <div key={i} className="flex items-center gap-2 text-xs border-b border-border pb-2">
                 <SourceBadge source={l.link_type} />
                 <a href={l.url} target="_blank" rel="noopener noreferrer"
                   className="text-accent hover:underline truncate max-w-md">{l.url}</a>
-                <span className="text-muted">confidence: {l.confidence.toFixed(1)}</span>
+                <span className="text-muted">{t("danbooru.confidence", { value: l.confidence.toFixed(1) })}</span>
               </div>
             ))}
           </div>
@@ -313,7 +317,7 @@ export default function DanbooruReferencePage() {
   const importMutation = useMutation({
     mutationFn: (creatorId: string) => api.importDanbooruArtist({ creator_id: creatorId, ...searchParams }),
     onSuccess: (data) => {
-      toast.success({ message: `Imported ${data.imported} links from Danbooru artist "${data.artist_name}"` });
+      toast.success({ message: t("danbooru.imported_links", { count: data.imported, name: data.artist_name }) });
       qc.invalidateQueries({ queryKey: queryKeys.creators.all });
     },
   });
@@ -324,11 +328,11 @@ export default function DanbooruReferencePage() {
       ...searchParams,
     }),
     onSuccess: (data) => {
-      notify.startOperationJob(data.job_id, "danbooru-import-all", "Danbooru import", {
+      notify.startOperationJob(data.job_id, "danbooru-import-all", t("danbooru.operation_title"), {
         name: searchParams?.name,
         pixiv_id: searchParams?.pixiv_id,
       });
-      toast.success({ message: "Danbooru import queued. You can leave this page; progress will continue in notifications." });
+      toast.success({ message: t("danbooru.import_queued") });
     },
   });
 
@@ -457,12 +461,12 @@ export default function DanbooruReferencePage() {
 
   return (
     <PermissionGuard module="subscriptions">
-    <PageShell size="normal">
+    <PageShell>
       <PageHeader title={t("danbooru.title")} description={t("danbooru.desc")} />
 
       <div className="bg-accent-subtle border border-accent/30 rounded-lg p-4 text-sm mb-6">
         <p className="font-medium text-accent mb-1">{t("danbooru.search_info")}</p>
-        <p className="text-accent">Danbooru artists map source profiles (Pixiv, Twitter, Iwara, etc.) to a canonical name. Use any of the three methods below to find the matching Danbooru artist record.</p>
+        <p className="text-accent">{t("danbooru.search_info_desc")}</p>
       </div>
 
       {/* URL Batch Import */}
@@ -474,15 +478,11 @@ export default function DanbooruReferencePage() {
           </button>
         </div>
         {!showUrlBatch && (
-          <p className="text-xs text-muted">
-            Paste multiple creator profile URLs (Pixiv, Twitter/X, Iwara, etc.) to bulk import via Danbooru. Results are shown immediately per URL.
-          </p>
+          <p className="text-xs text-muted">{t("danbooru.url_batch_desc")}</p>
         )}
         {showUrlBatch && (
           <div className="space-y-3">
-            <p className="text-xs text-muted">
-              Enter one URL per line. Supported: Pixiv, Twitter/X, Iwara, and other Danbooru-indexed profile URLs.
-            </p>
+            <p className="text-xs text-muted">{t("danbooru.url_batch_instructions")}</p>
             <textarea
               value={urlBatchInput}
               onChange={(e) => { setUrlBatchInput(e.target.value); setUrlPreview(null); }}
@@ -494,14 +494,14 @@ export default function DanbooruReferencePage() {
 
             {urlPreview && (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-150 dark:border-indigo-900 rounded p-2">
-                <span className="text-muted">{urlPreview.total} input</span>
+                <span className="text-muted">{t("danbooru.input_count", { count: urlPreview.total })}</span>
                 <span className="text-muted">→</span>
-                <span className="font-medium">{urlPreview.unique_count} unique</span>
+                <span className="font-medium">{t("danbooru.unique_count", { count: urlPreview.unique_count })}</span>
                 {urlPreview.duplicates_removed > 0 && (
-                  <span className="text-warning">({urlPreview.duplicates_removed} dupe)</span>
+                  <span className="text-warning">{t("danbooru.duplicate_count", { count: urlPreview.duplicates_removed })}</span>
                 )}
                 <span className="ml-auto font-semibold text-indigo-700 dark:text-indigo-300">
-                  {urlPreview.unique_count} ready to import
+                  {t("danbooru.ready_count", { count: urlPreview.unique_count })}
                 </span>
               </div>
             )}
@@ -515,7 +515,7 @@ export default function DanbooruReferencePage() {
                 {urlBatchImport.isPending ? t("danbooru.processing") : t("danbooru.url_batch_import")}
               </button>
               <span className="text-xs text-muted">
-                {urlBatchInput.trim() ? `${urlBatchInput.split("\n").filter((s) => s.trim().startsWith("http")).length} URLs` : ""}
+                {urlBatchInput.trim() ? t("danbooru.url_count", { count: urlBatchInput.split("\n").filter((s) => s.trim().startsWith("http")).length }) : ""}
               </span>
               {urlBatchImport.data && (
                 <button onClick={() => { urlBatchImport.reset(); setUrlBatchInput(""); }} className="text-xs text-accent hover:underline">{t("common.close")}</button>
@@ -525,7 +525,7 @@ export default function DanbooruReferencePage() {
               <p className="text-danger text-sm">{(urlBatchImport.error as Error).message}</p>
             )}
             {urlBatchImport.isSuccess && !displayBatchResult && (
-              <p className="mt-2 text-xs text-accent">{t("danbooru.job_enqueued", "任务已入队，可在下方查看进度。")}</p>
+              <p className="mt-2 text-xs text-accent">{t("danbooru.job_enqueued")}</p>
             )}
           </div>
         )}
@@ -541,15 +541,11 @@ export default function DanbooruReferencePage() {
           </button>
         </div>
         {!showBatch && (
-          <p className="text-xs text-muted">
-            Paste multiple Pixiv user IDs to bulk import via Danbooru. High-confidence matches are auto-imported; low-confidence and not-found entries are flagged for manual review.
-          </p>
+          <p className="text-xs text-muted">{t("danbooru.batch_desc")}</p>
         )}
         {showBatch && (
           <div className="space-y-3">
-            <p className="text-xs text-muted">
-              Enter one Pixiv user ID per line, or comma-separated. Valid IDs are numeric (e.g., 1980643).
-            </p>
+            <p className="text-xs text-muted">{t("danbooru.batch_instructions")}</p>
             <textarea
               value={batchInput}
               onChange={(e) => { setBatchInput(e.target.value); setPixivPreview(null); }}
@@ -562,17 +558,17 @@ export default function DanbooruReferencePage() {
             {/* Preview summary */}
             {pixivPreview && (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs bg-accent-subtle border border-accent/30 rounded p-2">
-                <span className="text-muted">{pixivPreview.total} input</span>
+                <span className="text-muted">{t("danbooru.input_count", { count: pixivPreview.total })}</span>
                 <span className="text-muted">→</span>
-                <span className="font-medium">{pixivPreview.unique_count} unique</span>
+                <span className="font-medium">{t("danbooru.unique_count", { count: pixivPreview.unique_count })}</span>
                 {pixivPreview.duplicates_removed > 0 && (
-                  <span className="text-warning">({pixivPreview.duplicates_removed} dupe)</span>
+                  <span className="text-warning">{t("danbooru.duplicate_count", { count: pixivPreview.duplicates_removed })}</span>
                 )}
                 {pixivPreview.already_exists.length > 0 && (
-                  <span className="text-warning">({pixivPreview.already_exists.length} already exist)</span>
+                  <span className="text-warning">{t("danbooru.already_exists_count", { count: pixivPreview.already_exists.length })}</span>
                 )}
                 <span className="ml-auto font-semibold text-accent">
-                  {pixivPreview.new_count} ready to import
+                  {t("danbooru.ready_count", { count: pixivPreview.new_count })}
                 </span>
               </div>
             )}
@@ -581,7 +577,7 @@ export default function DanbooruReferencePage() {
             {pixivPreview?.already_exists && pixivPreview.already_exists.length > 0 && (
               <details className="text-xs">
                 <summary className="cursor-pointer text-warning hover:text-warning">
-                  {pixivPreview.already_exists.length} ID(s) already have local creators
+                  {t("danbooru.already_exists_detail", { count: pixivPreview.already_exists.length })}
                 </summary>
                 <div className="mt-1 space-y-0.5 pl-4 max-h-24 overflow-y-auto">
                   {pixivPreview.already_exists.map((e) => (
@@ -616,8 +612,8 @@ export default function DanbooruReferencePage() {
             {displayBatchProgress && !displayBatchResult && (
               <div className="mt-3">
                 <div className="flex justify-between text-xs text-muted mb-1">
-                  <span>Processing {displayBatchProgress.current}/{displayBatchProgress.total}</span>
-                  <span>{displayBatchProgress.imported} imported, {displayBatchProgress.errors} errors</span>
+                  <span>{t("danbooru.progress", { current: displayBatchProgress.current, total: displayBatchProgress.total })}</span>
+                  <span>{t("danbooru.progress_result", { imported: displayBatchProgress.imported, errors: displayBatchProgress.errors })}</span>
                 </div>
                 <div className="w-full overflow-hidden bg-subtle rounded-full h-2">
                   <div className="bg-accent h-2 w-full rounded-full transition-transform duration-slow" style={{ transform: `scaleX(${(displayBatchProgress?.current || 0) / (displayBatchProgress?.total || 1)})`, transformOrigin: "left" }} />
@@ -630,19 +626,19 @@ export default function DanbooruReferencePage() {
               <div className="mt-4 space-y-3">
                 {/* Summary bar */}
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs bg-subtle border rounded p-2">
-                  <span className="font-medium">{displayBatchResult.total} total</span>
+                  <span className="font-medium">{t("danbooru.total_count", { count: displayBatchResult.total })}</span>
                   <span className="text-muted">|</span>
                   {displayBatchResult.imported_count > 0 && (
-                    <span className="text-success">🟢 {displayBatchResult.imported_count} imported</span>
+                    <span className="text-success">{t("danbooru.imported_count", { count: displayBatchResult.imported_count })}</span>
                   )}
                   {displayBatchResult.low_confidence_count > 0 && (
-                    <span className="text-warning">🟡 {displayBatchResult.low_confidence_count} low confidence</span>
+                    <span className="text-warning">{t("danbooru.low_confidence_count", { count: displayBatchResult.low_confidence_count })}</span>
                   )}
                   {displayBatchResult.not_found_count > 0 && (
-                    <span className="text-danger">🔴 {displayBatchResult.not_found_count} not found</span>
+                    <span className="text-danger">{t("danbooru.not_found_count", { count: displayBatchResult.not_found_count })}</span>
                   )}
                   {displayBatchResult.error_count > 0 && (
-                    <span className="text-danger">💥 {displayBatchResult.error_count} errors</span>
+                    <span className="text-danger">{t("danbooru.error_count", { count: displayBatchResult.error_count })}</span>
                   )}
                 </div>
 
@@ -652,18 +648,17 @@ export default function DanbooruReferencePage() {
                   return (
                     <details key={i} className="bg-subtle border rounded p-2 text-xs">
                       <summary className="cursor-pointer flex items-center gap-2">
-                        <span>{isLowConf ? "🟡" : "🟢"}</span>
                         <span className="font-mono">Pixiv {r.pixiv_id}</span>
                         <span className="text-muted">→</span>
                         <span className="font-medium">{r.artist_name}</span>
                         <span className="text-muted">Danbooru #{r.artist_id}</span>
                         {!isLowConf && (
-                          <span className="ml-auto text-success">{r.links_imported} links · {r.sources_created} sources</span>
+                          <span className="ml-auto text-success">{t("danbooru.links_sources_count", { links: r.links_imported, sources: r.sources_created })}</span>
                         )}
                       </summary>
                       <div className="mt-1 pl-6 text-muted space-y-0.5">
                         {r.downloadable_urls && r.downloadable_urls.length > 0 && (
-                          <div>Sources: {r.downloadable_urls.join(", ")}</div>
+                          <div>{t("danbooru.sources_label")} {r.downloadable_urls.join(", ")}</div>
                         )}
                         {isLowConf && r.message && <div className="text-warning">{r.message}</div>}
                       </div>
@@ -675,7 +670,7 @@ export default function DanbooruReferencePage() {
                 {displayBatchResult.not_found.length > 0 && (
                   <details className="bg-danger-subtle border border-danger/30 rounded p-2 text-xs">
                     <summary className="cursor-pointer font-medium text-danger flex items-center gap-2">
-                      🔴 Not found ({displayBatchResult.not_found.length})
+                      {t("danbooru.not_found_group", { count: displayBatchResult.not_found.length })}
                     </summary>
                     <div className="mt-2 space-y-1 pl-4 max-h-36 overflow-y-auto font-mono text-danger">
                       {displayBatchResult.not_found.map((r: any, i: number) => (
@@ -692,7 +687,7 @@ export default function DanbooruReferencePage() {
                 {displayBatchResult.errors && displayBatchResult.errors.length > 0 && (
                   <details className="bg-danger-subtle border border-danger/30 rounded p-2 text-xs">
                     <summary className="cursor-pointer font-medium text-danger flex items-center gap-2">
-                      💥 Errors ({displayBatchResult.errors.length})
+                      {t("danbooru.errors_group", { count: displayBatchResult.errors.length })}
                     </summary>
                     <div className="mt-2 space-y-1 pl-4 max-h-36 overflow-y-auto font-mono text-danger">
                       {displayBatchResult.errors.map((r: any, i: number) => (

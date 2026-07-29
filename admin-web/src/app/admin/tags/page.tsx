@@ -31,7 +31,7 @@ export default function TagsPage() {
 
   return (
     <PermissionGuard module="library">
-    <PageShell size="normal">
+    <PageShell>
       <PageHeader title={t("tags.title")} description={tags.data?.length ? t("common.page").replace("{page}", String(page + 1)) : t("tags.desc")}>
         {canCurate && (
           <button onClick={() => { setFormName(""); setFormCat("general"); setShowCreate(true); }}

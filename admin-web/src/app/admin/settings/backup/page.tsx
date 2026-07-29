@@ -7,15 +7,17 @@ import { useStaggeredEntrance } from "@/lib/motion";
 import Link from "next/link";
 import { PageHeader, PageShell, ConfirmDialog, EmptyState, ErrorState, RowActionMenu } from "@/components";
 import { useToast } from "@/components/Toast";
+import { useI18nFormat } from "@/lib/i18n-format";
+import { Archive, Database, FileJson, FileText, Settings } from "lucide-react";
 
 const ALL_CONTENTS = ["database", "gallerydl-config", "app-config", "download-archives", "library-metadata"] as const;
 
-const CONTENT_ICONS: Record<string, string> = {
-  database: "🗄",
-  "gallerydl-config": "⚙",
-  "app-config": "📋",
-  "download-archives": "📦",
-  "library-metadata": "📄",
+const CONTENT_ICONS = {
+  database: Database,
+  "gallerydl-config": Settings,
+  "app-config": FileJson,
+  "download-archives": Archive,
+  "library-metadata": FileText,
 };
 
 function fmtKB(kb: number): string {
@@ -37,6 +39,7 @@ function contentBadgeColor(content: string): string {
 export default function BackupPage() {
   const toast = useToast();
   const t = useT();
+  const fmt = useI18nFormat();
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -91,10 +94,11 @@ export default function BackupPage() {
     try {
       const data = await api.restoreBackup(restoreFile);
       if (data.status === "ok" || data.status === "partial") {
-        setResult({ ok: data.status === "ok", msg: t("backup.restored").replace("{count}", String(data.restored.length)) + (data.errors.length ? ` (${data.errors.length} errors)` : "") });
+        const errorSuffix = data.errors.length ? ` · ${t("backup.restore_errors", { count: data.errors.length })}` : "";
+        setResult({ ok: data.status === "ok", msg: t("backup.restored").replace("{count}", String(data.restored.length)) + errorSuffix });
         qc.invalidateQueries();
       } else {
-        setResult({ ok: false, msg: data.errors?.join("; ") || "Restore failed" });
+        setResult({ ok: false, msg: data.errors?.join("; ") || t("backup.restore_failed") });
       }
     } catch (e) { setResult({ ok: false, msg: (e as Error).message }); }
     setIsRestoring(false);
@@ -115,7 +119,7 @@ export default function BackupPage() {
   };
 
   return (
-    <PageShell size="normal">
+    <PageShell>
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("common.back")}</Link>
       </div>
@@ -144,7 +148,7 @@ export default function BackupPage() {
         </div>
 
         <label className="flex items-center gap-2 mb-3 text-xs text-muted cursor-pointer">
-          <input type="checkbox" aria-label="Select item" checked={selected.size === ALL_CONTENTS.length} onChange={toggleAll} className="rounded" />
+          <input type="checkbox" aria-label={t("backup.select_all")} checked={selected.size === ALL_CONTENTS.length} onChange={toggleAll} className="rounded" />
           {t("backup.select_all")}
         </label>
 
@@ -157,14 +161,15 @@ export default function BackupPage() {
               "download-archives": "archives", "library-metadata": "library",
             };
             const sk = keyMap[c] || c;
+            const ContentIcon = CONTENT_ICONS[c];
             return (
               <label key={c} className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
                 checked ? "border-border bg-subtle"
                   : "border-border hover:border-border dark:hover:border-border"}`}>
-                <input type="checkbox" aria-label="Select item" checked={checked} onChange={() => toggle(c)} className="mt-0.5 rounded" />
+                <input type="checkbox" aria-label={t(`backup.item_${sk}`)} checked={checked} onChange={() => toggle(c)} className="mt-0.5 rounded" />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-sm">{CONTENT_ICONS[c] || ""}</span>
+                    <ContentIcon className="h-4 w-4 shrink-0 text-muted" aria-hidden="true" />
                     <span className="text-sm font-medium dark:text-white">{t(`backup.item_${sk}`)}</span>
                     {size !== undefined && <span className="text-xs text-muted ml-auto">{fmtKB(size)}</span>}
                   </div>
@@ -193,7 +198,7 @@ export default function BackupPage() {
                     <span className="font-medium dark:text-white font-mono text-xs">{b.filename}</span>
                     {b.version && <span className="text-[10px] text-muted">{t("backup.manifest_version")} {b.version}</span>}
                   </div>
-                  <div className="text-xs text-muted mt-1">{b.size_mb} MB &middot; {new Date(b.created_at).toLocaleString()}</div>
+                  <div className="text-xs text-muted mt-1">{b.size_mb} MB &middot; {fmt.dateTime(b.created_at)}</div>
                   {b.contents && b.contents.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1.5">
                       {b.contents.map((c: string) => (

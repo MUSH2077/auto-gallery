@@ -99,7 +99,7 @@ export default function LoginPage() {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className="input w-full"
-                placeholder="admin"
+                placeholder={t("auth.username_placeholder")}
               />
             </div>
 
@@ -124,7 +124,7 @@ export default function LoginPage() {
         </form>
 
         <p className="mt-5 text-center text-xs text-muted">
-          v0.1.0 · secure admin access
+          {t("auth.secure_access", { version: "v0.1.0" })}
         </p>
         <div className="mt-1 flex justify-center">
           <SourceCodeLink />

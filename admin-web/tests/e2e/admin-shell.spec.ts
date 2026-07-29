@@ -1,4 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 
 const me = {
   id: 1,
@@ -52,7 +53,7 @@ const workbench = {
     low_disk_warning: false,
     scheduler_disabled_warning: false,
   },
-  recent: { download_jobs: [], import_jobs: [], tasks: [] },
+  recent: { download_jobs: [], import_jobs: [], tasks: [], works: [], successful_syncs: [] },
 };
 
 const longDownloadJob = {
@@ -73,6 +74,53 @@ const longDownloadJob = {
   error_log: null,
 };
 
+const REPRESENTATIVE_ROUTES = [
+  "/admin",
+  "/admin/creators",
+  "/admin/subscriptions",
+  "/admin/jobs?tab=downloads",
+  "/admin/scheduler",
+  "/admin/notifications",
+  "/admin/works",
+  "/admin/tags",
+  "/admin/upload",
+  "/admin/reference/danbooru",
+  "/admin/data-mgmt",
+  "/admin/curation",
+  "/admin/dedup",
+  "/admin/system",
+  "/admin/sources",
+  "/admin/search",
+  "/admin/users",
+  "/admin/settings",
+  "/admin/settings/appearance",
+  "/admin/settings/auth-status",
+  "/admin/settings/backup",
+  "/admin/settings/data-mgmt",
+  "/admin/settings/dedup",
+  "/admin/settings/download-defaults",
+  "/admin/settings/gallerydl",
+  "/admin/settings/logs",
+  "/admin/settings/profile",
+  "/admin/settings/proxy",
+  "/admin/settings/scheduler-defaults",
+  "/admin/settings/showcase",
+  "/admin/settings/subscription-defaults",
+] as const;
+
+const DYNAMIC_ROUTES = [
+  "/admin/works/fixture-work",
+  "/admin/creators/fixture-creator",
+  "/admin/creators/fixture-creator/mapping",
+  "/admin/creators/duplicates",
+  "/admin/subscriptions/fixture-subscription",
+  "/admin/repositories/fixture-repository",
+  "/admin/tags/fixture-tag",
+  "/admin/users/1",
+] as const;
+
+const QUALITY_ROUTES = [...REPRESENTATIVE_ROUTES, ...DYNAMIC_ROUTES] as const;
+
 async function installFixtureRoutes(context: BrowserContext) {
   await context.addCookies([{
     name: "ag_token",
@@ -82,16 +130,187 @@ async function installFixtureRoutes(context: BrowserContext) {
   }]);
   await context.addInitScript(() => {
     window.localStorage.setItem("ag_token", "ui-test-token");
-    window.localStorage.setItem("auto-gallery-lang", "en");
-    window.localStorage.setItem("auto-gallery-theme", "dark");
+    if (!window.localStorage.getItem("auto-gallery-lang")) {
+      window.localStorage.setItem("auto-gallery-lang", "en");
+    }
+    if (!window.localStorage.getItem("auto-gallery-theme")) {
+      window.localStorage.setItem("auto-gallery-theme", "dark");
+    }
   });
   await context.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
     if (path === "/api/v1/auth/me") {
       await route.fulfill({ json: me });
+    } else if (path === "/api/v1/works/fixture-work") {
+      await route.fulfill({
+        json: {
+          id: "fixture-work",
+          title: "Fixture Work",
+          description: "Fixture description",
+          posted_at: "2026-07-27T10:00:00Z",
+          is_nsfw: false,
+          is_ai_generated: false,
+          asset_count: 0,
+          is_favorite: false,
+          creator_id: "fixture-creator",
+          creator_name: "fixture-creator",
+          created_at: "2026-07-27T10:00:00Z",
+          updated_at: "2026-07-27T10:00:00Z",
+        },
+      });
+    } else if (/^\/api\/v1\/works\/fixture-work\/(assets|sources|tags)$/.test(path)) {
+      await route.fulfill({ json: [] });
+    } else if (path === "/api/v1/creators/fixture-creator") {
+      await route.fulfill({
+        json: {
+          id: "fixture-creator",
+          name: "fixture-creator",
+          display_name: "Fixture Creator",
+          description: "Fixture description",
+          is_active: true,
+          is_favorite: false,
+          created_at: "2026-07-27T10:00:00Z",
+          updated_at: "2026-07-27T10:00:00Z",
+        },
+      });
+    } else if (path === "/api/v1/creators/fixture-creator/links") {
+      await route.fulfill({ json: [] });
+    } else if (path === "/api/v1/creators/fixture-creator/timeline") {
+      await route.fulfill({ json: { creator_id: "fixture-creator", sources: [], days: [], total: 0 } });
+    } else if (path === "/api/v1/creators/fixture-creator/stats") {
+      await route.fulfill({
+        json: {
+          creator_id: "fixture-creator",
+          total_works: 0,
+          total_assets: 0,
+          total_tags: 0,
+          source_breakdown: [],
+          tag_distribution: [],
+          monthly_frequency: [],
+        },
+      });
+    } else if (path === "/api/v1/creators/fixture-creator/subscription-overview") {
+      await route.fulfill({
+        json: {
+          creator_id: "fixture-creator",
+          subscriptions: [],
+          repositories: [],
+          summary: {
+            subscription_count: 0,
+            repository_count: 0,
+            enabled_repository_count: 0,
+            running_job_count: 0,
+          },
+        },
+      });
+    } else if (path === "/api/v1/creators/duplicates") {
+      await route.fulfill({ json: { duplicates: [], total: 0 } });
+    } else if (path === "/api/v1/subscriptions/fixture-subscription") {
+      await route.fulfill({
+        json: {
+          id: "fixture-subscription",
+          creator_id: "fixture-creator",
+          name: "Fixture Subscription",
+          creator_name: "fixture-creator",
+          creator_display_name: "Fixture Creator",
+          is_active: true,
+          sync_enabled: true,
+          sync_interval_hours: 6,
+          source_count: 0,
+          enabled_source_count: 0,
+          running_job_count: 0,
+          failed_job_count: 0,
+          created_at: "2026-07-27T10:00:00Z",
+          updated_at: "2026-07-27T10:00:00Z",
+        },
+      });
+    } else if (path === "/api/v1/subscriptions/fixture-subscription/sources") {
+      await route.fulfill({ json: [] });
+    } else if (path === "/api/v1/repositories/fixture-repository") {
+      await route.fulfill({
+        json: {
+          repository: {
+            id: "fixture-repository",
+            subscription_id: "fixture-subscription",
+            source: "pixiv",
+            source_display_name: "Pixiv",
+            source_creator_id: "fixture-source",
+            source_url: "https://www.pixiv.net/users/1",
+            is_enabled: true,
+            auth_healthy: true,
+            can_download: true,
+            supports_gallerydl: true,
+            url_valid: true,
+            is_repository: true,
+          },
+          creator: {
+            id: "fixture-creator",
+            name: "fixture-creator",
+            display_name: "Fixture Creator",
+            is_favorite: false,
+          },
+          subscription: {
+            id: "fixture-subscription",
+            name: "Fixture Subscription",
+            is_active: true,
+            sync_enabled: true,
+            sync_interval_hours: 6,
+          },
+          provider: {
+            source: "pixiv",
+            display_name: "Pixiv",
+            normalized_url: "https://www.pixiv.net/users/1",
+            url_valid: true,
+            capabilities: {
+              can_download: true,
+              can_import_local: true,
+              supports_gallerydl: true,
+              supports_tags: true,
+              is_reference_only: false,
+            },
+          },
+          recent_jobs: [],
+          recent_works: [],
+        },
+      });
+    } else if (path === "/api/v1/repositories/fixture-repository/tags") {
+      await route.fulfill({ json: { items: [], total: 0 } });
+    } else if (path === "/api/v1/repositories/fixture-repository/curation-graph") {
+      await route.fulfill({
+        json: {
+          repository_id: "fixture-repository",
+          nodes: [],
+          edges: [],
+          total: 0,
+          offset: 0,
+          limit: 100,
+        },
+      });
+    } else if (path === "/api/v1/tags/fixture-tag") {
+      await route.fulfill({
+        json: {
+          id: "fixture-tag",
+          normalized_name: "fixture-tag",
+          category: "general",
+          usage_count: 0,
+          top_creators: [],
+          created_at: "2026-07-27T10:00:00Z",
+        },
+      });
+    } else if (path === "/api/v1/users/1") {
+      await route.fulfill({ json: { ...me, created_at: "2026-07-27T10:00:00Z" } });
     } else if (path === "/api/v1/system/workbench") {
       await route.fulfill({ json: workbench });
+    } else if (path === "/api/v1/system/scheduler-decisions") {
+      await route.fulfill({
+        json: {
+          updated_at: "2026-07-27T12:00:00Z",
+          scheduler_enabled: true,
+          timezone: "UTC",
+          items: [],
+        },
+      });
     } else if (path === "/api/v1/download-jobs") {
       await route.fulfill({ json: [longDownloadJob] });
     } else if (path === "/api/v1/tasks") {
@@ -100,10 +319,81 @@ async function installFixtureRoutes(context: BrowserContext) {
       await route.fulfill({ json: { items: [], total: 0, offset: 0, limit: 50 } });
     } else if (path === "/api/v1/works") {
       await route.fulfill({ json: { items: [], total: 0 } });
+    } else if (path === "/api/v1/creators") {
+      await route.fulfill({ json: { items: [], total: 0 } });
+    } else if (path === "/api/v1/creators/count") {
+      await route.fulfill({ json: { count: 0 } });
+    } else if (path === "/api/v1/subscriptions") {
+      await route.fulfill({ json: [] });
+    } else if (path === "/api/v1/subscriptions/count") {
+      await route.fulfill({ json: { count: 0 } });
+    } else if (path === "/api/v1/users") {
+      await route.fulfill({ json: [] });
+    } else if (path === "/api/v1/system/health") {
+      await route.fulfill({ json: { services: {}, version: "test" } });
+    } else if (path === "/api/v1/admin/auth-status") {
+      await route.fulfill({ json: { summary: { total: 0, healthy: 0, unhealthy: 0, unknown: 0 }, sources: [] } });
+    } else if (path === "/api/v1/admin/settings") {
+      await route.fulfill({
+        json: {
+          dedup: {},
+          subscription_defaults: {
+            default_sync_interval_hours: 6,
+            scheduler_scan_interval_minutes: 60,
+            scheduler_enabled: true,
+            schedule_mode: "interval",
+            scheduled_times: "",
+            timezone: "UTC",
+          },
+          download_defaults: {
+            timeout_seconds: 1800,
+            stall_timeout_seconds: 300,
+            max_retries: 3,
+            retry_backoff_base_seconds: 60,
+            max_posts: 0,
+            skip_ai_generated: false,
+            gallerydl_retries: 3,
+            gallerydl_timeout: 30,
+            gallerydl_abort: 300,
+            download_concurrency: 2,
+          },
+          proxy: { http_proxy: "", https_proxy: "", no_proxy: "", enabled: false },
+        },
+      });
+    } else if (path === "/api/v1/admin/gallerydl-config") {
+      await route.fulfill({
+        json: {
+          pixiv: {}, twitter: {}, iwara: {}, danbooru: {},
+          pinterest: {}, lofter: {}, weibo: {}, bilibili: {}, sources: {},
+        },
+      });
+    } else if (path === "/api/v1/curation/commits") {
+      await route.fulfill({ json: { items: [], total: 0 } });
+    } else if (path === "/api/v1/curation/purge/preview") {
+      await route.fulfill({ json: { work_count: 0, asset_count: 0, bytes_reclaimable: 0, works: [], assets: [] } });
+    } else if (path === "/api/v1/curation/rule-suggestions") {
+      await route.fulfill({ json: [] });
+    } else if (path === "/api/v1/curation/backfill/status") {
+      await route.fulfill({ json: { is_complete: false, expected: {}, existing: {}, missing: {} } });
+    } else if (path === "/api/v1/curation/gitllery/status") {
+      await route.fulfill({
+        json: {
+          repositories: [],
+          missing_repos: 0,
+          behind_total: 0,
+          needs_reconcile: false,
+        },
+      });
+    } else if (path === "/api/v1/admin/backup/list") {
+      await route.fulfill({ json: { backups: [] } });
+    } else if (path === "/api/v1/admin/backup/estimate") {
+      await route.fulfill({ json: { components: {} } });
     } else if (path === "/api/v1/tags") {
       await route.fulfill({ json: [] });
     } else if (path === "/api/v1/sources") {
       await route.fulfill({ json: { sources: [] } });
+    } else if (path === "/api/v1/system/logs") {
+      await route.fulfill({ json: { entries: [], total: 0, levels: ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] } });
     } else if (path.includes("/notifications")) {
       await route.fulfill({ json: { items: [], total: 0, unread_count: 0 } });
     } else {
@@ -178,33 +468,155 @@ test("desktop sidebar, contextual navigation, and command palette remain usable"
 test("top-level page headers share the task page alignment and works has no creator picker", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
 
-  const headingX = async (path: string, name: string) => {
+  const shellBox = async (path: string, name: string) => {
     await page.goto(path);
     const heading = page.locator("#main-content").getByRole("heading", { level: 1, name });
     await expect(heading).toBeVisible();
-    const box = await heading.boundingBox();
+    const box = await page.locator("[data-page-shell]").first().boundingBox();
     expect(box).not.toBeNull();
-    return box!.x;
+    return box!;
   };
 
-  const taskX = await headingX("/admin/jobs?tab=downloads", "Jobs");
+  const taskShell = await shellBox("/admin/jobs?tab=downloads", "Jobs");
   const pages = [
     ["/admin/works", "Works"],
     ["/admin/tags", "Tags"],
     ["/admin/upload", "Upload"],
     ["/admin/reference/danbooru", "Danbooru Reference Mapping"],
+    ["/admin/dedup", "Asset Deduplication"],
     ["/admin/notifications", "Notifications"],
+    ["/admin/settings", "Settings"],
+    ["/admin/settings/logs", "System Logs"],
   ] as const;
 
   for (const [path, name] of pages) {
-    const x = await headingX(path, name);
-    expect(Math.abs(x - taskX), `${name} heading should align with Jobs`).toBeLessThanOrEqual(1);
+    const box = await shellBox(path, name);
+    expect(Math.abs(box.x - taskShell.x), `${name} shell should align with Jobs`).toBeLessThanOrEqual(1);
+    expect(Math.abs(box.width - taskShell.width), `${name} shell should match Jobs width`).toBeLessThanOrEqual(1);
   }
 
   await page.goto("/admin/works?creator=creator-atlas");
   await expect(page.getByRole("combobox", { name: "Filter creator" })).toHaveCount(0);
   await expectNoPageOverflow(page);
   await page.screenshot({ path: "/tmp/auto-gallery-page-alignment.png", fullPage: false });
+});
+
+for (const route of QUALITY_ROUTES) {
+  test(`route quality: ${route}`, async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.stack || error.message));
+    await page.setViewportSize({ width: 1440, height: 960 });
+    await page.goto(route);
+    await expect(page.locator("#main-content")).toBeVisible();
+    await expect(page.getByRole("main")).toHaveCount(1);
+    await expect(page.locator("[data-nextjs-dialog-overlay]")).toHaveCount(0);
+    expect(pageErrors, `${route} should not throw a framework error`).toEqual([]);
+    const mainText = (await page.locator("#main-content").innerText()).replaceAll("中文", "");
+    expect(mainText, `${route} should not leak Chinese copy in English mode`).not.toMatch(/[\u3400-\u9fff]/u);
+    const results = await new AxeBuilder({ page })
+      .include("#main-content")
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+      .analyze();
+    expect(
+      results.violations.map((violation) => ({
+        id: violation.id,
+        targets: violation.nodes.map((node) => node.target.join(" ")),
+      })),
+      `${route} should have no axe violations`,
+    ).toEqual([]);
+  });
+}
+
+for (const route of QUALITY_ROUTES) {
+  test(`Chinese light route quality: ${route}`, async ({ page }) => {
+    const missingTranslations: string[] = [];
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.stack || error.message));
+    page.on("console", (message) => {
+      if (message.type() === "error" && message.text().includes("[i18n] Missing")) {
+        missingTranslations.push(message.text());
+      }
+    });
+    await page.addInitScript(() => {
+      window.localStorage.setItem("auto-gallery-lang", "zh");
+      window.localStorage.setItem("auto-gallery-theme", "light");
+    });
+    await page.setViewportSize({ width: 1440, height: 960 });
+    await page.goto(route);
+    await expect(page.locator("html")).not.toHaveClass(/dark/);
+    await expect(page.locator("#main-content")).toBeVisible();
+    await expect(page.getByRole("main")).toHaveCount(1);
+    await expect(page.locator("[data-nextjs-dialog-overlay]")).toHaveCount(0);
+    expect(pageErrors, `${route} should not throw a framework error`).toEqual([]);
+    expect(missingTranslations, `${route} should not use raw translation keys`).toEqual([]);
+    if (route === "/admin/settings/logs") {
+      await page.screenshot({ path: "/tmp/auto-gallery-logs-zh-light.png", fullPage: false });
+    }
+    const results = await new AxeBuilder({ page })
+      .include("#main-content")
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+      .analyze();
+    expect(
+      results.violations.map((violation) => ({
+        id: violation.id,
+        targets: violation.nodes.map((node) => node.target.join(" ")),
+      })),
+      `${route} should have no axe violations in Chinese light mode`,
+    ).toEqual([]);
+  });
+}
+
+test("legacy task and dedup routes redirect to their maintained destinations", async ({ page }) => {
+  await page.goto("/admin/import-jobs");
+  await expect(page).toHaveURL(/\/admin\/jobs\?tab=imports$/);
+  await expect(page.locator("[data-page-shell]")).toBeVisible();
+
+  await page.goto("/admin/merge-candidates");
+  await expect(page).toHaveURL(/\/admin\/dedup$/);
+  await expect(page.locator("[data-page-shell]")).toBeVisible();
+});
+
+test("restricted direct access renders the standard shell permission state", async ({ page }) => {
+  await page.route("**/api/v1/auth/me", (route) => route.fulfill({
+    json: { ...me, is_admin: false, permissions: ["library"], modules: { library: true, system: false } },
+  }));
+  await page.goto("/admin/settings/logs");
+  await expect(page.locator("[data-page-shell]")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "You don't have permission to access this page" })).toBeVisible();
+  await expect(page.getByRole("main")).toHaveCount(1);
+});
+
+test("route changes focus main content and dismissible menus restore trigger focus", async ({ page }) => {
+  await page.goto("/admin/jobs?tab=downloads");
+  const userMenu = page.getByRole("button", { name: "User menu" });
+  await userMenu.click();
+  await expect(userMenu).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Escape");
+  await expect(userMenu).toHaveAttribute("aria-expanded", "false");
+  await expect(userMenu).toBeFocused();
+
+  const notificationBell = page.locator('header button[aria-label="Notifications"]');
+  await notificationBell.click();
+  await page.keyboard.press("Escape");
+  await expect(notificationBell).toBeFocused();
+
+  await page.locator("#admin-sidebar").getByRole("link", { name: "Works" }).click();
+  await expect(page).toHaveURL(/\/admin\/works$/);
+  await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe("main-content");
+});
+
+test("shared dialogs trap focus, close with Escape, and restore their trigger", async ({ page }) => {
+  await page.goto("/admin/settings/data-mgmt");
+  const trigger = page.getByRole("button", { name: "Clear" }).first();
+  await trigger.click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect.poll(() => page.evaluate(() => Boolean(document.activeElement?.closest('[role="dialog"]')))).toBe(true);
+  await page.keyboard.press("Shift+Tab");
+  await expect.poll(() => page.evaluate(() => Boolean(document.activeElement?.closest('[role="dialog"]')))).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
 });
 
 test("compact tablet sidebar and long job metadata do not create root overflow", async ({ page }) => {
@@ -214,6 +626,23 @@ test("compact tablet sidebar and long job metadata do not create root overflow",
   await expect(page.getByText("xianyuliangryo-with-a-very-long-creator-name")).toBeVisible();
   await expectNoPageOverflow(page);
   await page.screenshot({ path: "/tmp/auto-gallery-jobs-tablet.png", fullPage: true });
+});
+
+test("200 percent equivalent reflow and reduced motion keep content visible", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  // A 720 CSS-pixel viewport represents a 1440-pixel desktop at 200% zoom.
+  await page.setViewportSize({ width: 720, height: 900 });
+  await page.goto("/admin/jobs?tab=downloads");
+  await expect(page.getByRole("heading", { level: 1, name: "Jobs" })).toBeVisible();
+  await expect(page.locator(".page-item").first()).toHaveCSS("opacity", "1");
+  await expectNoPageOverflow(page);
+});
+
+test("390 pixel mobile layout stays within the viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/admin/reference/danbooru");
+  await expect(page.getByRole("heading", { level: 1, name: "Danbooru Reference Mapping" })).toBeVisible();
+  await expectNoPageOverflow(page);
 });
 
 test("mobile drawer is discoverable, dismissible, and the task page stays in bounds", async ({ page }) => {
@@ -226,6 +655,7 @@ test("mobile drawer is discoverable, dismissible, and the task page stays in bou
   await expect(page.locator("#admin-mobile-sidebar")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.locator("#admin-mobile-sidebar")).toBeHidden();
+  await expect(trigger).toBeFocused();
   await expectNoPageOverflow(page);
   await page.screenshot({ path: "/tmp/auto-gallery-jobs-mobile.png", fullPage: true });
 });

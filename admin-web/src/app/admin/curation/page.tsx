@@ -8,6 +8,7 @@ import { api, CurationCommit, queryKeys } from "@/lib/api";
 import { EmptyState, ErrorState, PageHeader, PageShell, PermissionGuard } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useStaggeredEntrance } from "@/lib/motion";
+import { useI18nFormat } from "@/lib/i18n-format";
 
 function formatBytes(bytes: number) {
   if (!bytes) return "0 B";
@@ -38,6 +39,7 @@ function actionLabel(action: string) {
 
 function CommitCard({ commit, onRevert, reverting }: { commit: CurationCommit; onRevert: (id: string) => void; reverting: boolean }) {
   const t = useT();
+  const fmt = useI18nFormat();
   const [expanded, setExpanded] = useState(false);
   const workChanges = commit.changes.filter((c) => c.subject_type === "work");
   const assetChanges = commit.changes.filter((c) => c.subject_type === "asset");
@@ -67,7 +69,7 @@ function CommitCard({ commit, onRevert, reverting }: { commit: CurationCommit; o
               <span className="mx-1.5">·</span>
               <span>{commit.actor_type}</span>
               <span className="mx-1.5">·</span>
-              <time>{new Date(commit.occurred_at).toLocaleString()}</time>
+              <time dateTime={commit.occurred_at}>{fmt.dateTime(commit.occurred_at)}</time>
             </div>
           </div>
           {canRevert && (
@@ -199,7 +201,7 @@ function CurationContent() {
   };
 
   return (
-    <PageShell size="wide">
+    <PageShell>
       <PageHeader title={t("curation.title")} description={t("curation.desc")} />
       {(subjectType || subjectId) && (
         <div className="mb-4 rounded-md border border-border bg-white px-3 py-2 text-sm dark:border-border dark:bg-surface">
@@ -267,7 +269,7 @@ function CurationContent() {
             <button
               onClick={() => backfill.mutate()}
               disabled={backfill.isPending || backfillStatus.data?.is_complete}
-              className="mt-3 w-full rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-[#0860ca] disabled:opacity-50"
+              className="btn-primary mt-3 min-h-11 w-full text-xs"
             >
               {backfillStatus.data?.is_complete ? t("curation.baseline_complete") : backfill.isPending ? t("curation.backfilling") : t("curation.run_backfill")}
             </button>

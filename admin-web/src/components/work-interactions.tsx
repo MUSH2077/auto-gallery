@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type { WorkPreviewSize } from "@/lib/appearance";
 import SourceBadge from "./SourceBadge";
+import { useT } from "@/lib/i18n";
 
 export interface MediaAsset {
   id: string;
@@ -40,6 +41,7 @@ export function AssetImage({
   onLoad?: (event: React.SyntheticEvent<HTMLImageElement>) => void;
   onError?: () => void;
 }) {
+  const t = useT();
   const [failed, setFailed] = useState(false);
   const resolvedSrc = src || (assetId ? api.mediaUrl(assetId, size) : "");
 
@@ -50,7 +52,7 @@ export function AssetImage({
   if ((!assetId && !src) || failed) {
     return (
       <div className={`${className} flex items-center justify-center bg-subtle text-xs text-muted`}>
-        {fallback || "N/A"}
+        {fallback || t("common.na")}
       </div>
     );
   }
@@ -156,6 +158,7 @@ export function WorkPreviewOverlay({
   onWheelPage: (delta: number) => void;
   onRefreshAssets?: () => void;
 }) {
+  const t = useT();
   const [naturalRatio, setNaturalRatio] = useState<number | null>(null);
   const retriedSources = useRef<Set<string>>(new Set());
   const assetById = useMemo(() => new Map((assets || []).map((asset) => [asset.id, asset])), [assets]);
@@ -164,7 +167,7 @@ export function WorkPreviewOverlay({
   const currentSrc = currentAsset?.original_url || null;
   const footerText = currentAsset?.file_name
     ? `${currentAsset.file_name}${creatorName ? ` · ${creatorName}` : ""}`
-    : creatorName || "Unknown creator";
+    : creatorName || t("works.unknown_creator");
   const ratio = naturalRatio || ((currentAsset?.width || 0) > 0 && (currentAsset?.height || 0) > 0 ? (currentAsset!.width! / currentAsset!.height!) : 4 / 3);
   const style = useMemo(() => previewPosition(anchor, ratio, previewSize), [anchor, ratio, previewSize]);
   const canPage = Math.max(assetIds.length, assets?.length || 0) > 1;
@@ -189,13 +192,13 @@ export function WorkPreviewOverlay({
         {isLoading ? (
           <div className="h-full w-full animate-pulse bg-subtle" />
         ) : isError ? (
-          <div className="flex h-full w-full items-center justify-center px-4 text-center text-xs text-muted">Preview failed</div>
+          <div className="flex h-full w-full items-center justify-center px-4 text-center text-xs text-muted">{t("works.preview_failed")}</div>
         ) : currentSrc ? (
           <AssetImage
             src={currentSrc}
             alt={title || currentAsset?.file_name || ""}
             className="h-full w-full object-contain no-outline"
-            fallback="Original unavailable"
+            fallback={t("works.original_unavailable")}
             onLoad={(event) => {
               const image = event.currentTarget;
               if (image.naturalWidth > 0 && image.naturalHeight > 0) {
@@ -209,7 +212,7 @@ export function WorkPreviewOverlay({
             }}
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center px-4 text-center text-xs text-muted">Original unavailable</div>
+          <div className="flex h-full w-full items-center justify-center px-4 text-center text-xs text-muted">{t("works.original_unavailable")}</div>
         )}
         {canPage && (
           <div className="absolute bottom-2 left-2 rounded-md bg-black/70 px-2 py-1 text-xs font-medium text-white">
@@ -220,11 +223,11 @@ export function WorkPreviewOverlay({
       <div className="border-t border-border px-3 py-2">
         <div className="flex items-center gap-2">
           {source && <SourceBadge source={source} />}
-          <div className="min-w-0 flex-1 truncate text-sm font-medium">{title || "Untitled"}</div>
+          <div className="min-w-0 flex-1 truncate text-sm font-medium">{title || t("work_detail.untitled")}</div>
         </div>
         <div className="mt-1 flex items-center justify-between gap-3 text-xs text-muted">
           <span className="truncate">{footerText}</span>
-          {canPage && <span className="shrink-0">Scroll to page</span>}
+          {canPage && <span className="shrink-0">{t("works.scroll_to_page")}</span>}
         </div>
       </div>
     </div>
@@ -242,6 +245,7 @@ export function AssetFilmstrip<T extends MediaAsset>({
   onSelect: (index: number) => void;
   className?: string;
 }) {
+  const t = useT();
   if (!assets.length) return null;
   return (
     <div className={`flex gap-2 overflow-x-auto pb-1 ${className}`}>
@@ -256,7 +260,7 @@ export function AssetFilmstrip<T extends MediaAsset>({
             className={`relative h-16 w-16 shrink-0 overflow-hidden rounded-md border-2 transition-colors ${
               active ? "border-accent" : "border-border hover:border-accent/60"
             }`}
-            title={asset.file_name || `Page ${index + 1}`}
+            title={asset.file_name || t("works.page_number", { page: index + 1 })}
           >
             {archive ? (
               <span className="flex h-full w-full items-center justify-center bg-subtle font-mono text-[10px] font-semibold text-muted">
@@ -266,7 +270,7 @@ export function AssetFilmstrip<T extends MediaAsset>({
               <AssetImage
                 src={asset.thumb_url}
                 assetId={asset.id}
-                alt={asset.file_name || `Page ${index + 1}`}
+                alt={asset.file_name || t("works.page_number", { page: index + 1 })}
                 className="h-full w-full object-cover"
               />
             )}

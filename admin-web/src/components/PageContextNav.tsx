@@ -31,7 +31,7 @@ export default function PageContextNav() {
 
   return (
     <div className="mt-4 border-t border-border pt-3">
-      <nav aria-label={t("nav.secondary", "相关页面")} className="hidden min-w-0 items-center gap-1 md:flex">
+      <nav aria-label={t("nav.secondary")} className="hidden min-w-0 items-center gap-1 md:flex">
         {links.map((item) => {
           const selected = pathnameMatches(pathname, item.href);
           return (
@@ -56,7 +56,7 @@ export default function PageContextNav() {
           <ChevronDown className="h-4 w-4 shrink-0 text-muted transition-transform group-open:rotate-180" strokeWidth={1.8} aria-hidden />
         </summary>
         <nav
-          aria-label={t("nav.secondary", "相关页面")}
+          aria-label={t("nav.secondary")}
           className="absolute left-0 right-0 z-30 mt-1 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-overlay"
         >
           {links.map((item) => {

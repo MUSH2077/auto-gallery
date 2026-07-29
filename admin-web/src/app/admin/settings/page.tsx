@@ -15,18 +15,18 @@ export default function SettingsPage() {
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
   const reindex = useMutation({
     mutationFn: api.reindexSearch,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.admin.settings }); setConfirmReindex(false); toast.success({ message: "Reindex started" }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.admin.settings }); setConfirmReindex(false); toast.success({ message: t("settings.reindex_started") }); },
     onError: (e: Error) => { setConfirmReindex(false); toast.error({ message: e.message }); },
   });
   const [confirmReindex, setConfirmReindex] = useState(false);
 
   const cards = [
-    { href: "/admin/settings/appearance", title: t("settings.appearance", "外观"), desc: t("settings.appearance.desc", "主题、调色板、作品预览与浏览密度。") },
+    { href: "/admin/settings/appearance", title: t("settings.appearance"), desc: t("settings.appearance.desc") },
     { href: "/admin/settings/showcase", title: t("showcase_settings.title"), desc: t("showcase_settings.desc") },
     { href: "/admin/settings/gallerydl", title: t("settings.gallerydl"), desc: t("settings.gallerydl.desc") },
     { href: "/admin/settings/scheduler-defaults", title: t("settings.scheduler_defaults"), desc: t("settings.scheduler_defaults.desc") },
-    { href: "/admin/settings/subscription-defaults", title: t("settings.subscription_defaults", "订阅默认值"), desc: t("settings.subscription_defaults.desc", "默认同步间隔与调度器行为") },
-    { href: "/admin/settings/download-defaults", title: t("settings.download_defaults", "下载任务默认值"), desc: t("settings.download_defaults.desc", "超时、重试、并行下载数等") },
+    { href: "/admin/settings/subscription-defaults", title: t("settings.subscription_defaults"), desc: t("settings.subscription_defaults.desc") },
+    { href: "/admin/settings/download-defaults", title: t("settings.download_defaults"), desc: t("settings.download_defaults.desc") },
     { href: "/admin/settings/dedup", title: t("settings.dedup"), desc: t("settings.dedup.desc") },
     { href: "/admin/settings/proxy", title: t("settings.proxy"), desc: t("settings.proxy.desc") },
     { href: "/admin/settings/auth-status", title: t("settings.auth"), desc: t("settings.auth.desc") },
@@ -37,7 +37,7 @@ export default function SettingsPage() {
 
   return (
     <PermissionGuard module="system">
-    <PageShell size="normal" className="page-transition">
+    <PageShell>
       <PageHeader title={t("settings.title")} description={t("settings.desc_default")} />
 
       {/* Config Cards */}

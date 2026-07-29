@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, ProxySettings } from "@/lib/api";
 import { PageHeader, PageShell, ErrorState } from "@/components";
@@ -9,7 +9,6 @@ import Link from "next/link";
 
 function TestResults({ data, proxyEnabled }: { data: any | null; proxyEnabled: boolean }) {
   const t = useT();
-  const toast = useToast();
   if (!data) return null;
   const { results, proxy_reachable, proxy_reachable_error } = data;
   return (
@@ -84,7 +83,12 @@ export default function ProxySettingsPage() {
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
   const [local, setLocal] = useState<ProxySettings | null>(null);
-  
+
+  useEffect(() => {
+    if (settings.data?.proxy) {
+      setLocal((current) => current ?? { ...settings.data!.proxy });
+    }
+  }, [settings.data]);
 
   const save = useMutation({
     mutationFn: (data: ProxySettings) => api.updateAdminSettings({ proxy: data }),
@@ -93,14 +97,12 @@ export default function ProxySettingsPage() {
   const testProxy = useMutation({ mutationFn: () => api.testProxy() });
 
   const current = local || settings.data?.proxy;
-  if (settings.isError) return <PageShell size="normal"><ErrorState message={settings.error?.message || t("proxy.failed")} onRetry={() => settings.refetch()} /></PageShell>;
-  if (!settings.data) return <PageShell size="normal"><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded-md bg-subtle dark:bg-subtle" /><div className="h-48 rounded-md bg-subtle dark:bg-subtle" /></div></PageShell>;
-  if (!local && settings.data.proxy) setLocal({ ...settings.data.proxy });
-
+  if (settings.isError) return <PageShell><ErrorState message={settings.error?.message || t("proxy.failed")} onRetry={() => settings.refetch()} /></PageShell>;
+  if (!settings.data) return <PageShell><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded-md bg-subtle dark:bg-subtle" /><div className="h-48 rounded-md bg-subtle dark:bg-subtle" /></div></PageShell>;
   const setStr = (key: keyof ProxySettings, val: string) => { if (current) setLocal({ ...current, [key]: val }); };
 
   return (
-    <PageShell size="normal">
+    <PageShell>
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("proxy.back")}</Link>
       </div>
@@ -114,9 +116,17 @@ export default function ProxySettingsPage() {
                 <span className="font-medium text-sm dark:text-white">{t("proxy.enable")}</span>
                 <p className="text-xs text-muted mt-0.5">{t("proxy.enable.desc")}</p>
               </div>
-              <button onClick={() => setLocal({ ...current, enabled: !current.enabled })}
-                className={"relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 " + (current.enabled ? "bg-success" : "bg-subtle")}>
-                <span className={"inline-block h-4 w-4 transform rounded-full bg-white transition-transform " + (current.enabled ? "translate-x-6" : "translate-x-1")} />
+              <button
+                type="button"
+                role="switch"
+                aria-checked={current.enabled}
+                aria-label={t("proxy.enable")}
+                onClick={() => setLocal({ ...current, enabled: !current.enabled })}
+                className="relative inline-flex h-11 w-12 shrink-0 items-center justify-center rounded-md"
+              >
+                <span className={"relative inline-flex h-6 w-11 items-center rounded-full transition-colors " + (current.enabled ? "bg-success" : "bg-subtle")}>
+                  <span className={"inline-block h-4 w-4 transform rounded-full bg-white transition-transform " + (current.enabled ? "translate-x-6" : "translate-x-1")} />
+                </span>
               </button>
             </div>
 
@@ -127,8 +137,8 @@ export default function ProxySettingsPage() {
                 ["no_proxy", t("proxy.no"), t("proxy.no.desc"), "localhost,127.0.0.1,::1"],
               ] as [keyof ProxySettings, string, string, string][]).map(([key, label, desc, ph]) => (
                 <div key={key}>
-                  <label className="block text-sm font-medium mb-1.5 dark:text-white">{label}</label>
-                  <input type="text" value={(current[key] as string) || ""}
+                  <label htmlFor={`proxy-${key}`} className="block text-sm font-medium mb-1.5 dark:text-white">{label}</label>
+                  <input id={`proxy-${key}`} type="text" value={(current[key] as string) || ""}
                     onChange={(e) => setStr(key, e.target.value)} placeholder={ph}
                     className="input w-full max-w-lg font-mono" />
                   <p className="text-xs text-muted mt-1">{desc}</p>
@@ -153,7 +163,7 @@ export default function ProxySettingsPage() {
                 <p className="text-xs text-muted mt-0.5">{t("proxy.connectivity_test.desc")}</p>
               </div>
               <button onClick={() => testProxy.mutate()} disabled={testProxy.isPending}
-                className="px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 disabled:opacity-50 shrink-0 transition-colors">
+                className="btn-primary min-h-11 shrink-0 px-4 text-sm">
                 {testProxy.isPending ? t("proxy.testing") : t("proxy.test_now")}
               </button>
             </div>

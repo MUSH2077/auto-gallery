@@ -9,11 +9,13 @@ import { Breadcrumb } from "@/components/Breadcrumb";
 import { ConfirmDialog, ErrorState, EmptyState, Modal, PageShell, type SlideItem } from "@/components";
 import { useSlideshow } from "@/lib/useSlideshow";
 import { usePermissions } from "@/lib/usePermissions";
+import { useI18nFormat } from "@/lib/i18n-format";
 
 const CATEGORIES = ["general", "artist", "series", "character", "meta"];
 
 export default function TagDetailPage() {
   const t = useT();
+  const fmt = useI18nFormat();
   const router = useRouter();
   const queryClient = useQueryClient();
   const { has } = usePermissions();
@@ -63,13 +65,13 @@ export default function TagDetailPage() {
     .filter((w) => !!w.thumbnail_asset_id)
     .map((w) => ({ assetId: w.thumbnail_asset_id as string, workId: w.id, title: w.title, creatorName: w.creator_name }));
 
-  if (tag.isLoading) return <PageShell size="normal"><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded bg-subtle" /><div className="h-64 rounded bg-subtle" /></div></PageShell>;
-  if (tag.error) return <PageShell size="normal"><ErrorState message={(tag.error as Error).message} onRetry={() => tag.refetch()} /></PageShell>;
+  if (tag.isLoading) return <PageShell><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded bg-subtle" /><div className="h-64 rounded bg-subtle" /></div></PageShell>;
+  if (tag.error) return <PageShell><ErrorState message={(tag.error as Error).message} onRetry={() => tag.refetch()} /></PageShell>;
   if (!tag.data) return null;
   const td = tag.data;
 
   return (
-    <PageShell size="normal">
+    <PageShell>
       <Breadcrumb items={[
         { label: t("tags.title"), href: "/admin/tags" },
         { label: td.normalized_name },
@@ -82,7 +84,7 @@ export default function TagDetailPage() {
             {td.category && <span className="inline-block mt-2 px-2.5 py-0.5 rounded-full text-xs font-medium bg-accent-subtle text-accent">{td.category}</span>}
             <dl className="mt-4 space-y-2 text-sm">
               <div className="flex justify-between"><dt className="text-muted">{t("tag_detail.work_count")}</dt><dd className="font-semibold">{td.usage_count}</dd></div>
-              <div className="flex justify-between"><dt className="text-muted">{t("tag_detail.created")}</dt><dd className="text-xs">{new Date(td.created_at).toLocaleDateString()}</dd></div>
+              <div className="flex justify-between"><dt className="text-muted">{t("tag_detail.created")}</dt><dd className="text-xs">{fmt.date(td.created_at)}</dd></div>
             </dl>
             {canCurate && (
               <div className="mt-4 flex gap-2 border-t border-border pt-4">

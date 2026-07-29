@@ -9,6 +9,7 @@ import { useT } from "@/lib/i18n";
 import { useStaggeredEntrance } from "@/lib/motion";
 import { PageHeader, PageShell, EmptyState, ErrorState, SourceBadge, PermissionGuard } from "@/components";
 import { Breadcrumb } from "@/components/Breadcrumb";
+import { useI18nFormat } from "@/lib/i18n-format";
 
 type Kind = "all" | "works" | "creators" | "tags";
 
@@ -18,6 +19,7 @@ const INDICATOR_BASE_PX = 100;
 
 function SearchContent() {
   const t = useT();
+  const fmt = useI18nFormat();
   const toast = useToast();
   const router = useRouter();
   const qc = useQueryClient();
@@ -70,7 +72,7 @@ function SearchContent() {
   ];
 
   return (
-    <PageShell size="normal">
+    <PageShell>
       <Breadcrumb items={[{ label: t("search.title") }, { label: debounced || "..." }]} />
       <PageHeader title={t("search.title")} description={t("search.desc")}>
         <button className="btn-ghost px-3 py-1.5 text-xs" onClick={() => {
@@ -143,7 +145,12 @@ function SearchContent() {
                 {worksHits.map((w: any, index: number) => {
                   const entrance = workEntrance(`work:${w.id}`, index);
                   return (
-                  <div key={w.id} className={`card-interactive ${entrance.className} flex cursor-pointer gap-4 p-4`} style={entrance.style} onClick={() => router.push(`/admin/works/${w.id}`)}>
+                  <article key={w.id} className={`card-interactive ${entrance.className} relative flex gap-4 p-4`} style={entrance.style}>
+                    <Link
+                      href={`/admin/works/${w.id}`}
+                      className="absolute inset-0 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                      aria-label={t("search.open_work", { title: w.title || t("search.untitled") })}
+                    />
                     {w.thumbnail_asset_id ? (
                       <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="w-16 h-16 object-cover rounded shrink-0" loading="lazy" decoding="async" />
                     ) : (
@@ -155,23 +162,30 @@ function SearchContent() {
                         {w.is_nsfw && <span className="badge bg-danger-subtle text-danger text-xs">{t("search.nsfw")}</span>}
                       </div>
                       <div className="mt-1 flex items-center gap-2 text-xs text-muted">
-                        {w.source && <SourceBadge source={w.source} href={`/admin/works?source=${w.source}`} />}
+                        {w.source && <span className="relative z-10"><SourceBadge source={w.source} href={`/admin/works?source=${w.source}`} /></span>}
                         {w.creator_name && (
-                          <Link href={`/admin/creators/${w.creator_id || w.id}`} onClick={(e) => e.stopPropagation()}
-                            className="text-accent hover:underline">{w.creator_name}</Link>
+                          <Link href={`/admin/creators/${w.creator_id || w.id}`}
+                            className="relative z-10 text-accent hover:underline">{w.creator_name}</Link>
                         )}
-                        {w.posted_at && <span>{new Date(w.posted_at).toLocaleDateString()}</span>}
+                        {w.posted_at && <span>{fmt.date(w.posted_at)}</span>}
                       </div>
                       {w.tags && w.tags.length > 0 && (
                         <div className="flex gap-1 mt-1.5 flex-wrap">
                           {w.tags.slice(0, 8).map((tag: string) => (
-                            <span key={tag} onClick={(e) => { e.stopPropagation(); router.push(`/admin/search?q=${encodeURIComponent(tag)}`); }}
-                              className="badge cursor-pointer text-[10px] hover:border-accent/30 hover:text-accent">{tag}</span>
+                            <button
+                              key={tag}
+                              type="button"
+                              onClick={() => router.push(`/admin/search?q=${encodeURIComponent(tag)}`)}
+                              aria-label={t("search.search_tag", { tag })}
+                              className="badge relative z-10 min-h-6 cursor-pointer text-[10px] hover:border-accent/30 hover:text-accent"
+                            >
+                              {tag}
+                            </button>
                           ))}
                         </div>
                       )}
                     </div>
-                  </div>
+                  </article>
                   );
                 })}
               </div>

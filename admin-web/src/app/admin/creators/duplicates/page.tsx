@@ -64,7 +64,7 @@ export default function CreatorDuplicatesPage() {
   };
 
   return (
-    <PageShell size="normal">
+    <PageShell>
       <PageHeader title={t("duplicates.title")} description={t("duplicates.desc")} />
 
       <div className="mb-6 rounded-md border border-warning-subtle bg-warning-subtle p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-warning">
@@ -98,7 +98,7 @@ export default function CreatorDuplicatesPage() {
           <div className="space-y-2">
             {group.creator_ids.map((cid, i) => (
               <div key={cid} className="flex items-center gap-3 rounded-md border border-border p-2 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle">
-                <input type="checkbox" aria-label="Select item"
+                <input type="checkbox" aria-label={t("common.select_item", { name: group.creator_names[i] || cid.slice(0, 8) })}
                   checked={selectedSources.has(cid)}
                   onChange={() => toggleSource(cid, group.creator_ids[0] === cid ? group.creator_ids[1] : group.creator_ids[0])}
                   className="rounded shrink-0"

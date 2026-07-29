@@ -45,7 +45,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <PageShell size="normal">
+    <PageShell>
       <PageHeader title={t("auth.profile")} />
 
       <div className="max-w-xl">
@@ -73,11 +73,12 @@ export default function ProfilePage() {
           <h2 className="text-sm font-medium text-muted mb-4">{t("auth.change_password")}</h2>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div>
-              <label className="block text-sm font-medium text-fg mb-1">
+              <label htmlFor="current-password" className="block text-sm font-medium text-fg mb-1">
                 {t("auth.current_password")}
               </label>
               <input
                 type="password"
+                id="current-password"
                 autoComplete="current-password"
                 required
                 value={currentPassword}
@@ -86,11 +87,12 @@ export default function ProfilePage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-fg mb-1">
+              <label htmlFor="new-password" className="block text-sm font-medium text-fg mb-1">
                 {t("auth.new_password")}
               </label>
               <input
                 type="password"
+                id="new-password"
                 autoComplete="new-password"
                 required
                 value={newPassword}
@@ -99,11 +101,12 @@ export default function ProfilePage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-fg mb-1">
+              <label htmlFor="confirm-password" className="block text-sm font-medium text-fg mb-1">
                 {t("auth.confirm_password")}
               </label>
               <input
                 type="password"
+                id="confirm-password"
                 autoComplete="new-password"
                 required
                 value={confirmPassword}
@@ -115,7 +118,7 @@ export default function ProfilePage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-2 px-4 bg-accent hover:bg-accent/90 disabled:bg-accent text-white font-medium rounded-lg transition-colors text-sm focus:outline-none focus:ring-2 focus:ring-accent"
+              className="btn-primary min-h-11 w-full"
             >
               {loading ? t("common.saving") : t("auth.change_password")}
             </button>

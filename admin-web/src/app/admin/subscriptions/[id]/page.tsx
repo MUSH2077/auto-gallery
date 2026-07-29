@@ -107,7 +107,7 @@ export default function SubscriptionDetailPage() {
       qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
       qc.invalidateQueries({ queryKey: queryKeys.subscriptions.sources(id) });
       qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
-      if (result.status === "enqueued") toast.success(result.message || t("repo_detail.sync_queued", "Sync queued"));
+      if (result.status === "enqueued") toast.success(result.message || t("repo_detail.sync_queued"));
       else {
         const reason = typeof result.reason === "object" ? result.reason?.message : result.reason;
         toast.warning(reason || result.message || t("subscriptions.sync_no_jobs"));
@@ -139,8 +139,8 @@ export default function SubscriptionDetailPage() {
     return c ? (c.display_name || c.name) : creatorId.slice(0, 8);
   };
 
-  if (sub.isLoading) return <PageShell size="normal"><div className="animate-pulse space-y-4"><div className="h-8 w-1/4 rounded bg-subtle dark:bg-subtle" /><div className="h-32 rounded bg-subtle dark:bg-subtle" /></div></PageShell>;
-  if (sub.error) return <PageShell size="normal"><ErrorState message={(sub.error as Error).message} onRetry={() => sub.refetch()} /></PageShell>;
+  if (sub.isLoading) return <PageShell><div className="animate-pulse space-y-4"><div className="h-8 w-1/4 rounded bg-subtle dark:bg-subtle" /><div className="h-32 rounded bg-subtle dark:bg-subtle" /></div></PageShell>;
+  if (sub.error) return <PageShell><ErrorState message={(sub.error as Error).message} onRetry={() => sub.refetch()} /></PageShell>;
   if (!sub.data) return null;
   const s = sub.data;
   const providerMap = new Map((providerInfos.data?.sources || []).map((p: ProviderInfo) => [p.source_name, p]));
@@ -168,8 +168,8 @@ export default function SubscriptionDetailPage() {
   };
 
   return (
-    <PageShell size="normal">
-      <Link href="/admin/subscriptions" className="inline-flex items-center gap-1 text-sm text-accent hover:underline dark:text-accent">&larr; 返回</Link>
+    <PageShell>
+      <Link href="/admin/subscriptions" className="inline-flex min-h-11 items-center gap-1 text-sm text-accent hover:underline dark:text-accent">{t("subscription_detail.back")}</Link>
       <PageHeader title={s.name || (s.creator_display_name || s.creator_name || getCreatorName(s.creator_id))} description={s.creator_display_name || s.creator_name ? `${t("subscription_detail.creator")} ${s.creator_display_name || s.creator_name}` : undefined}>
         <div className="flex gap-2">
           <button onClick={() => { setEditName(s.name || ""); setEditMode(s.schedule_mode || ""); setEditInterval(s.sync_interval_hours || 24); setEditTimes(s.scheduled_times || ""); setEditing(true); }} className="btn-primary">{t("subscription_detail.edit")}</button>
@@ -177,12 +177,12 @@ export default function SubscriptionDetailPage() {
       </PageHeader>
 
       <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
-        <div className="card p-3"><div className="text-lg font-semibold text-fg">{detailStats.enabled}/{detailStats.total}</div><div className="text-xs uppercase text-muted">{t("subscriptions.col_sources", "Sources")}</div></div>
+        <div className="card p-3"><div className="text-lg font-semibold text-fg">{detailStats.enabled}/{detailStats.total}</div><div className="text-xs uppercase text-muted">{t("subscriptions.col_sources")}</div></div>
         <div className="card p-3"><div className="text-lg font-semibold text-accent">{detailStats.due}</div><div className="text-xs uppercase text-muted">{t("scheduler.filter_due")}</div></div>
         <div className="card p-3"><div className={`text-lg font-semibold ${detailStats.blocked ? "text-danger" : "text-fg"}`}>{detailStats.blocked}</div><div className="text-xs uppercase text-muted">{t("scheduler.filter_blocked")}</div></div>
-        <div className="card p-3"><div className="text-lg font-semibold text-fg">{detailStats.running}</div><div className="text-xs uppercase text-muted">{t("subscriptions.running", "Running")}</div></div>
-        <div className="card p-3"><div className={`text-lg font-semibold ${detailStats.failed ? "text-danger" : "text-fg"}`}>{detailStats.failed}</div><div className="text-xs uppercase text-muted">{t("subscriptions.failed", "Failed")}</div></div>
-        <div className="card p-3"><div className="truncate text-sm font-semibold text-fg">{fmt.dateTime(detailStats.nextDueAt)}</div><div className="text-xs uppercase text-muted">{t("subscriptions.next_due_short", "Next due")}</div></div>
+        <div className="card p-3"><div className="text-lg font-semibold text-fg">{detailStats.running}</div><div className="text-xs uppercase text-muted">{t("subscriptions.running")}</div></div>
+        <div className="card p-3"><div className={`text-lg font-semibold ${detailStats.failed ? "text-danger" : "text-fg"}`}>{detailStats.failed}</div><div className="text-xs uppercase text-muted">{t("subscriptions.failed")}</div></div>
+        <div className="card p-3"><div className="truncate text-sm font-semibold text-fg">{fmt.dateTime(detailStats.nextDueAt)}</div><div className="text-xs uppercase text-muted">{t("subscriptions.next_due_short")}</div></div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
@@ -190,7 +190,14 @@ export default function SubscriptionDetailPage() {
           <div className="card p-4 mb-4">
             <h3 className="font-medium mb-3">{t("subscription_detail.details")}</h3>
             <dl className="text-sm space-y-2">
-              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.creator")}</dt><dd className="cursor-pointer text-accent hover:underline dark:text-accent" onClick={() => router.push(`/admin/creators/${s.creator_id}`)}>{s.creator_display_name || s.creator_name || getCreatorName(s.creator_id)}</dd></div>
+              <div className="flex gap-2">
+                <dt className="w-28 text-muted">{t("subscription_detail.creator")}</dt>
+                <dd>
+                  <Link className="text-accent hover:underline dark:text-accent" href={`/admin/creators/${s.creator_id}`}>
+                    {s.creator_display_name || s.creator_name || getCreatorName(s.creator_id)}
+                  </Link>
+                </dd>
+              </div>
               <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.status")}</dt><dd><StatusBadge status={s.is_active ? "up" : "down"} /></dd></div>
               <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.auto_sync")}</dt><dd>{s.sync_enabled ? <span className="text-success dark:text-success">{t("subscription_detail.sync_enabled")}</span> : <span className="text-placeholder dark:text-muted">{t("subscription_detail.sync_disabled")}</span>}</dd></div>
               <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.sync_strategy")}</dt><dd className="text-xs">
@@ -204,8 +211,8 @@ export default function SubscriptionDetailPage() {
                   <span className="text-blue-600">{t("subscription_detail.strategy_interval")} · {s.sync_interval_hours}h</span>
                 )}
               </dd></div>
-              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.last_synced")}</dt><dd className="text-xs">{s.last_synced_at ? new Date(s.last_synced_at).toLocaleString() : t("subscription_detail.never_synced")}</dd></div>
-              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.created")}</dt><dd className="text-xs">{new Date(s.created_at).toLocaleString()}</dd></div>
+              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.last_synced")}</dt><dd className="text-xs">{s.last_synced_at ? fmt.dateTime(s.last_synced_at) : t("subscription_detail.never_synced")}</dd></div>
+              <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.created")}</dt><dd className="text-xs">{fmt.dateTime(s.created_at)}</dd></div>
             </dl>
           </div>
 
@@ -237,9 +244,9 @@ export default function SubscriptionDetailPage() {
           <h4 className="font-medium mb-2">{t("subscription_detail.multi_source_title")}</h4>
           <p className="text-muted">{t("subscription_detail.multi_source_desc")}</p>
           <div className="mt-4 space-y-2 border-t border-border pt-4 text-xs dark:border-border">
-            <div className="flex justify-between"><span>Repositories</span><span className="font-semibold">{sources.data?.length || 0}</span></div>
-            <div className="flex justify-between"><span>Enabled</span><span className="font-semibold">{sources.data?.filter((x) => x.is_enabled).length || 0}</span></div>
-            <div className="flex justify-between"><span>Last sync</span><span className="font-semibold">{s.last_synced_at ? new Date(s.last_synced_at).toLocaleDateString() : t("subscription_detail.never_synced")}</span></div>
+            <div className="flex justify-between"><span>{t("subscription_detail.repositories")}</span><span className="font-semibold">{sources.data?.length || 0}</span></div>
+            <div className="flex justify-between"><span>{t("subscription_detail.enabled")}</span><span className="font-semibold">{sources.data?.filter((x) => x.is_enabled).length || 0}</span></div>
+            <div className="flex justify-between"><span>{t("subscription_detail.last_sync_short")}</span><span className="font-semibold">{s.last_synced_at ? fmt.date(s.last_synced_at) : t("subscription_detail.never_synced")}</span></div>
           </div>
         </div>
       </div>
@@ -265,7 +272,7 @@ export default function SubscriptionDetailPage() {
                 <input type="number" min={1} max={168} value={editInterval}
                   onChange={(e) => setEditInterval(parseInt(e.target.value) || 24)}
                   className="input w-16 px-2 py-1.5 text-center font-mono" />
-                <span className="pr-2 text-xs text-muted">hours</span>
+                <span className="pr-2 text-xs text-muted">{t("subscription_detail.hours", { count: editInterval })}</span>
               </div>
             </div>
           )}

@@ -35,6 +35,7 @@ function NumberSetting({
       </div>
       <label className="flex shrink-0 items-center gap-2">
         <input
+          aria-label={label}
           type="number"
           min={min}
           max={max}
@@ -77,7 +78,7 @@ export default function DedupSettingsPage() {
 
   if (settings.isError) {
     return (
-      <PageShell size="normal">
+      <PageShell>
         <ErrorState
           message={settings.error?.message || t("dedup.failed")}
           onRetry={() => settings.refetch()}
@@ -87,7 +88,7 @@ export default function DedupSettingsPage() {
   }
   if (!local) {
     return (
-      <PageShell size="normal">
+      <PageShell>
         <div className="space-y-4 animate-pulse">
           <div className="h-8 w-1/3 rounded-md bg-subtle" />
           <div className="h-96 rounded-md bg-subtle" />
@@ -97,10 +98,10 @@ export default function DedupSettingsPage() {
   }
 
   return (
-    <PageShell size="normal">
+    <PageShell>
       <Link
         href="/admin/settings"
-        className="mb-5 inline-flex min-h-11 items-center text-sm text-blue-600 hover:underline"
+        className="mb-5 inline-flex min-h-11 items-center text-sm text-accent hover:underline"
       >
         {t("dedup.back")}
       </Link>
@@ -119,22 +120,25 @@ export default function DedupSettingsPage() {
           <button
             type="button"
             role="switch"
-            aria-checked={local.auto_group_enabled}
+            aria-checked={Boolean(local.auto_group_enabled)}
+            aria-label={t("dedup.auto_group")}
             onClick={() =>
               setLocal({
                 ...local,
                 auto_group_enabled: !local.auto_group_enabled,
               })
             }
-            className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors ${
-              local.auto_group_enabled ? "bg-success" : "bg-subtle"
-            }`}
+            className="relative inline-flex h-11 w-12 shrink-0 items-center justify-center rounded-md"
           >
-            <span
-              className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                local.auto_group_enabled ? "translate-x-6" : "translate-x-1"
-              }`}
-            />
+            <span className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${
+              local.auto_group_enabled ? "bg-success" : "bg-subtle"
+            }`}>
+              <span
+                className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                  local.auto_group_enabled ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
+            </span>
           </button>
         </div>
 
@@ -145,7 +149,7 @@ export default function DedupSettingsPage() {
           min={0}
           max={4}
           step={1}
-          suffix="bits"
+          suffix={t("dedup.bits")}
           onChange={(value) => setLocal({ ...local, phash_threshold: value })}
         />
         <NumberSetting

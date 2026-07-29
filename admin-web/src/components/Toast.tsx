@@ -1,6 +1,8 @@
 "use client";
 import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
+import { CheckCircle2, CircleAlert, CircleX, Info, X } from "lucide-react";
 import { motionConfig, motionTokens } from "@/lib/motion";
+import { useT } from "@/lib/i18n";
 
 type ToastType = "success" | "error" | "info" | "warning";
 
@@ -55,6 +57,7 @@ function resolveOptions(input: ToastOptions | string): ToastOptions {
 }
 
 export function ToastProvider({ children }: { children: ReactNode }) {
+  const tr = useT();
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   // List-owned presence: the provider keeps each toast mounted through its
@@ -116,8 +119,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     warning: "border-warning/30 bg-warning-subtle text-warning dark:border-warning/30 dark:bg-warning-subtle dark:text-warning",
   };
 
-  const icons: Record<ToastType, string> = {
-    success: "✓", error: "✗", info: "ℹ", warning: "⚠",
+  const icons: Record<ToastType, ReactNode> = {
+    success: <CheckCircle2 aria-hidden="true" className="h-4 w-4" />,
+    error: <CircleX aria-hidden="true" className="h-4 w-4" />,
+    info: <Info aria-hidden="true" className="h-4 w-4" />,
+    warning: <CircleAlert aria-hidden="true" className="h-4 w-4" />,
   };
 
   const progressColors: Record<ToastType, string> = {
@@ -155,11 +161,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                   </button>
                 )}
                 <button
+                  type="button"
                   onClick={() => dismiss(t.id)}
-                  className="ml-1 text-lg leading-none opacity-60 hover:opacity-100"
-                  aria-label="Dismiss"
+                  className="ml-1 inline-flex h-11 w-11 items-center justify-center rounded-md opacity-60 hover:bg-white/20 hover:opacity-100"
+                  aria-label={tr("common.dismiss")}
                 >
-                  &times;
+                  <X aria-hidden="true" className="h-4 w-4" />
                 </button>
               </div>
             </div>

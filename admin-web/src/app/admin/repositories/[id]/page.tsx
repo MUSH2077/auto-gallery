@@ -130,6 +130,7 @@ function graphTone(node: RepositoryGraphNode) {
 
 function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
   const t = useT();
+  const fmt = useI18nFormat();
   const [offset, setOffset] = useState(0);
   const [trigger, setTrigger] = useState("");
   const [includeBaseline, setIncludeBaseline] = useState(true);
@@ -187,8 +188,15 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
           <div key={node.id} className="relative grid grid-cols-[32px_minmax(0,1fr)] gap-3 pb-5 last:pb-0">
             {index < graph.data.nodes.length - 1 && <div className="absolute left-[15px] top-8 h-[calc(100%-1.5rem)] w-px bg-border dark:bg-border" />}
             <div className={`relative z-10 mt-1 h-8 w-8 rounded-full border-2 ${graphTone(node)}`} />
-            <div role="button" tabIndex={0} onClick={() => setExpanded(expanded === node.id ? null : node.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setExpanded(expanded === node.id ? null : node.id); }} className="min-w-0 rounded-md border border-border p-3 text-left hover:border-accent/50 dark:border-border dark:hover:border-accent/50">
-              <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 rounded-md border border-border hover:border-accent/50 dark:border-border dark:hover:border-accent/50">
+              <button
+                type="button"
+                onClick={() => setExpanded(expanded === node.id ? null : node.id)}
+                aria-expanded={expanded === node.id}
+                aria-controls={`repository-history-${node.id}`}
+                className="block min-h-11 w-full rounded-md p-3 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              >
+              <span className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold">{node.message}</div>
                   <div className="mt-1 text-xs text-muted">
@@ -197,11 +205,11 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
                     <span>{node.trigger}</span>
                     {node.is_baseline && <span className="ml-1.5 rounded-full border border-border px-1.5 py-0.5 text-[10px] dark:border-border">{t("repo_detail.graph_baseline")}</span>}
                     <span className="mx-1.5">·</span>
-                    <span>{new Date(node.occurred_at).toLocaleString()}</span>
+                    <span>{fmt.dateTime(node.occurred_at)}</span>
                   </div>
                 </div>
                 {typeof node.stats?.work_count === "number" && <Pill>{t("repo_detail.graph_works_count", { count: node.stats.work_count })}</Pill>}
-              </div>
+              </span>
               {node.changes_summary.length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-2">
                   {node.changes_summary.map((item) => (
@@ -220,12 +228,13 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
                   ))}
                 </div>
               )}
+              </button>
               {expanded === node.id && (
-                <div className="mt-3 border-t border-border pt-3 text-xs text-muted dark:border-border dark:text-muted">
+                <div id={`repository-history-${node.id}`} className="border-t border-border p-3 text-xs text-muted dark:border-border dark:text-muted">
                   <div className="mb-2 font-medium text-fg">{t("repo_detail.graph_node_details")}</div>
                   <div className="flex flex-wrap gap-2">
-                    <Link onClick={(e) => e.stopPropagation()} href={`/admin/curation?commit=${node.id}`} className="text-accent hover:underline dark:text-accent">{t("repo_detail.open_commit")}</Link>
-                    <Link onClick={(e) => e.stopPropagation()} href={`/admin/jobs?tab=downloads&subscription_source_id=${repositoryId}`} className="text-accent hover:underline dark:text-accent">{t("repo_detail.open_jobs")}</Link>
+                    <Link href={`/admin/curation?commit=${node.id}`} className="inline-flex min-h-6 items-center text-accent hover:underline dark:text-accent">{t("repo_detail.open_commit")}</Link>
+                    <Link href={`/admin/jobs?tab=downloads&subscription_source_id=${repositoryId}`} className="inline-flex min-h-6 items-center text-accent hover:underline dark:text-accent">{t("repo_detail.open_jobs")}</Link>
                   </div>
                 </div>
               )}
@@ -386,7 +395,7 @@ export default function RepositoryDetailPage() {
         </div>
       </header>
 
-      <nav className="mt-4 flex gap-1 overflow-x-auto border-b border-border" aria-label="Repository sections">
+      <nav className="mt-4 flex gap-1 overflow-x-auto border-b border-border" aria-label={t("repo_detail.sections")}>
         {tabs.map((item) => (
           <button key={item.key} onClick={() => setTab(item.key)}
             className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${tab === item.key ? "border-danger font-semibold text-fg" : "border-transparent text-muted hover:text-fg dark:text-muted dark:hover:text-fg"}`}>

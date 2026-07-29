@@ -6,25 +6,13 @@ import { useT } from "@/lib/i18n";
 import { statusLabel } from "@/lib/i18n-format";
 
 const SOURCES = [
-  { value: "", label: "All sources" },
-  { value: "pixiv", label: "Pixiv" },
-  { value: "twitter", label: "Twitter" },
-  { value: "iwara", label: "Iwara" },
-  { value: "danbooru", label: "Danbooru" },
-  { value: "weibo", label: "Weibo" },
-  { value: "bilibili", label: "Bilibili" },
-  { value: "pinterest", label: "Pinterest" },
-  { value: "lofter", label: "LOFTER" },
+  "", "pixiv", "twitter", "iwara", "danbooru", "weibo", "bilibili", "pinterest", "lofter",
 ];
 
 const STATUSES = ["", "enqueued", "downloading", "downloaded", "importing", "failed", "stale", "paused"];
 
 const ACTIONS = [
-  { value: "retry", label: "Retry All" },
-  { value: "pause", label: "Pause All" },
-  { value: "resume", label: "Resume All" },
-  { value: "cancel", label: "Cancel All" },
-  { value: "delete", label: "Delete All" },
+  "retry", "pause", "resume", "cancel", "delete",
 ];
 
 export function BatchByFilter({ onSuccess }: { onSuccess?: () => void }) {
@@ -46,9 +34,14 @@ export function BatchByFilter({ onSuccess }: { onSuccess?: () => void }) {
       if (status) filters.status = status;
 
       const res = await api.batchDownloadJobsByFilter(filters, action, note || undefined);
-      setResult(`${res.succeeded} succeeded, ${res.failed} failed (${res.total_matched} matched)`); onSuccess?.();
+      setResult(t("jobs.batch_filter_result", {
+        succeeded: res.succeeded,
+        failed: res.failed,
+        matched: res.total_matched,
+      }));
+      onSuccess?.();
     } catch (e) {
-      setResult(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setResult(`${t("common.error")}: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setRunning(false);
     }
@@ -61,8 +54,10 @@ export function BatchByFilter({ onSuccess }: { onSuccess?: () => void }) {
         onChange={(e) => setSource(e.target.value)}
         className="text-xs px-2 py-1 rounded border bg-surface dark:border-border"
       >
-        {SOURCES.map((s) => (
-          <option key={s.value} value={s.value}>{s.label}</option>
+        {SOURCES.map((sourceValue) => (
+          <option key={sourceValue} value={sourceValue}>
+            {sourceValue ? sourceValue : t("jobs.filter_all_source")}
+          </option>
         ))}
       </select>
       <select
@@ -79,9 +74,9 @@ export function BatchByFilter({ onSuccess }: { onSuccess?: () => void }) {
         onChange={(e) => setAction(e.target.value)}
         className="text-xs px-2 py-1 rounded border bg-surface dark:border-border"
       >
-        <option value="">Action...</option>
-        {ACTIONS.map((a) => (
-          <option key={a.value} value={a.value}>{a.label}</option>
+        <option value="">{t("jobs.batch_action_placeholder")}</option>
+        {ACTIONS.map((actionValue) => (
+          <option key={actionValue} value={actionValue}>{t(`jobs.batch_action_${actionValue}`)}</option>
         ))}
       </select>
       {action === "pause" || action === "cancel" ? (
@@ -89,7 +84,7 @@ export function BatchByFilter({ onSuccess }: { onSuccess?: () => void }) {
           type="text"
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          placeholder="Reason (optional)"
+          placeholder={t("jobs.batch_reason_optional")}
           className="text-xs px-2 py-1 rounded border bg-surface dark:border-border w-32"
         />
       ) : null}
@@ -98,7 +93,7 @@ export function BatchByFilter({ onSuccess }: { onSuccess?: () => void }) {
         disabled={!action || running}
         className="text-xs px-3 py-1 rounded bg-blue-600 text-white disabled:opacity-50 hover:bg-blue-700"
       >
-        {running ? "Running..." : "Apply"}
+        {running ? t("jobs.batch_running") : t("jobs.batch_apply")}
       </button>
       {result && <span className="text-xs text-muted">{result}</span>}
     </div>

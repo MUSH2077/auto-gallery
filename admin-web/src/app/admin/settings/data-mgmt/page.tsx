@@ -27,7 +27,7 @@ export default function DataManagementPage() {
     mutationFn: async () => {
       await api.clearEntity("all");
       await api.clearFailedJobs();
-      return { message: "All data, files, and Redis failed jobs cleared" };
+      return { message: t("datamgmt.clear_all_success") };
     },
     onSuccess: (d) => {
       toast.success({ message: d.message });
@@ -56,7 +56,7 @@ export default function DataManagementPage() {
     mutationFn: async () => {
       await api.clearEntity("jobs");
       await api.clearFailedJobs();
-      return { message: "All download and import jobs cleared" };
+      return { message: t("datamgmt.clear_jobs_success") };
     },
     onSuccess: (d) => { toast.success({ message: d.message }); clearCacheThenRefetch(); setConfirmAction(null); },
     onError: (e) => { toast.error({ message: (e as Error).message }); setConfirmAction(null); },
@@ -111,8 +111,8 @@ export default function DataManagementPage() {
     },
     {
       key: "tags",
-      title: t("datamgmt.clear_tags", "Clear Tags"),
-      desc: t("datamgmt.clear_tags.desc", "Delete all tags and tag associations (work_tags, work_source_tags). Works and assets remain intact."),
+      title: t("datamgmt.clear_tags"),
+      desc: t("datamgmt.clear_tags.desc"),
       color: "yellow",
       mutation: clearTags,
     },
@@ -133,7 +133,7 @@ export default function DataManagementPage() {
   ];
 
   return (
-    <PageShell size="normal">
+    <PageShell>
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("datamgmt.back")}</Link>
       </div>
@@ -158,12 +158,7 @@ export default function DataManagementPage() {
             <button
               onClick={() => setConfirmAction(a.key)}
               disabled={a.mutation.isPending}
-              className={`shrink-0 ml-4 btn-primary ${
-                a.color === "red" ? "bg-danger hover:bg-danger/90" :
-                a.color === "orange" ? "bg-orange-600 hover:bg-orange-700" :
-                a.color === "yellow" ? "bg-warning hover:bg-warning/90" :
-                "bg-accent hover:bg-accent/90"
-              }`}
+              className={`ml-4 min-h-11 shrink-0 ${a.color === "blue" ? "btn-primary" : "btn-danger"}`}
             >
               {a.mutation.isPending ? t("datamgmt.processing") : a.key === "settings" ? t("datamgmt.reset") : t("datamgmt.clear")}
             </button>

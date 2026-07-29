@@ -1,11 +1,13 @@
 "use client";
 import Link from "next/link";
+import { useT } from "@/lib/i18n";
 
 export type Crumb = { label: string; href?: string };
 
 export function Breadcrumb({ items }: { items: Crumb[] }) {
+  const t = useT();
   return (
-    <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-sm text-muted mb-4">
+    <nav aria-label={t("common.breadcrumb")} className="flex items-center gap-1.5 text-sm text-muted mb-4">
       {items.map((item, i) => (
         <span key={i} className="flex items-center gap-1.5">
           {i > 0 && <span className="text-muted" aria-hidden="true">/</span>}

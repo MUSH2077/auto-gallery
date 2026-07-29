@@ -348,7 +348,7 @@ export default function CreatorDetailPage() {
   if (!c) return null;
 
   return (
-    <PageShell className="page-transition">
+    <PageShell>
       <Breadcrumb items={[
         { label: t("creators.title"), href: "/admin/creators" },
         { label: c.display_name || c.name },
@@ -383,9 +383,9 @@ export default function CreatorDetailPage() {
             {c.is_favorite ? t("creator_detail.unstar") : t("creator_detail.star")}
           </button>
           {creatorVisibility === "visible" ? (
-            <button onClick={() => curateCreator.mutate("archive")} disabled={curateCreator.isPending} className="btn-ghost">Archive</button>
+            <button onClick={() => curateCreator.mutate("archive")} disabled={curateCreator.isPending} className="btn-ghost">{t("creator_detail.archive")}</button>
           ) : (
-            <button onClick={() => curateCreator.mutate("restore")} disabled={curateCreator.isPending} className="btn-ghost">Restore</button>
+            <button onClick={() => curateCreator.mutate("restore")} disabled={curateCreator.isPending} className="btn-ghost">{t("creator_detail.restore")}</button>
           )}
           <Link href={subscriptionHref} className="btn-ghost">
             {t("creator_detail.subscription")}
@@ -413,19 +413,19 @@ export default function CreatorDetailPage() {
 
           <section className="card p-4">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold">Curation</h2>
-              <Link href={`/admin/curation?subject_type=creator&subject_id=${id}`} className="text-sm text-accent hover:underline dark:text-accent">Open</Link>
+              <h2 className="text-sm font-semibold">{t("curation.title")}</h2>
+              <Link href={`/admin/curation?subject_type=creator&subject_id=${id}`} className="text-sm text-accent hover:underline dark:text-accent">{t("common.open")}</Link>
             </div>
             {curationHistory.data?.items.length ? (
               <div className="space-y-3">
                 {curationHistory.data.items.map((commit) => (
                   <div key={commit.id} className="border-l-2 border-accent pl-3 text-xs dark:border-accent">
                     <div className="font-medium text-fg">{commit.message}</div>
-                    <div className="mt-0.5 text-muted">{commit.trigger} · {new Date(commit.occurred_at).toLocaleDateString()}</div>
+                    <div className="mt-0.5 text-muted">{commit.trigger} · {fmt.date(commit.occurred_at)}</div>
                   </div>
                 ))}
               </div>
-            ) : <p className="text-sm text-muted">No curation commits yet.</p>}
+            ) : <p className="text-sm text-muted">{t("curation.empty_title")}</p>}
           </section>
 
           <GitlleryPanel />
@@ -455,7 +455,7 @@ export default function CreatorDetailPage() {
         </aside>
 
         <section className="min-w-0">
-          <nav className="mb-4 flex gap-1 overflow-x-auto border-b border-border" aria-label="Creator sections">
+          <nav className="mb-4 flex gap-1 overflow-x-auto border-b border-border" aria-label={t("creator_detail.sections")}>
             {tabs.map((tab) => (
               <button key={tab.key} onClick={() => setActiveTab(tab.key)}
                 className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${activeTab === tab.key ? "border-danger font-semibold text-fg" : "border-transparent text-muted hover:text-fg dark:text-muted dark:hover:text-fg"}`}>
@@ -680,7 +680,7 @@ function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () =>
   });
   return (
     <div className="space-y-4">
-      <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.url_label")}</label><input value={url} onChange={(e) => setUrl(e.target.value)} className="input w-full" placeholder="https://..." /></div>
+      <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.url_label")}</label><input value={url} onChange={(e) => setUrl(e.target.value)} className="input w-full" placeholder={t("creator_detail.url_placeholder")} /></div>
       <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.type_label")}</label>
         <select value={linkType} onChange={(e) => setLinkType(e.target.value)} className="select w-full">
           {["website", "pixiv", "x", "iwara", "danbooru", "other"].map((o) => <option key={o} value={o}>{o}</option>)}

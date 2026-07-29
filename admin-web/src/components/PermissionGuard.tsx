@@ -1,6 +1,8 @@
 "use client";
 import { ReactNode } from "react";
+import { LockKeyhole } from "lucide-react";
 import EmptyState from "@/components/EmptyState";
+import PageShell from "@/components/PageShell";
 import { usePermissions } from "@/lib/usePermissions";
 import { useT } from "@/lib/i18n";
 
@@ -20,9 +22,13 @@ export default function PermissionGuard({ module, children }: { module: string; 
 
   if (!has(module)) {
     return (
-      <div className="p-6">
-        <EmptyState icon="🔒" title={t("common.forbidden")} />
-      </div>
+      <PageShell>
+        <EmptyState
+          icon={<LockKeyhole aria-hidden="true" className="h-8 w-8" />}
+          title={t("common.forbidden")}
+          description={t("common.forbidden_desc")}
+        />
+      </PageShell>
     );
   }
 
