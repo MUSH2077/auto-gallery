@@ -121,7 +121,6 @@ const REPRESENTATIVE_ROUTES = [
   "/admin/settings/appearance",
   "/admin/settings/auth-status",
   "/admin/settings/backup",
-  "/admin/settings/data-mgmt",
   "/admin/settings/dedup",
   "/admin/settings/download-defaults",
   "/admin/settings/gallerydl",
@@ -911,7 +910,7 @@ test("dedup status is addressable and browser history restores the selected revi
   await expect(page.getByRole("tab", { name: "Deferred" })).toHaveAttribute("aria-selected", "true");
 });
 
-test("legacy task, source, and merge routes redirect to their maintained destinations", async ({ page }) => {
+test("legacy task, source, merge, and settings data routes redirect to their maintained destinations", async ({ page }) => {
   await page.goto("/admin/import-jobs");
   await expect(page).toHaveURL(/\/admin\/jobs\?tab=imports$/);
   await expect(page.locator("[data-page-shell]")).toBeVisible();
@@ -924,6 +923,20 @@ test("legacy task, source, and merge routes redirect to their maintained destina
   await expect(page).toHaveURL(/\/admin\/dedup\?status=pending$/);
   await expect(page.getByRole("tab", { name: "Pending" })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator("[data-page-shell]")).toBeVisible();
+
+  await page.goto("/admin/settings/data-mgmt");
+  await expect(page).toHaveURL(/\/admin\/data-mgmt$/);
+  await expect(page.getByRole("heading", { level: 1, name: "Data Management" })).toBeVisible();
+});
+
+test("settings no longer duplicates data management or language controls", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto("/admin/settings");
+  const main = page.locator("#main-content");
+  await expect(main.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
+  await expect(main.getByRole("link", { name: /Data Management/ })).toHaveCount(0);
+  await expect(main.getByRole("heading", { name: "Language" })).toHaveCount(0);
+  await page.screenshot({ path: "/tmp/auto-gallery-settings-clean.png", fullPage: false });
 });
 
 test("restricted direct access renders the standard shell permission state", async ({ page }) => {
@@ -998,8 +1011,9 @@ test("query-only task navigation preserves the current viewport", async ({ page 
 });
 
 test("shared dialogs trap focus, close with Escape, and restore their trigger", async ({ page }) => {
-  await page.goto("/admin/settings/data-mgmt");
-  const trigger = page.getByRole("button", { name: "Clear" }).first();
+  await page.goto("/admin/data-mgmt");
+  await page.getByPlaceholder("CONFIRM DELETE").fill("CONFIRM DELETE");
+  const trigger = page.getByRole("button", { name: "Delete All Works" });
   await trigger.click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();

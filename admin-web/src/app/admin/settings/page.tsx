@@ -3,14 +3,13 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, PageShell, ErrorState, ConfirmDialog, PermissionGuard } from "@/components";
-import { useT, useI18n } from "@/lib/i18n";
+import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import Link from "next/link";
 
 export default function SettingsPage() {
   const toast = useToast();
   const t = useT();
-  const { lang, setLang } = useI18n();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
   const reindex = useMutation({
@@ -30,7 +29,6 @@ export default function SettingsPage() {
     { href: "/admin/settings/dedup", title: t("settings.dedup"), desc: t("settings.dedup.desc") },
     { href: "/admin/settings/proxy", title: t("settings.proxy"), desc: t("settings.proxy.desc") },
     { href: "/admin/settings/auth-status", title: t("settings.auth"), desc: t("settings.auth.desc") },
-    { href: "/admin/settings/data-mgmt", title: t("settings.data_mgmt"), desc: t("settings.data_mgmt.desc") },
     { href: "/admin/settings/logs", title: t("settings.logs"), desc: t("settings.logs.desc") },
     { href: "/admin/settings/backup", title: t("settings.backup"), desc: t("settings.backup.desc") },
   ];
@@ -50,33 +48,6 @@ export default function SettingsPage() {
           </Link>
         ))}
       </div>
-
-      {/* Language */}
-      <section className="mb-8">
-        <h2 className="section-title mb-3">{t("settings.language")}</h2>
-        <div className="card p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-fg">{t("settings.language")}</p>
-              <p className="mt-1 text-xs text-muted">{t("settings.language.desc")}</p>
-            </div>
-            <div className="segmented-control">
-              <button
-                onClick={() => setLang("zh")}
-                className={`segment ${lang === "zh" ? "segment-active" : ""}`}
-              >
-                中文
-              </button>
-              <button
-                onClick={() => setLang("en")}
-                className={`segment ${lang === "en" ? "segment-active" : ""}`}
-              >
-                English
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
 
       {/* Search Index */}
       <section className="mb-8">
