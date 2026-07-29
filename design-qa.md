@@ -113,6 +113,12 @@ intentionally hard-loads 11 primary routes. Under the complete 16-worker
 matrix they could exhaust the former 30-second aggregate timeout even though
 every per-route assertion passed when run with one worker.
 
+GitHub Actions runs the managed Playwright server from Next's standalone
+production artifact produced by the preceding CI step. This avoids mixing
+`next build` and `next dev` output in the same `.next` directory, which can
+otherwise leave the first hard-loaded route without its development build
+manifest.
+
 No open P0, P1, or P2 findings remain.
 
 Validation:

@@ -100,6 +100,7 @@ jobs:
         working-directory: admin-web
         env:
           PLAYWRIGHT_MANAGE_SERVER: "1"
+          PLAYWRIGHT_SERVER_MODE: "production"
         run: npx playwright test tests/e2e/admin-shell.spec.ts --project=chromium --workers=1
 
   dependency-review:
