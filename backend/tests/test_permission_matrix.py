@@ -14,6 +14,8 @@ For each module-scoped user (permissions=[<module>]), the representative
 endpoint of their own module must return 200, and every other module's
 endpoint must return 403. The admin user must get 200 on all five.
 """
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -196,7 +198,19 @@ async def test_library_permission_blocked_from_curation_write_routes():
             curation_headers = _headers(f"{PREFIX}curation_write")
             random_id = uuid4()
 
-            r = await client.get("/api/v1/works", headers=library_headers)
+            # This assertion verifies the library permission boundary, not
+            # Meilisearch availability. Keep the permission matrix isolated
+            # from external search infrastructure so a missing CI service
+            # cannot turn an authorized request into an unrelated 503.
+            search_result = {
+                "groups": {"works": {"total": 0, "items": []}},
+                "total": 0,
+            }
+            with patch(
+                "app.api.works.SearchService.search",
+                new=AsyncMock(return_value=search_result),
+            ):
+                r = await client.get("/api/v1/works", headers=library_headers)
             assert r.status_code == 200, f"library -> GET /works: {r.status_code} {r.text}"
 
             r = await client.post(f"/api/v1/works/{random_id}/favorite", headers=library_headers)
