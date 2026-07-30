@@ -215,17 +215,53 @@ async function installFixtureRoutes(context: BrowserContext) {
     } else if (path === "/api/v1/creators/fixture-creator/links") {
       await route.fulfill({ json: [] });
     } else if (path === "/api/v1/creators/fixture-creator/timeline") {
-      await route.fulfill({ json: { creator_id: "fixture-creator", sources: [], days: [], total: 0 } });
+      const year = Number((url.searchParams.get("from_date") || "2026").slice(0, 4));
+      const days = year === 2025
+        ? [
+            { date: "2025-02-04", total: 2, pixiv: 2, pixiv_ids: ["work-2025-1", "work-2025-2"] },
+            { date: "2025-09-18", total: 1, x: 1, x_ids: ["work-2025-3"] },
+          ]
+        : [
+            { date: "2026-01-03", total: 2, pixiv: 2, pixiv_ids: ["work-2026-1", "work-2026-2"] },
+            { date: "2026-04-12", total: 5, pixiv: 3, x: 2, pixiv_ids: ["work-2026-3"], x_ids: ["work-2026-4"] },
+            { date: "2026-07-27", total: 1, x: 1, x_ids: ["work-2026-5"] },
+          ];
+      await route.fulfill({
+        json: {
+          creator_id: "fixture-creator",
+          sources: ["pixiv", "x"],
+          days,
+          total: days.reduce((sum, day) => sum + day.total, 0),
+        },
+      });
     } else if (path === "/api/v1/creators/fixture-creator/stats") {
       await route.fulfill({
         json: {
           creator_id: "fixture-creator",
-          total_works: 0,
-          total_assets: 0,
-          total_tags: 0,
-          source_breakdown: [],
-          tag_distribution: [],
-          monthly_frequency: [],
+          total_works: 120,
+          total_assets: 168,
+          total_tags: 8,
+          source_breakdown: [
+            { source: "pixiv", count: 82 },
+            { source: "x", count: 38 },
+          ],
+          tag_distribution: [
+            { tag: "architectural-light", count: 67 },
+            { tag: "long-label-for-responsive-validation", count: 52 },
+            { tag: "night", count: 31 },
+            { tag: "water", count: 23 },
+            { tag: "city", count: 19 },
+            { tag: "blue", count: 12 },
+            { tag: "seventh-is-not-charted", count: 8 },
+          ],
+          monthly_frequency: [
+            { month: "2025-01", count: 1 },
+            { month: "2025-02", count: 3 },
+            { month: "2025-09", count: 2 },
+            { month: "2026-01", count: 8 },
+            { month: "2026-04", count: 24 },
+            { month: "2026-07", count: 7 },
+          ],
         },
       });
     } else if (path === "/api/v1/creators/fixture-creator/subscription-overview") {
@@ -765,6 +801,182 @@ for (const viewport of [
     }
   });
 }
+
+test("creator charts share the data contract and year selection reloads the requested range", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto("/admin/creators/fixture-creator");
+
+  await expect(page.getByTestId("creator-activity-chart")).toBeVisible();
+  await expect(page.getByTestId("creator-source-chart")).toBeVisible();
+  await expect(page.getByTestId("creator-tag-chart")).toBeVisible();
+  await expect(page.getByTestId("creator-monthly-chart")).toBeVisible();
+  await expect(page.locator('[data-chart-kind="tick-rows"]')).toHaveAttribute("data-chart-unit", "5");
+  await expect(page.locator('[data-chart-kind="ballot-tally"] a')).toHaveCount(6);
+  await page.screenshot({ path: "/tmp/auto-gallery-creator-charts-desktop.png", fullPage: true });
+
+  const firstDay = page.locator('[data-chart-kind="activity-dot-matrix"] [role="group"] button').first();
+  await firstDay.focus();
+  const firstLabel = await firstDay.getAttribute("aria-label");
+  await page.keyboard.press("ArrowRight");
+  const nextDay = page.locator('[data-chart-kind="activity-dot-matrix"] button:focus');
+  const focusedLabel = await page.evaluate(() => document.activeElement?.getAttribute("aria-label"));
+  expect(focusedLabel).not.toBe(firstLabel);
+  await expect(nextDay).toHaveCount(1);
+  await page.keyboard.press("Escape");
+
+  const request2025 = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v1/creators/fixture-creator/timeline"
+      && url.searchParams.get("from_date") === "2025-01-01";
+  });
+  await page.getByLabel("Year", { exact: true }).selectOption("2025");
+  const request = await request2025;
+  const requestUrl = new URL(request.url());
+  expect(requestUrl.searchParams.get("to_date")).toBe("2026-01-01");
+  await expect(page.getByTestId("creator-activity-chart")).toContainText("Activity peaked on");
+
+  for (const frame of await page.locator("[data-chart-frame]").all()) {
+    const details = frame.locator("details");
+    if (await details.count()) {
+      await details.locator("summary").click();
+      await expect(details.getByRole("table")).toBeVisible();
+    }
+  }
+  for (const viewport of [
+    { width: 768, height: 1024 },
+    { width: 390, height: 844 },
+    { width: 320, height: 720 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expectNoPageOverflow(page);
+  }
+  await page.screenshot({ path: "/tmp/auto-gallery-creator-charts-mobile.png", fullPage: true });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.reload();
+  await expect(page.getByTestId("creator-activity-chart")).toBeVisible();
+  await expect(page.locator(".chart-dot-enter")).toHaveCount(0);
+  await expectNoPageOverflow(page);
+});
+
+test("data management charts preserve 100 ticks, exact values, hierarchy, and diagnostics", async ({ page }) => {
+  await page.route("**/api/v1/admin/system-info", (route) => route.fulfill({
+    json: {
+      version: "fixture",
+      downloads_size_mb: 1000,
+      library_size_mb: 75,
+      downloads_free_gb: 500,
+      archives_kb: {},
+    },
+  }));
+  await page.route("**/api/v1/admin/storage-breakdown", (route) => route.fulfill({
+    json: {
+      sources: {
+        pixiv: { size_mb: 500, creator_count: 2, work_count: 80 },
+        x: { size_mb: 250, creator_count: 2, work_count: 42 },
+        fanbox: { size_mb: 100, creator_count: 1, work_count: 18 },
+        weibo: { size_mb: 50, creator_count: 1, work_count: 9 },
+        iwara: { size_mb: 40, creator_count: 1, work_count: 7 },
+        tumblr: { size_mb: 30, creator_count: 1, work_count: 6 },
+        local: { size_mb: 30, creator_count: 1, work_count: 4 },
+      },
+      creator_tree: [
+        {
+          creator_id: "fixture-creator",
+          display_name: "Fixture Creator",
+          size_mb: 600,
+          work_count: 92,
+          repository_count: 2,
+          repositories: [
+            {
+              repository_id: "fixture-repository",
+              source: "pixiv",
+              source_display_name: "Pixiv",
+              disk_source: "pixiv",
+              directory_name: "fixture-pixiv-repository",
+              size_mb: 400,
+              work_count: 62,
+            },
+            {
+              repository_id: "fixture-x-repository",
+              source: "x",
+              source_display_name: "X",
+              disk_source: "twitter",
+              directory_name: "fixture-x-repository",
+              size_mb: 200,
+              work_count: 30,
+            },
+          ],
+        },
+        {
+          creator_id: "fixture-creator-2",
+          display_name: "Second Fixture",
+          size_mb: 300,
+          work_count: 48,
+          repository_count: 1,
+          repositories: [
+            {
+              repository_id: "fixture-repository-2",
+              source: "fanbox",
+              source_display_name: "Fanbox",
+              disk_source: "fanbox",
+              directory_name: "fixture-fanbox-repository",
+              size_mb: 300,
+              work_count: 48,
+            },
+          ],
+        },
+      ],
+      unlinked_repositories: [
+        {
+          repository_id: null,
+          source: "local",
+          source_display_name: "Local",
+          disk_source: "local",
+          directory_name: "unlinked-fixture",
+          size_mb: 100,
+          work_count: 3,
+        },
+      ],
+      db_stats: { works: 140, assets: 221, tags: 57 },
+      creators: [],
+    },
+  }));
+
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto("/admin/data-mgmt");
+  await expect(page.getByTestId("storage-source-chart")).toBeVisible();
+  await expect(page.getByTestId("creator-storage-chart")).toBeVisible();
+  await expect(page.locator('[data-chart-kind="tick-donut"] svg line')).toHaveCount(100);
+  await expect(page.getByTestId("storage-source-chart")).toContainText("Other");
+  await expect(page.getByRole("heading", { name: "Unlinked repositories" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Expand Fixture Creator" }).click();
+  await expect(page.getByRole("button", { name: "Collapse Fixture Creator" })).toBeVisible();
+  await expect(page.getByRole("link", { name: /fixture-pixiv-repository/ })).toHaveAttribute(
+    "href",
+    "/admin/subscriptions/repositories/fixture-repository",
+  );
+
+  const sourceData = page.getByTestId("storage-source-chart").locator("details");
+  await sourceData.locator("summary").click();
+  await expect(sourceData.getByRole("table")).toContainText("500.0 MB");
+  await page.screenshot({ path: "/tmp/auto-gallery-data-charts-desktop.png", fullPage: true });
+  const axe = await new AxeBuilder({ page })
+    .include("#main-content")
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+    .analyze();
+  expect(axe.violations).toEqual([]);
+  for (const viewport of [
+    { width: 768, height: 1024 },
+    { width: 390, height: 844 },
+    { width: 320, height: 720 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expectNoPageOverflow(page);
+  }
+  await page.screenshot({ path: "/tmp/auto-gallery-data-charts-mobile.png", fullPage: true });
+  await expectNoPageOverflow(page);
+});
 
 for (const route of QUALITY_ROUTES) {
   test(`route quality: ${route}`, async ({ page }) => {

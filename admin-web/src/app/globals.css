@@ -203,6 +203,10 @@
       opacity: 1 !important;
       animation: none !important;
     }
+    .chart-mark-enter, .chart-dot-enter {
+      opacity: 1 !important;
+      animation: none !important;
+    }
   }
 
   /* Touch ergonomics (P2): comfortable 44px hit areas on coarse pointers,
@@ -400,6 +404,50 @@
     opacity: 0;
     animation: fadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     animation-delay: var(--delay, 0ms);
+  }
+  .activity-matrix {
+    --activity-cell-size: 14px;
+    --activity-cell-gap: 3px;
+  }
+  .activity-matrix-cell {
+    width: var(--activity-cell-size);
+    height: var(--activity-cell-size);
+    min-height: var(--activity-cell-size);
+    min-width: var(--activity-cell-size);
+  }
+  .activity-matrix-dot {
+    width: 82%;
+    height: 82%;
+    transform: scale(var(--dot-scale, 1));
+  }
+  @keyframes chartMarkReveal {
+    from { opacity: 0; transform: scaleY(0); }
+    to { opacity: 1; transform: scaleY(1); }
+  }
+  @keyframes chartDotReveal {
+    from { opacity: 0; transform: scale(0); }
+    to { opacity: 1; transform: scale(var(--dot-scale, 1)); }
+  }
+  .chart-mark-enter {
+    transform-box: fill-box;
+    transform-origin: center bottom;
+    animation: chartMarkReveal 400ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: var(--chart-delay, 0ms);
+  }
+  .chart-dot-enter {
+    transform-origin: center;
+    animation: chartDotReveal 400ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: var(--chart-delay, 0ms);
+  }
+  @media (pointer: coarse) {
+    .activity-matrix {
+      --activity-cell-size: 44px;
+      --activity-cell-gap: 4px;
+    }
+    .hairline-series-svg {
+      width: var(--hairline-touch-width);
+      max-width: none;
+    }
   }
   @keyframes bubblePop {
     0% { opacity: 0; transform: scale(0.35); }

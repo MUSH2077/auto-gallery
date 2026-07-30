@@ -52,7 +52,9 @@ export function useI18nFormat() {
     return {
       lang,
       locale,
-      number: (value: number) => number.format(value),
+      number: (value: number, options?: Intl.NumberFormatOptions) => (
+        options ? new Intl.NumberFormat(locale, options).format(value) : number.format(value)
+      ),
       date: (value?: string | null) => {
         const d = parse(value);
         return d ? date.format(d) : "—";

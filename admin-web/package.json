@@ -15,6 +15,7 @@
     "generate:api-types": "openapi-typescript ../docs/api/openapi.json -o src/lib/api/types.generated.ts",
     "check:api-types": "node scripts/check-api-types.mjs",
     "check:admin-routes": "node scripts/check-admin-routes.mjs",
+    "check:charts": "node scripts/check-charts.mjs",
     "check:i18n": "node scripts/check-i18n.mjs",
     "check:search-contract": "node scripts/check-search-contract.mjs",
     "typecheck": "tsc --noEmit",

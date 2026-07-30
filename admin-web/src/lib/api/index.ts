@@ -116,7 +116,12 @@ export const api = {
       const q = new URLSearchParams();
       if (fromDate) q.set("from_date", fromDate);
       if (toDate) q.set("to_date", toDate);
-      return request<{ creator_id: string; sources: string[]; days: { date: string; total: number; [source: string]: number | string }[]; total: number }>(`/api/v1/creators/${creatorId}/timeline?${q.toString()}`);
+      return request<{
+        creator_id: string;
+        sources: string[];
+        days: { date: string; total: number; [source: string]: number | string | string[] }[];
+        total: number;
+      }>(`/api/v1/creators/${creatorId}/timeline?${q.toString()}`);
     },
 
   getCreatorStats: (id: string) =>

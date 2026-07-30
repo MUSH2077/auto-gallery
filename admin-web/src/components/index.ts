@@ -26,7 +26,6 @@ export { default as DataTable } from "./DataTable";
 export { CardSkeleton, TableSkeleton } from "./LoadingSkeleton";
 export { default as Modal } from "./Modal";
 export { default as ErrorBoundary } from "./ErrorBoundary";
-export { default as WorkGrid } from "./WorkGrid";
 export { default as RepositoryCard } from "./RepositoryCard";
 export { default as GitlleryPanel } from "./GitlleryPanel";
 export { Breadcrumb, type Crumb } from "./Breadcrumb";
