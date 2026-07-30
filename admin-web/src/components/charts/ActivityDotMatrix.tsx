@@ -4,7 +4,6 @@ import Link from "next/link";
 import {
   useEffect,
   useMemo,
-  useRef,
   useState,
   type CSSProperties,
   type KeyboardEvent,
@@ -12,7 +11,7 @@ import {
 
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
-import { motionConfig, useEnterOnce } from "@/lib/motion";
+import { motionConfig, useViewportReveal } from "@/lib/motion";
 
 import { radiusForValue } from "./chartMath";
 import { useChartTheme } from "./useChartTheme";
@@ -36,6 +35,13 @@ interface CalendarDay {
   entry?: ActivityDay;
   week: number;
   weekday: number;
+  month: number;
+}
+
+interface SourcePoint {
+  source: string;
+  count: number;
+  ids: string[];
 }
 
 function utcDateKey(date: Date): string {
@@ -45,7 +51,7 @@ function utcDateKey(date: Date): string {
 function buildCalendar(year: number, entries: Map<string, ActivityDay>): {
   days: CalendarDay[];
   weeks: number;
-  months: { key: string; labelDate: Date; week: number }[];
+  months: { key: string; labelDate: Date; week: number; index: number }[];
 } {
   const first = new Date(Date.UTC(year, 0, 1));
   const last = new Date(Date.UTC(year, 11, 31));
@@ -53,17 +59,29 @@ function buildCalendar(year: number, entries: Map<string, ActivityDay>): {
   const gridStart = new Date(first);
   gridStart.setUTCDate(gridStart.getUTCDate() - mondayOffset);
   const days: CalendarDay[] = [];
-  const months: { key: string; labelDate: Date; week: number }[] = [];
-  let cursor = new Date(first);
+  const months: { key: string; labelDate: Date; week: number; index: number }[] = [];
+  const cursor = new Date(first);
   while (cursor <= last) {
     const sinceStart = Math.round((cursor.getTime() - gridStart.getTime()) / 86_400_000);
     const week = Math.floor(sinceStart / 7);
     const weekday = (cursor.getUTCDay() + 6) % 7;
     const key = utcDateKey(cursor);
     if (cursor.getUTCDate() === 1) {
-      months.push({ key: `${year}-${cursor.getUTCMonth()}`, labelDate: new Date(cursor), week });
+      months.push({
+        key: `${year}-${cursor.getUTCMonth()}`,
+        labelDate: new Date(cursor),
+        week,
+        index: cursor.getUTCMonth(),
+      });
     }
-    days.push({ key, date: new Date(cursor), entry: entries.get(key), week, weekday });
+    days.push({
+      key,
+      date: new Date(cursor),
+      entry: entries.get(key),
+      week,
+      weekday,
+      month: cursor.getUTCMonth(),
+    });
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
   return {
@@ -73,32 +91,126 @@ function buildCalendar(year: number, entries: Map<string, ActivityDay>): {
   };
 }
 
-function sourceSegments(
-  entry: ActivityDay | undefined,
-  sources: string[],
-  colorFor: (source: string) => string,
-): { background: string; center?: string; segmented: boolean } {
-  if (!entry?.total) return { background: "rgb(var(--ag-border))", segmented: false };
-  const values = sources
-    .map((source) => ({ source, count: Number(entry[source] || 0) }))
-    .filter((item) => item.count > 0)
-    .sort((left, right) => right.count - left.count);
-  if (!values.length) return { background: "rgb(var(--ag-accent))", segmented: false };
-  if (values.length === 1) {
-    return { background: colorFor(values[0].source), segmented: false };
+function pointsForDay(day: ActivityDay | undefined, sources: string[]): SourcePoint[] {
+  if (!day) return [];
+  return sources
+    .map((source) => ({
+      source,
+      count: Number(day[source] || 0),
+      ids: (day[`${source}_ids`] as string[] | undefined) || [],
+    }))
+    .filter((point) => point.count > 0)
+    .sort((left, right) => left.source.localeCompare(right.source));
+}
+
+function pointPosition(index: number, total: number): { x: number; y: number } {
+  if (total === 1) return { x: 8, y: 8 };
+  if (total === 2) return { x: index === 0 ? 5.3 : 10.7, y: 8 };
+  if (total === 3) {
+    return [
+      { x: 8, y: 4.8 },
+      { x: 5.2, y: 10.1 },
+      { x: 10.8, y: 10.1 },
+    ][index];
   }
-  let cursor = 0;
-  const stops: string[] = [];
-  for (const item of values) {
-    const start = cursor;
-    cursor += (item.count / entry.total) * 100;
-    stops.push(`${colorFor(item.source)} ${start.toFixed(2)}% ${cursor.toFixed(2)}%`);
+  const angle = -Math.PI / 2 + (index / total) * Math.PI * 2;
+  return { x: 8 + Math.cos(angle) * 3.7, y: 8 + Math.sin(angle) * 3.7 };
+}
+
+function SourceCircleCluster({
+  points,
+  maximum,
+  colorFor,
+  entering,
+  delay,
+}: {
+  points: SourcePoint[];
+  maximum: number;
+  colorFor: (source: string) => string;
+  entering: boolean;
+  delay: number;
+}) {
+  if (!points.length) {
+    return <span className="block h-[28%] w-[28%] rounded-full bg-border" aria-hidden />;
   }
-  return {
-    background: `conic-gradient(${stops.join(", ")})`,
-    center: colorFor(values[0].source),
-    segmented: true,
-  };
+  return (
+    <svg viewBox="0 0 16 16" className="h-full w-full overflow-visible" aria-hidden>
+      {points.map((point, index) => {
+        const position = pointPosition(index, points.length);
+        const radius = radiusForValue(
+          point.count,
+          maximum,
+          points.length > 4 ? 1.1 : 1.45,
+          points.length > 4 ? 2.1 : 3.25,
+        );
+        return (
+          <circle
+            key={point.source}
+            data-activity-source={point.source}
+            data-activity-count={point.count}
+            cx={position.x}
+            cy={position.y}
+            r={radius}
+            fill={colorFor(point.source)}
+            stroke="rgb(var(--ag-surface))"
+            strokeWidth="0.75"
+            className={entering ? "activity-source-enter" : undefined}
+            style={{
+              "--chart-delay": `${Math.min(delay + index * 44, 760)}ms`,
+            } as CSSProperties}
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
+function SourceDetails({
+  day,
+  sources,
+  colorFor,
+}: {
+  day: CalendarDay;
+  sources: string[];
+  colorFor: (source: string) => string;
+}) {
+  const t = useT();
+  const fmt = useI18nFormat();
+  const points = pointsForDay(day.entry, sources);
+  return (
+    <div className="rounded-md border border-border bg-subtle px-3 py-2 text-sm">
+      <div className="font-semibold text-fg">{fmt.date(`${day.key}T00:00:00Z`)}</div>
+      {points.length ? (
+        <div className="mt-2 space-y-2">
+          {points.map((point) => (
+            <div key={point.source} className="min-w-0">
+              <div className="flex min-h-6 items-center gap-2 text-xs font-medium text-fg">
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: colorFor(point.source) }}
+                  aria-hidden
+                />
+                {t("workgrid.day_source_count", { source: point.source, count: point.count })}
+              </div>
+              {point.ids.length ? (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {point.ids.slice(0, 20).map((workId) => (
+                    <Link
+                      key={workId}
+                      href={`/admin/works/${workId}`}
+                      className="inline-flex min-h-11 items-center rounded-md border border-border bg-surface px-2 font-mono text-xs text-accent hover:border-accent"
+                    >
+                      {workId.length > 12 ? `${workId.slice(0, 8)}…${workId.slice(-4)}` : workId}
+                    </Link>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : <p className="mt-1 text-xs text-muted">{t("charts.no_activity_day")}</p>}
+    </div>
+  );
 }
 
 export default function ActivityDotMatrix({
@@ -107,7 +219,7 @@ export default function ActivityDotMatrix({
   availableYears,
   onYearChange,
 }: {
-  data?: ActivityTimeline;
+  data: ActivityTimeline;
   year: number;
   availableYears: number[];
   onYearChange: (year: number) => void;
@@ -116,32 +228,36 @@ export default function ActivityDotMatrix({
   const fmt = useI18nFormat();
   const theme = useChartTheme();
   const entries = useMemo(
-    () => new Map((data?.days || []).map((day) => [day.date, day])),
-    [data?.days],
+    () => new Map(data.days.map((day) => [day.date, day])),
+    [data.days],
   );
   const calendar = useMemo(() => buildCalendar(year, entries), [entries, year]);
-  const maximum = useMemo(
-    () => calendar.days.reduce((current, day) => Math.max(current, day.entry?.total || 0), 0),
+  const maximumSourceCount = useMemo(
+    () => calendar.days.reduce((maximum, day) => (
+      Math.max(
+        maximum,
+        ...pointsForDay(day.entry, data.sources).map((point) => point.count),
+      )
+    ), 0),
+    [calendar.days, data.sources],
+  );
+  const firstActiveIndex = useMemo(
+    () => Math.max(0, calendar.days.findIndex((day) => Boolean(day.entry?.total))),
     [calendar.days],
   );
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [activeIndex, setActiveIndex] = useState(firstActiveIndex);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-  const [motionEnabled, setMotionEnabled] = useState(false);
-  const dayRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const entryKeys = useMemo(
-    () => calendar.days.filter((day) => day.entry?.total).map((day) => day.key),
-    [calendar.days],
-  );
-  const isNew = useEnterOnce(entryKeys);
+  const [selectedMonth, setSelectedMonth] = useState(() => (
+    calendar.days[firstActiveIndex]?.month ?? new Date().getUTCMonth()
+  ));
+  const reveal = useViewportReveal<HTMLDivElement>(year);
+  const animate = reveal.revealed && motionConfig.shouldAnimate();
 
   useEffect(() => {
-    setMotionEnabled(motionConfig.shouldAnimate());
-  }, []);
-
-  useEffect(() => {
-    setActiveIndex(0);
+    setActiveIndex(firstActiveIndex);
     setSelectedIndex(null);
-  }, [year]);
+    setSelectedMonth(calendar.days[firstActiveIndex]?.month ?? 0);
+  }, [calendar.days, firstActiveIndex, year]);
 
   const weekdayLabels = useMemo(
     () => Array.from({ length: 7 }, (_, index) => {
@@ -155,43 +271,54 @@ export default function ActivityDotMatrix({
   const nextYear = yearIndex >= 0 && yearIndex < availableYears.length - 1
     ? availableYears[yearIndex + 1]
     : null;
+  const activeDay = calendar.days[activeIndex];
+  const selectedDay = selectedIndex === null ? null : calendar.days[selectedIndex];
+  const activeMonthDays = calendar.days.filter(
+    (day) => day.month === selectedMonth && Boolean(day.entry?.total),
+  );
 
-  const moveFocus = (index: number) => {
-    const bounded = Math.max(0, Math.min(calendar.days.length - 1, index));
-    setActiveIndex(bounded);
-    dayRefs.current[bounded]?.focus();
+  const labelForDay = (day: CalendarDay) => {
+    const sourceSummary = pointsForDay(day.entry, data.sources)
+      .map((point) => `${point.source} ${fmt.number(point.count)}`)
+      .join(", ");
+    return day.entry?.total
+      ? t("charts.activity_day_label", {
+        date: fmt.date(`${day.key}T00:00:00Z`),
+        count: day.entry.total,
+        sources: sourceSummary,
+      })
+      : t("charts.activity_day_empty", { date: fmt.date(`${day.key}T00:00:00Z`) });
   };
-  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+
+  const onGridKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const movements: Record<string, number> = {
       ArrowLeft: -7,
       ArrowRight: 7,
       ArrowUp: -1,
       ArrowDown: 1,
     };
-    if (event.key in movements) {
+    let next = activeIndex;
+    if (event.key in movements) next += movements[event.key];
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = calendar.days.length - 1;
+    else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      moveFocus(index + movements[event.key]);
-    } else if (event.key === "Home") {
-      event.preventDefault();
-      moveFocus(0);
-    } else if (event.key === "End") {
-      event.preventDefault();
-      moveFocus(calendar.days.length - 1);
-    } else if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      setSelectedIndex(index);
+      setSelectedIndex(activeIndex);
+      return;
     } else if (event.key === "Escape") {
       event.preventDefault();
       setSelectedIndex(null);
+      return;
+    } else {
+      return;
     }
+    event.preventDefault();
+    setActiveIndex(Math.max(0, Math.min(calendar.days.length - 1, next)));
   };
 
-  const selected = selectedIndex === null ? null : calendar.days[selectedIndex];
-  const visualWidth = `calc(${calendar.weeks} * var(--activity-cell-size) + ${Math.max(0, calendar.weeks - 1)} * var(--activity-cell-gap))`;
-
   return (
-    <div data-chart-kind="activity-dot-matrix">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+    <div ref={reveal.ref} data-chart-kind="activity-dot-matrix">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="inline-flex items-center gap-1 rounded-md border border-border bg-subtle p-1">
           <button
             type="button"
@@ -221,163 +348,181 @@ export default function ActivityDotMatrix({
             →
           </button>
         </div>
-        <span className="text-xs font-medium text-muted">{t("workgrid.work_count", { count: data?.total || 0 })}</span>
+        <span className="text-xs font-medium text-muted">
+          {t("workgrid.work_count", { count: data.total })}
+        </span>
       </div>
 
-      <div className="activity-matrix flex min-w-0 gap-2">
-        <div className="mt-6 grid shrink-0 grid-rows-7 gap-[var(--activity-cell-gap)]" aria-hidden>
-          {weekdayLabels.map((label, index) => (
-            <span key={`${label}:${index}`} className="flex h-[var(--activity-cell-size)] items-center text-[10px] font-medium text-muted">
-              {index % 2 === 0 ? label : ""}
-            </span>
-          ))}
-        </div>
-        <div className="min-w-0 flex-1 overflow-x-auto pb-2">
-          <div style={{ width: visualWidth }}>
+      <div className="activity-desktop">
+        <div className="flex min-w-0 gap-2">
+          <div className="mt-6 grid w-4 shrink-0 grid-rows-7 gap-1" aria-hidden>
+            {weekdayLabels.map((label, index) => (
+              <span key={`${label}:${index}`} className="flex items-center text-[10px] font-medium text-muted">
+                {index % 2 === 0 ? label : ""}
+              </span>
+            ))}
+          </div>
+          <div className="min-w-0 flex-1">
             <div
-              className="relative mb-1 h-5"
+              className="mb-1 grid h-5 gap-1"
+              style={{ gridTemplateColumns: `repeat(${calendar.weeks}, minmax(0, 1fr))` }}
               aria-hidden
             >
               {calendar.months.map((month) => (
                 <span
                   key={month.key}
-                  className="absolute top-0 text-[10px] font-semibold uppercase tracking-wide text-muted"
-                  style={{ left: `calc(${month.week} * (var(--activity-cell-size) + var(--activity-cell-gap)))` }}
+                  className="truncate text-[10px] font-semibold uppercase tracking-wide text-muted"
+                  style={{ gridColumn: `${month.week + 1} / span 4` }}
                 >
                   {new Intl.DateTimeFormat(fmt.locale, { month: "short", timeZone: "UTC" }).format(month.labelDate)}
                 </span>
               ))}
             </div>
             <div
-              role="group"
+              role="grid"
+              tabIndex={0}
               aria-label={t("creator_detail.works_timeline")}
-              className="grid grid-rows-7 gap-[var(--activity-cell-gap)]"
+              aria-activedescendant={activeDay ? `activity-day-${activeDay.key}` : undefined}
+              aria-describedby="activity-grid-instructions"
+              className="grid min-w-0 grid-rows-7 gap-1 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
               style={{
-                gridTemplateColumns: `repeat(${calendar.weeks}, var(--activity-cell-size))`,
+                gridTemplateColumns: `repeat(${calendar.weeks}, minmax(0, 1fr))`,
                 gridAutoFlow: "column",
               }}
+              onKeyDown={onGridKeyDown}
             >
-              {calendar.days.map((day, index) => {
-                const segments = sourceSegments(
-                  day.entry,
-                  data?.sources || [],
-                  (source) => theme.colorFor(`source:${source}`),
-                );
-                const radius = radiusForValue(day.entry?.total || 0, maximum, 0.18, 1);
-                const entering = Boolean(day.entry?.total) && motionEnabled && isNew(day.key);
-                const sourceSummary = (data?.sources || [])
-                  .map((source) => {
-                    const count = Number(day.entry?.[source] || 0);
-                    return count ? `${source} ${fmt.number(count)}` : "";
-                  })
-                  .filter(Boolean)
-                  .join(", ");
-                const label = day.entry?.total
-                  ? t("charts.activity_day_label", {
-                    date: fmt.date(`${day.key}T00:00:00Z`),
-                    count: day.entry.total,
-                    sources: sourceSummary,
-                  })
-                  : t("charts.activity_day_empty", { date: fmt.date(`${day.key}T00:00:00Z`) });
-                return (
-                  <button
-                    key={day.key}
-                    ref={(node) => { dayRefs.current[index] = node; }}
-                    type="button"
-                    tabIndex={index === activeIndex ? 0 : -1}
-                    aria-label={label}
-                    aria-pressed={selectedIndex === index}
-                    className="activity-matrix-cell flex items-center justify-center rounded-sm focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-                    style={{ gridColumn: day.week + 1, gridRow: day.weekday + 1 }}
-                    onFocus={() => {
-                      setActiveIndex(index);
-                      setSelectedIndex(index);
-                    }}
-                    onClick={() => setSelectedIndex(index)}
-                    onKeyDown={(event) => onKeyDown(event, index)}
-                  >
-                    <span
-                      aria-hidden
-                      className={`activity-matrix-dot relative flex items-center justify-center rounded-full ${entering ? "chart-dot-enter" : ""}`}
-                      style={{
-                        "--dot-scale": radius,
-                        "--chart-delay": `${Math.min(index * 2, 420)}ms`,
-                        background: segments.background,
-                        boxShadow: selectedIndex === index ? `0 0 0 2px ${theme.surface}, 0 0 0 4px ${theme.accent}` : undefined,
-                      } as CSSProperties}
-                    >
-                      {segments.segmented ? (
-                        <span
-                          className="block h-[58%] w-[58%] rounded-full ring-1 ring-surface"
-                          style={{ backgroundColor: segments.center }}
+              {weekdayLabels.map((_, weekday) => (
+                <div key={`row:${weekday}`} role="row" className="contents">
+                  {calendar.days.map((day, index) => {
+                    if (day.weekday !== weekday) return null;
+                    const points = pointsForDay(day.entry, data.sources);
+                    return (
+                      <div
+                        key={day.key}
+                        id={`activity-day-${day.key}`}
+                        role="gridcell"
+                        aria-label={labelForDay(day)}
+                        aria-selected={selectedIndex === index}
+                        className={`activity-calendar-cell relative aspect-square min-w-0 cursor-pointer rounded-sm ${
+                          activeIndex === index ? "bg-accent-subtle ring-1 ring-accent" : "hover:bg-subtle"
+                        }`}
+                        style={{ gridColumn: day.week + 1, gridRow: day.weekday + 1 }}
+                        onClick={() => {
+                          setActiveIndex(index);
+                          setSelectedIndex(index);
+                        }}
+                      >
+                        <SourceCircleCluster
+                          points={points}
+                          maximum={maximumSourceCount}
+                          colorFor={(source) => theme.colorFor(`source:${source}`)}
+                          entering={animate}
+                          delay={day.week * 11 + day.weekday * 3}
                         />
-                      ) : null}
-                    </span>
-                  </button>
-                );
-              })}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
             </div>
+            <p id="activity-grid-instructions" className="sr-only">
+              {t("charts.activity_keyboard_hint")}
+            </p>
           </div>
+        </div>
+        {selectedDay ? (
+          <div className="mt-3" aria-live="polite">
+            <SourceDetails
+              day={selectedDay}
+              sources={data.sources}
+              colorFor={(source) => theme.colorFor(`source:${source}`)}
+            />
+          </div>
+        ) : null}
+      </div>
+
+      <div className="activity-mobile">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {calendar.months.map((month) => {
+            const monthDays = calendar.days.filter((day) => day.month === month.index);
+            const monthTotal = monthDays.reduce((sum, day) => sum + (day.entry?.total || 0), 0);
+            const firstWeekday = monthDays[0]?.weekday || 0;
+            return (
+              <button
+                key={month.key}
+                type="button"
+                aria-pressed={selectedMonth === month.index}
+                aria-label={t("charts.activity_month_label", {
+                  month: new Intl.DateTimeFormat(fmt.locale, { month: "long", timeZone: "UTC" }).format(month.labelDate),
+                  count: monthTotal,
+                })}
+                className={`min-h-11 rounded-md border p-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus ${
+                  selectedMonth === month.index
+                    ? "border-accent bg-accent-subtle"
+                    : "border-border bg-surface hover:bg-subtle"
+                }`}
+                onClick={() => setSelectedMonth(month.index)}
+              >
+                <span className="flex items-center justify-between gap-2 text-xs font-semibold text-fg">
+                  {new Intl.DateTimeFormat(fmt.locale, { month: "short", timeZone: "UTC" }).format(month.labelDate)}
+                  <span className="font-mono text-muted">{fmt.number(monthTotal)}</span>
+                </span>
+                <span className="mt-2 grid grid-cols-7 gap-0.5" aria-hidden>
+                  {Array.from({ length: firstWeekday }).map((_, index) => (
+                    <span key={`blank:${index}`} className="aspect-square" />
+                  ))}
+                  {monthDays.map((day) => (
+                    <span key={day.key} className="flex aspect-square items-center justify-center rounded-sm bg-subtle">
+                      <span className="flex h-full w-full items-center justify-center">
+                        {pointsForDay(day.entry, data.sources).slice(0, 4).map((point) => (
+                          <span
+                            key={point.source}
+                            className="h-1 w-1 rounded-full"
+                            style={{ backgroundColor: theme.colorFor(`source:${point.source}`) }}
+                          />
+                        ))}
+                      </span>
+                    </span>
+                  ))}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-3 space-y-2" aria-live="polite">
+          <h3 className="text-sm font-semibold text-fg">
+            {t("charts.activity_month_details", {
+              month: new Intl.DateTimeFormat(fmt.locale, { month: "long", timeZone: "UTC" })
+                .format(new Date(Date.UTC(year, selectedMonth, 1))),
+            })}
+          </h3>
+          {activeMonthDays.length ? activeMonthDays.map((day) => (
+            <SourceDetails
+              key={day.key}
+              day={day}
+              sources={data.sources}
+              colorFor={(source) => theme.colorFor(`source:${source}`)}
+            />
+          )) : (
+            <div className="rounded-md border border-border bg-subtle p-3 text-sm text-muted">
+              {t("charts.activity_month_empty")}
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted">
-        {(data?.sources || []).map((source) => (
-          <span key={source} className="inline-flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: theme.colorFor(`source:${source}`) }} aria-hidden />
+      <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted">
+        {data.sources.map((source) => (
+          <span key={source} className="inline-flex min-h-6 items-center gap-1.5">
+            <span
+              className="h-2.5 w-2.5 rounded-full"
+              style={{ backgroundColor: theme.colorFor(`source:${source}`) }}
+              aria-hidden
+            />
             {source}
           </span>
         ))}
       </div>
-
-      {selected ? (
-        <div className="mt-3 min-h-11 rounded-md border border-border bg-subtle px-3 py-2 text-sm" aria-live="polite">
-          <div className="flex items-center justify-between gap-3">
-            <span className="font-semibold text-fg">{fmt.date(`${selected.key}T00:00:00Z`)}</span>
-            <button
-              type="button"
-              className="btn-icon"
-              onClick={() => {
-                setSelectedIndex(null);
-                dayRefs.current[activeIndex]?.focus();
-              }}
-              aria-label={t("common.close")}
-            >
-              ×
-            </button>
-          </div>
-          {selected.entry?.total ? (
-            <div className="mt-2 space-y-2">
-              {(data?.sources || []).map((source) => {
-                const count = Number(selected.entry?.[source] || 0);
-                const ids = (selected.entry?.[`${source}_ids`] as string[] | undefined) || [];
-                if (!count) return null;
-                return (
-                  <div key={source}>
-                    <div className="flex items-center gap-1.5 text-xs font-medium text-fg">
-                      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: theme.colorFor(`source:${source}`) }} aria-hidden />
-                      {t("workgrid.day_source_count", { source, count })}
-                    </div>
-                    {ids.length ? (
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {ids.slice(0, 20).map((workId) => (
-                          <Link
-                            key={workId}
-                            href={`/admin/works/${workId}`}
-                            className="inline-flex min-h-11 items-center rounded-md border border-border bg-surface px-2 font-mono text-xs text-accent hover:border-accent"
-                          >
-                            {workId.length > 12 ? `${workId.slice(0, 8)}…${workId.slice(-4)}` : workId}
-                          </Link>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          ) : <p className="mt-1 text-xs text-muted">{t("charts.no_activity_day")}</p>}
-        </div>
-      ) : null}
     </div>
   );
 }

@@ -7,10 +7,11 @@ import {
   useState,
   type CSSProperties,
   type KeyboardEvent,
+  type PointerEvent,
 } from "react";
 
 import { useI18nFormat } from "@/lib/i18n-format";
-import { motionConfig, useEnterOnce } from "@/lib/motion";
+import { motionConfig, useViewportReveal } from "@/lib/motion";
 
 import type { ChartSeriesPoint } from "./types";
 import { useChartTheme } from "./useChartTheme";
@@ -25,14 +26,10 @@ export default function HairlineSeries({ data }: { data: ChartSeriesPoint[] }) {
   const fmt = useI18nFormat();
   const theme = useChartTheme();
   const [activeIndex, setActiveIndex] = useState(() => Math.max(0, data.length - 1));
-  const [motionEnabled, setMotionEnabled] = useState(false);
-  const pointRefs = useRef<Array<SVGGElement | null>>([]);
-  const keys = useMemo(() => data.map((point) => point.id), [data]);
-  const isNew = useEnterOnce(keys);
-
-  useEffect(() => {
-    setMotionEnabled(motionConfig.shouldAnimate());
-  }, []);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const dataKey = useMemo(() => data.map((point) => point.id).join("|"), [data]);
+  const reveal = useViewportReveal<HTMLDivElement>(dataKey);
+  const animate = reveal.revealed && motionConfig.shouldAnimate();
 
   useEffect(() => {
     setActiveIndex((current) => Math.min(Math.max(0, current), Math.max(0, data.length - 1)));
@@ -60,17 +57,15 @@ export default function HairlineSeries({ data }: { data: ChartSeriesPoint[] }) {
   if (!data.length) return null;
 
   const moveFocus = (next: number) => {
-    const bounded = Math.max(0, Math.min(data.length - 1, next));
-    setActiveIndex(bounded);
-    pointRefs.current[bounded]?.focus();
+    setActiveIndex(Math.max(0, Math.min(data.length - 1, next)));
   };
-  const onKeyDown = (event: KeyboardEvent<SVGGElement>, index: number) => {
+  const onKeyDown = (event: KeyboardEvent<SVGSVGElement>) => {
     if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
       event.preventDefault();
-      moveFocus(index - 1);
+      moveFocus(activeIndex - 1);
     } else if (event.key === "ArrowRight" || event.key === "ArrowUp") {
       event.preventDefault();
-      moveFocus(index + 1);
+      moveFocus(activeIndex + 1);
     } else if (event.key === "Home") {
       event.preventDefault();
       moveFocus(0);
@@ -78,6 +73,12 @@ export default function HairlineSeries({ data }: { data: ChartSeriesPoint[] }) {
       event.preventDefault();
       moveFocus(data.length - 1);
     }
+  };
+  const selectNearestPoint = (event: PointerEvent<SVGSVGElement>) => {
+    const bounds = svgRef.current?.getBoundingClientRect();
+    if (!bounds || bounds.width <= 0) return;
+    const ratio = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
+    moveFocus(Math.round(ratio * (data.length - 1)));
   };
 
   const path = data
@@ -87,33 +88,35 @@ export default function HairlineSeries({ data }: { data: ChartSeriesPoint[] }) {
   const axisIndices = [...new Set([0, Math.floor((data.length - 1) / 2), data.length - 1])];
 
   return (
-    <div data-chart-kind="hairline-series" className="overflow-x-auto">
+    <div
+      ref={reveal.ref}
+      data-chart-kind="hairline-series"
+      className={animate ? "chart-series-enter" : ""}
+    >
       <svg
+        ref={svgRef}
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-        className="hairline-series-svg h-auto w-full overflow-visible"
-        style={{ "--hairline-touch-width": `${Math.max(WIDTH, data.length * 44)}px` } as CSSProperties}
-        role="group"
+        className="h-auto w-full touch-pan-y overflow-visible rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        role="slider"
+        tabIndex={0}
+        aria-valuemin={0}
+        aria-valuemax={data.length - 1}
+        aria-valuenow={activeIndex}
+        aria-valuetext={active.description || `${active.label}: ${fmt.number(active.value)}`}
         aria-label={active.description || `${active.label}: ${fmt.number(active.value)}`}
+        onKeyDown={onKeyDown}
+        onPointerMove={(event) => {
+          if (event.pointerType === "mouse") selectNearestPoint(event);
+        }}
+        onPointerDown={selectNearestPoint}
       >
         <line x1={PAD_X} y1={BASELINE} x2={WIDTH - PAD_X} y2={BASELINE} stroke={theme.border} strokeWidth="1" />
         {data.map((point, index) => {
           const x = geometry.x(index);
           const y = geometry.y(point.value);
           const peak = index === geometry.peakIndex;
-          const entering = motionEnabled && isNew(point.id);
           return (
-            <g
-              key={point.id}
-              ref={(node) => { pointRefs.current[index] = node; }}
-              role="button"
-              tabIndex={index === activeIndex ? 0 : -1}
-              aria-label={point.description || `${point.label}: ${fmt.number(point.value)}`}
-              onFocus={() => setActiveIndex(index)}
-              onClick={() => setActiveIndex(index)}
-              onKeyDown={(event) => onKeyDown(event, index)}
-              className="cursor-pointer focus-visible:outline-none"
-            >
-              <rect x={x - 11} y={TOP - 8} width="22" height={BASELINE - TOP + 24} fill="transparent" />
+            <g key={point.id} aria-hidden>
               <line
                 x1={x}
                 y1={BASELINE}
@@ -122,16 +125,16 @@ export default function HairlineSeries({ data }: { data: ChartSeriesPoint[] }) {
                 stroke={peak ? theme.accent : theme.muted}
                 strokeWidth={peak ? 1.8 : 0.8}
                 opacity={peak ? 1 : 0.64}
-                className={entering ? "chart-mark-enter" : undefined}
-                style={{ "--chart-delay": `${index * 12}ms` } as CSSProperties}
+                className="chart-series-hair"
+                style={{ "--chart-delay": `${Math.min(index * 12, 420)}ms` } as CSSProperties}
               />
               <circle
                 cx={x}
                 cy={y}
                 r={peak ? 4.5 : 2.4}
                 fill={peak ? theme.accent : theme.text}
-                className={entering ? "chart-dot-enter" : undefined}
-                style={{ "--chart-delay": `${120 + index * 12}ms` } as CSSProperties}
+                className="chart-series-point"
+                style={{ "--chart-delay": `${Math.min(100 + index * 12, 520)}ms` } as CSSProperties}
               />
               {index === activeIndex ? (
                 <circle cx={x} cy={y} r="8" fill="none" stroke={theme.accent} strokeWidth="1.5" />
@@ -139,7 +142,16 @@ export default function HairlineSeries({ data }: { data: ChartSeriesPoint[] }) {
             </g>
           );
         })}
-        <path d={path} fill="none" stroke={theme.text} strokeWidth="1.5" strokeLinejoin="round" />
+        <path
+          d={path}
+          pathLength="1"
+          fill="none"
+          stroke={theme.text}
+          strokeWidth="1.5"
+          strokeLinejoin="round"
+          className="chart-series-path"
+          aria-hidden
+        />
         {axisIndices.map((index) => (
           <text
             key={`${data[index].id}:axis`}
@@ -149,6 +161,7 @@ export default function HairlineSeries({ data }: { data: ChartSeriesPoint[] }) {
             fill={theme.muted}
             fontSize="11"
             fontWeight="600"
+            aria-hidden
           >
             {data[index].label}
           </text>

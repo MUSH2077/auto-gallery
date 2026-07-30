@@ -9,13 +9,12 @@ import type { ChartTableModel } from "./types";
 function ChartDataTable({ model }: { model: ChartTableModel }) {
   return (
     <div
-      className="mt-3 w-full max-w-full overflow-x-auto rounded-md border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-      tabIndex={0}
+      className="mt-3 w-full max-w-full rounded-md border border-border"
       role="region"
       aria-label={model.caption}
       style={{ contain: "inline-size" }}
     >
-      <table className="w-full min-w-[32rem] border-collapse text-sm">
+      <table className="hidden w-full table-fixed border-collapse text-sm sm:table">
         <caption className="sr-only">{model.caption}</caption>
         <thead className="bg-subtle text-xs text-muted">
           <tr>
@@ -36,7 +35,7 @@ function ChartDataTable({ model }: { model: ChartTableModel }) {
               {model.columns.map((column) => (
                 <td
                   key={column.key}
-                  className={`px-3 py-2 ${column.align === "right" ? "text-right tabular-nums" : "text-left"}`}
+                  className={`break-words px-3 py-2 ${column.align === "right" ? "text-right tabular-nums" : "text-left"}`}
                 >
                   {row.cells[column.key]}
                 </td>
@@ -45,6 +44,20 @@ function ChartDataTable({ model }: { model: ChartTableModel }) {
           ))}
         </tbody>
       </table>
+      <div className="divide-y divide-border sm:hidden">
+        {model.rows.map((row) => (
+          <dl key={row.id} className="space-y-2 px-3 py-3">
+            {model.columns.map((column) => (
+              <div key={column.key} className="grid grid-cols-[minmax(5rem,0.42fr)_minmax(0,1fr)] gap-3">
+                <dt className="text-xs font-semibold text-muted">{column.label}</dt>
+                <dd className={`min-w-0 break-words text-sm text-fg ${column.align === "right" ? "tabular-nums" : ""}`}>
+                  {row.cells[column.key]}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        ))}
+      </div>
     </div>
   );
 }

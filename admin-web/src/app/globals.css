@@ -203,9 +203,13 @@
       opacity: 1 !important;
       animation: none !important;
     }
-    .chart-mark-enter, .chart-dot-enter {
+    .chart-mark-enter, .chart-dot-enter, .activity-source-enter,
+    .chart-tick-enter, .chart-tally-enter, .chart-series-hair,
+    .chart-series-point, .chart-series-path, .creator-narrative-item {
       opacity: 1 !important;
       animation: none !important;
+      stroke-dashoffset: 0 !important;
+      transform: none !important;
     }
   }
 
@@ -405,21 +409,9 @@
     animation: fadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     animation-delay: var(--delay, 0ms);
   }
-  .activity-matrix {
-    --activity-cell-size: 14px;
-    --activity-cell-gap: 3px;
-  }
-  .activity-matrix-cell {
-    width: var(--activity-cell-size);
-    height: var(--activity-cell-size);
-    min-height: var(--activity-cell-size);
-    min-width: var(--activity-cell-size);
-  }
-  .activity-matrix-dot {
-    width: 82%;
-    height: 82%;
-    transform: scale(var(--dot-scale, 1));
-  }
+  .activity-desktop { display: block; }
+  .activity-mobile { display: none; }
+  .activity-calendar-cell { min-height: 8px; }
   @keyframes chartMarkReveal {
     from { opacity: 0; transform: scaleY(0); }
     to { opacity: 1; transform: scaleY(1); }
@@ -439,15 +431,66 @@
     animation: chartDotReveal 400ms cubic-bezier(0.16, 1, 0.3, 1) both;
     animation-delay: var(--chart-delay, 0ms);
   }
-  @media (pointer: coarse) {
-    .activity-matrix {
-      --activity-cell-size: 44px;
-      --activity-cell-gap: 4px;
-    }
-    .hairline-series-svg {
-      width: var(--hairline-touch-width);
-      max-width: none;
-    }
+  @keyframes activitySourcePop {
+    0% { opacity: 0; transform: scale(0.15); }
+    72% { opacity: 1; transform: scale(1.12); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  .activity-source-enter {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: activitySourcePop 520ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    animation-delay: var(--chart-delay, 0ms);
+  }
+  @keyframes chartTickRise {
+    from { opacity: 0; transform: scaleY(0); }
+    to { opacity: 1; transform: scaleY(var(--tick-scale, 1)); }
+  }
+  .chart-tick-enter {
+    transform-origin: center bottom;
+    animation: chartTickRise 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: var(--chart-delay, 0ms);
+  }
+  @keyframes chartTallyFill {
+    from { opacity: 0; transform: scaleX(0); }
+    to { opacity: 1; transform: scaleX(1); }
+  }
+  .chart-tally-enter {
+    animation: chartTallyFill 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: var(--chart-delay, 0ms);
+  }
+  @keyframes chartLineDraw {
+    from { stroke-dashoffset: 1; }
+    to { stroke-dashoffset: 0; }
+  }
+  .chart-series-enter .chart-series-path {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: chartLineDraw 620ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .chart-series-enter .chart-series-hair {
+    transform-box: fill-box;
+    transform-origin: center bottom;
+    animation: chartMarkReveal 400ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: var(--chart-delay, 0ms);
+  }
+  .chart-series-enter .chart-series-point {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: chartDotReveal 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: var(--chart-delay, 0ms);
+  }
+  @keyframes creatorNarrativeRise {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .creator-narrative-item {
+    animation: creatorNarrativeRise 400ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: var(--chart-delay, 0ms);
+  }
+  @media (max-width: 767px), (pointer: coarse) {
+    .activity-desktop { display: none; }
+    .activity-mobile { display: block; }
   }
   @keyframes bubblePop {
     0% { opacity: 0; transform: scale(0.35); }

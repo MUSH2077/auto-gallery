@@ -4,7 +4,7 @@
 // entrance animations against replaying on poll-driven re-renders — the #1
 // motion risk in this app (see docs/frontend-motion-audit.md §3.3.1).
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
 
 import { motionConfig } from "./config";
 import { motionTokens, staggerDelay } from "./tokens";
@@ -120,4 +120,37 @@ export function useStaggeredEntrance(
         }
       : { className: "" }
   ), [isNew]);
+}
+
+/**
+ * Reveals a visual once it enters the viewport. Changing `key` creates a new
+ * narrative beat (for example, selecting another activity year); polling with
+ * the same key never replays it.
+ */
+export function useViewportReveal<T extends HTMLElement>(
+  key: string | number,
+): { ref: RefObject<T>; revealed: boolean } {
+  const ref = useRef<T>(null);
+  const [revealed, setRevealed] = useState(false);
+
+  useEffect(() => {
+    setRevealed(false);
+    const node = ref.current;
+    if (!node || !motionConfig.shouldAnimate() || typeof IntersectionObserver === "undefined") {
+      setRevealed(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) return;
+        setRevealed(true);
+        observer.disconnect();
+      },
+      { rootMargin: "0px 0px -8% 0px", threshold: 0.12 },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [key]);
+
+  return { ref, revealed };
 }

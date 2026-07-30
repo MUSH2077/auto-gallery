@@ -1,4 +1,5 @@
 import logging
+from datetime import date, datetime, time, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -207,14 +208,35 @@ async def update_creator(creator_id: UUID, data: CreatorUpdate, db: AsyncSession
 
 
 @router.get("/{creator_id}/timeline")
-async def get_creator_timeline(creator_id: UUID,
-                                from_date: str | None = None,
-                                to_date: str | None = None,
-                                db: AsyncSession = Depends(get_db)):
+async def get_creator_timeline(
+    creator_id: UUID,
+    from_date: date | None = None,
+    to_date: date | None = None,
+    db: AsyncSession = Depends(get_db),
+):
     """Return per-source work counts per day for the creator's activity grid."""
+    if from_date is not None and to_date is not None and to_date <= from_date:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_date_range",
+                "message": "to_date must be later than from_date",
+            },
+        )
+    range_start = (
+        datetime.combine(from_date, time.min, tzinfo=timezone.utc)
+        if from_date is not None
+        else None
+    )
+    range_end = (
+        datetime.combine(to_date, time.min, tzinfo=timezone.utc)
+        if to_date is not None
+        else None
+    )
     from app.repositories.work import WorkRepository
+
     repo = WorkRepository(db)
-    days, sources = await repo.get_creator_timeline(creator_id, from_date, to_date)
+    days, sources = await repo.get_creator_timeline(creator_id, range_start, range_end)
     return {
         "creator_id": str(creator_id),
         "sources": sources,

@@ -814,15 +814,22 @@ test("creator charts share the data contract and year selection reloads the requ
   await expect(page.locator('[data-chart-kind="ballot-tally"] a')).toHaveCount(6);
   await page.screenshot({ path: "/tmp/auto-gallery-creator-charts-desktop.png", fullPage: true });
 
-  const firstDay = page.locator('[data-chart-kind="activity-dot-matrix"] [role="group"] button').first();
-  await firstDay.focus();
-  const firstLabel = await firstDay.getAttribute("aria-label");
+  const activityGrid = page.locator('[data-chart-kind="activity-dot-matrix"] [role="grid"]');
+  await activityGrid.focus();
+  const firstActiveDay = await activityGrid.getAttribute("aria-activedescendant");
   await page.keyboard.press("ArrowRight");
-  const nextDay = page.locator('[data-chart-kind="activity-dot-matrix"] button:focus');
-  const focusedLabel = await page.evaluate(() => document.activeElement?.getAttribute("aria-label"));
-  expect(focusedLabel).not.toBe(firstLabel);
-  await expect(nextDay).toHaveCount(1);
+  const nextActiveDay = await activityGrid.getAttribute("aria-activedescendant");
+  expect(nextActiveDay).not.toBe(firstActiveDay);
+  await page.keyboard.press("Enter");
+  await expect(page.locator('.activity-desktop [aria-live="polite"]')).toBeVisible();
   await page.keyboard.press("Escape");
+
+  const multiSourceDay = page.locator("#activity-day-2026-04-12");
+  await expect(multiSourceDay.locator("[data-activity-source]")).toHaveCount(2);
+  const pixivCircle = multiSourceDay.locator('[data-activity-source="pixiv"]');
+  const xCircle = multiSourceDay.locator('[data-activity-source="x"]');
+  expect(Number(await pixivCircle.getAttribute("r"))).toBeGreaterThan(Number(await xCircle.getAttribute("r")));
+  expect(await pixivCircle.getAttribute("fill")).not.toBe(await xCircle.getAttribute("fill"));
 
   const request2025 = page.waitForRequest((request) => {
     const url = new URL(request.url());
@@ -849,13 +856,40 @@ test("creator charts share the data contract and year selection reloads the requ
   ]) {
     await page.setViewportSize(viewport);
     await expectNoPageOverflow(page);
+    const overflowingCharts = await page.locator("[data-chart-frame], [data-chart-kind]").evaluateAll((nodes) => (
+      nodes
+        .filter((node) => node.scrollWidth > node.clientWidth + 1)
+        .map((node) => ({
+          kind: node.getAttribute("data-chart-kind") || node.getAttribute("data-testid"),
+          clientWidth: node.clientWidth,
+          scrollWidth: node.scrollWidth,
+        }))
+    ));
+    expect(overflowingCharts).toEqual([]);
   }
+  await expect(page.locator(".activity-mobile button")).toHaveCount(12);
+  await page.locator(".activity-mobile button").nth(1).click();
+  await expect(page.locator(".activity-mobile")).toContainText("February publishing details");
+  await expect(page.locator(".activity-mobile")).toContainText("pixiv: 2 works");
   await page.screenshot({ path: "/tmp/auto-gallery-creator-charts-mobile.png", fullPage: true });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.reload();
   await expect(page.getByTestId("creator-activity-chart")).toBeVisible();
   await expect(page.locator(".chart-dot-enter")).toHaveCount(0);
   await expectNoPageOverflow(page);
+});
+
+test("creator activity distinguishes a failed request from a genuinely empty year", async ({ page }) => {
+  await page.route("**/api/v1/creators/fixture-creator/timeline?*", (route) => route.fulfill({
+    status: 500,
+    json: { detail: "fixture timeline failure" },
+  }));
+  await page.goto("/admin/creators/fixture-creator");
+
+  const activity = page.getByTestId("creator-activity-chart");
+  await expect(activity.getByRole("alert")).toContainText("Publishing activity could not be loaded");
+  await expect(activity).not.toContainText("No publishing activity was recorded");
+  await expect(activity.getByRole("button", { name: "Retry" })).toBeVisible();
 });
 
 test("data management charts preserve 100 ticks, exact values, hierarchy, and diagnostics", async ({ page }) => {

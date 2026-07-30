@@ -5,5 +5,5 @@
 export { motionTokens, staggerDelay, bubbleStaggerDelay } from "./tokens";
 export { motionConfig } from "./config";
 export { enterHeatmap, countUp } from "./anime";
-export { usePresence, useEnterOnce, useStaggeredEntrance } from "./hooks";
+export { usePresence, useEnterOnce, useStaggeredEntrance, useViewportReveal } from "./hooks";
 export type { StaggeredEntranceProps } from "./hooks";

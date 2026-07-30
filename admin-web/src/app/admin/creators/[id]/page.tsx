@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
-import { GitlleryPanel, Modal, PageShell, RepositoryCard, SourceBadge, StatusBadge, SmartSearchInput, type SlideItem } from "@/components";
+import { GitlleryPanel, Modal, MotionNumber, PageShell, RepositoryCard, SourceBadge, StatusBadge, SmartSearchInput, type SlideItem } from "@/components";
 import ActivityDotMatrix, { type ActivityDay } from "@/components/charts/ActivityDotMatrix";
 import BallotTally from "@/components/charts/BallotTally";
 import ChartFrame from "@/components/charts/ChartFrame";
@@ -15,6 +15,7 @@ import { niceUnit } from "@/components/charts/chartMath";
 import type { ChartDatum, ChartSeriesPoint, ChartTableModel } from "@/components/charts/types";
 import { useSlideshow } from "@/lib/useSlideshow";
 import { POLL_IDLE_MS } from "@/lib/polling";
+import { motionConfig } from "@/lib/motion";
 import { Breadcrumb } from "@/components/Breadcrumb";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
@@ -197,6 +198,11 @@ export default function CreatorDetailPage() {
   const [editName, setEditName] = useState("");
   const [editDisplay, setEditDisplay] = useState("");
   const [editDesc, setEditDesc] = useState("");
+  const [narrativeMotionEnabled, setNarrativeMotionEnabled] = useState(false);
+
+  useEffect(() => {
+    setNarrativeMotionEnabled(motionConfig.shouldAnimate());
+  }, []);
 
   const creator = useQuery({ queryKey: queryKeys.creators.detail(id), queryFn: () => api.getCreator(id) });
   const links = useQuery({ queryKey: queryKeys.creators.links(id), queryFn: () => api.listCreatorLinks(id) });
@@ -229,7 +235,6 @@ export default function CreatorDetailPage() {
     enabled: activityYear !== null,
     refetchInterval: POLL_IDLE_MS,
     staleTime: POLL_IDLE_MS,
-    placeholderData: (previousData) => previousData,
   });
   const works = useQuery({
     queryKey: ["creator-latest-works", id],
@@ -472,7 +477,10 @@ export default function CreatorDetailPage() {
         { label: c.display_name || c.name },
       ]} />
       <div className="mb-6 flex flex-col gap-4 border-b border-border pb-5 dark:border-border md:flex-row md:items-end md:justify-between">
-        <div className="flex min-w-0 items-center gap-4">
+        <div
+          className={`${narrativeMotionEnabled ? "creator-narrative-item" : ""} flex min-w-0 items-center gap-4`}
+          style={{ "--chart-delay": "0ms" } as CSSProperties}
+        >
           <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full border border-accent/30 bg-accent-subtle text-2xl font-semibold text-accent">
             {initials(c.display_name || c.name)}
           </div>
@@ -496,7 +504,10 @@ export default function CreatorDetailPage() {
             </div>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div
+          className={`${narrativeMotionEnabled ? "creator-narrative-item" : ""} flex flex-wrap gap-2`}
+          style={{ "--chart-delay": "90ms" } as CSSProperties}
+        >
           <button onClick={() => toggleFavorite.mutate()} className="btn-ghost">
             {c.is_favorite ? t("creator_detail.unstar") : t("creator_detail.star")}
           </button>
@@ -514,7 +525,10 @@ export default function CreatorDetailPage() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr]">
         <aside className="space-y-4">
-          <section className="card p-4">
+          <section
+            className={`${narrativeMotionEnabled ? "creator-narrative-item" : ""} card p-4`}
+            style={{ "--chart-delay": "140ms" } as CSSProperties}
+          >
             <h2 className="mb-2 text-sm font-semibold">{t("creator_detail.profile")}</h2>
             {c.description ? (
               <p className="whitespace-pre-wrap text-sm leading-6 text-fg">{c.description}</p>
@@ -522,9 +536,30 @@ export default function CreatorDetailPage() {
               <p className="text-sm text-muted">{t("creator_detail.no_description")}</p>
             )}
             <dl className="mt-4 space-y-2 border-t border-border pt-4 text-sm dark:border-border">
-              <div className="flex justify-between gap-3"><dt className="text-muted">{t("creator_detail.stat_works")}</dt><dd className="font-semibold">{st?.total_works != null ? fmt.number(st.total_works) : "-"}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted">{t("creator_detail.stat_assets")}</dt><dd className="font-semibold">{st?.total_assets != null ? fmt.number(st.total_assets) : "-"}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted">{t("creator_detail.stat_sources")}</dt><dd className="font-semibold">{st?.source_breakdown?.length ?? "-"}</dd></div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted">{t("creator_detail.stat_works")}</dt>
+                <dd className="font-semibold">
+                  {st?.total_works != null ? (
+                    <MotionNumber value={st.total_works} animateInitial format={(value) => fmt.number(value)} />
+                  ) : "-"}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted">{t("creator_detail.stat_assets")}</dt>
+                <dd className="font-semibold">
+                  {st?.total_assets != null ? (
+                    <MotionNumber value={st.total_assets} animateInitial format={(value) => fmt.number(value)} />
+                  ) : "-"}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted">{t("creator_detail.stat_sources")}</dt>
+                <dd className="font-semibold">
+                  {st?.source_breakdown ? (
+                    <MotionNumber value={st.source_breakdown.length} animateInitial format={(value) => fmt.number(value)} />
+                  ) : "-"}
+                </dd>
+              </div>
               <div className="flex justify-between gap-3"><dt className="text-muted">{t("creator_detail.created")}</dt><dd>{fmt.date(c.created_at)}</dd></div>
             </dl>
           </section>
@@ -573,7 +608,7 @@ export default function CreatorDetailPage() {
         </aside>
 
         <section className="min-w-0">
-          <nav className="mb-4 flex gap-1 overflow-x-auto border-b border-border" aria-label={t("creator_detail.sections")}>
+          <nav className="mb-4 grid grid-cols-2 gap-1 border-b border-border sm:flex sm:flex-wrap" aria-label={t("creator_detail.sections")}>
             {tabs.map((tab) => (
               <button key={tab.key} onClick={() => setActiveTab(tab.key)}
                 className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${activeTab === tab.key ? "border-danger font-semibold text-fg" : "border-transparent text-muted hover:text-fg dark:text-muted dark:hover:text-fg"}`}>
@@ -586,15 +621,15 @@ export default function CreatorDetailPage() {
             <div className="space-y-5">
               <ChartFrame
                 title={t("creator_detail.works_timeline")}
-                insight={activityPeak && activityYear
-                  ? t("charts.activity_insight", {
-                    year: activityYear,
-                    date: fmt.date(`${activityPeak.date}T00:00:00Z`),
-                    count: activityPeak.total,
-                  })
-                  : activityYear
-                    ? t("charts.activity_insight_empty", { year: activityYear })
-                    : undefined}
+                insight={activityYear && timeline.data
+                  ? activityPeak
+                    ? t("charts.activity_insight", {
+                      year: activityYear,
+                      date: fmt.date(`${activityPeak.date}T00:00:00Z`),
+                      count: activityPeak.total,
+                    })
+                    : t("charts.activity_insight_empty", { year: activityYear })
+                  : undefined}
                 description={t("charts.activity_encoding")}
                 actions={(
                   <Link href={searchUrl("/admin/works", `creator:${id} sort:posted-desc`)} className="btn-ghost">
@@ -605,15 +640,34 @@ export default function CreatorDetailPage() {
                 footer={t("charts.creator_activity_footer")}
                 testId="creator-activity-chart"
               >
-                {timeline.isLoading || activityYear === null ? (
+                {timeline.isPending || activityYear === null ? (
                   <div className="h-44 animate-pulse rounded-md bg-subtle" aria-label={t("common.loading")} />
+                ) : timeline.error && !timeline.data ? (
+                  <div className="rounded-md border border-danger/30 bg-danger-subtle p-4" role="alert">
+                    <p className="font-semibold text-danger">{t("charts.activity_error")}</p>
+                    <p className="mt-1 break-words text-xs text-muted">{(timeline.error as Error).message}</p>
+                    <button type="button" className="btn-ghost mt-3" onClick={() => timeline.refetch()}>
+                      {t("common.retry")}
+                    </button>
+                  </div>
+                ) : timeline.data ? (
+                  <>
+                    {timeline.isRefetchError ? (
+                      <div className="mb-3 rounded-md border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning" role="status">
+                        {t("charts.activity_refresh_error")}
+                      </div>
+                    ) : null}
+                    <ActivityDotMatrix
+                      data={timeline.data}
+                      year={activityYear}
+                      availableYears={availableActivityYears}
+                      onYearChange={setActivityYear}
+                    />
+                  </>
                 ) : (
-                  <ActivityDotMatrix
-                    data={timeline.data}
-                    year={activityYear}
-                    availableYears={availableActivityYears}
-                    onYearChange={setActivityYear}
-                  />
+                  <div className="rounded-md border border-border bg-subtle p-4 text-sm text-muted">
+                    {t("charts.activity_error")}
+                  </div>
                 )}
               </ChartFrame>
 

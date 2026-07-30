@@ -30,6 +30,9 @@ const sharedChecks = [
   [/\b(?:CHART_COLORS|SOURCE_COLORS)\b/g, "unmediated color map; use useChartTheme"],
   [/\bMath\.random\s*\(/g, "random chart geometry or color is forbidden"],
   [/\b(?:chart\.js|recharts|echarts|victory|nivo|vega)\b/gi, "unapproved chart dependency"],
+  [/\boverflow-x-auto\b/g, "horizontal chart scrolling is forbidden; use a responsive encoding"],
+  [/\bmin-w-\[[^\]]+\]/g, "data-driven chart minimum widths are forbidden"],
+  [/\bmax-width\s*:\s*none\b/g, "unbounded chart width is forbidden"],
 ];
 
 for (const file of sourceFiles(chartRoot)) {

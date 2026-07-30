@@ -10829,6 +10829,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "format": "date",
                   "type": "string"
                 },
                 {
@@ -10845,6 +10846,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "format": "date",
                   "type": "string"
                 },
                 {
