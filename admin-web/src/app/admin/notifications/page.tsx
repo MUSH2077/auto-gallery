@@ -34,7 +34,7 @@ export default function NotificationsPage() {
   const query = useInfiniteQuery({
     queryKey: [...queryKeys.tasks.all, "feed", filter],
     queryFn: ({ pageParam = 0 }) =>
-      api.listTasks({ kind: kindParam, offset: pageParam as number, limit: PAGE_SIZE }),
+      api.listTasks({ kind: kindParam, include_account: true, offset: pageParam as number, limit: PAGE_SIZE }),
     initialPageParam: 0,
     getNextPageParam: (lastPage, pages) => {
       const loaded = pages.reduce((n, p) => n + p.items.length, 0);

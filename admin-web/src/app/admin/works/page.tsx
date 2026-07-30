@@ -1,18 +1,19 @@
 "use client";
-import { useState, useMemo, useEffect, useRef, Suspense } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
-import { api, queryKeys, WorkListItem } from "@/lib/api";
+import { api, queryKeys, WorkListItem, type SearchQualifierToken } from "@/lib/api";
 import type { WorkAsset } from "@/lib/api/endpoints/works";
 import { useAppearanceSettings } from "@/lib/appearance";
 import { useStaggeredEntrance, type StaggeredEntranceProps } from "@/lib/motion";
-import { AssetImage, PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, WorkPreviewOverlay, PermissionGuard, type SlideItem } from "@/components";
+import { AssetImage, PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, SmartSearchInput, WorkPreviewOverlay, PermissionGuard, useSearchComposer, type SlideItem } from "@/components";
 import { useSlideshow } from "@/lib/useSlideshow";
 import { usePermissions } from "@/lib/usePermissions";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { Star } from "lucide-react";
+import { searchUrl } from "@/lib/search-query";
 
 type PreviewState = {
   work: WorkListItem;
@@ -20,6 +21,32 @@ type PreviewState = {
   assetIds: string[];
   pageIndex: number;
 };
+
+const LEGACY_WORK_QUERY_KEYS = [
+  "source",
+  "creator",
+  "creator_id",
+  "tag",
+  "nsfw",
+  "fav",
+  "favorite",
+  "ai",
+  "sort",
+  "order",
+  "filter",
+  "search",
+];
+
+function stripLegacyWorkQuery(params: URLSearchParams): boolean {
+  let changed = false;
+  for (const key of LEGACY_WORK_QUERY_KEYS) {
+    if (params.has(key)) {
+      params.delete(key);
+      changed = true;
+    }
+  }
+  return changed;
+}
 
 function WorkCard({
   w,
@@ -151,7 +178,7 @@ function WorkCard({
       <div className="pointer-events-none relative z-10 p-3">
         <div className="text-sm font-medium truncate text-fg">{w.title || t("works.untitled")}</div>
         <div className="flex items-center gap-1.5 mt-1">
-          {w.source && <SourceBadge source={w.source} href={`/admin/works?source=${w.source}`} />}
+          {w.source && <SourceBadge source={w.source} href={`/admin/works?q=${encodeURIComponent(`source:${w.source}`)}`} />}
           {w.has_ugoira && <span className="rounded bg-accent-subtle px-1 text-[10px] text-accent">{t("works.gif_badge")}</span>}
           {w.creator_name && w.creator_id && (
   <Link href={`/admin/creators/${w.creator_id}`}
@@ -216,17 +243,10 @@ function WorksContent() {
     { key: "lofter", label: "Lofter" },
     { key: "weibo", label: t("works.source_weibo") },
   ];
-  // All filter state derived from URL — preserves filters on back/forward and supports sharing links
+  // q is the only search state. Page and view remain navigation/presentation
+  // state and are deliberately outside the search language.
   const search = sp.get("q") ?? "";
   const page = Number(sp.get("p") ?? "0");
-  const sortBy = (sp.get("sort") as SortKey) ?? "created_at";
-  const sortOrder = (sp.get("order") as "desc" | "asc") ?? "desc";
-  const sourceFilter = sp.get("source") ?? "";
-  const creatorFilter = sp.get("creator") ?? "";
-  const nsfwFilter = sp.get("nsfw") ?? "all";
-  const isFavoriteFilter = sp.get("fav") === "1";
-  const aiFilter = (sp.get("ai") as "all" | "human" | "ai") ?? "all";
-  const curationVisibility = sp.get("curation") === "trashed" ? "trashed" : "visible";
   const viewMode = (sp.get("view") as ViewMode) ?? "grid";
   const limit = 30;
 
@@ -234,9 +254,15 @@ function WorksContent() {
   const [inputVal, setInputVal] = useState(search);
   useEffect(() => { setInputVal(search); }, [search]);
   useEffect(() => {
+    const next = new URLSearchParams(sp.toString());
+    if (!stripLegacyWorkQuery(next)) return;
+    router.replace(next.size ? `${pathname}?${next.toString()}` : pathname, { scroll: false });
+  }, [pathname, router, sp]);
+  useEffect(() => {
     if (inputVal === search) return;
     const timer = setTimeout(() => {
       const p = new URLSearchParams(sp.toString());
+      stripLegacyWorkQuery(p);
       if (inputVal) p.set("q", inputVal); else p.delete("q");
       p.delete("p");
       router.replace(`${pathname}?${p.toString()}`, { scroll: false });
@@ -246,6 +272,7 @@ function WorksContent() {
 
   function updateParams(updates: Record<string, string | null>, resetPage = true) {
     const p = new URLSearchParams(sp.toString());
+    stripLegacyWorkQuery(p);
     for (const [k, v] of Object.entries(updates)) {
       if (v === null || v === "") p.delete(k); else p.set(k, v);
     }
@@ -253,11 +280,13 @@ function WorksContent() {
     router.replace(`${pathname}?${p.toString()}`, { scroll: false });
   }
 
+  function setSearchQuery(next: string) {
+    setInputVal(next);
+    updateParams({ q: next || null });
+  }
+
   function clearFilters() {
-    const p = new URLSearchParams();
-    if (curationVisibility === "trashed") p.set("curation", "trashed");
-    setInputVal("");
-    router.replace(p.toString() ? `${pathname}?${p.toString()}` : pathname, { scroll: false });
+    setSearchQuery("");
   }
 
   const scheduleClosePreview = () => {
@@ -275,48 +304,38 @@ function WorksContent() {
     if (!enabled) setPreview(null);
   };
 
-  const filters = useMemo(() => ({
-    search: search || undefined,
-    source: sourceFilter || undefined,
-    creator_id: creatorFilter || undefined,
-    is_nsfw: nsfwFilter === "all" ? undefined : nsfwFilter === "nsfw",
-    is_favorite: isFavoriteFilter || undefined,
-    is_ai_generated: aiFilter === "all" ? undefined : aiFilter === "ai",
-    curation_visibility: curationVisibility,
-    sort_by: sortBy,
-    sort_order: sortOrder,
-  }), [search, sourceFilter, creatorFilter, nsfwFilter, isFavoriteFilter, aiFilter, curationVisibility, sortBy, sortOrder]);
-
-  const activeFilterCount = [
-    search,
-    sourceFilter,
-    creatorFilter,
-    nsfwFilter !== "all",
-    isFavoriteFilter,
-    aiFilter !== "all",
-    sortBy !== "created_at" || sortOrder !== "desc",
-  ].filter(Boolean).length;
-
-  const useSearchPageLogic = !!search
-    && !sourceFilter
-    && !creatorFilter
-    && nsfwFilter === "all"
-    && !isFavoriteFilter
-    && aiFilter === "all"
-    && curationVisibility === "visible"
-    && sortBy === "created_at"
-    && sortOrder === "desc";
-
-  const works = useQuery({
-    queryKey: [...queryKeys.works.all, page, filters, useSearchPageLogic ? "search-api" : "works-api"],
-    queryFn: async () => {
-      if (useSearchPageLogic) {
-        const resp = await api.search(search, page * limit, limit);
-        return { total: resp.total, items: resp.results };
-      }
-      return api.listWorks(page * limit, limit, filters);
-    },
+  const worksQueryKey = [...queryKeys.works.all, "compound-search", page, search] as const;
+  const worksQuery = useQuery({
+    queryKey: worksQueryKey,
+    queryFn: () => api.search(search, page * limit, limit, "works"),
+    placeholderData: (previous) => previous,
   });
+  const works = {
+    ...worksQuery,
+    data: worksQuery.data?.groups.works,
+  };
+
+  const qualifierTokens = (worksQuery.data?.parsed.tokens || []).filter(
+    (token): token is SearchQualifierToken => token.kind === "qualifier",
+  );
+  const qualifierValues = (key: string) => qualifierTokens.filter((token) => token.key === key && !token.negated).map((token) => token.value);
+  const sourceFilter = qualifierValues("source")[0] || "";
+  const creatorFilter = qualifierValues("creator")[0] || "";
+  const isValues = qualifierValues("is");
+  const nsfwFilter = isValues.includes("nsfw") ? "nsfw" : isValues.includes("sfw") ? "sfw" : "all";
+  const isFavoriteFilter = isValues.includes("favorite");
+  const aiFilter = isValues.includes("ai") ? "ai" : isValues.includes("human") ? "human" : "all";
+  const curationVisibility = isValues.includes("trashed") ? "trashed" : "visible";
+  const sortValue = qualifierValues("sort")[0] || "created-desc";
+  const sortBy: SortKey = sortValue.startsWith("posted")
+    ? "posted_at"
+    : sortValue.startsWith("title")
+      ? "title"
+      : "created_at";
+  const sortOrder: "asc" | "desc" = sortValue.endsWith("-asc") ? "asc" : "desc";
+  const activeFilterCount = qualifierTokens.filter((token) => token.key !== "type").length + (worksQuery.data?.parsed.tokens.some((token) => token.kind === "text") ? 1 : 0);
+  const composer = useSearchComposer({ value: inputVal, scope: "works", onChange: setSearchQuery });
+  const filters = search;
 
   const slideshow = useSlideshow();
   const slideItems: SlideItem[] = (works.data?.items || [])
@@ -351,13 +370,7 @@ function WorksContent() {
 
   const toggleFavorite = useMutation({
     mutationFn: (id: string) => api.toggleWorkFavorite(id),
-    onSuccess: (updated) => {
-      // Directly patch the cache so the star updates immediately
-      qc.setQueryData([...queryKeys.works.all, page, filters], (old: { total: number; items: WorkListItem[] } | undefined) => {
-        if (!old) return old;
-        return { ...old, items: old.items.map((w) => w.id === updated.id ? { ...w, is_favorite: updated.is_favorite } : w) };
-      });
-    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.works.all }),
   });
 
   const restoreWork = useMutation({
@@ -438,24 +451,44 @@ function WorksContent() {
 
       <div data-page-primary-content id="works-filter-panel" className={`${filtersOpen ? "flex" : "hidden"} toolbar mb-4 flex-col md:flex md:flex-row md:flex-wrap md:items-center`}>
         <div className="segmented-control">
-          <button onClick={() => updateParams({ curation: null })}
+          <button onClick={() => composer.mutate({
+            key: "is",
+            value: null,
+            operation: "replace-group",
+            replace_values: ["visible", "trashed"],
+          })}
             aria-label={t("works.gallery")}
             className={`px-2.5 py-1 text-xs rounded transition-colors ${curationVisibility === "visible" ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
             {t("works.gallery")}
           </button>
-          <button onClick={() => updateParams({ curation: "trashed" })}
+          <button onClick={() => composer.mutate({
+            key: "is",
+            value: "trashed",
+            operation: "replace-group",
+            replace_values: ["visible", "trashed"],
+          })}
             aria-label={t("works.trash")}
             className={`px-2.5 py-1 text-xs rounded transition-colors ${curationVisibility === "trashed" ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
             {t("works.trash")}
           </button>
         </div>
 
-        <input value={inputVal} onChange={(e) => setInputVal(e.target.value)}
-          aria-label={t("works.search_title")}
-          placeholder={t("works.search_title")} className="input w-48 py-1.5 text-sm" />
+        <SmartSearchInput
+          value={inputVal}
+          onChange={setInputVal}
+          scope="works"
+          ariaLabel={t("works.search_title")}
+          placeholder={t("works.search_title")}
+          showTokens={false}
+          className="w-full md:w-72"
+        />
 
         {/* Source filter — dropdown */}
-        <select value={sourceFilter} onChange={(e) => updateParams({ source: e.target.value || null })}
+        <select value={sourceFilter} onChange={(e) => composer.mutate({
+          key: "source",
+          value: e.target.value || null,
+          operation: "set",
+        })}
           aria-label={t("works.filter_source")}
           className="select px-2 py-1.5 text-xs">
           {SOURCE_FILTERS.map((f) => (
@@ -466,7 +499,12 @@ function WorksContent() {
         {/* NSFW filter */}
         <div className="segmented-control">
           {NSFW_FILTERS.map((f) => (
-            <button key={f.key} onClick={() => updateParams({ nsfw: f.key === "all" ? null : f.key })}
+            <button key={f.key} onClick={() => composer.mutate({
+              key: "is",
+              value: f.key === "all" ? null : f.key,
+              operation: "replace-group",
+              replace_values: ["sfw", "nsfw"],
+            })}
               aria-label={f.label}
               className={`px-2.5 py-1 text-xs rounded transition-colors ${nsfwFilter === f.key ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
               {f.label}
@@ -475,7 +513,11 @@ function WorksContent() {
         </div>
 
         {/* Favorites filter */}
-        <button onClick={() => updateParams({ fav: isFavoriteFilter ? null : "1" })}
+        <button onClick={() => composer.mutate({
+          key: "is",
+          value: "favorite",
+          operation: "toggle",
+        })}
           aria-label={t("works.filter_favorites")}
           className={`px-2.5 py-1 text-xs rounded transition-colors ${isFavoriteFilter ? "bg-warning-subtle text-warning font-medium" : "text-muted hover:text-fg"}`}>
           <Star className="mr-1 inline h-3.5 w-3.5" fill={isFavoriteFilter ? "currentColor" : "none"} aria-hidden="true" />
@@ -489,7 +531,12 @@ function WorksContent() {
             { key: "human", label: t("works.ai_filter_human") },
             { key: "ai", label: t("works.ai_filter_ai") },
           ].map((f) => (
-            <button key={f.key} onClick={() => updateParams({ ai: f.key === "all" ? null : f.key })}
+            <button key={f.key} onClick={() => composer.mutate({
+              key: "is",
+              value: f.key === "all" ? null : f.key,
+              operation: "replace-group",
+              replace_values: ["human", "ai"],
+            })}
               aria-label={f.label}
               className={`px-2.5 py-1 text-xs rounded transition-colors ${aiFilter === f.key ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
               {f.label}
@@ -505,9 +552,12 @@ function WorksContent() {
             const nextDir = dir === "desc" ? "asc" : "desc";
             return (
               <button key={s.key}
-                onClick={() => updateParams({
-                  sort: s.key === "created_at" && nextDir === "desc" ? null : s.key,
-                  order: nextDir === "desc" ? null : nextDir,
+                onClick={() => composer.mutate({
+                  key: "sort",
+                  value: s.key === "created_at" && nextDir === "desc"
+                    ? null
+                    : `${s.key === "created_at" ? "created" : s.key === "posted_at" ? "posted" : "title"}-${nextDir}`,
+                  operation: "set",
                 })}
                 aria-label={t("works.sort_by", { sort: s.label })}
                 className={`px-2.5 py-1 text-xs rounded transition-colors ${active ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
@@ -659,7 +709,7 @@ function WorksContent() {
                   {w.has_ugoira && <span className="rounded bg-accent-subtle px-1 text-xs text-accent">{t("works.gif_badge")}</span>}
                 </div>
                 <div className="flex items-center gap-2 text-xs text-muted mt-0.5">
-                  {w.source && <SourceBadge source={w.source} href={`/admin/works?source=${w.source}`} />}
+                  {w.source && <SourceBadge source={w.source} href={searchUrl("/admin/works", `source:${w.source}`)} />}
                   {w.creator_name && w.creator_id && (
   <Link href={`/admin/creators/${w.creator_id}`} onClick={(e) => e.stopPropagation()} className="text-accent hover:underline">{w.creator_name}</Link>
 )}

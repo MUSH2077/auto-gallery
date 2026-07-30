@@ -11,7 +11,6 @@ class WorkRepository:
         self.session = session
 
     async def list_all(self, offset: int = 0, limit: int = 50,
-                       search: str | None = None,
                        source: str | None = None,
                        creator_id: str | None = None,
                        tag: str | None = None,
@@ -79,8 +78,6 @@ class WorkRepository:
 
         # Build WHERE conditions
         conditions = []
-        if search:
-            conditions.append(Work.title.ilike(f"%{search}%"))
         if is_nsfw is not None:
             conditions.append(Work.is_nsfw == is_nsfw)
         if is_favorite is not None:

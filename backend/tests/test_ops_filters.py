@@ -8,6 +8,9 @@ class _CountResult:
 
 
 class _Rows:
+    def unique(self):
+        return self
+
     def all(self):
         return []
 
@@ -39,5 +42,5 @@ def test_import_jobs_list_supports_download_job_and_text_filters():
 
     assert payload == {"total": 0, "items": []}
     assert all("failed" in params.values() for params in seen_params)
-    assert all(download_job_id in params.values() for params in seen_params)
+    assert all(f"%{download_job_id}%" in params.values() for params in seen_params)
     assert all("%boom%" in params.values() for params in seen_params)

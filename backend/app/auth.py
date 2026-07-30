@@ -103,6 +103,32 @@ def RequirePermission(module: str):
     return Depends(_check)
 
 
+def RequireAnyPermission(*modules: str):
+    """Require at least one permission while returning the resolved user.
+
+    Search is the first cross-domain interface that needs this: a library-only
+    user may search works while a subscriptions-only user may search
+    repositories.  Keeping the check here avoids weakening either domain's
+    existing route permissions.
+    """
+
+    required = tuple(dict.fromkeys(modules))
+    if not required:
+        raise ValueError("RequireAnyPermission needs at least one module")
+
+    async def _check(
+        request: Request,
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ):
+        username = await get_admin_key(request, credentials)
+        user = await _load_active_user(username)
+        if user.is_admin or any(module in (user.permissions or []) for module in required):
+            return user
+        raise HTTPException(status_code=403, detail=f"Missing any permission: {', '.join(required)}")
+
+    return Depends(_check)
+
+
 async def _admin_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),

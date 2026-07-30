@@ -11,12 +11,21 @@ class TestSearchService:
 
     def test_index_settings_defined(self):
         """Index settings are defined for all three indexes."""
-        from app.services.search import INDEX_SETTINGS, WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX
+        from app.services.search import (
+            CREATORS_INDEX,
+            INDEX_SETTINGS,
+            REPOSITORIES_INDEX,
+            SUBSCRIPTIONS_INDEX,
+            TAGS_INDEX,
+            WORKS_INDEX,
+        )
         assert WORKS_INDEX in INDEX_SETTINGS
         assert CREATORS_INDEX in INDEX_SETTINGS
         assert TAGS_INDEX in INDEX_SETTINGS
+        assert REPOSITORIES_INDEX in INDEX_SETTINGS
+        assert SUBSCRIPTIONS_INDEX in INDEX_SETTINGS
         # Each index has searchable and filterable attributes
-        for idx in [WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX]:
+        for idx in [WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX, REPOSITORIES_INDEX, SUBSCRIPTIONS_INDEX]:
             assert "searchableAttributes" in INDEX_SETTINGS[idx]
             assert "filterableAttributes" in INDEX_SETTINGS[idx]
 
@@ -32,6 +41,61 @@ class TestSearchService:
         from app.services.search import SearchService
         assert hasattr(SearchService, "reindex")
         assert inspect.iscoroutinefunction(SearchService.reindex)
+
+    def test_meili_filters_escape_values_and_preserve_or_semantics(self):
+        from app.services.search import _compile_meili_filter
+        from app.services.search_language import parse_search_query
+
+        query = parse_search_query('tag:"a\\\"b" tag:landscape -source:x -source:pixiv', "works")
+        filters = _compile_meili_filter(query, "works", {}, force_sfw=False)
+        assert '(tags = "a\\"b" OR tags = "landscape")' in filters
+        assert '(sources != "x" AND sources != "pixiv")' in filters
+
+    def test_global_targets_are_trimmed_by_permission(self):
+        from app.services.search import SearchService
+        from app.services.search_language import parse_search_query
+
+        query = parse_search_query("aurora", "global")
+        assert SearchService._allowed_targets(query, {"library"}) == (
+            "works",
+            "creators",
+            "tags",
+        )
+        assert SearchService._allowed_targets(query, {"subscriptions"}) == (
+            "repositories",
+            "subscriptions",
+        )
+
+    def test_explicit_denied_type_is_not_silently_omitted(self):
+        import pytest
+
+        from app.services.search import SearchPermissionError, SearchService
+        from app.services.search_language import parse_search_query
+
+        query = parse_search_query("type:repo aurora", "global")
+        with pytest.raises(SearchPermissionError):
+            SearchService._allowed_targets(query, {"library"})
+
+    def test_upload_permission_only_opens_creator_picker_scope(self):
+        import pytest
+
+        from app.services.search import SearchPermissionError, SearchService
+        from app.services.search_language import parse_search_query
+
+        picker = parse_search_query("atlas", "creator-picker")
+        assert SearchService._allowed_targets(picker, {"upload"}) == ("creators",)
+        global_query = parse_search_query("type:creator atlas", "global")
+        with pytest.raises(SearchPermissionError):
+            SearchService._allowed_targets(global_query, {"upload"})
+
+    def test_forced_sfw_filter_cannot_be_overridden_by_query(self):
+        from app.services.search import _compile_meili_filter
+        from app.services.search_language import parse_search_query
+
+        query = parse_search_query("is:nsfw", "works")
+        filters = _compile_meili_filter(query, "works", {}, force_sfw=True)
+        assert "is_nsfw = true" in filters
+        assert "is_nsfw = false" in filters
 
 
 class TestLogBuffer:

@@ -5,8 +5,8 @@ import { useT } from "@/lib/i18n";
 import { useStaggeredEntrance } from "@/lib/motion";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys, Subscription } from "@/lib/api";
-import { PageHeader, PageSection, EmptyState, ErrorState, ConfirmDialog, Modal, StatusBadge, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityList, EntityRow, RowActionMenu } from "@/components";
+import { api, queryKeys, type SearchQualifierToken, type SubscriptionSearchHit } from "@/lib/api";
+import { PageHeader, PageSection, EmptyState, ErrorState, ConfirmDialog, Modal, StatusBadge, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityList, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { scheduleModeLabel, useI18nFormat } from "@/lib/i18n-format";
 
@@ -43,19 +43,6 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
   );
 }
 
-function buildFilters(filter: FilterMode, search: string) {
-  const f: { search?: string; is_active?: boolean; sync_enabled?: boolean; never_synced?: boolean } = {};
-  if (search) f.search = search;
-  switch (filter) {
-    case "active": f.is_active = true; break;
-    case "inactive": f.is_active = false; break;
-    case "sync_on": f.sync_enabled = true; break;
-    case "sync_off": f.sync_enabled = false; break;
-    case "never_synced": f.never_synced = true; break;
-  }
-  return f;
-}
-
 function SubscriptionsContent() {
   const router = useRouter();
   const t = useT();
@@ -68,7 +55,6 @@ function SubscriptionsContent() {
 
   // Filter state derived from URL
   const search = sp.get("q") ?? "";
-  const filter = (sp.get("filter") as FilterMode) ?? "all";
   const page = Number(sp.get("p") ?? "0");
   const limit = 25;
   const [showCreate, setShowCreate] = useState(false);
@@ -107,27 +93,40 @@ function SubscriptionsContent() {
     { key: "never_synced", label: t("subscriptions.filter_never") },
   ];
 
-  const filters = buildFilters(filter, search);
-
-  const subsCount = useQuery({ queryKey: queryKeys.subscriptions.count, queryFn: () => api.countSubscriptions() });
-  const subs = useQuery({
-    queryKey: queryKeys.subscriptions.list(page, limit, filters),
-    queryFn: () => api.listSubscriptions(page * limit, limit, filters),
+  const subsQuery = useQuery({
+    queryKey: [...queryKeys.subscriptions.all, "compound-search", page, search],
+    queryFn: () => api.search(search, page * limit, limit, "subscriptions"),
     placeholderData: (previousData) => previousData,
   });
+  const subs = {
+    ...subsQuery,
+    data: subsQuery.data?.groups.subscriptions?.items,
+  };
+  const isValues = (subsQuery.data?.parsed.tokens || [])
+    .filter((token): token is SearchQualifierToken => token.kind === "qualifier" && token.key === "is" && !token.negated)
+    .map((token) => token.value);
+  const filter: FilterMode = isValues.includes("active")
+    ? "active"
+    : isValues.includes("inactive")
+      ? "inactive"
+      : isValues.includes("sync-enabled")
+        ? "sync_on"
+        : isValues.includes("sync-disabled")
+          ? "sync_off"
+          : isValues.includes("never-synced")
+            ? "never_synced"
+            : "all";
   const subscriptionItems = subs.data || [];
   const subscriptionEntrance = useStaggeredEntrance(subscriptionItems.map((subscription) => subscription.id));
 
   useEffect(() => {
     if (notify.operationJob?.kind !== "danbooru-import-all" || notify.operationJob.status !== "completed") return;
     subs.refetch();
-    subsCount.refetch();
   }, [notify.operationJob?.jobId, notify.operationJob?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (notify.batchJob?.status !== "completed") return;
     subs.refetch();
-    subsCount.refetch();
   }, [notify.batchJob?.jobId, notify.batchJob?.status]); // eslint-disable-line react-hooks/exhaustive-deps
   const systemSettings = useQuery({
     queryKey: queryKeys.admin.settings,
@@ -224,22 +223,52 @@ function SubscriptionsContent() {
     if (selected.size === (subs.data?.length || 0)) setSelected(new Set());
     else setSelected(new Set((subs.data || []).map((s) => s.id)));
   };
+  const setSearchQuery = (next: string) => {
+    setInputVal(next);
+    updateParams({ q: next || null });
+  };
+  const filterComposer = useSearchBatchComposer({ value: inputVal, scope: "subscriptions", onChange: setSearchQuery });
+  const handleFilterChange = (mode: FilterMode) => {
+    const value = {
+      active: "active",
+      inactive: "inactive",
+      sync_on: "sync-enabled",
+      sync_off: "sync-disabled",
+      never_synced: "never-synced",
+    }[mode as Exclude<FilterMode, "all">];
+    filterComposer.mutate([
+      {
+        key: "is",
+        value: value || null,
+        operation: "replace-group",
+        replace_values: ["active", "inactive", "sync-enabled", "sync-disabled", "never-synced"],
+      },
+    ]);
+  };
 
   return (
     <PageShell>
       <PageHeader
         title={t("subscriptions.title")}
-        description={t("subscriptions.count").replace("{count}", String(subsCount.data?.count ?? 0))}
+        description={t("subscriptions.count").replace("{count}", String(subsQuery.data?.groups.subscriptions?.total ?? 0))}
         primaryAction={<button onClick={() => setShowCreate(true)} className="btn-primary">{t("subscriptions.new")}</button>}
       />
 
       {/* Toolbar */}
       <div data-page-primary-content>
       <FilterBar>
-        <input value={inputVal} onChange={(e) => { setInputVal(e.target.value); }} placeholder={t("subscriptions.search")} className="input w-56 py-1.5" />
+        <SmartSearchInput
+          value={inputVal}
+          onChange={setInputVal}
+          scope="subscriptions"
+          placeholder={t("subscriptions.search")}
+          ariaLabel={t("subscriptions.search")}
+          showTokens={false}
+          className="w-full sm:w-72"
+        />
         <div className="segmented-control max-w-full flex-wrap">
           {FILTERS.map((f) => (
-            <button key={f.key} onClick={() => updateParams({ filter: f.key === "all" ? null : f.key })}
+            <button key={f.key} onClick={() => handleFilterChange(f.key)}
               className={`segment ${filter === f.key ? "segment-active" : ""}`}>
               {f.label}
             </button>
@@ -285,7 +314,7 @@ function SubscriptionsContent() {
 
       {subs.data && subs.data.length > 0 && (
         <EntityList label={t("subscriptions.title")}>
-          {subs.data.map((s: Subscription, i: number) => {
+          {subs.data.map((s: SubscriptionSearchHit, i: number) => {
             const name = s.name || s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8);
             const creatorName = s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8);
             const decision = decisionBySub.get(s.id);

@@ -9,7 +9,7 @@ import { useT } from "@/lib/i18n";
 import { pollInterval, hasActiveTask } from "@/lib/polling";
 import { scheduleModeLabel, schedulerDecisionLabel, useI18nFormat } from "@/lib/i18n-format";
 import { useStaggeredEntrance } from "@/lib/motion";
-import { AdaptiveToolbar, FilterBar, PageHeader, PageShell, EmptyState, ErrorState, SourceBadge, StatCard, StatusBadge, PermissionGuard, SelectionBar, RowActionMenu } from "@/components";
+import { AdaptiveToolbar, FilterBar, PageHeader, PageShell, EmptyState, ErrorState, SourceBadge, StatCard, StatusBadge, PermissionGuard, SelectionBar, RowActionMenu, SmartSearchInput, useSearchComposer } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useNotifications } from "@/components/NotificationCenter";
 import { usePermissions } from "@/lib/usePermissions";
@@ -46,18 +46,6 @@ function QueueRow({ name, stats }: { name: string; stats: QueueBreakdown }) {
       <div className={`tabular text-xs ${stats.failed > 0 ? "font-semibold text-danger" : "text-muted"}`}><span className="mr-1 font-normal text-placeholder sm:hidden">{t("scheduler.queue_failed")}:</span>{stats.failed}</div>
     </div>
   );
-}
-
-function matchesDecisionFilter(item: SchedulerDecisionItem, filter: string): boolean {
-  if (!filter) return true;
-  if (filter === "due") return item.due;
-  if (filter === "blocked") return ["auth_unhealthy", "url_invalid", "unknown_provider", "provider_not_downloadable"].includes(item.reason);
-  if (filter === "waiting") return !item.due && ["interval_not_due", "outside_fixed_time_window", "already_attempted_in_window", "already_synced_in_window"].includes(item.reason);
-  if (filter === "manual") return item.reason === "manual_mode" || item.effective_mode === "manual";
-  if (filter === "auth") return !item.auth_healthy || item.reason === "auth_unhealthy";
-  if (filter === "url") return !item.url_valid || item.reason === "url_invalid";
-  if (filter === "disabled") return ["scheduler_disabled", "source_disabled", "subscription_inactive", "subscription_sync_disabled"].includes(item.reason);
-  return true;
 }
 
 function AdminOperationsSection() {
@@ -149,7 +137,6 @@ export default function SchedulerPage() {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
-  const filter = sp.get("filter") || "";
   const search = sp.get("q") || "";
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -165,6 +152,16 @@ export default function SchedulerPage() {
 
   const queue = useQuery({ queryKey: ["queue-stats"], queryFn: api.queueStats, refetchInterval: 15000 });
   const decisions = useQuery({ queryKey: queryKeys.schedulerDecisions, queryFn: api.schedulerDecisions, refetchInterval: 15000 });
+  const searchedDecisions = useQuery({
+    queryKey: ["search", "scheduler", search],
+    queryFn: () => api.search(search, 0, 200, "scheduler"),
+    refetchInterval: 15000,
+  });
+  const filterComposer = useSearchComposer({
+    value: search,
+    scope: "scheduler",
+    onChange: (query) => updateParams({ q: query || null }),
+  });
 
   const syncNow = useMutation({
     mutationFn: () => api.triggerSyncNow("force_eligible"),
@@ -240,15 +237,12 @@ export default function SchedulerPage() {
   });
 
   const items = decisions.data?.items || [];
-  const filteredItems = items.filter((item) => {
-    const q = search.trim().toLowerCase();
-    return matchesDecisionFilter(item, filter)
-      && (!q
-        || item.creator_name.toLowerCase().includes(q)
-        || item.source.toLowerCase().includes(q)
-        || (item.source_url || "").toLowerCase().includes(q)
-        || (item.source_creator_id || "").toLowerCase().includes(q));
-  });
+  const filteredItems = searchedDecisions.data?.groups.scheduler?.items || [];
+  const selectedModes = new Set(
+    searchedDecisions.data?.parsed.tokens
+      .filter((token) => token.kind === "qualifier" && token.key === "is" && !token.negated)
+      .map((token) => token.value) || [],
+  );
   const decisionEntrance = useStaggeredEntrance(filteredItems.map((item) => item.source_id));
   const queueRows = queue.data?.queues ? Object.entries(queue.data.queues) : [];
   const queueEntrance = useStaggeredEntrance(queueRows.map(([name]) => name));
@@ -264,14 +258,13 @@ export default function SchedulerPage() {
     ["blocked", t("scheduler.filter_blocked")],
     ["waiting", t("scheduler.filter_waiting")],
     ["manual", t("scheduler.filter_manual")],
-    ["auth", t("scheduler.filter_auth")],
-    ["url", t("scheduler.filter_url")],
     ["disabled", t("scheduler.filter_disabled")],
   ];
-  const lastUpdated = Math.max(queue.dataUpdatedAt || 0, decisions.dataUpdatedAt || 0);
+  const lastUpdated = Math.max(queue.dataUpdatedAt || 0, decisions.dataUpdatedAt || 0, searchedDecisions.dataUpdatedAt || 0);
   const refreshAll = () => {
     qc.invalidateQueries({ queryKey: ["queue-stats"] });
     qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
+    qc.invalidateQueries({ queryKey: ["search", "scheduler"] });
   };
 
   const handleSelectAll = () => {
@@ -318,19 +311,24 @@ export default function SchedulerPage() {
       </div>
 
       <FilterBar meta={t("scheduler.last_updated", { time: lastUpdated ? fmt.time(new Date(lastUpdated).toISOString()) : "—" })}>
-        <input
+        <SmartSearchInput
           value={search}
-          onChange={(e) => updateParams({ q: e.target.value || null })}
-          className="input w-full min-w-0 px-3 py-1.5 text-sm sm:w-auto sm:min-w-[240px]"
+          onChange={(query) => updateParams({ q: query || null })}
+          scope="scheduler"
+          className="w-full sm:min-w-[320px] sm:max-w-xl"
           placeholder={t("scheduler.search_placeholder")}
-          aria-label={t("scheduler.search_placeholder")}
         />
         <div className="segmented-control flex-wrap">
           {filterOptions.map(([key, label]) => (
             <button
               key={key}
-              onClick={() => updateParams({ filter: key || null })}
-              className={`segment ${filter === key ? "segment-active" : ""}`}
+              onClick={() => filterComposer.mutate({
+                key: "is",
+                value: key || null,
+                operation: "replace-group",
+                replace_values: ["due", "blocked", "waiting", "manual", "disabled"],
+              })}
+              className={`segment ${key ? selectedModes.has(key) : selectedModes.size === 0 ? "segment-active" : ""}`}
             >
               {label}
             </button>
@@ -390,7 +388,7 @@ export default function SchedulerPage() {
                 return (
                   <Link
                     key={name}
-                    href={`/admin/jobs?tab=${name === "imports" ? "imports" : "downloads"}${stats.failed ? "&status=failed" : ""}`}
+                    href={`/admin/jobs?tab=${name === "imports" ? "imports" : "downloads"}${stats.failed ? "&q=status%3Afailed" : ""}`}
                     className="rounded-full border border-warning/30 bg-warning-subtle px-2 py-1 text-warning hover:underline dark:bg-warning-subtle dark:text-warning"
                   >
                     {t("scheduler.queue_attention", { queue: name, failed: stats.failed, scheduled: stats.scheduled, started: stats.started })}
@@ -445,9 +443,9 @@ export default function SchedulerPage() {
             )}
         </SelectionBar>
 
-        {decisions.isLoading && <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-20 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div>}
-        {decisions.error && <ErrorState message={(decisions.error as Error).message} onRetry={() => decisions.refetch()} />}
-        {decisions.data && filteredItems.length === 0 && <EmptyState title={t("scheduler.no_sources")} description={t("scheduler.no_sources_desc")} />}
+        {searchedDecisions.isLoading && <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-20 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div>}
+        {searchedDecisions.error && <ErrorState message={(searchedDecisions.error as Error).message} onRetry={() => searchedDecisions.refetch()} />}
+        {searchedDecisions.data && filteredItems.length === 0 && <EmptyState title={t("scheduler.no_sources")} description={t("scheduler.no_sources_desc")} />}
         {filteredItems.length > 0 && (
           <div className="table-shell overflow-hidden">
             <div className="hidden grid-cols-[auto_1.2fr_1fr_1fr_1fr_1fr] gap-3 border-b border-border bg-subtle px-4 py-2 text-xs font-semibold uppercase text-muted lg:grid">
@@ -500,7 +498,7 @@ export default function SchedulerPage() {
                         label={t("common.more_actions")}
                         items={[
                           { label: t("scheduler.open_repository"), href: `/admin/repositories/${item.source_id}` },
-                          { label: t("scheduler.open_jobs"), href: `/admin/jobs?tab=downloads&subscription_source_id=${item.source_id}` },
+                          { label: t("scheduler.open_jobs"), href: `/admin/jobs?tab=downloads&q=${encodeURIComponent(`kind:download repo:${item.source_id}`)}` },
                           { label: t("scheduler.manage"), href: `/admin/subscriptions/${item.subscription_id}` },
                         ]}
                       />

@@ -115,7 +115,7 @@ function CommitCard({ commit, onRevert, reverting }: { commit: CurationCommit; o
                   <span className="flex shrink-0 gap-2">
                     {change.subject_type === "work" && <Link href={`/admin/works/${change.subject_id}`} className="text-accent hover:underline dark:text-accent">{t("common.open")}</Link>}
                     {change.subject_type === "repository" && <Link href={`/admin/repositories/${change.subject_id}`} className="text-accent hover:underline dark:text-accent">{t("curation.open_repository")}</Link>}
-                    {change.subject_type === "repository" && <Link href={`/admin/jobs?tab=downloads&subscription_source_id=${change.subject_id}`} className="text-accent hover:underline dark:text-accent">{t("curation.open_jobs")}</Link>}
+                    {change.subject_type === "repository" && <Link href={`/admin/jobs?tab=downloads&q=${encodeURIComponent(`kind:download repo:${change.subject_id}`)}`} className="text-accent hover:underline dark:text-accent">{t("curation.open_jobs")}</Link>}
                   </span>
                 </div>
                 {expanded && change.diff && Object.keys(change.diff).length > 0 && (
@@ -143,7 +143,13 @@ function CurationContent() {
   const subjectId = sp.get("subject_id") || undefined;
   const params = useMemo(() => ({ limit: 40, trigger: trigger || undefined, subject_type: subjectType, subject_id: subjectId, include_baseline: includeBaseline }), [trigger, subjectType, subjectId, includeBaseline]);
   const commits = useQuery({ queryKey: queryKeys.curation.commits(params), queryFn: () => api.listCurationCommits(params) });
-  const trash = useQuery({ queryKey: [...queryKeys.works.all, "trash-preview"], queryFn: () => api.listWorks(0, 12, { curation_visibility: "trashed" }) });
+  const trash = useQuery({
+    queryKey: [...queryKeys.works.all, "trash-preview"],
+    queryFn: async () => {
+      const result = await api.search("is:trashed sort:updated-desc", 0, 12, "works");
+      return result.groups.works || { total: 0, items: [] };
+    },
+  });
   const purgePreview = useQuery({ queryKey: [...queryKeys.curation.all, "purge-preview"], queryFn: () => api.previewPurge(), refetchInterval: 30000 });
   const suggestions = useQuery({ queryKey: queryKeys.curation.suggestions, queryFn: api.curationRuleSuggestions });
   const backfillStatus = useQuery({ queryKey: queryKeys.curation.backfillStatus, queryFn: api.getCurationBackfillStatus, refetchInterval: 30000 });

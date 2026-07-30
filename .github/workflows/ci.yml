@@ -87,6 +87,9 @@ jobs:
       - name: Check admin translations
         working-directory: admin-web
         run: npm run check:i18n
+      - name: Check unified search contract
+        working-directory: admin-web
+        run: npm run check:search-contract
       - name: Typecheck admin web
         working-directory: admin-web
         run: npm run typecheck
@@ -101,7 +104,7 @@ jobs:
         env:
           PLAYWRIGHT_MANAGE_SERVER: "1"
           PLAYWRIGHT_SERVER_MODE: "production"
-        run: npx playwright test tests/e2e/admin-shell.spec.ts --project=chromium --workers=1
+        run: npx playwright test tests/e2e/admin-shell.spec.ts tests/e2e/search.spec.ts --project=chromium --workers=1
 
   dependency-review:
     name: Dependency review

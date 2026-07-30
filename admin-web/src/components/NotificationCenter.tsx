@@ -484,7 +484,7 @@ export function NotificationBell() {
   // Recent tasks come from the same server feed as /admin/notifications.
   const recent = useQuery({
     queryKey: [...queryKeys.tasks.all, "bell-recent"],
-    queryFn: () => api.listTasks({ limit: 10 }),
+    queryFn: () => api.listTasks({ include_account: true, limit: 10 }),
     enabled: open,
     staleTime: 10_000,
   });

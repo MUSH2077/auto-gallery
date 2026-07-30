@@ -22,6 +22,7 @@ versions.
 | Topic | English | 简体中文 |
 |---|---|---|
 | System boundaries and data flow | [Architecture](architecture.md) | [架构](architecture.zh.md) |
+| Compound search syntax and API | [Search language / 搜索语言](search.md) | [Search language / 搜索语言](search.md) |
 | Local development and tests | [Development](development.md) | [开发](development.zh.md) |
 | Release process | [Release checklist](release-checklist.md) | — |
 | Contribution workflow | [Contributing](../CONTRIBUTING.md) | [贡献](../CONTRIBUTING.zh.md) |

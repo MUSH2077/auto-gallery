@@ -10,6 +10,7 @@ import { ConfirmDialog, ErrorState, EmptyState, Modal, PageShell, type SlideItem
 import { useSlideshow } from "@/lib/useSlideshow";
 import { usePermissions } from "@/lib/usePermissions";
 import { useI18nFormat } from "@/lib/i18n-format";
+import { quoteSearchValue } from "@/lib/search-query";
 
 const CATEGORIES = ["general", "artist", "series", "character", "meta"];
 
@@ -36,7 +37,15 @@ export default function TagDetailPage() {
 
   const works = useQuery({
     queryKey: ["tag-works", id, page],
-    queryFn: () => api.listWorks(page * limit, limit, { tag: tag.data?.normalized_name }),
+    queryFn: async () => {
+      const result = await api.search(
+        `type:work tag:${quoteSearchValue(tag.data?.normalized_name || "")}`,
+        page * limit,
+        limit,
+        "works",
+      );
+      return result.groups.works || { total: 0, items: [] };
+    },
     enabled: !!tag.data?.normalized_name,
   });
 

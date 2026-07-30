@@ -58,6 +58,32 @@ async def _seed_works(db):
     return sfw, nsfw
 
 
+def _mock_indexed_work_search(monkeypatch):
+    from sqlalchemy import select
+
+    from app.models import Work
+    from app.services.search import SearchService
+
+    async def search(self, query, offset=0, limit=20, *, force_sfw=False, **_kwargs):
+        stmt = select(Work).order_by(Work.created_at.desc())
+        if force_sfw:
+            stmt = stmt.where(Work.is_nsfw.is_(False))
+        rows = list((await self.db.execute(stmt.offset(offset).limit(limit))).scalars().all())
+        items = [{
+            "id": str(work.id),
+            "title": work.title,
+            "is_nsfw": work.is_nsfw,
+            "is_ai_generated": work.is_ai_generated,
+            "is_favorite": work.is_favorite,
+            "asset_count": 0,
+            "created_at": work.created_at.isoformat(),
+            "curation_visibility": "visible",
+        } for work in rows]
+        return {"groups": {"works": {"total": len(items), "items": items}}}
+
+    monkeypatch.setattr(SearchService, "search", search)
+
+
 def _headers(username):
     from app.auth import create_access_token
     token = create_access_token(username, must_change_password=False)
@@ -66,10 +92,11 @@ def _headers(username):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_restricted_user_sees_only_sfw_work_in_list():
+async def test_restricted_user_sees_only_sfw_work_in_list(monkeypatch):
     from app.database import async_session, engine
     from app.main import app
 
+    _mock_indexed_work_search(monkeypatch)
     transport = ASGITransport(app=app)
     try:
         async with async_session() as db:
@@ -118,10 +145,11 @@ async def test_restricted_user_gets_404_on_nsfw_work_detail():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_admin_sees_both_works_and_can_open_nsfw_detail():
+async def test_admin_sees_both_works_and_can_open_nsfw_detail(monkeypatch):
     from app.database import async_session, engine
     from app.main import app
 
+    _mock_indexed_work_search(monkeypatch)
     transport = ASGITransport(app=app)
     try:
         async with async_session() as db:
@@ -180,7 +208,8 @@ async def test_search_service_adds_nsfw_filter_when_force_sfw(monkeypatch):
 
     works_calls = fake.calls_by_index.get(search_module.WORKS_INDEX)
     assert works_calls, "expected the works index to be searched"
-    assert works_calls[-1].get("filter") == "is_nsfw = false"
+    assert 'visibility = "visible"' in works_calls[-1].get("filter")
+    assert "is_nsfw = false" in works_calls[-1].get("filter")
 
 
 @pytest.mark.asyncio
@@ -195,7 +224,7 @@ async def test_search_service_omits_nsfw_filter_by_default(monkeypatch):
 
     works_calls = fake.calls_by_index.get(search_module.WORKS_INDEX)
     assert works_calls, "expected the works index to be searched"
-    assert works_calls[-1].get("filter") is None
+    assert works_calls[-1].get("filter") == 'visibility = "visible"'
 
 
 @pytest.mark.integration

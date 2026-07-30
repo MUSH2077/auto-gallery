@@ -1,9 +1,9 @@
 "use client";
 import { useState, useMemo, useEffect, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys } from "@/lib/api";
+import { api, queryKeys, type SearchQualifierToken } from "@/lib/api";
 import { useStaggeredEntrance } from "@/lib/motion";
-import { PageHeader, PageSection, EmptyState, ErrorState, ConfirmDialog, Modal, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityList, EntityRow, RowActionMenu } from "@/components";
+import { PageHeader, PageSection, EmptyState, ErrorState, ConfirmDialog, Modal, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityList, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useT } from "@/lib/i18n";
@@ -75,20 +75,6 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
   );
 }
 
-function buildFilters(mode: FilterMode, search: string) {
-  const f: Record<string, string | boolean | undefined> = {};
-  if (search) f.search = search;
-  switch (mode) {
-    case "active": f.is_active = true; break;
-    case "inactive": f.is_active = false; break;
-    case "has_danbooru": f.has_danbooru = true; break;
-    case "has_subscription": f.has_subscription = true; break;
-    case "no_subscription": f.has_subscription = false; break;
-    case "favorites": f.is_favorite = true; break;
-  }
-  return f;
-}
-
 function CreatorsContent() {
   const t = useT();
   const fmt = useI18nFormat();
@@ -103,7 +89,6 @@ function CreatorsContent() {
 
   // Filter state derived from URL
   const search = sp.get("q") ?? "";
-  const filter = (sp.get("filter") as FilterMode) ?? "all";
   const page = Number(sp.get("p") ?? "0");
 
   const [showCreate, setShowCreate] = useState(false);
@@ -145,27 +130,46 @@ function CreatorsContent() {
     { key: "favorites", label: t("creators.filter_favorites") },
   ], [t]);
 
-  const filters = useMemo(() => buildFilters(filter, search), [filter, search]);
-
-  const creatorCount = useQuery({ queryKey: queryKeys.creators.count, queryFn: () => api.countCreators() });
-  const creators = useQuery({
-    queryKey: queryKeys.creators.list(page, limit, filters),
-    queryFn: () => api.listCreators(page * limit, limit, filters as any),
+  const creatorsQuery = useQuery({
+    queryKey: [...queryKeys.creators.all, "compound-search", page, search],
+    queryFn: () => api.search(search, page * limit, limit, "creators"),
     placeholderData: (previousData) => previousData,
   });
+  const creators = {
+    ...creatorsQuery,
+    data: creatorsQuery.data?.groups.creators
+      ? { items: creatorsQuery.data.groups.creators.items, total: creatorsQuery.data.groups.creators.total }
+      : undefined,
+  };
+  const qualifierTokens = (creatorsQuery.data?.parsed.tokens || []).filter(
+    (token): token is SearchQualifierToken => token.kind === "qualifier",
+  );
+  const isValues = qualifierTokens.filter((token) => token.key === "is" && !token.negated).map((token) => token.value);
+  const hasTokens = qualifierTokens.filter((token) => token.key === "has");
+  const filter: FilterMode = isValues.includes("active")
+    ? "active"
+    : isValues.includes("inactive")
+      ? "inactive"
+      : isValues.includes("favorite")
+        ? "favorites"
+        : hasTokens.some((token) => token.value === "danbooru" && !token.negated)
+          ? "has_danbooru"
+          : hasTokens.some((token) => token.value === "subscription" && token.negated)
+            ? "no_subscription"
+            : hasTokens.some((token) => token.value === "subscription" && !token.negated)
+              ? "has_subscription"
+              : "all";
   const creatorItems = creators.data?.items || [];
   const creatorEntrance = useStaggeredEntrance(creatorItems.map((creator) => creator.id));
 
   useEffect(() => {
     if (notify.operationJob?.kind !== "danbooru-import-all" || notify.operationJob.status !== "completed") return;
     creators.refetch();
-    creatorCount.refetch();
   }, [notify.operationJob?.jobId, notify.operationJob?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (notify.batchJob?.status !== "completed") return;
     creators.refetch();
-    creatorCount.refetch();
   }, [notify.batchJob?.jobId, notify.batchJob?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refreshCreatorViews = () => {
@@ -213,19 +217,34 @@ function CreatorsContent() {
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.creators.all }),
   });
 
-  const handleFilterChange = (mode: FilterMode) => {
-    updateParams({ filter: mode === "all" ? null : mode });
+  const setSearchQuery = (next: string) => {
+    setInputVal(next);
+    updateParams({ q: next || null });
   };
+  const filterComposer = useSearchBatchComposer({ value: inputVal, scope: "creators", onChange: setSearchQuery });
 
-  const handleSearchChange = (value: string) => {
-    setInputVal(value);
+  const handleFilterChange = (mode: FilterMode) => {
+    const composes: Parameters<typeof filterComposer.mutate>[0] = [
+      { key: "is", value: null, operation: "replace-group", replace_values: ["active", "inactive", "favorite"] },
+      { key: "has", value: null, operation: "replace-group", replace_values: ["danbooru", "subscription"] },
+    ];
+    if (mode === "active" || mode === "inactive") {
+      composes.push({ key: "is", value: mode, operation: "add" });
+    } else if (mode === "favorites") {
+      composes.push({ key: "is", value: "favorite", operation: "add" });
+    } else if (mode === "has_danbooru") {
+      composes.push({ key: "has", value: "danbooru", operation: "add" });
+    } else if (mode === "has_subscription" || mode === "no_subscription") {
+      composes.push({ key: "has", value: "subscription", negated: mode === "no_subscription", operation: "add" });
+    }
+    filterComposer.mutate(composes);
   };
 
   return (
     <PageShell>
       <PageHeader
         title={t("creators.title")}
-        description={t("creators.count").replace("{count}", String(creatorCount.data?.count ?? 0))}
+        description={t("creators.count").replace("{count}", String(creators.data?.total ?? 0))}
         secondaryActions={
           <button onClick={() => router.push("/admin/creators/duplicates")} className="btn-ghost">{t("creators.duplicates")}</button>
         }
@@ -235,7 +254,15 @@ function CreatorsContent() {
       {/* Toolbar */}
       <div data-page-primary-content>
       <FilterBar>
-        <input value={inputVal} onChange={(e) => handleSearchChange(e.target.value)} placeholder={t("creators.search")} className="input w-56 py-1.5" />
+        <SmartSearchInput
+          value={inputVal}
+          onChange={setInputVal}
+          scope="creators"
+          placeholder={t("creators.search")}
+          ariaLabel={t("creators.search")}
+          showTokens={false}
+          className="w-full sm:w-72"
+        />
         <div className="segmented-control max-w-full flex-wrap">
           {FILTERS.map((f) => (
             <button key={f.key} onClick={() => handleFilterChange(f.key)}

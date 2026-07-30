@@ -171,14 +171,14 @@ export function DashboardStatusStrip({
         <DashboardStatusLink
           label={t("dashboard.failed")}
           value={String(failedJobs)}
-          href="/admin/jobs?status=failed"
+          href="/admin/jobs?q=status%3Afailed"
           tone={failedJobs > 0 ? "danger" : "ok"}
           testId="dashboard-status-failed"
         />
         <DashboardStatusLink
           label={t("dashboard.stale")}
           value={String(data.queue.stale_count)}
-          href="/admin/jobs?status=stale"
+          href="/admin/jobs?q=status%3Astale"
           tone={data.queue.stale_count > 0 ? "warning" : "ok"}
           testId="dashboard-status-stale"
         />
@@ -514,14 +514,14 @@ export function AttentionBanner({
             ? t("dashboard.attention_storage")
             : t("dashboard.attention_scheduler");
   const href = data.attention.failed_import_count && !data.attention.failed_download_count
-    ? "/admin/jobs?tab=imports&status=failed"
+    ? "/admin/jobs?tab=imports&q=kind%3Aimport%20status%3Afailed"
     : data.attention.auth_unhealthy_count && !data.attention.failed_download_count
       ? "/admin/settings/auth-status"
       : data.attention.low_disk_warning && !data.attention.failed_download_count
         ? "/admin/data-mgmt"
         : data.attention.scheduler_disabled_warning && !data.attention.failed_download_count
           ? "/admin/scheduler"
-          : "/admin/jobs?status=failed";
+          : "/admin/jobs?q=status%3Afailed";
 
   return (
     <section className="flex flex-col gap-4 rounded-lg border border-danger/50 bg-danger-subtle p-4 sm:flex-row sm:items-center" aria-labelledby="dashboard-attention-heading">

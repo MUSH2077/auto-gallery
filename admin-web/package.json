@@ -11,6 +11,7 @@
     "build": "next build",
     "generate:api-types": "openapi-typescript http://localhost:8818/openapi.json -o src/lib/api/types.generated.ts",
     "check:i18n": "node scripts/check-i18n.mjs",
+    "check:search-contract": "node scripts/check-search-contract.mjs",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",
     "screenshots:readme": "UPDATE_README_SCREENSHOTS=1 PLAYWRIGHT_MANAGE_SERVER=1 playwright test tests/e2e/readme-screenshots.spec.ts --project=chromium --workers=1",

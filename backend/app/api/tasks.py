@@ -7,6 +7,8 @@ from app.auth import RequirePermission, get_admin_key
 from app.database import get_db
 from app.services.operations import get_operation_status, set_operation_status
 from app.services.redis_client import get_redis
+from app.services.search import SearchService
+from app.services.search_language import SearchQueryError, compose_search_query
 from app.services.task_engine import TaskEngine, TaskEngineError
 from app.services.tasks import TaskService, task_payload
 
@@ -20,21 +22,46 @@ async def list_tasks(
     operation_type: str | None = None,
     source: str | None = None,
     q: str | None = None,
+    include_account: bool = False,
     offset: int = 0,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
 ):
-    svc = TaskService(db)
-    total, tasks = await svc.list_tasks(
-        kind=kind,
-        status=status,
-        operation_type=operation_type,
-        source=source,
-        q=q,
-        offset=offset,
-        limit=limit,
-    )
-    return {"total": total, "items": [task_payload(task) for task in tasks]}
+    if include_account:
+        svc = TaskService(db)
+        total, tasks = await svc.list_tasks(
+            kind=kind,
+            status=status,
+            operation_type=operation_type,
+            source=source,
+            include_account=True,
+            offset=offset,
+            limit=limit,
+        )
+        return {"total": total, "items": [task_payload(task) for task in tasks]}
+    canonical = q or ""
+    for key, value in (("kind", kind), ("status", status), ("source", source)):
+        if value:
+            canonical = compose_search_query(
+                canonical,
+                "tasks",
+                key=key,
+                value=value,
+                operation="add",
+            ).canonical
+    if operation_type:
+        canonical = f'{canonical} "{operation_type}"'.strip()
+    try:
+        result = await SearchService(db).search(
+            canonical,
+            offset=offset,
+            limit=limit,
+            scope="tasks",
+            permissions={"tasks"},
+        )
+    except SearchQueryError as exc:
+        raise HTTPException(status_code=422, detail=exc.diagnostic.payload()) from exc
+    return result["groups"]["tasks"]
 
 
 @router.get("/{task_id}")

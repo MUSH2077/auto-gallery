@@ -717,7 +717,14 @@ export interface CreatorSearchHit {
   display_name: string;
   description?: string;
   is_active: boolean;
+  is_favorite?: boolean;
+  danbooru_artist_id?: number | null;
+  subscription_count?: number;
+  source_count?: number;
+  repository_count?: number;
+  last_synced_at?: string | null;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface TagSearchHit {
@@ -725,6 +732,143 @@ export interface TagSearchHit {
   normalized_name: string;
   category?: string;
   created_at: string;
+}
+
+export type SearchScope =
+  | "global"
+  | "works"
+  | "creators"
+  | "tags"
+  | "repositories"
+  | "subscriptions"
+  | "tasks"
+  | "scheduler"
+  | "creator-picker";
+
+export type SearchTarget =
+  | "works"
+  | "creators"
+  | "tags"
+  | "repositories"
+  | "subscriptions"
+  | "tasks"
+  | "scheduler";
+
+export interface SearchTextToken {
+  kind: "text";
+  value: string;
+  quoted: boolean;
+  start: number;
+  end: number;
+}
+
+export interface SearchQualifierToken {
+  kind: "qualifier";
+  key: string;
+  value: string;
+  negated: boolean;
+  quoted: boolean;
+  start: number;
+  end: number;
+}
+
+export type SearchToken = SearchTextToken | SearchQualifierToken;
+
+export interface SearchDiagnostic {
+  code: string;
+  message: string;
+  start: number;
+  end: number;
+  token: string;
+  suggestions: string[];
+}
+
+export interface SearchSuggestion {
+  kind: "qualifier" | "value" | "repair";
+  label: string;
+  description: string;
+  query: string;
+}
+
+export interface SearchParsedQuery {
+  raw: string;
+  canonical: string;
+  scope: SearchScope;
+  targets: SearchTarget[];
+  tokens: SearchToken[];
+}
+
+export interface RepositorySearchHit {
+  id: string;
+  name: string;
+  source: string;
+  source_creator_id?: string | null;
+  source_url?: string | null;
+  creator_id: string;
+  creator_name: string;
+  subscription_id: string;
+  subscription_name?: string | null;
+  is_enabled: boolean;
+  auth_healthy: boolean;
+  auth_status?: string | null;
+  last_synced_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SubscriptionSearchHit {
+  id: string;
+  name: string;
+  creator_id: string;
+  creator_name: string;
+  creator_display_name?: string | null;
+  is_active: boolean;
+  sync_enabled: boolean;
+  sync_interval_hours: number;
+  schedule_mode?: string | null;
+  scheduled_times?: string | null;
+  last_synced_at?: string | null;
+  source_count: number;
+  enabled_source_count: number;
+  running_job_count: number;
+  failed_job_count: number;
+  latest_job_id?: string | null;
+  latest_job_status?: string | null;
+  latest_job_created_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SearchGroups {
+  works?: { total: number; items: SearchWorkResult[] };
+  creators?: { total: number; items: CreatorSearchHit[] };
+  tags?: { total: number; items: (TagSearchHit & { usage_count?: number })[] };
+  repositories?: { total: number; items: RepositorySearchHit[] };
+  subscriptions?: { total: number; items: SubscriptionSearchHit[] };
+  tasks?: { total: number; items: TaskRun[] };
+  scheduler?: { total: number; items: SchedulerDecisionItem[] };
+}
+
+export interface SearchResponse {
+  query: string;
+  canonical_query: string;
+  parsed: SearchParsedQuery;
+  groups: SearchGroups;
+  total: number;
+  results: SearchWorkResult[];
+  creators: CreatorSearchHit[];
+  tags: (TagSearchHit & { usage_count?: number })[];
+  repositories: RepositorySearchHit[];
+  subscriptions: SubscriptionSearchHit[];
+}
+
+export interface SearchAssistResponse {
+  query: string;
+  canonical_query?: string | null;
+  parsed?: SearchParsedQuery | null;
+  diagnostics: SearchDiagnostic[];
+  suggestions: SearchSuggestion[];
+  catalog: { key: string; negatable: boolean; values: string[] }[];
 }
 
 export interface DedupSettings {

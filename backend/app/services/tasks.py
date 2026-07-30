@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import String, cast, func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.download_job import DownloadJob
@@ -294,7 +294,7 @@ class TaskService:
         status: str | None = None,
         operation_type: str | None = None,
         source: str | None = None,
-        q: str | None = None,
+        include_account: bool = False,
         offset: int = 0,
         limit: int = 50,
     ) -> tuple[int, list[TaskRun]]:
@@ -303,7 +303,7 @@ class TaskService:
         filters = []
         if kind and kind != "all":
             filters.append(TaskRun.kind == kind)
-        elif not kind:
+        elif not kind and not include_account:
             filters.append(TaskRun.kind != "account")
         if status:
             filters.append(TaskRun.status == normalize_task_status(status))
@@ -311,16 +311,6 @@ class TaskService:
             filters.append(TaskRun.operation_type == operation_type)
         if source:
             filters.append(TaskRun.source == source)
-        if q:
-            pattern = f"%{q.strip()}%"
-            filters.append(or_(
-                cast(TaskRun.id, String).ilike(pattern),
-                cast(TaskRun.subject_id, String).ilike(pattern),
-                TaskRun.title.ilike(pattern),
-                TaskRun.operation_type.ilike(pattern),
-                TaskRun.source_url.ilike(pattern),
-                TaskRun.error_log.ilike(pattern),
-            ))
         for item in filters:
             stmt = stmt.where(item)
             count_stmt = count_stmt.where(item)

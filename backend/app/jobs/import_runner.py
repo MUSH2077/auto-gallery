@@ -359,8 +359,9 @@ async def run_import_job(import_job_id: str):
         batch_count = 0
         BATCH_SIZE = 50
 
-        # Batch Meilisearch documents
-        meili_docs = []
+        # Search documents are always built centrally from authoritative rows.
+        # The importer only carries stable work identities across batches.
+        meili_work_ids: list[UUID] = []
 
         _process_started = monotonic()  # "process" stage timing (per-work loop)
         for src_work_id, items in groups.items():
@@ -627,7 +628,6 @@ async def run_import_job(import_job_id: str):
                 try:
                     tags = provider.parse_source_tags(first_raw)
                     seen = set()
-                    tag_names = []  # collected for Meilisearch, avoids re-query
                     for td in tags:
                         n = td.get("original_name", "").lower().strip()
                         if not n or n in seen:
@@ -644,7 +644,6 @@ async def run_import_job(import_job_id: str):
                                 WorkTag.tag_id == tag.id))).scalar_one_or_none():
                             db.add(WorkTag(work_id=work.id, tag_id=tag.id,
                                            source=provider.source_name))
-                            tag_names.append(n)
                         if not (await db.execute(select(WorkSourceTag).where(
                                 WorkSourceTag.work_source_id == ws.id,
                                 WorkSourceTag.tag_id == tag.id))).scalar_one_or_none():
@@ -662,7 +661,7 @@ async def run_import_job(import_job_id: str):
                     logger.warning("Failed to write metadata.json for %s/%s", provider.source_name, src_work_id, exc_info=True)
 
                 curation = CurationService(db)
-                curation_commit, curation_visibility = await curation.record_imported_work(
+                curation_commit, _curation_visibility = await curation.record_imported_work(
                     work,
                     creator_id=linked_creator_id,
                     repository_id=dj.subscription_source_id,
@@ -670,24 +669,7 @@ async def run_import_job(import_job_id: str):
                     source_work_id=src_work_id,
                 )
 
-                # Collect Meilisearch document for this work
-                # tag_names collected during tag processing above
-                asset_count = len(asset_files)
-                if curation_visibility == "visible":
-                    meili_docs.append({
-                        "id": str(work.id),
-                        "title": work.title or "",
-                        "description": (work.description or "")[:500],
-                        "creator_name": display_name or "",
-                        "is_nsfw": work.is_nsfw,
-                        "is_ai_generated": work.is_ai_generated,
-                        "source": provider.source_name,
-                        "tags": [str(tn) for tn in tag_names],
-                        "thumbnail_asset_id": str(work.thumbnail_asset_id) if work.thumbnail_asset_id else None,
-                        "asset_count": asset_count,
-                        "posted_at": _posted_at_json(work.posted_at),
-                        "created_at": work.created_at.isoformat() if work.created_at else None,
-                    })
+                meili_work_ids.append(work.id)
 
                 # Commit work and batch Meilisearch periodically
                 await db.commit()
@@ -725,14 +707,14 @@ async def run_import_job(import_job_id: str):
                             exc_info=True,
                         )
                 batch_count += 1
-                if batch_count >= BATCH_SIZE and meili_docs:
+                if batch_count >= BATCH_SIZE and meili_work_ids:
                     try:
                         from app.services.search import SearchService
                         svc = SearchService(db)
-                        await svc._batch_index_works(meili_docs)
+                        await svc.index_works(meili_work_ids)
                     except Exception:
                         logger.warning("Batch Meilisearch index failed", exc_info=True)
-                    meili_docs = []
+                    meili_work_ids = []
                     batch_count = 0
 
             # Keep source metadata as an auditable, restart-safe input. The
@@ -768,14 +750,20 @@ async def run_import_job(import_job_id: str):
                 logger.debug("Failed to check image files in %s", work_dir, exc_info=True)
 
         # Flush remaining Meilisearch batch
-        if meili_docs:
+        if meili_work_ids:
             async with async_session() as db:
                 try:
                     from app.services.search import SearchService
                     svc = SearchService(db)
-                    await svc._batch_index_works(meili_docs)
+                    await svc.index_works(meili_work_ids)
                 except Exception:
                     logger.warning("Failed to flush remaining Meilisearch batch", exc_info=True)
+        async with async_session() as db:
+            try:
+                from app.services.search import SearchService
+                await SearchService(db).refresh_reference_indexes()
+            except Exception:
+                logger.warning("Failed to refresh reference search indexes", exc_info=True)
 
         # Stop control listener + heartbeat
         heartbeat.stop()

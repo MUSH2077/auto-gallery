@@ -242,7 +242,7 @@ test("dashboard links, refresh, job navigation, and retry controls work", async 
 
   await expect(page.getByRole("heading", { name: "Recently added works" })).toBeVisible();
   await expect(page.getByTestId("dashboard-status-scheduler")).toHaveAttribute("href", "/admin/scheduler");
-  await expect(page.getByTestId("dashboard-status-failed")).toHaveAttribute("href", "/admin/jobs?status=failed");
+  await expect(page.getByTestId("dashboard-status-failed")).toHaveAttribute("href", "/admin/jobs?q=status%3Afailed");
   await expect(page.getByRole("link", { name: "Open Harbor Light Study" })).toHaveAttribute("href", "/admin/works/work-harbor");
   await expect(page.locator('a[href*="job=download-failed"]').first()).toHaveAttribute("href", /job=download-failed/);
 

@@ -10,6 +10,7 @@ import { Breadcrumb } from "@/components/Breadcrumb";
 import { usePermissions } from "@/lib/usePermissions";
 import { FullImageLightbox, ArrowIcon, DisclosurePanel, type AssetData } from "@/components/WorkViewerParts";
 import { useI18nFormat } from "@/lib/i18n-format";
+import { quoteSearchValue, searchUrl } from "@/lib/search-query";
 import { Star } from "lucide-react";
 
 interface WorkSourceData {
@@ -229,7 +230,7 @@ export default function WorkDetailPage() {
         title={w.title || t("work_detail.untitled")}
         description={
           <span className="flex flex-wrap items-center gap-3">
-            {primaryWs && <SourceBadge source={primaryWs.source} href={`/admin/works?source=${primaryWs.source}`} />}
+            {primaryWs && <SourceBadge source={primaryWs.source} href={searchUrl("/admin/works", `source:${primaryWs.source}`)} />}
             {w.creator_name && w.creator_id && (
               <span className="text-sm">
                 {t("work_detail.by")}{" "}
@@ -259,7 +260,7 @@ export default function WorkDetailPage() {
               {workTags.data && workTags.data.length > 0 && (
                 <div className="mb-3 flex flex-wrap gap-2">
                   {workTags.data.map((tag) => (
-                    <button key={tag.id} onClick={() => router.push(`/admin/tags/${tag.id}`)}
+                    <button key={tag.id} onClick={() => router.push(searchUrl("/admin/works", `type:work tag:${quoteSearchValue(tag.normalized_name)}`))}
                       className="badge border-accent/30 bg-accent-subtle text-accent hover:border-accent"
                       title={t("work_detail.search_tag", { tag: `${tag.normalized_name}${tag.category ? ` (${tag.category})` : ""}` })}>
                       {tag.normalized_name}
@@ -271,7 +272,7 @@ export default function WorkDetailPage() {
               {rawTags.length > 0 && (
                 <div className="flex flex-wrap gap-2">
                   {rawTags.map((tag, i) => (
-                    <button key={`${tag}-${i}`} onClick={() => router.push(`/admin/search?q=${encodeURIComponent(tag)}`)}
+                    <button key={`${tag}-${i}`} onClick={() => router.push(searchUrl("/admin/works", `type:work tag:${quoteSearchValue(tag)}`))}
                       className="badge border-border bg-subtle text-muted hover:border-accent hover:text-accent"
                       title={t("work_detail.search_source_tag", { tag })}>
                       {tag}
@@ -392,7 +393,10 @@ function MoreFromCreator({ creatorId, currentWorkId }: { creatorId: string; curr
   const t = useT();
   const works = useQuery({
     queryKey: ["more-from-creator", creatorId],
-    queryFn: () => api.listWorks(0, 6, { creator_id: creatorId, sort_by: "posted_at", sort_order: "desc" }),
+    queryFn: async () => {
+      const result = await api.search(`creator:${creatorId} sort:posted-desc`, 0, 6, "works");
+      return result.groups.works || { total: 0, items: [] };
+    },
   });
   if (works.isLoading || !works.data?.items?.length) return null;
   const others = works.data.items.filter(w => w.id !== currentWorkId).slice(0, 5);
@@ -410,7 +414,7 @@ function MoreFromCreator({ creatorId, currentWorkId }: { creatorId: string; curr
           </Link>
         ))}
       </div>
-      <Link href={`/admin/works?creator=${creatorId}`} className="text-xs text-accent hover:underline mt-2 inline-block">
+      <Link href={searchUrl("/admin/works", `creator:${creatorId} sort:posted-desc`)} className="text-xs text-accent hover:underline mt-2 inline-block">
         {t("work_detail.view_all_from_creator")}
       </Link>
     </div>

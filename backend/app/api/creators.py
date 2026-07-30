@@ -23,6 +23,8 @@ from app.services.cache import (
 )
 from app.services.curation import CurationService
 from app.services.gitllery import project_commit_safe
+from app.services.search import SearchBackendUnavailable, SearchService
+from app.services.search_language import SearchQueryError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[RequirePermission("library")])
@@ -49,29 +51,29 @@ async def count_creators(db: AsyncSession = Depends(get_db)):
 @router.get("", response_model=CreatorListResponse)
 async def list_creators(
     offset: int = 0, limit: int = 50,
-    search: str | None = None,
-    is_active: bool | None = None,
-    has_danbooru: bool | None = None,
-    has_subscription: bool | None = None,
-    is_favorite: bool | None = None,
+    q: str = "",
     db: AsyncSession = Depends(get_db),
 ):
-    ck = cache_key("creators:list", offset=offset, limit=limit,
-                   search=search, is_active=is_active,
-                   has_danbooru=has_danbooru,
-                   has_subscription=has_subscription,
-                   is_favorite=is_favorite)
-    cached = cache_get(ck)
-    if cached is not None:
-        return cached
-    svc = CreatorService(db)
-    data = await svc.list_creators(offset, limit,
-                                   search=search, is_active=is_active,
-                                   has_danbooru=has_danbooru,
-                                   has_subscription=has_subscription,
-                                   is_favorite=is_favorite)
-    cache_set(ck, data, TTL["creators:list"])
-    return data
+    try:
+        result = await SearchService(db).search(
+            q,
+            offset,
+            limit,
+            scope="creators",
+            permissions={"library"},
+        )
+    except SearchQueryError as exc:
+        raise HTTPException(status_code=422, detail=exc.diagnostic.payload()) from exc
+    except SearchBackendUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "search_unavailable", "message": str(exc)},
+        ) from exc
+    group = result["groups"]["creators"]
+    return {
+        "total": group["total"],
+        "items": [CreatorRead.model_validate(item) for item in group["items"]],
+    }
 
 
 # ── Batch Operations ──
@@ -82,6 +84,7 @@ async def batch_delete_creators(data: dict, db: AsyncSession = Depends(get_db)):
     ids = data.get("ids", [])
     svc = CreatorService(db)
     results = []
+    changed = False
     for cid in ids:
         try:
             creator_id = UUID(cid)
@@ -90,13 +93,17 @@ async def batch_delete_creators(data: dict, db: AsyncSession = Depends(get_db)):
             continue
         try:
             await svc.delete_creator(creator_id)
+            await SearchService(db).delete_creator(str(creator_id))
             results.append({"id": cid, "status": "deleted"})
+            changed = True
         except ValueError:
             results.append({"id": cid, "status": "error", "error": "not_found"})
         except Exception:
             logger.warning("batch_delete_creators failed for %s", cid, exc_info=True)
             results.append({"id": cid, "status": "error", "error": "internal_error"})
     invalidate_creator_subscription_caches(include_works=True)
+    if changed:
+        await SearchService(db).refresh_reference_indexes()
     return {"status": "ok", "results": results}
 
 
@@ -124,6 +131,7 @@ async def merge_creators_endpoint(data: dict, db: AsyncSession = Depends(get_db)
         raise HTTPException(status_code=400, detail="Invalid target_id")
     source_ids = data.get("source_ids", [])
     results = []
+    changed = False
     for source_id_str in source_ids:
         try:
             source_id = UUID(source_id_str)
@@ -136,7 +144,9 @@ async def merge_creators_endpoint(data: dict, db: AsyncSession = Depends(get_db)
             continue
         try:
             stats = await merge_creators(db, target_id, source_id)
+            await SearchService(db).delete_creator(str(source_id))
             results.append({"source_id": source_id_str, "status": "merged", **stats})
+            changed = True
         except ValueError:
             results.append({
                 "source_id": source_id_str,
@@ -156,6 +166,8 @@ async def merge_creators_endpoint(data: dict, db: AsyncSession = Depends(get_db)
                 "error": "merge_failed",
             })
     invalidate_creator_subscription_caches(include_works=True)
+    if changed:
+        await SearchService(db).refresh_reference_indexes()
     return {"status": "ok", "results": results}
 
 
@@ -176,6 +188,7 @@ async def create_creator(data: CreatorCreate, db: AsyncSession = Depends(get_db)
     svc = CreatorService(db)
     result = await svc.create_creator(data.model_dump())
     invalidate_api_caches("creators")
+    await SearchService(db).refresh_reference_indexes()
     return result
 
 
@@ -185,6 +198,7 @@ async def update_creator(creator_id: UUID, data: CreatorUpdate, db: AsyncSession
     try:
         result = await svc.update_creator(creator_id, data.model_dump(exclude_none=True))
         invalidate_api_caches("creators")
+        await SearchService(db).refresh_reference_indexes()
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -234,6 +248,8 @@ async def delete_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
     try:
         await svc.delete_creator(creator_id)
         invalidate_creator_subscription_caches(include_works=True)
+        await SearchService(db).delete_creator(str(creator_id))
+        await SearchService(db).refresh_reference_indexes()
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -244,6 +260,7 @@ async def toggle_creator_favorite(creator_id: UUID, db: AsyncSession = Depends(g
     try:
         result = await svc.toggle_favorite(creator_id)
         invalidate_api_caches("creators")
+        await SearchService(db).refresh_reference_indexes()
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

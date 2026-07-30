@@ -458,11 +458,13 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 - `POST /merge` — 合并两个标签
 
 ### `/api/v1/search`
-基于 Meilisearch 的全文搜索和索引管理。
+统一复合搜索：图库实体由 Meilisearch 执行，运维集合由 SQL 执行。
 
 端点包括：
-- `GET /` — 搜索作品、创作者、标签
-- `POST /reindex` — 触发 Meilisearch 全量重建索引
+- `GET /` — 分组搜索作品、创作者、标签、仓库、订阅、任务或调度决策
+- `POST /assist` — 服务端解析、诊断、建议与查询组合
+
+语法详见[复合搜索语言](search.md)。全量索引重建由数据管理 API 排队执行。
 
 ### `/api/v1/sources`
 来源 provider 列表和能力。

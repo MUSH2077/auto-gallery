@@ -290,7 +290,7 @@ export function JobDetailDrawer({
               {imports.data?.length ? (
                 <div className="space-y-1">
                   {imports.data.map((job: ImportJob) => (
-                    <Link key={job.id} href={`/admin/jobs?tab=imports&download_job_id=${dl.id}&import_job=${job.id}`} className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-sm hover:bg-subtle dark:border-border dark:hover:bg-subtle">
+                    <Link key={job.id} href={`/admin/jobs?tab=imports&q=${encodeURIComponent(`kind:import "${dl.id}"`)}&import_job=${job.id}`} className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-sm hover:bg-subtle dark:border-border dark:hover:bg-subtle">
                       <span className="font-mono text-xs">{shortId(job.id)}</span>
                       <span>{statusLabel(t, job.status)}</span>
                     </Link>

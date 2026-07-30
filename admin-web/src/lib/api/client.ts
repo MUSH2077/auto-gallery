@@ -2,9 +2,16 @@ const BASE = "";
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  detail?: unknown;
+  code?: string;
+
+  constructor(status: number, message: string, detail?: unknown) {
     super(message);
     this.status = status;
+    this.detail = detail;
+    if (detail && typeof detail === "object" && "code" in detail && typeof detail.code === "string") {
+      this.code = detail.code;
+    }
   }
 }
 
@@ -47,7 +54,13 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
   if (res.status === 204) return undefined as T;
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, body.detail || `${res.status} ${res.statusText}`);
+    const detail = body.detail;
+    const message = typeof detail === "string"
+      ? detail
+      : detail && typeof detail === "object" && typeof detail.message === "string"
+        ? detail.message
+        : `${res.status} ${res.statusText}`;
+    throw new ApiError(res.status, message, detail);
   }
   return res.json();
 }

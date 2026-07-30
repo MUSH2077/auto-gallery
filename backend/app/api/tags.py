@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.schemas.tag import TagRead, TagCreate, TagUpdate, TagDetail, CreatorRef
 from app.repositories.tag import TagRepository
+from app.services.search import SearchService
 from app.models.tag import Tag
 from app.models.work_tag import WorkTag
 from app.models.work_source_tag import WorkSourceTag
@@ -81,6 +82,7 @@ async def create_tag(data: TagCreate, db: AsyncSession = Depends(get_db)):
     repo = TagRepository(db)
     tag = await repo.create(data.model_dump())
     await db.commit()
+    await SearchService(db).refresh_reference_indexes()
     return tag
 
 
@@ -92,6 +94,7 @@ async def update_tag(tag_id: UUID, data: TagUpdate, db: AsyncSession = Depends(g
         raise HTTPException(status_code=404, detail="Tag not found")
     tag = await repo.update(tag, data.model_dump(exclude_unset=True))
     await db.commit()
+    await SearchService(db).refresh_reference_indexes()
     return tag
 
 
@@ -140,6 +143,8 @@ async def merge_tags(data: dict, db: AsyncSession = Depends(get_db)):
         await db.delete(source_tag)
 
     await db.commit()
+    await SearchService(db).delete_tag(str(source_uuid))
+    await SearchService(db).refresh_reference_indexes()
     return {"status": "ok", "message": "Tags merged"}
 
 
@@ -157,4 +162,6 @@ async def delete_tag(tag_id: UUID, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Tag not found")
     await repo.delete(tag)
     await db.commit()
+    await SearchService(db).delete_tag(str(tag_id))
+    await SearchService(db).refresh_reference_indexes()
     return {"status": "ok"}

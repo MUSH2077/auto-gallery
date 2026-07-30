@@ -355,6 +355,63 @@ async function installFixtureRoutes(context: BrowserContext) {
       await route.fulfill({ json: { items: [], total: 0, offset: 0, limit: 50 } });
     } else if (path === "/api/v1/import-jobs") {
       await route.fulfill({ json: { items: [], total: 0, offset: 0, limit: 50 } });
+    } else if (path === "/api/v1/search/assist") {
+      const body = route.request().postDataJSON() as {
+        before_cursor?: string;
+        after_cursor?: string;
+      };
+      const query = `${body.before_cursor || ""}${body.after_cursor || ""}`.trim();
+      await route.fulfill({
+        json: {
+          query,
+          canonical_query: query,
+          parsed: {
+            raw: query,
+            canonical: query,
+            scope: "global",
+            targets: ["works", "creators", "tags", "repositories", "subscriptions"],
+            tokens: [],
+          },
+          diagnostics: [],
+          suggestions: [],
+          catalog: [],
+        },
+      });
+    } else if (path === "/api/v1/search") {
+      const scope = url.searchParams.get("scope") || "global";
+      const target = scope === "works" || scope === "creator-picker"
+        ? (scope === "creator-picker" ? "creators" : "works")
+        : scope;
+      const groups = scope === "global"
+        ? {
+            works: { total: 0, items: [] },
+            creators: { total: 0, items: [] },
+            tags: { total: 0, items: [] },
+            repositories: { total: 0, items: [] },
+            subscriptions: { total: 0, items: [] },
+          }
+        : { [target]: { total: 0, items: [] } };
+      const query = url.searchParams.get("q") || "";
+      await route.fulfill({
+        json: {
+          query,
+          canonical_query: query,
+          parsed: {
+            raw: query,
+            canonical: query,
+            scope,
+            targets: Object.keys(groups),
+            tokens: [],
+          },
+          groups,
+          total: 0,
+          results: [],
+          creators: [],
+          tags: [],
+          repositories: [],
+          subscriptions: [],
+        },
+      });
     } else if (path === "/api/v1/works") {
       await route.fulfill({ json: { items: [], total: 0 } });
     } else if (path === "/api/v1/creators") {
@@ -623,14 +680,15 @@ test("desktop sidebar, contextual navigation, and command palette remain usable"
   await page.keyboard.press("Control+k");
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  await dialog.getByRole("textbox").fill("creator");
+  const commandSearch = dialog.getByRole("combobox", { name: "Search works..." });
+  await commandSearch.fill("creator");
   await expect(dialog.getByRole("option").first()).toBeVisible();
-  await dialog.getByRole("textbox").fill("merge candidate");
+  await commandSearch.fill("merge candidate");
   await expect(dialog.getByRole("option", { name: /^Asset Deduplication\b/ })).toBeVisible();
   await expect(dialog.getByRole("option", { name: /^Merge Candidates\b/ })).toHaveCount(0);
-  await dialog.getByRole("textbox").fill("source provider");
+  await commandSearch.fill("source provider");
   await expect(dialog.getByRole("option", { name: /^System & Sources\b/ })).toBeVisible();
-  await dialog.getByRole("textbox").fill("notifications");
+  await commandSearch.fill("notifications");
   await expect(dialog.getByRole("option", { name: /^Notifications\b/ })).toHaveCount(0);
   await page.screenshot({ path: "/tmp/auto-gallery-command-palette.png", fullPage: false });
   await page.keyboard.press("Escape");

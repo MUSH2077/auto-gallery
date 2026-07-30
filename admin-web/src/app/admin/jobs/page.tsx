@@ -5,8 +5,8 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { useT, type TFunction } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, JobProgress, queryKeys, TaskRun } from "@/lib/api";
-import { PageHeader, PageShell, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, StatCard, PermissionGuard, CompactUrl, ErrorSummary, OverflowText, RowActionMenu } from "@/components";
+import { api, JobProgress, queryKeys, TaskRun, type SearchToken } from "@/lib/api";
+import { PageHeader, PageShell, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, StatCard, PermissionGuard, CompactUrl, ErrorSummary, OverflowText, RowActionMenu, SmartSearchInput } from "@/components";
 import { TaskDetailDrawer, JobDetailDrawer, shortId } from "@/components/JobDrawers";
 import { useJobWebSocket } from "@/lib/useWebSocket";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
@@ -303,16 +303,14 @@ function JobsFilterPanel({
   activeFilterCount,
   lastUpdatedLabel,
   search,
-  status,
-  dlSource,
+  tokens,
   subscriptionSourceId,
   downloadJobId,
-  dlSort,
-  dlOrder,
   selectAll,
   statusOptions,
   onTabChange,
-  onUpdateParams,
+  onQueryChange,
+  onCompose,
   onClearFilters,
   onSelectAll,
 }: {
@@ -320,20 +318,29 @@ function JobsFilterPanel({
   activeFilterCount: number;
   lastUpdatedLabel: string;
   search: string;
-  status: string;
-  dlSource: string;
+  tokens: SearchToken[];
   subscriptionSourceId: string;
   downloadJobId: string;
-  dlSort: string;
-  dlOrder: string;
   selectAll: boolean;
   statusOptions: string[];
   onTabChange: (tab: JobsTab) => void;
-  onUpdateParams: (updates: Record<string, string | null>) => void;
+  onQueryChange: (query: string) => void;
+  onCompose: (edit: {
+    key: string;
+    value: string | null;
+    operation: "set" | "replace-group";
+    replace_values?: string[];
+  }) => void;
   onClearFilters: () => void;
   onSelectAll: () => void;
 }) {
   const t = useT();
+  const qualifierValue = (key: string) => tokens.find(
+    (token) => token.kind === "qualifier" && token.key === key && !token.negated,
+  )?.value || "";
+  const status = qualifierValue("status");
+  const dlSource = qualifierValue("source");
+  const sort = qualifierValue("sort") || "created-desc";
   return (
     <div className="mb-4 flex flex-col gap-2 rounded-md border border-border bg-surface p-2.5 dark:border-border dark:bg-surface">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -346,13 +353,19 @@ function JobsFilterPanel({
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <input value={search} onChange={(e) => onUpdateParams({ q: e.target.value || null })} className="input h-9 min-h-9 min-w-[220px] px-3 py-0 text-xs" placeholder={t("jobs.search_placeholder")} aria-label={t("jobs.search_placeholder")} />
-        <select aria-label={t("jobs.filter_all_status")} value={status} onChange={(e) => onUpdateParams({ status: e.target.value || null })} className="select h-9 min-h-9 px-2 py-0 text-xs">
+        <SmartSearchInput
+          value={search}
+          onChange={onQueryChange}
+          scope="tasks"
+          className="w-full sm:min-w-[320px] sm:max-w-xl"
+          placeholder={t("jobs.search_placeholder")}
+        />
+        <select aria-label={t("jobs.filter_all_status")} value={status} onChange={(e) => onCompose({ key: "status", value: e.target.value || null, operation: "set" })} className="select h-11 min-h-11 px-2 py-0 text-xs">
           <option value="">{t("jobs.filter_all_status")}</option>
           {statusOptions.filter(Boolean).map((s) => <option key={s} value={s}>{statusLabel(t, s)}</option>)}
         </select>
         {activeTab !== "imports" && activeTab !== "admin" && (
-          <select aria-label={t("jobs.filter_all_source")} value={dlSource} onChange={(e) => onUpdateParams({ source: e.target.value || null })} className="select h-9 min-h-9 px-2 py-0 text-xs">
+          <select aria-label={t("jobs.filter_all_source")} value={dlSource} onChange={(e) => onCompose({ key: "source", value: e.target.value || null, operation: "set" })} className="select h-11 min-h-11 px-2 py-0 text-xs">
             <option value="">{t("jobs.filter_all_source")}</option>
             {SOURCE_OPTIONS.filter(Boolean).map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
@@ -360,14 +373,13 @@ function JobsFilterPanel({
         {subscriptionSourceId && <span className="rounded-md border border-border px-2 py-1 text-xs font-mono dark:border-border">{t("jobs.repository")} {shortId(subscriptionSourceId)}</span>}
         {downloadJobId && <span className="rounded-md border border-border px-2 py-1 text-xs font-mono dark:border-border">{t("jobs.download_job")} {shortId(downloadJobId)}</span>}
         {activeTab === "downloads" && (
-          <select aria-label={t("jobs.sort_label")} value={`${dlSort}-${dlOrder}`} onChange={(e) => { const [k, o] = e.target.value.split("-"); onUpdateParams({ sort: k === "created_at" && o === "desc" ? null : k, order: o === "desc" ? null : o }); }} className="select h-9 min-h-9 px-2 py-0 text-xs">
-            <option value="created_at-desc">{t("jobs.sort_newest")}</option>
-            <option value="created_at-asc">{t("jobs.sort_oldest")}</option>
-            <option value="status-asc">{t("jobs.sort_status")}</option>
-            <option value="source-asc">{t("jobs.sort_source")}</option>
+          <select aria-label={t("jobs.sort_label")} value={sort} onChange={(e) => onCompose({ key: "sort", value: e.target.value, operation: "set" })} className="select h-11 min-h-11 px-2 py-0 text-xs">
+            <option value="created-desc">{t("jobs.sort_newest")}</option>
+            <option value="created-asc">{t("jobs.sort_oldest")}</option>
+            <option value="updated-desc">{t("jobs.sort_updated")}</option>
           </select>
         )}
-        <button onClick={onSelectAll} className="inline-flex h-9 items-center justify-center rounded-md border border-border bg-surface px-3 text-xs font-medium text-fg hover:bg-subtle">{selectAll ? t("common.deselect_all") : t("common.select_all")}</button>
+        <button onClick={onSelectAll} className="inline-flex h-11 items-center justify-center rounded-md border border-border bg-surface px-3 text-xs font-medium text-fg hover:bg-subtle">{selectAll ? t("common.deselect_all") : t("common.select_all")}</button>
       </div>
     </div>
   );
@@ -391,7 +403,7 @@ function JobsBatchToolbar({
   activeTab: JobsTab;
   selectedCount: number;
   onRefresh: () => void;
-  onApply: (action: BatchAction, filters: { source?: string; status?: string }) => void;
+  onApply: (action: BatchAction) => void;
   onClear: (statuses: string[]) => void;
   onKillStuck: () => void;
   onRetryAllFailed: () => void;
@@ -403,20 +415,11 @@ function JobsBatchToolbar({
   isRetryingAll: boolean;
 }) {
   const t = useT();
-  const [source, setSource] = useState("");
-  const [status, setStatus] = useState("");
   const [action, setAction] = useState<BatchAction | "">("");
-  const [filterBatchOpen, setFilterBatchOpen] = useState(false);
   const actions = BATCH_ACTIONS_BY_TAB[activeTab];
-  const statusOptions = activeTab === "imports" ? IMPORT_STATUS_OPTIONS : activeTab === "downloads" ? STATUS_OPTIONS : TASK_STATUS_OPTIONS;
-  const canFilterBatch = activeTab === "downloads" || activeTab === "imports";
-  const hasSourceFilter = activeTab === "downloads";
-  const showBatchControls = selectedCount > 0 || filterBatchOpen;
+  const showBatchControls = selectedCount > 0;
 
   useEffect(() => {
-    setSource("");
-    setStatus("");
-    setFilterBatchOpen(false);
     setAction((current) => current && !BATCH_ACTIONS_BY_TAB[activeTab].includes(current) ? "" : current);
   }, [activeTab]);
 
@@ -441,16 +444,6 @@ function JobsBatchToolbar({
         </span>
       )}
         <span className="min-w-2 flex-1" />
-        {selectedCount === 0 && canFilterBatch && (
-          <button
-            type="button"
-            onClick={() => setFilterBatchOpen((open) => !open)}
-            className="btn-ghost text-xs"
-            aria-expanded={filterBatchOpen}
-          >
-            {t("jobs.batch_filter_scope")}
-          </button>
-        )}
         {activeTab === "downloads" && (
           <RowActionMenu
             label={t("jobs.maintenance_actions")}
@@ -466,22 +459,8 @@ function JobsBatchToolbar({
       {showBatchControls && (
         <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 border-t border-border pt-2">
           <span className="badge shrink-0">
-            {selectedCount > 0
-              ? t("common.selected_count", { count: selectedCount })
-              : t("jobs.current_filter_scope")}
+            {t("common.selected_count", { count: selectedCount })}
           </span>
-          {hasSourceFilter && selectedCount === 0 && (
-            <select value={source} onChange={(e) => setSource(e.target.value)} className="select h-9 min-h-9 px-2 py-0 text-xs" aria-label={t("jobs.filter_all_source")}>
-              <option value="">{t("jobs.filter_all_source")}</option>
-              {SOURCE_OPTIONS.filter(Boolean).map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          )}
-          {canFilterBatch && selectedCount === 0 && (
-            <select value={status} onChange={(e) => setStatus(e.target.value)} className="select h-9 min-h-9 px-2 py-0 text-xs" aria-label={t("jobs.filter_all_status")}>
-              <option value="">{t("jobs.filter_all_status")}</option>
-              {statusOptions.filter(Boolean).map((s) => <option key={s} value={s}>{statusLabel(t, s)}</option>)}
-            </select>
-          )}
           <select value={action} onChange={(e) => setAction(e.target.value as BatchAction | "")} className="select h-9 min-h-9 min-w-0 px-2 py-0 text-xs" aria-label={t("jobs.batch_action")}>
             <option value="">{t("jobs.batch_action_placeholder")}</option>
             {actions.map((item) => (
@@ -491,11 +470,7 @@ function JobsBatchToolbar({
           <button
             onClick={() => {
               if (!action) return;
-              if (
-                selectedCount === 0
-                && !confirm(t("jobs.batch_filter_confirm"))
-              ) return;
-              onApply(action, { source, status });
+              onApply(action);
             }}
             disabled={!action || isApplying}
             className="btn-primary text-xs"
@@ -920,13 +895,9 @@ function JobsContent() {
 
   const tabParam = sp.get("tab");
   const activeTab = (tabParam === "downloads" || tabParam === "imports" || tabParam === "admin" ? tabParam : "all") as JobsTab;
-  const status = sp.get("status") || "";
-  const dlSource = sp.get("source") || "";
   const subscriptionSourceId = sp.get("subscription_source_id") || "";
   const downloadJobId = sp.get("download_job_id") || "";
   const search = sp.get("q") || "";
-  const dlSort = sp.get("sort") || "created_at";
-  const dlOrder = sp.get("order") || "desc";
   const selectedDownloadJobId = sp.get("job");
   const selectedImportJobId = sp.get("import_job");
   const selectedTaskId = sp.get("task");
@@ -950,23 +921,62 @@ function JobsContent() {
   const openDownloadDetail = (id: string) => updateParams({ tab: "downloads", job: id, import_job: null, task: null }, false);
   const openImportDetail = (id: string) => updateParams({ tab: "imports", import_job: id, job: null, task: null }, false);
   const closeDetail = () => updateParams({ job: null, import_job: null, task: null });
-  const handleTabChange = (tab: JobsTab) => {
+  const searchAssist = useQuery({
+    queryKey: ["search-assist", "tasks", search],
+    queryFn: () => api.assistSearch({ before_cursor: search, scope: "tasks" }),
+    staleTime: 15_000,
+  });
+  const searchTokens = searchAssist.data?.parsed?.tokens || [];
+  const qualifierValue = (key: string) => searchTokens.find(
+    (token) => token.kind === "qualifier" && token.key === key && !token.negated,
+  )?.value || "";
+  const status = qualifierValue("status");
+
+  const composeQuery = async (edit: {
+    key: string;
+    value: string | null;
+    operation: "set" | "replace-group";
+    replace_values?: string[];
+  }) => {
+    const result = await api.assistSearch({
+      before_cursor: search,
+      scope: "tasks",
+      compose: edit,
+    });
+    updateParams({ q: (result.canonical_query || result.query) || null });
+  };
+
+  const handleTabChange = async (tab: JobsTab) => {
     setSelected(new Set());
-    if (tab === "all") updateParams({ tab: null, status: null, job: null, import_job: null, task: null });
-    if (tab === "downloads") updateParams({ tab: "downloads", status: null, import_job: null, task: null });
-    if (tab === "imports") updateParams({ tab: "imports", status: null, job: null, task: null, source: null });
-    if (tab === "admin") updateParams({ tab: "admin", status: null, job: null, import_job: null, task: null, source: null });
+    const kind = tab === "all" ? null : tab === "downloads" ? "download" : tab === "imports" ? "import" : "admin";
+    const result = await api.assistSearch({
+      before_cursor: search,
+      scope: "tasks",
+      compose: {
+        key: "kind",
+        value: kind,
+        operation: "replace-group",
+        replace_values: ["download", "import", "admin"],
+      },
+    });
+    updateParams({
+      tab: tab === "all" ? null : tab,
+      q: (result.canonical_query || result.query) || null,
+      status: null,
+      source: null,
+      sort: null,
+      order: null,
+      job: null,
+      import_job: null,
+      task: null,
+    });
   };
 
   const dlParams = useMemo(() => ({
-    status: activeTab === "downloads" ? status || undefined : undefined,
-    source: dlSource || undefined,
     subscription_source_id: subscriptionSourceId || undefined,
     q: search || undefined,
-    sort_by: dlSort,
-    sort_order: dlOrder,
     offset: 0, limit: PAGE_LIMIT,
-  }), [activeTab, status, dlSource, subscriptionSourceId, search, dlSort, dlOrder]);
+  }), [subscriptionSourceId, search]);
 
   const downloads = useQuery({
     queryKey: [...queryKeys.downloadJobs.all, dlParams],
@@ -999,18 +1009,12 @@ function JobsContent() {
   const downloadEntrance = useStaggeredEntrance((downloads.data ?? []).map((job) => job.id));
   const importEntrance = useStaggeredEntrance((imports.data?.items ?? []).map((job) => job.id));
 
-  const taskParams = useMemo(() => ({
-    kind: activeTab === "admin" ? "admin" : undefined,
-    status: status || undefined,
-    source: activeTab === "admin" ? undefined : dlSource || undefined,
-    q: search || undefined,
-    offset: 0,
-    limit: PAGE_LIMIT,
-  }), [activeTab, status, dlSource, search]);
-
   const tasks = useQuery({
-    queryKey: [...queryKeys.tasks.all, taskParams],
-    queryFn: () => api.listTasks(taskParams),
+    queryKey: ["search", "tasks", search, PAGE_LIMIT],
+    queryFn: async () => {
+      const result = await api.search(search, 0, PAGE_LIMIT, "tasks");
+      return result.groups.tasks || { total: 0, items: [] };
+    },
     enabled: activeTab === "all" || activeTab === "admin",
     refetchInterval: (!status || isActiveTask(status)) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
   });
@@ -1058,12 +1062,9 @@ function JobsContent() {
   }, [imports.data]);
 
   const activeFilterCount = [
-    status,
-    activeTab === "admin" ? "" : dlSource,
+    ...searchTokens,
     subscriptionSourceId,
     downloadJobId,
-    search,
-    activeTab === "downloads" && (dlSort !== "created_at" || dlOrder !== "desc"),
   ].filter(Boolean).length;
   const lastUpdated = Math.max(downloads.dataUpdatedAt || 0, imports.dataUpdatedAt || 0, tasks.dataUpdatedAt || 0, workbench.dataUpdatedAt || 0);
   const currentRows = useMemo(() => {
@@ -1091,6 +1092,7 @@ function JobsContent() {
     qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
     qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
     qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+    qc.invalidateQueries({ queryKey: ["search", "tasks"] });
     qc.invalidateQueries({ queryKey: queryKeys.workbench });
   };
   const clearFilters = () => updateParams({
@@ -1182,7 +1184,7 @@ function JobsContent() {
   };
 
   const batchJobs = useMutation({
-    mutationFn: async ({ action, filters }: { action: BatchAction; filters: { source?: string; status?: string } }) => {
+    mutationFn: async ({ action }: { action: BatchAction }) => {
       if (selected.size > 0) {
         const selectedRows = currentRows.filter((row: { id: string }) => selected.has(row.id)) as Array<{ id: string; status?: string }>;
         if (activeTab === "downloads") {
@@ -1202,17 +1204,6 @@ function JobsContent() {
         return runSelectedTaskBatch(selectedRows.map((row) => row.id), action);
       }
 
-      if (activeTab === "downloads") {
-        const batchFilters: Record<string, string> = {};
-        if (filters.source) batchFilters.source = filters.source;
-        if (filters.status) batchFilters.status = filters.status;
-        return api.batchDownloadJobsByFilter(batchFilters, action);
-      }
-      if (activeTab === "imports") {
-        const batchFilters: Record<string, string> = {};
-        if (filters.status) batchFilters.status = filters.status;
-        return api.batchImportJobsByFilter(batchFilters, action);
-      }
       toast.warning({ message: t("jobs.select_rows_first") });
       return { succeeded: 0, failed: 0, total_matched: 0 };
     },
@@ -1274,7 +1265,7 @@ function JobsContent() {
         activeTab={activeTab}
         selectedCount={selected.size}
         onRefresh={refreshAll}
-        onApply={(action, filters) => batchJobs.mutate({ action, filters })}
+        onApply={(action) => batchJobs.mutate({ action })}
         onClear={handleClear}
         onKillStuck={() => killStuck.mutate()}
         onRetryAllFailed={() => retryAllFailed.mutate()}
@@ -1291,16 +1282,14 @@ function JobsContent() {
         activeFilterCount={activeFilterCount}
         lastUpdatedLabel={t("jobs.last_refreshed", { time: lastUpdated ? fmt.time(new Date(lastUpdated).toISOString()) : "—" })}
         search={search}
-        status={status}
-        dlSource={dlSource}
+        tokens={searchTokens}
         subscriptionSourceId={subscriptionSourceId}
         downloadJobId={downloadJobId}
-        dlSort={dlSort}
-        dlOrder={dlOrder}
         selectAll={pageAllSelected}
         statusOptions={statusOptions}
         onTabChange={handleTabChange}
-        onUpdateParams={updateParams}
+        onQueryChange={(query) => updateParams({ q: query || null })}
+        onCompose={composeQuery}
         onClearFilters={clearFilters}
         onSelectAll={handleSelectAll}
       />

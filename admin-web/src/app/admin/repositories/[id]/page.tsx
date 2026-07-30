@@ -234,7 +234,7 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
                   <div className="mb-2 font-medium text-fg">{t("repo_detail.graph_node_details")}</div>
                   <div className="flex flex-wrap gap-2">
                     <Link href={`/admin/curation?commit=${node.id}`} className="inline-flex min-h-6 items-center text-accent hover:underline dark:text-accent">{t("repo_detail.open_commit")}</Link>
-                    <Link href={`/admin/jobs?tab=downloads&subscription_source_id=${repositoryId}`} className="inline-flex min-h-6 items-center text-accent hover:underline dark:text-accent">{t("repo_detail.open_jobs")}</Link>
+                    <Link href={`/admin/jobs?tab=downloads&q=${encodeURIComponent(`kind:download repo:${repositoryId}`)}`} className="inline-flex min-h-6 items-center text-accent hover:underline dark:text-accent">{t("repo_detail.open_jobs")}</Link>
                   </div>
                 </div>
               )}
@@ -411,7 +411,7 @@ export default function RepositoryDetailPage() {
               <div className="font-semibold">{t("repo_detail.next_action")}</div>
               <div className="mt-1">{t(hint.text)}</div>
               <div className="mt-3 flex flex-wrap gap-2">
-                <Link href={`/admin/jobs?tab=downloads&subscription_source_id=${id}`} className="btn-ghost text-xs">{t("repo_detail.open_jobs")}</Link>
+                <Link href={`/admin/jobs?tab=downloads&q=${encodeURIComponent(`kind:download repo:${id}`)}`} className="btn-ghost text-xs">{t("repo_detail.open_jobs")}</Link>
                 <Link href="/admin/scheduler" className="btn-ghost text-xs">{t("repo_detail.open_scheduler")}</Link>
                 <button onClick={() => sync.mutate()} disabled={!canSync || sync.isPending} className="btn-primary text-xs disabled:opacity-50">{t("repo.sync_now")}</button>
               </div>
@@ -449,7 +449,7 @@ export default function RepositoryDetailPage() {
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm text-muted">{t("repo_detail.jobs_filtered_desc")}</p>
-              <Link href={`/admin/jobs?tab=downloads&subscription_source_id=${id}`} className="btn-ghost text-sm">{t("repo_detail.open_in_jobs")}</Link>
+              <Link href={`/admin/jobs?tab=downloads&q=${encodeURIComponent(`kind:download repo:${id}`)}`} className="btn-ghost text-sm">{t("repo_detail.open_in_jobs")}</Link>
             </div>
             <JobsList jobs={recent_jobs} />
           </div>

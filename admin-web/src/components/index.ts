@@ -35,6 +35,7 @@ export { RealProgressBar } from "./RealProgressBar";
 export { default as MotionNumber } from "./MotionNumber";
 export { default as TagBubbleChart } from "./TagBubbleChart";
 export { BatchByFilter } from "./BatchByFilter";
+export { SmartSearchInput, useSearchBatchComposer, useSearchComposer } from "./SmartSearchInput";
 export { AssetFilmstrip, AssetImage, WorkPreviewOverlay, isArchiveAsset } from "./work-interactions";
 export type { MediaAsset } from "./work-interactions";
 

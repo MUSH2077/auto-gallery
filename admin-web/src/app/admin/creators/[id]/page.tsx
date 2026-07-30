@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
-import { GitlleryPanel, Modal, PageShell, RepositoryCard, SourceBadge, StatusBadge, WorkGrid, type SlideItem } from "@/components";
+import { GitlleryPanel, Modal, PageShell, RepositoryCard, SourceBadge, StatusBadge, WorkGrid, SmartSearchInput, type SlideItem } from "@/components";
 import { useSlideshow } from "@/lib/useSlideshow";
 import { POLL_IDLE_MS } from "@/lib/polling";
 import { Breadcrumb } from "@/components/Breadcrumb";
@@ -13,6 +13,7 @@ import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { CHART_COLORS, SOURCE_COLORS } from "@/lib/sourceColors";
+import { quoteSearchValue, searchUrl } from "@/lib/search-query";
 
 type TabKey = "overview" | "repositories" | "works" | "links";
 
@@ -101,22 +102,42 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
   const t = useT();
   const fmt = useI18nFormat();
   const [page, setPage] = useState(0);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(
+    `creator:${creatorId}${selectedTag ? ` tag:${quoteSearchValue(selectedTag)}` : ""} sort:posted-desc`,
+  );
   const limit = 12;
 
   useEffect(() => {
     setPage(0);
-  }, [creatorId, selectedTag, search]);
+  }, [search]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.assistSearch({
+      before_cursor: search,
+      scope: "works",
+      composes: [
+        { key: "creator", value: creatorId, operation: "set" },
+        { key: "tag", value: selectedTag || null, operation: "set" },
+        { key: "sort", value: "posted-desc", operation: "set" },
+      ],
+    }).then((result) => {
+      if (!cancelled) setSearch(result.canonical_query || result.query);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // The existing free-text query is intentionally retained while contextual
+    // creator/tag tokens are updated by the server composer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [creatorId, selectedTag]);
 
   const filteredWorks = useQuery({
-    queryKey: ["creator-works-tab", creatorId, selectedTag, search, page],
-    queryFn: () => api.listWorks(page * limit, limit, {
-      creator_id: creatorId,
-      tag: selectedTag || undefined,
-      search: search || undefined,
-      sort_by: "posted_at",
-      sort_order: "desc",
-    }),
+    queryKey: ["search", "works", "creator-detail", search, page],
+    queryFn: async () => {
+      const result = await api.search(search, page * limit, limit, "works");
+      return result.groups.works || { total: 0, items: [] };
+    },
   });
 
   const slideshow = useSlideshow();
@@ -138,17 +159,18 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
                 {t("slideshow.open")}
               </button>
             )}
-            <Link href={`/admin/works?creator=${creatorId}${selectedTag ? `&tag=${encodeURIComponent(selectedTag)}` : ""}`} className="btn-ghost">
+            <Link href={searchUrl("/admin/works", search)} className="btn-ghost">
               {t("creator_detail.open_full_gallery")}
             </Link>
           </div>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          <input
+          <SmartSearchInput
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={setSearch}
+            scope="works"
             placeholder={t("works.search_title")}
-            className="input min-w-0 flex-1 md:max-w-xs"
+            className="min-w-0 flex-1 md:max-w-xl"
           />
           {selectedTag && (
             <button
@@ -219,7 +241,10 @@ export default function CreatorDetailPage() {
   const stats = useQuery({ queryKey: ["creator-stats", id], queryFn: () => api.getCreatorStats(id), refetchInterval: POLL_IDLE_MS, staleTime: POLL_IDLE_MS });
   const works = useQuery({
     queryKey: ["creator-latest-works", id],
-    queryFn: () => api.listWorks(0, 6, { creator_id: id, sort_by: "posted_at", sort_order: "desc" }),
+    queryFn: async () => {
+      const result = await api.search(`creator:${id} sort:posted-desc`, 0, 6, "works");
+      return result.groups.works || { total: 0, items: [] };
+    },
     refetchInterval: 15000,
   });
   const overview = useQuery({
@@ -469,7 +494,7 @@ export default function CreatorDetailPage() {
               <section className="card p-4">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <h2 className="text-base font-semibold">{t("creator_detail.works_timeline")}</h2>
-                  <Link href={`/admin/works?creator=${id}`} className="text-sm text-accent hover:underline dark:text-accent">{t("creator_detail.view_all_works")}</Link>
+                  <Link href={searchUrl("/admin/works", `creator:${id} sort:posted-desc`)} className="text-sm text-accent hover:underline dark:text-accent">{t("creator_detail.view_all_works")}</Link>
                 </div>
                 <WorkGrid data={timeline.data} loading={timeline.isLoading} />
               </section>
@@ -521,7 +546,7 @@ export default function CreatorDetailPage() {
               <section className="card p-4">
                 <div className="mb-4 flex items-center justify-between">
                   <h2 className="text-base font-semibold">{t("creator_detail.latest_works")}</h2>
-                  <Link href={`/admin/works?creator=${id}`} className="text-sm text-accent hover:underline dark:text-accent">{t("creator_detail.open_works")}</Link>
+                  <Link href={searchUrl("/admin/works", `creator:${id} sort:posted-desc`)} className="text-sm text-accent hover:underline dark:text-accent">{t("creator_detail.open_works")}</Link>
                 </div>
                 {works.data?.items?.length ? (
                   <div className="grid grid-cols-2 gap-3 md:grid-cols-3">

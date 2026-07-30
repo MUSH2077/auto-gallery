@@ -480,11 +480,15 @@ Endpoints include:
 - `POST /merge` — merge two tags into one
 
 ### `/api/v1/search`
-Meilisearch-powered full-text search and index management.
+Canonical compound search across Meilisearch-backed library entities and
+SQL-backed operational collections.
 
 Endpoints include:
-- `GET /` — search works, creators, tags
-- `POST /reindex` — trigger full Meilisearch reindex
+- `GET /` — grouped works, creators, tags, repositories, subscriptions, tasks, or scheduler decisions
+- `POST /assist` — server parsing, diagnostics, suggestions, and query composition
+
+See [Compound search language](search.md). Full index rebuilds are queued from
+the data-management API.
 
 ### `/api/v1/sources`
 Source provider listing and capabilities.
