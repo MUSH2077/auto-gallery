@@ -31,7 +31,7 @@ async function main() {
 
   // ─── Navigate to Danbooru ───
   console.log('2. 导航到 Danbooru...');
-  await page.click('nav a[href="/admin/reference/danbooru"]');
+  await page.click('nav a[href="/admin/upload/danbooru"]');
   await page.waitForURL('**/danbooru', { timeout: 10000 });
   await wait(1000);
   console.log('   ✅ 页面已加载');

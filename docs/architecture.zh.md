@@ -325,15 +325,18 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 ## API 路由分组
 
 所有路由均以 `/api/v1` 为前缀，除非另有说明。
+本节用于说明架构边界，并非完整端点清单。由 CI 对照运行时校验的
+[OpenAPI 与 AsyncAPI 契约](api/README.zh.md)才是规范的机器可读接口。
 
 ### `/api/v1/system`
 健康检查、队列统计、存储统计、清除失败任务、日志缓冲。
 
 端点：
-- `GET /health` — 系统健康检查（数据库、Redis、Meilisearch、磁盘）
-- `GET /health/disk` — 磁盘使用统计
+- `GET /health` 与 `GET /ready` — 公开存活检查与依赖就绪检查
+- `GET /storage` — 图库逻辑存储统计
+- `GET /workbench` — 仪表盘状态与最近活动
 - `GET /queue-stats` — 等待/运行/失败任务数量
-- `GET /storage-breakdown` — 各来源存储使用
+- `GET /scheduler-decisions` — 当前仓库调度决策
 - `POST /clear-failed-jobs` — 清除所有失败的下载/导入任务
 - `GET /logs` — 查看缓冲日志输出
 
@@ -342,7 +345,7 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 
 端点包括：
 - `GET /settings` / `PUT /settings` — 系统设置 CRUD
-- `POST /settings/reset` — 重置设置为默认值
+- `POST /reset-settings` — 重置设置为默认值
 - `GET /gallerydl-config` / `PUT /gallerydl-config` — 各来源 gallery-dl 提取器配置
 - `GET /system-info` — 系统概览（CPU、内存、磁盘、数据库大小、归档大小）
 - `GET /integrity-check` — 扫描孤立文件、缺失缩略图、孤立记录

@@ -14,8 +14,10 @@ from sqlalchemy import text
 
 from app.api import api_router
 from app.api.media import router as media_router
+from app.api_docs import create_api_docs_router
 from app.config import settings
 from app.database import async_session, engine
+from app.openapi_contract import build_openapi_schema, stable_operation_id
 from app.services.danbooru import DanbooruUnavailableError
 
 # Configure stdlib logging from settings.
@@ -236,7 +238,22 @@ def _process_rss_mb() -> float | None:
         return None
 
 
-app = FastAPI(title="auto-gallery", version="0.1.0", lifespan=lifespan)
+app = FastAPI(
+    title="auto-gallery",
+    version="0.1.0",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+    generate_unique_id_function=stable_operation_id,
+)
+
+
+def _openapi():
+    return build_openapi_schema(app)
+
+
+app.openapi = _openapi
 
 app.add_middleware(
     CORSMiddleware,
@@ -264,8 +281,8 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         safe_body = str(data)
     except Exception:
         safe_body = f"<{len(raw)} bytes, parse error>"
-    logger.error("Validation error on %s %s: %s | body: %s",
-                 request.method, request.url.path, exc.errors(), safe_body)
+    logger.warning("Validation error on %s %s: %s | body: %s",
+                   request.method, request.url.path, exc.errors(), safe_body)
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 
@@ -280,6 +297,7 @@ async def danbooru_unavailable_handler(request: Request, exc: DanbooruUnavailabl
 
 app.include_router(api_router)
 app.include_router(media_router)
+app.include_router(create_api_docs_router(app))
 
 
 async def _service_readiness() -> dict[str, str]:

@@ -12,6 +12,7 @@ import { FullImageLightbox, ArrowIcon, DisclosurePanel, type AssetData } from "@
 import { useI18nFormat } from "@/lib/i18n-format";
 import { quoteSearchValue, searchUrl } from "@/lib/search-query";
 import { Star } from "lucide-react";
+import { adminRoutes } from "@/lib/adminRoutes";
 
 interface WorkSourceData {
   id: string;
@@ -139,7 +140,7 @@ function WorkHistory({ workId }: { workId: string }) {
     <div>
       <div className="mb-3 flex items-center justify-between gap-3">
         <h3 className="text-sm font-medium uppercase tracking-wide text-muted">{t("work_detail.history")}</h3>
-        <Link href={`/admin/curation?subject_type=work&subject_id=${workId}`} className="text-xs text-accent hover:underline">{t("work_detail.open_curation")}</Link>
+        <Link href={`${adminRoutes.curation}?subject_type=work&subject_id=${workId}`} className="text-xs text-accent hover:underline">{t("work_detail.open_curation")}</Link>
       </div>
       <div className="space-y-3">
         {commits.data.items.map((commit) => (

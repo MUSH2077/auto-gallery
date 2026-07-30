@@ -1,18 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys, QueueBreakdown, SchedulerDecisionItem } from "@/lib/api";
+import { api, queryKeys, QueueBreakdown, SchedulerDecisionItem, SEARCH_PAGE_SIZE } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { pollInterval, hasActiveTask } from "@/lib/polling";
 import { scheduleModeLabel, schedulerDecisionLabel, useI18nFormat } from "@/lib/i18n-format";
 import { useStaggeredEntrance } from "@/lib/motion";
-import { AdaptiveToolbar, FilterBar, PageHeader, PageShell, EmptyState, ErrorState, SourceBadge, StatCard, StatusBadge, PermissionGuard, SelectionBar, RowActionMenu, SmartSearchInput, useSearchComposer } from "@/components";
+import { AdaptiveToolbar, FilterBar, PageHeader, PageShell, Pagination, EmptyState, ErrorState, SourceBadge, StatCard, StatusBadge, PermissionGuard, SelectionBar, RowActionMenu, SmartSearchInput, useSearchComposer } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useNotifications } from "@/components/NotificationCenter";
 import { usePermissions } from "@/lib/usePermissions";
+import { adminRoutes } from "@/lib/adminRoutes";
 
 function decisionTone(item: SchedulerDecisionItem): string {
   if (item.due) return "border-accent/30 bg-accent-subtle text-accent dark:border-accent/30 dark:bg-accent-subtle dark:text-accent";
@@ -138,6 +139,9 @@ export default function SchedulerPage() {
   const pathname = usePathname();
   const sp = useSearchParams();
   const search = sp.get("q") || "";
+  const rawPage = Number.parseInt(sp.get("page") || "1", 10);
+  const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+  const searchOffset = (page - 1) * SEARCH_PAGE_SIZE;
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectAll, setSelectAll] = useState(false);
@@ -153,14 +157,14 @@ export default function SchedulerPage() {
   const queue = useQuery({ queryKey: ["queue-stats"], queryFn: api.queueStats, refetchInterval: 15000 });
   const decisions = useQuery({ queryKey: queryKeys.schedulerDecisions, queryFn: api.schedulerDecisions, refetchInterval: 15000 });
   const searchedDecisions = useQuery({
-    queryKey: ["search", "scheduler", search],
-    queryFn: () => api.search(search, 0, 200, "scheduler"),
+    queryKey: ["search", "scheduler", search, searchOffset, SEARCH_PAGE_SIZE],
+    queryFn: () => api.search(search, searchOffset, SEARCH_PAGE_SIZE, "scheduler"),
     refetchInterval: 15000,
   });
   const filterComposer = useSearchComposer({
     value: search,
     scope: "scheduler",
-    onChange: (query) => updateParams({ q: query || null }),
+    onChange: (query) => updateParams({ q: query || null, page: null }),
   });
 
   const syncNow = useMutation({
@@ -237,7 +241,9 @@ export default function SchedulerPage() {
   });
 
   const items = decisions.data?.items || [];
-  const filteredItems = searchedDecisions.data?.groups.scheduler?.items || [];
+  const schedulerGroup = searchedDecisions.data?.groups.scheduler;
+  const filteredItems = schedulerGroup?.items || [];
+  const visibleIdsKey = filteredItems.map((item) => item.source_id).join("|");
   const selectedModes = new Set(
     searchedDecisions.data?.parsed.tokens
       .filter((token) => token.kind === "qualifier" && token.key === "is" && !token.negated)
@@ -266,6 +272,15 @@ export default function SchedulerPage() {
     qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
     qc.invalidateQueries({ queryKey: ["search", "scheduler"] });
   };
+
+  useEffect(() => {
+    const visibleIds = new Set(visibleIdsKey ? visibleIdsKey.split("|") : []);
+    setSelected((current) => {
+      const next = new Set(Array.from(current).filter((id) => visibleIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+    setSelectAll(false);
+  }, [visibleIdsKey]);
 
   const handleSelectAll = () => {
     if (selectAll) { setSelected(new Set()); setSelectAll(false); return; }
@@ -313,7 +328,7 @@ export default function SchedulerPage() {
       <FilterBar meta={t("scheduler.last_updated", { time: lastUpdated ? fmt.time(new Date(lastUpdated).toISOString()) : "—" })}>
         <SmartSearchInput
           value={search}
-          onChange={(query) => updateParams({ q: query || null })}
+          onChange={(query) => updateParams({ q: query || null, page: null })}
           scope="scheduler"
           className="w-full sm:min-w-[320px] sm:max-w-xl"
           placeholder={t("scheduler.search_placeholder")}
@@ -497,7 +512,7 @@ export default function SchedulerPage() {
                       <RowActionMenu
                         label={t("common.more_actions")}
                         items={[
-                          { label: t("scheduler.open_repository"), href: `/admin/repositories/${item.source_id}` },
+                          { label: t("scheduler.open_repository"), href: adminRoutes.repository(item.source_id) },
                           { label: t("scheduler.open_jobs"), href: `/admin/jobs?tab=downloads&q=${encodeURIComponent(`kind:download repo:${item.source_id}`)}` },
                           { label: t("scheduler.manage"), href: `/admin/subscriptions/${item.subscription_id}` },
                         ]}
@@ -510,6 +525,14 @@ export default function SchedulerPage() {
             </div>
           </div>
         )}
+        {searchedDecisions.data ? (
+          <Pagination
+            page={page}
+            pageSize={SEARCH_PAGE_SIZE}
+            total={schedulerGroup?.total || 0}
+            onPageChange={(nextPage) => updateParams({ page: nextPage === 1 ? null : String(nextPage) })}
+          />
+        ) : null}
       </section>
     </PageShell>
     </PermissionGuard>

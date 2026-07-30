@@ -11,6 +11,7 @@ import { useStaggeredEntrance } from "@/lib/motion";
 import { useRouter } from "next/navigation";
 import { getSourceColor } from "@/lib/sourceColors";
 import { useI18nFormat } from "@/lib/i18n-format";
+import { adminRoutes } from "@/lib/adminRoutes";
 
 type Severity = "error" | "warning" | "info";
 
@@ -336,7 +337,7 @@ export default function DataManagementPage() {
                             <td />
                             <td className="py-1.5 pl-10">
                               {repository.repository_id ? (
-                                <Link href={`/admin/repositories/${repository.repository_id}`} className="inline-flex min-w-0 items-center gap-2 text-accent hover:underline">
+                                <Link href={adminRoutes.repository(repository.repository_id)} className="inline-flex min-w-0 items-center gap-2 text-accent hover:underline">
                                   <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: getSourceColor(repository.source) }} />
                                   <span className="truncate font-medium">{repository.directory_name}</span>
                                 </Link>

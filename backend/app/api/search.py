@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import RequireAnyPermission
 from app.database import get_db
 from app.models.user import User
-from app.schemas.search import SearchAssistRequest
+from app.schemas.search import SearchAssistRequest, SearchScopeValue
 from app.services.search import SearchBackendUnavailable, SearchPermissionError, SearchService
 from app.services.search_language import SCOPE_TARGETS, SearchQueryError
 
@@ -33,7 +33,7 @@ def _raise_search_error(error: SearchQueryError) -> None:
 @router.get("")
 async def search(
     q: str = Query("", description="Search query"),
-    scope: str = Query("global", description="Search surface and result type"),
+    scope: SearchScopeValue = Query("global", description="Search surface and result type"),
     kind: str | None = Query(None, description="Deprecated entity type adapter"),
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),

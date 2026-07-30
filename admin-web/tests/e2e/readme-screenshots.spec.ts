@@ -377,6 +377,39 @@ const schedulerDecisions = {
   ],
 };
 
+const taskRuns = [
+  {
+    id: "task-download-running",
+    kind: "download",
+    operation_type: "download",
+    subject_id: "download-running",
+    status: "running",
+    queue_name: "downloads:pixiv",
+    title: "Download Atlas archive",
+    source: "pixiv",
+    progress_stage: "download",
+    progress_current: 48,
+    progress_total: 132,
+    created_at: "2026-07-28T08:25:00Z",
+    updated_at: "2026-07-28T08:29:00Z",
+  },
+  {
+    id: "task-import-running",
+    kind: "import",
+    operation_type: "import",
+    subject_id: "import-running",
+    status: "running",
+    queue_name: "imports",
+    title: "Import Atlas archive",
+    source: "pixiv",
+    progress_stage: "works",
+    progress_current: 8,
+    progress_total: 12,
+    created_at: "2026-07-28T08:20:00Z",
+    updated_at: "2026-07-28T08:29:00Z",
+  },
+];
+
 const dedupCase = {
   id: "dedup-case-1",
   status: "pending",
@@ -495,6 +528,70 @@ async function installRoutes(context: BrowserContext, unknownRequests: string[])
     }
     if (url.pathname === "/api/v1/system/workbench") return route.fulfill({ json: workbench });
     if (url.pathname === "/api/v1/system/scheduler-decisions") return route.fulfill({ json: schedulerDecisions });
+    if (url.pathname === "/api/v1/search/assist") {
+      const body = request.postDataJSON() as { before_cursor?: string; after_cursor?: string; scope?: string };
+      const query = `${body.before_cursor || ""}${body.after_cursor || ""}`.trim();
+      return route.fulfill({
+        json: {
+          query,
+          canonical_query: query,
+          parsed: {
+            raw: query,
+            canonical: query,
+            scope: body.scope || "global",
+            targets: [],
+            tokens: [],
+          },
+          diagnostics: [],
+          suggestions: [],
+          catalog: [],
+        },
+      });
+    }
+    if (url.pathname === "/api/v1/search") {
+      const scope = url.searchParams.get("scope") || "global";
+      const byScope: Record<string, unknown[]> = {
+        works,
+        creators,
+        tags,
+        repositories: [repository.repository],
+        subscriptions: [],
+        tasks: taskRuns,
+        scheduler: schedulerDecisions.items,
+        "creator-picker": creators,
+      };
+      const target = scope === "creator-picker" ? "creators" : scope;
+      const groups = scope === "global"
+        ? {
+            works: { total: works.length, items: works },
+            creators: { total: creators.length, items: creators },
+            tags: { total: tags.length, items: tags },
+            repositories: { total: 1, items: [repository.repository] },
+            subscriptions: { total: 0, items: [] },
+          }
+        : { [target]: { total: byScope[scope]?.length || 0, items: byScope[scope] || [] } };
+      const query = url.searchParams.get("q") || "";
+      return route.fulfill({
+        json: {
+          query,
+          canonical_query: query,
+          parsed: {
+            raw: query,
+            canonical: query,
+            scope,
+            targets: Object.keys(groups),
+            tokens: [],
+          },
+          groups,
+          total: Object.values(groups).reduce((sum, group) => sum + group.total, 0),
+          results: [],
+          creators,
+          tags,
+          repositories: [repository.repository],
+          subscriptions: [],
+        },
+      });
+    }
     if (url.pathname === "/api/v1/works") return route.fulfill({ json: { total: works.length, items: works } });
     if (url.pathname === "/api/v1/creators/count") return route.fulfill({ json: { count: creators.length } });
     if (url.pathname === "/api/v1/creators") return route.fulfill({ json: { total: creators.length, items: creators } });
@@ -513,39 +610,8 @@ async function installRoutes(context: BrowserContext, unknownRequests: string[])
     if (url.pathname === "/api/v1/tasks") {
       return route.fulfill({
         json: {
-          total: 2,
-          items: [
-            {
-              id: "task-download-running",
-              kind: "download",
-              operation_type: "download",
-              subject_id: "download-running",
-              status: "running",
-              queue_name: "downloads:pixiv",
-              title: "Download Atlas archive",
-              source: "pixiv",
-              progress_stage: "download",
-              progress_current: 48,
-              progress_total: 132,
-              created_at: "2026-07-28T08:25:00Z",
-              updated_at: "2026-07-28T08:29:00Z",
-            },
-            {
-              id: "task-import-running",
-              kind: "import",
-              operation_type: "import",
-              subject_id: "import-running",
-              status: "running",
-              queue_name: "imports",
-              title: "Import Atlas archive",
-              source: "pixiv",
-              progress_stage: "works",
-              progress_current: 8,
-              progress_total: 12,
-              created_at: "2026-07-28T08:20:00Z",
-              updated_at: "2026-07-28T08:29:00Z",
-            },
-          ],
+          total: taskRuns.length,
+          items: taskRuns,
         },
       });
     }
@@ -613,7 +679,7 @@ test("generate sanitized README screenshots from strict fictional fixtures", asy
     await expect(page.getByRole("heading", { level: 1, name: "Creators" })).toBeVisible();
     await expect(page.getByText("Northwind Studio")).toBeVisible();
   });
-  await capture(page, unknownRequests, "/admin/repositories/repo-atlas-pixiv", "repository-detail.png", async () => {
+  await capture(page, unknownRequests, "/admin/subscriptions/repositories/repo-atlas-pixiv", "repository-detail.png", async () => {
     await expect(page.getByRole("heading", { name: /pixiv\/10000001/i })).toBeVisible();
     await expect(page.getByText("Recent works")).toBeVisible();
   });
@@ -621,7 +687,7 @@ test("generate sanitized README screenshots from strict fictional fixtures", asy
     await expect(page.getByRole("heading", { level: 1, name: "Tags" })).toBeVisible();
     await expect(page.getByRole("link", { name: /landscape/i })).toBeVisible();
   });
-  await capture(page, unknownRequests, "/admin/dedup", "asset-dedup-review.png", async () => {
+  await capture(page, unknownRequests, "/admin/data-mgmt/dedup", "asset-dedup-review.png", async () => {
     await expect(page.getByText("Harbor Light Study").first()).toBeVisible();
     await expect(page.getByText("104").first()).toBeVisible();
   });

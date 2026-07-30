@@ -5,8 +5,8 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { useT, type TFunction } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, JobProgress, queryKeys, TaskRun, type SearchToken } from "@/lib/api";
-import { PageHeader, PageShell, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, StatCard, PermissionGuard, CompactUrl, ErrorSummary, OverflowText, RowActionMenu, SmartSearchInput } from "@/components";
+import { api, JobProgress, queryKeys, SEARCH_PAGE_SIZE, TaskRun, type SearchToken } from "@/lib/api";
+import { PageHeader, PageShell, Pagination, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, StatCard, PermissionGuard, CompactUrl, ErrorSummary, OverflowText, RowActionMenu, SmartSearchInput } from "@/components";
 import { TaskDetailDrawer, JobDetailDrawer, shortId } from "@/components/JobDrawers";
 import { useJobWebSocket } from "@/lib/useWebSocket";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
@@ -15,7 +15,7 @@ import { POLL_ACTIVE_MS as REFETCH_ACTIVE_MS, POLL_IDLE_MS as REFETCH_IDLE_MS } 
 import { useStaggeredEntrance, type StaggeredEntranceProps } from "@/lib/motion";
 
 
-const PAGE_LIMIT = 200;
+const JOB_LIST_LIMIT = 200;
 
 const STATUS_OPTIONS = ["", "enqueued", "downloading", "paused", "downloaded", "importing", "complete", "failed", "stale", "cancelled"];
 const IMPORT_STATUS_OPTIONS = ["", "enqueued", "running", "complete", "failed", "stale"];
@@ -898,6 +898,9 @@ function JobsContent() {
   const subscriptionSourceId = sp.get("subscription_source_id") || "";
   const downloadJobId = sp.get("download_job_id") || "";
   const search = sp.get("q") || "";
+  const rawPage = Number.parseInt(sp.get("page") || "1", 10);
+  const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+  const taskOffset = (page - 1) * SEARCH_PAGE_SIZE;
   const selectedDownloadJobId = sp.get("job");
   const selectedImportJobId = sp.get("import_job");
   const selectedTaskId = sp.get("task");
@@ -943,7 +946,7 @@ function JobsContent() {
       scope: "tasks",
       compose: edit,
     });
-    updateParams({ q: (result.canonical_query || result.query) || null });
+    updateParams({ q: (result.canonical_query || result.query) || null, page: null });
   };
 
   const handleTabChange = async (tab: JobsTab) => {
@@ -969,13 +972,14 @@ function JobsContent() {
       job: null,
       import_job: null,
       task: null,
+      page: null,
     });
   };
 
   const dlParams = useMemo(() => ({
     subscription_source_id: subscriptionSourceId || undefined,
     q: search || undefined,
-    offset: 0, limit: PAGE_LIMIT,
+    offset: 0, limit: JOB_LIST_LIMIT,
   }), [subscriptionSourceId, search]);
 
   const downloads = useQuery({
@@ -1001,7 +1005,7 @@ function JobsContent() {
       download_job_id: downloadJobId || undefined,
       q: search || undefined,
       offset: 0,
-      limit: PAGE_LIMIT,
+      limit: JOB_LIST_LIMIT,
     }),
     enabled: activeTab === "imports",
     refetchInterval: (!status || isActiveImport(status)) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
@@ -1010,9 +1014,9 @@ function JobsContent() {
   const importEntrance = useStaggeredEntrance((imports.data?.items ?? []).map((job) => job.id));
 
   const tasks = useQuery({
-    queryKey: ["search", "tasks", search, PAGE_LIMIT],
+    queryKey: ["search", "tasks", search, taskOffset, SEARCH_PAGE_SIZE],
     queryFn: async () => {
-      const result = await api.search(search, 0, PAGE_LIMIT, "tasks");
+      const result = await api.search(search, taskOffset, SEARCH_PAGE_SIZE, "tasks");
       return result.groups.tasks || { total: 0, items: [] };
     },
     enabled: activeTab === "all" || activeTab === "admin",
@@ -1103,6 +1107,7 @@ function JobsContent() {
     q: null,
     sort: null,
     order: null,
+    page: null,
   });
 
   // --- Mutations ---
@@ -1288,7 +1293,7 @@ function JobsContent() {
         selectAll={pageAllSelected}
         statusOptions={statusOptions}
         onTabChange={handleTabChange}
-        onQueryChange={(query) => updateParams({ q: query || null })}
+        onQueryChange={(query) => updateParams({ q: query || null, page: null })}
         onCompose={composeQuery}
         onClearFilters={clearFilters}
         onSelectAll={handleSelectAll}
@@ -1321,6 +1326,15 @@ function JobsContent() {
           openImportDetail={openImportDetail}
         />
       )}
+
+      {(activeTab === "all" || activeTab === "admin") && tasks.data ? (
+        <Pagination
+          page={page}
+          pageSize={SEARCH_PAGE_SIZE}
+          total={tasks.data.total}
+          onPageChange={(nextPage) => updateParams({ page: nextPage === 1 ? null : String(nextPage) }, false)}
+        />
+      ) : null}
 
       {/* Download Jobs list */}
       {activeTab === "downloads" && <section className="mb-8">

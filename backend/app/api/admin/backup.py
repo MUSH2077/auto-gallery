@@ -282,7 +282,18 @@ def _validate_backup_filename(filename: str) -> Path:
     raise HTTPException(status_code=404, detail="Backup not found")
 
 
-@router.get("/backup/download")
+@router.get(
+    "/backup/download",
+    responses={
+        200: {
+            "content": {
+                "application/gzip": {"schema": {"type": "string", "format": "binary"}},
+                "application/json": {"schema": {"type": "object", "additionalProperties": True}},
+            },
+            "description": "Backup archive bytes, or a JSON diagnostic when no backup exists.",
+        }
+    },
+)
 async def download_backup(filename: str | None = None):
     """Download a backup file. If filename not specified, returns the latest."""
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)

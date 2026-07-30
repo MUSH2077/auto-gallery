@@ -14,6 +14,7 @@ import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { CHART_COLORS, SOURCE_COLORS } from "@/lib/sourceColors";
 import { quoteSearchValue, searchUrl } from "@/lib/search-query";
+import { adminRoutes } from "@/lib/adminRoutes";
 
 type TabKey = "overview" | "repositories" | "works" | "links";
 
@@ -439,7 +440,7 @@ export default function CreatorDetailPage() {
           <section className="card p-4">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-sm font-semibold">{t("curation.title")}</h2>
-              <Link href={`/admin/curation?subject_type=creator&subject_id=${id}`} className="text-sm text-accent hover:underline dark:text-accent">{t("common.open")}</Link>
+              <Link href={`${adminRoutes.curation}?subject_type=creator&subject_id=${id}`} className="text-sm text-accent hover:underline dark:text-accent">{t("common.open")}</Link>
             </div>
             {curationHistory.data?.items.length ? (
               <div className="space-y-3">

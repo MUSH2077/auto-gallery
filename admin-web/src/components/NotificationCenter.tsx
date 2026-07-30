@@ -7,6 +7,7 @@ import { useT, type TFunction } from "@/lib/i18n";
 import { api, queryKeys } from "@/lib/api";
 import { usePresence, useStaggeredEntrance } from "@/lib/motion";
 import { useI18nFormat } from "@/lib/i18n-format";
+import { adminRoutes } from "@/lib/adminRoutes";
 
 type ActivityStatus = "running" | "completed" | "error" | "pending";
 
@@ -574,7 +575,7 @@ export function NotificationBell() {
               <>
                 {batchJob && (
                   <div className="cursor-pointer border-b border-border px-4 py-2.5 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle"
-                    onClick={() => { setOpen(false); router.push("/admin/reference/danbooru"); }}>
+                    onClick={() => { setOpen(false); router.push(adminRoutes.danbooru); }}>
                     <div className="flex items-start gap-2.5">
                       <div className="mt-0.5">{statusIcon(batchJob.status)}</div>
                       <div className="flex-1 min-w-0">
@@ -622,7 +623,7 @@ export function NotificationBell() {
                   <div className="cursor-pointer border-b border-border px-4 py-2.5 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle"
                     onClick={() => {
                       setOpen(false);
-                      router.push(operationJob.kind === "danbooru-import-all" ? "/admin/reference/danbooru" : `/admin/jobs?tab=admin&task=${operationJob.jobId}`);
+                      router.push(operationJob.kind === "danbooru-import-all" ? adminRoutes.danbooru : `${adminRoutes.jobs}?tab=admin&task=${operationJob.jobId}`);
                     }}>
                     <div className="flex items-start gap-2.5">
                       <div className="mt-0.5">{statusIcon(operationJob.status)}</div>

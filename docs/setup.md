@@ -16,6 +16,19 @@
 
 Both ports are configurable via `BACKEND_PORT` and `ADMIN_WEB_PORT` in `.env`.
 
+### LAN API reference
+
+After signing in as an administrator, open `/api/docs` on the admin-web host
+for the interactive Swagger UI or `/api/redoc` for the read-only reference.
+Both interfaces and their assets are served locally. The versioned HTTP and
+WebSocket contracts are documented in [LAN API contracts](api/README.md).
+
+Swagger's **Authorize** action requires the explicit JWT Bearer token returned
+by `POST /api/v1/auth/login`; the browser session cookie only grants access to
+the documentation itself. When a separate LAN application calls the API, add
+its exact scheme, host, and port to the comma-separated `CORS_ORIGINS`
+allowlist. Do not use `*` with credentials.
+
 The Jobs page uses WebSocket for live progress. By default it connects to the
 current site's `/api/v1/ws`; if your NAS reverse proxy does not forward
 WebSocket upgrades, or you access the UI directly through the `admin-web` port,

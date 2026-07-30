@@ -1268,7 +1268,6 @@ export interface UploadResponse {
 
 export type GeneratedWork = components["schemas"]["WorkRead"];
 export type GeneratedWorkList = components["schemas"]["WorkList"];
-export type GeneratedAsset = components["schemas"]["AssetRead"];
 export type GeneratedCreator = components["schemas"]["CreatorRead"];
 export type GeneratedSubscription = components["schemas"]["SubscriptionRead"];
 

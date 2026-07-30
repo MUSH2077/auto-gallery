@@ -66,6 +66,9 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://autogallery:test-db@localhost:5432/autogallery
           REDIS_URL: redis://localhost:6379/0
         run: python -m pytest
+      - name: Check generated API contracts
+        working-directory: backend
+        run: python scripts/export_api_contracts.py --check
 
   admin-web:
     name: Admin checks
@@ -90,6 +93,12 @@ jobs:
       - name: Check unified search contract
         working-directory: admin-web
         run: npm run check:search-contract
+      - name: Check canonical admin routes
+        working-directory: admin-web
+        run: npm run check:admin-routes
+      - name: Check generated OpenAPI types
+        working-directory: admin-web
+        run: npm run check:api-types
       - name: Typecheck admin web
         working-directory: admin-web
         run: npm run typecheck
@@ -187,6 +196,10 @@ jobs:
           test -f docs/distribution.md
           test -f docs/distribution.zh.md
           test -f docs/architecture.md
+          test -f docs/api/openapi.json
+          test -f docs/api/asyncapi.yaml
+          test -f docs/api/README.zh.md
+          test -f docs/api/capability-matrix.md
           test -f docs/risks.md
           test -f docs/release-checklist.md
 

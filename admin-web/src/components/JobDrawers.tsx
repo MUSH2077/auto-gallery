@@ -8,6 +8,7 @@ import { useT } from "@/lib/i18n";
 import { usePresence, motionTokens } from "@/lib/motion";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { classifyError } from "@/lib/jobCategory";
+import { adminRoutes } from "@/lib/adminRoutes";
 
 export function shortId(id?: string | null) {
   return id ? id.slice(0, 8) : "-";
@@ -223,7 +224,7 @@ export function JobDetailDrawer({
               <DetailRow label={t("jobs.source_url")} value={dl.source_url} />
               <DetailRow label={t("jobs.creator")} value={dl.creator_id ? <Link href={`/admin/creators/${dl.creator_id}`} className="text-accent hover:underline dark:text-accent">{dl.creator_name || shortId(dl.creator_id)}</Link> : dl.creator_name} />
               <DetailRow label={t("jobs.subscription")} value={dl.subscription_id ? <Link href={`/admin/subscriptions/${dl.subscription_id}`} className="text-accent hover:underline dark:text-accent">{dl.subscription_name || shortId(dl.subscription_id)}</Link> : undefined} />
-              <DetailRow label={t("jobs.repository")} value={dl.subscription_source_id ? <Link href={`/admin/repositories/${dl.subscription_source_id}`} className="text-accent hover:underline dark:text-accent">{shortId(dl.subscription_source_id)}</Link> : undefined} />
+              <DetailRow label={t("jobs.repository")} value={dl.subscription_source_id ? <Link href={adminRoutes.repository(dl.subscription_source_id)} className="text-accent hover:underline dark:text-accent">{shortId(dl.subscription_source_id)}</Link> : undefined} />
               <DetailRow label={t("jobs.created")} value={fmt.dateTime(dl.created_at)} />
               <DetailRow label={t("jobs.updated")} value={fmt.dateTime(dl.updated_at)} />
               {dl.last_heartbeat_at && (

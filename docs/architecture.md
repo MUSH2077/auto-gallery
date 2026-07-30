@@ -347,15 +347,20 @@ Key environment variables used by the application:
 ## API Route Groups
 
 All routes are prefixed with `/api/v1` unless otherwise noted.
+This section is an architectural map rather than an exhaustive endpoint list.
+The generated [OpenAPI and AsyncAPI contracts](api/README.md) are the normative
+machine-readable interface and are checked against the running application in
+CI.
 
 ### `/api/v1/system`
 Health, queue stats, storage stats, clear failed jobs, log buffer.
 
 Endpoints:
-- `GET /health` — system health check (DB, Redis, Meilisearch, disk)
-- `GET /health/disk` — disk usage stats
+- `GET /health` and `GET /ready` — public liveness and dependency readiness
+- `GET /storage` — logical library storage stats
+- `GET /workbench` — dashboard status and recent activity
 - `GET /queue-stats` — pending/running/failed job counts
-- `GET /storage-breakdown` — per-source storage usage
+- `GET /scheduler-decisions` — current repository scheduling decisions
 - `POST /clear-failed-jobs` — clear all failed download/import jobs
 - `GET /logs` — tail buffered log output
 
@@ -364,7 +369,7 @@ Settings, gallery-dl config, system info, integrity, backup, import progress, pr
 
 Endpoints include:
 - `GET /settings` / `PUT /settings` — system settings CRUD
-- `POST /settings/reset` — reset settings to defaults
+- `POST /reset-settings` — reset settings to defaults
 - `GET /gallerydl-config` / `PUT /gallerydl-config` — per-source gallery-dl extractor config
 - `GET /system-info` — system overview (CPU, memory, disk, database size, archive sizes)
 - `GET /integrity-check` — scan for orphaned files, missing thumbnails, orphaned records

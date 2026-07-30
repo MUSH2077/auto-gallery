@@ -142,6 +142,7 @@ changing these boundaries.
 
 - [Documentation index](docs/README.md)
 - [Setup and upgrades](docs/setup.md)
+- [LAN API contracts](docs/api/README.md)
 - [Architecture](docs/architecture.md)
 - [Provider development](docs/providers.md)
 - [Development](docs/development.md)

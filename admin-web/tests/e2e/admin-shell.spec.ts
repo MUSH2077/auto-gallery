@@ -109,14 +109,14 @@ const REPRESENTATIVE_ROUTES = [
   "/admin/works",
   "/admin/tags",
   "/admin/upload",
-  "/admin/reference/danbooru",
+  "/admin/upload/danbooru",
   "/admin/data-mgmt",
-  "/admin/curation",
-  "/admin/dedup",
+  "/admin/data-mgmt/curation",
+  "/admin/data-mgmt/dedup",
   "/admin/system",
   "/admin/sources",
   "/admin/search",
-  "/admin/users",
+  "/admin/settings/users",
   "/admin/settings",
   "/admin/settings/appearance",
   "/admin/settings/auth-status",
@@ -138,9 +138,9 @@ const DYNAMIC_ROUTES = [
   "/admin/creators/fixture-creator/mapping",
   "/admin/creators/duplicates",
   "/admin/subscriptions/fixture-subscription",
-  "/admin/repositories/fixture-repository",
+  "/admin/subscriptions/repositories/fixture-repository",
   "/admin/tags/fixture-tag",
-  "/admin/users/1",
+  "/admin/settings/users/1",
 ] as const;
 
 const QUALITY_ROUTES = [...REPRESENTATIVE_ROUTES, ...DYNAMIC_ROUTES] as const;
@@ -149,7 +149,7 @@ const PRIMARY_ADMIN_ROUTES = [
   "/admin/works",
   "/admin/tags",
   "/admin/upload",
-  "/admin/reference/danbooru",
+  "/admin/upload/danbooru",
   "/admin/creators",
   "/admin/subscriptions",
   "/admin/jobs?tab=downloads",
@@ -957,14 +957,14 @@ for (const viewport of [
 }
 
 test("dedup status is addressable and browser history restores the selected review queue", async ({ page }) => {
-  await page.goto("/admin/dedup?status=deferred");
+  await page.goto("/admin/data-mgmt/dedup?status=deferred");
   await expect(page.getByText("0 candidates in the current view")).toBeVisible();
   await expect(page.getByRole("tab", { name: "Deferred" })).toHaveAttribute("aria-selected", "true");
   await page.getByRole("tab", { name: "Pending" }).click();
-  await expect(page).toHaveURL(/\/admin\/dedup\?status=pending$/);
+  await expect(page).toHaveURL(/\/admin\/data-mgmt\/dedup\?status=pending$/);
   await expect(page.getByRole("tab", { name: "Pending" })).toHaveAttribute("aria-selected", "true");
   await page.goBack();
-  await expect(page).toHaveURL(/\/admin\/dedup\?status=deferred$/);
+  await expect(page).toHaveURL(/\/admin\/data-mgmt\/dedup\?status=deferred$/);
   await expect(page.getByRole("tab", { name: "Deferred" })).toHaveAttribute("aria-selected", "true");
 });
 
@@ -978,13 +978,115 @@ test("legacy task, source, merge, and settings data routes redirect to their mai
   await expect(page.getByRole("tab", { name: "Sources" })).toHaveAttribute("aria-selected", "true");
 
   await page.goto("/admin/merge-candidates");
-  await expect(page).toHaveURL(/\/admin\/dedup\?status=pending$/);
+  await expect(page).toHaveURL(/\/admin\/data-mgmt\/dedup\?status=pending$/);
   await expect(page.getByRole("tab", { name: "Pending" })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator("[data-page-shell]")).toBeVisible();
 
   await page.goto("/admin/settings/data-mgmt");
   await expect(page).toHaveURL(/\/admin\/data-mgmt$/);
   await expect(page.getByRole("heading", { level: 1, name: "Data Management" })).toBeVisible();
+});
+
+test("migrated admin URLs return permanent redirects and preserve deep-link state", async ({ page }) => {
+  const cases = [
+    ["/admin/reference/danbooru?artist=atlas&tag=a&tag=b", "/admin/upload/danbooru?artist=atlas&tag=a&tag=b"],
+    ["/admin/repositories/repo-1?tab=tags&page=2", "/admin/subscriptions/repositories/repo-1?tab=tags&page=2"],
+    ["/admin/curation?cursor=commit-1", "/admin/data-mgmt/curation?cursor=commit-1"],
+    ["/admin/dedup?status=deferred&page=3", "/admin/data-mgmt/dedup?status=deferred&page=3"],
+    ["/admin/users?status=inactive", "/admin/settings/users?status=inactive"],
+    ["/admin/users/42?from=audit", "/admin/settings/users/42?from=audit"],
+    ["/admin/merge-candidates?view=grid&status=deferred", "/admin/data-mgmt/dedup?view=grid&status=pending"],
+    ["/admin/sources?from=bookmark", "/admin/system?from=bookmark&tab=sources"],
+    ["/admin/import-jobs?from=bookmark", "/admin/jobs?from=bookmark&tab=imports"],
+    ["/admin/settings/data-mgmt?from=bookmark", "/admin/data-mgmt?from=bookmark"],
+  ] as const;
+
+  for (const [legacy, canonical] of cases) {
+    const response = await page.request.get(legacy, { maxRedirects: 0 });
+    expect(response.status(), legacy).toBe(308);
+    const location = new URL(response.headers().location, "http://127.0.0.1:13000");
+    expect(`${location.pathname}${location.search}`, legacy).toBe(canonical);
+  }
+});
+
+test("tasks and scheduler paginate the unified search contract without exceeding 100", async ({ page }) => {
+  const requested = { tasks: [] as number[], scheduler: [] as number[] };
+  await page.route("**/api/v1/search**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname !== "/api/v1/search") {
+      await route.fallback();
+      return;
+    }
+    const scope = url.searchParams.get("scope");
+    if (scope !== "tasks" && scope !== "scheduler") {
+      await route.fallback();
+      return;
+    }
+    expect(url.searchParams.get("limit")).toBe("100");
+    const offset = Number(url.searchParams.get("offset") || 0);
+    requested[scope].push(offset);
+    const task = {
+      id: `task-${offset}`,
+      kind: "admin",
+      operation_type: "contract-check",
+      status: "complete",
+      title: `Task page ${offset / 100 + 1}`,
+      created_at: "2026-07-27T10:00:00Z",
+    };
+    const decision = {
+      subscription_id: `subscription-${offset}`,
+      subscription_name: "Fixture subscription",
+      subscription_active: true,
+      subscription_sync_enabled: true,
+      creator_id: `creator-${offset}`,
+      creator_name: `Creator page ${offset / 100 + 1}`,
+      source_id: `repository-${offset}`,
+      source: "pixiv",
+      source_url: "https://www.pixiv.net/users/10000001",
+      source_enabled: true,
+      effective_mode: "interval",
+      timezone: "UTC",
+      sync_interval_hours: 6,
+      due: true,
+      decision: "sync",
+      reason: "due",
+      auth_healthy: true,
+      url_valid: true,
+      can_download: true,
+    };
+    const items = scope === "tasks" ? [task] : [decision];
+    await route.fulfill({
+      json: {
+        query: "",
+        canonical_query: "",
+        parsed: { raw: "", canonical: "", scope, targets: [scope], tokens: [] },
+        groups: { [scope]: { total: 205, items } },
+        total: 205,
+        results: [],
+        creators: [],
+        tags: [],
+        repositories: [],
+        subscriptions: [],
+      },
+    });
+  });
+
+  await page.goto("/admin/jobs");
+  await expect(page.getByText("Task page 1")).toBeVisible();
+  await expect(page.getByText("Page 1 of 3")).toBeVisible();
+  await page.getByRole("navigation", { name: "Pagination" }).getByRole("button", { name: "Next" }).click();
+  await expect(page).toHaveURL(/\/admin\/jobs\?page=2$/);
+  await expect(page.getByText("Task page 2")).toBeVisible();
+  expect(requested.tasks).toContain(0);
+  expect(requested.tasks).toContain(100);
+
+  await page.goto("/admin/scheduler");
+  await expect(page.getByText("Creator page 1")).toBeVisible();
+  await page.getByRole("navigation", { name: "Pagination" }).getByRole("button", { name: "Next" }).click();
+  await expect(page).toHaveURL(/\/admin\/scheduler\?page=2$/);
+  await expect(page.getByText("Creator page 2")).toBeVisible();
+  expect(requested.scheduler).toContain(0);
+  expect(requested.scheduler).toContain(100);
 });
 
 test("settings no longer duplicates data management or language controls", async ({ page }) => {
@@ -1104,7 +1206,7 @@ test("200 percent equivalent reflow and reduced motion keep content visible", as
 
 test("390 pixel mobile layout stays within the viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/admin/reference/danbooru");
+  await page.goto("/admin/upload/danbooru");
   await expect(page.getByRole("heading", { level: 1, name: "Danbooru Reference Mapping" })).toBeVisible();
   await expectNoPageOverflow(page);
 });

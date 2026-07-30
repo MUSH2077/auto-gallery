@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, CreatorLink as CreatorLinkType } from "@/lib/api";
 import { PageHeader, PageShell, StatusBadge, SourceBadge, Modal, ConfirmDialog } from "@/components";
 import { useT } from "@/lib/i18n";
+import { adminRoutes } from "@/lib/adminRoutes";
 
 function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () => void }) {
   const t = useT();
@@ -132,7 +133,7 @@ export default function MappingPage() {
         <div className="rounded-md border border-warning-subtle bg-warning-subtle p-4 text-sm dark:border-warning/30 dark:bg-warning/15">
           <p className="font-medium text-warning mb-2">{t("mapping.danbooru_info")}</p>
           <p className="text-warning mb-3">{t("mapping.danbooru_desc")}</p>
-          <button onClick={() => router.push("/admin/reference/danbooru")} className="btn-primary px-3 py-1.5 text-xs">{t("mapping.open_danbooru")}</button>
+          <button onClick={() => router.push(adminRoutes.danbooru)} className="btn-primary px-3 py-1.5 text-xs">{t("mapping.open_danbooru")}</button>
         </div>
       </section>
 

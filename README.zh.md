@@ -124,6 +124,7 @@ Sources
 
 - [文档索引](docs/README.md)
 - [部署与升级](docs/setup.zh.md)
+- [局域网 API 契约](docs/api/README.zh.md)
 - [架构](docs/architecture.zh.md)
 - [Provider 开发](docs/providers.zh.md)
 - [开发指南](docs/development.zh.md)

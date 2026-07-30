@@ -20,6 +20,7 @@ import {
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { useStaggeredEntrance } from "@/lib/motion";
+import { adminRoutes } from "@/lib/adminRoutes";
 import { useToast } from "@/components/Toast";
 import { quoteSearchValue, searchUrl } from "@/lib/search-query";
 import { usePermissions } from "@/lib/usePermissions";
@@ -322,7 +323,7 @@ function SearchContent() {
                     return (
                       <Link
                         key={repository.id}
-                        href={`/admin/repositories/${repository.id}`}
+                        href={adminRoutes.repository(repository.id)}
                         aria-label={t("search.repository_open", { name: repository.name })}
                         className={`card-interactive ${entrance.className} flex min-h-16 items-center gap-3 p-4`}
                         style={entrance.style}

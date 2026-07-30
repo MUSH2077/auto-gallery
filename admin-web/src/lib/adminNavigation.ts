@@ -1,3 +1,5 @@
+import { adminRoutes } from "@/lib/adminRoutes";
+
 export type AdminIconName =
   | "home"
   | "image"
@@ -47,22 +49,21 @@ export type AdminPermissionRequirement = string | readonly string[];
 // Route -> permission module. Missing entries are available to every signed-in
 // user; adminOnly links receive an additional is_admin check in consumers.
 export const ADMIN_LINK_MODULE: Record<string, AdminPermissionRequirement> = {
-  "/admin/works": "library",
-  "/admin/tags": "library",
-  "/admin/search": "library",
-  "/admin/upload": "upload",
-  "/admin/curation": "curation",
-  "/admin/dedup": "curation",
-  "/admin/creators": "library",
-  "/admin/subscriptions": "subscriptions",
-  "/admin/reference/danbooru": "subscriptions",
-  "/admin/jobs": "tasks",
-  "/admin/import-jobs": "tasks",
-  "/admin/scheduler": "tasks",
-  "/admin/notifications": "tasks",
-  "/admin/data-mgmt": "system",
-  "/admin/system": ["system", "subscriptions"],
-  "/admin/settings": "system",
+  [adminRoutes.works]: "library",
+  [adminRoutes.tags]: "library",
+  [adminRoutes.search]: "library",
+  [adminRoutes.upload]: "upload",
+  [adminRoutes.curation]: "curation",
+  [adminRoutes.dedup]: "curation",
+  [adminRoutes.creators]: "library",
+  [adminRoutes.subscriptions]: "subscriptions",
+  [adminRoutes.danbooru]: "subscriptions",
+  [adminRoutes.jobs]: "tasks",
+  [adminRoutes.scheduler]: "tasks",
+  [adminRoutes.notifications]: "tasks",
+  [adminRoutes.dataManagement]: "system",
+  [adminRoutes.system]: ["system", "subscriptions"],
+  [adminRoutes.settings]: "system",
 };
 
 export function hasAdminPermission(
@@ -83,80 +84,82 @@ const link = (
 ): AdminNavLink => ({ href, labelKey, icon, context, ...options });
 
 export const ADMIN_NAV_LINKS: AdminNavLink[] = [
-  link("/admin", "nav.dashboard", "home", "overview", { primary: true, keywords: ["overview", "home", "概览"] }),
-  link("/admin/works", "nav.works", "image", "library", { primary: true, keywords: ["gallery", "images", "图库"] }),
-  link("/admin/tags", "nav.tags", "tag", "library", { primary: true, keywords: ["labels", "标签"] }),
-  link("/admin/upload", "nav.upload", "upload", "ingestion", { primary: true, keywords: ["import files", "上传"] }),
-  link("/admin/reference/danbooru", "nav.danbooru", "code", "ingestion", { primary: true, keywords: ["reference", "mapping"] }),
-  link("/admin/creators", "nav.creators", "person", "source-management", { primary: true, keywords: ["artists", "作者"] }),
-  link("/admin/subscriptions", "nav.subscriptions", "inbox", "source-management", { primary: true, keywords: ["repositories", "repos", "订阅", "仓库"] }),
-  link("/admin/jobs", "nav.jobs", "clock", "operations", { primary: true, keywords: ["tasks", "queue", "任务", "队列"] }),
-  link("/admin/scheduler", "nav.scheduler", "calendar", "operations", { primary: true, keywords: ["schedule", "sync", "调度", "同步"] }),
-  link("/admin/data-mgmt", "nav.datamgmt", "database", "governance", { primary: true, keywords: ["storage", "governance", "数据", "存储"] }),
-  link("/admin/system", "nav.system", "pulse", "governance", {
+  link(adminRoutes.dashboard, "nav.dashboard", "home", "overview", { primary: true, keywords: ["overview", "home", "概览"] }),
+  link(adminRoutes.works, "nav.works", "image", "library", { primary: true, keywords: ["gallery", "images", "图库"] }),
+  link(adminRoutes.tags, "nav.tags", "tag", "library", { primary: true, keywords: ["labels", "标签"] }),
+  link(adminRoutes.upload, "nav.upload", "upload", "ingestion", { primary: true, keywords: ["import files", "上传"] }),
+  link(adminRoutes.danbooru, "nav.danbooru", "code", "ingestion", { primary: true, keywords: ["reference", "mapping"] }),
+  link(adminRoutes.creators, "nav.creators", "person", "source-management", { primary: true, keywords: ["artists", "作者"] }),
+  link(adminRoutes.subscriptions, "nav.subscriptions", "inbox", "source-management", { primary: true, keywords: ["repositories", "repos", "订阅", "仓库"] }),
+  link(adminRoutes.jobs, "nav.jobs", "clock", "operations", {
+    primary: true,
+    keywords: ["tasks", "queue", "imports", "任务", "队列", "导入任务"],
+  }),
+  link(adminRoutes.scheduler, "nav.scheduler", "calendar", "operations", { primary: true, keywords: ["schedule", "sync", "调度", "同步"] }),
+  link(adminRoutes.dataManagement, "nav.datamgmt", "database", "governance", { primary: true, keywords: ["storage", "governance", "数据", "存储"] }),
+  link(adminRoutes.system, "nav.system", "pulse", "governance", {
     primary: true,
     keywords: ["health", "status", "source", "provider", "健康", "数据源"],
   }),
-  link("/admin/settings", "nav.settings", "gear", "settings", { primary: true, keywords: ["config", "preferences", "配置"] }),
+  link(adminRoutes.settings, "nav.settings", "gear", "settings", { primary: true, keywords: ["config", "preferences", "配置"] }),
 
-  link("/admin/search", "nav.search", "image", "library", { keywords: ["find", "搜索"] }),
-  link("/admin/import-jobs", "nav.import", "branch", "operations", { keywords: ["imports", "导入任务"] }),
-  link("/admin/notifications", "notifications.title", "bell", "notifications", {
+  link(adminRoutes.search, "nav.search", "image", "library", { keywords: ["find", "搜索"] }),
+  link(adminRoutes.notifications, "notifications.title", "bell", "notifications", {
     keywords: ["alerts", "通知"],
     topbarOnly: true,
   }),
-  link("/admin/curation", "nav.curation", "branch", "governance", { keywords: ["history", "策展"] }),
-  link("/admin/dedup", "nav.dedup", "copy", "governance", {
+  link(adminRoutes.curation, "nav.curation", "branch", "governance", { keywords: ["history", "策展"] }),
+  link(adminRoutes.dedup, "nav.dedup", "copy", "governance", {
     keywords: ["duplicates", "merge", "candidate", "查重", "合并候选"],
   }),
-  link("/admin/users", "nav.users", "people", "settings", { adminOnly: true, keywords: ["accounts", "权限", "用户"] }),
+  link(adminRoutes.users, "nav.users", "people", "settings", { adminOnly: true, keywords: ["accounts", "权限", "用户"] }),
 ];
 
 const byHref = (href: string) => ADMIN_NAV_LINKS.find((item) => item.href === href)!;
 
 export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
-  { labelKey: "nav.library", links: [byHref("/admin/works"), byHref("/admin/tags")] },
-  { labelKey: "nav.ingestion", links: [byHref("/admin/upload"), byHref("/admin/reference/danbooru")] },
-  { labelKey: "nav.sources", links: [byHref("/admin/creators"), byHref("/admin/subscriptions")] },
-  { labelKey: "nav.operations", links: [byHref("/admin/jobs"), byHref("/admin/scheduler")] },
-  { labelKey: "nav.admin", links: [byHref("/admin/data-mgmt"), byHref("/admin/system"), byHref("/admin/settings")] },
+  { labelKey: "nav.library", links: [byHref(adminRoutes.works), byHref(adminRoutes.tags)] },
+  { labelKey: "nav.ingestion", links: [byHref(adminRoutes.upload), byHref(adminRoutes.danbooru)] },
+  { labelKey: "nav.sources", links: [byHref(adminRoutes.creators), byHref(adminRoutes.subscriptions)] },
+  { labelKey: "nav.operations", links: [byHref(adminRoutes.jobs), byHref(adminRoutes.scheduler)] },
+  { labelKey: "nav.admin", links: [byHref(adminRoutes.dataManagement), byHref(adminRoutes.system), byHref(adminRoutes.settings)] },
 ];
 
 export const ADMIN_CONTEXT_LINKS: Record<AdminNavContext, AdminNavLink[]> = {
-  overview: [byHref("/admin")],
+  overview: [byHref(adminRoutes.dashboard)],
   library: [
-    byHref("/admin/works"),
-    byHref("/admin/tags"),
+    byHref(adminRoutes.works),
+    byHref(adminRoutes.tags),
   ],
   ingestion: [
-    byHref("/admin/upload"),
-    byHref("/admin/reference/danbooru"),
+    byHref(adminRoutes.upload),
+    byHref(adminRoutes.danbooru),
   ],
   "source-management": [
-    byHref("/admin/creators"),
-    byHref("/admin/subscriptions"),
+    byHref(adminRoutes.creators),
+    byHref(adminRoutes.subscriptions),
   ],
   operations: [
-    byHref("/admin/jobs"),
-    byHref("/admin/scheduler"),
+    byHref(adminRoutes.jobs),
+    byHref(adminRoutes.scheduler),
   ],
-  notifications: [byHref("/admin/notifications")],
+  notifications: [byHref(adminRoutes.notifications)],
   governance: [
-    byHref("/admin/data-mgmt"),
-    byHref("/admin/curation"),
-    byHref("/admin/dedup"),
-    byHref("/admin/system"),
+    byHref(adminRoutes.dataManagement),
+    byHref(adminRoutes.curation),
+    byHref(adminRoutes.dedup),
+    byHref(adminRoutes.system),
   ],
   settings: [
-    byHref("/admin/settings"),
-    byHref("/admin/users"),
+    byHref(adminRoutes.settings),
+    byHref(adminRoutes.users),
   ],
 };
 
-export const ADMIN_USERS_LINK = byHref("/admin/users");
+export const ADMIN_USERS_LINK = byHref(adminRoutes.users);
 
 export function pathnameMatches(pathname: string, href: string): boolean {
-  return href === "/admin" ? pathname === "/admin" : pathname.startsWith(href);
+  return href === adminRoutes.dashboard ? pathname === adminRoutes.dashboard : pathname.startsWith(href);
 }
 
 export function findAdminNavLink(pathname: string): AdminNavLink | null {
@@ -167,7 +170,7 @@ export function findAdminNavLink(pathname: string): AdminNavLink | null {
     }
   }
   // Settings detail routes intentionally inherit the settings context.
-  if (!best && pathname.startsWith("/admin/settings/")) return byHref("/admin/settings");
+  if (!best && pathname.startsWith(`${adminRoutes.settings}/`)) return byHref(adminRoutes.settings);
   return best;
 }
 

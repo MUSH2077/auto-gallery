@@ -7,9 +7,14 @@
     "node": ">=20.9.0"
   },
   "scripts": {
+    "prepare:api-docs": "node scripts/copy-api-doc-assets.mjs",
+    "predev": "npm run prepare:api-docs",
     "dev": "next dev --port 3000",
+    "prebuild": "npm run prepare:api-docs",
     "build": "next build",
-    "generate:api-types": "openapi-typescript http://localhost:8818/openapi.json -o src/lib/api/types.generated.ts",
+    "generate:api-types": "openapi-typescript ../docs/api/openapi.json -o src/lib/api/types.generated.ts",
+    "check:api-types": "node scripts/check-api-types.mjs",
+    "check:admin-routes": "node scripts/check-admin-routes.mjs",
     "check:i18n": "node scripts/check-i18n.mjs",
     "check:search-contract": "node scripts/check-search-contract.mjs",
     "typecheck": "tsc --noEmit",
@@ -26,7 +31,9 @@
     "ogl": "^1.0.11",
     "playwright-core": "^1.60.0",
     "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "react-dom": "18.3.1",
+    "redoc": "2.5.3",
+    "swagger-ui-dist": "5.32.11"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",

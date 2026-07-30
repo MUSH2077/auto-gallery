@@ -1,5 +1,8 @@
 const BASE = "";
 
+/** Public unified-search contract: backend accepts at most 100 rows per page. */
+export const SEARCH_PAGE_SIZE = 100;
+
 export class ApiError extends Error {
   status: number;
   detail?: unknown;

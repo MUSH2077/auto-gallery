@@ -1,12 +1,12 @@
-'use client';
-import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import PermissionGuard from '@/components/PermissionGuard';
+import { permanentRedirect } from "next/navigation";
 
-export default function ImportJobsRedirect() {
-  const router = useRouter();
-  useEffect(() => {
-    router.replace('/admin/jobs?tab=imports');
-  }, [router]);
-  return <PermissionGuard module="tasks">{null}</PermissionGuard>;
+import { adminRoutes } from "@/lib/adminRoutes";
+import { canonicalRedirectUrl, type LegacySearchParams } from "@/lib/legacyRedirect";
+
+export default async function ImportJobsRedirect({
+  searchParams,
+}: {
+  searchParams: Promise<LegacySearchParams>;
+}) {
+  permanentRedirect(canonicalRedirectUrl(adminRoutes.jobs, await searchParams, { tab: "imports" }));
 }

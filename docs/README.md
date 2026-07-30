@@ -14,6 +14,7 @@ versions.
 | Deployment sizing | [Deployment profiles](deployment-profiles.md) | [English only](deployment-profiles.md) |
 | gallery-dl settings | [Configuration](gallerydl-config.md) | [配置](gallerydl-config.zh.md) |
 | Provider behavior and authentication | [Providers](providers.md) | [Provider](providers.zh.md) |
+| LAN HTTP and WebSocket contract | [API contracts](api/README.md) | [API 契约](api/README.zh.md) |
 | Known operational risks | [Risk register](risks.md) | [风险登记](risks.zh.md) |
 | Privacy-safe distribution | [Distribution](distribution.md) | [分发与隐私](distribution.zh.md) |
 

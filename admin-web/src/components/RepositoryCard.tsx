@@ -6,6 +6,7 @@ import type { KeyboardEvent, MouseEvent } from "react";
 import type { CreatorRepository, RepositoryLatestJob, SchedulerDecisionItem } from "@/lib/api";
 import { scheduleModeLabel, schedulerDecisionLabel, useI18nFormat } from "@/lib/i18n-format";
 import { useT } from "@/lib/i18n";
+import { adminRoutes } from "@/lib/adminRoutes";
 import SourceBadge from "./SourceBadge";
 import StatusBadge from "./StatusBadge";
 
@@ -106,7 +107,7 @@ export default function RepositoryCard({
   const running = !!repo.latest_job && ["pending", "downloading", "downloaded", "importing"].includes(repo.latest_job.status);
   const legal = repo.is_repository;
   const disabledReason = !repo.can_download ? t("repo.provider_cannot_download") : !repo.url_valid ? t("repo.invalid_url") : null;
-  const detailHref = `/admin/repositories/${repo.id}`;
+  const detailHref = adminRoutes.repository(repo.id);
 
   const openDetail = () => router.push(detailHref);
   const handleCardClick = (event: MouseEvent<HTMLElement>) => {

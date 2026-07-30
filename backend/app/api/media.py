@@ -84,7 +84,11 @@ async def _serve(asset_id: str, size: str):
             return FileResponse(full, media_type=mime)
 
 
-@router.get("/media/thumb/{asset_id}")
+@router.get(
+    "/media/thumb/{asset_id}",
+    response_class=FileResponse,
+    responses={200: {"content": {"image/webp": {}}, "description": "WebP thumbnail bytes."}},
+)
 async def thumb(asset_id: str):
     """Serve thumbnail — no auth needed (embedded in <img> tags on admin-web).
 
@@ -96,7 +100,16 @@ async def thumb(asset_id: str):
     return resp
 
 
-@router.get("/media/preview/{asset_id}")
+@router.get(
+    "/media/preview/{asset_id}",
+    response_class=FileResponse,
+    responses={
+        200: {
+            "content": {"image/*": {}, "video/*": {}, "application/octet-stream": {}},
+            "description": "Signed preview media bytes.",
+        }
+    },
+)
 async def preview(asset_id: str, expires: str | None = None, token: str | None = None):
     """Serve preview image with a short-lived signed URL."""
     if not verify_media_token(asset_id, "preview", expires, token):
@@ -104,7 +117,16 @@ async def preview(asset_id: str, expires: str | None = None, token: str | None =
     return await _serve(asset_id, "original")
 
 
-@router.get("/media/original/{asset_id}")
+@router.get(
+    "/media/original/{asset_id}",
+    response_class=FileResponse,
+    responses={
+        200: {
+            "content": {"image/*": {}, "video/*": {}, "application/octet-stream": {}},
+            "description": "Original media bytes.",
+        }
+    },
+)
 async def original(
     asset_id: str,
     request: Request,
