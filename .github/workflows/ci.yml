@@ -68,6 +68,12 @@ jobs:
         run: python -m pytest
       - name: Check generated API contracts
         working-directory: backend
+        env:
+          SECRET_KEY: ci-secret-key-32chars-minimum-value
+          ADMIN_PASSWORD: ci-admin-password
+          DATABASE_URL: postgresql+asyncpg://autogallery:test-db@localhost:5432/autogallery
+          REDIS_URL: redis://localhost:6379/0
+          MEILI_MASTER_KEY: ci-meilisearch-master-key-32chars
         run: python scripts/export_api_contracts.py --check
 
   admin-web:
