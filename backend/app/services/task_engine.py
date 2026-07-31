@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
+from app.models.subscription_source import SubscriptionSource
 from app.models.task_state import (
     DOWNLOAD_ENQUEUED,
     DOWNLOAD_PAUSED,
@@ -46,8 +47,11 @@ from app.models.task_state import (
 )
 from app.repositories.download_job import DownloadJobRepository
 from app.services.job_manifest import append_manifest_event
+from app.services.job_manifest import update_manifest
+from app.services.job_progress import apply_download_progress
 from app.services.redis_client import get_redis
 from app.services.redis_pubsub import TaskChannel, TaskEventPublisher
+from app.services.sync_outcome import clear_download_job_outcome
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +273,28 @@ class TaskEngine:
         job = await self._apply_transition(job, DOWNLOAD_ENQUEUED, operator=operator)
         job.retry_count = 0
         job.error_log = None
+        clear_download_job_outcome(job)
+        subscription_source_id = getattr(job, "subscription_source_id", None)
+        source = await self.db.get(SubscriptionSource, subscription_source_id) if subscription_source_id else None
+        update_manifest(job, had_sync_baseline=bool(source and source.last_synced_at))
+        apply_download_progress(
+            job,
+            "enqueued",
+            "Queued; waiting for download worker",
+            publish=False,
+        )
+        try:
+            from app.services.tasks import TaskService
+            await TaskService(self.db).update_subject(
+                "download_job",
+                job.id,
+                status=DOWNLOAD_ENQUEUED,
+                progress=job.progress_data,
+                result=None,
+                error=None,
+            )
+        except Exception:
+            logger.warning("Unable to reset TaskRun projection for download retry %s", job.id, exc_info=True)
         await self.db.flush()
 
         self._enqueue_rq("downloads", "app.jobs.download.run_download_job", str(job_id))

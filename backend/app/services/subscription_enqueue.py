@@ -186,6 +186,7 @@ async def enqueue_subscription_source_sync(
         update_manifest(job,
             trigger=trigger,
             force_reason=force_reason,
+            had_sync_baseline=bool(ss.last_synced_at),
             subscription_source_id=str(ss.id),
             subscription_id=str(sub.id),
             source=ss.source,

@@ -51,6 +51,13 @@ export interface TaskRun {
   }[];
 }
 
+export interface SyncOutcome {
+  code: "new_content" | "no_changes" | "no_content";
+  metadata_count: number;
+  media_count: number;
+  completed_at: string;
+}
+
 export interface TaskRunListResponse {
   total: number;
   items: TaskRun[];
@@ -163,6 +170,7 @@ export interface RepositoryLatestJob {
   created_at?: string | null;
   updated_at?: string | null;
   error_log_excerpt?: string | null;
+  outcome?: SyncOutcome | null;
 }
 
 export interface CreatorRepository {
@@ -198,6 +206,7 @@ export interface RepositoryRecentJob {
   status: string;
   retry_count: number;
   error_log_excerpt?: string | null;
+  outcome?: SyncOutcome | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -462,6 +471,7 @@ export interface WorkbenchSummary {
       status: string;
       pipeline_stage?: string | null;
       progress_data?: JobProgress | null;
+      outcome?: SyncOutcome | null;
       created_at?: string | null;
       updated_at?: string | null;
       error_log_excerpt?: string | null;
@@ -587,6 +597,7 @@ export interface DownloadJob {
   worker_pid?: number | null;
   pipeline_stage?: string | null;
   progress_data?: JobProgress | null;
+  outcome?: SyncOutcome | null;
 }
 
 export interface JobProgress {
@@ -596,6 +607,7 @@ export interface JobProgress {
   percent?: number;
   message?: string;
   assets?: number;
+  outcome_code?: SyncOutcome["code"];
 }
 
 export interface WorkListItem {

@@ -22,6 +22,7 @@ from app.models.task_run import TaskEvent, TaskRun
 
 NONTERMINAL_STATUSES = {"enqueued", "running", "paused", "recovering"}
 TERMINAL_STATUSES = {"complete", "failed", "cancelled", "stale"}
+_UNSET = object()
 
 
 def normalize_task_status(status: str | None) -> str:
@@ -86,8 +87,8 @@ class TaskService:
         source: str | None = None,
         source_url: str | None = None,
         progress: dict[str, Any] | None = None,
-        result: dict[str, Any] | None = None,
-        error: str | None = None,
+        result: dict[str, Any] | None | object = _UNSET,
+        error: str | None | object = _UNSET,
         meta: dict[str, Any] | None = None,
         task_id: UUID | None = None,
     ) -> TaskRun:
@@ -127,8 +128,8 @@ class TaskService:
             progress_current=(progress or {}).get("current"),
             progress_total=(progress or {}).get("total"),
             progress_data=progress,
-            result_data=result,
-            error_log=error,
+            result_data=None if result is _UNSET else result,
+            error_log=None if error is _UNSET else error,
             meta=meta,
             enqueued_at=now if normalized == "enqueued" else None,
             started_at=now if normalized == "running" else None,
@@ -181,8 +182,8 @@ class TaskService:
         *,
         status: str | None = None,
         progress: dict[str, Any] | None = None,
-        result: dict[str, Any] | None = None,
-        error: str | None = None,
+        result: dict[str, Any] | None | object = _UNSET,
+        error: str | None | object = _UNSET,
         meta: dict[str, Any] | None = None,
         rq_job_id: str | None = None,
         parent_task_id: UUID | None = None,
@@ -208,9 +209,9 @@ class TaskService:
             task.progress_stage = progress.get("stage") or progress.get("phase")
             task.progress_current = progress.get("current") or progress.get("scanned")
             task.progress_total = progress.get("total")
-        if result is not None:
+        if result is not _UNSET:
             task.result_data = result
-        if error is not None:
+        if error is not _UNSET:
             task.error_log = error
         if meta is not None:
             task.meta = meta
@@ -221,7 +222,13 @@ class TaskService:
         task.updated_at = _now()
         await self.db.flush()
         if status is not None and old_status != task.status:
-            await self.add_event(task, "status_changed", from_status=old_status, to_status=task.status, message=error)
+            await self.add_event(
+                task,
+                "status_changed",
+                from_status=old_status,
+                to_status=task.status,
+                message=None if error is _UNSET else error,
+            )
         elif progress is not None:
             await self.add_event(task, "progress", to_status=task.status, payload=progress)
         return task
@@ -233,8 +240,8 @@ class TaskService:
         *,
         status: str | None = None,
         progress: dict[str, Any] | None = None,
-        result: dict[str, Any] | None = None,
-        error: str | None = None,
+        result: dict[str, Any] | None | object = _UNSET,
+        error: str | None | object = _UNSET,
         meta: dict[str, Any] | None = None,
     ) -> TaskRun | None:
         task = await self.get_by_subject(subject_type, subject_id)
@@ -243,6 +250,8 @@ class TaskService:
         return await self.update_task(task, status=status, progress=progress, result=result, error=error, meta=meta)
 
     async def ensure_download_task(self, job: DownloadJob, *, parent_task_id: UUID | None = None) -> TaskRun:
+        from app.services.sync_outcome import download_job_outcome
+
         progress = job.progress_data if isinstance(job.progress_data, dict) else None
         return await self.create_task(
             kind="download",
@@ -256,6 +265,7 @@ class TaskService:
             source=job.source,
             source_url=job.source_url,
             progress=progress,
+            result=download_job_outcome(job),
             error=job.error_log,
             meta={
                 "subscription_id": str(job.subscription_id) if job.subscription_id else None,

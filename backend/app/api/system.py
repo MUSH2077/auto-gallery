@@ -24,6 +24,7 @@ from app.models.work import Work
 from app.models.work_source import WorkSource
 from app.providers import registry
 from app.services.settings import get_download_defaults, get_scheduler_config
+from app.services.sync_outcome import download_job_outcome
 
 try:
     from zoneinfo import ZoneInfo
@@ -486,6 +487,7 @@ async def workbench_summary(
                 "status": j.status,
                 "pipeline_stage": j.pipeline_stage,
                 "progress_data": j.progress_data,
+                "outcome": download_job_outcome(j),
                 "created_at": _iso(j.created_at),
                 "updated_at": _iso(j.updated_at),
                 "error_log_excerpt": _excerpt(j.error_log),

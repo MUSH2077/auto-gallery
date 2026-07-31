@@ -6,13 +6,14 @@ import { useToast } from "@/components/Toast";
 import { useT, type TFunction } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, JobProgress, queryKeys, SEARCH_PAGE_SIZE, TaskRun, type SearchToken } from "@/lib/api";
-import { PageHeader, PageShell, Pagination, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, StatCard, PermissionGuard, CompactUrl, ErrorSummary, OverflowText, RowActionMenu, SmartSearchInput } from "@/components";
+import { PageHeader, PageShell, Pagination, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, StatCard, PermissionGuard, CompactUrl, ErrorSummary, OverflowText, RowActionMenu, SmartSearchInput, SyncOutcomeNotice } from "@/components";
 import { TaskDetailDrawer, JobDetailDrawer, shortId } from "@/components/JobDrawers";
 import { useJobWebSocket } from "@/lib/useWebSocket";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { classifyJob, categoryBorderClass, estimatedRetryBackoff } from "@/lib/jobCategory";
 import { POLL_ACTIVE_MS as REFETCH_ACTIVE_MS, POLL_IDLE_MS as REFETCH_IDLE_MS } from "@/lib/polling";
 import { useStaggeredEntrance, type StaggeredEntranceProps } from "@/lib/motion";
+import { parseSyncOutcome } from "@/lib/syncOutcome";
 
 
 const JOB_LIST_LIMIT = 200;
@@ -255,8 +256,6 @@ function JobRowShell({
       ? <CompactUrl value={detail} />
       : <OverflowText value={detail} className="text-xs text-muted" />
     : detail || <span className="text-xs text-muted">—</span>;
-  const calmError = Boolean(error && /no new content since last sync|already archived or empty/i.test(error));
-
   return (
     <div className={entrance?.className} style={entrance?.style}>
       <div
@@ -288,9 +287,7 @@ function JobRowShell({
         </div>
         {(error || result) && (
           <div className="mt-3 border-t border-border pt-2" onClick={(event) => event.stopPropagation()}>
-            {error
-              ? <ErrorSummary value={error} calm={calmError} />
-              : <ErrorSummary value={typeof result === "string" ? result : String(result || "")} calm />}
+            {error ? <ErrorSummary value={error} /> : result}
           </div>
         )}
       </div>
@@ -575,6 +572,8 @@ function TaskRunRow({
   const clickableDownload = task.subject_type === "download_job" && subjectId;
   const clickableImport = task.subject_type === "import_job" && subjectId;
   const isActive = isActiveTask(task.status);
+  const outcome = parseSyncOutcome(task.result_data);
+  const isFailure = ["failed", "stale"].includes(task.status);
   return (
     <div className={indent ? "pl-6" : undefined}>
       <JobRowShell
@@ -587,11 +586,11 @@ function TaskRunRow({
         primary={task.title || task.operation_type || task.kind}
         secondary={task.subject_type && task.subject_id ? `${task.subject_type} · ${shortId(task.subject_id)}` : task.queue_name || task.rq_job_id}
         detail={task.source_url || task.queue_name || task.rq_job_id || task.subject_type}
-        progress={isActive ? progress || fallbackProgress(task.progress_stage || task.status) : progress}
+        progress={isActive ? progress || fallbackProgress(task.progress_stage || task.status) : null}
         activeSince={isActive && !progress && task.created_at ? task.created_at : null}
         timestamp={task.created_at ? fmt.time(task.created_at) : "—"}
-        error={task.error_log}
-        result={task.result_data?.message}
+        error={isFailure ? task.error_log : null}
+        result={outcome ? <SyncOutcomeNotice outcome={outcome} /> : task.result_data?.message}
         onClick={() => openTaskDetail(task.id)}
         actions={(
           <>
@@ -1349,6 +1348,7 @@ function JobsContent() {
           <div className="space-y-1">
             {downloads.data.map((j: any, index: number) => {
               const active = isActiveDownload(j.status);
+              const outcome = parseSyncOutcome(j.outcome);
               const progress = active
                 ? downloadProgress[j.id] || (j.progress_data as JobProgress | null) || fallbackProgress(j.pipeline_stage || j.status)
                 : null;
@@ -1399,7 +1399,8 @@ function JobsContent() {
                         {fmt.time(j.created_at)}
                       </>
                     )}
-                    error={j.error_log}
+                    error={["failed", "stale"].includes(j.status) ? j.error_log : null}
+                    result={outcome ? <SyncOutcomeNotice outcome={outcome} /> : null}
                     className={(() => { const cls = categoryBorderClass(classifyJob(j.status, j.retry_count, 3)); return `${cls ? `border-l-2 ${cls}` : ""} ${flashIds.has(j.id) ? "row-flash" : ""}`.trim(); })()}
                     onClick={() => openDownloadDetail(j.id)}
                     actions={(
@@ -1483,7 +1484,7 @@ function JobsContent() {
                     progress={progress}
                     activeSince={active ? j.created_at : null}
                     timestamp={fmt.time(j.created_at)}
-                    error={j.error_log}
+                    error={["failed", "stale"].includes(j.status) ? j.error_log : null}
                     className={`${active ? "border-l-2 border-l-accent" : j.status === "failed" ? "border-l-2 border-l-danger" : ""} ${flashIds.has(j.id) ? "row-flash" : ""}`.trim()}
                     onClick={() => openImportDetail(j.id)}
                     actions={(

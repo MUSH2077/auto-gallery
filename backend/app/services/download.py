@@ -20,6 +20,7 @@ from app.services.search_language import compose_search_query
 logger = logging.getLogger(__name__)
 
 RQ_JOB_TIMEOUT = 7200  # 2 hours — must exceed gallery-dl subprocess timeout
+ACTIVE_DOWNLOAD_STATUSES = {"pending", "enqueued", "downloading", "downloaded", "importing"}
 
 
 class DownloadService:
@@ -68,6 +69,8 @@ class DownloadService:
 
     def _enrich_progress(self, jobs):
         for job in jobs:
+            if getattr(job, "status", None) not in ACTIVE_DOWNLOAD_STATUSES:
+                continue
             progress = ProgressTracker.get(str(job.id))
             if progress:
                 job.progress_data = progress

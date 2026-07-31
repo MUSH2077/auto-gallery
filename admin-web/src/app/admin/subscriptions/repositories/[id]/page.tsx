@@ -6,7 +6,7 @@ import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import type { CreatorRepository, RepositoryDetailResponse, RepositoryGraphNode, RepositoryRecentJob, RepositoryRecentWork, SchedulerDecisionItem } from "@/lib/api";
-import { EmptyState, ErrorState, PageShell, SourceBadge, TagBubbleChart } from "@/components";
+import { EmptyState, ErrorState, PageShell, SourceBadge, SyncOutcomeBadge, SyncOutcomeNotice, TagBubbleChart } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { scheduleModeLabel, schedulerDecisionLabel, statusLabel, useI18nFormat } from "@/lib/i18n-format";
@@ -73,10 +73,11 @@ function JobsList({ jobs }: { jobs: RepositoryRecentJob[] }) {
                 <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${statusClass(job.status)}`}>
                   {statusLabel(t, job.status)}
                 </span>
+                {job.outcome && <SyncOutcomeBadge outcome={job.outcome} />}
                 <span className="font-mono text-xs text-muted">{job.id.slice(0, 8)}</span>
                 {job.retry_count > 0 && <Pill tone="warn">{t("repo_detail.retry_count", { count: job.retry_count })}</Pill>}
               </div>
-              {job.error_log_excerpt && <p className="mt-2 line-clamp-2 text-xs text-danger dark:text-danger">{job.error_log_excerpt}</p>}
+              {job.error_log_excerpt && ["failed", "stale"].includes(job.status) && <p className="mt-2 line-clamp-2 text-xs text-danger dark:text-danger">{job.error_log_excerpt}</p>}
             </div>
             <div className="text-right text-xs text-muted">
               <div>{fmt.relative(job.created_at)}</div>
@@ -423,7 +424,8 @@ export default function RepositoryDetailPage() {
               <StatCard label={t("repo_detail.auth_status")} value={repo.auth_status || (repo.auth_healthy ? t("repo.auth_healthy") : t("repo.auth_issue"))} hint={fmt.dateTime(repo.last_auth_checked_at)} />
               <StatCard label={t("repo_detail.schedule")} value={decision ? schedulerDecisionLabel(t, decision.reason, decision.due) : scheduleModeLabel(t, subscription.schedule_mode)} hint={decision?.next_due_at ? fmt.dateTime(decision.next_due_at) : undefined} />
             </div>
-            {repo.latest_job?.error_log_excerpt && (
+            {repo.latest_job?.outcome && <SyncOutcomeNotice outcome={repo.latest_job.outcome} />}
+            {repo.latest_job?.error_log_excerpt && ["failed", "stale"].includes(repo.latest_job.status) && (
               <div className="rounded-md border border-danger/30 bg-danger-subtle p-4 text-sm text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">
                 {repo.latest_job.error_log_excerpt}
               </div>

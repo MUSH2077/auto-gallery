@@ -3,12 +3,13 @@ import Link from "next/link";
 import { useRef, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, DownloadJob, ImportJob, queryKeys } from "@/lib/api";
-import { ErrorState, StatusBadge, SourceBadge } from "@/components";
+import { ErrorState, StatusBadge, SourceBadge, SyncOutcomeNotice } from "@/components";
 import { useT } from "@/lib/i18n";
 import { usePresence, motionTokens } from "@/lib/motion";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { classifyError } from "@/lib/jobCategory";
 import { adminRoutes } from "@/lib/adminRoutes";
+import { parseSyncOutcome } from "@/lib/syncOutcome";
 
 export function shortId(id?: string | null) {
   return id ? id.slice(0, 8) : "-";
@@ -59,6 +60,7 @@ export function TaskDetailDrawer({
   });
   if (!mounted || !heldId) return null;
   const item = task.data;
+  const outcome = parseSyncOutcome(item?.result_data);
   const retryable = item?.operation_type === "admin-disk-import" || item?.operation_type === "admin-rebuild";
   const canRetry = retryable && ["failed", "stale", "cancelled"].includes(item?.status || "");
 
@@ -101,7 +103,7 @@ export function TaskDetailDrawer({
               <DetailRow label={t("jobs.started")} value={item.started_at ? fmt.dateTime(item.started_at) : undefined} />
               <DetailRow label={t("jobs.finished")} value={item.finished_at ? fmt.dateTime(item.finished_at) : undefined} />
             </dl>
-            {item.error_log && (
+            {item.error_log && ["failed", "stale"].includes(item.status) && (
               <section>
                 <h3 className="mb-2 text-sm font-semibold">{t("jobs.error_log")}</h3>
                 <pre className="max-h-96 overflow-auto rounded-md border border-danger/20 bg-danger-subtle p-3 font-mono text-xs whitespace-pre-wrap text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">{item.error_log}</pre>
@@ -113,7 +115,7 @@ export function TaskDetailDrawer({
             </section>
             <section>
               <h3 className="mb-2 text-sm font-semibold">{t("jobs.result")}</h3>
-              <JsonBlock value={item.result_data} />
+              {outcome ? <SyncOutcomeNotice outcome={outcome} /> : <JsonBlock value={item.result_data} />}
             </section>
             <section>
               <h3 className="mb-2 text-sm font-semibold">{t("jobs.meta")}</h3>
@@ -245,7 +247,8 @@ export function JobDetailDrawer({
                 } />
               )}
             </dl>
-            {dl.error_log && (() => {
+            {dl.outcome && <SyncOutcomeNotice outcome={dl.outcome} />}
+            {dl.error_log && ["failed", "stale"].includes(dl.status) && (() => {
               const errInfo = classifyError(dl.error_log);
               const hintKey = `jobs.error_type_${errInfo.type}`;
               return (

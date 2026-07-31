@@ -4054,6 +4054,7 @@ export interface components {
             operator_action?: string | null;
             /** Operator Name */
             operator_name?: string | null;
+            readonly outcome: components["schemas"]["SyncOutcomeRead"] | null;
             /** Pipeline Stage */
             pipeline_stage?: string | null;
             /**
@@ -4921,6 +4922,23 @@ export interface components {
             sync_enabled?: boolean | null;
             /** Sync Interval Hours */
             sync_interval_hours?: number | null;
+        };
+        /** SyncOutcomeRead */
+        SyncOutcomeRead: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "new_content" | "no_changes" | "no_content";
+            /**
+             * Completed At
+             * Format: date-time
+             */
+            completed_at: string;
+            /** Media Count */
+            media_count: number;
+            /** Metadata Count */
+            metadata_count: number;
         };
         /** TagCreate */
         TagCreate: {

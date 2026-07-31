@@ -1,5 +1,6 @@
 export { default as StatusBadge } from "./StatusBadge";
 export { getStatusTone } from "./StatusBadge";
+export { SyncOutcomeBadge, SyncOutcomeNotice } from "./SyncOutcomeBadge";
 export { default as SourceBadge } from "./SourceBadge";
 export { default as Banner } from "./Banner";
 export { default as PageHeader } from "./PageHeader";

@@ -21,6 +21,7 @@ from app.schemas.curation import RepositoryGraphResponse
 from app.services.curation import CurationService
 from app.services.subscription_enqueue import enqueue_subscription_source_sync
 from app.services.repository_identity import resolve_repository_source_creator_ids
+from app.services.sync_outcome import download_job_outcome
 
 router = APIRouter(dependencies=[RequirePermission("library")])
 
@@ -75,6 +76,7 @@ def _job_payload(job: DownloadJob) -> dict:
         "source_url": job.source_url,
         "status": job.status,
         "retry_count": job.retry_count,
+        "outcome": download_job_outcome(job),
         "error_log_excerpt": (job.error_log or "")[:240] or None,
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "updated_at": job.updated_at.isoformat() if job.updated_at else None,

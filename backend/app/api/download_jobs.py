@@ -243,9 +243,13 @@ async def batch_by_filter(
 
 
 @router.get("/{job_id}/progress")
-async def get_progress(job_id: UUID):
+async def get_progress(job_id: UUID, db: AsyncSession = Depends(get_db)):
     """Get the latest progress snapshot for a download job."""
-    progress = ProgressTracker.get(str(job_id))
+    try:
+        job = await DownloadService(db).get_job(job_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Job not found")
+    progress = job.progress_data
     if not progress:
         raise HTTPException(status_code=404, detail="No progress data available")
     return {"job_id": str(job_id), **progress}
@@ -277,5 +281,5 @@ async def get_pipeline(job_id: UUID, db: AsyncSession = Depends(get_db)):
         "job_id": str(job.id),
         "current_stage": current_stage,
         "stages": pipeline,
-        "progress": ProgressTracker.get(str(job_id)),
+        "progress": job.progress_data,
     }

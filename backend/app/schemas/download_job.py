@@ -1,7 +1,10 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
+
+from app.services.sync_outcome import sync_outcome_from_manifest
 
 
 class DownloadJobCreate(BaseModel):
@@ -11,6 +14,13 @@ class DownloadJobCreate(BaseModel):
     source_url: str
 
     model_config = {"from_attributes": True}
+
+
+class SyncOutcomeRead(BaseModel):
+    code: Literal["new_content", "no_changes", "no_content"]
+    metadata_count: int
+    media_count: int
+    completed_at: datetime
 
 
 class DownloadJobRead(BaseModel):
@@ -39,5 +49,11 @@ class DownloadJobRead(BaseModel):
     worker_pid: int | None = None
     pipeline_stage: str | None = None
     progress_data: dict | None = None
+
+    @computed_field
+    @property
+    def outcome(self) -> SyncOutcomeRead | None:
+        value = sync_outcome_from_manifest(self.manifest)
+        return SyncOutcomeRead(**value) if value else None
 
     model_config = {"from_attributes": True}

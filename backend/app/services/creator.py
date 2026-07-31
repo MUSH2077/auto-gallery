@@ -11,6 +11,7 @@ from app.models.work_tag import WorkTag
 from app.models.tag import Tag
 from app.models.asset_source import AssetSource
 from app.models.storage_artifact import StorageArtifact
+from app.services.sync_outcome import download_job_outcome
 
 logger = logging.getLogger(__name__)
 
@@ -288,6 +289,7 @@ class CreatorService:
                     "updated_at": latest_job.updated_at.isoformat() if latest_job.updated_at else None,
                     "error_log_excerpt": (latest_job.error_log or "")[:240] or None,
                 }
+                latest_job_payload["outcome"] = download_job_outcome(latest_job)
 
             is_repository = bool(can_download and url_valid and ss.source_url)
             repositories.append({

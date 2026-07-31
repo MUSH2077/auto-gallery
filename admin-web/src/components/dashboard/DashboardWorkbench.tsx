@@ -17,7 +17,8 @@ import {
 
 import SourceBadge from "@/components/SourceBadge";
 import StatusBadge from "@/components/StatusBadge";
-import { api, type WorkbenchSummary } from "@/lib/api";
+import { SyncOutcomeBadge } from "@/components/SyncOutcomeBadge";
+import { api, type SyncOutcome, type WorkbenchSummary } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { useStaggeredEntrance } from "@/lib/motion";
@@ -34,6 +35,7 @@ type DashboardActivity = {
   href: string;
   progress?: number | null;
   progressLabel?: string | null;
+  outcome?: SyncOutcome | null;
   retryable: boolean;
 };
 
@@ -291,20 +293,27 @@ export function RecentWorksPanel({ data }: { data: WorkbenchSummary }) {
 }
 
 function buildActivities(data: WorkbenchSummary, t: ReturnType<typeof useT>): DashboardActivity[] {
+  const recentDownloadSources = new Set(
+    data.recent.download_jobs
+      .map((job) => job.subscription_source_id)
+      .filter((id): id is string => Boolean(id)),
+  );
   const downloads = data.recent.download_jobs.map((job) => {
-    const progress = progressValue(job.progress_data);
+    const active = ACTIVE_STATUSES.has(job.status.toLowerCase());
+    const progress = active ? progressValue(job.progress_data) : { percent: null, label: null };
     return {
       key: `download:${job.id}`,
       id: job.id,
       kind: "download" as const,
       source: job.source,
       title: job.creator_name || job.subscription_name || sourceHandle(job.source_url) || job.id.slice(0, 8),
-      detail: job.pipeline_stage || t("dashboard.activity_download"),
+      detail: job.outcome ? t(`sync_outcome.${job.outcome.code}_desc`) : job.pipeline_stage || t("dashboard.activity_download"),
       status: job.status,
       timestamp: job.updated_at || job.created_at,
       href: `/admin/jobs?tab=downloads&job=${job.id}`,
       progress: progress.percent,
       progressLabel: progress.label,
+      outcome: job.outcome,
       retryable: FAILED_STATUSES.has(job.status.toLowerCase()),
     };
   });
@@ -325,7 +334,7 @@ function buildActivities(data: WorkbenchSummary, t: ReturnType<typeof useT>): Da
       retryable: FAILED_STATUSES.has(job.status.toLowerCase()),
     };
   });
-  const syncs = data.recent.successful_syncs.map((sync) => ({
+  const syncs = data.recent.successful_syncs.filter((sync) => !recentDownloadSources.has(sync.source_id)).map((sync) => ({
     key: `sync:${sync.source_id}`,
     id: sync.source_id,
     kind: "sync" as const,
@@ -388,6 +397,7 @@ function ActivityRow({
       <div className="ml-auto flex min-h-11 shrink-0 items-center gap-1 sm:gap-2">
         <div className="text-right">
           <StatusBadge status={activity.status} className="py-0 text-[11px]" />
+          {activity.outcome && <span className="mt-1 block"><SyncOutcomeBadge outcome={activity.outcome} /></span>}
           <p className="mt-1 text-[11px] tabular text-muted">{fmt.relative(activity.timestamp)}</p>
         </div>
         {activity.retryable && canRetry && (

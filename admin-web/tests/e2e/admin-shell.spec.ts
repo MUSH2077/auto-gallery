@@ -69,9 +69,18 @@ const longDownloadJob = {
   retry_count: 0,
   created_at: "2026-07-27T11:40:00Z",
   updated_at: "2026-07-27T11:45:00Z",
-  progress_data: null,
-  pipeline_stage: "complete",
-  error_log: null,
+  progress_data: {
+    stage: "post_download",
+    message: "Found 0 metadata files and 0 media files",
+  },
+  pipeline_stage: "post_download",
+  error_log: "No new content since last sync (already archived or empty)",
+  outcome: {
+    code: "no_changes",
+    metadata_count: 0,
+    media_count: 0,
+    completed_at: "2026-07-27T11:45:00Z",
+  },
 };
 
 const providerFixtures = [
@@ -1570,6 +1579,16 @@ test("compact tablet sidebar and long job metadata do not create root overflow",
   await expect(page.getByText("xianyuliangryo-with-a-very-long-creator-name")).toBeVisible();
   await expectNoPageOverflow(page);
   await page.screenshot({ path: "/tmp/auto-gallery-jobs-tablet.png", fullPage: true });
+});
+
+test("completed no-change sync uses an outcome badge without an error or progress bar", async ({ page }) => {
+  await page.goto("/admin/jobs?tab=downloads");
+  await expect(page.locator("span").filter({ hasText: /^Complete$/ })).toBeVisible();
+  await expect(page.getByText("No new works", { exact: true })).toBeVisible();
+  await expect(page.getByText("Sync completed; no new works were found to import.")).toBeVisible();
+  await expect(page.getByText("Found 0 metadata files and 0 media files")).toHaveCount(0);
+  await expect(page.getByText("No new content since last sync (already archived or empty)")).toHaveCount(0);
+  await expect(page.getByText("Verifying download")).toHaveCount(0);
 });
 
 test("200 percent equivalent reflow and reduced motion keep content visible", async ({ page }) => {

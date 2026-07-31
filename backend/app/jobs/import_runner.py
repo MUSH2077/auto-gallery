@@ -28,10 +28,11 @@ from app.providers import registry
 from app.repositories.download_job import DownloadJobRepository
 from app.services.job_progress import apply_download_progress, apply_import_progress
 from app.services.job_manifest import append_manifest_event, update_manifest
+from app.services.download_finalization import finalize_download_job
 from app.models.task_state import transition_import_job
 from app.services.settings import get_download_defaults
 from app.services.redis_client import get_redis
-from app.services.subscription_enqueue import mark_source_sync_success
+from app.services.sync_outcome import build_sync_outcome
 from app.services.curation import CurationService
 from app.services.gitllery import project_commit_safe
 from app.services.work_import import WorkImportService
@@ -862,15 +863,31 @@ async def run_import_job(import_job_id: str):
                 dj_repo = DownloadJobRepository(db)
                 dj = await dj_repo.get(ij.download_job_id)
                 if dj:
-                    await dj_repo.update_status(dj, status, message if status == "failed" else None)
-                    apply_download_progress(dj, status, message)
                     update_manifest(dj, import_stats=stats)
                     append_manifest_event(dj, "import_complete", status=status, **stats)
                     append_manifest_event(dj, "stage_timing", stage="parse", ms=_parse_ms)
                     append_manifest_event(dj, "stage_timing", stage="process", ms=_process_ms)
-                    if status == "complete" and dj.subscription_source_id:
-                        await mark_source_sync_success(db, dj.subscription_source_id)
-                await db.commit()
+                    manifest = dj.manifest or {}
+                    outcome = (
+                        build_sync_outcome(
+                            "new_content" if stats["works"] > 0 else "no_changes",
+                            metadata_count=int(manifest.get("metadata_json_count") or total_groups),
+                            media_count=int(manifest.get("image_count") or stats["assets"]),
+                        )
+                        if status == "complete"
+                        else None
+                    )
+                    await finalize_download_job(
+                        db,
+                        dj,
+                        status=status,
+                        outcome=outcome,
+                        error=message if status == "failed" else None,
+                        message=message,
+                        assets=stats["assets"],
+                    )
+                else:
+                    await db.commit()
 
         logger.info("Import finished: %d works, %d assets, %d skipped, %d multi-page (batched)",
                      stats["works"], stats["assets"], stats.get("skipped", 0), stats["multi_page"])

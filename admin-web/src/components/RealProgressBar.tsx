@@ -20,6 +20,9 @@ const KNOWN_PROGRESS_STAGES = new Set([
 export function RealProgressBar({ progress }: { progress: ProgressData | null }) {
   const t = useT();
   if (!progress) return null;
+  if (["complete", "completed", "failed", "stale", "cancelled"].includes(progress.stage || "")) {
+    return null;
+  }
 
   const computedPercent = progress.percent != null
     ? progress.percent

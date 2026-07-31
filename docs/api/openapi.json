@@ -2129,6 +2129,17 @@
             ],
             "title": "Operator Name"
           },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SyncOutcomeRead"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "readOnly": true
+          },
           "pipeline_stage": {
             "anyOf": [
               {
@@ -2236,7 +2247,8 @@
           "status",
           "retry_count",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "outcome"
         ],
         "title": "DownloadJobRead",
         "type": "object"
@@ -4681,6 +4693,40 @@
           }
         },
         "title": "SubscriptionUpdate",
+        "type": "object"
+      },
+      "SyncOutcomeRead": {
+        "properties": {
+          "code": {
+            "enum": [
+              "new_content",
+              "no_changes",
+              "no_content"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "completed_at": {
+            "format": "date-time",
+            "title": "Completed At",
+            "type": "string"
+          },
+          "media_count": {
+            "title": "Media Count",
+            "type": "integer"
+          },
+          "metadata_count": {
+            "title": "Metadata Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "metadata_count",
+          "media_count",
+          "completed_at"
+        ],
+        "title": "SyncOutcomeRead",
         "type": "object"
       },
       "TagCreate": {
