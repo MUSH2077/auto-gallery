@@ -60,7 +60,7 @@ export const ADMIN_LINK_MODULE: Record<string, AdminPermissionRequirement> = {
   [adminRoutes.subscriptions]: "subscriptions",
   [adminRoutes.danbooru]: "subscriptions",
   [adminRoutes.jobs]: "tasks",
-  [adminRoutes.scheduler]: "tasks",
+  [adminRoutes.scheduler]: ["tasks", "system"],
   [adminRoutes.notifications]: "tasks",
   [adminRoutes.dataManagement]: "system",
   [adminRoutes.system]: ["system", "subscriptions"],
@@ -138,6 +138,17 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
 ];
 
 export const ADMIN_USERS_LINK = byHref(adminRoutes.users);
+
+/**
+ * Secondary governance destinations which are not independently present in
+ * the sidebar. Other peer pages already have first-class sidebar entries and
+ * must not receive a duplicate page-level switcher.
+ */
+export const ADMIN_MANAGEMENT_LINKS: readonly AdminNavLink[] = [
+  byHref(adminRoutes.dataManagement),
+  byHref(adminRoutes.curation),
+  byHref(adminRoutes.dedup),
+];
 
 /** Whether a pathname belongs to a registered route, respecting path-segment boundaries. */
 export function pathnameBelongsTo(pathname: string, href: string): boolean {

@@ -128,7 +128,6 @@ const REPRESENTATIVE_ROUTES = [
   "/admin/settings/users",
   "/admin/settings",
   "/admin/settings/appearance",
-  "/admin/settings/auth-status",
   "/admin/settings/backup",
   "/admin/settings/dedup",
   "/admin/settings/download-defaults",
@@ -501,7 +500,25 @@ async function installFixtureRoutes(context: BrowserContext) {
         },
       });
     } else if (path === "/api/v1/admin/auth-status") {
-      await route.fulfill({ json: { summary: { total: 0, healthy: 0, unhealthy: 0, unknown: 0 }, sources: [] } });
+      await route.fulfill({
+        json: {
+          summary: { total: 1, healthy: 1, unhealthy: 0, unknown: 0 },
+          sources: [{
+            id: "fixture-source",
+            source: "pixiv",
+            source_url: "https://www.pixiv.net/users/2048",
+            source_creator_id: "2048",
+            auth_healthy: true,
+            auth_status: "healthy",
+            auth_error_reason: null,
+            last_auth_checked_at: "2026-07-30T12:00:00Z",
+            last_successful_auth: "2026-07-30T12:00:00Z",
+            is_enabled: true,
+            subscription: { id: "fixture-subscription", name: "Atlas archive", is_active: true, sync_enabled: true },
+            creator: { id: "fixture-creator", name: "atlas", display_name: "Atlas Studio" },
+          }],
+        },
+      });
     } else if (path === "/api/v1/admin/settings") {
       await route.fulfill({
         json: {
@@ -586,8 +603,15 @@ async function expectUniqueNavigationSelection(
   page: Page,
   sidebarHref: string | null,
 ) {
-  const contextNavigation = page.locator('[data-page-header] nav[aria-label="Related pages"]:visible');
-  await expect(contextNavigation).toHaveCount(0);
+  const pathname = new URL(page.url()).pathname;
+  const managementHrefs = ["/admin/data-mgmt", "/admin/data-mgmt/curation", "/admin/data-mgmt/dedup"];
+  const expectedManagementHref = managementHrefs.includes(pathname) ? pathname : null;
+  const contextNavigation = page.locator('[data-page-header] nav[aria-label="Data management sections"]:visible');
+  await expect(contextNavigation).toHaveCount(expectedManagementHref ? 1 : 0);
+  if (expectedManagementHref) {
+    await expect(contextNavigation.locator('[aria-current="page"]')).toHaveCount(1);
+    await expect(contextNavigation.locator(`a[href="${expectedManagementHref}"]`)).toHaveAttribute("aria-current", "page");
+  }
 
   const primaryNavigation = page.locator('#admin-sidebar nav[aria-label="Primary navigation"]');
   await expect(primaryNavigation.locator('[aria-current="page"]')).toHaveCount(sidebarHref ? 1 : 0);
@@ -818,6 +842,13 @@ test("sidebar resolves exactly one active route without duplicate peer-page tabs
   await page.goto("/admin/dedup?status=deferred");
   await expect(page).toHaveURL(/\/admin\/data-mgmt\/dedup\?status=deferred$/);
   await expectUniqueNavigationSelection(page, "/admin/data-mgmt");
+
+  const managementNav = page.getByRole("navigation", { name: "Data management sections" });
+  await managementNav.getByRole("link", { name: "Curation" }).click();
+  await expect(page).toHaveURL(/\/admin\/data-mgmt\/curation$/);
+  await expectUniqueNavigationSelection(page, "/admin/data-mgmt");
+  await page.getByRole("navigation", { name: "Data management sections" }).getByRole("link", { name: "Data Mgmt" }).click();
+  await expect(page).toHaveURL(/\/admin\/data-mgmt$/);
 });
 
 test("top-level page headers share the task page alignment and works has no creator picker", async ({ page }) => {
@@ -1322,13 +1353,14 @@ test("migrated admin URLs return permanent redirects and preserve deep-link stat
     ["/admin/sources?from=bookmark", "/admin/system?from=bookmark&tab=sources"],
     ["/admin/import-jobs?from=bookmark", "/admin/jobs?from=bookmark&tab=imports"],
     ["/admin/settings/data-mgmt?from=bookmark", "/admin/data-mgmt?from=bookmark"],
+    ["/admin/settings/auth-status?from=bookmark", "/admin/scheduler?from=bookmark#auth-status"],
   ] as const;
 
   for (const [legacy, canonical] of cases) {
     const response = await page.request.get(legacy, { maxRedirects: 0 });
     expect(response.status(), legacy).toBe(308);
     const location = new URL(response.headers().location, "http://127.0.0.1:13000");
-    expect(`${location.pathname}${location.search}`, legacy).toBe(canonical);
+    expect(`${location.pathname}${location.search}${location.hash}`, legacy).toBe(canonical);
   }
 });
 
@@ -1419,14 +1451,82 @@ test("settings no longer duplicates data management or language controls", async
   await expect(main.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
   await expect(main.getByRole("link", { name: /Data Management/ })).toHaveCount(0);
   await expect(main.getByRole("heading", { name: "Language" })).toHaveCount(0);
+  await expect(main.getByRole("link", { name: /Auth & Cookie Status/ })).toHaveCount(0);
   await page.screenshot({ path: "/tmp/auto-gallery-settings-clean.png", fullPage: false });
+});
+
+test("auth health is integrated into scheduler and storage chart footers are removed", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto("/admin/scheduler#auth-status");
+  await expect(page.getByRole("heading", { level: 1, name: "Scheduler" })).toBeVisible();
+  const authSection = page.locator("#auth-status");
+  await expect(authSection.getByRole("heading", { name: "Auth & Cookie Status" })).toBeVisible();
+  await expect(authSection).toBeInViewport();
+  await expect(authSection.getByRole("link", { name: "Atlas Studio" })).toHaveAttribute("href", "/admin/creators/fixture-creator");
+  await expect(authSection.getByText("Healthy", { exact: true }).last()).toBeVisible();
+  await page.screenshot({ path: "/tmp/auto-gallery-scheduler-auth-status.png", fullPage: true });
+
+  await page.goto("/admin/settings/auth-status?from=legacy");
+  await expect(page).toHaveURL(/\/admin\/scheduler\?from=legacy#auth-status$/);
+  await expect(page.locator("#auth-status")).toBeVisible();
+
+  await page.goto("/admin/data-mgmt");
+  await expect(page.getByText("Source: original media storage scan · exact capacity retained for every source")).toHaveCount(0);
+  await expect(page.getByText("Source: creator and repository storage tree · sorted by total storage")).toHaveCount(0);
+});
+
+test("scheduler separates task controls from system auth-health permissions", async ({ page }) => {
+  let authRequests = 0;
+  await page.route("**/api/v1/admin/auth-status", async (route) => {
+    authRequests += 1;
+    await route.fallback();
+  });
+  await page.route("**/api/v1/auth/me", (route) => route.fulfill({
+    json: {
+      ...me,
+      is_admin: false,
+      permissions: ["system"],
+      modules: { system: true, tasks: false },
+    },
+  }));
+  await page.goto("/admin/scheduler#auth-status");
+  await expect(page.locator("#auth-status").getByRole("heading", { name: "Auth & Cookie Status" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Run scheduler scan" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Sync eligible now" })).toHaveCount(0);
+  await expect.poll(() => authRequests).toBeGreaterThan(0);
+
+  authRequests = 0;
+  await page.route("**/api/v1/auth/me", (route) => route.fulfill({
+    json: {
+      ...me,
+      is_admin: false,
+      permissions: ["tasks"],
+      modules: { system: false, tasks: true },
+    },
+  }));
+  await page.goto("/admin/scheduler");
+  await expect(page.getByRole("button", { name: "Run scheduler scan" })).toBeVisible();
+  await expect(page.locator("#auth-status")).toHaveCount(0);
+  expect(authRequests).toBe(0);
+});
+
+test("mobile data management switcher keeps curation and dedup reachable", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/admin/data-mgmt");
+  const switcher = page.locator("[data-page-header] details");
+  await expect(switcher).toBeVisible();
+  await switcher.locator("summary").click();
+  await switcher.getByRole("link", { name: "Asset Deduplication" }).click();
+  await expect(page).toHaveURL(/\/admin\/data-mgmt\/dedup$/);
+  await expectNoPageOverflow(page);
+  await page.locator("[data-page-header] details summary").click();
+  await page.screenshot({ path: "/tmp/auto-gallery-management-switcher-mobile.png", fullPage: false });
 });
 
 test("settings children use clickable breadcrumbs without duplicate back controls", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   const settingsChildren = [
     ["/admin/settings/appearance", "Appearance"],
-    ["/admin/settings/auth-status", "Auth & Cookie Status"],
     ["/admin/settings/backup", "Backup & Restore"],
     ["/admin/settings/dedup", "Deduplication Settings"],
     ["/admin/settings/download-defaults", "Download Job Defaults"],

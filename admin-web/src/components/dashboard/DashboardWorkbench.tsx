@@ -23,6 +23,7 @@ import { api, type SyncOutcome, type WorkbenchSummary } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { useStaggeredEntrance } from "@/lib/motion";
+import { adminRoutes } from "@/lib/adminRoutes";
 
 type DashboardActivity = {
   key: string;
@@ -510,7 +511,7 @@ export function AttentionBanner({
   const href = data.attention.failed_import_count && !data.attention.failed_download_count
     ? "/admin/jobs?tab=imports&q=kind%3Aimport%20status%3Afailed"
     : data.attention.auth_unhealthy_count && !data.attention.failed_download_count
-      ? "/admin/settings/auth-status"
+      ? adminRoutes.schedulerAuth
       : data.attention.low_disk_warning && !data.attention.failed_download_count
         ? "/admin/data-mgmt"
         : data.attention.scheduler_disabled_warning && !data.attention.failed_download_count

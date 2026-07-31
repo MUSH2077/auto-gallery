@@ -26,6 +26,7 @@ export const adminRoutes = {
 
   jobs: "/admin/jobs",
   scheduler: "/admin/scheduler",
+  schedulerAuth: "/admin/scheduler#auth-status",
   notifications: "/admin/notifications",
 
   dataManagement: "/admin/data-mgmt",
@@ -52,6 +53,7 @@ export const legacyAdminRoutes = {
   importJobs: "/admin/import-jobs",
   settingsDataManagement: "/admin/settings/data-mgmt",
   profile: "/admin/settings/profile",
+  authStatus: "/admin/settings/auth-status",
 } as const;
 
 export interface AdminBreadcrumbParent {
@@ -92,7 +94,6 @@ export function adminBreadcrumbParents(pathname: string): AdminBreadcrumbParent[
 const SETTINGS_PAGE_TITLE_KEYS: Readonly<Record<string, string>> = {
   [adminRoutes.settings]: "settings.title",
   [adminRoutes.settingsSection("appearance")]: "appearance.title",
-  [adminRoutes.settingsSection("auth-status")]: "auth.title",
   [adminRoutes.settingsSection("backup")]: "backup.title",
   [adminRoutes.settingsSection("dedup")]: "dedup.title",
   [adminRoutes.settingsSection("download-defaults")]: "dldefaults.title",
@@ -114,6 +115,7 @@ export function adminPageTitleKey(pathname: string): string | null {
 export interface LegacyAdminRedirect {
   pathname: string;
   query?: Readonly<Record<string, string>>;
+  hash?: string;
 }
 
 /**
@@ -147,6 +149,10 @@ export function resolveLegacyAdminRoute(pathname: string): LegacyAdminRedirect |
     },
     [legacyAdminRoutes.profile]: {
       pathname: adminRoutes.profile,
+    },
+    [legacyAdminRoutes.authStatus]: {
+      pathname: adminRoutes.scheduler,
+      hash: "auth-status",
     },
   };
   if (exact[pathname]) return exact[pathname];

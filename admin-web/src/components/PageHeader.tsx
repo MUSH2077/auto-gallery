@@ -4,6 +4,7 @@ import { type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 
 import { Breadcrumb } from "@/components/Breadcrumb";
+import PageContextNav from "@/components/PageContextNav";
 import { findAdminNavEntry } from "@/lib/adminNavigation";
 import { adminBreadcrumbParents } from "@/lib/adminRoutes";
 import { useT } from "@/lib/i18n";
@@ -63,6 +64,7 @@ export default function PageHeader({
           </div>
         )}
       </div>
+      <PageContextNav />
     </header>
   );
 }

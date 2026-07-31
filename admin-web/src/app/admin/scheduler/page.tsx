@@ -49,6 +49,103 @@ function QueueRow({ name, stats }: { name: string; stats: QueueBreakdown }) {
   );
 }
 
+function AuthStatusSection({ enabled }: { enabled: boolean }) {
+  const t = useT();
+  const fmt = useI18nFormat();
+  const auth = useQuery({
+    queryKey: queryKeys.admin.authStatus,
+    queryFn: api.getAuthStatus,
+    enabled,
+    refetchInterval: enabled ? 30000 : false,
+  });
+
+  if (!enabled) return null;
+
+  return (
+    <section id="auth-status" aria-labelledby="auth-status-heading" className="mb-6 scroll-mt-20">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 id="auth-status-heading" className="text-base font-semibold">{t("auth.title")}</h2>
+          <p className="mt-1 text-sm text-muted">{t("auth.desc")}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => auth.refetch()}
+          disabled={auth.isFetching}
+          className="btn-ghost min-h-11 self-start px-4 sm:self-auto"
+        >
+          {auth.isFetching ? t("common.loading") : t("scheduler.refresh")}
+        </button>
+      </div>
+
+      {auth.isLoading && (
+        <div aria-hidden="true" className="space-y-2">
+          {Array.from({ length: 3 }).map((_, index) => (
+            <div key={index} className="h-16 animate-pulse rounded-md bg-subtle" />
+          ))}
+        </div>
+      )}
+      {auth.error && <ErrorState message={(auth.error as Error).message} onRetry={() => auth.refetch()} />}
+
+      {auth.data && (
+        <>
+          <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+            <StatCard label={t("auth.total")} value={auth.data.summary.total} />
+            <StatCard label={t("auth.healthy")} value={auth.data.summary.healthy} tone="success" />
+            <StatCard label={t("auth.unhealthy")} value={auth.data.summary.unhealthy} tone={auth.data.summary.unhealthy > 0 ? "danger" : "neutral"} />
+            <StatCard label={t("auth.unknown")} value={auth.data.summary.unknown} />
+          </div>
+
+          {auth.data.sources.length === 0 ? (
+            <EmptyState title={t("auth.no_sources")} description={t("auth.no_sources_desc")} />
+          ) : (
+            <div className="table-shell divide-y divide-border">
+              {auth.data.sources.map((source) => (
+                <div key={source.id} className="flex min-w-0 flex-col gap-3 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <SourceBadge source={source.source} />
+                    <div className="min-w-0">
+                      <Link href={adminRoutes.creator(source.creator.id)} className="font-medium text-accent hover:underline">
+                        {source.creator.display_name || source.creator.name}
+                      </Link>
+                      <div className="mt-0.5 break-all font-mono text-xs text-muted">{source.source_url}</div>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+                    {!source.is_enabled && <span className="badge">{t("auth.disabled")}</span>}
+                    {source.auth_healthy === true && (
+                      <span className="inline-flex items-center gap-1 rounded bg-success-subtle px-2 py-1 text-xs text-success">
+                        <span aria-hidden="true" className="h-2 w-2 rounded-full bg-success" />{t("auth.healthy")}
+                      </span>
+                    )}
+                    {source.auth_healthy === false && (
+                      <span className="inline-flex items-center gap-1 rounded bg-danger-subtle px-2 py-1 text-xs text-danger">
+                        <span aria-hidden="true" className="h-2 w-2 rounded-full bg-danger" />{t("auth.unhealthy")}
+                      </span>
+                    )}
+                    {source.auth_healthy === null && (
+                      <span className="badge inline-flex items-center gap-1">
+                        <span aria-hidden="true" className="h-2 w-2 rounded-full bg-muted" />{t("auth.unknown")}
+                      </span>
+                    )}
+                    {source.last_successful_auth && (
+                      <span className="text-xs text-muted">{t("auth.last_success")} {fmt.dateTime(source.last_successful_auth)}</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <p className="mt-4 rounded-md border border-accent/20 bg-accent-subtle p-4 text-sm text-accent">
+            {t("auth.how")}
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
 function AdminOperationsSection() {
   const t = useT();
   const toast = useToast();
@@ -135,6 +232,8 @@ export default function SchedulerPage() {
   const toast = useToast();
   const qc = useQueryClient();
   const { has } = usePermissions();
+  const canManageTasks = has("tasks");
+  const canViewAuth = has("system");
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
@@ -142,6 +241,20 @@ export default function SchedulerPage() {
   const rawPage = Number.parseInt(sp.get("page") || "1", 10);
   const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
   const searchOffset = (page - 1) * SEARCH_PAGE_SIZE;
+
+  useEffect(() => {
+    if (!canViewAuth || window.location.hash !== "#auth-status") return;
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        document.getElementById("auth-status")?.scrollIntoView({ block: "start" });
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [canViewAuth]);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectAll, setSelectAll] = useState(false);
@@ -154,12 +267,13 @@ export default function SchedulerPage() {
     router.replace(next.toString() ? `${pathname}?${next.toString()}` : pathname, { scroll: false });
   };
 
-  const queue = useQuery({ queryKey: ["queue-stats"], queryFn: api.queueStats, refetchInterval: 15000 });
-  const decisions = useQuery({ queryKey: queryKeys.schedulerDecisions, queryFn: api.schedulerDecisions, refetchInterval: 15000 });
+  const queue = useQuery({ queryKey: ["queue-stats"], queryFn: api.queueStats, enabled: canManageTasks, refetchInterval: canManageTasks ? 15000 : false });
+  const decisions = useQuery({ queryKey: queryKeys.schedulerDecisions, queryFn: api.schedulerDecisions, enabled: canManageTasks, refetchInterval: canManageTasks ? 15000 : false });
   const searchedDecisions = useQuery({
     queryKey: ["search", "scheduler", search, searchOffset, SEARCH_PAGE_SIZE],
     queryFn: () => api.search(search, searchOffset, SEARCH_PAGE_SIZE, "scheduler"),
-    refetchInterval: 15000,
+    enabled: canManageTasks,
+    refetchInterval: canManageTasks ? 15000 : false,
   });
   const filterComposer = useSearchComposer({
     value: search,
@@ -298,9 +412,11 @@ export default function SchedulerPage() {
   };
 
   return (
-    <PermissionGuard module="tasks">
+    <PermissionGuard anyOf={["tasks", "system"]}>
     <PageShell>
       <PageHeader title={t("scheduler.title")} description={t("scheduler.explain_desc")} />
+      {canManageTasks && (
+      <>
       <div data-page-primary-content>
         <AdaptiveToolbar
           className="mb-4"
@@ -415,6 +531,13 @@ export default function SchedulerPage() {
         </section>
       )}
 
+      </>
+      )}
+
+      <AuthStatusSection enabled={canViewAuth} />
+
+      {canManageTasks && (
+      <>
       <AdminOperationsSection />
 
       <section>
@@ -534,6 +657,8 @@ export default function SchedulerPage() {
           />
         ) : null}
       </section>
+      </>
+      )}
     </PageShell>
     </PermissionGuard>
   );

@@ -265,7 +265,7 @@ export function JobDetailDrawer({
                 </h3>
                 {errInfo.type === "auth" && (
                   <p className="text-xs text-danger mb-2">
-                    {t("auth.desc")}: <Link href="/admin/settings/auth-status" className="underline">{t("settings.auth")} →</Link>
+                    {t("auth.desc")}: <Link href={adminRoutes.schedulerAuth} className="underline">{t("settings.auth")} →</Link>
                   </p>
                 )}
                 {errInfo.type === "timeout" && (

@@ -310,7 +310,6 @@ export default function DataManagementPage() {
             })
             : t("datamgmt.storage_no_data")}
           description={t("charts.storage_encoding")}
-          footer={t("charts.storage_footer")}
           testId="storage-source-chart"
         >
           {sourceStorageData.length ? (
@@ -333,7 +332,6 @@ export default function DataManagementPage() {
             })
             : t("datamgmt.storage_no_data")}
           description={t("charts.storage_tree_encoding")}
-          footer={t("charts.storage_tree_footer")}
           testId="creator-storage-chart"
         >
           {storageGroups.length ? (

@@ -44,6 +44,7 @@ export function proxy(request: NextRequest) {
     for (const [key, value] of Object.entries(legacyRedirect.query || {})) {
       destination.searchParams.set(key, value);
     }
+    if (legacyRedirect.hash) destination.hash = legacyRedirect.hash;
     return NextResponse.redirect(destination, 308);
   }
 

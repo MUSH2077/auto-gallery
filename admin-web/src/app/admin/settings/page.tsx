@@ -28,7 +28,6 @@ export default function SettingsPage() {
     { href: "/admin/settings/download-defaults", title: t("settings.download_defaults"), desc: t("settings.download_defaults.desc") },
     { href: "/admin/settings/dedup", title: t("settings.dedup"), desc: t("settings.dedup.desc") },
     { href: "/admin/settings/proxy", title: t("settings.proxy"), desc: t("settings.proxy.desc") },
-    { href: "/admin/settings/auth-status", title: t("settings.auth"), desc: t("settings.auth.desc") },
     { href: "/admin/settings/logs", title: t("settings.logs"), desc: t("settings.logs.desc") },
     { href: "/admin/settings/backup", title: t("settings.backup"), desc: t("settings.backup.desc") },
   ];
