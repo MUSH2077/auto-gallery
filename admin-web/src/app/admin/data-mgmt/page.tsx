@@ -6,7 +6,7 @@ import { PageHeader, ConfirmDialog, Modal, PageShell, StatusBadge, PermissionGua
 import ChartFrame from "@/components/charts/ChartFrame";
 import StorageColonnade, { type StorageColonnadeGroup } from "@/components/charts/StorageColonnade";
 import TickDonut from "@/components/charts/TickDonut";
-import type { ChartDatum, ChartTableModel } from "@/components/charts/types";
+import type { ChartDatum } from "@/components/charts/types";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
@@ -206,27 +206,6 @@ export default function DataManagementPage() {
     }))
   ), [sourceEntries, t]);
   const sourceStorageLeader = sourceStorageData[0];
-  const sourceStorageTable: ChartTableModel = {
-    caption: t("charts.storage_table_caption"),
-    columns: [
-      { key: "source", label: t("charts.column_source") },
-      { key: "works", label: t("charts.column_works"), align: "right" },
-      { key: "share", label: t("charts.column_share"), align: "right" },
-      { key: "size", label: t("charts.column_size"), align: "right" },
-    ],
-    rows: sourceEntries.map(([source, storage]) => ({
-      id: source,
-      cells: {
-        source,
-        works: fmt.number(storage.work_count),
-        share: `${fmt.number(
-          totalSourceSize > 0 ? (storage.size_mb / totalSourceSize) * 100 : 0,
-          { maximumFractionDigits: 1 },
-        )}%`,
-        size: formatSize(storage.size_mb),
-      },
-    })),
-  };
   const storageGroups = useMemo<StorageColonnadeGroup[]>(() => (
     creatorEntries.map((creator) => ({
       id: creator.creator_id,
@@ -248,24 +227,6 @@ export default function DataManagementPage() {
     }))
   ), [creatorEntries]);
   const creatorStorageLeader = storageGroups[0];
-  const creatorStorageTable: ChartTableModel = {
-    caption: t("datamgmt.storage_creators_title"),
-    columns: [
-      { key: "creator", label: t("charts.column_creator") },
-      { key: "repositories", label: t("charts.column_repositories"), align: "right" },
-      { key: "works", label: t("charts.column_works"), align: "right" },
-      { key: "size", label: t("charts.column_size"), align: "right" },
-    ],
-    rows: creatorEntries.map((creator) => ({
-      id: creator.creator_id,
-      cells: {
-        creator: creator.display_name,
-        repositories: fmt.number(creator.repository_count),
-        works: fmt.number(creator.work_count),
-        size: formatSize(creator.size_mb),
-      },
-    })),
-  };
   const integrityItemKeys = (integrityItems?.items || []).map(
     (item, index) => item.id || item.path || item.file_name || item.name || `item:${index}`,
   );
@@ -349,7 +310,6 @@ export default function DataManagementPage() {
             })
             : t("datamgmt.storage_no_data")}
           description={t("charts.storage_encoding")}
-          table={sourceStorageData.length ? sourceStorageTable : undefined}
           footer={t("charts.storage_footer")}
           testId="storage-source-chart"
         >
@@ -373,7 +333,6 @@ export default function DataManagementPage() {
             })
             : t("datamgmt.storage_no_data")}
           description={t("charts.storage_tree_encoding")}
-          table={storageGroups.length ? creatorStorageTable : undefined}
           footer={t("charts.storage_tree_footer")}
           testId="creator-storage-chart"
         >

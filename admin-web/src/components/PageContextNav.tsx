@@ -9,7 +9,6 @@ import {
   ADMIN_LINK_MODULE,
   findAdminNavLink,
   hasAdminPermission,
-  pathnameMatches,
 } from "@/lib/adminNavigation";
 import { useT } from "@/lib/i18n";
 import { usePermissions } from "@/lib/usePermissions";
@@ -27,13 +26,13 @@ export default function PageContextNav() {
   });
   if (links.length <= 1) return null;
 
-  const active = links.find((item) => pathnameMatches(pathname, item.href)) || current;
+  const active = links.find((item) => item.href === current.href) || current;
 
   return (
     <div className="mt-4 border-t border-border pt-3">
       <nav aria-label={t("nav.secondary")} className="hidden min-w-0 items-center gap-1 md:flex">
         {links.map((item) => {
-          const selected = pathnameMatches(pathname, item.href);
+          const selected = item.href === current.href;
           return (
             <Link
               key={item.href}
@@ -60,7 +59,7 @@ export default function PageContextNav() {
           className="absolute left-0 right-0 z-30 mt-1 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-overlay"
         >
           {links.map((item) => {
-            const selected = pathnameMatches(pathname, item.href);
+            const selected = item.href === current.href;
             return (
               <Link
                 key={item.href}

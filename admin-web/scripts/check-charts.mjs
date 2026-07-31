@@ -33,6 +33,7 @@ const sharedChecks = [
   [/\boverflow-x-auto\b/g, "horizontal chart scrolling is forbidden; use a responsive encoding"],
   [/\bmin-w-\[[^\]]+\]/g, "data-driven chart minimum widths are forbidden"],
   [/\bmax-width\s*:\s*none\b/g, "unbounded chart width is forbidden"],
+  [/\btable\s*=/g, "retired chart data-table prop; keep exact values in the chart interaction"],
 ];
 
 for (const file of sourceFiles(chartRoot)) {
@@ -43,10 +44,24 @@ for (const file of sourceFiles(chartRoot)) {
   }
 }
 
+const retiredContractChecks = [
+  [/\bChartTableModel\b/g, "retired ChartTableModel contract"],
+  [/["']charts\.view_data["']/g, "retired chart data-table translation"],
+];
+
+for (const file of sourceFiles(path.join(root, "src"))) {
+  const source = fs.readFileSync(file, "utf8");
+  for (const [pattern, message] of retiredContractChecks) {
+    pattern.lastIndex = 0;
+    for (const match of source.matchAll(pattern)) report(file, source, match.index, message);
+  }
+}
+
 const localChartChecks = [
   [/\b(?:CHART_COLORS|SOURCE_COLORS|getSourceColor|HorizontalBarChart|MonthStrip|WorkGrid)\b/g, "local or legacy chart implementation"],
   [/<svg\b/g, "page-local SVG; move visual encoding into a shared chart primitive"],
   [/\bMath\.random\s*\(/g, "random chart geometry or color is forbidden"],
+  [/\btable\s*=/g, "retired chart data-table prop"],
 ];
 
 for (const file of targetPages) {

@@ -12,7 +12,7 @@ import ChartFrame from "@/components/charts/ChartFrame";
 import HairlineSeries from "@/components/charts/HairlineSeries";
 import TickRows from "@/components/charts/TickRows";
 import { niceUnit } from "@/components/charts/chartMath";
-import type { ChartDatum, ChartSeriesPoint, ChartTableModel } from "@/components/charts/types";
+import type { ChartDatum, ChartSeriesPoint } from "@/components/charts/types";
 import { useSlideshow } from "@/lib/useSlideshow";
 import { POLL_IDLE_MS } from "@/lib/polling";
 import { motionConfig } from "@/lib/motion";
@@ -372,63 +372,6 @@ export default function CreatorDetailPage() {
     (current, day) => current === null || day.total > current.total ? day : current,
     null,
   );
-  const activityTable: ChartTableModel = {
-    caption: t("charts.activity_table_caption", { year: activityYear || "" }),
-    columns: [
-      { key: "date", label: t("charts.column_date") },
-      { key: "sources", label: t("charts.column_sources") },
-      { key: "count", label: t("charts.column_works"), align: "right" },
-    ],
-    rows: (timeline.data?.days || []).map((day) => ({
-      id: day.date,
-      cells: {
-        date: fmt.date(`${day.date}T00:00:00Z`),
-        sources: timeline.data?.sources
-          .filter((source) => Number(day[source] || 0) > 0)
-          .map((source) => `${source} ${fmt.number(Number(day[source]))}`)
-          .join(" · "),
-        count: fmt.number(day.total),
-      },
-    })),
-  };
-  const sourceTable: ChartTableModel = {
-    caption: t("creator_detail.source_breakdown"),
-    columns: [
-      { key: "source", label: t("charts.column_source") },
-      { key: "count", label: t("charts.column_works"), align: "right" },
-    ],
-    rows: sourceChartData.map((item) => ({
-      id: item.id,
-      cells: { source: item.label, count: fmt.number(item.value) },
-    })),
-  };
-  const tagTable: ChartTableModel = {
-    caption: t("creator_detail.tag_distribution"),
-    columns: [
-      { key: "tag", label: t("charts.column_tag") },
-      { key: "count", label: t("charts.column_works"), align: "right" },
-      { key: "share", label: t("charts.column_share"), align: "right" },
-    ],
-    rows: tagChartData.map((item) => ({
-      id: item.id,
-      cells: {
-        tag: <Link href={item.href || "#"} className="text-accent hover:underline">#{item.label}</Link>,
-        count: fmt.number(item.value),
-        share: `${fmt.number(st?.total_works ? (item.value / st.total_works) * 100 : 0, { maximumFractionDigits: 1 })}%`,
-      },
-    })),
-  };
-  const monthlyTable: ChartTableModel = {
-    caption: t("creator_detail.posting_frequency"),
-    columns: [
-      { key: "month", label: t("charts.column_month") },
-      { key: "count", label: t("charts.column_works"), align: "right" },
-    ],
-    rows: monthlyChartData.map((item) => ({
-      id: item.id,
-      cells: { month: item.label, count: fmt.number(item.value) },
-    })),
-  };
   const repos = overview.data?.repositories || [];
   const legalRepos = repos.filter((r) => r.is_repository);
   const decisionBySource = useMemo(() => {
@@ -636,7 +579,6 @@ export default function CreatorDetailPage() {
                     {t("creator_detail.view_all_works")}
                   </Link>
                 )}
-                table={activityTable.rows.length ? activityTable : undefined}
                 footer={t("charts.creator_activity_footer")}
                 testId="creator-activity-chart"
               >
@@ -682,7 +624,6 @@ export default function CreatorDetailPage() {
                       })
                       : undefined}
                     description={t("charts.source_encoding", { unit: sourceUnit })}
-                    table={sourceTable}
                     footer={t("charts.creator_stats_footer")}
                     testId="creator-source-chart"
                   >
@@ -703,7 +644,6 @@ export default function CreatorDetailPage() {
                       })
                       : undefined}
                     description={t("charts.tag_encoding")}
-                    table={tagTable}
                     footer={t("charts.creator_stats_footer")}
                     testId="creator-tag-chart"
                   >
@@ -722,7 +662,6 @@ export default function CreatorDetailPage() {
                     })
                     : undefined}
                   description={t("charts.monthly_encoding")}
-                  table={monthlyTable}
                   footer={t("charts.creator_stats_footer")}
                   testId="creator-monthly-chart"
                 >

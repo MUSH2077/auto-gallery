@@ -28,8 +28,8 @@ import { api, queryKeys } from "@/lib/api";
 import {
   ADMIN_LINK_MODULE,
   ADMIN_NAV_GROUPS,
+  findAdminSidebarHref,
   hasAdminPermission,
-  pathnameMatches,
   type AdminIconName,
 } from "@/lib/adminNavigation";
 import { useT } from "@/lib/i18n";
@@ -145,6 +145,7 @@ export default function AppSidebar({
       }),
     }))
     .filter((group) => group.links.length > 0);
+  const activeSidebarHref = findAdminSidebarHref(pathname);
 
   return (
     <div className={`flex h-full flex-col ${compact ? "w-16" : "w-[248px]"}`}>
@@ -195,7 +196,7 @@ export default function AppSidebar({
                 </h2>
               )}
               {group.links.map(({ href, labelKey, icon }) => {
-                const active = pathnameMatches(pathname, href);
+                const active = activeSidebarHref === href;
                 const label = t(labelKey);
                 return (
                   <Link

@@ -159,6 +159,28 @@ const PRIMARY_ADMIN_ROUTES = [
   "/admin/settings",
 ] as const;
 
+const NAVIGATION_SELECTION_MATRIX = [
+  ["/admin/works", "/admin/works", "/admin/works"],
+  ["/admin/tags", "/admin/tags", "/admin/tags"],
+  ["/admin/search?q=atlas", null, "/admin/works"],
+  ["/admin/upload", "/admin/upload", "/admin/upload"],
+  ["/admin/upload/danbooru", "/admin/upload/danbooru", "/admin/upload/danbooru"],
+  ["/admin/creators", "/admin/creators", "/admin/creators"],
+  ["/admin/creators/fixture-creator", null, "/admin/creators"],
+  ["/admin/subscriptions", "/admin/subscriptions", "/admin/subscriptions"],
+  ["/admin/subscriptions/repositories/fixture-repository", null, "/admin/subscriptions"],
+  ["/admin/jobs?tab=imports", "/admin/jobs", "/admin/jobs"],
+  ["/admin/scheduler?page=1", "/admin/scheduler", "/admin/scheduler"],
+  ["/admin/data-mgmt", "/admin/data-mgmt", "/admin/data-mgmt"],
+  ["/admin/data-mgmt/curation", "/admin/data-mgmt/curation", "/admin/data-mgmt"],
+  ["/admin/data-mgmt/dedup?status=pending", "/admin/data-mgmt/dedup", "/admin/data-mgmt"],
+  ["/admin/system?tab=sources", "/admin/system", "/admin/system"],
+  ["/admin/settings", "/admin/settings", "/admin/settings"],
+  ["/admin/settings/users", "/admin/settings/users", "/admin/settings"],
+  ["/admin/settings/users/1", "/admin/settings/users", "/admin/settings"],
+  ["/admin/notifications", null, null],
+] as const;
+
 async function installFixtureRoutes(context: BrowserContext) {
   await context.addCookies([{
     name: "ag_token",
@@ -551,6 +573,29 @@ async function expectNoPageOverflow(page: Page) {
   })).toBe(true);
 }
 
+async function expectUniqueNavigationSelection(
+  page: Page,
+  contextHref: string | null,
+  sidebarHref: string | null,
+) {
+  const contextNavigation = page.locator('[data-page-header] nav[aria-label="Related pages"]:visible');
+  if (contextHref) {
+    await expect(contextNavigation).toHaveCount(1);
+    await expect(contextNavigation.locator('[aria-current="page"]')).toHaveCount(1);
+    await expect(contextNavigation.locator(`a[href="${contextHref}"]`))
+      .toHaveAttribute("aria-current", "page");
+  } else {
+    await expect(contextNavigation.locator('[aria-current="page"]')).toHaveCount(0);
+  }
+
+  const primaryNavigation = page.locator('#admin-sidebar nav[aria-label="Primary navigation"]');
+  await expect(primaryNavigation.locator('[aria-current="page"]')).toHaveCount(sidebarHref ? 1 : 0);
+  if (sidebarHref) {
+    await expect(primaryNavigation.locator(`a[href="${sidebarHref}"]`))
+      .toHaveAttribute("aria-current", "page");
+  }
+}
+
 test.beforeEach(async ({ context }) => {
   await installFixtureRoutes(context);
 });
@@ -740,6 +785,41 @@ test("desktop sidebar, contextual navigation, and command palette remain usable"
   expect(consoleErrors.filter((message) => !message.includes("WebSocket"))).toEqual([]);
 });
 
+test("context tabs and sidebar resolve exactly one active route across parent and child URLs", async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.setViewportSize({ width: 1440, height: 960 });
+
+  for (const [route, contextHref, sidebarHref] of NAVIGATION_SELECTION_MATRIX) {
+    await page.goto(route);
+    await expect(page.locator("#main-content").getByRole("heading", { level: 1 })).toBeVisible();
+    await expectUniqueNavigationSelection(page, contextHref, sidebarHref);
+  }
+
+  await page.goto("/admin/upload");
+  await expectUniqueNavigationSelection(page, "/admin/upload", "/admin/upload");
+  await page.locator('[data-page-header] nav[aria-label="Related pages"]:visible')
+    .getByRole("link", { name: "Danbooru", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/admin\/upload\/danbooru$/);
+  await expectUniqueNavigationSelection(page, "/admin/upload/danbooru", "/admin/upload/danbooru");
+  await page.screenshot({ path: "/tmp/auto-gallery-danbooru-single-active-desktop.png", fullPage: false });
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/admin\/upload$/);
+  await expectUniqueNavigationSelection(page, "/admin/upload", "/admin/upload");
+  await page.goForward();
+  await expect(page).toHaveURL(/\/admin\/upload\/danbooru$/);
+  await expectUniqueNavigationSelection(page, "/admin/upload/danbooru", "/admin/upload/danbooru");
+
+  await page.goto("/admin/reference/danbooru?artist=atlas");
+  await expect(page).toHaveURL(/\/admin\/upload\/danbooru\?artist=atlas$/);
+  await expectUniqueNavigationSelection(page, "/admin/upload/danbooru", "/admin/upload/danbooru");
+
+  await page.goto("/admin/dedup?status=deferred");
+  await expect(page).toHaveURL(/\/admin\/data-mgmt\/dedup\?status=deferred$/);
+  await expectUniqueNavigationSelection(page, "/admin/data-mgmt/dedup", "/admin/data-mgmt");
+});
+
 test("top-level page headers share the task page alignment and works has no creator picker", async ({ page }) => {
   test.setTimeout(60_000);
   await page.setViewportSize({ width: 1440, height: 960 });
@@ -842,13 +922,9 @@ test("creator charts share the data contract and year selection reloads the requ
   expect(requestUrl.searchParams.get("to_date")).toBe("2026-01-01");
   await expect(page.getByTestId("creator-activity-chart")).toContainText("Activity peaked on");
 
-  for (const frame of await page.locator("[data-chart-frame]").all()) {
-    const details = frame.locator("details");
-    if (await details.count()) {
-      await details.locator("summary").click();
-      await expect(details.getByRole("table")).toBeVisible();
-    }
-  }
+  await expect(page.locator("[data-chart-frame] details")).toHaveCount(0);
+  await expect(page.locator("[data-chart-frame] table")).toHaveCount(0);
+  await expect(page.getByText("View data", { exact: true })).toHaveCount(0);
   for (const viewport of [
     { width: 768, height: 1024 },
     { width: 390, height: 844 },
@@ -991,9 +1067,10 @@ test("data management charts preserve 100 ticks, exact values, hierarchy, and di
     "/admin/subscriptions/repositories/fixture-repository",
   );
 
-  const sourceData = page.getByTestId("storage-source-chart").locator("details");
-  await sourceData.locator("summary").click();
-  await expect(sourceData.getByRole("table")).toContainText("500.0 MB");
+  await expect(page.getByTestId("storage-source-chart")).toContainText("500.0 MB");
+  await expect(page.locator("[data-chart-frame] details")).toHaveCount(0);
+  await expect(page.locator("[data-chart-frame] table")).toHaveCount(0);
+  await expect(page.getByText("View data", { exact: true })).toHaveCount(0);
   await page.screenshot({ path: "/tmp/auto-gallery-data-charts-desktop.png", fullPage: true });
   const axe = await new AxeBuilder({ page })
     .include("#main-content")
@@ -1509,7 +1586,19 @@ test("390 pixel mobile layout stays within the viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/admin/upload/danbooru");
   await expect(page.getByRole("heading", { level: 1, name: "Danbooru Reference Mapping" })).toBeVisible();
+  const contextDetails = page.locator("[data-page-header] details");
+  await expect(contextDetails.locator("summary")).toContainText("Danbooru");
+  const contextNavigations = page.locator('[data-page-header] nav[aria-label="Related pages"]');
+  expect(await contextNavigations.evaluateAll((elements) => (
+    elements.map((element) => element.querySelectorAll('[aria-current="page"]').length)
+  ))).toEqual([1, 1]);
+  await contextDetails.locator("summary").click();
+  await expect(contextDetails.getByRole("link", { name: "Danbooru", exact: true }))
+    .toHaveAttribute("aria-current", "page");
+  await expect(contextDetails.getByRole("link", { name: "Upload", exact: true }))
+    .not.toHaveAttribute("aria-current", "page");
   await expectNoPageOverflow(page);
+  await page.screenshot({ path: "/tmp/auto-gallery-danbooru-single-active-mobile.png", fullPage: false });
 });
 
 test("mobile drawer is discoverable, dismissible, and the task page stays in bounds", async ({ page }) => {

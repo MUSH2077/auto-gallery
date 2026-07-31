@@ -33,6 +33,7 @@ export interface AdminNavLink {
   labelKey: string;
   icon: AdminIconName;
   context: AdminNavContext;
+  sidebarOwner?: string;
   keywords?: string[];
   primary?: boolean;
   adminOnly?: boolean;
@@ -80,7 +81,7 @@ const link = (
   labelKey: string,
   icon: AdminIconName,
   context: AdminNavContext,
-  options: Pick<AdminNavLink, "keywords" | "primary" | "adminOnly" | "topbarOnly"> = {},
+  options: Pick<AdminNavLink, "sidebarOwner" | "keywords" | "primary" | "adminOnly" | "topbarOnly"> = {},
 ): AdminNavLink => ({ href, labelKey, icon, context, ...options });
 
 export const ADMIN_NAV_LINKS: AdminNavLink[] = [
@@ -103,16 +104,27 @@ export const ADMIN_NAV_LINKS: AdminNavLink[] = [
   }),
   link(adminRoutes.settings, "nav.settings", "gear", "settings", { primary: true, keywords: ["config", "preferences", "配置"] }),
 
-  link(adminRoutes.search, "nav.search", "image", "library", { keywords: ["find", "搜索"] }),
+  link(adminRoutes.search, "nav.search", "image", "library", {
+    sidebarOwner: adminRoutes.works,
+    keywords: ["find", "搜索"],
+  }),
   link(adminRoutes.notifications, "notifications.title", "bell", "notifications", {
     keywords: ["alerts", "通知"],
     topbarOnly: true,
   }),
-  link(adminRoutes.curation, "nav.curation", "branch", "governance", { keywords: ["history", "策展"] }),
+  link(adminRoutes.curation, "nav.curation", "branch", "governance", {
+    sidebarOwner: adminRoutes.dataManagement,
+    keywords: ["history", "策展"],
+  }),
   link(adminRoutes.dedup, "nav.dedup", "copy", "governance", {
+    sidebarOwner: adminRoutes.dataManagement,
     keywords: ["duplicates", "merge", "candidate", "查重", "合并候选"],
   }),
-  link(adminRoutes.users, "nav.users", "people", "settings", { adminOnly: true, keywords: ["accounts", "权限", "用户"] }),
+  link(adminRoutes.users, "nav.users", "people", "settings", {
+    sidebarOwner: adminRoutes.settings,
+    adminOnly: true,
+    keywords: ["accounts", "权限", "用户"],
+  }),
 ];
 
 const byHref = (href: string) => ADMIN_NAV_LINKS.find((item) => item.href === href)!;
@@ -158,20 +170,30 @@ export const ADMIN_CONTEXT_LINKS: Record<AdminNavContext, AdminNavLink[]> = {
 
 export const ADMIN_USERS_LINK = byHref(adminRoutes.users);
 
-export function pathnameMatches(pathname: string, href: string): boolean {
-  return href === adminRoutes.dashboard ? pathname === adminRoutes.dashboard : pathname.startsWith(href);
+/** Whether a pathname belongs to a registered route, respecting path-segment boundaries. */
+export function pathnameBelongsTo(pathname: string, href: string): boolean {
+  if (href === adminRoutes.dashboard) return pathname === adminRoutes.dashboard;
+  return pathname === href || pathname.startsWith(`${href}/`);
 }
 
 export function findAdminNavLink(pathname: string): AdminNavLink | null {
   let best: AdminNavLink | null = null;
   for (const item of ADMIN_NAV_LINKS) {
-    if (pathnameMatches(pathname, item.href) && (!best || item.href.length > best.href.length)) {
+    if (pathnameBelongsTo(pathname, item.href) && (!best || item.href.length > best.href.length)) {
       best = item;
     }
   }
   // Settings detail routes intentionally inherit the settings context.
   if (!best && pathname.startsWith(`${adminRoutes.settings}/`)) return byHref(adminRoutes.settings);
   return best;
+}
+
+/** Unique primary-sidebar owner for the current route, if it has one. */
+export function findAdminSidebarHref(pathname: string): string | null {
+  const current = findAdminNavLink(pathname);
+  if (!current) return null;
+  if (current.primary) return current.href;
+  return current.sidebarOwner || null;
 }
 
 /** Longest-prefix navigation match used by the top bar and page hierarchy. */

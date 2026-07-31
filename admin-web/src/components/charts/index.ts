@@ -11,7 +11,4 @@ export type {
   ChartColorRole,
   ChartDatum,
   ChartSeriesPoint,
-  ChartTableColumn,
-  ChartTableModel,
-  ChartTableRow,
 } from "./types";
