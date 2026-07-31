@@ -8,12 +8,13 @@ import { api, queryKeys, WorkListItem, type SearchQualifierToken } from "@/lib/a
 import type { WorkAsset } from "@/lib/api/endpoints/works";
 import { useAppearanceSettings } from "@/lib/appearance";
 import { useStaggeredEntrance, type StaggeredEntranceProps } from "@/lib/motion";
-import { AssetImage, PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, SmartSearchInput, WorkPreviewOverlay, PermissionGuard, useSearchComposer, type SlideItem } from "@/components";
+import { PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, SmartSearchInput, WorkMediaThumbnail, WorkPreviewOverlay, PermissionGuard, useSearchComposer, type SlideItem } from "@/components";
 import { useSlideshow } from "@/lib/useSlideshow";
 import { usePermissions } from "@/lib/usePermissions";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { Star } from "lucide-react";
 import { searchUrl } from "@/lib/search-query";
+import { resolveMediaKind } from "@/lib/media";
 
 type PreviewState = {
   work: WorkListItem;
@@ -141,7 +142,7 @@ function WorkCard({
         className="absolute inset-0 z-0 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       />
       <div className="pointer-events-none relative z-10 flex h-32 items-center justify-center overflow-hidden bg-subtle text-xs text-muted">
-        <AssetImage assetId={currentId} alt={w.title || ""} className="h-full w-full object-cover" fallback={t("works.na")} />
+        <WorkMediaThumbnail assetId={currentId} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" fallback={t("works.na")} />
         {selectable && (
           <label className="pointer-events-auto absolute left-1 top-1 z-20 flex h-7 w-7 items-center justify-center rounded bg-black/60 text-white shadow-sm">
             <span className="sr-only">{t("works.select_work")}</span>
@@ -357,7 +358,12 @@ function WorksContent() {
     const byId = new Map<string, WorkAsset>(previewAssets.data.map((asset) => [asset.id, asset]));
     [preview.pageIndex, preview.pageIndex - 1, preview.pageIndex + 1].forEach((idx) => {
       const id = preview.assetIds[(idx + preview.assetIds.length) % preview.assetIds.length];
-      const src = (id ? byId.get(id) : undefined)?.original_url;
+      const asset = id ? byId.get(id) : undefined;
+      const src = asset
+        ? resolveMediaKind(asset) === "video"
+          ? asset.poster_url || asset.thumb_url
+          : asset.original_url
+        : undefined;
       if (!src) return;
       const img = new Image();
       img.src = src;
@@ -699,7 +705,7 @@ function WorksContent() {
                 />
               )}
               <div className="w-12 h-12 bg-subtle rounded overflow-hidden shrink-0">
-                <AssetImage assetId={w.thumbnail_asset_id} alt={w.title || ""} className="w-full h-full object-cover" fallback={t("works.na")} />
+                <WorkMediaThumbnail assetId={w.thumbnail_asset_id} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" fallback={t("works.na")} />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">

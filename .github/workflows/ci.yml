@@ -99,6 +99,9 @@ jobs:
       - name: Check shared chart contract
         working-directory: admin-web
         run: npm run check:charts
+      - name: Check shared media contract
+        working-directory: admin-web
+        run: npm run check:media
       - name: Check unified search contract
         working-directory: admin-web
         run: npm run check:search-contract

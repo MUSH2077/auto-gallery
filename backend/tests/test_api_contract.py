@@ -84,9 +84,11 @@ def test_contract_uses_real_upload_and_binary_content_types():
 
     thumbnail = schema["paths"]["/media/thumb/{asset_id}"]["get"]["responses"]["200"]["content"]
     original = schema["paths"]["/media/original/{asset_id}"]["get"]["responses"]["200"]["content"]
+    stream = schema["paths"]["/media/stream/{asset_id}"]["get"]["responses"]["206"]["content"]
     backup = schema["paths"]["/api/v1/admin/backup/download"]["get"]["responses"]["200"]["content"]
     assert set(thumbnail) == {"image/webp"}
     assert {"image/*", "video/*", "application/octet-stream"} <= set(original)
+    assert {"video/mp4", "video/webm", "application/octet-stream"} <= set(stream)
     assert "application/json" not in original
     assert "application/gzip" in backup
     assert backup["application/gzip"]["schema"]["format"] == "binary"

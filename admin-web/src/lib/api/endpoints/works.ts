@@ -1,18 +1,10 @@
 import { request } from "../client";
 import type { CurationCommit, Work } from "../types";
+import type { MediaAssetData } from "../../media";
 
-export interface WorkAsset {
-  id: string;
+export interface WorkAsset extends MediaAssetData {
   file_name: string;
   file_path: string;
-  width?: number;
-  height?: number;
-  mime_type?: string;
-  thumb_sm_path?: string;
-  thumb_md_path?: string;
-  thumb_url?: string;
-  preview_url?: string;
-  original_url?: string;
   created_at: string;
 }
 
@@ -32,8 +24,14 @@ export const worksApi = {
 
   getWorkAssets: (id: string) => request<WorkAsset[]>(`/api/v1/works/${id}/assets`),
 
+  createPlaybackTicket: (workId: string, assetId: string) =>
+    request<{ url: string; expires_at: string }>(
+      `/api/v1/works/${workId}/assets/${assetId}/playback-ticket`,
+      { method: "POST" },
+    ),
+
   getWorkTags: (id: string) => request<{ id: string; normalized_name: string; category?: string }[]>(`/api/v1/works/${id}/tags`),
 
-  mediaUrl: (assetId: string, size: "thumb" | "preview" | "original" = "thumb") =>
+  mediaUrl: (assetId: string, size: "thumb" | "preview" | "original" | "poster" | "stream" = "thumb") =>
     `/media/${size}/${assetId}`,
 };

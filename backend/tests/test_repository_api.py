@@ -125,7 +125,7 @@ def test_repository_detail_returns_context_jobs_and_recent_works():
     db = _FakeDB([
         _Result(first=(ss, sub, creator)),
         _Result(scalars=[job]),
-        _Result(rows=[(work, work_source, 2)]),
+        _Result(rows=[(work, work_source, 2, True)]),
     ])
 
     payload = asyncio.run(get_repository(source_id, db=db))
@@ -138,6 +138,7 @@ def test_repository_detail_returns_context_jobs_and_recent_works():
     assert payload["recent_jobs"][0]["subscription_source_id"] == str(source_id)
     assert payload["recent_works"][0]["id"] == str(work_id)
     assert payload["recent_works"][0]["asset_count"] == 2
+    assert payload["recent_works"][0]["has_video"] is True
 
 
 def test_repository_detail_returns_404_for_missing_source():

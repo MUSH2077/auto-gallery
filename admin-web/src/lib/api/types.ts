@@ -217,6 +217,7 @@ export interface RepositoryRecentWork {
   posted_at?: string | null;
   thumbnail_asset_id?: string | null;
   asset_count: number;
+  has_video?: boolean;
   is_nsfw: boolean;
   is_ai_generated: boolean;
   is_favorite: boolean;
@@ -498,6 +499,7 @@ export interface WorkbenchSummary {
       id: string;
       title?: string | null;
       thumbnail_asset_id?: string | null;
+      has_video?: boolean;
       source?: string | null;
       creator_name?: string | null;
       created_at?: string | null;
@@ -623,6 +625,7 @@ export interface WorkListItem {
   creator_name?: string;
   creator_id?: string;
   has_ugoira?: boolean;
+  has_video?: boolean;
   preview_asset_ids?: string[];
   is_favorite?: boolean;
   curation_visibility?: string;
@@ -1293,6 +1296,7 @@ export interface ShowcaseItem {
   asset_id: string;
   thumb_url: string;
   preview_url: string;
+  media_kind?: string;
   width: number | null;
   height: number | null;
 }

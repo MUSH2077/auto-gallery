@@ -1,4 +1,5 @@
 from app.services.image_utils import can_generate_thumbnail, get_mime_type, get_image_dims, can_compute_phash, IMAGE_EXTS
+from app.services.media_assets import browser_video_mime_type, render_video_derivatives
 import asyncio
 import json
 import logging
@@ -587,11 +588,34 @@ async def run_import_job(import_job_id: str):
                         except Exception as _thumb_err:
                             logger.warning("Thumbnail failed for %s: %s", fp, _thumb_err)
                     elif fp.suffix.lower() in VIDEO_EXTS:
-                        # No ffmpeg/video thumbnailer exists yet (services/thumbnail.py
-                        # is pyvips/image-only). Skip gracefully rather than attempt
-                        # and fail -- one failed asset must not break the import.
-                        logger.info("Skipping thumbnail generation for video asset %s "
-                                    "(no video thumbnailer configured)", fp)
+                        derivatives = await asyncio.to_thread(
+                            render_video_derivatives,
+                            fp,
+                            lib_dir,
+                            fp.stem,
+                        )
+                        if derivatives.inspection:
+                            asset.width = derivatives.inspection.width
+                            asset.height = derivatives.inspection.height
+                            asset.duration = derivatives.inspection.duration
+                            asset.mime_type = browser_video_mime_type(
+                                asset.file_name,
+                                asset.mime_type,
+                            )
+                        if derivatives.thumbnail_path:
+                            asset.thumb_sm_path = str(
+                                derivatives.thumbnail_path.relative_to(settings.library_root)
+                            )
+                        if derivatives.poster_path:
+                            asset.thumb_lg_path = str(
+                                derivatives.poster_path.relative_to(settings.library_root)
+                            )
+                        if derivatives.error:
+                            logger.warning(
+                                "Video derivatives incomplete for asset %s: %s",
+                                asset.id,
+                                derivatives.error,
+                            )
 
                     # Compute sha256 in thread pool (CPU-bound hashing)
                     try:
@@ -724,11 +748,21 @@ async def run_import_job(import_job_id: str):
                 from app.services.artifact_ledger import managed_artifact_row
                 ledger = ArtifactLedger(ledger_db)
                 await ledger.mark_work(dj.id, src_work_id, "done")
-                library_paths = [lib_dir / "metadata.json", *lib_dir.glob("*.thumbnail.webp")]
+                library_paths = [
+                    lib_dir / "metadata.json",
+                    *lib_dir.glob("*.thumbnail.webp"),
+                    *lib_dir.glob("*.poster.webp"),
+                ]
                 await ledger.upsert_many([
                     managed_artifact_row(path, Path(settings.library_root), "library",
                                          provider.source_name, _creator_dir, src_work_id,
-                                         "metadata_json" if path.name == "metadata.json" else "thumbnail")
+                                         (
+                                             "metadata_json"
+                                             if path.name == "metadata.json"
+                                             else "video_poster"
+                                             if path.name.endswith(".poster.webp")
+                                             else "thumbnail"
+                                         ))
                     for path in library_paths if path.exists()
                 ])
                 await ledger_db.commit()

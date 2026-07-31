@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     secret_key: str = ""
     admin_password: str = ""
     access_token_expire_minutes: int = 10080  # 7 days (NAS single-user)
+    media_playback_ttl_seconds: int = 7200
 
     download_root: str = "/downloads"
     library_root: str = "/library"

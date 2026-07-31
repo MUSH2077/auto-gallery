@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
-import { GitlleryPanel, Modal, MotionNumber, PageShell, RepositoryCard, SourceBadge, StatusBadge, SmartSearchInput, type SlideItem } from "@/components";
+import { GitlleryPanel, Modal, MotionNumber, PageShell, RepositoryCard, SourceBadge, StatusBadge, SmartSearchInput, WorkMediaThumbnail, type SlideItem } from "@/components";
 import ActivityDotMatrix, { type ActivityDay } from "@/components/charts/ActivityDotMatrix";
 import BallotTally from "@/components/charts/BallotTally";
 import ChartFrame from "@/components/charts/ChartFrame";
@@ -41,7 +41,7 @@ function WorkPreviewCard({ work }: { work: WorkListItem }) {
     <Link href={`/admin/works/${work.id}`} className="group overflow-hidden rounded-md border border-border bg-white transition-colors hover:border-accent/50 dark:border-border dark:bg-surface dark:hover:border-accent/50">
       <div className="aspect-[4/3] bg-subtle">
         {assetId ? (
-          <img src={api.mediaUrl(assetId, "thumb")} alt={work.title || t("creator_detail.untitled")} className="h-full w-full object-cover" loading="lazy" decoding="async" />
+          <WorkMediaThumbnail assetId={assetId} hasVideo={work.has_video} alt={work.title || t("creator_detail.untitled")} className="h-full w-full object-cover" />
         ) : (
           <div className="flex h-full items-center justify-center text-xs text-muted">{t("works.na")}</div>
         )}

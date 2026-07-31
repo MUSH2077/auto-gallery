@@ -494,10 +494,8 @@ async def test_save_upload_video_asset_imports_through_real_import_runner(tmp_pa
     charged quota but ASSET_EXTENSIONS in import_runner.py excluded video
     extensions entirely, so the import ran with "no media assets found" and
     never created a Work. Confirm a webm upload produces a real Work + Asset
-    row through the REAL import runner, and that thumbnail generation
-    (unsupported for video -- services/thumbnail.py is pyvips/image-only, no
-    ffmpeg path exists) is skipped gracefully rather than failing the
-    import."""
+    row through the REAL import runner. This deliberately corrupt WebM also
+    verifies that ffprobe/poster diagnostics do not fail the import."""
     from app.config import settings
     from app.database import async_session, engine
     from app.jobs.import_runner import run_import_job

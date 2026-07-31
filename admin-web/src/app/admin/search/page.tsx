@@ -15,6 +15,7 @@ import {
   PermissionGuard,
   SmartSearchInput,
   SourceBadge,
+  WorkMediaThumbnail,
   useSearchComposer,
 } from "@/components";
 import { useT } from "@/lib/i18n";
@@ -239,13 +240,14 @@ function SearchContent() {
                           aria-label={t("search.open_work", { title: work.title || t("search.untitled") })}
                         />
                         {work.thumbnail_asset_id ? (
-                          <img
-                            src={api.mediaUrl(work.thumbnail_asset_id, "thumb")}
-                            alt=""
-                            className="h-16 w-16 shrink-0 rounded object-cover"
-                            loading="lazy"
-                            decoding="async"
-                          />
+                          <span className="h-16 w-16 shrink-0 overflow-hidden rounded">
+                            <WorkMediaThumbnail
+                              assetId={work.thumbnail_asset_id}
+                              hasVideo={work.has_video}
+                              alt=""
+                              className="h-full w-full object-cover"
+                            />
+                          </span>
                         ) : (
                           <span className="flex h-16 w-16 shrink-0 items-center justify-center rounded border border-border bg-subtle text-xs text-muted">
                             {t("search.na")}

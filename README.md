@@ -42,6 +42,9 @@ curation history, and gallery-dl configuration.
 - **Visual exploration.** Responsive work grids, creator storage trees, tag
   bubbles, search, slideshows, and an optional showcase help browse large
   collections.
+- **User-initiated video playback.** MP4 and WebM assets receive derived WebP
+  covers for fast browsing and play with native browser controls only after an
+  authorized click; GIF remains supported as an animated image.
 - **Accessible administration.** Chinese and English UI, module permissions,
   keyboard navigation, touch targets, responsive layouts, dark mode, and
   reduced-motion support.

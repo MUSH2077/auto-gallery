@@ -3189,6 +3189,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/works/{work_id}/assets/{asset_id}/playback-ticket": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Playback Ticket
+         * @description Issue a short-lived signed stream URL for one video asset.
+         */
+        post: operations["post_api_v1_works_work_id_assets_asset_id_playback_ticket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/works/{work_id}/favorite": {
         parameters: {
             query?: never;
@@ -3269,6 +3289,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/media/poster/{asset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Poster
+         * @description Serve a large derived video poster with a short-lived signed URL.
+         */
+        get: operations["get_media_poster_asset_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/media/preview/{asset_id}": {
         parameters: {
             query?: never;
@@ -3281,6 +3321,26 @@ export interface paths {
          * @description Serve preview image with a short-lived signed URL.
          */
         get: operations["get_media_preview_asset_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/media/stream/{asset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream
+         * @description Serve original video bytes via an asset-scoped playback ticket.
+         */
+        get: operations["get_media_stream_asset_id"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4429,6 +4489,16 @@ export interface components {
              */
             ugoira: string | null;
         };
+        /** PlaybackTicketRead */
+        PlaybackTicketRead: {
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Url */
+            url: string;
+        };
         /** PreferencesIn */
         PreferencesIn: {
             /** Preferences */
@@ -4650,6 +4720,11 @@ export interface components {
             creator_name?: string | null;
             /** Height */
             height?: number | null;
+            /**
+             * Media Kind
+             * @default image
+             */
+            media_kind: string;
             /** Preview Url */
             preview_url: string;
             /** Source */
@@ -5210,6 +5285,52 @@ export interface components {
             /** Videos */
             videos?: boolean | null;
         };
+        /** WorkAssetRead */
+        WorkAssetRead: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Duration */
+            duration?: number | null;
+            /** File Name */
+            file_name: string;
+            /** File Path */
+            file_path: string;
+            /** File Size */
+            file_size?: number | null;
+            /** Height */
+            height?: number | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Media Kind
+             * @enum {string}
+             */
+            media_kind: "image" | "animated_image" | "video" | "archive" | "unknown";
+            /** Mime Type */
+            mime_type?: string | null;
+            /** Original Url */
+            original_url?: string | null;
+            /** Poster Url */
+            poster_url?: string | null;
+            /** Preview Url */
+            preview_url?: string | null;
+            /** Thumb Lg Path */
+            thumb_lg_path?: string | null;
+            /** Thumb Md Path */
+            thumb_md_path?: string | null;
+            /** Thumb Sm Path */
+            thumb_sm_path?: string | null;
+            /** Thumb Url */
+            thumb_url?: string | null;
+            /** Width */
+            width?: number | null;
+        };
         /** WorkList */
         WorkList: {
             /**
@@ -5236,6 +5357,11 @@ export interface components {
              * @default false
              */
             has_ugoira: boolean;
+            /**
+             * Has Video
+             * @default false
+             */
+            has_video: boolean;
             /**
              * Id
              * Format: uuid
@@ -13916,7 +14042,57 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["WorkAssetRead"][];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_works_work_id_assets_asset_id_playback_ticket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlaybackTicketRead"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -14131,6 +14307,40 @@ export interface operations {
             };
         };
     };
+    get_media_poster_asset_id: {
+        parameters: {
+            query?: {
+                expires?: string | null;
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed video poster bytes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/webp": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_media_preview_asset_id: {
         parameters: {
             query?: {
@@ -14154,6 +14364,53 @@ export interface operations {
                     "application/octet-stream": string;
                     "image/*": string;
                     "video/*": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_media_stream_asset_id: {
+        parameters: {
+            query?: {
+                expires?: string | null;
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed video stream with HTTP range support. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                    "video/mp4": string;
+                    "video/webm": string;
+                };
+            };
+            /** @description Partial video content for seeking and progressive playback. */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                    "video/mp4": string;
+                    "video/webm": string;
                 };
             };
             /** @description Validation Error */

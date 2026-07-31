@@ -294,10 +294,11 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 ### 存储规则
 
 - **downloads/**：原图仓库。原始图片/视频文件按 `{source}/{creator_name}/{source_work_id}/` 组织并长期保存。导入时从 gallery-dl 的扁平输出移动至此。JSON 元数据文件处理后被删除。路径中不包含 job_id 层级。
-- **library/**：索引层。仅每个作品的元数据 + 缩略图。与 downloads 使用相同的 `{source}/{creator_name}/{source_work_id}/` 结构，通过 source_work_id 链接。不存放原始图片。
+- **library/**：索引层。仅保存每个作品的元数据与派生图片。与 downloads 使用相同的 `{source}/{creator_name}/{source_work_id}/` 结构，通过 source_work_id 链接，不存放原始媒体。
 - **gallery-dl 输出**：导入前的 worker 短生命周期输出。导入过程中文件被重组到长期保存的原图仓库中，JSON 文件被删除。
-- **缩略图**：400px WebP 格式，由 pyvips 从首页图片生成。从 LIBRARY_ROOT 通过无鉴权的 `/media/thumb/{asset_id}` 提供，用于网格/列表中的图片标签。
+- **缩略图与海报**：图片通过 pyvips 生成 400px WebP 缩略图；MP4/WebM 由 ffprobe 探测，并生成 400px WebP 缩略图与最长边不超过 1280px 的海报。派生文件位于 LIBRARY_ROOT，原始媒体不会被修改。
 - **预览/原图**：直接从 DOWNLOAD_ROOT 通过 `/media/preview/{asset_id}` 和 `/media/original/{asset_id}` 提供。预览需要短期签名 URL；原图接受管理员 Bearer 鉴权或短期签名 URL。
+- **视频播放**：授权后的单资产票据提供两小时 `/media/stream/{asset_id}` 访问权限，以 HTTP Range 方式传输原始 MP4/WebM；不执行转码、HLS、纯音频或 ugoira ZIP 播放。
 - **metadata.json**：导入时为每个作品写入。包含 work_id、source、source_work_id、title、posted_at、creator、assets 数组。
 - **source_work_id**：平台特定的作品 ID（如 Pixiv 作品 ID "38362603"）。在 downloads/ 和 library/ 中都用作目录名。链接两个存储树。
 
@@ -308,6 +309,7 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 | 变量 | 默认值 | 用途 |
 |---|---|---|
 | `BACKEND_PORT` | `8818` | 后端 API 主机端口（映射容器 8000） |
+| `MEDIA_PLAYBACK_TTL_SECONDS` | `7200` | 单资产 MP4/WebM 播放票据的有效期（秒） |
 | `ADMIN_WEB_PORT` | `13000` | 管理端主机端口（映射容器 3000） |
 | `CORS_ORIGINS` | `http://localhost:13000` | 允许的 CORS 来源 |
 | `BACKEND_INTERNAL_URL` | `http://backend:8000` | admin-web SSR 访问后端的内部 URL |
@@ -499,4 +501,6 @@ Danbooru 参考 provider 操作，用于创作者身份映射。
 端点：
 - `GET /thumb/{asset_id}` — 来自 LIBRARY_ROOT 的 400px WebP 缩略图
 - `GET /preview/{asset_id}` — 来自 DOWNLOAD_ROOT 的原始文件，需要短期签名 URL
+- `GET /poster/{asset_id}` — 派生的大尺寸 WebP 视频海报，需要签名 URL
+- `GET /stream/{asset_id}` — 支持 HTTP Range 的原始 MP4/WebM，需要单资产播放票据
 - `GET /original/{asset_id}` — 来自 DOWNLOAD_ROOT 的原始文件（下载用）

@@ -17,6 +17,7 @@
     "check:admin-routes": "node scripts/check-admin-routes.mjs",
     "check:charts": "node scripts/check-charts.mjs",
     "check:i18n": "node scripts/check-i18n.mjs",
+    "check:media": "node scripts/check-media.mjs",
     "check:search-contract": "node scripts/check-search-contract.mjs",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",

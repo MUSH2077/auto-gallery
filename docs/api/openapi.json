@@ -3362,6 +3362,25 @@
         "title": "PixivSourceConfig",
         "type": "object"
       },
+      "PlaybackTicketRead": {
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "expires_at"
+        ],
+        "title": "PlaybackTicketRead",
+        "type": "object"
+      },
       "PreferencesIn": {
         "properties": {
           "preferences": {
@@ -3881,6 +3900,11 @@
               }
             ],
             "title": "Height"
+          },
+          "media_kind": {
+            "default": "image",
+            "title": "Media Kind",
+            "type": "string"
           },
           "preview_url": {
             "title": "Preview Url",
@@ -5586,6 +5610,180 @@
         "title": "WeiboSourceConfig",
         "type": "object"
       },
+      "WorkAssetRead": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "file_name": {
+            "title": "File Name",
+            "type": "string"
+          },
+          "file_path": {
+            "title": "File Path",
+            "type": "string"
+          },
+          "file_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Size"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "media_kind": {
+            "enum": [
+              "image",
+              "animated_image",
+              "video",
+              "archive",
+              "unknown"
+            ],
+            "title": "Media Kind",
+            "type": "string"
+          },
+          "mime_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mime Type"
+          },
+          "original_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Url"
+          },
+          "poster_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Poster Url"
+          },
+          "preview_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Url"
+          },
+          "thumb_lg_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumb Lg Path"
+          },
+          "thumb_md_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumb Md Path"
+          },
+          "thumb_sm_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumb Sm Path"
+          },
+          "thumb_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumb Url"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          }
+        },
+        "required": [
+          "id",
+          "file_name",
+          "file_path",
+          "media_kind",
+          "created_at"
+        ],
+        "title": "WorkAssetRead",
+        "type": "object"
+      },
       "WorkList": {
         "properties": {
           "asset_count": {
@@ -5628,6 +5826,11 @@
           "has_ugoira": {
             "default": false,
             "title": "Has Ugoira",
+            "type": "boolean"
+          },
+          "has_video": {
+            "default": false,
+            "title": "Has Video",
             "type": "boolean"
           },
           "id": {
@@ -19745,7 +19948,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "items": {
+                    "$ref": "#/components/schemas/WorkAssetRead"
+                  },
+                  "title": "Response Get Api V1 Works Work Id Assets",
+                  "type": "array"
                 }
               }
             },
@@ -19798,8 +20005,94 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "library"
+        ]
+      }
+    },
+    "/api/v1/works/{work_id}/assets/{asset_id}/playback-ticket": {
+      "post": {
+        "description": "Issue a short-lived signed stream URL for one video asset.",
+        "operationId": "post_api_v1_works_work_id_assets_asset_id_playback_ticket",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
         ],
-        "x-response-schema-status": "generic"
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaybackTicketRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Playback Ticket",
+        "tags": [
+          "works"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "library"
+        ]
       }
     },
     "/api/v1/works/{work_id}/favorite": {
@@ -20133,6 +20426,87 @@
         "x-response-schema-status": "generic"
       }
     },
+    "/media/poster/{asset_id}": {
+      "get": {
+        "description": "Serve a large derived video poster with a short-lived signed URL.",
+        "operationId": "get_media_poster_asset_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "title": "Asset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expires",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expires"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/webp": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Signed video poster bytes."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Poster",
+        "tags": [
+          "works"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "public",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-response-schema-status": "generic"
+      }
+    },
     "/media/preview/{asset_id}": {
       "get": {
         "description": "Serve preview image with a short-lived signed URL.",
@@ -20216,6 +20590,122 @@
           }
         },
         "summary": "Preview",
+        "tags": [
+          "works"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "public",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-response-schema-status": "generic"
+      }
+    },
+    "/media/stream/{asset_id}": {
+      "get": {
+        "description": "Serve original video bytes via an asset-scoped playback ticket.",
+        "operationId": "get_media_stream_asset_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "title": "Asset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expires",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expires"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "video/mp4": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "video/webm": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Signed video stream with HTTP range support."
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "video/mp4": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "video/webm": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Partial video content for seeking and progressive playback."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream",
         "tags": [
           "works"
         ],

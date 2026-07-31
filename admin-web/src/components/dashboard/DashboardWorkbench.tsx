@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   AlertTriangle,
   Box,
@@ -18,6 +18,7 @@ import {
 import SourceBadge from "@/components/SourceBadge";
 import StatusBadge from "@/components/StatusBadge";
 import { SyncOutcomeBadge } from "@/components/SyncOutcomeBadge";
+import { WorkMediaThumbnail } from "@/components/MediaAssetRenderer";
 import { api, type SyncOutcome, type WorkbenchSummary } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
@@ -216,29 +217,6 @@ export function DashboardStatusStrip({
   );
 }
 
-function WorkThumbnail({ assetId, title }: { assetId?: string | null; title: string }) {
-  const [failed, setFailed] = useState(false);
-  if (!assetId || failed) {
-    return (
-      <div className="flex h-full w-full items-center justify-center bg-subtle text-muted">
-        <ImageOff className="h-7 w-7" aria-hidden />
-      </div>
-    );
-  }
-  return (
-    <img
-      src={api.mediaUrl(assetId, "thumb")}
-      alt=""
-      className="h-full w-full object-cover transition-transform duration-slow ease-expo group-hover:scale-[1.025]"
-      loading="eager"
-      decoding="async"
-      onError={() => setFailed(true)}
-      aria-describedby={`dashboard-work-${assetId}`}
-      title={title}
-    />
-  );
-}
-
 export function RecentWorksPanel({ data }: { data: WorkbenchSummary }) {
   const t = useT();
   const fmt = useI18nFormat();
@@ -267,7 +245,13 @@ export function RecentWorksPanel({ data }: { data: WorkbenchSummary }) {
                 aria-label={t("common.open_item", { name: title })}
               >
                 <div className="aspect-[4/3] overflow-hidden border-b border-border bg-subtle">
-                  <WorkThumbnail assetId={work.thumbnail_asset_id} title={title} />
+                  <WorkMediaThumbnail
+                    assetId={work.thumbnail_asset_id}
+                    hasVideo={work.has_video}
+                    alt=""
+                    eager
+                    className="h-full w-full object-cover transition-transform duration-slow ease-expo group-hover:scale-[1.025]"
+                  />
                 </div>
                 <div className="p-3" id={work.thumbnail_asset_id ? `dashboard-work-${work.thumbnail_asset_id}` : undefined}>
                   <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-fg">{title}</h3>

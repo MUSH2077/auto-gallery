@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { useT } from "@/lib/i18n";
 import { usePresence } from "@/lib/motion";
 import { isArchiveAsset } from "@/components";
+import type { MediaKind } from "@/lib/media";
 
 export interface AssetData {
   id: string;
@@ -13,9 +14,12 @@ export interface AssetData {
   width?: number;
   height?: number;
   mime_type?: string;
+  media_kind?: MediaKind;
+  duration?: number;
   thumb_sm_path?: string;
   thumb_url?: string;
   preview_url?: string;
+  poster_url?: string;
   original_url?: string;
   created_at: string;
 }

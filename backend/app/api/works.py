@@ -1,15 +1,17 @@
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import RequirePermission
 from app.models.user import User
-from app.models.work import Work
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.schemas.work import WorkRead, WorkList, WorkListResponse
+from app.schemas.asset import PlaybackTicketRead, WorkAssetRead
 from app.schemas.curation import BatchCurateRequest, CurationCommitRead
 from app.repositories.work import WorkRepository
 from app.services.cache import cache_delete_pattern
@@ -19,7 +21,8 @@ from app.models.work import Work
 from app.models.work_source import WorkSource
 from app.models.tag import Tag
 from app.models.work_tag import WorkTag
-from app.services.media_signing import signed_media_url
+from app.services.media_assets import is_browser_playable_video, media_kind
+from app.services.media_signing import signed_media_ticket, signed_media_url
 from app.services.curation import CurationService
 from app.services.gitllery import project_commit_safe
 from app.services.search import SearchBackendUnavailable, SearchPermissionError, SearchService
@@ -127,7 +130,7 @@ async def get_work_tags(work_id: UUID, user: User = _require_library, db: AsyncS
     return [{"id": str(t.id), "normalized_name": t.normalized_name, "category": t.category} for t in tags]
 
 
-@router.get("/{work_id}/assets")
+@router.get("/{work_id}/assets", response_model=list[WorkAssetRead])
 async def get_work_assets(work_id: UUID, user: User = _require_library, db: AsyncSession = Depends(get_db)):
     repo = WorkRepository(db)
     work = await repo.get(work_id, force_sfw=not user.nsfw_visible)
@@ -137,18 +140,72 @@ async def get_work_assets(work_id: UUID, user: User = _require_library, db: Asyn
         select(Asset).join(AssetSource, AssetSource.asset_id == Asset.id)
         .join(WorkSource, WorkSource.id == AssetSource.work_source_id)
         .where(WorkSource.work_id == work_id)
+        .distinct()
         .order_by(Asset.created_at)
     )
     assets = result.scalars().all()
     return [{
         "id": str(a.id), "file_name": a.file_name, "file_path": a.file_path,
-        "width": a.width, "height": a.height, "mime_type": a.mime_type,
+        "file_size": a.file_size,
+        "width": a.width, "height": a.height, "duration": a.duration, "mime_type": a.mime_type,
+        "media_kind": media_kind(a.mime_type, a.file_name),
         "thumb_sm_path": a.thumb_sm_path, "thumb_md_path": a.thumb_md_path,
-        "thumb_url": f"/media/thumb/{a.id}",
+        "thumb_lg_path": a.thumb_lg_path,
+        "thumb_url": f"/media/thumb/{a.id}" if a.thumb_sm_path else None,
+        "poster_url": (
+            signed_media_url(
+                str(a.id),
+                "poster",
+                settings.media_playback_ttl_seconds,
+            )
+            if a.thumb_lg_path and media_kind(a.mime_type, a.file_name) == "video"
+            else None
+        ),
         "preview_url": signed_media_url(str(a.id), "preview"),
         "original_url": signed_media_url(str(a.id), "original"),
         "created_at": a.created_at.isoformat(),
     } for a in assets]
+
+
+@router.post(
+    "/{work_id}/assets/{asset_id}/playback-ticket",
+    response_model=PlaybackTicketRead,
+)
+async def create_playback_ticket(
+    work_id: UUID,
+    asset_id: UUID,
+    user: User = _require_library,
+    db: AsyncSession = Depends(get_db),
+):
+    """Issue a short-lived signed stream URL for one video asset."""
+    repo = WorkRepository(db)
+    work = await repo.get(work_id, force_sfw=not user.nsfw_visible)
+    if not work:
+        raise HTTPException(status_code=404, detail="Work not found")
+    result = await db.execute(
+        select(Asset)
+        .join(AssetSource, AssetSource.asset_id == Asset.id)
+        .join(WorkSource, WorkSource.id == AssetSource.work_source_id)
+        .where(WorkSource.work_id == work_id, Asset.id == asset_id)
+        .limit(1)
+    )
+    asset = result.scalar_one_or_none()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found in work")
+    if not is_browser_playable_video(asset.mime_type, asset.file_name):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "not_playable_video", "message": "Playback tickets are only available for video assets"},
+        )
+    url, expires = signed_media_ticket(
+        str(asset.id),
+        "stream",
+        settings.media_playback_ttl_seconds,
+    )
+    return PlaybackTicketRead(
+        url=url,
+        expires_at=datetime.fromtimestamp(expires, tz=timezone.utc),
+    )
 
 
 @curation_router.delete("/{work_id}", status_code=204)

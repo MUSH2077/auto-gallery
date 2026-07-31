@@ -9,6 +9,7 @@ class ShowcaseItem(BaseModel):
     asset_id: str
     thumb_url: str
     preview_url: str
+    media_kind: str = "image"
     width: int | None = None
     height: int | None = None
 

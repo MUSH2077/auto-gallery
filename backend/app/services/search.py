@@ -1482,10 +1482,13 @@ class SearchService:
             key = str(work.id)
             mimes = asset_mimes[key]
             names = asset_names[key]
-            has_video = any(mime.startswith("video/") for mime in mimes)
+            has_video = (
+                any(mime.startswith("video/") for mime in mimes)
+                or any(PurePosixPath(name).suffix in {".mp4", ".webm"} for name in names)
+            )
             has_animation = (
                 any(mime in {"image/gif", "image/apng"} for mime in mimes)
-                or any(PurePosixPath(name).suffix in {".gif", ".zip", ".webm"} for name in names)
+                or any(PurePosixPath(name).suffix in {".gif", ".zip"} for name in names)
             )
             has_image = any(mime.startswith("image/") for mime in mimes)
             previews = asset_ids[key][:10]

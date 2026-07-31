@@ -5,7 +5,7 @@ import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { AssetFilmstrip, AssetImage, PageHeader, PageShell, SourceBadge, ErrorState, EmptyState, isArchiveAsset } from "@/components";
+import { AssetFilmstrip, AssetViewer, WorkMediaThumbnail, PageHeader, PageShell, SourceBadge, ErrorState, EmptyState } from "@/components";
 import { Breadcrumb } from "@/components/Breadcrumb";
 import { usePermissions } from "@/lib/usePermissions";
 import { FullImageLightbox, ArrowIcon, DisclosurePanel, type AssetData } from "@/components/WorkViewerParts";
@@ -13,6 +13,7 @@ import { useI18nFormat } from "@/lib/i18n-format";
 import { quoteSearchValue, searchUrl } from "@/lib/search-query";
 import { Star } from "lucide-react";
 import { adminRoutes } from "@/lib/adminRoutes";
+import { formatMediaDuration } from "@/lib/media";
 
 interface WorkSourceData {
   id: string;
@@ -42,6 +43,9 @@ function WorkViewerShell({ workId }: { workId: string }) {
   useEffect(() => {
     if (!totalPages) return;
     const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("video, input, textarea, select, button, a, [role='slider']")) return;
       if (event.key === "ArrowLeft") changePage(-1);
       if (event.key === "ArrowRight") changePage(1);
     };
@@ -53,13 +57,13 @@ function WorkViewerShell({ workId }: { workId: string }) {
   if (!assets.data || !assets.data.length) return <div className="card p-4"><EmptyState title={t("work_detail.no_assets_title")} description={t("work_detail.no_assets")} /></div>;
 
   const current = assets.data[activeIndex] as AssetData;
-  const currentIsArchive = isArchiveAsset(current);
 
   return (
     <section className="card overflow-hidden">
       <div
         className="relative flex min-h-[58vh] items-center justify-center bg-canvas"
         onWheel={(event) => {
+          if ((event.target as HTMLElement).closest("video")) return;
           if (totalPages <= 1) return;
           wheelDelta.current += event.deltaY;
           if (Math.abs(wheelDelta.current) < 80) return;
@@ -68,39 +72,19 @@ function WorkViewerShell({ workId }: { workId: string }) {
           wheelDelta.current = 0;
         }}
       >
-        {currentIsArchive ? (
-          <div className="mx-4 rounded-md border border-border bg-surface p-8 text-center">
-            <div className="mx-auto mb-3 flex h-20 w-20 items-center justify-center rounded-md border border-border bg-subtle font-mono text-base font-semibold text-muted">ZIP</div>
-            <div className="text-sm font-medium text-fg">{t("work_detail.archive_asset")}</div>
-            <div className="mt-1 max-w-md truncate text-xs text-muted">{current.file_name}</div>
-            <a href={current.original_url || ""} className="btn-ghost mt-4 inline-flex text-xs" target="_blank" rel="noopener noreferrer">
-              {t("work_detail.download_original")}
-            </a>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setFullAsset(current)}
-            className="group flex h-full min-h-[58vh] w-full items-center justify-center p-3"
-            title={t("work_detail.view_full")}
-          >
-            <AssetImage
-              key={current.id}
-              src={current.preview_url}
-              assetId={current.id}
-              size="preview"
-              alt={current.file_name}
-              className="fade-in max-h-[72vh] max-w-full object-contain no-outline transition-transform duration-150 group-hover:scale-[1.005]"
-            />
-          </button>
-        )}
+        <AssetViewer
+          key={current.id}
+          workId={workId}
+          asset={current}
+          onOpenImage={() => setFullAsset(current)}
+        />
 
         {totalPages > 1 && (
           <>
-            <button type="button" onClick={() => changePage(-1)} className="absolute left-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-md border border-border bg-surface/90 text-fg shadow-overlay hover:bg-subtle" aria-label={t("works.prev")}>
+            <button type="button" onClick={() => changePage(-1)} className="absolute left-3 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-md border border-border bg-surface/90 text-fg shadow-overlay hover:bg-subtle" aria-label={t("works.prev")}>
               <ArrowIcon direction="left" />
             </button>
-            <button type="button" onClick={() => changePage(1)} className="absolute right-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-md border border-border bg-surface/90 text-fg shadow-overlay hover:bg-subtle" aria-label={t("works.next")}>
+            <button type="button" onClick={() => changePage(1)} className="absolute right-3 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-md border border-border bg-surface/90 text-fg shadow-overlay hover:bg-subtle" aria-label={t("works.next")}>
               <ArrowIcon direction="right" />
             </button>
             <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-md bg-black/70 px-2 py-1 text-xs font-medium text-white">
@@ -112,13 +96,16 @@ function WorkViewerShell({ workId }: { workId: string }) {
 
       <div className="border-t border-border p-3">
         <AssetFilmstrip assets={assets.data as AssetData[]} activeIndex={activeIndex} onSelect={setActiveIndex} />
-        <div className="mt-3 grid gap-2 text-xs text-muted sm:grid-cols-3">
+        <div className="mt-3 grid gap-2 text-xs text-muted sm:grid-cols-4">
           <div className="min-w-0"><span className="font-medium text-fg">{t("work_detail.file")}</span><div className="truncate font-mono">{current.file_name}</div></div>
           {current.width && current.height && (
             <div><span className="font-medium text-fg">{t("work_detail.dimensions")}</span><div>{current.width} &times; {current.height}</div></div>
           )}
           {current.mime_type && (
             <div><span className="font-medium text-fg">{t("work_detail.format")}</span><div>{current.mime_type}</div></div>
+          )}
+          {formatMediaDuration(current.duration) && (
+            <div><span className="font-medium text-fg">{t("media.duration")}</span><div>{formatMediaDuration(current.duration)}</div></div>
           )}
         </div>
       </div>
@@ -409,7 +396,7 @@ function MoreFromCreator({ creatorId, currentWorkId }: { creatorId: string; curr
         {others.map(w => (
           <Link key={w.id} href={`/admin/works/${w.id}`} className="group">
             <div className="aspect-[4/3] overflow-hidden rounded-md bg-subtle">
-              <AssetImage assetId={w.thumbnail_asset_id} alt={w.title || ""} className="h-full w-full object-cover" fallback={t("works.na")} />
+              <WorkMediaThumbnail assetId={w.thumbnail_asset_id} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" fallback={t("works.na")} />
             </div>
             <p className="text-xs mt-1 truncate group-hover:text-accent">{w.title || t("works.untitled")}</p>
           </Link>

@@ -8,7 +8,7 @@ signals, database access, and worker implementation details.
 | --- | --- | --- |
 | Sign in and account preferences | `/api/v1/auth/*` | — |
 | Browse/search works, creators, tags, repositories, and subscriptions | `/api/v1/search`, `/api/v1/works`, `/api/v1/creators`, `/api/v1/tags`, `/api/v1/repositories`, `/api/v1/subscriptions` | — |
-| Read thumbnails and media | `/api/v1/media/*`, signed media endpoints | — |
+| Read thumbnails, posters, originals, and seekable video | `/media/*`, `/api/v1/works/{work_id}/assets`, `/api/v1/works/{work_id}/assets/{asset_id}/playback-ticket` | — |
 | Upload media | `/api/v1/upload/*` multipart operations | task status/progress |
 | Validate and import Danbooru references | `/api/v1/reference/*` | task status/progress |
 | Create/edit subscriptions and synchronize repositories | `/api/v1/subscriptions/*`, `/api/v1/repositories/*` | task status/progress |

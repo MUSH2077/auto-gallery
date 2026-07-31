@@ -5,17 +5,9 @@ import { api } from "@/lib/api";
 import type { WorkPreviewSize } from "@/lib/appearance";
 import SourceBadge from "./SourceBadge";
 import { useT } from "@/lib/i18n";
+import { resolveMediaKind, type MediaAssetData } from "@/lib/media";
 
-export interface MediaAsset {
-  id: string;
-  file_name?: string;
-  width?: number;
-  height?: number;
-  mime_type?: string;
-  thumb_url?: string;
-  preview_url?: string;
-  original_url?: string;
-}
+export type MediaAsset = MediaAssetData;
 
 export function isArchiveAsset(asset: MediaAsset | null | undefined) {
   if (!asset) return false;
@@ -31,6 +23,7 @@ export function AssetImage({
   fallback,
   onLoad,
   onError,
+  loading = "lazy",
 }: {
   assetId?: string | null;
   src?: string | null;
@@ -40,6 +33,7 @@ export function AssetImage({
   fallback?: string;
   onLoad?: (event: React.SyntheticEvent<HTMLImageElement>) => void;
   onError?: () => void;
+  loading?: "eager" | "lazy";
 }) {
   const t = useT();
   const [failed, setFailed] = useState(false);
@@ -61,7 +55,7 @@ export function AssetImage({
       src={resolvedSrc}
       alt={alt}
       className={className}
-      loading="lazy"
+      loading={loading}
       decoding="async"
       onLoad={onLoad}
       onError={() => {
@@ -164,7 +158,10 @@ export function WorkPreviewOverlay({
   const assetById = useMemo(() => new Map((assets || []).map((asset) => [asset.id, asset])), [assets]);
   const currentId = assetIds[pageIndex] || assetIds[0];
   const currentAsset = assetById.get(currentId) || assets?.[pageIndex] || assets?.[0];
-  const currentSrc = currentAsset?.original_url || null;
+  const currentKind = currentAsset ? resolveMediaKind(currentAsset) : "unknown";
+  const currentSrc = currentKind === "video"
+    ? currentAsset?.poster_url || currentAsset?.thumb_url || null
+    : currentAsset?.original_url || currentAsset?.preview_url || null;
   const footerText = currentAsset?.file_name
     ? `${currentAsset.file_name}${creatorName ? ` · ${creatorName}` : ""}`
     : creatorName || t("works.unknown_creator");
@@ -214,6 +211,11 @@ export function WorkPreviewOverlay({
         ) : (
           <div className="flex h-full w-full items-center justify-center px-4 text-center text-xs text-muted">{t("works.original_unavailable")}</div>
         )}
+        {currentKind === "video" && currentSrc ? (
+          <span className="pointer-events-none absolute bottom-2 right-2 rounded bg-black/75 px-2 py-1 text-xs font-semibold text-white">
+            {t("media.video_badge")}
+          </span>
+        ) : null}
         {canPage && (
           <div className="absolute bottom-2 left-2 rounded-md bg-black/70 px-2 py-1 text-xs font-medium text-white">
             {pageIndex + 1} / {assetCount}
@@ -251,6 +253,7 @@ export function AssetFilmstrip<T extends MediaAsset>({
     <div className={`flex gap-2 overflow-x-auto pb-1 ${className}`}>
       {assets.map((asset, index) => {
         const archive = isArchiveAsset(asset);
+        const kind = resolveMediaKind(asset);
         const active = index === activeIndex;
         return (
           <button
@@ -268,12 +271,17 @@ export function AssetFilmstrip<T extends MediaAsset>({
               </span>
             ) : (
               <AssetImage
-                src={asset.thumb_url}
+                src={asset.thumb_url || (kind === "video" ? asset.poster_url : asset.preview_url)}
                 assetId={asset.id}
                 alt={asset.file_name || t("works.page_number", { page: index + 1 })}
                 className="h-full w-full object-cover"
               />
             )}
+            {kind === "video" ? (
+              <span className="absolute left-1 top-1 rounded bg-black/75 px-1 text-[9px] font-semibold text-white">
+                {t("media.video_badge")}
+              </span>
+            ) : null}
             <span className="absolute bottom-0.5 right-0.5 rounded bg-black/70 px-1 text-[10px] font-medium text-white">
               {index + 1}
             </span>

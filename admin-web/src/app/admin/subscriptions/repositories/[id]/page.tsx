@@ -6,7 +6,7 @@ import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import type { CreatorRepository, RepositoryDetailResponse, RepositoryGraphNode, RepositoryRecentJob, RepositoryRecentWork, SchedulerDecisionItem } from "@/lib/api";
-import { EmptyState, ErrorState, PageShell, SourceBadge, SyncOutcomeBadge, SyncOutcomeNotice, TagBubbleChart } from "@/components";
+import { EmptyState, ErrorState, PageShell, SourceBadge, SyncOutcomeBadge, SyncOutcomeNotice, TagBubbleChart, WorkMediaThumbnail } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { scheduleModeLabel, schedulerDecisionLabel, statusLabel, useI18nFormat } from "@/lib/i18n-format";
@@ -103,7 +103,7 @@ function WorksGrid({ works }: { works: RepositoryRecentWork[] }) {
           className="group overflow-hidden rounded-md border border-border bg-white transition-colors hover:border-accent/50 dark:border-border dark:bg-surface dark:hover:border-accent/50">
           <div className="aspect-[4/3] bg-subtle">
             {work.thumbnail_asset_id ? (
-              <img src={api.mediaUrl(work.thumbnail_asset_id, "thumb")} alt={work.title || ""} className="h-full w-full object-cover" loading="lazy" decoding="async" />
+              <WorkMediaThumbnail assetId={work.thumbnail_asset_id} hasVideo={work.has_video} alt={work.title || ""} className="h-full w-full object-cover" />
             ) : (
               <div className="flex h-full items-center justify-center text-xs text-muted">{t("works.na")}</div>
             )}
@@ -225,7 +225,7 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
                 <div className="mt-3 flex gap-2 overflow-x-auto">
                   {node.thumbnails.map((assetId) => (
                     <div key={assetId} className="h-14 w-14 shrink-0 overflow-hidden rounded-md border border-border bg-subtle dark:border-border dark:bg-subtle">
-                      <img src={api.mediaUrl(assetId, "thumb")} alt="" className="h-full w-full object-cover" loading="lazy" decoding="async" />
+                      <WorkMediaThumbnail assetId={assetId} alt="" className="h-full w-full object-cover" />
                     </div>
                   ))}
                 </div>

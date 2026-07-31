@@ -70,12 +70,16 @@ async def _serve(asset_id: str, size: str):
         if storage_state and storage_state.storage_state == "purged":
             raise HTTPException(status_code=404, detail="File not found")
 
-        if size == "thumb":
-            if asset.thumb_sm_path:
-                full = _safe_path(_RESOLVED_LIBRARY_ROOT, asset.thumb_sm_path)
+        if size in {"thumb", "poster"}:
+            relative_path = asset.thumb_sm_path if size == "thumb" else asset.thumb_lg_path
+            if relative_path:
+                full = _safe_path(_RESOLVED_LIBRARY_ROOT, relative_path)
                 if full.exists():
                     return FileResponse(full, media_type="image/webp")
-            raise HTTPException(status_code=404, detail="Thumbnail not found")
+            raise HTTPException(
+                status_code=404,
+                detail="Thumbnail not found" if size == "thumb" else "Poster not found",
+            )
         else:
             full = _safe_path(_RESOLVED_DOWNLOAD_ROOT, asset.file_path)
             if not full.exists():
@@ -115,6 +119,44 @@ async def preview(asset_id: str, expires: str | None = None, token: str | None =
     if not verify_media_token(asset_id, "preview", expires, token):
         raise HTTPException(status_code=401, detail="Invalid or expired media token")
     return await _serve(asset_id, "original")
+
+
+@router.get(
+    "/media/poster/{asset_id}",
+    response_class=FileResponse,
+    responses={200: {"content": {"image/webp": {}}, "description": "Signed video poster bytes."}},
+)
+async def poster(asset_id: str, expires: str | None = None, token: str | None = None):
+    """Serve a large derived video poster with a short-lived signed URL."""
+    if not verify_media_token(asset_id, "poster", expires, token):
+        raise HTTPException(status_code=401, detail="Invalid or expired media token")
+    response = await _serve(asset_id, "poster")
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@router.get(
+    "/media/stream/{asset_id}",
+    response_class=FileResponse,
+    responses={
+        200: {
+            "content": {"video/mp4": {}, "video/webm": {}, "application/octet-stream": {}},
+            "description": "Signed video stream with HTTP range support.",
+        },
+        206: {
+            "content": {"video/mp4": {}, "video/webm": {}, "application/octet-stream": {}},
+            "description": "Partial video content for seeking and progressive playback.",
+        },
+    },
+)
+async def stream(asset_id: str, expires: str | None = None, token: str | None = None):
+    """Serve original video bytes via an asset-scoped playback ticket."""
+    if not verify_media_token(asset_id, "stream", expires, token):
+        raise HTTPException(status_code=401, detail="Invalid or expired media token")
+    response = await _serve(asset_id, "original")
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 @router.get(

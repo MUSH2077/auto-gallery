@@ -61,6 +61,21 @@ class WorkRepository:
             .group_by(WorkSource.work_id)
             .subquery()
         )
+        video_agg = (
+            select(
+                WorkSource.work_id,
+                (func.count(AssetSource.id) > 0).label("has_video"),
+            )
+            .join(AssetSource, AssetSource.work_source_id == WorkSource.id)
+            .join(Asset, Asset.id == AssetSource.asset_id)
+            .where(or_(
+                Asset.mime_type.like("video/%"),
+                Asset.file_name.ilike("%.mp4"),
+                Asset.file_name.ilike("%.webm"),
+            ))
+            .group_by(WorkSource.work_id)
+            .subquery()
+        )
 
         stmt = (
             select(
@@ -70,10 +85,12 @@ class WorkRepository:
                 ws_agg.c.creator_name.label("creator_name"),
                 ws_agg.c.creator_id.label("creator_id"),
                 func.coalesce(ug_agg.c.has_ugoira, False).label("has_ugoira"),
+                func.coalesce(video_agg.c.has_video, False).label("has_video"),
             )
             .outerjoin(ws_agg, ws_agg.c.work_id == Work.id)
             .outerjoin(ac_agg, ac_agg.c.work_id == Work.id)
             .outerjoin(ug_agg, ug_agg.c.work_id == Work.id)
+            .outerjoin(video_agg, video_agg.c.work_id == Work.id)
             .outerjoin(WorkCurationState, WorkCurationState.work_id == Work.id)
         )
 
@@ -148,6 +165,7 @@ class WorkRepository:
             w.creator_name = row[3]
             w.creator_id = str(row[4]) if row[4] else None
             w.has_ugoira = bool(row[5])
+            w.has_video = bool(row[6])
             w.preview_asset_ids = []
             w.curation_visibility = curation_visibility if curation_visibility != "all" else "visible"
             works.append(w)

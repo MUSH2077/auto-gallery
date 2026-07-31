@@ -5,7 +5,7 @@ import { Suspense, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CurationCommit, queryKeys } from "@/lib/api";
-import { EmptyState, ErrorState, PageHeader, PageShell, PermissionGuard } from "@/components";
+import { EmptyState, ErrorState, PageHeader, PageShell, PermissionGuard, WorkMediaThumbnail } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useStaggeredEntrance } from "@/lib/motion";
 import { useI18nFormat } from "@/lib/i18n-format";
@@ -100,7 +100,7 @@ function CommitCard({ commit, onRevert, reverting }: { commit: CurationCommit; o
               <div className="mb-2 flex gap-2 overflow-x-auto">
                 {thumbnails.map((assetId) => (
                   <div key={assetId} className="h-12 w-12 shrink-0 overflow-hidden rounded-md border border-border bg-subtle dark:border-border dark:bg-subtle">
-                    <img src={api.mediaUrl(assetId, "thumb")} alt="" className="h-full w-full object-cover" loading="lazy" decoding="async" />
+                    <WorkMediaThumbnail assetId={assetId} alt="" className="h-full w-full object-cover" />
                   </div>
                 ))}
               </div>

@@ -6,7 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { Breadcrumb } from "@/components/Breadcrumb";
-import { ConfirmDialog, ErrorState, EmptyState, Modal, PageShell, type SlideItem } from "@/components";
+import { ConfirmDialog, ErrorState, EmptyState, Modal, PageShell, WorkMediaThumbnail, type SlideItem } from "@/components";
 import { useSlideshow } from "@/lib/useSlideshow";
 import { usePermissions } from "@/lib/usePermissions";
 import { useI18nFormat } from "@/lib/i18n-format";
@@ -149,7 +149,7 @@ export default function TagDetailPage() {
                   <Link key={w.id} href={`/admin/works/${w.id}`} className="group overflow-hidden rounded-md border border-border bg-white hover:border-accent/30 dark:border-border dark:bg-subtle transition-colors">
                     <div className="aspect-[4/3] bg-subtle">
                       {w.thumbnail_asset_id ? (
-                        <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="h-full w-full object-cover" loading="lazy" decoding="async" />
+                        <WorkMediaThumbnail assetId={w.thumbnail_asset_id} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" />
                       ) : (
                         <div className="flex h-full items-center justify-center text-xs text-muted">{t("works.na")}</div>
                       )}

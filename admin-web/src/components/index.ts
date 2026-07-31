@@ -39,6 +39,12 @@ export { BatchByFilter } from "./BatchByFilter";
 export { SmartSearchInput, useSearchBatchComposer, useSearchComposer } from "./SmartSearchInput";
 export { AssetFilmstrip, AssetImage, WorkPreviewOverlay, isArchiveAsset } from "./work-interactions";
 export type { MediaAsset } from "./work-interactions";
+export {
+  AssetPreviewMedia,
+  AssetViewer,
+  VideoBadge,
+  WorkMediaThumbnail,
+} from "./MediaAssetRenderer";
 
 export { TaskDetailDrawer, JobDetailDrawer } from "./JobDrawers";
 export { FullImageLightbox, DisclosurePanel } from "./WorkViewerParts";
