@@ -6,7 +6,6 @@ import type { PixivSourceConfig, TwitterSourceConfig, IwaraSourceConfig, Danboor
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import { PageHeader, ErrorState, PageShell } from "@/components";
-import Link from "next/link";
 
 type TabKey = "pixiv" | "twitter" | "iwara" | "danbooru" | "pinterest" | "lofter" | "weibo" | "bilibili";
 type PatternTarget = "directory" | "filename";
@@ -551,9 +550,6 @@ export default function GalleryDLConfigPage() {
 
   return (
     <PageShell>
-      <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("gallerydl.back")}</Link>
-      </div>
       <PageHeader title={t("gallerydl.title")} description={t("gallerydl.desc")} />
 
       {/* Tabs */}

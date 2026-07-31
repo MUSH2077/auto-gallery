@@ -4,7 +4,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, DownloadDefaults } from "@/lib/api";
 import { PageHeader, PageShell, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
-import Link from "next/link";
 
 export default function DownloadDefaultsPage() {
   const t = useT();
@@ -51,9 +50,6 @@ export default function DownloadDefaultsPage() {
 
   return (
     <PageShell>
-      <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("dldefaults.back")}</Link>
-      </div>
       <PageHeader title={t("dldefaults.title")} description={t("dldefaults.desc")} />
 
       {!current ? null : (

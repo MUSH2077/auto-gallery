@@ -5,7 +5,6 @@ import { api, queryKeys, ProxySettings } from "@/lib/api";
 import { PageHeader, PageShell, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
-import Link from "next/link";
 
 function TestResults({ data, proxyEnabled }: { data: any | null; proxyEnabled: boolean }) {
   const t = useT();
@@ -103,9 +102,6 @@ export default function ProxySettingsPage() {
 
   return (
     <PageShell>
-      <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("proxy.back")}</Link>
-      </div>
       <PageHeader title={t("proxy.title")} description={t("proxy.desc")} />
 
       {current && (

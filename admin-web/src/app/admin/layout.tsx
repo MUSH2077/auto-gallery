@@ -2,6 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth";
+import { adminRoutes } from "@/lib/adminRoutes";
 import { usePresence } from "@/lib/motion";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import AppSidebar from "@/components/AppSidebar";
@@ -35,10 +36,10 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
       !isLoading
       && isAuthenticated
       && user?.must_change_password
-      && pathname !== "/admin/settings/profile"
+      && pathname !== adminRoutes.profile
       && pathname !== "/admin/login"
     ) {
-      router.replace("/admin/settings/profile");
+      router.replace(adminRoutes.profile);
     }
   }, [isAuthenticated, isLoading, pathname, router, user?.must_change_password]);
 

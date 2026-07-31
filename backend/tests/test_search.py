@@ -1,6 +1,9 @@
 """Tests for Meilisearch search service — unit tests that verify code structure."""
 
 import inspect
+import os
+
+import pytest
 
 
 class TestSearchService:
@@ -10,7 +13,7 @@ class TestSearchService:
         assert MeiliClient is not None
 
     def test_index_settings_defined(self):
-        """Index settings are defined for all three indexes."""
+        """Index settings are defined for every projection."""
         from app.services.search import (
             CREATORS_INDEX,
             INDEX_SETTINGS,
@@ -28,6 +31,24 @@ class TestSearchService:
         for idx in [WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX, REPOSITORIES_INDEX, SUBSCRIPTIONS_INDEX]:
             assert "searchableAttributes" in INDEX_SETTINGS[idx]
             assert "filterableAttributes" in INDEX_SETTINGS[idx]
+            assert idx.startswith(os.environ["MEILI_INDEX_PREFIX"])
+
+    def test_test_database_requires_an_index_namespace(self):
+        from app.services.search import _validate_index_namespace
+
+        with pytest.raises(RuntimeError, match="MEILI_INDEX_PREFIX"):
+            _validate_index_namespace(
+                "postgresql+asyncpg://user:pass@postgres/autogallery_test",
+                "",
+            )
+        assert _validate_index_namespace(
+            "postgresql+asyncpg://user:pass@postgres/autogallery_test",
+            "ag_test_safe_",
+        ) == "ag_test_safe_"
+        assert _validate_index_namespace(
+            "postgresql+asyncpg://user:pass@postgres/autogallery",
+            "",
+        ) == ""
 
     def test_search_method_signature(self):
         from app.services.search import SearchService
@@ -96,6 +117,44 @@ class TestSearchService:
         filters = _compile_meili_filter(query, "works", {}, force_sfw=True)
         assert "is_nsfw = true" in filters
         assert "is_nsfw = false" in filters
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reindex_removes_orphans_and_projection_audit_is_clean():
+    from app.database import async_session
+    from app.services.search import (
+        WORKS_INDEX,
+        SearchService,
+        _client,
+        _ensure_indexes,
+        _wait_for_task,
+    )
+
+    client = _client()
+    try:
+        _ensure_indexes(client)
+    except Exception as exc:
+        pytest.skip(f"Meilisearch unavailable: {exc}")
+
+    orphan_id = "00000000-0000-0000-0000-000000000001"
+    _wait_for_task(
+        client,
+        client.index(WORKS_INDEX).add_documents([{"id": orphan_id, "title": "orphan"}]),
+    )
+
+    async with async_session() as db:
+        service = SearchService(db)
+        before = await service.audit_projection()
+        assert orphan_id in before["indexes"]["works"]["stale_ids"]
+
+        rebuilt = await service.reindex()
+        assert rebuilt["status"] == "ok"
+
+        after = await service.audit_projection()
+        assert after["status"] == "ok"
+        assert after["indexes"]["works"]["stale_ids"] == []
+        assert after["indexes"]["works"]["missing_ids"] == []
 
 
 class TestLogBuffer:

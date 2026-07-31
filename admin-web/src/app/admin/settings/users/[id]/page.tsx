@@ -4,7 +4,6 @@ import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, PageShell, SectionPanel, ConfirmDialog, Modal, ErrorState, StatusBadge } from "@/components";
-import { Breadcrumb } from "@/components/Breadcrumb";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { formatBytes } from "@/lib/format";
@@ -90,15 +89,28 @@ export default function UserDetailPage() {
   if (user.isLoading) {
     return (
       <PageShell>
+        <PageHeader title={t("user_detail.title")} />
         <div className="space-y-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-24 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div>
       </PageShell>
     );
   }
   if (user.error) {
-    return <PageShell><ErrorState message={(user.error as Error).message} onRetry={() => user.refetch()} /></PageShell>;
+    return (
+      <PageShell>
+        <PageHeader title={t("user_detail.title")} />
+        <ErrorState message={(user.error as Error).message} onRetry={() => user.refetch()} />
+      </PageShell>
+    );
   }
   const u = user.data;
-  if (!u) return null;
+  if (!u) {
+    return (
+      <PageShell>
+        <PageHeader title={t("user_detail.title")} />
+        <ErrorState message={t("common.no_data")} onRetry={() => user.refetch()} />
+      </PageShell>
+    );
+  }
 
   const modules = me.data?.modules || {};
   const displayNameDirty = displayName !== (u.display_name || "");
@@ -110,7 +122,6 @@ export default function UserDetailPage() {
 
   return (
     <PageShell>
-      <Breadcrumb items={[{ label: t("users.title"), href: adminRoutes.users }, { label: u.display_name || u.username }]} />
       <PageHeader
         title={u.display_name || u.username}
         description={
@@ -125,7 +136,6 @@ export default function UserDetailPage() {
           <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-border bg-gradient-to-br from-accent to-[#8250df] text-base font-semibold text-white dark:border-border">
             {initials(u.display_name || u.username)}
           </div>
-          <button onClick={() => router.push(adminRoutes.users)} className="btn-ghost">{t("common.back")}</button>
         </div>
       </PageHeader>
 

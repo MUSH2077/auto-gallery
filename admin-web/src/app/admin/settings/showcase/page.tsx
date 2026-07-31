@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys, type ProviderInfo } from "@/lib/api";
@@ -146,11 +145,6 @@ export default function ShowcaseSettingsPage() {
   return (
     <PermissionGuard module="system">
       <PageShell>
-        <div className="mb-4">
-          <Link href="/admin/settings" className="text-sm text-accent hover:underline">
-            {t("common.back")}
-          </Link>
-        </div>
         <PageHeader title={t("showcase_settings.title")} description={t("showcase_settings.desc")} />
 
         {/* ① 内容源 */}

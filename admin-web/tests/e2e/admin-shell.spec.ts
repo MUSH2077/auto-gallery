@@ -125,7 +125,7 @@ const REPRESENTATIVE_ROUTES = [
   "/admin/settings/download-defaults",
   "/admin/settings/gallerydl",
   "/admin/settings/logs",
-  "/admin/settings/profile",
+  "/admin/profile",
   "/admin/settings/proxy",
   "/admin/settings/scheduler-defaults",
   "/admin/settings/showcase",
@@ -1343,6 +1343,61 @@ test("settings no longer duplicates data management or language controls", async
   await expect(main.getByRole("link", { name: /Data Management/ })).toHaveCount(0);
   await expect(main.getByRole("heading", { name: "Language" })).toHaveCount(0);
   await page.screenshot({ path: "/tmp/auto-gallery-settings-clean.png", fullPage: false });
+});
+
+test("settings children use clickable breadcrumbs without duplicate back controls", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const settingsChildren = [
+    ["/admin/settings/appearance", "Appearance"],
+    ["/admin/settings/auth-status", "Auth & Cookie Status"],
+    ["/admin/settings/backup", "Backup & Restore"],
+    ["/admin/settings/dedup", "Deduplication Settings"],
+    ["/admin/settings/download-defaults", "Download Job Defaults"],
+    ["/admin/settings/gallerydl", "gallery-dl Configuration"],
+    ["/admin/settings/logs", "System Logs"],
+    ["/admin/settings/proxy", "Network Proxy"],
+    ["/admin/settings/scheduler-defaults", "Scheduler Defaults"],
+    ["/admin/settings/showcase", "Showcase"],
+    ["/admin/settings/subscription-defaults", "Subscription Defaults"],
+    ["/admin/settings/users", "User Management"],
+  ] as const;
+
+  for (const [route, title] of settingsChildren) {
+    await page.goto(route);
+    const breadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });
+    await expect(breadcrumb.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/admin/settings");
+    await expect(breadcrumb.getByText(title, { exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("button", { name: "Back", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Back", exact: true })).toHaveCount(0);
+  }
+
+  await page.goto("/admin/settings/users/1");
+  const userBreadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });
+  await expect(userBreadcrumb.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/admin/settings");
+  await expect(userBreadcrumb.getByRole("link", { name: "User Management" })).toHaveAttribute("href", "/admin/settings/users");
+  await expect(userBreadcrumb.getByText("UI Review", { exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("button", { name: "Back", exact: true })).toHaveCount(0);
+  await page.screenshot({ path: "/tmp/auto-gallery-settings-breadcrumbs.png", fullPage: false });
+
+  await userBreadcrumb.getByRole("link", { name: "User Management" }).click();
+  await expect(page).toHaveURL(/\/admin\/settings\/users$/);
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Settings" }).click();
+  await expect(page).toHaveURL(/\/admin\/settings$/);
+});
+
+test("profile is independent and the legacy settings URL redirects with its query", async ({ page }) => {
+  await page.goto("/admin/profile");
+  const breadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });
+  await expect(breadcrumb.getByRole("link", { name: "Dashboard" })).toHaveAttribute("href", "/admin");
+  await expect(breadcrumb.getByText("Profile", { exact: true })).toHaveAttribute("aria-current", "page");
+
+  const response = await page.goto("/admin/settings/profile?from=legacy");
+  expect(response?.status()).toBe(200);
+  await expect(page).toHaveURL(/\/admin\/profile\?from=legacy$/);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toBeVisible();
+  await page.screenshot({ path: "/tmp/auto-gallery-profile-breadcrumb-mobile.png", fullPage: false });
 });
 
 test("restricted direct access renders the standard shell permission state", async ({ page }) => {

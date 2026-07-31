@@ -4,7 +4,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, SubscriptionDefaults } from "@/lib/api";
 import { PageHeader, PageShell, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
-import Link from "next/link";
 import { Plus, X } from "lucide-react";
 
 function ScheduledTimePicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
@@ -97,9 +96,6 @@ export default function SubscriptionDefaultsPage() {
 
   return (
     <PageShell>
-      <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="inline-flex min-h-11 items-center text-sm text-accent hover:underline">&larr; {t("subdefaults.back")}</Link>
-      </div>
       <PageHeader title={t("subdefaults.title")} description={t("subdefaults.desc")} />
 
       {!current ? null : (

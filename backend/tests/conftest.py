@@ -11,6 +11,7 @@ is imported, with a hard guard that it can never resolve to production.
 
 import os
 from urllib.parse import urlparse, urlunparse
+from uuid import uuid4
 
 import pytest
 
@@ -47,6 +48,8 @@ os.environ["DATABASE_URL"] = _MAIN_TEST_URL
 # Isolate Redis to a separate logical db so tests can't flush production keys.
 _REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 os.environ["REDIS_URL"] = urlunparse(urlparse(_REDIS_URL)._replace(path="/15"))
+_TEST_MEILI_INDEX_PREFIX = f"ag_test_{os.getpid()}_{uuid4().hex[:10]}_"
+os.environ["MEILI_INDEX_PREFIX"] = _TEST_MEILI_INDEX_PREFIX
 os.environ.setdefault("SECRET_KEY", "test-secret-key-with-at-least-32-bytes")
 os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
 os.environ.setdefault("APP_CONFIG_ROOT", "/tmp/auto-gallery-test-config")
@@ -99,6 +102,33 @@ def _provision_main_test_database() -> None:
 
 
 _provision_main_test_database()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_meilisearch_indexes():
+    """Keep every test search projection outside the production index names."""
+
+    yield
+
+    try:
+        from meilisearch_python_sdk import Client as MeiliClient
+
+        client = MeiliClient(
+            os.environ.get("MEILI_URL", "http://meilisearch:7700"),
+            os.environ.get("MEILI_MASTER_KEY", ""),
+        )
+        for index in client.get_indexes():
+            uid = getattr(index, "uid", "")
+            if not uid.startswith(_TEST_MEILI_INDEX_PREFIX):
+                continue
+            task = client.index(uid).delete()
+            client.wait_for_task(
+                task.task_uid,
+                timeout_in_ms=120_000,
+                raise_for_status=True,
+            )
+    except Exception as exc:  # noqa: BLE001 - best effort when Meilisearch is absent
+        print(f"[conftest] test Meilisearch cleanup skipped ({exc})")
 
 
 # ── Integration test fixtures (PostgreSQL required) ──────────────────────────

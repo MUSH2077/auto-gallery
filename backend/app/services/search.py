@@ -14,7 +14,8 @@ import json
 import logging
 from pathlib import PurePosixPath
 from typing import Any, Iterable
-from uuid import UUID
+from urllib.parse import urlparse
+from uuid import UUID, uuid4
 
 from meilisearch_python_sdk import Client as MeiliClient
 from meilisearch_python_sdk.models.settings import MeilisearchSettings
@@ -58,11 +59,34 @@ from app.services.tasks import task_payload
 
 logger = logging.getLogger(__name__)
 
-WORKS_INDEX = "works"
-CREATORS_INDEX = "creators"
-TAGS_INDEX = "tags"
-REPOSITORIES_INDEX = "repositories"
-SUBSCRIPTIONS_INDEX = "subscriptions"
+
+def _validate_index_namespace(database_url: str, index_prefix: str) -> str:
+    database_name = urlparse(database_url).path.lstrip("/").split("?", 1)[0]
+    if database_name.endswith("_test") and not index_prefix:
+        raise RuntimeError(
+            "Test database search isolation failure: MEILI_INDEX_PREFIX must be set "
+            "before a *_test database may access Meilisearch."
+        )
+    return index_prefix
+
+
+_INDEX_PREFIX = _validate_index_namespace(
+    settings.database_url,
+    settings.meili_index_prefix,
+)
+WORKS_INDEX = f"{_INDEX_PREFIX}works"
+CREATORS_INDEX = f"{_INDEX_PREFIX}creators"
+TAGS_INDEX = f"{_INDEX_PREFIX}tags"
+REPOSITORIES_INDEX = f"{_INDEX_PREFIX}repositories"
+SUBSCRIPTIONS_INDEX = f"{_INDEX_PREFIX}subscriptions"
+
+INDEX_LABELS = {
+    WORKS_INDEX: "works",
+    CREATORS_INDEX: "creators",
+    TAGS_INDEX: "tags",
+    REPOSITORIES_INDEX: "repositories",
+    SUBSCRIPTIONS_INDEX: "subscriptions",
+}
 
 MEILI_TARGET_INDEX: dict[SearchTarget, str] = {
     "works": WORKS_INDEX,
@@ -313,19 +337,103 @@ def _client() -> MeiliClient:
     return MeiliClient(settings.meili_url, settings.meili_master_key)
 
 
+def _wait_for_task(
+    client: MeiliClient,
+    task: Any,
+    *,
+    timeout_in_ms: int = 120_000,
+    raise_for_status: bool = True,
+) -> Any:
+    task_uid = getattr(task, "task_uid", None)
+    if task_uid is None:
+        return task
+    return client.wait_for_task(
+        task_uid,
+        timeout_in_ms=timeout_in_ms,
+        raise_for_status=raise_for_status,
+    )
+
+
 def _ensure_indexes(client: MeiliClient, settings_map: dict[str, dict] | None = None) -> None:
     for uid, config in (settings_map or INDEX_SETTINGS).items():
         try:
-            client.create_index(uid, primary_key="id")
-        except Exception:
-            pass
-        try:
             index = client.get_index(uid)
-            if index.primary_key is None:
-                index.update(primary_key="id")
+        except Exception:
+            _wait_for_task(client, client.create_index(uid, primary_key="id"))
+            index = client.get_index(uid)
+        if index.primary_key is None:
+            _wait_for_task(client, index.update(primary_key="id"))
+        _wait_for_task(
+            client,
+            client.index(uid).update_settings(MeilisearchSettings.model_validate(config)),
+        )
+
+
+def _replace_indexes_atomically(
+    client: MeiliClient,
+    documents_by_index: dict[str, list[dict]],
+) -> None:
+    """Replace derived projections without exposing a partially rebuilt index."""
+
+    generation = uuid4().hex[:12]
+    staging_indexes: dict[str, str] = {}
+    selected_settings = {uid: INDEX_SETTINGS[uid] for uid in documents_by_index}
+
+    for live_index, documents in documents_by_index.items():
+        staging = f"{live_index}__staging_{generation}"
+        staging_indexes[live_index] = staging
+        try:
+            _wait_for_task(client, client.index(staging).delete())
         except Exception:
             pass
-        client.index(uid).update_settings(MeilisearchSettings.model_validate(config))
+        _wait_for_task(client, client.create_index(staging, primary_key="id"))
+        _wait_for_task(
+            client,
+            client.index(staging).update_settings(
+                MeilisearchSettings.model_validate(INDEX_SETTINGS[live_index])
+            ),
+        )
+        if documents:
+            _wait_for_task(client, client.index(staging).add_documents(documents))
+
+    _ensure_indexes(client, selected_settings)
+    swaps = [(live, staging) for live, staging in staging_indexes.items()]
+    try:
+        _wait_for_task(client, client.swap_indexes(swaps))
+    except Exception:
+        # Keep correctness on older Meilisearch/SDK combinations that do not
+        # expose atomic swaps. Every task is still awaited before returning.
+        logger.warning("Atomic index swap unavailable; rebuilding live indexes", exc_info=True)
+        for live, documents in documents_by_index.items():
+            _wait_for_task(client, client.index(live).delete_all_documents())
+            _wait_for_task(
+                client,
+                client.index(live).update_settings(
+                    MeilisearchSettings.model_validate(INDEX_SETTINGS[live])
+                ),
+            )
+            if documents:
+                _wait_for_task(client, client.index(live).add_documents(documents))
+    finally:
+        for staging in staging_indexes.values():
+            try:
+                _wait_for_task(client, client.index(staging).delete(), raise_for_status=False)
+            except Exception:
+                logger.debug(
+                    "Failed to remove temporary search index %s",
+                    staging,
+                    exc_info=True,
+                )
+
+
+def _delete_document(index_name: str, document_id: str) -> None:
+    client = _client()
+    _wait_for_task(client, client.index(index_name).delete_document(document_id))
+
+
+def _delete_all_documents(index_name: str) -> None:
+    client = _client()
+    _wait_for_task(client, client.index(index_name).delete_all_documents())
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -1589,7 +1697,7 @@ class SearchService:
             def _run() -> None:
                 client = _client()
                 _ensure_indexes(client)
-                client.index(WORKS_INDEX).add_documents(documents)
+                _wait_for_task(client, client.index(WORKS_INDEX).add_documents(documents))
 
             await asyncio.to_thread(_run)
         except Exception:
@@ -1612,11 +1720,7 @@ class SearchService:
 
         def _run() -> None:
             client = _client()
-            _ensure_indexes(client)
-            for index_name, documents in documents_by_index.items():
-                index = client.index(index_name)
-                if documents:
-                    index.add_documents(documents)
+            _replace_indexes_atomically(client, documents_by_index)
 
         try:
             await asyncio.to_thread(_run)
@@ -1655,43 +1759,97 @@ class SearchService:
 
     async def delete_work(self, work_id: str) -> None:
         try:
-            await asyncio.to_thread(lambda: _client().index(WORKS_INDEX).delete_document(work_id))
+            await asyncio.to_thread(_delete_document, WORKS_INDEX, work_id)
         except Exception:
-            logger.debug("Failed to delete work %s from search", work_id, exc_info=True)
+            logger.warning("Failed to delete work %s from search", work_id, exc_info=True)
 
     async def delete_creator(self, creator_id: str) -> None:
         try:
-            await asyncio.to_thread(lambda: _client().index(CREATORS_INDEX).delete_document(creator_id))
+            await asyncio.to_thread(_delete_document, CREATORS_INDEX, creator_id)
         except Exception:
-            logger.debug("Failed to delete creator %s from search", creator_id, exc_info=True)
+            logger.warning("Failed to delete creator %s from search", creator_id, exc_info=True)
 
     async def delete_tag(self, tag_id: str) -> None:
         try:
-            await asyncio.to_thread(lambda: _client().index(TAGS_INDEX).delete_document(tag_id))
+            await asyncio.to_thread(_delete_document, TAGS_INDEX, tag_id)
         except Exception:
-            logger.debug("Failed to delete tag %s from search", tag_id, exc_info=True)
+            logger.warning("Failed to delete tag %s from search", tag_id, exc_info=True)
 
     async def delete_repository(self, repository_id: str) -> None:
         try:
-            await asyncio.to_thread(
-                lambda: _client().index(REPOSITORIES_INDEX).delete_document(repository_id)
-            )
+            await asyncio.to_thread(_delete_document, REPOSITORIES_INDEX, repository_id)
         except Exception:
-            logger.debug("Failed to delete repository %s from search", repository_id, exc_info=True)
+            logger.warning(
+                "Failed to delete repository %s from search",
+                repository_id,
+                exc_info=True,
+            )
 
     async def delete_subscription(self, subscription_id: str) -> None:
         try:
-            await asyncio.to_thread(
-                lambda: _client().index(SUBSCRIPTIONS_INDEX).delete_document(subscription_id)
-            )
+            await asyncio.to_thread(_delete_document, SUBSCRIPTIONS_INDEX, subscription_id)
         except Exception:
-            logger.debug("Failed to delete subscription %s from search", subscription_id, exc_info=True)
+            logger.warning(
+                "Failed to delete subscription %s from search",
+                subscription_id,
+                exc_info=True,
+            )
 
     async def delete_all_works(self) -> None:
         try:
-            await asyncio.to_thread(lambda: _client().index(WORKS_INDEX).delete_all_documents())
+            await asyncio.to_thread(_delete_all_documents, WORKS_INDEX)
         except Exception:
             logger.warning("Failed to clear works search index", exc_info=True)
+
+    async def audit_projection(self) -> dict[str, Any]:
+        """Compare database-derived documents with the current search projection."""
+
+        documents_by_index = {
+            WORKS_INDEX: await self._build_work_documents(),
+            CREATORS_INDEX: await self._build_creator_documents(),
+            TAGS_INDEX: await self._build_tag_documents(),
+            REPOSITORIES_INDEX: await self._build_repository_documents(),
+            SUBSCRIPTIONS_INDEX: await self._build_subscription_documents(),
+        }
+
+        def _read_ids() -> dict[str, tuple[set[str], int]]:
+            client = _client()
+            result: dict[str, tuple[set[str], int]] = {}
+            for index_name in documents_by_index:
+                search_result = client.index(index_name).search(
+                    "",
+                    limit=100_000,
+                    attributes_to_retrieve=["id"],
+                )
+                hits, total = _search_hits(search_result)
+                result[index_name] = (
+                    {str(hit["id"]) for hit in hits if hit.get("id") is not None},
+                    total,
+                )
+            return result
+
+        try:
+            indexed_ids = await asyncio.to_thread(_read_ids)
+        except Exception as exc:
+            raise SearchBackendUnavailable("Search index audit is unavailable") from exc
+
+        indexes: dict[str, dict[str, Any]] = {}
+        has_drift = False
+        for index_name, documents in documents_by_index.items():
+            expected = {str(document["id"]) for document in documents}
+            actual, indexed_total = indexed_ids[index_name]
+            stale = sorted(actual - expected)
+            missing = sorted(expected - actual)
+            drifted = bool(stale or missing or indexed_total != len(actual))
+            has_drift = has_drift or drifted
+            indexes[INDEX_LABELS[index_name]] = {
+                "database_count": len(expected),
+                "index_count": indexed_total,
+                "stale_ids": stale,
+                "missing_ids": missing,
+                "status": "drift" if drifted else "ok",
+            }
+        return {"status": "drift" if has_drift else "ok", "indexes": indexes}
 
     async def reindex(self) -> dict:
         builders = {
@@ -1709,56 +1867,20 @@ class SearchService:
                 stats[index] = len(documents_by_index[index])
 
             def _rebuild() -> None:
-                client = _client()
-                staging_indexes = {}
-                generation = int(datetime.now(timezone.utc).timestamp())
-                for live_index, documents in documents_by_index.items():
-                    staging = f"{live_index}__staging_{generation}"
-                    staging_indexes[live_index] = staging
-                    try:
-                        deletion = client.index(staging).delete()
-                        client.wait_for_task(deletion.task_uid, timeout_in_ms=120_000, raise_for_status=True)
-                    except Exception:
-                        pass
-                    client.create_index(staging, primary_key="id")
-                    settings_task = client.index(staging).update_settings(
-                        MeilisearchSettings.model_validate(INDEX_SETTINGS[live_index])
-                    )
-                    client.wait_for_task(settings_task.task_uid, timeout_in_ms=120_000, raise_for_status=True)
-                    if documents:
-                        document_task = client.index(staging).add_documents(documents)
-                        client.wait_for_task(document_task.task_uid, timeout_in_ms=120_000, raise_for_status=True)
-
-                _ensure_indexes(client)
-                swaps = [(live, staging) for live, staging in staging_indexes.items()]
-                try:
-                    swap_task = client.swap_indexes(swaps)
-                    client.wait_for_task(swap_task.task_uid, timeout_in_ms=120_000, raise_for_status=True)
-                    for staging in staging_indexes.values():
-                        try:
-                            deletion = client.index(staging).delete()
-                            client.wait_for_task(deletion.task_uid, timeout_in_ms=120_000)
-                        except Exception:
-                            logger.debug("Failed to remove old swapped search index %s", staging, exc_info=True)
-                except Exception:
-                    # Older SDKs expose swap through the raw HTTP client
-                    # differently. Preserve correctness with a live rebuild
-                    # rather than reporting success for stale data.
-                    logger.warning("Atomic index swap unavailable; rebuilding live indexes", exc_info=True)
-                    for live, documents in documents_by_index.items():
-                        client.index(live).delete_all_documents()
-                        client.index(live).update_settings(
-                            MeilisearchSettings.model_validate(INDEX_SETTINGS[live])
-                        )
-                        if documents:
-                            client.index(live).add_documents(documents)
+                _replace_indexes_atomically(_client(), documents_by_index)
 
             await asyncio.to_thread(_rebuild)
         except Exception as exc:
             logger.exception("Search reindex failed")
-            return {"status": "error", "message": str(exc), **stats}
+            return {
+                "status": "error",
+                "message": str(exc),
+                **{INDEX_LABELS[name]: count for name, count in stats.items()},
+            }
         return {
             "status": "ok",
-            "message": ", ".join(f"{name}={count}" for name, count in stats.items()),
-            **stats,
+            "message": ", ".join(
+                f"{INDEX_LABELS[name]}={count}" for name, count in stats.items()
+            ),
+            **{INDEX_LABELS[name]: count for name, count in stats.items()},
         }

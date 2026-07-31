@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, PageShell, EmptyState, ErrorState, SourceBadge } from "@/components";
 import { useT } from "@/lib/i18n";
-import Link from "next/link";
 import { useI18nFormat } from "@/lib/i18n-format";
 
 export default function AuthStatusPage() {
@@ -13,9 +12,6 @@ export default function AuthStatusPage() {
 
   return (
     <PageShell>
-      <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="text-sm text-accent hover:underline">&larr; {t("auth.back")}</Link>
-      </div>
       <PageHeader title={t("auth.title")} description={t("auth.desc")} />
 
       {auth.isLoading && (

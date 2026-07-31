@@ -1,12 +1,11 @@
 "use client";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { api, queryKeys } from "@/lib/api";
 import { EmptyState, ErrorState, PageHeader, PageShell, PermissionGuard } from "@/components";
 import { useT } from "@/lib/i18n";
 import { POLL_ACTIVE_MS } from "@/lib/polling";
-import Link from "next/link";
 import { useI18nFormat } from "@/lib/i18n-format";
 
 const LEVEL_COLORS: Record<string, string> = {
@@ -35,10 +34,6 @@ export default function SystemLogsPage() {
   return (
     <PermissionGuard module="system">
       <PageShell>
-      <Link href="/admin/settings" className="btn-ghost mb-4 inline-flex min-h-11 items-center gap-2">
-        <ArrowLeft aria-hidden="true" className="h-4 w-4" />
-        {t("logs.back")}
-      </Link>
       <PageHeader title={t("logs.title")} description={t("logs.desc")}>
         <button
           type="button"

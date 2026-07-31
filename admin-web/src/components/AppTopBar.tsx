@@ -9,6 +9,7 @@ import { useAuth } from "@/lib/auth";
 import { usePermissions } from "@/lib/usePermissions";
 import { usePresence } from "@/lib/motion";
 import { findAdminNavEntry } from "@/lib/adminNavigation";
+import { adminRoutes } from "@/lib/adminRoutes";
 import { NotificationBell } from "@/components/NotificationCenter";
 import CommandPalette from "@/components/CommandPalette";
 
@@ -86,7 +87,7 @@ function UserMenu() {
         >
           <div className="border-b border-border px-3 py-2 text-xs text-muted">{user?.display_name || user?.username}</div>
           <Link
-            href="/admin/settings/profile"
+            href={adminRoutes.profile}
             onClick={() => setOpen(false)}
             role="menuitem"
             className="flex min-h-11 items-center gap-2 px-3 py-2 transition-colors hover:bg-subtle focus-visible:bg-subtle"

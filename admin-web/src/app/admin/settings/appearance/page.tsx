@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { PageHeader, PageShell } from "@/components";
 import {
   type WorkPreviewDelayMs,
@@ -77,11 +76,6 @@ export default function AppearanceSettingsPage() {
 
   return (
     <PageShell>
-      <div className="mb-4">
-        <Link href="/admin/settings" className="text-sm text-accent hover:underline">
-          {t("common.back")}
-        </Link>
-      </div>
       <PageHeader title={t("appearance.title")} description={t("appearance.desc")} />
 
       <section className="card p-5">

@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://:changeme@redis:6379/0"
     meili_url: str = "http://meilisearch:7700"
     meili_master_key: str = ""
+    meili_index_prefix: str = ""
 
     secret_key: str = ""
     admin_password: str = ""
@@ -77,6 +78,14 @@ class Settings(BaseSettings):
             )
         if _is_placeholder(self.meili_master_key):
             errors.append("MEILI_MASTER_KEY is still a factory placeholder.")
+        if len(self.meili_index_prefix) > 64 or any(
+            not (character.isalnum() or character in {"_", "-"})
+            for character in self.meili_index_prefix
+        ):
+            errors.append(
+                "MEILI_INDEX_PREFIX may contain only letters, numbers, '_' and '-' "
+                "and must be at most 64 characters."
+            )
 
         # Check DB/Redis passwords — refuse to start with factory defaults.
         # Parse the password component from each URL to avoid false positives

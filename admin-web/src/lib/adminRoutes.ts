@@ -33,6 +33,7 @@ export const adminRoutes = {
   dedup: "/admin/data-mgmt/dedup",
   system: "/admin/system",
 
+  profile: "/admin/profile",
   settings: "/admin/settings",
   settingsSection: (section: string) => `/admin/settings/${encodeURIComponent(section)}`,
   users: "/admin/settings/users",
@@ -50,7 +51,58 @@ export const legacyAdminRoutes = {
   sources: "/admin/sources",
   importJobs: "/admin/import-jobs",
   settingsDataManagement: "/admin/settings/data-mgmt",
+  profile: "/admin/settings/profile",
 } as const;
+
+export interface AdminBreadcrumbParent {
+  labelKey: string;
+  href: string;
+}
+
+/**
+ * Parent hierarchy for pages whose location cannot be expressed by the
+ * sidebar's flat navigation group alone.
+ */
+export function adminBreadcrumbParents(pathname: string): AdminBreadcrumbParent[] {
+  if (pathname === adminRoutes.profile) {
+    return [{ labelKey: "nav.dashboard", href: adminRoutes.dashboard }];
+  }
+  if (pathname === adminRoutes.users) {
+    return [{ labelKey: "settings.title", href: adminRoutes.settings }];
+  }
+  if (pathname.startsWith(`${adminRoutes.users}/`)) {
+    return [
+      { labelKey: "settings.title", href: adminRoutes.settings },
+      { labelKey: "users.title", href: adminRoutes.users },
+    ];
+  }
+  if (pathname.startsWith(`${adminRoutes.settings}/`)) {
+    return [{ labelKey: "settings.title", href: adminRoutes.settings }];
+  }
+  return [];
+}
+
+const SETTINGS_PAGE_TITLE_KEYS: Readonly<Record<string, string>> = {
+  [adminRoutes.settings]: "settings.title",
+  [adminRoutes.settingsSection("appearance")]: "appearance.title",
+  [adminRoutes.settingsSection("auth-status")]: "auth.title",
+  [adminRoutes.settingsSection("backup")]: "backup.title",
+  [adminRoutes.settingsSection("dedup")]: "dedup.title",
+  [adminRoutes.settingsSection("download-defaults")]: "dldefaults.title",
+  [adminRoutes.settingsSection("gallerydl")]: "gallerydl.title",
+  [adminRoutes.settingsSection("logs")]: "logs.title",
+  [adminRoutes.settingsSection("proxy")]: "proxy.title",
+  [adminRoutes.settingsSection("scheduler-defaults")]: "scheduler.defaults_title",
+  [adminRoutes.settingsSection("showcase")]: "showcase_settings.title",
+  [adminRoutes.settingsSection("subscription-defaults")]: "subdefaults.title",
+  [adminRoutes.users]: "users.title",
+  [adminRoutes.profile]: "auth.profile",
+};
+
+export function adminPageTitleKey(pathname: string): string | null {
+  if (pathname.startsWith(`${adminRoutes.users}/`)) return "user_detail.title";
+  return SETTINGS_PAGE_TITLE_KEYS[pathname] || null;
+}
 
 export interface LegacyAdminRedirect {
   pathname: string;
@@ -85,6 +137,9 @@ export function resolveLegacyAdminRoute(pathname: string): LegacyAdminRedirect |
     },
     [legacyAdminRoutes.settingsDataManagement]: {
       pathname: adminRoutes.dataManagement,
+    },
+    [legacyAdminRoutes.profile]: {
+      pathname: adminRoutes.profile,
     },
   };
   if (exact[pathname]) return exact[pathname];

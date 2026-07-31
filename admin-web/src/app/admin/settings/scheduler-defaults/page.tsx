@@ -5,7 +5,6 @@ import { api, queryKeys, SubscriptionDefaults, DownloadDefaults } from "@/lib/ap
 import { PageHeader, PageShell, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
-import Link from "next/link";
 import { Plus, X } from "lucide-react";
 
 const TIMEZONES = ["UTC", "Asia/Shanghai", "Asia/Tokyo", "Asia/Seoul", "Asia/Singapore", "Asia/Kolkata",
@@ -70,9 +69,6 @@ export default function SchedulerDefaultsPage() {
 
   return (
     <PageShell>
-      <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/settings" className="inline-flex min-h-11 items-center text-sm text-accent hover:underline">&larr; {t("subdefaults.back")}</Link>
-      </div>
       <PageHeader title={t("scheduler.defaults_title")} description={t("scheduler.defaults_desc")} />
 
       <div className="space-y-6">

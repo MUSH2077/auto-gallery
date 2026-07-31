@@ -6,7 +6,6 @@ import { api, DedupSettings, queryKeys } from "@/lib/api";
 import { ErrorState, PageHeader, PageShell } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
-import Link from "next/link";
 
 function NumberSetting({
   label,
@@ -99,12 +98,6 @@ export default function DedupSettingsPage() {
 
   return (
     <PageShell>
-      <Link
-        href="/admin/settings"
-        className="mb-5 inline-flex min-h-11 items-center text-sm text-accent hover:underline"
-      >
-        {t("dedup.back")}
-      </Link>
       <PageHeader title={t("dedup.title")} description={t("dedup.desc")} />
 
       <section className="card p-5">

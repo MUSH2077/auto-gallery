@@ -294,6 +294,7 @@ const zh: Record<string, string> = {
 
   // Users - Detail
   "user_detail.account_section": "账号",
+  "user_detail.title": "用户详情",
   "user_detail.permissions_section": "权限矩阵",
   "user_detail.quota_section": "配额",
   "user_detail.content_section": "内容过滤",
@@ -2621,6 +2622,7 @@ function buildEn(): Record<string, string> {
 
     // Users - Detail
     "user_detail.account_section": "Account",
+    "user_detail.title": "User details",
     "user_detail.permissions_section": "Permissions",
     "user_detail.quota_section": "Quota",
     "user_detail.content_section": "Content Filter",
