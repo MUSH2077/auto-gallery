@@ -53,7 +53,7 @@ function SettingRow({
   );
 }
 
-export function AppearanceSettingsContent() {
+export default function AppearanceSettingsPage() {
   const t = useT();
   const { theme, setTheme } = useTheme();
   const { settings, updateSettings, resetSettings } = useAppearanceSettings();
@@ -75,7 +75,9 @@ export function AppearanceSettingsContent() {
   ];
 
   return (
-    <>
+    <PageShell>
+      <PageHeader title={t("appearance.title")} description={t("appearance.desc")} />
+
       <section className="card p-5">
         <h2 className="section-title mb-2">{t("appearance.interface")}</h2>
         <SettingRow title={t("appearance.theme")} description={t("appearance.theme_desc")}>
@@ -145,16 +147,6 @@ export function AppearanceSettingsContent() {
           {t("common.reset")}
         </button>
       </section>
-    </>
-  );
-}
-
-export default function AppearanceSettingsPage() {
-  const t = useT();
-  return (
-    <PageShell>
-      <PageHeader title={t("appearance.title")} description={t("appearance.desc")} />
-      <AppearanceSettingsContent />
     </PageShell>
   );
 }

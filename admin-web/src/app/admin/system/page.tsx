@@ -1,21 +1,20 @@
 "use client";
 
 import { useEffect } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 
-import { ErrorState, PageHeader, PageShell, PermissionGuard, StatusBadge, UrlTabs } from "@/components";
-import { SystemLogsContent } from "@/app/admin/settings/logs/page";
+import { ErrorState, PageHeader, PageShell, PermissionGuard, StatusBadge } from "@/components";
 import SourceRegistryPanel from "@/components/SourceRegistryPanel";
 import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { usePermissions } from "@/lib/usePermissions";
-import { adminRoutes } from "@/lib/adminRoutes";
 
-type SystemTab = "services" | "sources" | "logs";
+type SystemTab = "services" | "sources";
 
-const SYSTEM_TABS: readonly SystemTab[] = ["services", "sources", "logs"];
+const SYSTEM_TABS: readonly SystemTab[] = ["services", "sources"];
 
 export default function SystemPage() {
   const t = useT();
@@ -25,7 +24,6 @@ export default function SystemPage() {
   const { has, isLoading: permissionsLoading } = usePermissions();
   const canViewServices = has("system");
   const canViewSources = has("subscriptions");
-  const canViewLogs = has("system");
   const requestedTab = searchParams.get("tab");
   const validRequestedTab = SYSTEM_TABS.includes(requestedTab as SystemTab)
     ? requestedTab as SystemTab
@@ -35,16 +33,14 @@ export default function SystemPage() {
     ? "services"
     : validRequestedTab === "sources" && canViewSources
       ? "sources"
-      : validRequestedTab === "logs" && canViewLogs
-        ? "logs"
-        : fallbackTab;
+      : fallbackTab;
   const paramsKey = searchParams.toString();
 
   useEffect(() => {
     if (permissionsLoading || !requestedTab || requestedTab === activeTab) return;
     const next = new URLSearchParams(paramsKey);
     next.set("tab", activeTab);
-    router.replace(`${adminRoutes.system}?${next.toString()}`, { scroll: false });
+    router.replace(`/admin/system?${next.toString()}`, { scroll: false });
   }, [activeTab, paramsKey, permissionsLoading, requestedTab, router]);
 
   const health = useQuery({
@@ -63,7 +59,7 @@ export default function SystemPage() {
   const refreshCurrent = () => {
     if (activeTab === "services") {
       void health.refetch();
-    } else if (activeTab === "sources") {
+    } else {
       void sources.refetch();
     }
   };
@@ -78,7 +74,7 @@ export default function SystemPage() {
         <PageHeader
           title={t("system_health.title")}
           description={t("system_health.desc")}
-          primaryAction={activeTab !== "logs" ? (
+          primaryAction={
             <button
               type="button"
               onClick={refreshCurrent}
@@ -87,19 +83,42 @@ export default function SystemPage() {
             >
               {refreshing ? t("system_health.refreshing") : t("system_health.refresh")}
             </button>
-          ) : undefined}
+          }
         />
 
         <div data-page-primary-content>
-          <UrlTabs
-            activeId={activeTab}
-            ariaLabel={t("system_health.sections")}
-            tabs={[
-              ...(canViewServices ? [{ id: "services", label: t("system_health.services_tab"), href: `${adminRoutes.system}?tab=services` }] : []),
-              ...(canViewSources ? [{ id: "sources", label: t("system_health.sources_tab"), href: `${adminRoutes.system}?tab=sources` }] : []),
-              ...(canViewLogs ? [{ id: "logs", label: t("logs.title"), href: `${adminRoutes.system}?tab=logs` }] : []),
-            ]}
-          />
+          <nav
+            className="segmented-control mb-6 w-fit max-w-full flex-wrap"
+            role="tablist"
+            aria-label={t("system_health.sections")}
+          >
+            {canViewServices && (
+              <Link
+                id="system-tab-services"
+                href="/admin/system?tab=services"
+                scroll={false}
+                role="tab"
+                aria-selected={activeTab === "services"}
+                aria-controls="system-panel-services"
+                className={`segment min-h-11 ${activeTab === "services" ? "segment-active" : ""}`}
+              >
+                {t("system_health.services_tab")}
+              </Link>
+            )}
+            {canViewSources && (
+              <Link
+                id="system-tab-sources"
+                href="/admin/system?tab=sources"
+                scroll={false}
+                role="tab"
+                aria-selected={activeTab === "sources"}
+                aria-controls="system-panel-sources"
+                className={`segment min-h-11 ${activeTab === "sources" ? "segment-active" : ""}`}
+              >
+                {t("system_health.sources_tab")}
+              </Link>
+            )}
+          </nav>
 
           {canViewServices && (
             <section
@@ -165,11 +184,6 @@ export default function SystemPage() {
                 error={sources.error as Error | null}
                 onRetry={() => void sources.refetch()}
               />
-            </section>
-          )}
-          {canViewLogs && activeTab === "logs" && (
-            <section id="system-panel-logs" role="tabpanel" aria-label={t("logs.title")}>
-              <SystemLogsContent enabled />
             </section>
           )}
         </div>

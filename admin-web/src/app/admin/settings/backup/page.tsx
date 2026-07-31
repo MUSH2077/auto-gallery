@@ -35,7 +35,7 @@ function contentBadgeColor(content: string): string {
   return colors[content] || "bg-subtle text-fg";
 }
 
-export function BackupManagementContent() {
+export default function BackupPage() {
   const toast = useToast();
   const t = useT();
   const fmt = useI18nFormat();
@@ -118,7 +118,9 @@ export function BackupManagementContent() {
   };
 
   return (
-    <>
+    <PageShell>
+      <PageHeader title={t("backup.title")} description={t("backup.desc")} />
+
       {result && (
         <div className={`mb-4 p-3 rounded-lg text-sm flex items-center justify-between ${result.ok ? "bg-success-subtle border border-success/30 text-success" : "bg-danger-subtle border border-danger/30 text-danger"}`}>
           <span>{result.msg}</span>
@@ -247,16 +249,6 @@ export function BackupManagementContent() {
           onCancel={() => setDeleteTarget(null)}
           isPending={false} />
       )}
-    </>
-  );
-}
-
-export default function BackupPage() {
-  const t = useT();
-  return (
-    <PageShell>
-      <PageHeader title={t("backup.title")} description={t("backup.desc")} />
-      <BackupManagementContent />
     </PageShell>
   );
 }

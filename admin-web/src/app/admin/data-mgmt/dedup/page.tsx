@@ -14,18 +14,13 @@ import {
   PageShell,
   PermissionGuard,
   SourceBadge,
-  UrlTabs,
 } from "@/components";
-import { DedupSettingsContent } from "@/app/admin/settings/dedup/page";
-import { adminRoutes } from "@/lib/adminRoutes";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
-import { usePermissions } from "@/lib/usePermissions";
 
 const PAGE_SIZE = 25;
 const DEDUP_STATUSES = ["pending", "merged", "separate", "deferred"] as const;
 type DedupStatus = typeof DEDUP_STATUSES[number];
-type DedupPageTab = "review" | "settings";
 
 function Metric({
   label,
@@ -205,16 +200,6 @@ export default function DedupPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
-  const { has, isLoading: permissionsLoading } = usePermissions();
-  const canReview = has("curation");
-  const canConfigure = has("system");
-  const requestedTab = searchParams.get("tab");
-  const fallbackTab: DedupPageTab = canReview ? "review" : "settings";
-  const activeTab: DedupPageTab = requestedTab === "review" && canReview
-    ? "review"
-    : requestedTab === "settings" && canConfigure
-      ? "settings"
-      : fallbackTab;
   const requestedStatus = searchParams.get("status");
   const status: DedupStatus = DEDUP_STATUSES.includes(requestedStatus as DedupStatus)
     ? requestedStatus as DedupStatus
@@ -226,13 +211,6 @@ export default function DedupPage() {
     representativeId: string;
   } | null>(null);
   const [scanId, setScanId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (permissionsLoading || !requestedTab || requestedTab === activeTab) return;
-    const next = new URLSearchParams(paramsKey);
-    next.set("tab", activeTab);
-    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
-  }, [activeTab, paramsKey, pathname, permissionsLoading, requestedTab, router]);
 
   useEffect(() => {
     if (!requestedStatus || requestedStatus === status) return;
@@ -254,12 +232,11 @@ export default function DedupPage() {
   const cases = useQuery({
     queryKey: queryKeys.dedup.cases(status, page),
     queryFn: () => api.listAssetDedupCases(status, page * PAGE_SIZE, PAGE_SIZE),
-    enabled: canReview && activeTab === "review",
   });
   const scanStatus = useQuery({
     queryKey: queryKeys.dedup.scan(scanId || ""),
     queryFn: () => api.getAssetDedupScan(scanId!),
-    enabled: canReview && activeTab === "review" && !!scanId,
+    enabled: !!scanId,
     refetchInterval: (query) => {
       const current = query.state.data?.status;
       return current && ["complete", "failed"].includes(current) ? false : 2000;
@@ -310,14 +287,13 @@ export default function DedupPage() {
   }, [scan.isPending, scanStatus.data, t]);
 
   return (
-    <PermissionGuard anyOf={["curation", "system"]}>
+    <PermissionGuard module="curation">
       <PageShell>
         <PageHeader
           title={t("asset_dedup.title")}
           description={t("asset_dedup.desc")}
-          meta={activeTab === "review" && cases.data ? t("asset_dedup.filtered_count", { count: cases.data.total }) : undefined}
+          meta={cases.data ? t("asset_dedup.filtered_count", { count: cases.data.total }) : undefined}
         >
-          {activeTab === "review" && canReview ? (
           <button
             type="button"
             onClick={() => scan.mutate()}
@@ -330,19 +306,7 @@ export default function DedupPage() {
           >
             {scanLabel}
           </button>
-          ) : null}
         </PageHeader>
-
-        <UrlTabs
-          activeId={activeTab}
-          ariaLabel={t("asset_dedup.sections")}
-          tabs={[
-            ...(canReview ? [{ id: "review", label: t("asset_dedup.review_tab"), href: `${adminRoutes.dedup}?tab=review&status=${status}` }] : []),
-            ...(canConfigure ? [{ id: "settings", label: t("dedup.title"), href: `${adminRoutes.dedup}?tab=settings` }] : []),
-          ]}
-        />
-
-        {activeTab === "review" && canReview ? (<>
 
         <div className="mb-5 rounded-md border border-border bg-subtle/40 p-4 text-sm leading-6 text-muted">
           {t("asset_dedup.policy")}
@@ -522,13 +486,6 @@ export default function DedupPage() {
             });
           }}
         />
-        </>) : null}
-
-        {activeTab === "settings" && canConfigure ? (
-          <section role="tabpanel" aria-label={t("dedup.title")}>
-            <DedupSettingsContent />
-          </section>
-        ) : null}
       </PageShell>
     </PermissionGuard>
   );

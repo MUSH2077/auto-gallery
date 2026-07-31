@@ -5,7 +5,7 @@ import { api, queryKeys, DownloadDefaults } from "@/lib/api";
 import { PageHeader, PageShell, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
 
-export function DownloadDefaultsSettingsContent({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
+export default function DownloadDefaultsPage() {
   const t = useT();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
@@ -23,25 +23,23 @@ export function DownloadDefaultsSettingsContent({ onDirtyChange }: { onDirtyChan
   });
 
   const current = local || settings.data?.download_defaults;
-  const dirty = Boolean(local && settings.data?.download_defaults
-    && JSON.stringify(local) !== JSON.stringify(settings.data.download_defaults));
-
-  useEffect(() => {
-    onDirtyChange?.(dirty);
-  }, [dirty, onDirtyChange]);
 
   if (settings.isError) {
     return (
-      <ErrorState message={settings.error?.message || t("dldefaults.failed")} onRetry={() => settings.refetch()} />
+      <PageShell>
+        <ErrorState message={settings.error?.message || t("dldefaults.failed")} onRetry={() => settings.refetch()} />
+      </PageShell>
     );
   }
 
   if (!settings.data) {
     return (
-      <div className="animate-pulse space-y-4">
+      <PageShell>
+        <div className="animate-pulse space-y-4">
           <div className="h-8 rounded-md bg-subtle dark:bg-subtle w-1/3" />
           <div className="h-48 rounded-md bg-subtle dark:bg-subtle" />
-      </div>
+        </div>
+      </PageShell>
     );
   }
 
@@ -51,7 +49,9 @@ export function DownloadDefaultsSettingsContent({ onDirtyChange }: { onDirtyChan
   };
 
   return (
-    <>
+    <PageShell>
+      <PageHeader title={t("dldefaults.title")} description={t("dldefaults.desc")} />
+
       {!current ? null : (
         <>
           <div className="card p-6 space-y-5 text-sm">
@@ -218,16 +218,6 @@ export function DownloadDefaultsSettingsContent({ onDirtyChange }: { onDirtyChan
           {save.error && <p className="text-danger text-sm mt-2">{(save.error as Error).message}</p>}
         </>
       )}
-    </>
-  );
-}
-
-export default function DownloadDefaultsPage() {
-  const t = useT();
-  return (
-    <PageShell>
-      <PageHeader title={t("dldefaults.title")} description={t("dldefaults.desc")} />
-      <DownloadDefaultsSettingsContent />
     </PageShell>
   );
 }

@@ -76,7 +76,7 @@ function TestResults({ data, proxyEnabled }: { data: any | null; proxyEnabled: b
   );
 }
 
-export function ProxySettingsContent() {
+export default function ProxySettingsPage() {
   const t = useT();
   const toast = useToast();
   const qc = useQueryClient();
@@ -96,12 +96,14 @@ export function ProxySettingsContent() {
   const testProxy = useMutation({ mutationFn: () => api.testProxy() });
 
   const current = local || settings.data?.proxy;
-  if (settings.isError) return <ErrorState message={settings.error?.message || t("proxy.failed")} onRetry={() => settings.refetch()} />;
-  if (!settings.data) return <div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded-md bg-subtle dark:bg-subtle" /><div className="h-48 rounded-md bg-subtle dark:bg-subtle" /></div>;
+  if (settings.isError) return <PageShell><ErrorState message={settings.error?.message || t("proxy.failed")} onRetry={() => settings.refetch()} /></PageShell>;
+  if (!settings.data) return <PageShell><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded-md bg-subtle dark:bg-subtle" /><div className="h-48 rounded-md bg-subtle dark:bg-subtle" /></div></PageShell>;
   const setStr = (key: keyof ProxySettings, val: string) => { if (current) setLocal({ ...current, [key]: val }); };
 
   return (
-    <>
+    <PageShell>
+      <PageHeader title={t("proxy.title")} description={t("proxy.desc")} />
+
       {current && (
         <>
           <div className="card p-6 space-y-5">
@@ -175,16 +177,6 @@ export function ProxySettingsContent() {
           </div>
         </>
       )}
-    </>
-  );
-}
-
-export default function ProxySettingsPage() {
-  const t = useT();
-  return (
-    <PageShell>
-      <PageHeader title={t("proxy.title")} description={t("proxy.desc")} />
-      <ProxySettingsContent />
     </PageShell>
   );
 }

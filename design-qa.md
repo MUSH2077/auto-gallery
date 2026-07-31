@@ -78,47 +78,6 @@ Validation:
 
 final result: passed
 
-# Settings domain consolidation QA
-
-## Scope and evidence
-
-- Consolidated destinations: Profile, Automation, Connectivity & Extractors,
-  Data Management, System & Sources, Asset Deduplication, and Users.
-- Compatibility: all replaced settings URLs permanently redirect while
-  preserving non-conflicting query parameters; the destination tab always
-  takes precedence.
-- Viewports and presentation: 1440×960, 768×1024, and 390×844 in English dark
-  and Chinese light fixtures. All API and media traffic used intercepted,
-  fictional data.
-
-## Results
-
-| Area | Result | Notes |
-|---|---|---|
-| Settings landing | Passed | Only Automation, Connectivity & Extractors, and admin-only User Management remain; configuration dumps and duplicate maintenance actions are absent. |
-| Personal preferences | Passed | Account, Appearance, and Showcase live under Profile and remain available without system or subscription permissions. |
-| Automation ownership | Passed | Schedule and download drafts survive tab switches; each save updates only its owned settings object and preserves hidden `auto_enable_sources`. |
-| Connectivity | Passed | Extractor source is URL-addressable, collapses to a mobile select, and remains independent from proxy save/test behavior. |
-| Data governance | Passed | Overview, Maintenance, Backup & Restore, and Danger Zone are independently addressable; search and library rebuilds remain distinct operations. |
-| Permissions | Passed | System logs load only on their authorized active tab; dedup review and settings expose independent curation/system access. |
-| Accessibility | Passed | URL tabs support arrows, Home/End, mobile selection, unique current state, visible focus, and zero automated Axe A/AA violations in the representative route matrix. |
-| Localization and layout | Passed | 2,257 bilingual keys are equivalent; every consolidated route follows the shared page shell and 24px header-to-content rhythm without root overflow. |
-
-No open P0, P1, or P2 findings remain.
-
-Validation:
-
-- all frontend contract checks (`admin-routes`, `api-types`, `charts`, `i18n`,
-  `media`, and `search-contract`)
-- `npm run typecheck`
-- `npm run build`
-- complete Playwright suite: 126 passed, 1 documentation screenshot test
-  skipped by its explicit environment gate
-- `scripts/privacy-scan.sh`
-- `git diff --check`
-
-final result: passed
-
 # Initial admin shell stability QA
 
 ## Scope and evidence

@@ -119,26 +119,25 @@ const REPRESENTATIVE_ROUTES = [
   "/admin/tags",
   "/admin/upload",
   "/admin/upload/danbooru",
-  "/admin/data-mgmt?tab=overview",
-  "/admin/data-mgmt?tab=maintenance",
-  "/admin/data-mgmt?tab=backups",
-  "/admin/data-mgmt?tab=danger",
+  "/admin/data-mgmt",
   "/admin/data-mgmt/curation",
-  "/admin/data-mgmt/dedup?tab=review&status=pending",
-  "/admin/data-mgmt/dedup?tab=settings",
-  "/admin/system?tab=services",
-  "/admin/system?tab=sources",
-  "/admin/system?tab=logs",
+  "/admin/data-mgmt/dedup",
+  "/admin/system",
+  "/admin/sources",
   "/admin/search",
   "/admin/settings/users",
   "/admin/settings",
-  "/admin/settings/automation?tab=schedule",
-  "/admin/settings/automation?tab=downloads",
-  "/admin/settings/connectivity?tab=extractors&source=pixiv",
-  "/admin/settings/connectivity?tab=proxy",
-  "/admin/profile?tab=account",
-  "/admin/profile?tab=appearance",
-  "/admin/profile?tab=showcase",
+  "/admin/settings/appearance",
+  "/admin/settings/backup",
+  "/admin/settings/dedup",
+  "/admin/settings/download-defaults",
+  "/admin/settings/gallerydl",
+  "/admin/settings/logs",
+  "/admin/profile",
+  "/admin/settings/proxy",
+  "/admin/settings/scheduler-defaults",
+  "/admin/settings/showcase",
+  "/admin/settings/subscription-defaults",
 ] as const;
 
 const DYNAMIC_ROUTES = [
@@ -185,8 +184,6 @@ const NAVIGATION_SELECTION_MATRIX = [
   ["/admin/data-mgmt/dedup?status=pending", "/admin/data-mgmt"],
   ["/admin/system?tab=sources", "/admin/system"],
   ["/admin/settings", "/admin/settings"],
-  ["/admin/settings/automation?tab=downloads", "/admin/settings"],
-  ["/admin/settings/connectivity?tab=proxy", "/admin/settings"],
   ["/admin/settings/users", "/admin/settings"],
   ["/admin/settings/users/1", "/admin/settings"],
   ["/admin/notifications", null],
@@ -533,7 +530,6 @@ async function installFixtureRoutes(context: BrowserContext) {
             schedule_mode: "interval",
             scheduled_times: "",
             timezone: "UTC",
-            auto_enable_sources: "pixiv",
           },
           download_defaults: {
             timeout_seconds: 1800,
@@ -1133,7 +1129,7 @@ for (const route of QUALITY_ROUTES) {
     await expect(page.locator("#main-content")).toBeVisible();
     await expect(page.getByRole("main")).toHaveCount(1);
     await expect(page.locator("[data-nextjs-dialog-overlay]")).toHaveCount(0);
-    if (route === "/admin/system?tab=sources") {
+    if (route === "/admin/sources") {
       await expect(page.getByRole("heading", { level: 3, name: "Pixiv" })).toBeVisible();
       await expect(page.locator("#main-content .page-item").last()).toHaveCSS("opacity", "1");
     }
@@ -1174,13 +1170,13 @@ for (const route of QUALITY_ROUTES) {
     await expect(page.locator("#main-content")).toBeVisible();
     await expect(page.getByRole("main")).toHaveCount(1);
     await expect(page.locator("[data-nextjs-dialog-overlay]")).toHaveCount(0);
-    if (route === "/admin/system?tab=sources") {
+    if (route === "/admin/sources") {
       await expect(page.getByRole("heading", { level: 3, name: "Pixiv" })).toBeVisible();
       await expect(page.locator("#main-content .page-item").last()).toHaveCSS("opacity", "1");
     }
     expect(pageErrors, `${route} should not throw a framework error`).toEqual([]);
     expect(missingTranslations, `${route} should not use raw translation keys`).toEqual([]);
-    if (route === "/admin/system?tab=logs") {
+    if (route === "/admin/settings/logs") {
       await page.screenshot({ path: "/tmp/auto-gallery-logs-zh-light.png", fullPage: false });
     }
     const results = await new AxeBuilder({ page })
@@ -1201,7 +1197,6 @@ test("system and source tabs fetch only their active data and retain provider to
   await page.setViewportSize({ width: 1440, height: 960 });
   let healthRequests = 0;
   let sourceRequests = 0;
-  let logRequests = 0;
   await page.route("**/api/v1/system/health", async (route) => {
     healthRequests += 1;
     await route.fulfill({
@@ -1217,10 +1212,6 @@ test("system and source tabs fetch only their active data and retain provider to
     sourceRequests += 1;
     await route.fulfill({ json: { sources: providerFixtures } });
   });
-  await page.route("**/api/v1/system/logs**", async (route) => {
-    logRequests += 1;
-    await route.fulfill({ json: { entries: [], total: 0 } });
-  });
 
   await page.goto("/admin/system");
   await expect(page.getByRole("heading", { level: 1, name: "System & Sources" })).toBeVisible();
@@ -1228,7 +1219,6 @@ test("system and source tabs fetch only their active data and retain provider to
   await expect(page.getByRole("tab", { name: "Sources" })).toBeVisible();
   await expect.poll(() => healthRequests).toBeGreaterThan(0);
   expect(sourceRequests).toBe(0);
-  expect(logRequests).toBe(0);
   await page.screenshot({ path: "/tmp/auto-gallery-system-services.png", fullPage: false });
 
   await page.getByRole("tab", { name: "Sources" }).click();
@@ -1249,12 +1239,6 @@ test("system and source tabs fetch only their active data and retain provider to
   await expect.poll(() => sourceRequests).toBeGreaterThan(sourceRequestsBeforeRefresh);
   await expect(refreshButton).toBeEnabled();
   expect(healthRequests).toBe(healthRequestsBeforeRefresh);
-  await page.screenshot({ path: "/tmp/auto-gallery-system-sources.png", fullPage: true });
-
-  await page.getByRole("tab", { name: "System Logs" }).click();
-  await expect(page).toHaveURL(/\/admin\/system\?tab=logs$/);
-  await expect.poll(() => logRequests).toBeGreaterThan(0);
-  await expect(page.getByText("No log entries matching filters.")).toBeVisible();
 
   const axe = await new AxeBuilder({ page })
     .include("#main-content")
@@ -1262,7 +1246,7 @@ test("system and source tabs fetch only their active data and retain provider to
     .analyze();
   expect(axe.violations).toEqual([]);
   await expectNoPageOverflow(page);
-  await page.screenshot({ path: "/tmp/auto-gallery-system-logs.png", fullPage: true });
+  await page.screenshot({ path: "/tmp/auto-gallery-system-sources.png", fullPage: true });
 });
 
 test("system and source tabs preserve module-level permissions", async ({ page }) => {
@@ -1288,7 +1272,6 @@ test("system and source tabs preserve module-level permissions", async ({ page }
   await page.goto("/admin/system?tab=sources");
   await expect(page).toHaveURL(/\/admin\/system\?tab=services$/);
   await expect(page.getByRole("tab", { name: "Service Status" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "System Logs" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Sources" })).toHaveCount(0);
   await expect.poll(() => healthRequests).toBeGreaterThan(0);
   expect(sourceRequests).toBe(0);
@@ -1303,8 +1286,7 @@ test("system and source tabs preserve module-level permissions", async ({ page }
   }));
   await page.goto("/admin/sources");
   await expect(page).toHaveURL(/\/admin\/system\?tab=sources$/);
-  await expect(page.getByRole("tab")).toHaveCount(0);
-  await expect(page.getByRole("heading", { level: 3, name: "Pixiv" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Sources" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Service Status" })).toHaveCount(0);
   await expect(page.locator("#admin-sidebar").getByRole("link", { name: "System & Sources" })).toBeVisible();
   const healthRequestsBeforeSourceOnly = healthRequests;
@@ -1319,11 +1301,7 @@ for (const viewport of [
   test(`source registry reflows at ${viewport.name} width`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/admin/system?tab=sources");
-    if (viewport.name === "mobile") {
-      await expect(page.getByRole("combobox", { name: "System and source sections" })).toHaveValue("sources");
-    } else {
-      await expect(page.getByRole("tab", { name: "Sources" })).toHaveAttribute("aria-selected", "true");
-    }
+    await expect(page.getByRole("tab", { name: "Sources" })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("heading", { level: 3, name: "Pixiv" })).toBeVisible();
     await expectNoPageOverflow(page);
     if (viewport.name === "mobile") {
@@ -1342,39 +1320,6 @@ test("dedup status is addressable and browser history restores the selected revi
   await page.goBack();
   await expect(page).toHaveURL(/\/admin\/data-mgmt\/dedup\?status=deferred$/);
   await expect(page.getByRole("tab", { name: "Deferred" })).toHaveAttribute("aria-selected", "true");
-});
-
-test("dedup review and settings tabs honor their independent permissions", async ({ page }) => {
-  let caseRequests = 0;
-  await page.route("**/api/v1/admin/dedup/cases**", async (route) => {
-    caseRequests += 1;
-    await route.fulfill({ json: { items: [], total: 0, offset: 0, limit: 25 } });
-  });
-  await page.route("**/api/v1/auth/me", (route) => route.fulfill({
-    json: {
-      ...me,
-      is_admin: false,
-      permissions: ["system"],
-      modules: { system: true, curation: false },
-    },
-  }));
-  await page.goto("/admin/data-mgmt/dedup?tab=review");
-  await expect(page).toHaveURL(/tab=settings/);
-  await expect(page.getByText("Automatically group visual assets")).toBeVisible();
-  expect(caseRequests).toBe(0);
-
-  await page.route("**/api/v1/auth/me", (route) => route.fulfill({
-    json: {
-      ...me,
-      is_admin: false,
-      permissions: ["curation"],
-      modules: { system: false, curation: true },
-    },
-  }));
-  await page.goto("/admin/data-mgmt/dedup?tab=settings&status=pending");
-  await expect(page).toHaveURL(/tab=review/);
-  await expect(page.getByText("No image candidates")).toBeVisible();
-  await expect.poll(() => caseRequests).toBeGreaterThan(0);
 });
 
 test("legacy task, source, merge, and settings data routes redirect to their maintained destinations", async ({ page }) => {
@@ -1408,18 +1353,7 @@ test("migrated admin URLs return permanent redirects and preserve deep-link stat
     ["/admin/sources?from=bookmark", "/admin/system?from=bookmark&tab=sources"],
     ["/admin/import-jobs?from=bookmark", "/admin/jobs?from=bookmark&tab=imports"],
     ["/admin/settings/data-mgmt?from=bookmark", "/admin/data-mgmt?from=bookmark"],
-    ["/admin/settings/profile?from=bookmark", "/admin/profile?from=bookmark"],
     ["/admin/settings/auth-status?from=bookmark", "/admin/scheduler?from=bookmark#auth-status"],
-    ["/admin/settings/appearance?from=bookmark", "/admin/profile?from=bookmark&tab=appearance"],
-    ["/admin/settings/showcase?from=bookmark", "/admin/profile?from=bookmark&tab=showcase"],
-    ["/admin/settings/gallerydl?from=bookmark", "/admin/settings/connectivity?from=bookmark&tab=extractors"],
-    ["/admin/settings/scheduler-defaults?from=bookmark", "/admin/settings/automation?from=bookmark&tab=schedule"],
-    ["/admin/settings/subscription-defaults?from=bookmark", "/admin/settings/automation?from=bookmark&tab=schedule"],
-    ["/admin/settings/download-defaults?from=bookmark", "/admin/settings/automation?from=bookmark&tab=downloads"],
-    ["/admin/settings/dedup?status=pending", "/admin/data-mgmt/dedup?status=pending&tab=settings"],
-    ["/admin/settings/proxy?from=bookmark", "/admin/settings/connectivity?from=bookmark&tab=proxy"],
-    ["/admin/settings/logs?from=bookmark", "/admin/system?from=bookmark&tab=logs"],
-    ["/admin/settings/backup?from=bookmark", "/admin/data-mgmt?from=bookmark&tab=backups"],
   ] as const;
 
   for (const [legacy, canonical] of cases) {
@@ -1518,82 +1452,7 @@ test("settings no longer duplicates data management or language controls", async
   await expect(main.getByRole("link", { name: /Data Management/ })).toHaveCount(0);
   await expect(main.getByRole("heading", { name: "Language" })).toHaveCount(0);
   await expect(main.getByRole("link", { name: /Auth & Cookie Status/ })).toHaveCount(0);
-  await expect(main.getByRole("link", { name: /Automation/ })).toBeVisible();
-  await expect(main.getByRole("link", { name: /Connectivity & Extractors/ })).toBeVisible();
-  await expect(main.getByRole("link", { name: /User Management/ })).toBeVisible();
-  await expect(main.getByText("Search Index", { exact: true })).toHaveCount(0);
-  await expect(main.getByText("Current Configuration", { exact: true })).toHaveCount(0);
   await page.screenshot({ path: "/tmp/auto-gallery-settings-clean.png", fullPage: false });
-});
-
-test("automation tabs save only their owned settings category and preserve hidden fields", async ({ page }) => {
-  const payloads: Record<string, unknown>[] = [];
-  let stored = {
-    dedup: {},
-    subscription_defaults: {
-      default_sync_interval_hours: 6,
-      scheduler_scan_interval_minutes: 60,
-      scheduler_enabled: true,
-      schedule_mode: "interval",
-      scheduled_times: "",
-      timezone: "UTC",
-      auto_enable_sources: "pixiv",
-    },
-    download_defaults: {
-      timeout_seconds: 1800,
-      stall_timeout_seconds: 300,
-      max_retries: 3,
-      retry_backoff_base_seconds: 60,
-      max_posts: 200,
-      skip_ai_generated: false,
-      gallerydl_retries: 3,
-      gallerydl_timeout: 30,
-      gallerydl_abort: 5,
-      download_concurrency: 2,
-    },
-    proxy: { http_proxy: "", https_proxy: "", no_proxy: "", enabled: false },
-  };
-  await page.route("**/api/v1/admin/settings", async (route) => {
-    if (route.request().method() === "PUT") {
-      const payload = route.request().postDataJSON() as Record<string, unknown>;
-      payloads.push(payload);
-      stored = { ...stored, ...payload } as typeof stored;
-    }
-    await route.fulfill({ json: stored });
-  });
-
-  await page.goto("/admin/settings/automation?tab=schedule");
-  await page.getByLabel("Sync Interval (hours)").fill("12");
-  await page.getByRole("button", { name: "Save Settings" }).click();
-  await expect.poll(() => payloads.length).toBe(1);
-  expect(Object.keys(payloads[0])).toEqual(["subscription_defaults"]);
-  expect((payloads[0].subscription_defaults as Record<string, unknown>).auto_enable_sources).toBe("pixiv");
-
-  await page.getByRole("tab", { name: "Download behavior" }).click();
-  await expect(page).toHaveURL(/tab=downloads/);
-  await page.getByRole("spinbutton", { name: "Timeout", exact: true }).fill("1200");
-  await page.getByRole("button", { name: "Save Settings" }).click();
-  await expect.poll(() => payloads.length).toBe(2);
-  expect(Object.keys(payloads[1])).toEqual(["download_defaults"]);
-});
-
-test("connectivity and data management expose stable addressable subdivisions", async ({ page }) => {
-  await page.goto("/admin/settings/connectivity?tab=extractors&source=weibo");
-  await expect(page.getByRole("tab", { name: "Weibo" })).toHaveAttribute("aria-selected", "true");
-  await page.getByRole("tab", { name: "Network Proxy" }).click();
-  await expect(page).toHaveURL(/\/admin\/settings\/connectivity\?tab=proxy$/);
-  await expect(page.getByText("Route external API calls and gallery-dl traffic through a proxy server.")).toBeVisible();
-
-  await page.goto("/admin/data-mgmt?tab=overview");
-  await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
-  await page.getByRole("tab", { name: "Maintenance" }).click();
-  await expect(page).toHaveURL(/tab=maintenance/);
-  await expect(page.getByText("Meilisearch Re-indexing")).toBeVisible();
-  await expect(page.getByText("Rebuild library derivatives")).toBeVisible();
-  await page.getByRole("tab", { name: "Backup & Restore" }).click();
-  await expect(page.getByRole("heading", { name: "Existing Backups" })).toBeVisible();
-  await page.getByRole("tab", { name: "Danger Zone" }).click();
-  await expect(page.getByText("These operations are irreversible. Ensure you have a backup first.")).toBeVisible();
 });
 
 test("auth health is integrated into scheduler and storage chart footers are removed", async ({ page }) => {
@@ -1667,8 +1526,16 @@ test("mobile data management switcher keeps curation and dedup reachable", async
 test("settings children use clickable breadcrumbs without duplicate back controls", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   const settingsChildren = [
-    ["/admin/settings/automation?tab=schedule", "Automation"],
-    ["/admin/settings/connectivity?tab=extractors&source=pixiv", "Connectivity & Extractors"],
+    ["/admin/settings/appearance", "Appearance"],
+    ["/admin/settings/backup", "Backup & Restore"],
+    ["/admin/settings/dedup", "Deduplication Settings"],
+    ["/admin/settings/download-defaults", "Download Job Defaults"],
+    ["/admin/settings/gallerydl", "gallery-dl Configuration"],
+    ["/admin/settings/logs", "System Logs"],
+    ["/admin/settings/proxy", "Network Proxy"],
+    ["/admin/settings/scheduler-defaults", "Scheduler Defaults"],
+    ["/admin/settings/showcase", "Showcase"],
+    ["/admin/settings/subscription-defaults", "Subscription Defaults"],
     ["/admin/settings/users", "User Management"],
   ] as const;
 
@@ -1727,16 +1594,10 @@ test("subscription and repository details use clickable hierarchy breadcrumbs", 
 });
 
 test("profile is independent and the legacy settings URL redirects with its query", async ({ page }) => {
-  await page.goto("/admin/profile?tab=account");
+  await page.goto("/admin/profile");
   const breadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });
   await expect(breadcrumb.getByRole("link", { name: "Dashboard" })).toHaveAttribute("href", "/admin");
   await expect(breadcrumb.getByText("Profile", { exact: true })).toHaveAttribute("aria-current", "page");
-  await page.getByRole("tab", { name: "Appearance" }).click();
-  await expect(page).toHaveURL(/\/admin\/profile\?tab=appearance$/);
-  await expect(page.getByText("Choose light, dark, or system mode.")).toBeVisible();
-  await page.getByRole("tab", { name: "Showcase" }).click();
-  await expect(page).toHaveURL(/\/admin\/profile\?tab=showcase$/);
-  await expect(page.getByText("Content", { exact: true })).toBeVisible();
 
   const response = await page.goto("/admin/settings/profile?from=legacy");
   expect(response?.status()).toBe(200);
@@ -1747,34 +1608,11 @@ test("profile is independent and the legacy settings URL redirects with its quer
   await page.screenshot({ path: "/tmp/auto-gallery-profile-breadcrumb-mobile.png", fullPage: false });
 });
 
-test("personal appearance and showcase preferences do not require system permissions", async ({ page }) => {
-  let sourceRequests = 0;
-  await page.route("**/api/v1/auth/me", (route) => route.fulfill({
-    json: {
-      ...me,
-      is_admin: false,
-      permissions: ["library"],
-      modules: { library: true, system: false, subscriptions: false },
-    },
-  }));
-  await page.route("**/api/v1/sources", async (route) => {
-    sourceRequests += 1;
-    await route.fallback();
-  });
-
-  await page.goto("/admin/profile?tab=appearance");
-  await expect(page.getByText("Choose light, dark, or system mode.")).toBeVisible();
-  await expect(page.getByText("You don't have permission to access this page")).toHaveCount(0);
-  await page.goto("/admin/profile?tab=showcase");
-  await expect(page.getByText("Content", { exact: true })).toBeVisible();
-  expect(sourceRequests).toBe(0);
-});
-
 test("restricted direct access renders the standard shell permission state", async ({ page }) => {
   await page.route("**/api/v1/auth/me", (route) => route.fulfill({
     json: { ...me, is_admin: false, permissions: ["library"], modules: { library: true, system: false } },
   }));
-  await page.goto("/admin/system?tab=logs");
+  await page.goto("/admin/settings/logs");
   await expect(page.locator("[data-page-shell]")).toBeVisible();
   await expect(page.getByRole("heading", { name: "You don't have permission to access this page" })).toBeVisible();
   await expect(page.getByRole("main")).toHaveCount(1);
@@ -1842,7 +1680,7 @@ test("query-only task navigation preserves the current viewport", async ({ page 
 });
 
 test("shared dialogs trap focus, close with Escape, and restore their trigger", async ({ page }) => {
-  await page.goto("/admin/data-mgmt?tab=danger");
+  await page.goto("/admin/data-mgmt");
   await page.getByPlaceholder("CONFIRM DELETE").fill("CONFIRM DELETE");
   const trigger = page.getByRole("button", { name: "Delete All Works" });
   await trigger.click();

@@ -7,8 +7,7 @@ import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import { PageHeader, ErrorState, PageShell } from "@/components";
 
-export type GallerySourceTab = "pixiv" | "twitter" | "iwara" | "danbooru" | "pinterest" | "lofter" | "weibo" | "bilibili";
-type TabKey = GallerySourceTab;
+type TabKey = "pixiv" | "twitter" | "iwara" | "danbooru" | "pinterest" | "lofter" | "weibo" | "bilibili";
 type PatternTarget = "directory" | "filename";
 
 type NamingToken = {
@@ -388,18 +387,12 @@ function NamingReferencePanel({
   );
 }
 
-export function GalleryDLSettingsContent({
-  activeSource,
-  onSourceChange,
-}: {
-  activeSource: GallerySourceTab;
-  onSourceChange: (source: GallerySourceTab) => void;
-}) {
+export default function GalleryDLConfigPage() {
   const t = useT();
   const tabs = useGalleryTabs();
   const qc = useQueryClient();
   const config = useQuery({ queryKey: ["gallerydl-config"], queryFn: () => api.getGalleryDLConfig() });
-  const activeTab = activeSource;
+  const [activeTab, setActiveTab] = useState<TabKey>("pixiv");
   const [saved, setSaved] = useState<string | null>(null);
 
   // Per-source local state
@@ -542,34 +535,28 @@ export function GalleryDLSettingsContent({
   });
 
   if (config.isError) {
-    return <>
+    return <PageShell>
       <ErrorState message={config.error?.message || t("gallerydl.failed")} onRetry={() => config.refetch()} />
-    </>;
+    </PageShell>;
   }
   if (!config.data) {
-    return <>
+    return <PageShell>
       <div className="animate-pulse space-y-4"><div className="h-8 bg-subtle rounded w-1/3" /><div className="h-64 bg-subtle rounded" /></div>
-    </>;
+    </PageShell>;
   }
 
   const meta = config.data.sources || {} as Record<string, GalleryDLSourceMeta>;
   const currentMeta = meta[activeTab];
 
   return (
-    <>
+    <PageShell>
+      <PageHeader title={t("gallerydl.title")} description={t("gallerydl.desc")} />
+
       {/* Tabs */}
-      <select
-        value={activeTab}
-        onChange={(event) => onSourceChange(event.target.value as GallerySourceTab)}
-        className="select mb-6 min-h-11 w-full md:hidden"
-        aria-label={t("gallerydl.source_selector")}
-      >
-        {tabs.map((tab) => <option key={tab.key} value={tab.key}>{tab.label}</option>)}
-      </select>
-      <div className="mb-6 hidden flex-wrap border-b border-border md:flex" role="tablist" aria-label={t("gallerydl.source_selector")}>
+      <div className="mb-6 flex border-b border-border" role="tablist">
         {tabs.map((tab) => (
           <button key={tab.key}
-            onClick={() => onSourceChange(tab.key)}
+            onClick={() => setActiveTab(tab.key)}
             role="tab"
             aria-selected={activeTab === tab.key}
             className={`px-5 py-3 text-sm font-medium border-b-2 -mb-px transition-colors
@@ -621,17 +608,6 @@ export function GalleryDLSettingsContent({
           )}
         </div>
       </div>
-    </>
-  );
-}
-
-export default function GalleryDLConfigPage() {
-  const t = useT();
-  const [activeSource, setActiveSource] = useState<GallerySourceTab>("pixiv");
-  return (
-    <PageShell>
-      <PageHeader title={t("gallerydl.title")} description={t("gallerydl.desc")} />
-      <GalleryDLSettingsContent activeSource={activeSource} onSourceChange={setActiveSource} />
     </PageShell>
   );
 }

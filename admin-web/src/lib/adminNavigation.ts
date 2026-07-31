@@ -65,8 +65,6 @@ export const ADMIN_LINK_MODULE: Record<string, AdminPermissionRequirement> = {
   [adminRoutes.dataManagement]: "system",
   [adminRoutes.system]: ["system", "subscriptions"],
   [adminRoutes.settings]: "system",
-  [adminRoutes.settingsAutomation]: "system",
-  [adminRoutes.settingsConnectivity]: "system",
 };
 
 export function hasAdminPermission(
@@ -126,14 +124,6 @@ export const ADMIN_NAV_LINKS: AdminNavLink[] = [
     sidebarOwner: adminRoutes.settings,
     adminOnly: true,
     keywords: ["accounts", "权限", "用户"],
-  }),
-  link(adminRoutes.settingsAutomation, "settings.automation", "calendar", "settings", {
-    sidebarOwner: adminRoutes.settings,
-    keywords: ["sync", "schedule", "download defaults", "自动化", "同步计划", "下载默认值"],
-  }),
-  link(adminRoutes.settingsConnectivity, "settings.connectivity", "pulse", "settings", {
-    sidebarOwner: adminRoutes.settings,
-    keywords: ["gallery-dl", "extractor", "proxy", "提取器", "代理"],
   }),
 ];
 

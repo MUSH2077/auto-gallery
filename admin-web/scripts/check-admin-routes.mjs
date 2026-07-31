@@ -4,7 +4,7 @@ import path from "node:path";
 const sourceRoot = path.resolve("src");
 const registryPath = path.join(sourceRoot, "lib", "adminRoutes.ts");
 const forbiddenLiteral =
-  /(["'`])\/admin\/(?:reference\/danbooru|repositories(?:\/|["'`?])|curation(?:\/|["'`?])|dedup(?:\/|["'`?])|users(?:\/|["'`?])|settings\/(?:profile|appearance|showcase|gallerydl|scheduler-defaults|subscription-defaults|download-defaults|dedup|proxy|logs|backup)(?:\/|["'`?]))/g;
+  /(["'`])\/admin\/(?:reference\/danbooru|repositories(?:\/|["'`?])|curation(?:\/|["'`?])|dedup(?:\/|["'`?])|users(?:\/|["'`?])|settings\/profile(?:\/|["'`?]))/g;
 
 async function sourceFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });

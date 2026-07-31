@@ -1,9 +1,8 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { PageHeader, ConfirmDialog, Modal, PageShell, StatusBadge, PermissionGuard, UrlTabs } from "@/components";
-import { BackupManagementContent } from "@/app/admin/settings/backup/page";
+import { PageHeader, ConfirmDialog, Modal, PageShell, StatusBadge, PermissionGuard } from "@/components";
 import ChartFrame from "@/components/charts/ChartFrame";
 import StorageColonnade, { type StorageColonnadeGroup } from "@/components/charts/StorageColonnade";
 import TickDonut from "@/components/charts/TickDonut";
@@ -12,13 +11,11 @@ import { useNotifications } from "@/components/NotificationCenter";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useStaggeredEntrance } from "@/lib/motion";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { adminRoutes } from "@/lib/adminRoutes";
 
 type Severity = "error" | "warning" | "info";
-type DataManagementTab = "overview" | "maintenance" | "backups" | "danger";
-const DATA_MANAGEMENT_TABS: readonly DataManagementTab[] = ["overview", "maintenance", "backups", "danger"];
 
 function formatSize(mb: number): string {
   if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
@@ -49,12 +46,6 @@ export default function DataManagementPage() {
   const t = useT();
   const fmt = useI18nFormat();
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const requestedTab = searchParams.get("tab");
-  const activeTab: DataManagementTab = DATA_MANAGEMENT_TABS.includes(requestedTab as DataManagementTab)
-    ? requestedTab as DataManagementTab
-    : "overview";
-  const paramsKey = searchParams.toString();
   const qc = useQueryClient();
   const notify = useNotifications();
   const toast = useToast();
@@ -65,30 +56,22 @@ export default function DataManagementPage() {
   const [integrityItems, setIntegrityItems] = useState<{ type: string; description: string; count: number; items: any[] } | null>(null);
   const [dangerConfirm, setDangerConfirm] = useState("");
 
-  useEffect(() => {
-    if (!requestedTab || requestedTab === activeTab) return;
-    const next = new URLSearchParams(paramsKey);
-    next.set("tab", activeTab);
-    router.replace(`${adminRoutes.dataManagement}?${next.toString()}`, { scroll: false });
-  }, [activeTab, paramsKey, requestedTab, router]);
-
   // ── Data queries ──
   const systemInfo = useQuery({
     queryKey: ["system-info"],
     queryFn: () => api.getSystemInfo(),
-    enabled: activeTab === "overview",
     refetchInterval: 60000,
     placeholderData: (previousData) => previousData,
   });
   const storageBreakdown = useQuery({
     queryKey: ["storage-breakdown"],
     queryFn: () => api.getStorageBreakdown(),
-    enabled: activeTab === "overview",
     placeholderData: (previousData) => previousData,
   });
-  const creatorCount = useQuery({ queryKey: queryKeys.creators.count, queryFn: () => api.countCreators(), enabled: activeTab === "overview" });
-  const subCount = useQuery({ queryKey: queryKeys.subscriptions.count, queryFn: () => api.countSubscriptions(), enabled: activeTab === "overview" });
+  const creatorCount = useQuery({ queryKey: queryKeys.creators.count, queryFn: () => api.countCreators() });
+  const subCount = useQuery({ queryKey: queryKeys.subscriptions.count, queryFn: () => api.countSubscriptions() });
   const integrity = useQuery({ queryKey: ["integrity-check"], queryFn: () => api.getIntegrityCheck(), enabled: false });
+  const backups = useQuery({ queryKey: ["backups"], queryFn: () => api.listBackups() });
 
   // ── Mutations ──
   const cleanupJSON = useMutation({
@@ -132,7 +115,7 @@ export default function DataManagementPage() {
   const rebuildLibrary = useMutation({
     mutationFn: () => api.rebuildLibrary(),
     onSuccess: (d: any) => {
-      const title = t("datamgmt.library_rebuild");
+      const title = t("datamgmt.cleanup_reindex");
       setResult({ ok: true, msg: d.message });
       notify.startOperationJob(d.job_id, "admin-rebuild", title);
       qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
@@ -140,9 +123,12 @@ export default function DataManagementPage() {
     onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
   });
 
-  const rebuildSearch = useMutation({
-    mutationFn: () => api.reindexSearch(),
-    onSuccess: () => setResult({ ok: true, msg: t("settings.reindex_started") }),
+  const createBackupMut = useMutation({
+    mutationFn: () => api.createBackup(),
+    onSuccess: (d: any) => {
+      setResult({ ok: true, msg: t("backup.created", { filename: d.filename, size: d.size_mb }) });
+      backups.refetch();
+    },
     onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
   });
 
@@ -193,6 +179,7 @@ export default function DataManagementPage() {
   const breakdown = storageBreakdown.data;
   const issues = integrity.data?.issues || [];
   const dbStats = breakdown?.db_stats || integrity.data?.db_stats;
+  const lastBackup = backups.data?.backups?.[0];
   const totalSourceSize = useMemo(() => (
     breakdown?.sources
       ? Object.values(breakdown.sources).reduce((sum, storage) => sum + storage.size_mb, 0)
@@ -250,17 +237,6 @@ export default function DataManagementPage() {
     <PermissionGuard module="system">
     <PageShell>
       <PageHeader title={t("datamgmt.title")} description={t("datamgmt.desc")} />
-      <div data-page-primary-content>
-        <UrlTabs
-          activeId={activeTab}
-          ariaLabel={t("datamgmt.sections")}
-          tabs={[
-            { id: "overview", label: t("datamgmt.overview_tab"), href: `${adminRoutes.dataManagement}?tab=overview` },
-            { id: "maintenance", label: t("datamgmt.maintenance_tab"), href: `${adminRoutes.dataManagement}?tab=maintenance` },
-            { id: "backups", label: t("backup.title"), href: `${adminRoutes.dataManagement}?tab=backups` },
-            { id: "danger", label: t("datamgmt.danger_title"), href: `${adminRoutes.dataManagement}?tab=danger` },
-          ]}
-        />
 
       {result && (
         <div className={`mb-4 p-3 rounded-lg text-sm flex items-center justify-between ${result.ok ? "bg-success-subtle border border-success/30 text-success" : "bg-danger-subtle border border-danger/30 text-danger"}`}>
@@ -287,8 +263,8 @@ export default function DataManagementPage() {
         </div>
       )}
 
-      {activeTab === "overview" && (<>
       <section
+        data-page-primary-content
         aria-labelledby="data-ledger-title"
         className="mb-6 overflow-hidden rounded-md border border-border bg-border"
       >
@@ -392,9 +368,6 @@ export default function DataManagementPage() {
         </ChartFrame>
       </div>
 
-      </>)}
-
-      {activeTab === "maintenance" && (<>
       {/* ═══ Integrity Check ═══ */}
       <div className="card p-4 mb-6">
         <div className="flex items-center justify-between mb-3">
@@ -515,21 +488,11 @@ export default function DataManagementPage() {
         )}
       </div>
 
-      <div className="mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         {/* ═══ Cleanup Tools ═══ */}
         <div className="card p-4">
           <h3 className="font-medium text-sm mb-3">{t("datamgmt.cleanup_title")}</h3>
           <div className="space-y-3">
-            <div className="flex items-center justify-between p-3 border rounded-lg">
-              <div>
-                <p className="text-sm font-medium">{t("settings.reindex_label")}</p>
-                <p className="text-xs text-muted">{t("settings.search_index.desc")}</p>
-              </div>
-              <button onClick={() => rebuildSearch.mutate()} disabled={rebuildSearch.isPending}
-                className="btn-primary ml-3 shrink-0 text-xs">
-                {rebuildSearch.isPending ? "..." : t("settings.reindex")}
-              </button>
-            </div>
             <div className="flex items-center justify-between p-3 border rounded-lg">
               <div>
                 <p className="text-sm font-medium">{t("datamgmt.cleanup_json")}</p>
@@ -542,12 +505,12 @@ export default function DataManagementPage() {
             </div>
             <div className="flex items-center justify-between p-3 border rounded-lg">
               <div>
-                <p className="text-sm font-medium">{t("datamgmt.library_rebuild")}</p>
-                <p className="text-xs text-muted">{t("datamgmt.library_rebuild_desc")}</p>
+                <p className="text-sm font-medium">{t("datamgmt.cleanup_reindex")}</p>
+                <p className="text-xs text-muted">{t("datamgmt.cleanup_reindex_desc")}</p>
               </div>
               <button onClick={() => rebuildLibrary.mutate()} disabled={rebuildLibrary.isPending}
                 className="btn-primary ml-3 shrink-0 text-xs">
-                {rebuildLibrary.isPending ? "..." : t("datamgmt.library_rebuild_btn")}
+                {rebuildLibrary.isPending ? "..." : t("datamgmt.cleanup_reindex_btn")}
               </button>
             </div>
             <div className="flex items-center justify-between p-3 border rounded-lg">
@@ -577,18 +540,52 @@ export default function DataManagementPage() {
             </div>
           </div>
         </div>
+
+        {/* ═══ Backup & Database ═══ */}
+        <div className="card p-4">
+          <h3 className="font-medium text-sm mb-3">{t("datamgmt.backup_section")}</h3>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-subtle rounded p-3 text-center">
+                <div className="text-xs text-muted">{t("datamgmt.backup_recent")}</div>
+                <div className="text-sm font-medium mt-0.5">
+                  {lastBackup
+                    ? fmt.dateTime(lastBackup.created_at)
+                    : t("datamgmt.backup_none")}
+                </div>
+              </div>
+              <div className="bg-subtle rounded p-3 text-center">
+                <div className="text-xs text-muted">{t("datamgmt.backup_count")}</div>
+                <div className="text-sm font-medium mt-0.5">{backups.data?.backups?.length ?? 0}</div>
+              </div>
+            </div>
+            <button onClick={() => createBackupMut.mutate()} disabled={createBackupMut.isPending}
+              className="btn-primary w-full">
+              {createBackupMut.isPending ? t("datamgmt.backup_creating") : t("datamgmt.backup_create")}
+            </button>
+
+            <div className="pt-3 border-t">
+              <h4 className="text-xs font-medium text-muted mb-2">{t("datamgmt.db_stats_title")}</h4>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                {info && (
+                  <>
+                    <div className="bg-subtle rounded p-2 flex justify-between">
+                      <span className="text-muted">{t("datamgmt.db_stats_title")}</span>
+                      <span>{((info.downloads_size_mb || 0) + (info.library_size_mb || 0)).toFixed(1)} MB</span>
+                    </div>
+                    <div className="bg-subtle rounded p-2 flex justify-between">
+                      <span>Meilisearch</span>
+                      <span>-</span>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
-      </>)}
-
-      {activeTab === "backups" && (
-        <section role="tabpanel" aria-label={t("backup.title")}>
-          <BackupManagementContent />
-        </section>
-      )}
-
       {/* ═══ Danger Zone ═══ */}
-      {activeTab === "danger" && (
       <div className="card border-danger p-4 dark:border-danger">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-danger text-lg">&#9888;</span>
@@ -638,8 +635,6 @@ export default function DataManagementPage() {
             );
           })}
         </div>
-      </div>
-      )}
       </div>
 
       {/* Global confirm dialog */}
