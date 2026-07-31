@@ -16,7 +16,7 @@ const LEVEL_COLORS: Record<string, string> = {
   CRITICAL: "text-danger font-bold",
 };
 
-export default function SystemLogsPage() {
+export function SystemLogsContent({ enabled = true }: { enabled?: boolean }) {
   const t = useT();
   const fmt = useI18nFormat();
   const [levelFilter, setLevelFilter] = useState("");
@@ -27,25 +27,13 @@ export default function SystemLogsPage() {
   const logs = useQuery({
     queryKey: queryKeys.system.logs(limit, levelFilter || undefined, nameFilter || undefined),
     queryFn: () => api.systemLogs(limit, levelFilter || undefined, nameFilter || undefined),
-    refetchInterval: autoRefresh ? POLL_ACTIVE_MS : false,
+    enabled,
+    refetchInterval: enabled && autoRefresh ? POLL_ACTIVE_MS : false,
     placeholderData: (previous) => previous,
   });
 
   return (
-    <PermissionGuard module="system">
-      <PageShell>
-      <PageHeader title={t("logs.title")} description={t("logs.desc")}>
-        <button
-          type="button"
-          onClick={() => logs.refetch()}
-          disabled={logs.isFetching}
-          className="btn-ghost inline-flex min-h-11 items-center gap-2"
-        >
-          <RefreshCw aria-hidden="true" className={`h-4 w-4 ${logs.isFetching ? "animate-spin" : ""}`} />
-          {logs.isFetching ? t("common.refreshing") : t("common.refresh")}
-        </button>
-      </PageHeader>
-
+    <>
       <div className="mb-4 flex flex-wrap items-end gap-3 rounded-md border border-border bg-surface p-3">
         <label className="grid gap-1 text-xs font-medium text-muted">
           {t("logs.level")}
@@ -73,6 +61,15 @@ export default function SystemLogsPage() {
         </label>
         <div className="flex-1" />
         {logs.data && <span className="min-h-6 text-xs text-muted">{t("logs.entries", { count: fmt.number(logs.data.total) })}</span>}
+        <button
+          type="button"
+          onClick={() => logs.refetch()}
+          disabled={logs.isFetching}
+          className="btn-ghost inline-flex min-h-11 items-center gap-2"
+        >
+          <RefreshCw aria-hidden="true" className={`h-4 w-4 ${logs.isFetching ? "animate-spin" : ""}`} />
+          {logs.isFetching ? t("common.refreshing") : t("common.refresh")}
+        </button>
       </div>
 
       <p aria-live="polite" className="sr-only">
@@ -95,6 +92,17 @@ export default function SystemLogsPage() {
           ))}
         </div>
       )}
+    </>
+  );
+}
+
+export default function SystemLogsPage() {
+  const t = useT();
+  return (
+    <PermissionGuard module="system">
+      <PageShell>
+        <PageHeader title={t("logs.title")} description={t("logs.desc")} />
+        <SystemLogsContent />
       </PageShell>
     </PermissionGuard>
   );

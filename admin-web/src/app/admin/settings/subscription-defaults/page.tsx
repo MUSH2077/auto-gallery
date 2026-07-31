@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, SubscriptionDefaults } from "@/lib/api";
 import { PageHeader, PageShell, ErrorState } from "@/components";
@@ -58,7 +58,7 @@ function ScheduledTimePicker({ value, onChange }: { value: string; onChange: (v:
   );
 }
 
-export default function SubscriptionDefaultsPage() {
+export function SyncScheduleSettingsContent({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
   const t = useT();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
@@ -71,33 +71,36 @@ export default function SubscriptionDefaultsPage() {
 
   const current = local || settings.data?.subscription_defaults;
 
+  useEffect(() => {
+    if (settings.data?.subscription_defaults) {
+      setLocal((previous) => previous ?? { ...settings.data!.subscription_defaults });
+    }
+  }, [settings.data]);
+
+  const dirty = Boolean(local && settings.data?.subscription_defaults
+    && JSON.stringify(local) !== JSON.stringify(settings.data.subscription_defaults));
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
   if (settings.isError) {
     return (
-      <PageShell>
-        <ErrorState message={settings.error?.message || t("subdefaults.failed")} onRetry={() => settings.refetch()} />
-      </PageShell>
+      <ErrorState message={settings.error?.message || t("subdefaults.failed")} onRetry={() => settings.refetch()} />
     );
   }
 
   if (!settings.data) {
     return (
-      <PageShell>
-        <div className="animate-pulse space-y-4">
+      <div className="animate-pulse space-y-4">
           <div className="h-8 rounded-md bg-subtle dark:bg-subtle w-1/3" />
           <div className="h-48 rounded-md bg-subtle dark:bg-subtle" />
-        </div>
-      </PageShell>
+      </div>
     );
   }
 
-  if (!local && settings.data.subscription_defaults) {
-    setLocal({ ...settings.data.subscription_defaults });
-  }
-
   return (
-    <PageShell>
-      <PageHeader title={t("subdefaults.title")} description={t("subdefaults.desc")} />
-
+    <>
       {!current ? null : (
         <>
           <div className="card p-6 space-y-5 text-sm">
@@ -205,6 +208,16 @@ export default function SubscriptionDefaultsPage() {
           {save.error && <p className="mt-2 text-sm text-danger">{(save.error as Error).message}</p>}
         </>
       )}
+    </>
+  );
+}
+
+export default function SubscriptionDefaultsPage() {
+  const t = useT();
+  return (
+    <PageShell>
+      <PageHeader title={t("subdefaults.title")} description={t("subdefaults.desc")} />
+      <SyncScheduleSettingsContent />
     </PageShell>
   );
 }

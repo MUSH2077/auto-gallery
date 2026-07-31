@@ -1,5 +1,6 @@
 "use client";
-import { useState, FormEvent } from "react";
+import { useEffect, useState, FormEvent } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
@@ -7,15 +8,36 @@ import { authChangePassword } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
 import PageShell from "@/components/PageShell";
 import Banner from "@/components/Banner";
+import UrlTabs from "@/components/UrlTabs";
+import { adminRoutes } from "@/lib/adminRoutes";
+import { AppearanceSettingsContent } from "@/app/admin/settings/appearance/page";
+import { ShowcaseSettingsContent } from "@/app/admin/settings/showcase/page";
+
+type ProfileTab = "account" | "appearance" | "showcase";
+const PROFILE_TABS: readonly ProfileTab[] = ["account", "appearance", "showcase"];
 
 export default function ProfilePage() {
   const t = useT();
   const { user, updateAccessToken } = useAuth();
   const toast = useToast();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const requestedTab = searchParams.get("tab");
+  const activeTab: ProfileTab = PROFILE_TABS.includes(requestedTab as ProfileTab)
+    ? requestedTab as ProfileTab
+    : "account";
+  const paramsKey = searchParams.toString();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!requestedTab || requestedTab === activeTab) return;
+    const next = new URLSearchParams(paramsKey);
+    next.set("tab", activeTab);
+    router.replace(`${adminRoutes.profile}?${next.toString()}`, { scroll: false });
+  }, [activeTab, paramsKey, requestedTab, router]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -46,9 +68,23 @@ export default function ProfilePage() {
 
   return (
     <PageShell>
-      <PageHeader title={t("auth.profile")} />
+      <PageHeader title={t("auth.profile")} description={t("profile.desc")} />
+      <UrlTabs
+        activeId={activeTab}
+        ariaLabel={t("profile.sections")}
+        tabs={[
+          { id: "account", label: t("profile.account_tab"), href: adminRoutes.profileTab("account") },
+          { id: "appearance", label: t("appearance.title"), href: adminRoutes.profileTab("appearance") },
+          { id: "showcase", label: t("showcase_settings.title"), href: adminRoutes.profileTab("showcase") },
+        ]}
+      />
 
-      <div className="max-w-xl">
+      {activeTab === "appearance" ? (
+        <AppearanceSettingsContent />
+      ) : activeTab === "showcase" ? (
+        <ShowcaseSettingsContent />
+      ) : (
+      <div className="max-w-xl" role="tabpanel" aria-label={t("profile.account_tab")}>
         {/* User Info */}
         <div className="card p-5 mb-6">
           <h2 className="text-sm font-medium text-muted mb-3">{t("auth.account_info")}</h2>
@@ -125,6 +161,7 @@ export default function ProfilePage() {
           </form>
         </div>
       </div>
+      )}
     </PageShell>
   );
 }

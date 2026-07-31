@@ -3,9 +3,21 @@
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys, type ProviderInfo } from "@/lib/api";
-import { PageHeader, PageShell, PermissionGuard } from "@/components";
+import { PageHeader, PageShell } from "@/components";
 import { useShowcaseConfig, type ShowcaseConfig } from "@/lib/showcase/config";
 import { useT } from "@/lib/i18n";
+import { usePermissions } from "@/lib/usePermissions";
+
+const FALLBACK_SHOWCASE_SOURCES = [
+  { source_name: "pixiv", display_name: "Pixiv" },
+  { source_name: "x", display_name: "X" },
+  { source_name: "iwara", display_name: "Iwara" },
+  { source_name: "danbooru", display_name: "Danbooru" },
+  { source_name: "pinterest", display_name: "Pinterest" },
+  { source_name: "lofter", display_name: "LOFTER" },
+  { source_name: "weibo", display_name: "Weibo" },
+  { source_name: "bilibili", display_name: "Bilibili" },
+] as const;
 
 function OptionButton<T extends string>({
   value,
@@ -121,11 +133,12 @@ function RangeRow({
   );
 }
 
-export default function ShowcaseSettingsPage() {
+export function ShowcaseSettingsContent() {
   const t = useT();
+  const { has } = usePermissions();
   const { config, update } = useShowcaseConfig();
   const me = useQuery({ queryKey: queryKeys.me, queryFn: api.getMe });
-  const sources = useQuery({ queryKey: queryKeys.sources, queryFn: api.sources });
+  const sources = useQuery({ queryKey: queryKeys.sources, queryFn: api.sources, enabled: has("subscriptions") });
 
   const nsfwLocked = me.data?.nsfw_visible === false;
 
@@ -143,10 +156,7 @@ export default function ShowcaseSettingsPage() {
   ];
 
   return (
-    <PermissionGuard module="system">
-      <PageShell>
-        <PageHeader title={t("showcase_settings.title")} description={t("showcase_settings.desc")} />
-
+    <>
         {/* ① 内容源 */}
         <section className="card p-5">
           <h2 className="section-title mb-2">{t("showcase_settings.group_source")}</h2>
@@ -167,7 +177,10 @@ export default function ShowcaseSettingsPage() {
               aria-label={t("showcase_settings.source")}
             >
               <option value="">{t("showcase_settings.source_any")}</option>
-              {(sources.data?.sources || []).filter((s: ProviderInfo) => s.capabilities.can_download || s.capabilities.can_import_local).map((s: ProviderInfo) => (
+              {(sources.data?.sources
+                ? sources.data.sources.filter((s: ProviderInfo) => s.capabilities.can_download || s.capabilities.can_import_local)
+                : FALLBACK_SHOWCASE_SOURCES
+              ).map((s) => (
                 <option key={s.source_name} value={s.source_name}>
                   {s.display_name}
                 </option>
@@ -291,7 +304,16 @@ export default function ShowcaseSettingsPage() {
             <ToggleButton checked={config.showStats} onToggle={() => update({ showStats: !config.showStats })} label={t("showcase_settings.show_stats")} />
           </SettingRow>
         </section>
-      </PageShell>
-    </PermissionGuard>
+    </>
+  );
+}
+
+export default function ShowcaseSettingsPage() {
+  const t = useT();
+  return (
+    <PageShell>
+      <PageHeader title={t("showcase_settings.title")} description={t("showcase_settings.desc")} />
+      <ShowcaseSettingsContent />
+    </PageShell>
   );
 }

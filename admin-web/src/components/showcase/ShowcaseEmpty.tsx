@@ -3,6 +3,7 @@
 import Link from "next/link";
 
 import { EmptyState } from "@/components";
+import { adminRoutes } from "@/lib/adminRoutes";
 import { useT } from "@/lib/i18n";
 import { usePermissions } from "@/lib/usePermissions";
 
@@ -19,7 +20,7 @@ export default function ShowcaseEmpty({ variant = "library" }: { variant?: "libr
             description={t("showcase.empty_filtered_desc")}
             action={
               <div className="flex flex-wrap items-center justify-center gap-3">
-                <Link href="/admin/settings/showcase" className="btn-primary">
+                <Link href={adminRoutes.profileTab("showcase")} className="btn-primary">
                   {t("showcase_settings.title")}
                 </Link>
               </div>

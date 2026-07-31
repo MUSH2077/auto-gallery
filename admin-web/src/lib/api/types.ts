@@ -996,6 +996,7 @@ export interface SubscriptionDefaults {
   schedule_mode: "interval" | "fixed_time";
   scheduled_times: string;
   timezone: string;
+  auto_enable_sources: string;
 }
 
 export interface DownloadDefaults {

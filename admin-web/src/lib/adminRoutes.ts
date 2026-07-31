@@ -35,7 +35,10 @@ export const adminRoutes = {
   system: "/admin/system",
 
   profile: "/admin/profile",
+  profileTab: (tab: "account" | "appearance" | "showcase") => `/admin/profile?tab=${tab}`,
   settings: "/admin/settings",
+  settingsAutomation: "/admin/settings/automation",
+  settingsConnectivity: "/admin/settings/connectivity",
   settingsSection: (section: string) => `/admin/settings/${encodeURIComponent(section)}`,
   users: "/admin/settings/users",
   user: (id: string | number) => `/admin/settings/users/${encodeURIComponent(String(id))}`,
@@ -54,6 +57,16 @@ export const legacyAdminRoutes = {
   settingsDataManagement: "/admin/settings/data-mgmt",
   profile: "/admin/settings/profile",
   authStatus: "/admin/settings/auth-status",
+  appearance: "/admin/settings/appearance",
+  showcase: "/admin/settings/showcase",
+  gallerydl: "/admin/settings/gallerydl",
+  schedulerDefaults: "/admin/settings/scheduler-defaults",
+  subscriptionDefaults: "/admin/settings/subscription-defaults",
+  downloadDefaults: "/admin/settings/download-defaults",
+  dedupSettings: "/admin/settings/dedup",
+  proxy: "/admin/settings/proxy",
+  logs: "/admin/settings/logs",
+  backup: "/admin/settings/backup",
 } as const;
 
 export interface AdminBreadcrumbParent {
@@ -93,16 +106,8 @@ export function adminBreadcrumbParents(pathname: string): AdminBreadcrumbParent[
 
 const SETTINGS_PAGE_TITLE_KEYS: Readonly<Record<string, string>> = {
   [adminRoutes.settings]: "settings.title",
-  [adminRoutes.settingsSection("appearance")]: "appearance.title",
-  [adminRoutes.settingsSection("backup")]: "backup.title",
-  [adminRoutes.settingsSection("dedup")]: "dedup.title",
-  [adminRoutes.settingsSection("download-defaults")]: "dldefaults.title",
-  [adminRoutes.settingsSection("gallerydl")]: "gallerydl.title",
-  [adminRoutes.settingsSection("logs")]: "logs.title",
-  [adminRoutes.settingsSection("proxy")]: "proxy.title",
-  [adminRoutes.settingsSection("scheduler-defaults")]: "scheduler.defaults_title",
-  [adminRoutes.settingsSection("showcase")]: "showcase_settings.title",
-  [adminRoutes.settingsSection("subscription-defaults")]: "subdefaults.title",
+  [adminRoutes.settingsAutomation]: "settings.automation",
+  [adminRoutes.settingsConnectivity]: "settings.connectivity",
   [adminRoutes.users]: "users.title",
   [adminRoutes.profile]: "auth.profile",
 };
@@ -153,6 +158,46 @@ export function resolveLegacyAdminRoute(pathname: string): LegacyAdminRedirect |
     [legacyAdminRoutes.authStatus]: {
       pathname: adminRoutes.scheduler,
       hash: "auth-status",
+    },
+    [legacyAdminRoutes.appearance]: {
+      pathname: adminRoutes.profile,
+      query: { tab: "appearance" },
+    },
+    [legacyAdminRoutes.showcase]: {
+      pathname: adminRoutes.profile,
+      query: { tab: "showcase" },
+    },
+    [legacyAdminRoutes.gallerydl]: {
+      pathname: adminRoutes.settingsConnectivity,
+      query: { tab: "extractors" },
+    },
+    [legacyAdminRoutes.schedulerDefaults]: {
+      pathname: adminRoutes.settingsAutomation,
+      query: { tab: "schedule" },
+    },
+    [legacyAdminRoutes.subscriptionDefaults]: {
+      pathname: adminRoutes.settingsAutomation,
+      query: { tab: "schedule" },
+    },
+    [legacyAdminRoutes.downloadDefaults]: {
+      pathname: adminRoutes.settingsAutomation,
+      query: { tab: "downloads" },
+    },
+    [legacyAdminRoutes.dedupSettings]: {
+      pathname: adminRoutes.dedup,
+      query: { tab: "settings" },
+    },
+    [legacyAdminRoutes.proxy]: {
+      pathname: adminRoutes.settingsConnectivity,
+      query: { tab: "proxy" },
+    },
+    [legacyAdminRoutes.logs]: {
+      pathname: adminRoutes.system,
+      query: { tab: "logs" },
+    },
+    [legacyAdminRoutes.backup]: {
+      pathname: adminRoutes.dataManagement,
+      query: { tab: "backups" },
     },
   };
   if (exact[pathname]) return exact[pathname];

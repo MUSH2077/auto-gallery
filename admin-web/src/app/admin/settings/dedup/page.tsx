@@ -52,7 +52,7 @@ function NumberSetting({
   );
 }
 
-export default function DedupSettingsPage() {
+export function DedupSettingsContent() {
   const t = useT();
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -77,29 +77,23 @@ export default function DedupSettingsPage() {
 
   if (settings.isError) {
     return (
-      <PageShell>
-        <ErrorState
+      <ErrorState
           message={settings.error?.message || t("dedup.failed")}
           onRetry={() => settings.refetch()}
-        />
-      </PageShell>
+      />
     );
   }
   if (!local) {
     return (
-      <PageShell>
-        <div className="space-y-4 animate-pulse">
+      <div className="space-y-4 animate-pulse">
           <div className="h-8 w-1/3 rounded-md bg-subtle" />
           <div className="h-96 rounded-md bg-subtle" />
-        </div>
-      </PageShell>
+      </div>
     );
   }
 
   return (
-    <PageShell>
-      <PageHeader title={t("dedup.title")} description={t("dedup.desc")} />
-
+    <>
       <section className="card p-5">
         <div className="flex items-center justify-between border-b border-border pb-4">
           <div>
@@ -224,6 +218,16 @@ export default function DedupSettingsPage() {
           {save.isPending ? t("common.saving") : t("dedup.save")}
         </button>
       </div>
+    </>
+  );
+}
+
+export default function DedupSettingsPage() {
+  const t = useT();
+  return (
+    <PageShell>
+      <PageHeader title={t("dedup.title")} description={t("dedup.desc")} />
+      <DedupSettingsContent />
     </PageShell>
   );
 }

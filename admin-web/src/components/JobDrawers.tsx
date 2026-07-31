@@ -270,12 +270,12 @@ export function JobDetailDrawer({
                 )}
                 {errInfo.type === "timeout" && (
                   <p className="text-xs text-warning mb-2">
-                    {t("dldefaults.timeout.desc")}: <Link href="/admin/settings/download-defaults" className="underline">{t("dldefaults.title")} →</Link>
+                    {t("dldefaults.timeout.desc")}: <Link href={`${adminRoutes.settingsAutomation}?tab=downloads`} className="underline">{t("dldefaults.title")} →</Link>
                   </p>
                 )}
                 {errInfo.type === "stall" && (
                   <p className="text-xs text-warning mb-2">
-                    {t("dldefaults.stall_timeout.desc")}: <Link href="/admin/settings/download-defaults" className="underline">{t("dldefaults.title")} →</Link>
+                    {t("dldefaults.stall_timeout.desc")}: <Link href={`${adminRoutes.settingsAutomation}?tab=downloads`} className="underline">{t("dldefaults.title")} →</Link>
                   </p>
                 )}
                 <pre className="max-h-64 overflow-auto rounded-md border border-danger/20 bg-danger-subtle p-3 font-mono text-xs whitespace-pre-wrap text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">{dl.error_log}</pre>
