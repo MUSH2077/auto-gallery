@@ -7,7 +7,6 @@ import { Breadcrumb } from "@/components/Breadcrumb";
 import { findAdminNavEntry } from "@/lib/adminNavigation";
 import { adminBreadcrumbParents } from "@/lib/adminRoutes";
 import { useT } from "@/lib/i18n";
-import PageContextNav from "@/components/PageContextNav";
 
 export default function PageHeader({
   title,
@@ -64,7 +63,6 @@ export default function PageHeader({
           </div>
         )}
       </div>
-      <PageContextNav />
     </header>
   );
 }

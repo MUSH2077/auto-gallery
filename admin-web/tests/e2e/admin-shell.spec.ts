@@ -169,25 +169,25 @@ const PRIMARY_ADMIN_ROUTES = [
 ] as const;
 
 const NAVIGATION_SELECTION_MATRIX = [
-  ["/admin/works", "/admin/works", "/admin/works"],
-  ["/admin/tags", "/admin/tags", "/admin/tags"],
-  ["/admin/search?q=atlas", null, "/admin/works"],
-  ["/admin/upload", "/admin/upload", "/admin/upload"],
-  ["/admin/upload/danbooru", "/admin/upload/danbooru", "/admin/upload/danbooru"],
-  ["/admin/creators", "/admin/creators", "/admin/creators"],
-  ["/admin/creators/fixture-creator", null, "/admin/creators"],
-  ["/admin/subscriptions", "/admin/subscriptions", "/admin/subscriptions"],
-  ["/admin/subscriptions/repositories/fixture-repository", null, "/admin/subscriptions"],
-  ["/admin/jobs?tab=imports", "/admin/jobs", "/admin/jobs"],
-  ["/admin/scheduler?page=1", "/admin/scheduler", "/admin/scheduler"],
-  ["/admin/data-mgmt", "/admin/data-mgmt", "/admin/data-mgmt"],
-  ["/admin/data-mgmt/curation", "/admin/data-mgmt/curation", "/admin/data-mgmt"],
-  ["/admin/data-mgmt/dedup?status=pending", "/admin/data-mgmt/dedup", "/admin/data-mgmt"],
-  ["/admin/system?tab=sources", "/admin/system", "/admin/system"],
-  ["/admin/settings", "/admin/settings", "/admin/settings"],
-  ["/admin/settings/users", "/admin/settings/users", "/admin/settings"],
-  ["/admin/settings/users/1", "/admin/settings/users", "/admin/settings"],
-  ["/admin/notifications", null, null],
+  ["/admin/works", "/admin/works"],
+  ["/admin/tags", "/admin/tags"],
+  ["/admin/search?q=atlas", "/admin/works"],
+  ["/admin/upload", "/admin/upload"],
+  ["/admin/upload/danbooru", "/admin/upload/danbooru"],
+  ["/admin/creators", "/admin/creators"],
+  ["/admin/creators/fixture-creator", "/admin/creators"],
+  ["/admin/subscriptions", "/admin/subscriptions"],
+  ["/admin/subscriptions/repositories/fixture-repository", "/admin/subscriptions"],
+  ["/admin/jobs?tab=imports", "/admin/jobs"],
+  ["/admin/scheduler?page=1", "/admin/scheduler"],
+  ["/admin/data-mgmt", "/admin/data-mgmt"],
+  ["/admin/data-mgmt/curation", "/admin/data-mgmt"],
+  ["/admin/data-mgmt/dedup?status=pending", "/admin/data-mgmt"],
+  ["/admin/system?tab=sources", "/admin/system"],
+  ["/admin/settings", "/admin/settings"],
+  ["/admin/settings/users", "/admin/settings"],
+  ["/admin/settings/users/1", "/admin/settings"],
+  ["/admin/notifications", null],
 ] as const;
 
 async function installFixtureRoutes(context: BrowserContext) {
@@ -584,18 +584,10 @@ async function expectNoPageOverflow(page: Page) {
 
 async function expectUniqueNavigationSelection(
   page: Page,
-  contextHref: string | null,
   sidebarHref: string | null,
 ) {
   const contextNavigation = page.locator('[data-page-header] nav[aria-label="Related pages"]:visible');
-  if (contextHref) {
-    await expect(contextNavigation).toHaveCount(1);
-    await expect(contextNavigation.locator('[aria-current="page"]')).toHaveCount(1);
-    await expect(contextNavigation.locator(`a[href="${contextHref}"]`))
-      .toHaveAttribute("aria-current", "page");
-  } else {
-    await expect(contextNavigation.locator('[aria-current="page"]')).toHaveCount(0);
-  }
+  await expect(contextNavigation).toHaveCount(0);
 
   const primaryNavigation = page.locator('#admin-sidebar nav[aria-label="Primary navigation"]');
   await expect(primaryNavigation.locator('[aria-current="page"]')).toHaveCount(sidebarHref ? 1 : 0);
@@ -733,7 +725,7 @@ test("stored compact sidebar keeps primary page shells stable and aligned from f
   }
 });
 
-test("desktop sidebar, contextual navigation, and command palette remain usable", async ({ page }) => {
+test("desktop sidebar is the sole peer-page navigation and command palette remains usable", async ({ page }) => {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
   page.on("console", (message) => {
@@ -757,10 +749,11 @@ test("desktop sidebar, contextual navigation, and command palette remain usable"
   await expect(sidebar.getByRole("link", { name: "Upload" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "Danbooru" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "Notifications" })).toHaveCount(0);
-  const contextNav = page.locator("#main-content header nav");
-  await expect(contextNav.getByRole("link", { name: "Jobs" })).toBeVisible();
-  await expect(contextNav.getByRole("link", { name: "Scheduler" })).toBeVisible();
-  await expect(contextNav.getByRole("link", { name: "Notifications" })).toHaveCount(0);
+  await expect(page.locator('[data-page-header] nav[aria-label="Related pages"]')).toHaveCount(0);
+  await expect(sidebar.locator('a[href="/admin/jobs"]')).toHaveAttribute("aria-current", "page");
+  await expect(sidebar.locator('a[href="/admin/scheduler"]')).toBeVisible();
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toHaveCount(0);
+  await expect(page.getByText("Live", { exact: true })).toHaveCount(0);
   await expect(page.getByTestId("source-code-link")).toHaveAttribute(
     "href",
     "https://github.com/MUSH2077/auto-gallery",
@@ -794,39 +787,37 @@ test("desktop sidebar, contextual navigation, and command palette remain usable"
   expect(consoleErrors.filter((message) => !message.includes("WebSocket"))).toEqual([]);
 });
 
-test("context tabs and sidebar resolve exactly one active route across parent and child URLs", async ({ page }) => {
+test("sidebar resolves exactly one active route without duplicate peer-page tabs", async ({ page }) => {
   test.setTimeout(60_000);
   await page.setViewportSize({ width: 1440, height: 960 });
 
-  for (const [route, contextHref, sidebarHref] of NAVIGATION_SELECTION_MATRIX) {
+  for (const [route, sidebarHref] of NAVIGATION_SELECTION_MATRIX) {
     await page.goto(route);
     await expect(page.locator("#main-content").getByRole("heading", { level: 1 })).toBeVisible();
-    await expectUniqueNavigationSelection(page, contextHref, sidebarHref);
+    await expectUniqueNavigationSelection(page, sidebarHref);
   }
 
   await page.goto("/admin/upload");
-  await expectUniqueNavigationSelection(page, "/admin/upload", "/admin/upload");
-  await page.locator('[data-page-header] nav[aria-label="Related pages"]:visible')
-    .getByRole("link", { name: "Danbooru", exact: true })
-    .click();
+  await expectUniqueNavigationSelection(page, "/admin/upload");
+  await page.locator("#admin-sidebar").getByRole("link", { name: "Danbooru", exact: true }).click();
   await expect(page).toHaveURL(/\/admin\/upload\/danbooru$/);
-  await expectUniqueNavigationSelection(page, "/admin/upload/danbooru", "/admin/upload/danbooru");
+  await expectUniqueNavigationSelection(page, "/admin/upload/danbooru");
   await page.screenshot({ path: "/tmp/auto-gallery-danbooru-single-active-desktop.png", fullPage: false });
 
   await page.goBack();
   await expect(page).toHaveURL(/\/admin\/upload$/);
-  await expectUniqueNavigationSelection(page, "/admin/upload", "/admin/upload");
+  await expectUniqueNavigationSelection(page, "/admin/upload");
   await page.goForward();
   await expect(page).toHaveURL(/\/admin\/upload\/danbooru$/);
-  await expectUniqueNavigationSelection(page, "/admin/upload/danbooru", "/admin/upload/danbooru");
+  await expectUniqueNavigationSelection(page, "/admin/upload/danbooru");
 
   await page.goto("/admin/reference/danbooru?artist=atlas");
   await expect(page).toHaveURL(/\/admin\/upload\/danbooru\?artist=atlas$/);
-  await expectUniqueNavigationSelection(page, "/admin/upload/danbooru", "/admin/upload/danbooru");
+  await expectUniqueNavigationSelection(page, "/admin/upload/danbooru");
 
   await page.goto("/admin/dedup?status=deferred");
   await expect(page).toHaveURL(/\/admin\/data-mgmt\/dedup\?status=deferred$/);
-  await expectUniqueNavigationSelection(page, "/admin/data-mgmt/dedup", "/admin/data-mgmt");
+  await expectUniqueNavigationSelection(page, "/admin/data-mgmt");
 });
 
 test("top-level page headers share the task page alignment and works has no creator picker", async ({ page }) => {
@@ -1471,6 +1462,37 @@ test("settings children use clickable breadcrumbs without duplicate back control
   await expect(page).toHaveURL(/\/admin\/settings$/);
 });
 
+test("subscription and repository details use clickable hierarchy breadcrumbs", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+
+  await page.goto("/admin/subscriptions/fixture-subscription");
+  const subscriptionBreadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });
+  await expect(subscriptionBreadcrumb.getByRole("link", { name: "Subscriptions" }))
+    .toHaveAttribute("href", "/admin/subscriptions");
+  await expect(subscriptionBreadcrumb.getByText("Fixture Subscription", { exact: true }))
+    .toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("link", { name: "Back to Subscriptions" })).toHaveCount(0);
+  await page.screenshot({ path: "/tmp/auto-gallery-subscription-detail-breadcrumb.png", fullPage: false });
+
+  await page.goto("/admin/subscriptions/repositories/fixture-repository");
+  const repositoryBreadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });
+  await expect(repositoryBreadcrumb.getByRole("link", { name: "Subscriptions" }))
+    .toHaveAttribute("href", "/admin/subscriptions");
+  await expect(repositoryBreadcrumb.getByRole("link", { name: "Fixture Subscription" }))
+    .toHaveAttribute("href", "/admin/subscriptions/fixture-subscription");
+  await expect(repositoryBreadcrumb.getByText("pixiv/fixture-source", { exact: true }))
+    .toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("link", { name: "Back to creator" })).toHaveCount(0);
+  await page.screenshot({ path: "/tmp/auto-gallery-subscription-breadcrumbs.png", fullPage: false });
+
+  await repositoryBreadcrumb.getByRole("link", { name: "Fixture Subscription" }).click();
+  await expect(page).toHaveURL(/\/admin\/subscriptions\/fixture-subscription$/);
+  await page.getByRole("navigation", { name: "Breadcrumb" })
+    .getByRole("link", { name: "Subscriptions" })
+    .click();
+  await expect(page).toHaveURL(/\/admin\/subscriptions$/);
+});
+
 test("profile is independent and the legacy settings URL redirects with its query", async ({ page }) => {
   await page.goto("/admin/profile");
   const breadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });
@@ -1605,17 +1627,8 @@ test("390 pixel mobile layout stays within the viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/admin/upload/danbooru");
   await expect(page.getByRole("heading", { level: 1, name: "Danbooru Reference Mapping" })).toBeVisible();
-  const contextDetails = page.locator("[data-page-header] details");
-  await expect(contextDetails.locator("summary")).toContainText("Danbooru");
-  const contextNavigations = page.locator('[data-page-header] nav[aria-label="Related pages"]');
-  expect(await contextNavigations.evaluateAll((elements) => (
-    elements.map((element) => element.querySelectorAll('[aria-current="page"]').length)
-  ))).toEqual([1, 1]);
-  await contextDetails.locator("summary").click();
-  await expect(contextDetails.getByRole("link", { name: "Danbooru", exact: true }))
-    .toHaveAttribute("aria-current", "page");
-  await expect(contextDetails.getByRole("link", { name: "Upload", exact: true }))
-    .not.toHaveAttribute("aria-current", "page");
+  await expect(page.locator("[data-page-header] details")).toHaveCount(0);
+  await expect(page.locator('[data-page-header] nav[aria-label="Related pages"]')).toHaveCount(0);
   await expectNoPageOverflow(page);
   await page.screenshot({ path: "/tmp/auto-gallery-danbooru-single-active-mobile.png", fullPage: false });
 });

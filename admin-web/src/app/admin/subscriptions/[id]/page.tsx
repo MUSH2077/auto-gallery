@@ -169,7 +169,6 @@ export default function SubscriptionDetailPage() {
 
   return (
     <PageShell>
-      <Link href="/admin/subscriptions" className="inline-flex min-h-11 items-center gap-1 text-sm text-accent hover:underline dark:text-accent">{t("subscription_detail.back")}</Link>
       <PageHeader title={s.name || (s.creator_display_name || s.creator_name || getCreatorName(s.creator_id))} description={s.creator_display_name || s.creator_name ? `${t("subscription_detail.creator")} ${s.creator_display_name || s.creator_name}` : undefined}>
         <div className="flex gap-2">
           <button onClick={() => { setEditName(s.name || ""); setEditMode(s.schedule_mode || ""); setEditInterval(s.sync_interval_hours || 24); setEditTimes(s.scheduled_times || ""); setEditing(true); }} className="btn-primary">{t("subscription_detail.edit")}</button>

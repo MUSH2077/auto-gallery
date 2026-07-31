@@ -137,37 +137,6 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
   { labelKey: "nav.admin", links: [byHref(adminRoutes.dataManagement), byHref(adminRoutes.system), byHref(adminRoutes.settings)] },
 ];
 
-export const ADMIN_CONTEXT_LINKS: Record<AdminNavContext, AdminNavLink[]> = {
-  overview: [byHref(adminRoutes.dashboard)],
-  library: [
-    byHref(adminRoutes.works),
-    byHref(adminRoutes.tags),
-  ],
-  ingestion: [
-    byHref(adminRoutes.upload),
-    byHref(adminRoutes.danbooru),
-  ],
-  "source-management": [
-    byHref(adminRoutes.creators),
-    byHref(adminRoutes.subscriptions),
-  ],
-  operations: [
-    byHref(adminRoutes.jobs),
-    byHref(adminRoutes.scheduler),
-  ],
-  notifications: [byHref(adminRoutes.notifications)],
-  governance: [
-    byHref(adminRoutes.dataManagement),
-    byHref(adminRoutes.curation),
-    byHref(adminRoutes.dedup),
-    byHref(adminRoutes.system),
-  ],
-  settings: [
-    byHref(adminRoutes.settings),
-    byHref(adminRoutes.users),
-  ],
-};
-
 export const ADMIN_USERS_LINK = byHref(adminRoutes.users);
 
 /** Whether a pathname belongs to a registered route, respecting path-segment boundaries. */

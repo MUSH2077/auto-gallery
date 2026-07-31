@@ -6,7 +6,7 @@ import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import type { CreatorRepository, RepositoryDetailResponse, RepositoryGraphNode, RepositoryRecentJob, RepositoryRecentWork, SchedulerDecisionItem } from "@/lib/api";
-import { EmptyState, ErrorState, PageShell, SourceBadge, SyncOutcomeBadge, SyncOutcomeNotice, TagBubbleChart, WorkMediaThumbnail } from "@/components";
+import { Breadcrumb, EmptyState, ErrorState, PageShell, SourceBadge, SyncOutcomeBadge, SyncOutcomeNotice, TagBubbleChart, WorkMediaThumbnail } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { scheduleModeLabel, schedulerDecisionLabel, statusLabel, useI18nFormat } from "@/lib/i18n-format";
@@ -364,9 +364,16 @@ export default function RepositoryDetailPage() {
 
   return (
     <PageShell>
-      <Link href={`/admin/creators/${creator.id}`} className="inline-flex items-center gap-1 text-sm text-accent hover:underline dark:text-accent">&larr; {t("repo_detail.back_to_creator")}</Link>
+      <Breadcrumb items={[
+        { label: t("subscriptions.title"), href: adminRoutes.subscriptions },
+        {
+          label: subscription.name || creator.display_name || creator.name,
+          href: adminRoutes.subscription(subscription.id),
+        },
+        { label: repoName(repo) },
+      ]} />
 
-      <header className="mt-4 border-b border-border pb-5 dark:border-border">
+      <header className="border-b border-border pb-5 dark:border-border">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">

@@ -79,6 +79,13 @@ export function adminBreadcrumbParents(pathname: string): AdminBreadcrumbParent[
   if (pathname.startsWith(`${adminRoutes.settings}/`)) {
     return [{ labelKey: "settings.title", href: adminRoutes.settings }];
   }
+  if (
+    pathname !== adminRoutes.subscriptions
+    && pathname.startsWith(`${adminRoutes.subscriptions}/`)
+    && !pathname.startsWith(`${adminRoutes.subscriptions}/repositories/`)
+  ) {
+    return [{ labelKey: "subscriptions.title", href: adminRoutes.subscriptions }];
+  }
   return [];
 }
 

@@ -6,7 +6,6 @@ export { default as Banner } from "./Banner";
 export { default as PageHeader } from "./PageHeader";
 export { default as PageShell } from "./PageShell";
 export { default as Pagination } from "./Pagination";
-export { default as PageContextNav } from "./PageContextNav";
 export { default as AdaptiveToolbar } from "./AdaptiveToolbar";
 export { OverflowText, CompactUrl, ErrorSummary, compactUrl } from "./OverflowText";
 export { default as PageSection } from "./PageSection";

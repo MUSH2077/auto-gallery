@@ -310,6 +310,7 @@ function JobsFilterPanel({
   onCompose,
   onClearFilters,
   onSelectAll,
+  maintenanceActions,
 }: {
   activeTab: JobsTab;
   activeFilterCount: number;
@@ -330,6 +331,7 @@ function JobsFilterPanel({
   }) => void;
   onClearFilters: () => void;
   onSelectAll: () => void;
+  maintenanceActions?: ReactNode;
 }) {
   const t = useT();
   const qualifierValue = (key: string) => tokens.find(
@@ -346,6 +348,7 @@ function JobsFilterPanel({
           {activeFilterCount > 0 && <span className="rounded-full bg-accent-subtle px-2 py-0.5 font-medium text-accent dark:bg-accent-subtle dark:text-accent">{t("jobs.active_filters", { count: activeFilterCount })}</span>}
           <span>{lastUpdatedLabel}</span>
           {activeFilterCount > 0 && <button onClick={onClearFilters} className="text-accent hover:underline dark:text-accent">{t("jobs.clear_filters")}</button>}
+          {maintenanceActions}
         </div>
       </div>
 
@@ -385,31 +388,13 @@ function JobsFilterPanel({
 function JobsBatchToolbar({
   activeTab,
   selectedCount,
-  onRefresh,
   onApply,
-  onClear,
-  onKillStuck,
-  onRetryAllFailed,
-  connected,
-  wsStatus,
   isApplying,
-  isClearing,
-  isKillingStuck,
-  isRetryingAll,
 }: {
   activeTab: JobsTab;
   selectedCount: number;
-  onRefresh: () => void;
   onApply: (action: BatchAction) => void;
-  onClear: (statuses: string[]) => void;
-  onKillStuck: () => void;
-  onRetryAllFailed: () => void;
-  connected: boolean;
-  wsStatus: string;
   isApplying: boolean;
-  isClearing: boolean;
-  isKillingStuck: boolean;
-  isRetryingAll: boolean;
 }) {
   const t = useT();
   const [action, setAction] = useState<BatchAction | "">("");
@@ -420,41 +405,11 @@ function JobsBatchToolbar({
     setAction((current) => current && !BATCH_ACTIONS_BY_TAB[activeTab].includes(current) ? "" : current);
   }, [activeTab]);
 
+  if (!showBatchControls) return null;
+
   return (
     <div className="mb-4 rounded-lg border border-border bg-surface p-2.5">
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <button onClick={onRefresh} className="btn-ghost text-xs">{t("jobs.refresh")}</button>
-        <span
-          className={`inline-flex h-9 items-center gap-1 rounded-full border px-3 text-xs ${
-            connected
-              ? "border-success/30 bg-success-subtle text-success"
-              : "border-border bg-subtle text-muted"
-          }`}
-          title={connected ? t("jobs.live_connected") : t("jobs.live_polling_title")}
-        >
-          <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-current" : "animate-pulse bg-current"}`} />
-          {connected ? t("jobs.live_connected") : wsStatus === "connecting" ? t("jobs.live_connecting") : t("jobs.live_polling")}
-        </span>
-      {selectedCount > 0 && (
-        <span className="inline-flex h-9 items-center rounded-md border border-border bg-subtle px-3 text-xs font-medium text-fg">
-          {t("common.selected_count", { count: selectedCount })}
-        </span>
-      )}
-        <span className="min-w-2 flex-1" />
-        {activeTab === "downloads" && (
-          <RowActionMenu
-            label={t("jobs.maintenance_actions")}
-            items={[
-              { label: t("jobs.clear_failed"), onSelect: () => onClear(["failed", "stale"]), tone: "danger", disabled: isClearing },
-              { label: t("jobs.clear_complete"), onSelect: () => onClear(["complete"]), disabled: isClearing },
-              { label: t("jobs.kill_stuck"), onSelect: onKillStuck, tone: "danger", disabled: isKillingStuck },
-              { label: t("jobs.retry_all_failed"), onSelect: onRetryAllFailed, disabled: isRetryingAll },
-            ]}
-          />
-        )}
-      </div>
-      {showBatchControls && (
-        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 border-t border-border pt-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <span className="badge shrink-0">
             {t("common.selected_count", { count: selectedCount })}
           </span>
@@ -475,7 +430,6 @@ function JobsBatchToolbar({
             {isApplying ? t("jobs.batch_running") : t("jobs.batch_apply")}
           </button>
         </div>
-      )}
     </div>
   );
 }
@@ -867,7 +821,7 @@ function JobsContent() {
   }, []);
 
   // WebSocket: invalidate queries on status change, update progress on progress events
-  const { connected, status: wsStatus } = useJobWebSocket({
+  useJobWebSocket({
     onStatusChange: (msg) => {
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
       qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
@@ -1091,13 +1045,6 @@ function JobsContent() {
     });
   }, [currentPageIds]);
 
-  const refreshAll = () => {
-    qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
-    qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
-    qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
-    qc.invalidateQueries({ queryKey: ["search", "tasks"] });
-    qc.invalidateQueries({ queryKey: queryKeys.workbench });
-  };
   const clearFilters = () => updateParams({
     status: null,
     source: null,
@@ -1268,17 +1215,8 @@ function JobsContent() {
       <JobsBatchToolbar
         activeTab={activeTab}
         selectedCount={selected.size}
-        onRefresh={refreshAll}
         onApply={(action) => batchJobs.mutate({ action })}
-        onClear={handleClear}
-        onKillStuck={() => killStuck.mutate()}
-        onRetryAllFailed={() => retryAllFailed.mutate()}
-        connected={connected}
-        wsStatus={wsStatus}
         isApplying={batchJobs.isPending}
-        isClearing={clearDL.isPending}
-        isKillingStuck={killStuck.isPending}
-        isRetryingAll={retryAllFailed.isPending}
       />
 
       <JobsFilterPanel
@@ -1296,6 +1234,17 @@ function JobsContent() {
         onCompose={composeQuery}
         onClearFilters={clearFilters}
         onSelectAll={handleSelectAll}
+        maintenanceActions={activeTab === "downloads" ? (
+          <RowActionMenu
+            label={t("jobs.maintenance_actions")}
+            items={[
+              { label: t("jobs.clear_failed"), onSelect: () => handleClear(["failed", "stale"]), tone: "danger", disabled: clearDL.isPending },
+              { label: t("jobs.clear_complete"), onSelect: () => handleClear(["complete"]), disabled: clearDL.isPending },
+              { label: t("jobs.kill_stuck"), onSelect: () => killStuck.mutate(), tone: "danger", disabled: killStuck.isPending },
+              { label: t("jobs.retry_all_failed"), onSelect: () => retryAllFailed.mutate(), disabled: retryAllFailed.isPending },
+            ]}
+          />
+        ) : undefined}
       />
 
       {activeTab === "all" && (
