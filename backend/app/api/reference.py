@@ -118,9 +118,24 @@ async def batch_import_danbooru_artists(data: dict):
         raise HTTPException(status_code=400, detail="No valid pixiv_ids provided")
 
     precheck = await _precheck_pixiv_ids(pixiv_ids)
-    pixiv_ids = precheck["unique_ids"]
     deduped = precheck["duplicates_removed"]
     existing_ids = precheck["existing_ids"]
+    # Filter out creators that already exist in the database.
+    # The precheck identified them via SourceCreator records — skip them
+    # instead of making unnecessary Danbooru API calls for every one.
+    pixiv_ids = [pid for pid in precheck["unique_ids"] if pid not in existing_ids]
+    skipped_existing = len(existing_ids)
+
+    if not pixiv_ids:
+        return {
+            "status": "ok",
+            "message": f"All {len(precheck['unique_ids'])} IDs already exist in the library — nothing to import",
+            "job_id": None,
+            "total": 0,
+            "duplicates_removed": deduped,
+            "already_exists": precheck["already_exists"],
+            "skipped_existing": skipped_existing,
+        }
 
     r = redis_lib.from_url(settings.redis_url)
     q = Queue(name="imports", connection=r)
@@ -133,15 +148,21 @@ async def batch_import_danbooru_artists(data: dict):
                     job_timeout=3600,  # 1 hour max
                     result_ttl=3600)
 
-    logger.info("Enqueued batch import job_key=%s (rq_job=%s) with %d pixiv_ids (%d duplicates removed, %d already exist)",
-                job_key, job.id, len(pixiv_ids), deduped, len(existing_ids))
+    logger.info("Enqueued batch import job_key=%s (rq_job=%s) with %d new pixiv_ids (%d duplicates removed, %d already exist — skipped)",
+                job_key, job.id, len(pixiv_ids), deduped, skipped_existing)
     return {
         "status": "ok",
-        "message": f"Batch import enqueued ({len(pixiv_ids)} IDs" + (f", {deduped} duplicates removed)" if deduped > 0 else ")"),
+        "message": (
+            f"Batch import enqueued ({len(pixiv_ids)} new IDs"
+            + (f", {deduped} duplicates removed" if deduped > 0 else "")
+            + (f", {skipped_existing} already exist — skipped" if skipped_existing > 0 else "")
+            + ")"
+        ),
         "job_id": job_key,
         "total": len(pixiv_ids),
         "duplicates_removed": deduped,
         "already_exists": precheck["already_exists"],
+        "skipped_existing": skipped_existing,
     }
 
 
