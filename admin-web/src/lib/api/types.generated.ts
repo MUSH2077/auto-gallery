@@ -3535,7 +3535,9 @@ export interface components {
             /** Aspect Ratio Delta */
             aspect_ratio_delta?: number | null;
             /** Facts */
-            facts?: Record<string, never>;
+            facts?: {
+                [key: string]: unknown;
+            };
             /** Hard Gate Passed */
             hard_gate_passed: boolean;
             /**
@@ -3838,22 +3840,32 @@ export interface components {
         /** CurationBackfillStatusResponse */
         CurationBackfillStatusResponse: {
             /** Existing */
-            existing: Record<string, never>;
+            existing: {
+                [key: string]: unknown;
+            };
             /** Expected */
-            expected: Record<string, never>;
+            expected: {
+                [key: string]: unknown;
+            };
             /** Is Complete */
             is_complete: boolean;
             /** Missing */
-            missing: Record<string, never>;
+            missing: {
+                [key: string]: unknown;
+            };
         };
         /** CurationChangeRead */
         CurationChangeRead: {
             /** Action */
             action: string;
             /** After State */
-            after_state?: Record<string, never> | null;
+            after_state?: {
+                [key: string]: unknown;
+            } | null;
             /** Before State */
-            before_state?: Record<string, never> | null;
+            before_state?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Commit Id
              * Format: uuid
@@ -3865,14 +3877,18 @@ export interface components {
              */
             created_at: string;
             /** Diff */
-            diff?: Record<string, never> | null;
+            diff?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Id
              * Format: uuid
              */
             id: string;
             /** Impact */
-            impact?: Record<string, never> | null;
+            impact?: {
+                [key: string]: unknown;
+            } | null;
             /** Subject Id */
             subject_id: string;
             /** Subject Type */
@@ -3913,7 +3929,9 @@ export interface components {
             /** Message */
             message: string;
             /** Metadata */
-            metadata?: Record<string, never> | null;
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Occurred At
              * Format: date-time
@@ -3929,7 +3947,9 @@ export interface components {
             /** Reverts Commit Id */
             reverts_commit_id?: string | null;
             /** Stats */
-            stats?: Record<string, never> | null;
+            stats?: {
+                [key: string]: unknown;
+            } | null;
             /** Status */
             status: string;
             /** Trigger */
@@ -3944,7 +3964,9 @@ export interface components {
         CurationRevertResponse: {
             commit?: components["schemas"]["CurationCommitRead"] | null;
             /** Conflicts */
-            conflicts?: Record<string, never>[];
+            conflicts?: {
+                [key: string]: unknown;
+            }[];
             /**
              * Reverted
              * @default 0
@@ -4109,7 +4131,9 @@ export interface components {
             /** Last Heartbeat At */
             last_heartbeat_at?: string | null;
             /** Manifest */
-            manifest?: Record<string, never> | null;
+            manifest?: {
+                [key: string]: unknown;
+            } | null;
             /** Operator Action */
             operator_action?: string | null;
             /** Operator Name */
@@ -4123,7 +4147,9 @@ export interface components {
              */
             priority: number;
             /** Progress Data */
-            progress_data?: Record<string, never> | null;
+            progress_data?: {
+                [key: string]: unknown;
+            } | null;
             /** Retry Count */
             retry_count: number;
             /** Source */
@@ -4322,7 +4348,9 @@ export interface components {
              */
             priority: number;
             /** Progress Data */
-            progress_data?: Record<string, never> | null;
+            progress_data?: {
+                [key: string]: unknown;
+            } | null;
             /** Progress Stage */
             progress_stage?: string | null;
             /** Progress Works Done */
@@ -4407,7 +4435,9 @@ export interface components {
             /** Permissions */
             permissions: string[];
             /** Preferences */
-            preferences: Record<string, never>;
+            preferences: {
+                [key: string]: unknown;
+            };
             /** Upload Quota Bytes */
             upload_quota_bytes?: number | null;
             /** Upload Used Bytes */
@@ -4502,12 +4532,16 @@ export interface components {
         /** PreferencesIn */
         PreferencesIn: {
             /** Preferences */
-            preferences: Record<string, never>;
+            preferences: {
+                [key: string]: unknown;
+            };
         };
         /** PreferencesOut */
         PreferencesOut: {
             /** Preferences */
-            preferences: Record<string, never>;
+            preferences: {
+                [key: string]: unknown;
+            };
         };
         /** ProxySettings */
         ProxySettings: {
@@ -4542,13 +4576,17 @@ export interface components {
             /** Asset Count */
             asset_count: number;
             /** Assets */
-            assets?: Record<string, never>[];
+            assets?: {
+                [key: string]: unknown;
+            }[];
             /** Bytes Reclaimable */
             bytes_reclaimable: number;
             /** Work Count */
             work_count: number;
             /** Works */
-            works?: Record<string, never>[];
+            works?: {
+                [key: string]: unknown;
+            }[];
         };
         /** PurgeRequest */
         PurgeRequest: {
@@ -4593,7 +4631,9 @@ export interface components {
         /** RepositoryGraphNode */
         RepositoryGraphNode: {
             /** Changes Summary */
-            changes_summary?: Record<string, never>[];
+            changes_summary?: {
+                [key: string]: unknown;
+            }[];
             /**
              * Id
              * Format: uuid
@@ -4612,7 +4652,9 @@ export interface components {
              */
             occurred_at: string;
             /** Stats */
-            stats?: Record<string, never> | null;
+            stats?: {
+                [key: string]: unknown;
+            } | null;
             /** Status */
             status: string;
             /** Thumbnails */
@@ -4652,7 +4694,9 @@ export interface components {
             /** Id */
             id: string;
             /** Impact */
-            impact: Record<string, never>;
+            impact: {
+                [key: string]: unknown;
+            };
             /** Title */
             title: string;
         };
@@ -4750,7 +4794,9 @@ export interface components {
             /** Display Name */
             display_name?: string | null;
             /** Raw Metadata */
-            raw_metadata?: Record<string, never> | null;
+            raw_metadata?: {
+                [key: string]: unknown;
+            } | null;
             /** Source */
             source: string;
             /** Source Creator Id */
@@ -4775,7 +4821,9 @@ export interface components {
              */
             id: string;
             /** Raw Metadata */
-            raw_metadata?: Record<string, never> | null;
+            raw_metadata?: {
+                [key: string]: unknown;
+            } | null;
             /** Source */
             source: string;
             /** Source Creator Id */
@@ -5606,7 +5654,9 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": Record<string, never> | null;
+                "application/json": {
+                    [key: string]: unknown;
+                } | null;
             };
         };
         responses: {
@@ -5856,7 +5906,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -6596,7 +6648,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -6986,7 +7040,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -7801,7 +7857,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -7946,7 +8004,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -9553,7 +9613,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -9604,7 +9666,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -9655,7 +9719,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -9900,7 +9966,9 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": Record<string, never> | null;
+                "application/json": {
+                    [key: string]: unknown;
+                } | null;
             };
         };
         responses: {
@@ -10002,7 +10070,9 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": Record<string, never> | null;
+                "application/json": {
+                    [key: string]: unknown;
+                } | null;
             };
         };
         responses: {
@@ -10104,7 +10174,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -10355,7 +10427,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -10553,7 +10627,9 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": Record<string, never> | null;
+                "application/json": {
+                    [key: string]: unknown;
+                } | null;
             };
         };
         responses: {
@@ -10606,7 +10682,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -10755,7 +10833,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -10806,7 +10886,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -10906,7 +10988,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -10957,7 +11041,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -11008,7 +11094,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -11059,7 +11147,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -11159,7 +11249,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -11210,7 +11302,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -11821,7 +11915,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -11872,7 +11968,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -12821,7 +12919,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -13025,7 +13125,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -13183,7 +13285,9 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": Record<string, never> | null;
+                "application/json": {
+                    [key: string]: unknown;
+                } | null;
             };
         };
         responses: {
@@ -13236,7 +13340,9 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": Record<string, never> | null;
+                "application/json": {
+                    [key: string]: unknown;
+                } | null;
             };
         };
         responses: {
@@ -13836,7 +13942,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
@@ -13887,7 +13995,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
