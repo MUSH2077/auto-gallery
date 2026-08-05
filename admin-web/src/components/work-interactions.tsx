@@ -4,17 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type { WorkPreviewSize } from "@/lib/appearance";
 import SourceBadge from "./SourceBadge";
+import { useT } from "@/lib/i18n";
+import { resolveMediaKind, type MediaAssetData } from "@/lib/media";
 
-export interface MediaAsset {
-  id: string;
-  file_name?: string;
-  width?: number;
-  height?: number;
-  mime_type?: string;
-  thumb_url?: string;
-  preview_url?: string;
-  original_url?: string;
-}
+export type MediaAsset = MediaAssetData;
 
 export function isArchiveAsset(asset: MediaAsset | null | undefined) {
   if (!asset) return false;
@@ -30,6 +23,7 @@ export function AssetImage({
   fallback,
   onLoad,
   onError,
+  loading = "lazy",
 }: {
   assetId?: string | null;
   src?: string | null;
@@ -39,7 +33,9 @@ export function AssetImage({
   fallback?: string;
   onLoad?: (event: React.SyntheticEvent<HTMLImageElement>) => void;
   onError?: () => void;
+  loading?: "eager" | "lazy";
 }) {
+  const t = useT();
   const [failed, setFailed] = useState(false);
   const resolvedSrc = src || (assetId ? api.mediaUrl(assetId, size) : "");
 
@@ -50,7 +46,7 @@ export function AssetImage({
   if ((!assetId && !src) || failed) {
     return (
       <div className={`${className} flex items-center justify-center bg-subtle text-xs text-muted`}>
-        {fallback || "N/A"}
+        {fallback || t("common.na")}
       </div>
     );
   }
@@ -59,7 +55,7 @@ export function AssetImage({
       src={resolvedSrc}
       alt={alt}
       className={className}
-      loading="lazy"
+      loading={loading}
       decoding="async"
       onLoad={onLoad}
       onError={() => {
@@ -156,15 +152,19 @@ export function WorkPreviewOverlay({
   onWheelPage: (delta: number) => void;
   onRefreshAssets?: () => void;
 }) {
+  const t = useT();
   const [naturalRatio, setNaturalRatio] = useState<number | null>(null);
   const retriedSources = useRef<Set<string>>(new Set());
   const assetById = useMemo(() => new Map((assets || []).map((asset) => [asset.id, asset])), [assets]);
   const currentId = assetIds[pageIndex] || assetIds[0];
   const currentAsset = assetById.get(currentId) || assets?.[pageIndex] || assets?.[0];
-  const currentSrc = currentAsset?.original_url || null;
+  const currentKind = currentAsset ? resolveMediaKind(currentAsset) : "unknown";
+  const currentSrc = currentKind === "video"
+    ? currentAsset?.poster_url || currentAsset?.thumb_url || null
+    : currentAsset?.original_url || currentAsset?.preview_url || null;
   const footerText = currentAsset?.file_name
     ? `${currentAsset.file_name}${creatorName ? ` · ${creatorName}` : ""}`
-    : creatorName || "Unknown creator";
+    : creatorName || t("works.unknown_creator");
   const ratio = naturalRatio || ((currentAsset?.width || 0) > 0 && (currentAsset?.height || 0) > 0 ? (currentAsset!.width! / currentAsset!.height!) : 4 / 3);
   const style = useMemo(() => previewPosition(anchor, ratio, previewSize), [anchor, ratio, previewSize]);
   const canPage = Math.max(assetIds.length, assets?.length || 0) > 1;
@@ -189,13 +189,13 @@ export function WorkPreviewOverlay({
         {isLoading ? (
           <div className="h-full w-full animate-pulse bg-subtle" />
         ) : isError ? (
-          <div className="flex h-full w-full items-center justify-center px-4 text-center text-xs text-muted">Preview failed</div>
+          <div className="flex h-full w-full items-center justify-center px-4 text-center text-xs text-muted">{t("works.preview_failed")}</div>
         ) : currentSrc ? (
           <AssetImage
             src={currentSrc}
             alt={title || currentAsset?.file_name || ""}
             className="h-full w-full object-contain no-outline"
-            fallback="Original unavailable"
+            fallback={t("works.original_unavailable")}
             onLoad={(event) => {
               const image = event.currentTarget;
               if (image.naturalWidth > 0 && image.naturalHeight > 0) {
@@ -209,8 +209,13 @@ export function WorkPreviewOverlay({
             }}
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center px-4 text-center text-xs text-muted">Original unavailable</div>
+          <div className="flex h-full w-full items-center justify-center px-4 text-center text-xs text-muted">{t("works.original_unavailable")}</div>
         )}
+        {currentKind === "video" && currentSrc ? (
+          <span className="pointer-events-none absolute bottom-2 right-2 rounded bg-black/75 px-2 py-1 text-xs font-semibold text-white">
+            {t("media.video_badge")}
+          </span>
+        ) : null}
         {canPage && (
           <div className="absolute bottom-2 left-2 rounded-md bg-black/70 px-2 py-1 text-xs font-medium text-white">
             {pageIndex + 1} / {assetCount}
@@ -220,11 +225,11 @@ export function WorkPreviewOverlay({
       <div className="border-t border-border px-3 py-2">
         <div className="flex items-center gap-2">
           {source && <SourceBadge source={source} />}
-          <div className="min-w-0 flex-1 truncate text-sm font-medium">{title || "Untitled"}</div>
+          <div className="min-w-0 flex-1 truncate text-sm font-medium">{title || t("work_detail.untitled")}</div>
         </div>
         <div className="mt-1 flex items-center justify-between gap-3 text-xs text-muted">
           <span className="truncate">{footerText}</span>
-          {canPage && <span className="shrink-0">Scroll to page</span>}
+          {canPage && <span className="shrink-0">{t("works.scroll_to_page")}</span>}
         </div>
       </div>
     </div>
@@ -242,11 +247,13 @@ export function AssetFilmstrip<T extends MediaAsset>({
   onSelect: (index: number) => void;
   className?: string;
 }) {
+  const t = useT();
   if (!assets.length) return null;
   return (
     <div className={`flex gap-2 overflow-x-auto pb-1 ${className}`}>
       {assets.map((asset, index) => {
         const archive = isArchiveAsset(asset);
+        const kind = resolveMediaKind(asset);
         const active = index === activeIndex;
         return (
           <button
@@ -256,7 +263,7 @@ export function AssetFilmstrip<T extends MediaAsset>({
             className={`relative h-16 w-16 shrink-0 overflow-hidden rounded-md border-2 transition-colors ${
               active ? "border-accent" : "border-border hover:border-accent/60"
             }`}
-            title={asset.file_name || `Page ${index + 1}`}
+            title={asset.file_name || t("works.page_number", { page: index + 1 })}
           >
             {archive ? (
               <span className="flex h-full w-full items-center justify-center bg-subtle font-mono text-[10px] font-semibold text-muted">
@@ -264,12 +271,17 @@ export function AssetFilmstrip<T extends MediaAsset>({
               </span>
             ) : (
               <AssetImage
-                src={asset.thumb_url}
+                src={asset.thumb_url || (kind === "video" ? asset.poster_url : asset.preview_url)}
                 assetId={asset.id}
-                alt={asset.file_name || `Page ${index + 1}`}
+                alt={asset.file_name || t("works.page_number", { page: index + 1 })}
                 className="h-full w-full object-cover"
               />
             )}
+            {kind === "video" ? (
+              <span className="absolute left-1 top-1 rounded bg-black/75 px-1 text-[9px] font-semibold text-white">
+                {t("media.video_badge")}
+              </span>
+            ) : null}
             <span className="absolute bottom-0.5 right-0.5 rounded bg-black/70 px-1 text-[10px] font-medium text-white">
               {index + 1}
             </span>

@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type RefObject } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu, Search, Upload } from "lucide-react";
@@ -9,6 +9,7 @@ import { useAuth } from "@/lib/auth";
 import { usePermissions } from "@/lib/usePermissions";
 import { usePresence } from "@/lib/motion";
 import { findAdminNavEntry } from "@/lib/adminNavigation";
+import { adminRoutes } from "@/lib/adminRoutes";
 import { NotificationBell } from "@/components/NotificationCenter";
 import CommandPalette from "@/components/CommandPalette";
 
@@ -18,39 +19,86 @@ function UserMenu() {
   const [open, setOpen] = useState(false);
   const { mounted, closing } = usePresence(open);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuId = useId();
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     }
+    function handleKeyDown(e: KeyboardEvent) {
+      if (!open) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setOpen(false);
+        triggerRef.current?.focus();
+        return;
+      }
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Home" && e.key !== "End") return;
+      const items = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') || []);
+      if (!items.length) return;
+      e.preventDefault();
+      const currentIndex = items.indexOf(document.activeElement as HTMLElement);
+      if (e.key === "Home") items[0].focus();
+      else if (e.key === "End") items[items.length - 1].focus();
+      else if (e.key === "ArrowDown") items[(currentIndex + 1 + items.length) % items.length].focus();
+      else items[(currentIndex - 1 + items.length) % items.length].focus();
+    }
     document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, []);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
 
   return (
     <div ref={ref} className="relative">
       <button
+        ref={triggerRef}
+        type="button"
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 rounded-md px-2 py-1 text-sm text-muted transition-colors hover:bg-subtle hover:text-fg"
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            setOpen(true);
+            window.requestAnimationFrame(() => menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus());
+          }
+        }}
+        className="flex h-11 min-w-11 items-center justify-center rounded-md px-2 text-sm text-muted transition-colors hover:bg-subtle hover:text-fg"
         title={user?.display_name || user?.username}
+        aria-label={t("nav.user_menu")}
+        aria-haspopup="menu"
+        aria-controls={menuId}
+        aria-expanded={open}
       >
         <span className="flex h-[26px] w-[26px] items-center justify-center rounded-full border border-border bg-accent text-[11px] font-semibold text-white">
           {(user?.display_name || user?.username || "?").trim().slice(0, 2).toUpperCase()}
         </span>
       </button>
       {mounted && (
-        <div className={`popover ${closing ? "popover-exit" : ""} absolute right-0 z-50 mt-1 w-44 overflow-hidden rounded-md border border-border bg-surface text-sm text-fg shadow-overlay dark:shadow-overlay-dark`}>
+        <div
+          ref={menuRef}
+          id={menuId}
+          role="menu"
+          aria-label={t("nav.user_menu")}
+          className={`popover ${closing ? "popover-exit" : ""} absolute right-0 z-50 mt-1 w-52 overflow-hidden rounded-md border border-border bg-surface text-sm text-fg shadow-overlay dark:shadow-overlay-dark`}
+        >
           <div className="border-b border-border px-3 py-2 text-xs text-muted">{user?.display_name || user?.username}</div>
           <Link
-            href="/admin/settings/profile"
+            href={adminRoutes.profile}
             onClick={() => setOpen(false)}
-            className="flex items-center gap-2 px-3 py-2 transition-colors hover:bg-subtle"
+            role="menuitem"
+            className="flex min-h-11 items-center gap-2 px-3 py-2 transition-colors hover:bg-subtle focus-visible:bg-subtle"
           >
             {t("auth.change_password")}
           </Link>
           <button
+            type="button"
             onClick={() => { setOpen(false); logout(); }}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-danger transition-colors hover:bg-subtle"
+            role="menuitem"
+            className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left text-danger transition-colors hover:bg-subtle focus-visible:bg-subtle"
           >
             {t("auth.logout")}
           </button>

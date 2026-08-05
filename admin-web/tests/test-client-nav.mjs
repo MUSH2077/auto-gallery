@@ -9,7 +9,7 @@ import { BASE, launchBrowser, wait } from './helpers.mjs';
   await page.fill('input[autocomplete="current-password"]', 'admin');
   await page.click('button[type="submit"]');
   await page.waitForURL('**/admin', { timeout: 10000 });
-  await page.click('nav a[href="/admin/reference/danbooru"]');
+  await page.click('nav a[href="/admin/upload/danbooru"]');
   await page.waitForURL('**/danbooru', { timeout: 10000 });
   await wait(1000);
   
@@ -41,7 +41,7 @@ import { BASE, launchBrowser, wait } from './helpers.mjs';
   await wait(10000);
   
   // Navigate back to Danbooru via CLIENT-SIDE
-  await page.locator('nav a[href="/admin/reference/danbooru"]').last().click();
+  await page.locator('nav a[href="/admin/upload/danbooru"]').last().click();
   await page.waitForURL('**/danbooru', { timeout: 5000 });
   await wait(2000);
   

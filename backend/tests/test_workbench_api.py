@@ -87,6 +87,7 @@ async def test_workbench_refresh_populates_cache_and_exposes_recent_context(monk
         _Result(rows=[(download, subscription, creator)]),
         _Result(rows=[(import_job, download, subscription, creator)]),
         _Result(scalar_rows=[work]),
+        _Result(scalar_rows=[work.id]),
         _Result(rows=[(work.id, "pixiv", creator.display_name, creator.name)]),
         _Result(rows=[(source, subscription, creator)]),
     ])
@@ -126,9 +127,10 @@ async def test_workbench_refresh_populates_cache_and_exposes_recent_context(monk
     assert payload["recent"]["import_jobs"][0]["progress_works_total"] == 12
     assert payload["recent"]["works"][0]["source"] == "pixiv"
     assert payload["recent"]["works"][0]["creator_name"] == "Atlas Ink"
+    assert payload["recent"]["works"][0]["has_video"] is True
     assert system._workbench_cache is payload
     assert system._WORKBENCH_CACHE_TTL == 10.0
 
     cached = await system.workbench_summary(refresh=False, db=SimpleNamespace())
     assert cached is payload
-    assert session.execute_count == 8
+    assert session.execute_count == 9

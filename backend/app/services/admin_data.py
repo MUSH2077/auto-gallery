@@ -24,6 +24,7 @@ from app.services.library_sync import (
     sync_thumbnails,
     write_metadata_json,
 )
+from app.services.media_assets import is_browser_playable_video, media_kind
 from app.services.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
@@ -219,9 +220,36 @@ async def rebuild_library_index(db: AsyncSession, options: dict | None = None, p
                 creator_dir = resolve_creator_directory(ws.source, ws.raw_metadata, ws.source_work_id, config)
                 lib_dir = Path(settings.library_root) / ws.source / creator_dir / ws.source_work_id
                 version = library_version(work, ws, rows)
-                expected_thumbs = [lib_dir / f"{Path(asset.file_path).stem}.thumbnail.webp"
-                                   for asset, _ in rows if Path(asset.file_path).suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}]
-                if mode == "repair" and metadata_version(lib_dir) == version and all(path.exists() for path in expected_thumbs):
+                expected_thumbs = []
+                media_projection_complete = True
+                for asset, _ in rows:
+                    asset_kind = media_kind(asset.mime_type, asset.file_name)
+                    stem = Path(asset.file_path).stem
+                    if asset_kind in {"image", "animated_image"}:
+                        expected_thumbs.append(lib_dir / f"{stem}.thumbnail.webp")
+                    elif is_browser_playable_video(asset.mime_type, asset.file_name):
+                        expected_thumbs.extend(
+                            (
+                                lib_dir / f"{stem}.thumbnail.webp",
+                                lib_dir / f"{stem}.poster.webp",
+                            )
+                        )
+                        media_projection_complete = media_projection_complete and all(
+                            value is not None
+                            for value in (
+                                asset.width,
+                                asset.height,
+                                asset.duration,
+                                asset.thumb_sm_path,
+                                asset.thumb_lg_path,
+                            )
+                        )
+                if (
+                    mode == "repair"
+                    and metadata_version(lib_dir) == version
+                    and media_projection_complete
+                    and all(path.exists() for path in expected_thumbs)
+                ):
                     stats["skipped"] += 1
                     continue
                 generated = await sync_thumbnails(
@@ -231,11 +259,21 @@ async def rebuild_library_index(db: AsyncSession, options: dict | None = None, p
                 write_metadata_json(lib_dir, work, ws,
                                     creator.display_name if creator and creator.display_name else creator_dir,
                                     assets_meta, version=version)
-                managed_paths = [lib_dir / "metadata.json", *lib_dir.glob("*.thumbnail.webp")]
+                managed_paths = [
+                    lib_dir / "metadata.json",
+                    *lib_dir.glob("*.thumbnail.webp"),
+                    *lib_dir.glob("*.poster.webp"),
+                ]
                 library_artifacts.extend(
                     managed_artifact_row(path, Path(settings.library_root), "library",
                                          ws.source, creator_dir, ws.source_work_id,
-                                         "metadata_json" if path.name == "metadata.json" else "thumbnail")
+                                         (
+                                             "metadata_json"
+                                             if path.name == "metadata.json"
+                                             else "video_poster"
+                                             if path.name.endswith(".poster.webp")
+                                             else "thumbnail"
+                                         ))
                     for path in managed_paths if path.exists()
                 )
                 stats["metadata_written"] += 1

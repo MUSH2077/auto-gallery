@@ -3,11 +3,13 @@ import Link from "next/link";
 import { useRef, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, DownloadJob, ImportJob, queryKeys } from "@/lib/api";
-import { ErrorState, StatusBadge, SourceBadge } from "@/components";
+import { ErrorState, StatusBadge, SourceBadge, SyncOutcomeNotice } from "@/components";
 import { useT } from "@/lib/i18n";
 import { usePresence, motionTokens } from "@/lib/motion";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { classifyError } from "@/lib/jobCategory";
+import { adminRoutes } from "@/lib/adminRoutes";
+import { parseSyncOutcome } from "@/lib/syncOutcome";
 
 export function shortId(id?: string | null) {
   return id ? id.slice(0, 8) : "-";
@@ -58,6 +60,7 @@ export function TaskDetailDrawer({
   });
   if (!mounted || !heldId) return null;
   const item = task.data;
+  const outcome = parseSyncOutcome(item?.result_data);
   const retryable = item?.operation_type === "admin-disk-import" || item?.operation_type === "admin-rebuild";
   const canRetry = retryable && ["failed", "stale", "cancelled"].includes(item?.status || "");
 
@@ -100,7 +103,7 @@ export function TaskDetailDrawer({
               <DetailRow label={t("jobs.started")} value={item.started_at ? fmt.dateTime(item.started_at) : undefined} />
               <DetailRow label={t("jobs.finished")} value={item.finished_at ? fmt.dateTime(item.finished_at) : undefined} />
             </dl>
-            {item.error_log && (
+            {item.error_log && ["failed", "stale"].includes(item.status) && (
               <section>
                 <h3 className="mb-2 text-sm font-semibold">{t("jobs.error_log")}</h3>
                 <pre className="max-h-96 overflow-auto rounded-md border border-danger/20 bg-danger-subtle p-3 font-mono text-xs whitespace-pre-wrap text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">{item.error_log}</pre>
@@ -112,7 +115,7 @@ export function TaskDetailDrawer({
             </section>
             <section>
               <h3 className="mb-2 text-sm font-semibold">{t("jobs.result")}</h3>
-              <JsonBlock value={item.result_data} />
+              {outcome ? <SyncOutcomeNotice outcome={outcome} /> : <JsonBlock value={item.result_data} />}
             </section>
             <section>
               <h3 className="mb-2 text-sm font-semibold">{t("jobs.meta")}</h3>
@@ -223,7 +226,7 @@ export function JobDetailDrawer({
               <DetailRow label={t("jobs.source_url")} value={dl.source_url} />
               <DetailRow label={t("jobs.creator")} value={dl.creator_id ? <Link href={`/admin/creators/${dl.creator_id}`} className="text-accent hover:underline dark:text-accent">{dl.creator_name || shortId(dl.creator_id)}</Link> : dl.creator_name} />
               <DetailRow label={t("jobs.subscription")} value={dl.subscription_id ? <Link href={`/admin/subscriptions/${dl.subscription_id}`} className="text-accent hover:underline dark:text-accent">{dl.subscription_name || shortId(dl.subscription_id)}</Link> : undefined} />
-              <DetailRow label={t("jobs.repository")} value={dl.subscription_source_id ? <Link href={`/admin/repositories/${dl.subscription_source_id}`} className="text-accent hover:underline dark:text-accent">{shortId(dl.subscription_source_id)}</Link> : undefined} />
+              <DetailRow label={t("jobs.repository")} value={dl.subscription_source_id ? <Link href={adminRoutes.repository(dl.subscription_source_id)} className="text-accent hover:underline dark:text-accent">{shortId(dl.subscription_source_id)}</Link> : undefined} />
               <DetailRow label={t("jobs.created")} value={fmt.dateTime(dl.created_at)} />
               <DetailRow label={t("jobs.updated")} value={fmt.dateTime(dl.updated_at)} />
               {dl.last_heartbeat_at && (
@@ -244,7 +247,8 @@ export function JobDetailDrawer({
                 } />
               )}
             </dl>
-            {dl.error_log && (() => {
+            {dl.outcome && <SyncOutcomeNotice outcome={dl.outcome} />}
+            {dl.error_log && ["failed", "stale"].includes(dl.status) && (() => {
               const errInfo = classifyError(dl.error_log);
               const hintKey = `jobs.error_type_${errInfo.type}`;
               return (
@@ -261,7 +265,7 @@ export function JobDetailDrawer({
                 </h3>
                 {errInfo.type === "auth" && (
                   <p className="text-xs text-danger mb-2">
-                    {t("auth.desc")}: <Link href="/admin/settings/auth-status" className="underline">{t("settings.auth")} →</Link>
+                    {t("auth.desc")}: <Link href={adminRoutes.schedulerAuth} className="underline">{t("settings.auth")} →</Link>
                   </p>
                 )}
                 {errInfo.type === "timeout" && (
@@ -290,7 +294,7 @@ export function JobDetailDrawer({
               {imports.data?.length ? (
                 <div className="space-y-1">
                   {imports.data.map((job: ImportJob) => (
-                    <Link key={job.id} href={`/admin/jobs?tab=imports&download_job_id=${dl.id}&import_job=${job.id}`} className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-sm hover:bg-subtle dark:border-border dark:hover:bg-subtle">
+                    <Link key={job.id} href={`/admin/jobs?tab=imports&q=${encodeURIComponent(`kind:import "${dl.id}"`)}&import_job=${job.id}`} className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-sm hover:bg-subtle dark:border-border dark:hover:bg-subtle">
                       <span className="font-mono text-xs">{shortId(job.id)}</span>
                       <span>{statusLabel(t, job.status)}</span>
                     </Link>

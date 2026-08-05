@@ -31,14 +31,17 @@ export default function TagsPage() {
 
   return (
     <PermissionGuard module="library">
-    <PageShell size="normal">
-      <PageHeader title={t("tags.title")} description={tags.data?.length ? t("common.page").replace("{page}", String(page + 1)) : t("tags.desc")}>
-        {canCurate && (
+    <PageShell>
+      <PageHeader
+        title={t("tags.title")}
+        description={tags.data?.length ? t("common.page").replace("{page}", String(page + 1)) : t("tags.desc")}
+        primaryAction={canCurate ? (
           <button onClick={() => { setFormName(""); setFormCat("general"); setShowCreate(true); }}
             className="btn-primary">{t("tags.new")}</button>
-        )}
-      </PageHeader>
+        ) : undefined}
+      />
 
+      <div data-page-primary-content>
       {tags.isLoading && (
         <div className="flex min-h-80 flex-wrap items-center justify-center gap-3">
           {Array.from({ length: 20 }).map((_, i) => {
@@ -52,7 +55,7 @@ export default function TagsPage() {
       {tags.data && !tags.data.length && <EmptyState title={t("tags.no_tags")} description={t("tags.no_tags_desc")} />}
 
       {tags.data && tags.data.length > 0 && (
-        <div className="rounded-md border border-border bg-white p-3 dark:border-border dark:bg-surface sm:p-5">
+        <div className="card p-3 sm:p-5">
           <TagBubbleChart tags={tags.data} ariaLabel={t("tags.title")} />
           <p className="mt-5 text-center text-xs text-muted">
             {t("tags.total").replace("{count}", String(tags.data.length))}
@@ -90,6 +93,7 @@ export default function TagsPage() {
             className="btn-ghost px-3 py-1 text-sm disabled:opacity-30">{t("common.next")}</button>
         </div>
       )}
+      </div>
     </PageShell>
     </PermissionGuard>
   );

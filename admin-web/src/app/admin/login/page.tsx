@@ -7,6 +7,7 @@ import { useToast } from "@/components/Toast";
 import { ThemeToggle, LangToggle } from "@/lib/theme";
 import { SHOWCASE_STORAGE_KEY, DEFAULT_SHOWCASE_CONFIG } from "@/lib/showcase/config";
 import SourceCodeLink from "@/components/SourceCodeLink";
+import { adminRoutes } from "@/lib/adminRoutes";
 
 /**
  * Decide the post-login destination. The server-side preference
@@ -50,7 +51,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   if (isAuthenticated) {
-    router.replace(user?.must_change_password ? "/admin/settings/profile" : resolveLanding(user?.preferences));
+    router.replace(user?.must_change_password ? adminRoutes.profile : resolveLanding(user?.preferences));
     return null;
   }
 
@@ -60,7 +61,7 @@ export default function LoginPage() {
     try {
       const authUser = await login(username, password);
       if (authUser.must_change_password) {
-        router.replace("/admin/settings/profile");
+        router.replace(adminRoutes.profile);
       } else {
         router.replace(resolveLanding(authUser.preferences));
       }
@@ -99,7 +100,7 @@ export default function LoginPage() {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className="input w-full"
-                placeholder="admin"
+                placeholder={t("auth.username_placeholder")}
               />
             </div>
 
@@ -124,7 +125,7 @@ export default function LoginPage() {
         </form>
 
         <p className="mt-5 text-center text-xs text-muted">
-          v0.1.0 · secure admin access
+          {t("auth.secure_access", { version: "v0.1.0" })}
         </p>
         <div className="mt-1 flex justify-center">
           <SourceCodeLink />

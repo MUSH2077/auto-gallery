@@ -2,16 +2,18 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Search } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 
 import {
   ADMIN_LINK_MODULE,
   ADMIN_NAV_LINKS,
+  hasAdminPermission,
   type AdminNavLink,
 } from "@/lib/adminNavigation";
 import { useT } from "@/lib/i18n";
 import { usePresence } from "@/lib/motion";
 import { usePermissions } from "@/lib/usePermissions";
+import { SmartSearchInput } from "@/components/SmartSearchInput";
 
 type PaletteItem = AdminNavLink & { displayLabel: string; searchTarget?: boolean };
 
@@ -31,9 +33,9 @@ export default function CommandPalette({
   const [activeIndex, setActiveIndex] = useState(0);
 
   const availableLinks = useMemo(() => ADMIN_NAV_LINKS.filter((item) => {
+    if (item.topbarOnly) return false;
     if (item.adminOnly && !isAdmin) return false;
-    const module = ADMIN_LINK_MODULE[item.href];
-    return !module || has(module);
+    return hasAdminPermission(ADMIN_LINK_MODULE[item.href], has);
   }), [has, isAdmin]);
 
   const items = useMemo<PaletteItem[]>(() => {
@@ -50,7 +52,7 @@ export default function CommandPalette({
         return haystack.includes(normalized);
       })
       .slice(0, 10);
-    if (normalized && has("library")) {
+    if (normalized && (has("library") || has("subscriptions"))) {
       matched.push({
         href: `/admin/search?q=${encodeURIComponent(query.trim())}`,
         labelKey: "search.title",
@@ -77,6 +79,7 @@ export default function CommandPalette({
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       if (event.key === "Escape") {
         event.preventDefault();
         onClose();
@@ -112,16 +115,20 @@ export default function CommandPalette({
         aria-label={t("search.title")}
         className={`relative w-full max-w-xl overflow-hidden rounded-xl border border-border bg-surface shadow-overlay ${closing ? "overlay-panel-exit" : "overlay-panel"}`}
       >
-        <div className="flex items-center gap-3 border-b border-border px-4">
-          <Search className="h-[18px] w-[18px] shrink-0 text-muted" strokeWidth={1.8} aria-hidden />
-          <input
+        <div className="flex items-center gap-3 border-b border-border px-3 py-2">
+          <SmartSearchInput
             ref={inputRef}
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            className="h-12 min-w-0 flex-1 bg-transparent text-sm text-fg outline-none placeholder:text-placeholder"
+            onChange={setQuery}
+            scope="global"
+            showTokens={false}
+            className="min-w-0 flex-1"
             placeholder={t("search.placeholder")}
-            aria-controls="admin-command-results"
-            aria-activedescendant={items[activeIndex] ? `admin-command-${activeIndex}` : undefined}
+            ariaLabel={t("search.placeholder")}
+            onSubmit={(canonical) => {
+              router.push(`/admin/search?q=${encodeURIComponent(canonical)}`);
+              onClose();
+            }}
           />
           <kbd className="rounded border border-border bg-subtle px-1.5 py-0.5 font-mono text-[10px] text-muted">ESC</kbd>
         </div>
@@ -152,7 +159,7 @@ export default function CommandPalette({
           ))}
         </div>
         <div className="flex items-center gap-3 border-t border-border bg-subtle px-4 py-2 text-[10px] text-muted">
-          <span>↑↓ {t("common.select", "选择")}</span>
+          <span>↑↓ {t("common.select")}</span>
           <span>↵ {t("common.open")}</span>
           <span className="ml-auto">Ctrl/⌘ K</span>
         </div>

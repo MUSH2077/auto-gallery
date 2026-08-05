@@ -1,18 +1,27 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
-import { GitlleryPanel, Modal, PageShell, RepositoryCard, SourceBadge, StatusBadge, WorkGrid, type SlideItem } from "@/components";
+import { GitlleryPanel, Modal, MotionNumber, PageShell, RepositoryCard, SourceBadge, StatusBadge, SmartSearchInput, WorkMediaThumbnail, type SlideItem } from "@/components";
+import ActivityDotMatrix, { type ActivityDay } from "@/components/charts/ActivityDotMatrix";
+import BallotTally from "@/components/charts/BallotTally";
+import ChartFrame from "@/components/charts/ChartFrame";
+import HairlineSeries from "@/components/charts/HairlineSeries";
+import TickRows from "@/components/charts/TickRows";
+import { niceUnit } from "@/components/charts/chartMath";
+import type { ChartDatum, ChartSeriesPoint } from "@/components/charts/types";
 import { useSlideshow } from "@/lib/useSlideshow";
 import { POLL_IDLE_MS } from "@/lib/polling";
+import { motionConfig } from "@/lib/motion";
 import { Breadcrumb } from "@/components/Breadcrumb";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
-import { CHART_COLORS, SOURCE_COLORS } from "@/lib/sourceColors";
+import { quoteSearchValue, searchUrl } from "@/lib/search-query";
+import { adminRoutes } from "@/lib/adminRoutes";
 
 type TabKey = "overview" | "repositories" | "works" | "links";
 
@@ -24,51 +33,6 @@ function runningRepoCount(repos: CreatorRepository[]) {
   return repos.filter((r) => r.latest_job && ["pending", "downloading", "downloaded", "importing"].includes(r.latest_job.status)).length;
 }
 
-function HorizontalBarChart({ data, maxKey, labelKey, colorFn, onItemClick }: {
-  data: { [k: string]: any }[];
-  maxKey: string;
-  labelKey: string;
-  colorFn: (item: any, i: number) => string;
-  onItemClick?: (item: any) => void;
-}) {
-  const fmt = useI18nFormat();
-  const max = data.length > 0 ? Math.max(...data.map((d) => d[maxKey] as number)) : 1;
-  return (
-    <div className="space-y-2">
-      {data.map((item, i) => (
-        <button
-          key={`${item[labelKey]}-${i}`}
-          type="button"
-          onClick={() => onItemClick?.(item)}
-          disabled={!onItemClick}
-          className={`flex w-full items-center gap-2 text-xs ${onItemClick ? "rounded-md px-1 py-0.5 text-left hover:bg-subtle dark:hover:bg-subtle" : ""}`}
-        >
-          <span className="w-24 truncate text-right text-muted">{String(item[labelKey])}</span>
-          <div className="h-2 flex-1 overflow-hidden rounded-full bg-subtle dark:bg-border">
-            <div className="h-full rounded-full" style={{ width: `${((item[maxKey] as number) / max) * 100}%`, backgroundColor: colorFn(item, i) }} />
-          </div>
-          <span className="w-10 shrink-0 text-right font-mono text-muted">{fmt.number(item[maxKey] as number)}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function MonthStrip({ data }: { data: { month: string; count: number }[] }) {
-  if (!data.length) return null;
-  const max = Math.max(...data.map((d) => d.count), 1);
-  return (
-    <div className="flex h-12 items-end gap-[2px]">
-      {data.slice(-48).map((d) => (
-        <div key={d.month}
-          className="min-w-[3px] flex-1 rounded-t-sm bg-accent transition-opacity hover:opacity-75"
-          style={{ height: `${Math.max(2, (d.count / max) * 100)}%`, opacity: 0.3 + (d.count / max) * 0.7 }}
-          title={`${d.month}: ${d.count} works`} />
-      ))}
-    </div>
-  );
-}
-
 function WorkPreviewCard({ work }: { work: WorkListItem }) {
   const t = useT();
   const fmt = useI18nFormat();
@@ -77,7 +41,7 @@ function WorkPreviewCard({ work }: { work: WorkListItem }) {
     <Link href={`/admin/works/${work.id}`} className="group overflow-hidden rounded-md border border-border bg-white transition-colors hover:border-accent/50 dark:border-border dark:bg-surface dark:hover:border-accent/50">
       <div className="aspect-[4/3] bg-subtle">
         {assetId ? (
-          <img src={api.mediaUrl(assetId, "thumb")} alt={work.title || t("creator_detail.untitled")} className="h-full w-full object-cover" loading="lazy" decoding="async" />
+          <WorkMediaThumbnail assetId={assetId} hasVideo={work.has_video} alt={work.title || t("creator_detail.untitled")} className="h-full w-full object-cover" />
         ) : (
           <div className="flex h-full items-center justify-center text-xs text-muted">{t("works.na")}</div>
         )}
@@ -101,22 +65,42 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
   const t = useT();
   const fmt = useI18nFormat();
   const [page, setPage] = useState(0);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(
+    `creator:${creatorId}${selectedTag ? ` tag:${quoteSearchValue(selectedTag)}` : ""} sort:posted-desc`,
+  );
   const limit = 12;
 
   useEffect(() => {
     setPage(0);
-  }, [creatorId, selectedTag, search]);
+  }, [search]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.assistSearch({
+      before_cursor: search,
+      scope: "works",
+      composes: [
+        { key: "creator", value: creatorId, operation: "set" },
+        { key: "tag", value: selectedTag || null, operation: "set" },
+        { key: "sort", value: "posted-desc", operation: "set" },
+      ],
+    }).then((result) => {
+      if (!cancelled) setSearch(result.canonical_query || result.query);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // The existing free-text query is intentionally retained while contextual
+    // creator/tag tokens are updated by the server composer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [creatorId, selectedTag]);
 
   const filteredWorks = useQuery({
-    queryKey: ["creator-works-tab", creatorId, selectedTag, search, page],
-    queryFn: () => api.listWorks(page * limit, limit, {
-      creator_id: creatorId,
-      tag: selectedTag || undefined,
-      search: search || undefined,
-      sort_by: "posted_at",
-      sort_order: "desc",
-    }),
+    queryKey: ["search", "works", "creator-detail", search, page],
+    queryFn: async () => {
+      const result = await api.search(search, page * limit, limit, "works");
+      return result.groups.works || { total: 0, items: [] };
+    },
   });
 
   const slideshow = useSlideshow();
@@ -138,23 +122,24 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
                 {t("slideshow.open")}
               </button>
             )}
-            <Link href={`/admin/works?creator=${creatorId}${selectedTag ? `&tag=${encodeURIComponent(selectedTag)}` : ""}`} className="btn-ghost">
+            <Link href={searchUrl("/admin/works", search)} className="btn-ghost">
               {t("creator_detail.open_full_gallery")}
             </Link>
           </div>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          <input
+          <SmartSearchInput
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={setSearch}
+            scope="works"
             placeholder={t("works.search_title")}
-            className="input min-w-0 flex-1 md:max-w-xs"
+            className="min-w-0 flex-1 md:max-w-xl"
           />
           {selectedTag && (
             <button
               type="button"
               onClick={() => onTagChange("")}
-              className="inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent-subtle px-3 py-1.5 text-sm font-medium text-accent hover:bg-[#b6e3ff] dark:border-accent/40 dark:bg-accent-subtle dark:text-accent"
+              className="inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent-subtle px-3 py-1.5 text-sm font-medium text-accent hover:border-accent/60 hover:bg-subtle dark:border-accent/40 dark:bg-accent-subtle dark:text-accent"
               title={t("creator_detail.clear_tag_filter", { tag: selectedTag })}
             >
               <span className="max-w-[14rem] truncate">#{selectedTag}</span>
@@ -209,17 +194,54 @@ export default function CreatorDetailPage() {
   const [showAddLink, setShowAddLink] = useState(false);
   const [editing, setEditing] = useState(false);
   const [worksTag, setWorksTag] = useState("");
+  const [activityYear, setActivityYear] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
   const [editDisplay, setEditDisplay] = useState("");
   const [editDesc, setEditDesc] = useState("");
+  const [narrativeMotionEnabled, setNarrativeMotionEnabled] = useState(false);
+
+  useEffect(() => {
+    setNarrativeMotionEnabled(motionConfig.shouldAnimate());
+  }, []);
 
   const creator = useQuery({ queryKey: queryKeys.creators.detail(id), queryFn: () => api.getCreator(id) });
   const links = useQuery({ queryKey: queryKeys.creators.links(id), queryFn: () => api.listCreatorLinks(id) });
-  const timeline = useQuery({ queryKey: ["creator-timeline", id], queryFn: () => api.getCreatorTimeline(id), refetchInterval: POLL_IDLE_MS, staleTime: POLL_IDLE_MS });
   const stats = useQuery({ queryKey: ["creator-stats", id], queryFn: () => api.getCreatorStats(id), refetchInterval: POLL_IDLE_MS, staleTime: POLL_IDLE_MS });
+  const availableActivityYears = useMemo(() => {
+    if (!stats.data) return [];
+    const years = new Set(
+      stats.data.monthly_frequency
+        .map((point) => Number(point.month.slice(0, 4)))
+        .filter(Number.isFinite),
+    );
+    if (!years.size) years.add(new Date().getUTCFullYear());
+    return [...years].sort((left, right) => left - right);
+  }, [stats.data]);
+  useEffect(() => {
+    if (!availableActivityYears.length) return;
+    setActivityYear((current) => (
+      current !== null && availableActivityYears.includes(current)
+        ? current
+        : availableActivityYears[availableActivityYears.length - 1]
+    ));
+  }, [availableActivityYears]);
+  const timeline = useQuery({
+    queryKey: ["creator-timeline", id, activityYear],
+    queryFn: () => api.getCreatorTimeline(
+      id,
+      `${activityYear}-01-01`,
+      `${Number(activityYear) + 1}-01-01`,
+    ),
+    enabled: activityYear !== null,
+    refetchInterval: POLL_IDLE_MS,
+    staleTime: POLL_IDLE_MS,
+  });
   const works = useQuery({
     queryKey: ["creator-latest-works", id],
-    queryFn: () => api.listWorks(0, 6, { creator_id: id, sort_by: "posted_at", sort_order: "desc" }),
+    queryFn: async () => {
+      const result = await api.search(`creator:${id} sort:posted-desc`, 0, 6, "works");
+      return result.groups.works || { total: 0, items: [] };
+    },
     refetchInterval: 15000,
   });
   const overview = useQuery({
@@ -302,6 +324,54 @@ export default function CreatorDetailPage() {
 
   const c = creator.data;
   const st = stats.data;
+  const sourceChartData = useMemo<ChartDatum[]>(() => (
+    [...(st?.source_breakdown || [])]
+      .sort((left, right) => right.count - left.count || left.source.localeCompare(right.source))
+      .map((item) => ({
+        id: item.source,
+        label: item.source,
+        value: item.count,
+        colorRole: `source:${item.source}`,
+        description: t("charts.source_row_label", { source: item.source, count: item.count }),
+      }))
+  ), [st?.source_breakdown, t]);
+  const sourceUnit = niceUnit(
+    sourceChartData.reduce((maximum, item) => Math.max(maximum, item.value), 0),
+  );
+  const tagChartData = useMemo<ChartDatum[]>(() => (
+    [...(st?.tag_distribution || [])]
+      .sort((left, right) => right.count - left.count || left.tag.localeCompare(right.tag))
+      .slice(0, 6)
+      .map((item) => ({
+        id: item.tag,
+        label: item.tag,
+        value: item.count,
+        colorRole: "accent",
+        href: searchUrl("/admin/works", `type:work creator:${id} tag:${quoteSearchValue(item.tag)} sort:posted-desc`),
+        description: t("charts.tag_row_label", { tag: item.tag, count: item.count }),
+      }))
+  ), [id, st?.tag_distribution, t]);
+  const monthlyChartData = useMemo<ChartSeriesPoint[]>(() => (
+    [...(st?.monthly_frequency || [])]
+      .sort((left, right) => left.month.localeCompare(right.month))
+      .slice(-48)
+      .map((item) => ({
+        id: item.month,
+        label: item.month,
+        value: item.count,
+        description: t("charts.month_row_label", { month: item.month, count: item.count }),
+      }))
+  ), [st?.monthly_frequency, t]);
+  const sourceLeader = sourceChartData[0];
+  const tagLeader = tagChartData[0];
+  const monthlyPeak = monthlyChartData.reduce<ChartSeriesPoint | null>(
+    (current, point) => current === null || point.value > current.value ? point : current,
+    null,
+  );
+  const activityPeak = (timeline.data?.days || []).reduce<ActivityDay | null>(
+    (current, day) => current === null || day.total > current.total ? day : current,
+    null,
+  );
   const repos = overview.data?.repositories || [];
   const legalRepos = repos.filter((r) => r.is_repository);
   const decisionBySource = useMemo(() => {
@@ -326,10 +396,6 @@ export default function CreatorDetailPage() {
     ? `/admin/subscriptions/${overview.data.subscriptions[0].id}`
     : `/admin/subscriptions?q=${encodeURIComponent(c?.display_name || c?.name || "")}`;
 
-  const openWorksTag = (tag: string) => {
-    setWorksTag(tag);
-    setActiveTab("works");
-  };
   const creatorVisibility = c?.curation_state?.visibility || "visible";
 
   const tabs = useMemo(() => [
@@ -348,14 +414,17 @@ export default function CreatorDetailPage() {
   if (!c) return null;
 
   return (
-    <PageShell className="page-transition">
+    <PageShell>
       <Breadcrumb items={[
         { label: t("creators.title"), href: "/admin/creators" },
         { label: c.display_name || c.name },
       ]} />
       <div className="mb-6 flex flex-col gap-4 border-b border-border pb-5 dark:border-border md:flex-row md:items-end md:justify-between">
-        <div className="flex min-w-0 items-center gap-4">
-          <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full border border-border bg-gradient-to-br from-accent to-[#8250df] text-2xl font-semibold text-white dark:border-border">
+        <div
+          className={`${narrativeMotionEnabled ? "creator-narrative-item" : ""} flex min-w-0 items-center gap-4`}
+          style={{ "--chart-delay": "0ms" } as CSSProperties}
+        >
+          <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full border border-accent/30 bg-accent-subtle text-2xl font-semibold text-accent">
             {initials(c.display_name || c.name)}
           </div>
           <div className="min-w-0">
@@ -378,14 +447,17 @@ export default function CreatorDetailPage() {
             </div>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div
+          className={`${narrativeMotionEnabled ? "creator-narrative-item" : ""} flex flex-wrap gap-2`}
+          style={{ "--chart-delay": "90ms" } as CSSProperties}
+        >
           <button onClick={() => toggleFavorite.mutate()} className="btn-ghost">
             {c.is_favorite ? t("creator_detail.unstar") : t("creator_detail.star")}
           </button>
           {creatorVisibility === "visible" ? (
-            <button onClick={() => curateCreator.mutate("archive")} disabled={curateCreator.isPending} className="btn-ghost">Archive</button>
+            <button onClick={() => curateCreator.mutate("archive")} disabled={curateCreator.isPending} className="btn-ghost">{t("creator_detail.archive")}</button>
           ) : (
-            <button onClick={() => curateCreator.mutate("restore")} disabled={curateCreator.isPending} className="btn-ghost">Restore</button>
+            <button onClick={() => curateCreator.mutate("restore")} disabled={curateCreator.isPending} className="btn-ghost">{t("creator_detail.restore")}</button>
           )}
           <Link href={subscriptionHref} className="btn-ghost">
             {t("creator_detail.subscription")}
@@ -396,7 +468,10 @@ export default function CreatorDetailPage() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr]">
         <aside className="space-y-4">
-          <section className="card p-4">
+          <section
+            className={`${narrativeMotionEnabled ? "creator-narrative-item" : ""} card p-4`}
+            style={{ "--chart-delay": "140ms" } as CSSProperties}
+          >
             <h2 className="mb-2 text-sm font-semibold">{t("creator_detail.profile")}</h2>
             {c.description ? (
               <p className="whitespace-pre-wrap text-sm leading-6 text-fg">{c.description}</p>
@@ -404,28 +479,49 @@ export default function CreatorDetailPage() {
               <p className="text-sm text-muted">{t("creator_detail.no_description")}</p>
             )}
             <dl className="mt-4 space-y-2 border-t border-border pt-4 text-sm dark:border-border">
-              <div className="flex justify-between gap-3"><dt className="text-muted">{t("creator_detail.stat_works")}</dt><dd className="font-semibold">{st?.total_works != null ? fmt.number(st.total_works) : "-"}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted">{t("creator_detail.stat_assets")}</dt><dd className="font-semibold">{st?.total_assets != null ? fmt.number(st.total_assets) : "-"}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted">{t("creator_detail.stat_sources")}</dt><dd className="font-semibold">{st?.source_breakdown?.length ?? "-"}</dd></div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted">{t("creator_detail.stat_works")}</dt>
+                <dd className="font-semibold">
+                  {st?.total_works != null ? (
+                    <MotionNumber value={st.total_works} animateInitial format={(value) => fmt.number(value)} />
+                  ) : "-"}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted">{t("creator_detail.stat_assets")}</dt>
+                <dd className="font-semibold">
+                  {st?.total_assets != null ? (
+                    <MotionNumber value={st.total_assets} animateInitial format={(value) => fmt.number(value)} />
+                  ) : "-"}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted">{t("creator_detail.stat_sources")}</dt>
+                <dd className="font-semibold">
+                  {st?.source_breakdown ? (
+                    <MotionNumber value={st.source_breakdown.length} animateInitial format={(value) => fmt.number(value)} />
+                  ) : "-"}
+                </dd>
+              </div>
               <div className="flex justify-between gap-3"><dt className="text-muted">{t("creator_detail.created")}</dt><dd>{fmt.date(c.created_at)}</dd></div>
             </dl>
           </section>
 
           <section className="card p-4">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold">Curation</h2>
-              <Link href={`/admin/curation?subject_type=creator&subject_id=${id}`} className="text-sm text-accent hover:underline dark:text-accent">Open</Link>
+              <h2 className="text-sm font-semibold">{t("curation.title")}</h2>
+              <Link href={`${adminRoutes.curation}?subject_type=creator&subject_id=${id}`} className="text-sm text-accent hover:underline dark:text-accent">{t("common.open")}</Link>
             </div>
             {curationHistory.data?.items.length ? (
               <div className="space-y-3">
                 {curationHistory.data.items.map((commit) => (
                   <div key={commit.id} className="border-l-2 border-accent pl-3 text-xs dark:border-accent">
                     <div className="font-medium text-fg">{commit.message}</div>
-                    <div className="mt-0.5 text-muted">{commit.trigger} · {new Date(commit.occurred_at).toLocaleDateString()}</div>
+                    <div className="mt-0.5 text-muted">{commit.trigger} · {fmt.date(commit.occurred_at)}</div>
                   </div>
                 ))}
               </div>
-            ) : <p className="text-sm text-muted">No curation commits yet.</p>}
+            ) : <p className="text-sm text-muted">{t("curation.empty_title")}</p>}
           </section>
 
           <GitlleryPanel />
@@ -455,73 +551,128 @@ export default function CreatorDetailPage() {
         </aside>
 
         <section className="min-w-0">
-          <nav className="mb-4 flex gap-1 overflow-x-auto border-b border-border" aria-label="Creator sections">
+          <nav className="mb-4 grid grid-cols-2 gap-1 border-b border-border sm:flex sm:flex-wrap" aria-label={t("creator_detail.sections")}>
             {tabs.map((tab) => (
               <button key={tab.key} onClick={() => setActiveTab(tab.key)}
                 className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${activeTab === tab.key ? "border-danger font-semibold text-fg" : "border-transparent text-muted hover:text-fg dark:text-muted dark:hover:text-fg"}`}>
-                {tab.label}{tab.count !== undefined && <span className="ml-2 rounded-full bg-subtle px-2 py-0.5 text-xs font-medium text-muted dark:bg-border dark:text-muted">{tab.count}</span>}
+                {tab.label}{tab.count !== undefined && <span className="ml-2 rounded-full bg-subtle px-2 py-0.5 text-xs font-semibold text-fg">{tab.count}</span>}
               </button>
             ))}
           </nav>
 
           {activeTab === "overview" && (
             <div className="space-y-5">
-              <section className="card p-4">
-                <div className="mb-4 flex items-center justify-between gap-3">
-                  <h2 className="text-base font-semibold">{t("creator_detail.works_timeline")}</h2>
-                  <Link href={`/admin/works?creator=${id}`} className="text-sm text-accent hover:underline dark:text-accent">{t("creator_detail.view_all_works")}</Link>
-                </div>
-                <WorkGrid data={timeline.data} loading={timeline.isLoading} />
-              </section>
-
-              <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-                {st?.source_breakdown?.length ? (
-                  <section className="card p-4">
-                    <h2 className="mb-4 text-base font-semibold">{t("creator_detail.source_breakdown")}</h2>
-                    <HorizontalBarChart data={st.source_breakdown} maxKey="count" labelKey="source" colorFn={(d) => SOURCE_COLORS[d.source as string] || CHART_COLORS[0]} />
-                  </section>
-                ) : null}
-                {st?.tag_distribution?.length ? (
-                  <section className="card p-4">
-                    <h2 className="mb-4 text-base font-semibold">{t("creator_detail.tag_distribution")}</h2>
-                    <HorizontalBarChart
-                      data={st.tag_distribution.slice(0, 10)}
-                      maxKey="count"
-                      labelKey="tag"
-                      colorFn={(_, i) => CHART_COLORS[i % CHART_COLORS.length]}
-                      onItemClick={(item) => openWorksTag(String(item.tag))}
+              <ChartFrame
+                title={t("creator_detail.works_timeline")}
+                insight={activityYear && timeline.data
+                  ? activityPeak
+                    ? t("charts.activity_insight", {
+                      year: activityYear,
+                      date: fmt.date(`${activityPeak.date}T00:00:00Z`),
+                      count: activityPeak.total,
+                    })
+                    : t("charts.activity_insight_empty", { year: activityYear })
+                  : undefined}
+                description={t("charts.activity_encoding")}
+                actions={(
+                  <Link href={searchUrl("/admin/works", `creator:${id} sort:posted-desc`)} className="btn-ghost">
+                    {t("creator_detail.view_all_works")}
+                  </Link>
+                )}
+                footer={t("charts.creator_activity_footer")}
+                testId="creator-activity-chart"
+              >
+                {timeline.isPending || activityYear === null ? (
+                  <div className="h-44 animate-pulse rounded-md bg-subtle" aria-label={t("common.loading")} />
+                ) : timeline.error && !timeline.data ? (
+                  <div className="rounded-md border border-danger/30 bg-danger-subtle p-4" role="alert">
+                    <p className="font-semibold text-danger">{t("charts.activity_error")}</p>
+                    <p className="mt-1 break-words text-xs text-muted">{(timeline.error as Error).message}</p>
+                    <button type="button" className="btn-ghost mt-3" onClick={() => timeline.refetch()}>
+                      {t("common.retry")}
+                    </button>
+                  </div>
+                ) : timeline.data ? (
+                  <>
+                    {timeline.isRefetchError ? (
+                      <div className="mb-3 rounded-md border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning" role="status">
+                        {t("charts.activity_refresh_error")}
+                      </div>
+                    ) : null}
+                    <ActivityDotMatrix
+                      data={timeline.data}
+                      year={activityYear}
+                      availableYears={availableActivityYears}
+                      onYearChange={setActivityYear}
                     />
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      {st.tag_distribution.slice(0, 12).map((item) => (
-                        <button
-                          key={item.tag}
-                          type="button"
-                          onClick={() => openWorksTag(item.tag)}
-                          className="rounded-full border border-border bg-subtle px-2.5 py-1 text-xs font-medium text-accent hover:border-accent/40 hover:bg-accent-subtle dark:border-border dark:bg-subtle dark:text-accent dark:hover:bg-accent-subtle"
-                          title={t("creator_detail.search_tag_title", { tag: item.tag })}
-                        >
-                          #{item.tag}
-                        </button>
-                      ))}
-                    </div>
-                  </section>
+                  </>
+                ) : (
+                  <div className="rounded-md border border-border bg-subtle p-4 text-sm text-muted">
+                    {t("charts.activity_error")}
+                  </div>
+                )}
+              </ChartFrame>
+
+              <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-2">
+                {sourceChartData.length ? (
+                  <ChartFrame
+                    title={t("creator_detail.source_breakdown")}
+                    insight={sourceLeader
+                      ? t("charts.source_insight", {
+                        source: sourceLeader.label,
+                        count: sourceLeader.value,
+                      })
+                      : undefined}
+                    description={t("charts.source_encoding", { unit: sourceUnit })}
+                    footer={t("charts.creator_stats_footer")}
+                    testId="creator-source-chart"
+                  >
+                    <TickRows data={sourceChartData} />
+                  </ChartFrame>
+                ) : null}
+                {tagChartData.length ? (
+                  <ChartFrame
+                    title={t("creator_detail.tag_distribution")}
+                    insight={tagLeader
+                      ? t("charts.tag_insight", {
+                        tag: tagLeader.label,
+                        count: tagLeader.value,
+                        share: fmt.number(
+                          st?.total_works ? (tagLeader.value / st.total_works) * 100 : 0,
+                          { maximumFractionDigits: 1 },
+                        ),
+                      })
+                      : undefined}
+                    description={t("charts.tag_encoding")}
+                    footer={t("charts.creator_stats_footer")}
+                    testId="creator-tag-chart"
+                  >
+                    <BallotTally data={tagChartData} total={st?.total_works || 0} />
+                  </ChartFrame>
                 ) : null}
               </div>
 
-              {st?.monthly_frequency?.length ? (
-                <section className="card p-4">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h2 className="text-base font-semibold">{t("creator_detail.posting_frequency")}</h2>
-                    <span className="text-xs text-muted">{t("creator_detail.months_count", { count: st.monthly_frequency.length })}</span>
-                  </div>
-                  <MonthStrip data={st.monthly_frequency} />
-                </section>
+              {monthlyChartData.length ? (
+                <ChartFrame
+                  title={t("creator_detail.posting_frequency")}
+                  insight={monthlyPeak
+                    ? t("charts.monthly_insight", {
+                      month: monthlyPeak.label,
+                      count: monthlyPeak.value,
+                    })
+                    : undefined}
+                  description={t("charts.monthly_encoding")}
+                  footer={t("charts.creator_stats_footer")}
+                  testId="creator-monthly-chart"
+                >
+                  <HairlineSeries data={monthlyChartData} />
+                </ChartFrame>
               ) : null}
 
               <section className="card p-4">
                 <div className="mb-4 flex items-center justify-between">
                   <h2 className="text-base font-semibold">{t("creator_detail.latest_works")}</h2>
-                  <Link href={`/admin/works?creator=${id}`} className="text-sm text-accent hover:underline dark:text-accent">{t("creator_detail.open_works")}</Link>
+                  <Link href={searchUrl("/admin/works", `creator:${id} sort:posted-desc`)} className="text-sm text-accent hover:underline dark:text-accent">{t("creator_detail.open_works")}</Link>
                 </div>
                 {works.data?.items?.length ? (
                   <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
@@ -680,7 +831,7 @@ function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () =>
   });
   return (
     <div className="space-y-4">
-      <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.url_label")}</label><input value={url} onChange={(e) => setUrl(e.target.value)} className="input w-full" placeholder="https://..." /></div>
+      <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.url_label")}</label><input value={url} onChange={(e) => setUrl(e.target.value)} className="input w-full" placeholder={t("creator_detail.url_placeholder")} /></div>
       <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.type_label")}</label>
         <select value={linkType} onChange={(e) => setLinkType(e.target.value)} className="select w-full">
           {["website", "pixiv", "x", "iwara", "danbooru", "other"].map((o) => <option key={o} value={o}>{o}</option>)}

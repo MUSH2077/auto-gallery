@@ -112,9 +112,16 @@ async def test_download_and_import_jobs_sync_to_parent_child_task_runs():
             assert import_task.status == "running"
             assert import_task.parent_task_id == download_task.id
 
-            total, tasks = await svc.list_tasks(q="pixiv")
-            assert total >= 1
-            assert any(task.id == download_task.id for task in tasks)
+            from app.services.search import SearchService
+
+            result = await SearchService(db).search(
+                "pixiv",
+                scope="tasks",
+                permissions={"tasks"},
+            )
+            tasks = result["groups"]["tasks"]
+            assert tasks["total"] >= 1
+            assert any(task["id"] == str(download_task.id) for task in tasks["items"])
     finally:
         async with async_session() as db:
             await _clear_task_test_tables(db)

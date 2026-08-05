@@ -13,6 +13,8 @@ export const SOURCE_COLORS: Record<string, string> = {
   lofter: "#14B8A6",      // teal-500, matches gallery-dl tab
   weibo: "#F97316",       // orange-500, matches gallery-dl tab
   bilibili: "#06B6D4",    // cyan-500, matches gallery-dl tab
+  fanbox: "#F59E0B",      // amber-500
+  tumblr: "#6366F1",      // indigo-500
 
   // Reference
   danbooru_reference: "#B45309",
@@ -78,6 +80,3 @@ export function getSourceColor(source: string): string {
 export function getSourceBadgeColor(source: string): string {
   return SOURCE_BADGE_COLORS[source] || "bg-gray-100 text-gray-600 dark:bg-gray-900/30 dark:text-gray-400";
 }
-
-// Consistent chart color palette (ordered for visual distinction)
-export const CHART_COLORS = ["#0066FF", "#EC4899", "#B45309", "#EF4444", "#14B8A6", "#F97316", "#06B6D4", "#6B7280", "#1DA1F2", "#E60023"];

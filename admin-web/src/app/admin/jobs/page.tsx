@@ -1,21 +1,22 @@
 "use client";
 import Link from "next/link";
-import { Suspense, useState, useEffect, useMemo, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { Suspense, useState, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { useT, type TFunction } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, JobProgress, queryKeys, TaskRun } from "@/lib/api";
-import { PageHeader, PageShell, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, StatCard, PermissionGuard, CompactUrl, ErrorSummary, OverflowText, RowActionMenu } from "@/components";
+import { api, JobProgress, queryKeys, SEARCH_PAGE_SIZE, TaskRun, type SearchToken } from "@/lib/api";
+import { PageHeader, PageShell, Pagination, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, StatCard, PermissionGuard, CompactUrl, ErrorSummary, OverflowText, RowActionMenu, SmartSearchInput, SyncOutcomeNotice } from "@/components";
 import { TaskDetailDrawer, JobDetailDrawer, shortId } from "@/components/JobDrawers";
 import { useJobWebSocket } from "@/lib/useWebSocket";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { classifyJob, categoryBorderClass, estimatedRetryBackoff } from "@/lib/jobCategory";
 import { POLL_ACTIVE_MS as REFETCH_ACTIVE_MS, POLL_IDLE_MS as REFETCH_IDLE_MS } from "@/lib/polling";
 import { useStaggeredEntrance, type StaggeredEntranceProps } from "@/lib/motion";
+import { parseSyncOutcome } from "@/lib/syncOutcome";
 
 
-const PAGE_LIMIT = 200;
+const JOB_LIST_LIMIT = 200;
 
 const STATUS_OPTIONS = ["", "enqueued", "downloading", "paused", "downloaded", "importing", "complete", "failed", "stale", "cancelled"];
 const IMPORT_STATUS_OPTIONS = ["", "enqueued", "running", "complete", "failed", "stale"];
@@ -105,7 +106,7 @@ function JobLifecycle({ status }: { status: string }) {
         return (
           <div key={`${step}-${index}`} className="flex min-w-0 flex-1 items-center gap-1">
             <span
-              title={t(`jobs.lifecycle_${step}`, step)}
+              title={t(`jobs.lifecycle_${step}`)}
               className={`h-2 w-2 shrink-0 rounded-full transition-colors duration-slow ${
                 danger ? "bg-danger" : active ? "animate-pulse bg-accent" : done ? "bg-success" : "bg-border dark:bg-border"
               }`}
@@ -255,24 +256,10 @@ function JobRowShell({
       ? <CompactUrl value={detail} />
       : <OverflowText value={detail} className="text-xs text-muted" />
     : detail || <span className="text-xs text-muted">—</span>;
-  const calmError = Boolean(error && /no new content since last sync|already archived or empty/i.test(error));
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.target !== event.currentTarget) return;
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      onClick();
-    }
-  };
-
   return (
     <div className={entrance?.className} style={entrance?.style}>
       <div
-        role="button"
-        tabIndex={0}
-        aria-label={`${typeof typeLabel === "string" ? typeLabel : "Job"} ${shortId(id)}`}
         onClick={onClick}
-        onKeyDown={handleKeyDown}
         className={`card min-h-[68px] w-full min-w-0 cursor-pointer p-3 text-sm transition-colors hover:border-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${className}`}
       >
         <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 lg:grid-cols-[auto_minmax(11rem,0.8fr)_minmax(12rem,1.1fr)_minmax(10rem,0.8fr)_auto] lg:items-center">
@@ -284,7 +271,7 @@ function JobRowShell({
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
               <span className="truncate text-xs font-medium text-fg">{typeLabel}</span>
               {source || <span className="text-xs text-muted">—</span>}
-              <span className="font-mono text-[10px] text-placeholder">{shortId(id)}</span>
+              <span className="font-mono text-[10px] text-muted">{shortId(id)}</span>
             </div>
             <div className="mt-1"><RowMeta primary={primary} secondary={secondary} /></div>
           </div>
@@ -300,9 +287,7 @@ function JobRowShell({
         </div>
         {(error || result) && (
           <div className="mt-3 border-t border-border pt-2" onClick={(event) => event.stopPropagation()}>
-            {error
-              ? <ErrorSummary value={error} calm={calmError} />
-              : <ErrorSummary value={typeof result === "string" ? result : String(result || "")} calm />}
+            {error ? <ErrorSummary value={error} /> : result}
           </div>
         )}
       </div>
@@ -315,37 +300,46 @@ function JobsFilterPanel({
   activeFilterCount,
   lastUpdatedLabel,
   search,
-  status,
-  dlSource,
+  tokens,
   subscriptionSourceId,
   downloadJobId,
-  dlSort,
-  dlOrder,
   selectAll,
   statusOptions,
   onTabChange,
-  onUpdateParams,
+  onQueryChange,
+  onCompose,
   onClearFilters,
   onSelectAll,
+  maintenanceActions,
 }: {
   activeTab: JobsTab;
   activeFilterCount: number;
   lastUpdatedLabel: string;
   search: string;
-  status: string;
-  dlSource: string;
+  tokens: SearchToken[];
   subscriptionSourceId: string;
   downloadJobId: string;
-  dlSort: string;
-  dlOrder: string;
   selectAll: boolean;
   statusOptions: string[];
   onTabChange: (tab: JobsTab) => void;
-  onUpdateParams: (updates: Record<string, string | null>) => void;
+  onQueryChange: (query: string) => void;
+  onCompose: (edit: {
+    key: string;
+    value: string | null;
+    operation: "set" | "replace-group";
+    replace_values?: string[];
+  }) => void;
   onClearFilters: () => void;
   onSelectAll: () => void;
+  maintenanceActions?: ReactNode;
 }) {
   const t = useT();
+  const qualifierValue = (key: string) => tokens.find(
+    (token) => token.kind === "qualifier" && token.key === key && !token.negated,
+  )?.value || "";
+  const status = qualifierValue("status");
+  const dlSource = qualifierValue("source");
+  const sort = qualifierValue("sort") || "created-desc";
   return (
     <div className="mb-4 flex flex-col gap-2 rounded-md border border-border bg-surface p-2.5 dark:border-border dark:bg-surface">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -354,17 +348,24 @@ function JobsFilterPanel({
           {activeFilterCount > 0 && <span className="rounded-full bg-accent-subtle px-2 py-0.5 font-medium text-accent dark:bg-accent-subtle dark:text-accent">{t("jobs.active_filters", { count: activeFilterCount })}</span>}
           <span>{lastUpdatedLabel}</span>
           {activeFilterCount > 0 && <button onClick={onClearFilters} className="text-accent hover:underline dark:text-accent">{t("jobs.clear_filters")}</button>}
+          {maintenanceActions}
         </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <input value={search} onChange={(e) => onUpdateParams({ q: e.target.value || null })} className="input h-9 min-h-9 min-w-[220px] px-3 py-0 text-xs" placeholder={t("jobs.search_placeholder")} aria-label={t("jobs.search_placeholder")} />
-        <select value={status} onChange={(e) => onUpdateParams({ status: e.target.value || null })} className="select h-9 min-h-9 px-2 py-0 text-xs">
+        <SmartSearchInput
+          value={search}
+          onChange={onQueryChange}
+          scope="tasks"
+          className="w-full sm:min-w-[320px] sm:max-w-xl"
+          placeholder={t("jobs.search_placeholder")}
+        />
+        <select aria-label={t("jobs.filter_all_status")} value={status} onChange={(e) => onCompose({ key: "status", value: e.target.value || null, operation: "set" })} className="select h-11 min-h-11 px-2 py-0 text-xs">
           <option value="">{t("jobs.filter_all_status")}</option>
           {statusOptions.filter(Boolean).map((s) => <option key={s} value={s}>{statusLabel(t, s)}</option>)}
         </select>
         {activeTab !== "imports" && activeTab !== "admin" && (
-          <select value={dlSource} onChange={(e) => onUpdateParams({ source: e.target.value || null })} className="select h-9 min-h-9 px-2 py-0 text-xs">
+          <select aria-label={t("jobs.filter_all_source")} value={dlSource} onChange={(e) => onCompose({ key: "source", value: e.target.value || null, operation: "set" })} className="select h-11 min-h-11 px-2 py-0 text-xs">
             <option value="">{t("jobs.filter_all_source")}</option>
             {SOURCE_OPTIONS.filter(Boolean).map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
@@ -372,14 +373,13 @@ function JobsFilterPanel({
         {subscriptionSourceId && <span className="rounded-md border border-border px-2 py-1 text-xs font-mono dark:border-border">{t("jobs.repository")} {shortId(subscriptionSourceId)}</span>}
         {downloadJobId && <span className="rounded-md border border-border px-2 py-1 text-xs font-mono dark:border-border">{t("jobs.download_job")} {shortId(downloadJobId)}</span>}
         {activeTab === "downloads" && (
-          <select value={`${dlSort}-${dlOrder}`} onChange={(e) => { const [k, o] = e.target.value.split("-"); onUpdateParams({ sort: k === "created_at" && o === "desc" ? null : k, order: o === "desc" ? null : o }); }} className="select h-9 min-h-9 px-2 py-0 text-xs">
-            <option value="created_at-desc">{t("jobs.sort_newest")}</option>
-            <option value="created_at-asc">{t("jobs.sort_oldest")}</option>
-            <option value="status-asc">{t("jobs.sort_status")}</option>
-            <option value="source-asc">{t("jobs.sort_source")}</option>
+          <select aria-label={t("jobs.sort_label")} value={sort} onChange={(e) => onCompose({ key: "sort", value: e.target.value, operation: "set" })} className="select h-11 min-h-11 px-2 py-0 text-xs">
+            <option value="created-desc">{t("jobs.sort_newest")}</option>
+            <option value="created-asc">{t("jobs.sort_oldest")}</option>
+            <option value="updated-desc">{t("jobs.sort_updated")}</option>
           </select>
         )}
-        <button onClick={onSelectAll} className="inline-flex h-9 items-center justify-center rounded-md border border-border bg-surface px-3 text-xs font-medium text-fg hover:bg-subtle">{selectAll ? t("common.deselect_all") : t("common.select_all")}</button>
+        <button onClick={onSelectAll} className="inline-flex h-11 items-center justify-center rounded-md border border-border bg-surface px-3 text-xs font-medium text-fg hover:bg-subtle">{selectAll ? t("common.deselect_all") : t("common.select_all")}</button>
       </div>
     </div>
   );
@@ -388,112 +388,31 @@ function JobsFilterPanel({
 function JobsBatchToolbar({
   activeTab,
   selectedCount,
-  onRefresh,
   onApply,
-  onClear,
-  onKillStuck,
-  onRetryAllFailed,
-  connected,
-  wsStatus,
   isApplying,
-  isClearing,
-  isKillingStuck,
-  isRetryingAll,
 }: {
   activeTab: JobsTab;
   selectedCount: number;
-  onRefresh: () => void;
-  onApply: (action: BatchAction, filters: { source?: string; status?: string }) => void;
-  onClear: (statuses: string[]) => void;
-  onKillStuck: () => void;
-  onRetryAllFailed: () => void;
-  connected: boolean;
-  wsStatus: string;
+  onApply: (action: BatchAction) => void;
   isApplying: boolean;
-  isClearing: boolean;
-  isKillingStuck: boolean;
-  isRetryingAll: boolean;
 }) {
   const t = useT();
-  const [source, setSource] = useState("");
-  const [status, setStatus] = useState("");
   const [action, setAction] = useState<BatchAction | "">("");
-  const [filterBatchOpen, setFilterBatchOpen] = useState(false);
   const actions = BATCH_ACTIONS_BY_TAB[activeTab];
-  const statusOptions = activeTab === "imports" ? IMPORT_STATUS_OPTIONS : activeTab === "downloads" ? STATUS_OPTIONS : TASK_STATUS_OPTIONS;
-  const canFilterBatch = activeTab === "downloads" || activeTab === "imports";
-  const hasSourceFilter = activeTab === "downloads";
-  const showBatchControls = selectedCount > 0 || filterBatchOpen;
+  const showBatchControls = selectedCount > 0;
 
   useEffect(() => {
-    setSource("");
-    setStatus("");
-    setFilterBatchOpen(false);
     setAction((current) => current && !BATCH_ACTIONS_BY_TAB[activeTab].includes(current) ? "" : current);
   }, [activeTab]);
 
+  if (!showBatchControls) return null;
+
   return (
     <div className="mb-4 rounded-lg border border-border bg-surface p-2.5">
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <button onClick={onRefresh} className="btn-ghost text-xs">{t("jobs.refresh")}</button>
-        <span
-          className={`inline-flex h-9 items-center gap-1 rounded-full border px-3 text-xs ${
-            connected
-              ? "border-success/30 bg-success-subtle text-success"
-              : "border-border bg-subtle text-muted"
-          }`}
-          title={connected ? t("jobs.live_connected") : t("jobs.live_polling_title")}
-        >
-          <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-current" : "animate-pulse bg-current"}`} />
-          {connected ? t("jobs.live_connected") : wsStatus === "connecting" ? t("jobs.live_connecting") : t("jobs.live_polling")}
-        </span>
-      {selectedCount > 0 && (
-        <span className="inline-flex h-9 items-center rounded-md border border-border bg-subtle px-3 text-xs font-medium text-fg">
-          {t("common.selected_count", { count: selectedCount })}
-        </span>
-      )}
-        <span className="min-w-2 flex-1" />
-        {selectedCount === 0 && canFilterBatch && (
-          <button
-            type="button"
-            onClick={() => setFilterBatchOpen((open) => !open)}
-            className="btn-ghost text-xs"
-            aria-expanded={filterBatchOpen}
-          >
-            {t("jobs.batch_filter_scope", "批量处理当前筛选")}
-          </button>
-        )}
-        {activeTab === "downloads" && (
-          <RowActionMenu
-            label={t("jobs.maintenance_actions", "维护操作")}
-            items={[
-              { label: t("jobs.clear_failed"), onSelect: () => onClear(["failed", "stale"]), tone: "danger", disabled: isClearing },
-              { label: t("jobs.clear_complete"), onSelect: () => onClear(["complete"]), disabled: isClearing },
-              { label: t("jobs.kill_stuck"), onSelect: onKillStuck, tone: "danger", disabled: isKillingStuck },
-              { label: t("jobs.retry_all_failed"), onSelect: onRetryAllFailed, disabled: isRetryingAll },
-            ]}
-          />
-        )}
-      </div>
-      {showBatchControls && (
-        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 border-t border-border pt-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <span className="badge shrink-0">
-            {selectedCount > 0
-              ? t("common.selected_count", { count: selectedCount })
-              : t("jobs.current_filter_scope", "当前筛选范围")}
+            {t("common.selected_count", { count: selectedCount })}
           </span>
-          {hasSourceFilter && selectedCount === 0 && (
-            <select value={source} onChange={(e) => setSource(e.target.value)} className="select h-9 min-h-9 px-2 py-0 text-xs" aria-label={t("jobs.filter_all_source")}>
-              <option value="">{t("jobs.filter_all_source")}</option>
-              {SOURCE_OPTIONS.filter(Boolean).map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          )}
-          {canFilterBatch && selectedCount === 0 && (
-            <select value={status} onChange={(e) => setStatus(e.target.value)} className="select h-9 min-h-9 px-2 py-0 text-xs" aria-label={t("jobs.filter_all_status")}>
-              <option value="">{t("jobs.filter_all_status")}</option>
-              {statusOptions.filter(Boolean).map((s) => <option key={s} value={s}>{statusLabel(t, s)}</option>)}
-            </select>
-          )}
           <select value={action} onChange={(e) => setAction(e.target.value as BatchAction | "")} className="select h-9 min-h-9 min-w-0 px-2 py-0 text-xs" aria-label={t("jobs.batch_action")}>
             <option value="">{t("jobs.batch_action_placeholder")}</option>
             {actions.map((item) => (
@@ -503,11 +422,7 @@ function JobsBatchToolbar({
           <button
             onClick={() => {
               if (!action) return;
-              if (
-                selectedCount === 0
-                && !confirm(t("jobs.batch_filter_confirm", "确认对当前筛选匹配的全部任务执行此操作？"))
-              ) return;
-              onApply(action, { source, status });
+              onApply(action);
             }}
             disabled={!action || isApplying}
             className="btn-primary text-xs"
@@ -515,7 +430,6 @@ function JobsBatchToolbar({
             {isApplying ? t("jobs.batch_running") : t("jobs.batch_apply")}
           </button>
         </div>
-      )}
     </div>
   );
 }
@@ -612,6 +526,8 @@ function TaskRunRow({
   const clickableDownload = task.subject_type === "download_job" && subjectId;
   const clickableImport = task.subject_type === "import_job" && subjectId;
   const isActive = isActiveTask(task.status);
+  const outcome = parseSyncOutcome(task.result_data);
+  const isFailure = ["failed", "stale"].includes(task.status);
   return (
     <div className={indent ? "pl-6" : undefined}>
       <JobRowShell
@@ -619,16 +535,16 @@ function TaskRunRow({
         entrance={entrance}
         status={task.status}
         typeLabel={operationLabel(t, task.operation_type, task.kind)}
-        select={<input type="checkbox" checked={selected.has(task.id)} onClick={(e) => e.stopPropagation()} onChange={() => onToggleSelect(task.id)} className="h-4 w-4 shrink-0 rounded border-border" aria-label={t("jobs.select_task", { id: shortId(task.id) })} />}
+        select={<input type="checkbox" checked={selected.has(task.id)} onClick={(e) => e.stopPropagation()} onChange={() => onToggleSelect(task.id)} className="h-6 w-6 shrink-0 rounded border-border" aria-label={t("jobs.select_task", { id: shortId(task.id) })} />}
         source={task.source ? <SourceBadge source={task.source} /> : undefined}
         primary={task.title || task.operation_type || task.kind}
         secondary={task.subject_type && task.subject_id ? `${task.subject_type} · ${shortId(task.subject_id)}` : task.queue_name || task.rq_job_id}
         detail={task.source_url || task.queue_name || task.rq_job_id || task.subject_type}
-        progress={isActive ? progress || fallbackProgress(task.progress_stage || task.status) : progress}
+        progress={isActive ? progress || fallbackProgress(task.progress_stage || task.status) : null}
         activeSince={isActive && !progress && task.created_at ? task.created_at : null}
         timestamp={task.created_at ? fmt.time(task.created_at) : "—"}
-        error={task.error_log}
-        result={task.result_data?.message}
+        error={isFailure ? task.error_log : null}
+        result={outcome ? <SyncOutcomeNotice outcome={outcome} /> : task.result_data?.message}
         onClick={() => openTaskDetail(task.id)}
         actions={(
           <>
@@ -905,7 +821,7 @@ function JobsContent() {
   }, []);
 
   // WebSocket: invalidate queries on status change, update progress on progress events
-  const { connected, status: wsStatus } = useJobWebSocket({
+  useJobWebSocket({
     onStatusChange: (msg) => {
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
       qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
@@ -932,13 +848,12 @@ function JobsContent() {
 
   const tabParam = sp.get("tab");
   const activeTab = (tabParam === "downloads" || tabParam === "imports" || tabParam === "admin" ? tabParam : "all") as JobsTab;
-  const status = sp.get("status") || "";
-  const dlSource = sp.get("source") || "";
   const subscriptionSourceId = sp.get("subscription_source_id") || "";
   const downloadJobId = sp.get("download_job_id") || "";
   const search = sp.get("q") || "";
-  const dlSort = sp.get("sort") || "created_at";
-  const dlOrder = sp.get("order") || "desc";
+  const rawPage = Number.parseInt(sp.get("page") || "1", 10);
+  const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+  const taskOffset = (page - 1) * SEARCH_PAGE_SIZE;
   const selectedDownloadJobId = sp.get("job");
   const selectedImportJobId = sp.get("import_job");
   const selectedTaskId = sp.get("task");
@@ -962,23 +877,63 @@ function JobsContent() {
   const openDownloadDetail = (id: string) => updateParams({ tab: "downloads", job: id, import_job: null, task: null }, false);
   const openImportDetail = (id: string) => updateParams({ tab: "imports", import_job: id, job: null, task: null }, false);
   const closeDetail = () => updateParams({ job: null, import_job: null, task: null });
-  const handleTabChange = (tab: JobsTab) => {
+  const searchAssist = useQuery({
+    queryKey: ["search-assist", "tasks", search],
+    queryFn: () => api.assistSearch({ before_cursor: search, scope: "tasks" }),
+    staleTime: 15_000,
+  });
+  const searchTokens = searchAssist.data?.parsed?.tokens || [];
+  const qualifierValue = (key: string) => searchTokens.find(
+    (token) => token.kind === "qualifier" && token.key === key && !token.negated,
+  )?.value || "";
+  const status = qualifierValue("status");
+
+  const composeQuery = async (edit: {
+    key: string;
+    value: string | null;
+    operation: "set" | "replace-group";
+    replace_values?: string[];
+  }) => {
+    const result = await api.assistSearch({
+      before_cursor: search,
+      scope: "tasks",
+      compose: edit,
+    });
+    updateParams({ q: (result.canonical_query || result.query) || null, page: null });
+  };
+
+  const handleTabChange = async (tab: JobsTab) => {
     setSelected(new Set());
-    if (tab === "all") updateParams({ tab: null, status: null, job: null, import_job: null, task: null });
-    if (tab === "downloads") updateParams({ tab: "downloads", status: null, import_job: null, task: null });
-    if (tab === "imports") updateParams({ tab: "imports", status: null, job: null, task: null, source: null });
-    if (tab === "admin") updateParams({ tab: "admin", status: null, job: null, import_job: null, task: null, source: null });
+    const kind = tab === "all" ? null : tab === "downloads" ? "download" : tab === "imports" ? "import" : "admin";
+    const result = await api.assistSearch({
+      before_cursor: search,
+      scope: "tasks",
+      compose: {
+        key: "kind",
+        value: kind,
+        operation: "replace-group",
+        replace_values: ["download", "import", "admin"],
+      },
+    });
+    updateParams({
+      tab: tab === "all" ? null : tab,
+      q: (result.canonical_query || result.query) || null,
+      status: null,
+      source: null,
+      sort: null,
+      order: null,
+      job: null,
+      import_job: null,
+      task: null,
+      page: null,
+    });
   };
 
   const dlParams = useMemo(() => ({
-    status: activeTab === "downloads" ? status || undefined : undefined,
-    source: dlSource || undefined,
     subscription_source_id: subscriptionSourceId || undefined,
     q: search || undefined,
-    sort_by: dlSort,
-    sort_order: dlOrder,
-    offset: 0, limit: PAGE_LIMIT,
-  }), [activeTab, status, dlSource, subscriptionSourceId, search, dlSort, dlOrder]);
+    offset: 0, limit: JOB_LIST_LIMIT,
+  }), [subscriptionSourceId, search]);
 
   const downloads = useQuery({
     queryKey: [...queryKeys.downloadJobs.all, dlParams],
@@ -1003,7 +958,7 @@ function JobsContent() {
       download_job_id: downloadJobId || undefined,
       q: search || undefined,
       offset: 0,
-      limit: PAGE_LIMIT,
+      limit: JOB_LIST_LIMIT,
     }),
     enabled: activeTab === "imports",
     refetchInterval: (!status || isActiveImport(status)) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
@@ -1011,18 +966,12 @@ function JobsContent() {
   const downloadEntrance = useStaggeredEntrance((downloads.data ?? []).map((job) => job.id));
   const importEntrance = useStaggeredEntrance((imports.data?.items ?? []).map((job) => job.id));
 
-  const taskParams = useMemo(() => ({
-    kind: activeTab === "admin" ? "admin" : undefined,
-    status: status || undefined,
-    source: activeTab === "admin" ? undefined : dlSource || undefined,
-    q: search || undefined,
-    offset: 0,
-    limit: PAGE_LIMIT,
-  }), [activeTab, status, dlSource, search]);
-
   const tasks = useQuery({
-    queryKey: [...queryKeys.tasks.all, taskParams],
-    queryFn: () => api.listTasks(taskParams),
+    queryKey: ["search", "tasks", search, taskOffset, SEARCH_PAGE_SIZE],
+    queryFn: async () => {
+      const result = await api.search(search, taskOffset, SEARCH_PAGE_SIZE, "tasks");
+      return result.groups.tasks || { total: 0, items: [] };
+    },
     enabled: activeTab === "all" || activeTab === "admin",
     refetchInterval: (!status || isActiveTask(status)) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
   });
@@ -1070,12 +1019,9 @@ function JobsContent() {
   }, [imports.data]);
 
   const activeFilterCount = [
-    status,
-    activeTab === "admin" ? "" : dlSource,
+    ...searchTokens,
     subscriptionSourceId,
     downloadJobId,
-    search,
-    activeTab === "downloads" && (dlSort !== "created_at" || dlOrder !== "desc"),
   ].filter(Boolean).length;
   const lastUpdated = Math.max(downloads.dataUpdatedAt || 0, imports.dataUpdatedAt || 0, tasks.dataUpdatedAt || 0, workbench.dataUpdatedAt || 0);
   const currentRows = useMemo(() => {
@@ -1099,12 +1045,6 @@ function JobsContent() {
     });
   }, [currentPageIds]);
 
-  const refreshAll = () => {
-    qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
-    qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
-    qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
-    qc.invalidateQueries({ queryKey: queryKeys.workbench });
-  };
   const clearFilters = () => updateParams({
     status: null,
     source: null,
@@ -1113,6 +1053,7 @@ function JobsContent() {
     q: null,
     sort: null,
     order: null,
+    page: null,
   });
 
   // --- Mutations ---
@@ -1194,7 +1135,7 @@ function JobsContent() {
   };
 
   const batchJobs = useMutation({
-    mutationFn: async ({ action, filters }: { action: BatchAction; filters: { source?: string; status?: string } }) => {
+    mutationFn: async ({ action }: { action: BatchAction }) => {
       if (selected.size > 0) {
         const selectedRows = currentRows.filter((row: { id: string }) => selected.has(row.id)) as Array<{ id: string; status?: string }>;
         if (activeTab === "downloads") {
@@ -1214,17 +1155,6 @@ function JobsContent() {
         return runSelectedTaskBatch(selectedRows.map((row) => row.id), action);
       }
 
-      if (activeTab === "downloads") {
-        const batchFilters: Record<string, string> = {};
-        if (filters.source) batchFilters.source = filters.source;
-        if (filters.status) batchFilters.status = filters.status;
-        return api.batchDownloadJobsByFilter(batchFilters, action);
-      }
-      if (activeTab === "imports") {
-        const batchFilters: Record<string, string> = {};
-        if (filters.status) batchFilters.status = filters.status;
-        return api.batchImportJobsByFilter(batchFilters, action);
-      }
       toast.warning({ message: t("jobs.select_rows_first") });
       return { succeeded: 0, failed: 0, total_matched: 0 };
     },
@@ -1269,11 +1199,11 @@ function JobsContent() {
       : TASK_STATUS_OPTIONS;
 
   return (
-    <PageShell size="wide">
+    <PageShell>
       <PageHeader title={t("jobs.title")} description={t("jobs.desc")} />
 
       {workbench.data && (
-        <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+        <div data-page-primary-content className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
           <StatCard label={t("jobs.summary_active")} value={workbench.data.queue.active_download_count + workbench.data.queue.active_import_count} sub={t("jobs.summary_active_sub")} tone="active" />
           <StatCard label={t("jobs.summary_queued")} value={workbench.data.queue.default} sub={t("jobs.summary_queued_sub")} />
           <StatCard label={t("jobs.summary_importing")} value={workbench.data.queue.active_import_count} sub={t("jobs.summary_importing_sub")} tone={workbench.data.queue.active_import_count ? "active" : "neutral"} />
@@ -1285,17 +1215,8 @@ function JobsContent() {
       <JobsBatchToolbar
         activeTab={activeTab}
         selectedCount={selected.size}
-        onRefresh={refreshAll}
-        onApply={(action, filters) => batchJobs.mutate({ action, filters })}
-        onClear={handleClear}
-        onKillStuck={() => killStuck.mutate()}
-        onRetryAllFailed={() => retryAllFailed.mutate()}
-        connected={connected}
-        wsStatus={wsStatus}
+        onApply={(action) => batchJobs.mutate({ action })}
         isApplying={batchJobs.isPending}
-        isClearing={clearDL.isPending}
-        isKillingStuck={killStuck.isPending}
-        isRetryingAll={retryAllFailed.isPending}
       />
 
       <JobsFilterPanel
@@ -1303,18 +1224,27 @@ function JobsContent() {
         activeFilterCount={activeFilterCount}
         lastUpdatedLabel={t("jobs.last_refreshed", { time: lastUpdated ? fmt.time(new Date(lastUpdated).toISOString()) : "—" })}
         search={search}
-        status={status}
-        dlSource={dlSource}
+        tokens={searchTokens}
         subscriptionSourceId={subscriptionSourceId}
         downloadJobId={downloadJobId}
-        dlSort={dlSort}
-        dlOrder={dlOrder}
         selectAll={pageAllSelected}
         statusOptions={statusOptions}
         onTabChange={handleTabChange}
-        onUpdateParams={updateParams}
+        onQueryChange={(query) => updateParams({ q: query || null, page: null })}
+        onCompose={composeQuery}
         onClearFilters={clearFilters}
         onSelectAll={handleSelectAll}
+        maintenanceActions={activeTab === "downloads" ? (
+          <RowActionMenu
+            label={t("jobs.maintenance_actions")}
+            items={[
+              { label: t("jobs.clear_failed"), onSelect: () => handleClear(["failed", "stale"]), tone: "danger", disabled: clearDL.isPending },
+              { label: t("jobs.clear_complete"), onSelect: () => handleClear(["complete"]), disabled: clearDL.isPending },
+              { label: t("jobs.kill_stuck"), onSelect: () => killStuck.mutate(), tone: "danger", disabled: killStuck.isPending },
+              { label: t("jobs.retry_all_failed"), onSelect: () => retryAllFailed.mutate(), disabled: retryAllFailed.isPending },
+            ]}
+          />
+        ) : undefined}
       />
 
       {activeTab === "all" && (
@@ -1345,6 +1275,15 @@ function JobsContent() {
         />
       )}
 
+      {(activeTab === "all" || activeTab === "admin") && tasks.data ? (
+        <Pagination
+          page={page}
+          pageSize={SEARCH_PAGE_SIZE}
+          total={tasks.data.total}
+          onPageChange={(nextPage) => updateParams({ page: nextPage === 1 ? null : String(nextPage) }, false)}
+        />
+      ) : null}
+
       {/* Download Jobs list */}
       {activeTab === "downloads" && <section className="mb-8">
         <h3 className="mb-2 flex items-center gap-3 text-base font-semibold">
@@ -1358,6 +1297,7 @@ function JobsContent() {
           <div className="space-y-1">
             {downloads.data.map((j: any, index: number) => {
               const active = isActiveDownload(j.status);
+              const outcome = parseSyncOutcome(j.outcome);
               const progress = active
                 ? downloadProgress[j.id] || (j.progress_data as JobProgress | null) || fallbackProgress(j.pipeline_stage || j.status)
                 : null;
@@ -1370,13 +1310,13 @@ function JobsContent() {
                     id={j.id}
                     status={j.status}
                     typeLabel={operationLabel(t, j.operation_type, "download")}
-                    select={<input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="h-4 w-4 shrink-0 rounded border-border" aria-label={t("jobs.select_download", { id: shortId(j.id) })} />}
+                    select={<input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="h-6 w-6 shrink-0 rounded border-border" aria-label={t("jobs.select_download", { id: shortId(j.id) })} />}
                     source={j.source ? <SourceBadge source={j.source} /> : undefined}
                     primary={j.subscription_id ? (
                       <Link
                         href={`/admin/subscriptions/${j.subscription_id}`}
                         onClick={(e) => e.stopPropagation()}
-                        className="text-accent hover:underline dark:text-accent"
+                        className="inline-flex min-h-6 items-center text-accent hover:underline dark:text-accent"
                         title={j.creator_name || j.subscription_name || j.subscription_id}
                       >
                         {subscriptionLabel}
@@ -1386,7 +1326,7 @@ function JobsContent() {
                       <Link
                         href={`/admin/subscriptions/${j.subscription_id}`}
                         onClick={(e) => e.stopPropagation()}
-                        className="text-muted hover:underline dark:text-muted"
+                        className="inline-flex min-h-6 items-center text-muted hover:underline dark:text-muted"
                         title={j.subscription_name || j.subscription_id}
                       >
                         {subscriptionSecondary}
@@ -1408,7 +1348,8 @@ function JobsContent() {
                         {fmt.time(j.created_at)}
                       </>
                     )}
-                    error={j.error_log}
+                    error={["failed", "stale"].includes(j.status) ? j.error_log : null}
+                    result={outcome ? <SyncOutcomeNotice outcome={outcome} /> : null}
                     className={(() => { const cls = categoryBorderClass(classifyJob(j.status, j.retry_count, 3)); return `${cls ? `border-l-2 ${cls}` : ""} ${flashIds.has(j.id) ? "row-flash" : ""}`.trim(); })()}
                     onClick={() => openDownloadDetail(j.id)}
                     actions={(
@@ -1423,7 +1364,7 @@ function JobsContent() {
                           <RowButton tone="primary" onClick={() => { setRetryId(j.id); retryDL.mutate(j.id); }} disabled={retryDL.isPending}>{t("jobs.retry")}</RowButton>
                         )}
                         <RowActionMenu
-                          label={t("common.more_actions", "更多操作")}
+                          label={t("common.more_actions")}
                           items={[
                             {
                               label: t("jobs.imports"),
@@ -1473,10 +1414,10 @@ function JobsContent() {
                     id={j.id}
                     status={j.status}
                     typeLabel={operationLabel(t, j.operation_type, "import")}
-                    select={<input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="h-4 w-4 shrink-0 rounded border-border" aria-label={t("jobs.select_import", { id: shortId(j.id) })} />}
+                    select={<input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="h-6 w-6 shrink-0 rounded border-border" aria-label={t("jobs.select_import", { id: shortId(j.id) })} />}
                     source={j.source ? <SourceBadge source={j.source} /> : undefined}
                     primary={j.subscription_id ? (
-                      <Link href={`/admin/subscriptions/${j.subscription_id}`} onClick={(e) => e.stopPropagation()} className="text-accent hover:underline dark:text-accent" title={j.creator_name || j.subscription_name || undefined}>
+                      <Link href={`/admin/subscriptions/${j.subscription_id}`} onClick={(e) => e.stopPropagation()} className="inline-flex min-h-6 items-center text-accent hover:underline dark:text-accent" title={j.creator_name || j.subscription_name || undefined}>
                         {j.creator_name || j.subscription_name || shortId(j.subscription_id)}
                       </Link>
                     ) : "—"}
@@ -1492,14 +1433,14 @@ function JobsContent() {
                     progress={progress}
                     activeSince={active ? j.created_at : null}
                     timestamp={fmt.time(j.created_at)}
-                    error={j.error_log}
+                    error={["failed", "stale"].includes(j.status) ? j.error_log : null}
                     className={`${active ? "border-l-2 border-l-accent" : j.status === "failed" ? "border-l-2 border-l-danger" : ""} ${flashIds.has(j.id) ? "row-flash" : ""}`.trim()}
                     onClick={() => openImportDetail(j.id)}
                     actions={(
                       <>
                         {(j.status === "failed" || j.status === "stale") && <RowButton tone="primary" onClick={() => { setRetryId(j.id); retryIM.mutate(j.id); }} disabled={retryIM.isPending}>{t("jobs.retry")}</RowButton>}
                         <RowActionMenu
-                          label={t("common.more_actions", "更多操作")}
+                          label={t("common.more_actions")}
                           items={[
                             {
                               label: t("jobs.open_download"),

@@ -37,29 +37,30 @@ def test_delete_work_moves_to_trash_instead_of_hard_delete(monkeypatch):
     assert calls["cache"] == "works:*"
 
 
-def test_list_works_passes_curation_visibility_to_repository(monkeypatch):
+def test_list_works_uses_canonical_search_query(monkeypatch):
     from app.api import works
 
     captured = {}
 
-    class FakeRepo:
+    class FakeSearchService:
         def __init__(self, db):
             captured["db"] = db
 
-        async def list_all(self, **kwargs):
-            captured["kwargs"] = kwargs
-            return [], 0
+        async def search(self, query, offset, limit, **kwargs):
+            captured.update(query=query, offset=offset, limit=limit, kwargs=kwargs)
+            return {"groups": {"works": {"total": 0, "items": []}}}
 
-    monkeypatch.setattr(works, "WorkRepository", FakeRepo)
-    monkeypatch.setattr(works, "cache_get", lambda _key: None)
-    monkeypatch.setattr(works, "cache_set", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(works, "SearchService", FakeSearchService)
 
     result = asyncio.run(works.list_works(
-        curation_visibility="trashed", user=SimpleNamespace(nsfw_visible=True), db=object(),
+        q="is:trashed",
+        user=SimpleNamespace(nsfw_visible=True, is_admin=True, permissions=[]),
+        db=object(),
     ))
 
     assert result == {"total": 0, "items": []}
-    assert captured["kwargs"]["curation_visibility"] == "trashed"
+    assert captured["query"] == "is:trashed"
+    assert captured["kwargs"]["scope"] == "works"
 
 
 def test_batch_curate_restore_uses_curation_service(monkeypatch):

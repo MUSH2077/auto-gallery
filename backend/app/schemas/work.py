@@ -19,6 +19,7 @@ class WorkList(BaseModel):
     creator_name: str | None = None
     creator_id: str | None = None
     has_ugoira: bool = False
+    has_video: bool = False
     preview_asset_ids: list[str] = []
     is_favorite: bool = False
     curation_visibility: str = "visible"

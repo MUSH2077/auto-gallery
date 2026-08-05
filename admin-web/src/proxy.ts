@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { resolveLegacyAdminRoute } from "@/lib/adminRoutes";
 
 const TOKEN_COOKIE = "ag_token";
 const LOGIN = "/admin/login";
@@ -35,6 +36,17 @@ function isPublicPath(pathname: string): boolean {
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const token = request.cookies.get(TOKEN_COOKIE)?.value;
+  const legacyRedirect = resolveLegacyAdminRoute(pathname);
+
+  if (legacyRedirect) {
+    const destination = request.nextUrl.clone();
+    destination.pathname = legacyRedirect.pathname;
+    for (const [key, value] of Object.entries(legacyRedirect.query || {})) {
+      destination.searchParams.set(key, value);
+    }
+    if (legacyRedirect.hash) destination.hash = legacyRedirect.hash;
+    return NextResponse.redirect(destination, 308);
+  }
 
   if (isPublicPath(pathname)) {
     if (pathname === LOGIN && token) {

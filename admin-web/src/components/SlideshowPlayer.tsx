@@ -38,6 +38,9 @@ import { usePresence, motionTokens } from "@/lib/motion";
 import { useShowcaseConfig } from "@/lib/showcase/config";
 import { useT } from "@/lib/i18n";
 import { ArrowIcon } from "@/components/WorkViewerParts";
+import { Pause, Play, X } from "lucide-react";
+import { resolveMediaKind } from "@/lib/media";
+import { VideoBadge } from "@/components/MediaAssetRenderer";
 
 export interface SlideItem {
   assetId: string;
@@ -52,37 +55,25 @@ export interface SlideItem {
 // (Task 5) — bounded per slide, resets the moment that slide loads cleanly.
 const MAX_LOAD_RETRY_STREAK = 2;
 
-async function fetchPreviewUrl(workId: string, assetId: string): Promise<string | null> {
+async function fetchPreviewAsset(workId: string, assetId: string): Promise<WorkAsset | null> {
   try {
     const assets: WorkAsset[] = await api.getWorkAssets(workId);
-    return assets.find((a) => a.id === assetId)?.preview_url ?? null;
+    return assets.find((a) => a.id === assetId) ?? null;
   } catch {
     return null;
   }
 }
 
 function PlayIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden>
-      <path d="M8 5v14l11-7z" />
-    </svg>
-  );
+  return <Play className="h-5 w-5" fill="currentColor" aria-hidden="true" />;
 }
 
 function PauseIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden>
-      <path d="M6 5h4v14H6zM14 5h4v14h-4z" />
-    </svg>
-  );
+  return <Pause className="h-5 w-5" fill="currentColor" aria-hidden="true" />;
 }
 
 function CloseIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-      <path d="M6 6l12 12M18 6L6 18" />
-    </svg>
-  );
+  return <X className="h-5 w-5" aria-hidden="true" />;
 }
 
 function SlideLayer({ item, gen, front, kenBurns, dwellMs }: {
@@ -94,6 +85,7 @@ function SlideLayer({ item, gen, front, kenBurns, dwellMs }: {
 }) {
   const t = useT();
   const [url, setUrl] = useState<string | null>(null);
+  const [videoPoster, setVideoPoster] = useState(false);
   const [broken, setBroken] = useState(false);
   const retryRef = useRef(0);
   const cancelledRef = useRef(false);
@@ -104,6 +96,7 @@ function SlideLayer({ item, gen, front, kenBurns, dwellMs }: {
     cancelledRef.current = false;
     retryRef.current = 0;
     setUrl(null);
+    setVideoPoster(false);
     setBroken(false);
     // The back slot doesn't need a signed URL until it is actually shown:
     // every place that assigns this slot a new (gen, workId, assetId) also
@@ -115,10 +108,22 @@ function SlideLayer({ item, gen, front, kenBurns, dwellMs }: {
     // without its own gen changing, and re-running this effect then would
     // wipe the url/broken state mid-fade-out.
     if (!front) return;
-    fetchPreviewUrl(workId, assetId).then((resolved) => {
+    fetchPreviewAsset(workId, assetId).then((asset) => {
       if (cancelledRef.current) return;
-      if (resolved) setUrl(resolved);
-      else setBroken(true);
+      if (!asset) {
+        setBroken(true);
+        return;
+      }
+      const video = resolveMediaKind(asset) === "video";
+      const resolved = video
+        ? asset.poster_url || asset.thumb_url
+        : asset.preview_url;
+      if (!resolved) {
+        setBroken(true);
+        return;
+      }
+      setVideoPoster(video);
+      setUrl(resolved);
     });
     return () => {
       cancelledRef.current = true;
@@ -136,10 +141,22 @@ function SlideLayer({ item, gen, front, kenBurns, dwellMs }: {
       setBroken(true);
       return;
     }
-    fetchPreviewUrl(workId, assetId).then((resolved) => {
+    fetchPreviewAsset(workId, assetId).then((asset) => {
       if (cancelledRef.current) return;
-      if (resolved) setUrl(resolved);
-      else setBroken(true);
+      if (!asset) {
+        setBroken(true);
+        return;
+      }
+      const video = resolveMediaKind(asset) === "video";
+      const resolved = video
+        ? asset.poster_url || asset.thumb_url
+        : asset.preview_url;
+      if (!resolved) {
+        setBroken(true);
+        return;
+      }
+      setVideoPoster(video);
+      setUrl(resolved);
     });
   }, [workId, assetId]);
 
@@ -150,11 +167,20 @@ function SlideLayer({ item, gen, front, kenBurns, dwellMs }: {
           key={gen}
           src={url}
           alt={item.title || ""}
-          className={`max-h-screen max-w-full object-contain ${front && kenBurns ? "slide-kenburns" : ""}`}
-          style={front && kenBurns ? ({ "--slide-dwell": `${dwellMs}ms` } as CSSProperties) : undefined}
+          className={`max-h-screen max-w-full object-contain ${front && kenBurns && !videoPoster ? "slide-kenburns" : ""}`}
+          style={front && kenBurns && !videoPoster ? ({ "--slide-dwell": `${dwellMs}ms` } as CSSProperties) : undefined}
           onError={handleError}
         />
       )}
+      {url && !broken && videoPoster && front ? (
+        <a
+          href={`/admin/works/${workId}`}
+          className="absolute bottom-20 left-1/2 z-10 inline-flex min-h-11 -translate-x-1/2 items-center gap-2 rounded-md border border-white/20 bg-black/75 px-4 text-sm font-medium text-white hover:bg-black/90 focus-visible:ring-2 focus-visible:ring-white"
+        >
+          <VideoBadge />
+          {t("media.open_video")}
+        </a>
+      ) : null}
       {broken && <div className="text-sm text-white/50">{t("works.na")}</div>}
     </div>
   );
@@ -311,7 +337,7 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
         // branch below is explicit; nothing here falls through to default
         // browser tab behavior.
         const focusables = el.querySelectorAll<HTMLElement>(
-          'input:not([disabled]), button:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          'a[href], input:not([disabled]), button:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
         );
         if (!focusables.length) return;
         const first = focusables[0];

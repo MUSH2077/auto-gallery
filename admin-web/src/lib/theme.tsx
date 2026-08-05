@@ -100,9 +100,9 @@ export function ThemeToggle() {
   const cycle: Theme[] = ["light", "dark", "system"];
   const next = cycle[(cycle.indexOf(theme) + 1) % cycle.length];
   const labels: Record<Theme, string> = {
-    light: t("theme.light", "Light"),
-    dark: t("theme.dark", "Dark"),
-    system: t("theme.system", "System"),
+    light: t("theme.light"),
+    dark: t("theme.dark"),
+    system: t("theme.system"),
   };
   const Icon = theme === "dark" ? Moon : theme === "system" ? Monitor : Sun;
 

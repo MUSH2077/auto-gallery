@@ -3,45 +3,42 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { PageHeader, PageShell, ErrorState, ConfirmDialog, PermissionGuard } from "@/components";
-import { useT, useI18n } from "@/lib/i18n";
+import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import Link from "next/link";
 
 export default function SettingsPage() {
   const toast = useToast();
   const t = useT();
-  const { lang, setLang } = useI18n();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
   const reindex = useMutation({
     mutationFn: api.reindexSearch,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.admin.settings }); setConfirmReindex(false); toast.success({ message: "Reindex started" }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.admin.settings }); setConfirmReindex(false); toast.success({ message: t("settings.reindex_started") }); },
     onError: (e: Error) => { setConfirmReindex(false); toast.error({ message: e.message }); },
   });
   const [confirmReindex, setConfirmReindex] = useState(false);
 
   const cards = [
-    { href: "/admin/settings/appearance", title: t("settings.appearance", "外观"), desc: t("settings.appearance.desc", "主题、调色板、作品预览与浏览密度。") },
+    { href: "/admin/settings/appearance", title: t("settings.appearance"), desc: t("settings.appearance.desc") },
     { href: "/admin/settings/showcase", title: t("showcase_settings.title"), desc: t("showcase_settings.desc") },
     { href: "/admin/settings/gallerydl", title: t("settings.gallerydl"), desc: t("settings.gallerydl.desc") },
     { href: "/admin/settings/scheduler-defaults", title: t("settings.scheduler_defaults"), desc: t("settings.scheduler_defaults.desc") },
-    { href: "/admin/settings/subscription-defaults", title: t("settings.subscription_defaults", "订阅默认值"), desc: t("settings.subscription_defaults.desc", "默认同步间隔与调度器行为") },
-    { href: "/admin/settings/download-defaults", title: t("settings.download_defaults", "下载任务默认值"), desc: t("settings.download_defaults.desc", "超时、重试、并行下载数等") },
+    { href: "/admin/settings/subscription-defaults", title: t("settings.subscription_defaults"), desc: t("settings.subscription_defaults.desc") },
+    { href: "/admin/settings/download-defaults", title: t("settings.download_defaults"), desc: t("settings.download_defaults.desc") },
     { href: "/admin/settings/dedup", title: t("settings.dedup"), desc: t("settings.dedup.desc") },
     { href: "/admin/settings/proxy", title: t("settings.proxy"), desc: t("settings.proxy.desc") },
-    { href: "/admin/settings/auth-status", title: t("settings.auth"), desc: t("settings.auth.desc") },
-    { href: "/admin/settings/data-mgmt", title: t("settings.data_mgmt"), desc: t("settings.data_mgmt.desc") },
     { href: "/admin/settings/logs", title: t("settings.logs"), desc: t("settings.logs.desc") },
     { href: "/admin/settings/backup", title: t("settings.backup"), desc: t("settings.backup.desc") },
   ];
 
   return (
     <PermissionGuard module="system">
-    <PageShell size="normal" className="page-transition">
+    <PageShell>
       <PageHeader title={t("settings.title")} description={t("settings.desc_default")} />
 
       {/* Config Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+      <div data-page-primary-content className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-2">
         {cards.map((c) => (
           <Link key={c.href} href={c.href}
             className="card-interactive p-6 block">
@@ -50,33 +47,6 @@ export default function SettingsPage() {
           </Link>
         ))}
       </div>
-
-      {/* Language */}
-      <section className="mb-8">
-        <h2 className="section-title mb-3">{t("settings.language")}</h2>
-        <div className="card p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-fg">{t("settings.language")}</p>
-              <p className="mt-1 text-xs text-muted">{t("settings.language.desc")}</p>
-            </div>
-            <div className="segmented-control">
-              <button
-                onClick={() => setLang("zh")}
-                className={`segment ${lang === "zh" ? "segment-active" : ""}`}
-              >
-                中文
-              </button>
-              <button
-                onClick={() => setLang("en")}
-                className={`segment ${lang === "en" ? "segment-active" : ""}`}
-              >
-                English
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
 
       {/* Search Index */}
       <section className="mb-8">

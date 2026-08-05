@@ -93,6 +93,25 @@ const WORKBENCH = {
         created_at: "2026-07-28T08:25:00Z",
         updated_at: "2026-07-28T08:29:00Z",
       },
+      {
+        id: "download-no-changes",
+        subscription_id: "subscription-3",
+        subscription_source_id: "source-3",
+        source: "pixiv",
+        source_url: "https://www.pixiv.net/users/10000003",
+        creator_name: "Quiet Archive",
+        status: "complete",
+        pipeline_stage: "post_download",
+        progress_data: { stage: "post_download", percent: 90 },
+        outcome: {
+          code: "no_changes",
+          metadata_count: 0,
+          media_count: 0,
+          completed_at: "2026-07-28T08:27:00Z",
+        },
+        created_at: "2026-07-28T08:26:00Z",
+        updated_at: "2026-07-28T08:27:00Z",
+      },
     ],
     import_jobs: [
       {
@@ -242,9 +261,11 @@ test("dashboard links, refresh, job navigation, and retry controls work", async 
 
   await expect(page.getByRole("heading", { name: "Recently added works" })).toBeVisible();
   await expect(page.getByTestId("dashboard-status-scheduler")).toHaveAttribute("href", "/admin/scheduler");
-  await expect(page.getByTestId("dashboard-status-failed")).toHaveAttribute("href", "/admin/jobs?status=failed");
+  await expect(page.getByTestId("dashboard-status-failed")).toHaveAttribute("href", "/admin/jobs?q=status%3Afailed");
   await expect(page.getByRole("link", { name: "Open Harbor Light Study" })).toHaveAttribute("href", "/admin/works/work-harbor");
   await expect(page.locator('a[href*="job=download-failed"]').first()).toHaveAttribute("href", /job=download-failed/);
+  await expect(page.getByText("No new works", { exact: true })).toBeVisible();
+  await expect(page.getByText("Sync completed; no new works were found to import.")).toBeVisible();
 
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect.poll(() => calls.some((call) => call === "GET /api/v1/system/workbench?refresh=true")).toBe(true);

@@ -11,7 +11,7 @@ from app.models.work_tag import WorkTag
 from app.models.tag import Tag
 from app.models.asset_source import AssetSource
 from app.models.storage_artifact import StorageArtifact
-from app.schemas.creator import CreatorRead
+from app.services.sync_outcome import download_job_outcome
 
 logger = logging.getLogger(__name__)
 
@@ -20,33 +20,6 @@ class CreatorService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.repo = CreatorRepository(db)
-
-    async def _search_creator_ids(self, search: str) -> list[UUID] | None:
-        try:
-            from app.services.search import _client, CREATORS_INDEX
-            client = _client()
-            result = client.index(CREATORS_INDEX).search(search, limit=500)
-            hits = getattr(result, "hits", []) or []
-            ids = [UUID(h["id"]) for h in hits if h.get("id")]
-            return ids if ids else None
-        except Exception:
-            return None
-
-    async def list_creators(self, offset: int = 0, limit: int = 50,
-                            search: str | None = None,
-                            is_active: bool | None = None,
-                            has_danbooru: bool | None = None,
-                            has_subscription: bool | None = None,
-                            is_favorite: bool | None = None):
-        search_ids = await self._search_creator_ids(search) if search else None
-        creators, total = await self.repo.list_all(offset, limit,
-                                        search=search, search_ids=search_ids,
-                                        is_active=is_active,
-                                        has_danbooru=has_danbooru,
-                                        has_subscription=has_subscription,
-                                        is_favorite=is_favorite)
-        items = [CreatorRead.model_validate(c, from_attributes=True) for c in creators]
-        return {"items": items, "total": total}
 
     async def toggle_favorite(self, creator_id: UUID):
         creator = await self.get_creator(creator_id)
@@ -316,6 +289,7 @@ class CreatorService:
                     "updated_at": latest_job.updated_at.isoformat() if latest_job.updated_at else None,
                     "error_log_excerpt": (latest_job.error_log or "")[:240] or None,
                 }
+                latest_job_payload["outcome"] = download_job_outcome(latest_job)
 
             is_repository = bool(can_download and url_valid and ss.source_url)
             repositories.append({

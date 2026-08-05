@@ -32,6 +32,8 @@ NAS 和 Linux 主机。响应式管理工作台覆盖创作者、来源仓库、
   发布时间可进一步加分，歧义候选进入人工审核。
 - **可视化浏览。** 通过响应式作品网格、创作者存储树、标签气泡、搜索、幻灯片和可选展示页
   浏览大规模收藏。
+- **由用户发起的视频播放。** MP4 与 WebM 资产会生成 WebP 封面用于快速浏览，并只在授权点击后
+  使用浏览器原生控件播放；GIF 继续作为动图展示。
 - **可访问的管理体验。** 支持中英文、模块权限、键盘导航、触屏目标、响应式布局、深色模式
   与降低动效。
 
@@ -124,6 +126,7 @@ Sources
 
 - [文档索引](docs/README.md)
 - [部署与升级](docs/setup.zh.md)
+- [局域网 API 契约](docs/api/README.zh.md)
 - [架构](docs/architecture.zh.md)
 - [Provider 开发](docs/providers.zh.md)
 - [开发指南](docs/development.zh.md)

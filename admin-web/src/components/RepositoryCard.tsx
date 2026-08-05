@@ -6,8 +6,10 @@ import type { KeyboardEvent, MouseEvent } from "react";
 import type { CreatorRepository, RepositoryLatestJob, SchedulerDecisionItem } from "@/lib/api";
 import { scheduleModeLabel, schedulerDecisionLabel, useI18nFormat } from "@/lib/i18n-format";
 import { useT } from "@/lib/i18n";
+import { adminRoutes } from "@/lib/adminRoutes";
 import SourceBadge from "./SourceBadge";
 import StatusBadge from "./StatusBadge";
+import { SyncOutcomeBadge } from "./SyncOutcomeBadge";
 
 type RepoLike = Pick<CreatorRepository,
   "id" | "subscription_id" | "source" | "source_display_name" | "source_creator_id" |
@@ -58,8 +60,9 @@ function JobPill({ job }: { job?: RepositoryLatestJob | null }) {
   const t = useT();
   if (!job) return <span className="text-xs text-muted">{t("repo.no_jobs")}</span>;
   return (
-    <Link href={`/admin/jobs`} className="inline-flex">
+    <Link href={`/admin/jobs`} className="inline-flex flex-wrap items-center gap-1.5">
       <StatusBadge status={job.status} />
+      {job.outcome && <SyncOutcomeBadge outcome={job.outcome} />}
     </Link>
   );
 }
@@ -106,7 +109,7 @@ export default function RepositoryCard({
   const running = !!repo.latest_job && ["pending", "downloading", "downloaded", "importing"].includes(repo.latest_job.status);
   const legal = repo.is_repository;
   const disabledReason = !repo.can_download ? t("repo.provider_cannot_download") : !repo.url_valid ? t("repo.invalid_url") : null;
-  const detailHref = `/admin/repositories/${repo.id}`;
+  const detailHref = adminRoutes.repository(repo.id);
 
   const openDetail = () => router.push(detailHref);
   const handleCardClick = (event: MouseEvent<HTMLElement>) => {
@@ -162,7 +165,7 @@ export default function RepositoryCard({
             </div>
           )}
           {disabledReason && <p className="mt-2 text-xs text-warning dark:text-warning">{disabledReason}</p>}
-          {repo.latest_job?.error_log_excerpt && (
+          {repo.latest_job?.error_log_excerpt && ["failed", "stale"].includes(repo.latest_job.status) && (
             <p className="mt-2 line-clamp-2 rounded-md bg-danger-subtle px-2 py-1 text-xs text-danger dark:bg-danger-subtle dark:text-danger">
               {repo.latest_job.error_log_excerpt}
             </p>

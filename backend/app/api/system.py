@@ -8,13 +8,15 @@ from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from app.auth import RequirePermission
-from sqlalchemy import and_, select, func
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
 from app.jobs.subscription_sync import schedule_decision_snapshot
 from app.models.creator import Creator
+from app.models.asset import Asset
+from app.models.asset_source import AssetSource
 from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
 from app.models.source_creator import SourceCreator
@@ -24,6 +26,7 @@ from app.models.work import Work
 from app.models.work_source import WorkSource
 from app.providers import registry
 from app.services.settings import get_download_defaults, get_scheduler_config
+from app.services.sync_outcome import download_job_outcome
 
 try:
     from zoneinfo import ZoneInfo
@@ -395,7 +398,22 @@ async def workbench_summary(
         select(Work).order_by(Work.created_at.desc()).limit(5)
     )).scalars().all())
     work_context: dict = {}
+    video_work_ids: set = set()
     if latest_works:
+        video_work_ids = set((await db.execute(
+            select(WorkSource.work_id)
+            .join(AssetSource, AssetSource.work_source_id == WorkSource.id)
+            .join(Asset, Asset.id == AssetSource.asset_id)
+            .where(
+                WorkSource.work_id.in_([work.id for work in latest_works]),
+                or_(
+                    Asset.mime_type.like("video/%"),
+                    Asset.file_name.ilike("%.mp4"),
+                    Asset.file_name.ilike("%.webm"),
+                ),
+            )
+            .distinct()
+        )).scalars().all())
         work_context_rows = list((await db.execute(
             select(
                 WorkSource.work_id,
@@ -486,6 +504,7 @@ async def workbench_summary(
                 "status": j.status,
                 "pipeline_stage": j.pipeline_stage,
                 "progress_data": j.progress_data,
+                "outcome": download_job_outcome(j),
                 "created_at": _iso(j.created_at),
                 "updated_at": _iso(j.updated_at),
                 "error_log_excerpt": _excerpt(j.error_log),
@@ -512,6 +531,7 @@ async def workbench_summary(
                 "id": str(w.id),
                 "title": w.title,
                 "thumbnail_asset_id": str(w.thumbnail_asset_id) if w.thumbnail_asset_id else None,
+                "has_video": w.id in video_work_ids,
                 "source": (work_context.get(w.id) or {}).get("source"),
                 "creator_name": (work_context.get(w.id) or {}).get("creator_name"),
                 "created_at": _iso(w.created_at),

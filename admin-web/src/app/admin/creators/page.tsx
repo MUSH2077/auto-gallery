@@ -1,15 +1,16 @@
 "use client";
 import { useState, useMemo, useEffect, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys } from "@/lib/api";
+import { api, queryKeys, type SearchQualifierToken } from "@/lib/api";
 import { useStaggeredEntrance } from "@/lib/motion";
-import { PageHeader, PageSection, EmptyState, ErrorState, ConfirmDialog, Modal, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityList, EntityRow, RowActionMenu } from "@/components";
+import { PageHeader, PageSection, EmptyState, ErrorState, ConfirmDialog, Modal, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityList, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { useToast } from "@/components/Toast";
 import { usePermissions } from "@/lib/usePermissions";
+import { Star } from "lucide-react";
 
 type FilterMode = "all" | "active" | "inactive" | "has_danbooru" | "has_subscription" | "no_subscription" | "favorites";
 
@@ -45,11 +46,11 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
   return (
     <div className="space-y-4">
       <div>
-        <label className="block text-sm font-medium mb-1">{t("creators.source_url_label") || "来源 URL"}</label>
+        <label className="block text-sm font-medium mb-1">{t("creators.source_url_label")}</label>
         <input value={urlInput} onChange={(e) => handleUrlPaste(e.target.value)}
           className="input w-full font-mono"
-          placeholder="https://www.pixiv.net/users/123456 或 https://x.com/username" />
-        <p className="mt-1 text-xs text-muted">粘贴 URL 自动提取创作者名。支持 Pixiv / X / Iwara / Danbooru / Weibo / Lofter / Bilibili。</p>
+          placeholder={t("creators.source_url_placeholder")} />
+        <p className="mt-1 text-xs text-muted">{t("creators.source_url_hint")}</p>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
@@ -58,7 +59,7 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">{t("creators.display_name_label")}</label>
-          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="input w-full" placeholder="可选显示名" />
+          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="input w-full" placeholder={t("creators.display_name_placeholder")} />
         </div>
       </div>
       <div><label className="block text-sm font-medium mb-1">{t("creators.description_label")}</label><textarea value={description} onChange={(e) => setDescription(e.target.value)} className="textarea w-full" rows={2} /></div>
@@ -72,20 +73,6 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
       {error && <p className="text-sm text-danger dark:text-danger">{error.message}</p>}
     </div>
   );
-}
-
-function buildFilters(mode: FilterMode, search: string) {
-  const f: Record<string, string | boolean | undefined> = {};
-  if (search) f.search = search;
-  switch (mode) {
-    case "active": f.is_active = true; break;
-    case "inactive": f.is_active = false; break;
-    case "has_danbooru": f.has_danbooru = true; break;
-    case "has_subscription": f.has_subscription = true; break;
-    case "no_subscription": f.has_subscription = false; break;
-    case "favorites": f.is_favorite = true; break;
-  }
-  return f;
 }
 
 function CreatorsContent() {
@@ -102,7 +89,6 @@ function CreatorsContent() {
 
   // Filter state derived from URL
   const search = sp.get("q") ?? "";
-  const filter = (sp.get("filter") as FilterMode) ?? "all";
   const page = Number(sp.get("p") ?? "0");
 
   const [showCreate, setShowCreate] = useState(false);
@@ -144,27 +130,46 @@ function CreatorsContent() {
     { key: "favorites", label: t("creators.filter_favorites") },
   ], [t]);
 
-  const filters = useMemo(() => buildFilters(filter, search), [filter, search]);
-
-  const creatorCount = useQuery({ queryKey: queryKeys.creators.count, queryFn: () => api.countCreators() });
-  const creators = useQuery({
-    queryKey: queryKeys.creators.list(page, limit, filters),
-    queryFn: () => api.listCreators(page * limit, limit, filters as any),
+  const creatorsQuery = useQuery({
+    queryKey: [...queryKeys.creators.all, "compound-search", page, search],
+    queryFn: () => api.search(search, page * limit, limit, "creators"),
     placeholderData: (previousData) => previousData,
   });
+  const creators = {
+    ...creatorsQuery,
+    data: creatorsQuery.data?.groups.creators
+      ? { items: creatorsQuery.data.groups.creators.items, total: creatorsQuery.data.groups.creators.total }
+      : undefined,
+  };
+  const qualifierTokens = (creatorsQuery.data?.parsed.tokens || []).filter(
+    (token): token is SearchQualifierToken => token.kind === "qualifier",
+  );
+  const isValues = qualifierTokens.filter((token) => token.key === "is" && !token.negated).map((token) => token.value);
+  const hasTokens = qualifierTokens.filter((token) => token.key === "has");
+  const filter: FilterMode = isValues.includes("active")
+    ? "active"
+    : isValues.includes("inactive")
+      ? "inactive"
+      : isValues.includes("favorite")
+        ? "favorites"
+        : hasTokens.some((token) => token.value === "danbooru" && !token.negated)
+          ? "has_danbooru"
+          : hasTokens.some((token) => token.value === "subscription" && token.negated)
+            ? "no_subscription"
+            : hasTokens.some((token) => token.value === "subscription" && !token.negated)
+              ? "has_subscription"
+              : "all";
   const creatorItems = creators.data?.items || [];
   const creatorEntrance = useStaggeredEntrance(creatorItems.map((creator) => creator.id));
 
   useEffect(() => {
     if (notify.operationJob?.kind !== "danbooru-import-all" || notify.operationJob.status !== "completed") return;
     creators.refetch();
-    creatorCount.refetch();
   }, [notify.operationJob?.jobId, notify.operationJob?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (notify.batchJob?.status !== "completed") return;
     creators.refetch();
-    creatorCount.refetch();
   }, [notify.batchJob?.jobId, notify.batchJob?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refreshCreatorViews = () => {
@@ -212,27 +217,53 @@ function CreatorsContent() {
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.creators.all }),
   });
 
-  const handleFilterChange = (mode: FilterMode) => {
-    updateParams({ filter: mode === "all" ? null : mode });
+  const setSearchQuery = (next: string) => {
+    setInputVal(next);
+    updateParams({ q: next || null });
   };
+  const filterComposer = useSearchBatchComposer({ value: inputVal, scope: "creators", onChange: setSearchQuery });
 
-  const handleSearchChange = (value: string) => {
-    setInputVal(value);
+  const handleFilterChange = (mode: FilterMode) => {
+    const composes: Parameters<typeof filterComposer.mutate>[0] = [
+      { key: "is", value: null, operation: "replace-group", replace_values: ["active", "inactive", "favorite"] },
+      { key: "has", value: null, operation: "replace-group", replace_values: ["danbooru", "subscription"] },
+    ];
+    if (mode === "active" || mode === "inactive") {
+      composes.push({ key: "is", value: mode, operation: "add" });
+    } else if (mode === "favorites") {
+      composes.push({ key: "is", value: "favorite", operation: "add" });
+    } else if (mode === "has_danbooru") {
+      composes.push({ key: "has", value: "danbooru", operation: "add" });
+    } else if (mode === "has_subscription" || mode === "no_subscription") {
+      composes.push({ key: "has", value: "subscription", negated: mode === "no_subscription", operation: "add" });
+    }
+    filterComposer.mutate(composes);
   };
 
   return (
-    <PageShell size="normal">
-      <PageHeader title={t("creators.title")} description={t("creators.count", "0 creators").replace("{count}", String(creatorCount.data?.count ?? 0))}>
-        <div className="flex gap-2">
+    <PageShell>
+      <PageHeader
+        title={t("creators.title")}
+        description={t("creators.count").replace("{count}", String(creators.data?.total ?? 0))}
+        secondaryActions={
           <button onClick={() => router.push("/admin/creators/duplicates")} className="btn-ghost">{t("creators.duplicates")}</button>
-          {canCurate && <button onClick={() => setShowCreate(true)} className="btn-primary">{t("creators.new")}</button>}
-        </div>
-      </PageHeader>
+        }
+        primaryAction={canCurate ? <button onClick={() => setShowCreate(true)} className="btn-primary">{t("creators.new")}</button> : undefined}
+      />
 
       {/* Toolbar */}
+      <div data-page-primary-content>
       <FilterBar>
-        <input value={inputVal} onChange={(e) => handleSearchChange(e.target.value)} placeholder={t("creators.search")} className="input w-56 py-1.5" />
-        <div className="segmented-control">
+        <SmartSearchInput
+          value={inputVal}
+          onChange={setInputVal}
+          scope="creators"
+          placeholder={t("creators.search")}
+          ariaLabel={t("creators.search")}
+          showTokens={false}
+          className="w-full sm:w-72"
+        />
+        <div className="segmented-control max-w-full flex-wrap">
           {FILTERS.map((f) => (
             <button key={f.key} onClick={() => handleFilterChange(f.key)}
               className={`segment ${filter === f.key ? "segment-active" : ""}`}>
@@ -241,8 +272,9 @@ function CreatorsContent() {
           ))}
         </div>
       </FilterBar>
+      </div>
 
-      <PageSection className="mt-5">
+      <PageSection>
       {canCurate && (
         <SelectionBar
           count={selected.size}
@@ -325,7 +357,7 @@ function CreatorsContent() {
                     title={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}
                     aria-label={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}
                   >
-                    {c.is_favorite ? "★" : "☆"}
+                    <Star className="h-5 w-5" fill={c.is_favorite ? "currentColor" : "none"} aria-hidden="true" />
                   </button>
                 )}
                 {canCurate && (

@@ -90,6 +90,29 @@ async def _load_active_user(username: str):
     return user
 
 
+async def require_docs_admin(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+):
+    """Authenticate the human-facing API contract without weakening APIs.
+
+    Swagger/ReDoc can be opened from the signed-in admin browser via the
+    existing ``ag_token`` cookie. Programmatic schema clients may instead send
+    the same JWT as a Bearer token. Business endpoints continue to accept
+    Bearer authentication only, avoiding cookie-authenticated mutations.
+    """
+    token = credentials.credentials if credentials and credentials.credentials else request.cookies.get("ag_token")
+    payload = decode_access_token_payload(token) if token else None
+    if not payload or not payload.get("sub"):
+        raise HTTPException(status_code=401, detail="Administrator authentication required")
+    if payload.get("pwd_chg_required"):
+        raise HTTPException(status_code=403, detail="Password change required")
+    user = await _load_active_user(payload["sub"])
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Administrator access required")
+    return user
+
+
 def RequirePermission(module: str):
     async def _check(
         request: Request,
@@ -100,6 +123,32 @@ def RequirePermission(module: str):
         if user.is_admin or module in (user.permissions or []):
             return user
         raise HTTPException(status_code=403, detail=f"Missing permission: {module}")
+    return Depends(_check)
+
+
+def RequireAnyPermission(*modules: str):
+    """Require at least one permission while returning the resolved user.
+
+    Search is the first cross-domain interface that needs this: a library-only
+    user may search works while a subscriptions-only user may search
+    repositories.  Keeping the check here avoids weakening either domain's
+    existing route permissions.
+    """
+
+    required = tuple(dict.fromkeys(modules))
+    if not required:
+        raise ValueError("RequireAnyPermission needs at least one module")
+
+    async def _check(
+        request: Request,
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ):
+        username = await get_admin_key(request, credentials)
+        user = await _load_active_user(username)
+        if user.is_admin or any(module in (user.permissions or []) for module in required):
+            return user
+        raise HTTPException(status_code=403, detail=f"Missing any permission: {', '.join(required)}")
+
     return Depends(_check)
 
 

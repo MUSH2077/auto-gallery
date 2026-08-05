@@ -6,14 +6,17 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { Breadcrumb } from "@/components/Breadcrumb";
-import { ConfirmDialog, ErrorState, EmptyState, Modal, PageShell, type SlideItem } from "@/components";
+import { ConfirmDialog, ErrorState, EmptyState, Modal, PageShell, WorkMediaThumbnail, type SlideItem } from "@/components";
 import { useSlideshow } from "@/lib/useSlideshow";
 import { usePermissions } from "@/lib/usePermissions";
+import { useI18nFormat } from "@/lib/i18n-format";
+import { quoteSearchValue } from "@/lib/search-query";
 
 const CATEGORIES = ["general", "artist", "series", "character", "meta"];
 
 export default function TagDetailPage() {
   const t = useT();
+  const fmt = useI18nFormat();
   const router = useRouter();
   const queryClient = useQueryClient();
   const { has } = usePermissions();
@@ -34,7 +37,15 @@ export default function TagDetailPage() {
 
   const works = useQuery({
     queryKey: ["tag-works", id, page],
-    queryFn: () => api.listWorks(page * limit, limit, { tag: tag.data?.normalized_name }),
+    queryFn: async () => {
+      const result = await api.search(
+        `type:work tag:${quoteSearchValue(tag.data?.normalized_name || "")}`,
+        page * limit,
+        limit,
+        "works",
+      );
+      return result.groups.works || { total: 0, items: [] };
+    },
     enabled: !!tag.data?.normalized_name,
   });
 
@@ -63,13 +74,13 @@ export default function TagDetailPage() {
     .filter((w) => !!w.thumbnail_asset_id)
     .map((w) => ({ assetId: w.thumbnail_asset_id as string, workId: w.id, title: w.title, creatorName: w.creator_name }));
 
-  if (tag.isLoading) return <PageShell size="normal"><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded bg-subtle" /><div className="h-64 rounded bg-subtle" /></div></PageShell>;
-  if (tag.error) return <PageShell size="normal"><ErrorState message={(tag.error as Error).message} onRetry={() => tag.refetch()} /></PageShell>;
+  if (tag.isLoading) return <PageShell><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded bg-subtle" /><div className="h-64 rounded bg-subtle" /></div></PageShell>;
+  if (tag.error) return <PageShell><ErrorState message={(tag.error as Error).message} onRetry={() => tag.refetch()} /></PageShell>;
   if (!tag.data) return null;
   const td = tag.data;
 
   return (
-    <PageShell size="normal">
+    <PageShell>
       <Breadcrumb items={[
         { label: t("tags.title"), href: "/admin/tags" },
         { label: td.normalized_name },
@@ -82,7 +93,7 @@ export default function TagDetailPage() {
             {td.category && <span className="inline-block mt-2 px-2.5 py-0.5 rounded-full text-xs font-medium bg-accent-subtle text-accent">{td.category}</span>}
             <dl className="mt-4 space-y-2 text-sm">
               <div className="flex justify-between"><dt className="text-muted">{t("tag_detail.work_count")}</dt><dd className="font-semibold">{td.usage_count}</dd></div>
-              <div className="flex justify-between"><dt className="text-muted">{t("tag_detail.created")}</dt><dd className="text-xs">{new Date(td.created_at).toLocaleDateString()}</dd></div>
+              <div className="flex justify-between"><dt className="text-muted">{t("tag_detail.created")}</dt><dd className="text-xs">{fmt.date(td.created_at)}</dd></div>
             </dl>
             {canCurate && (
               <div className="mt-4 flex gap-2 border-t border-border pt-4">
@@ -138,7 +149,7 @@ export default function TagDetailPage() {
                   <Link key={w.id} href={`/admin/works/${w.id}`} className="group overflow-hidden rounded-md border border-border bg-white hover:border-accent/30 dark:border-border dark:bg-subtle transition-colors">
                     <div className="aspect-[4/3] bg-subtle">
                       {w.thumbnail_asset_id ? (
-                        <img src={api.mediaUrl(w.thumbnail_asset_id, "thumb")} alt={w.title || ""} className="h-full w-full object-cover" loading="lazy" decoding="async" />
+                        <WorkMediaThumbnail assetId={w.thumbnail_asset_id} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" />
                       ) : (
                         <div className="flex h-full items-center justify-center text-xs text-muted">{t("works.na")}</div>
                       )}

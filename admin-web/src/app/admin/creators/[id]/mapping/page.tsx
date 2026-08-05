@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, CreatorLink as CreatorLinkType } from "@/lib/api";
 import { PageHeader, PageShell, StatusBadge, SourceBadge, Modal, ConfirmDialog } from "@/components";
 import { useT } from "@/lib/i18n";
+import { adminRoutes } from "@/lib/adminRoutes";
 
 function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () => void }) {
   const t = useT();
@@ -74,10 +75,10 @@ export default function MappingPage() {
   const verified = links.data?.filter((l: CreatorLinkType) => l.is_verified) || [];
   const suggested = links.data?.filter((l: CreatorLinkType) => !l.is_verified) || [];
 
-  if (creator.isLoading) return <PageShell size="normal"><div className="animate-pulse"><div className="mb-4 h-8 w-1/4 rounded-md bg-subtle dark:bg-subtle" /><div className="h-32 rounded-md bg-subtle dark:bg-subtle" /></div></PageShell>;
+  if (creator.isLoading) return <PageShell><div className="animate-pulse"><div className="mb-4 h-8 w-1/4 rounded-md bg-subtle dark:bg-subtle" /><div className="h-32 rounded-md bg-subtle dark:bg-subtle" /></div></PageShell>;
 
   return (
-    <PageShell size="normal" className="page-transition">
+    <PageShell>
       <PageHeader title={t("mapping.title").replace("{name}", creator.data?.display_name || creator.data?.name || "Creator")} description={t("mapping.desc")}>
         <div className="flex gap-2">
           <button onClick={() => router.push(`/admin/creators/${id}`)} className="btn-ghost">{t("mapping.back_to_creator")}</button>
@@ -132,7 +133,7 @@ export default function MappingPage() {
         <div className="rounded-md border border-warning-subtle bg-warning-subtle p-4 text-sm dark:border-warning/30 dark:bg-warning/15">
           <p className="font-medium text-warning mb-2">{t("mapping.danbooru_info")}</p>
           <p className="text-warning mb-3">{t("mapping.danbooru_desc")}</p>
-          <button onClick={() => router.push("/admin/reference/danbooru")} className="btn-primary px-3 py-1.5 text-xs">{t("mapping.open_danbooru")}</button>
+          <button onClick={() => router.push(adminRoutes.danbooru)} className="btn-primary px-3 py-1.5 text-xs">{t("mapping.open_danbooru")}</button>
         </div>
       </section>
 

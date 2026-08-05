@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   AlertTriangle,
   Box,
@@ -17,10 +17,13 @@ import {
 
 import SourceBadge from "@/components/SourceBadge";
 import StatusBadge from "@/components/StatusBadge";
-import { api, type WorkbenchSummary } from "@/lib/api";
+import { SyncOutcomeBadge } from "@/components/SyncOutcomeBadge";
+import { WorkMediaThumbnail } from "@/components/MediaAssetRenderer";
+import { api, type SyncOutcome, type WorkbenchSummary } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { useStaggeredEntrance } from "@/lib/motion";
+import { adminRoutes } from "@/lib/adminRoutes";
 
 type DashboardActivity = {
   key: string;
@@ -34,6 +37,7 @@ type DashboardActivity = {
   href: string;
   progress?: number | null;
   progressLabel?: string | null;
+  outcome?: SyncOutcome | null;
   retryable: boolean;
 };
 
@@ -171,14 +175,14 @@ export function DashboardStatusStrip({
         <DashboardStatusLink
           label={t("dashboard.failed")}
           value={String(failedJobs)}
-          href="/admin/jobs?status=failed"
+          href="/admin/jobs?q=status%3Afailed"
           tone={failedJobs > 0 ? "danger" : "ok"}
           testId="dashboard-status-failed"
         />
         <DashboardStatusLink
           label={t("dashboard.stale")}
           value={String(data.queue.stale_count)}
-          href="/admin/jobs?status=stale"
+          href="/admin/jobs?q=status%3Astale"
           tone={data.queue.stale_count > 0 ? "warning" : "ok"}
           testId="dashboard-status-stale"
         />
@@ -214,29 +218,6 @@ export function DashboardStatusStrip({
   );
 }
 
-function WorkThumbnail({ assetId, title }: { assetId?: string | null; title: string }) {
-  const [failed, setFailed] = useState(false);
-  if (!assetId || failed) {
-    return (
-      <div className="flex h-full w-full items-center justify-center bg-subtle text-muted">
-        <ImageOff className="h-7 w-7" aria-hidden />
-      </div>
-    );
-  }
-  return (
-    <img
-      src={api.mediaUrl(assetId, "thumb")}
-      alt=""
-      className="h-full w-full object-cover transition-transform duration-slow ease-expo group-hover:scale-[1.025]"
-      loading="eager"
-      decoding="async"
-      onError={() => setFailed(true)}
-      aria-describedby={`dashboard-work-${assetId}`}
-      title={title}
-    />
-  );
-}
-
 export function RecentWorksPanel({ data }: { data: WorkbenchSummary }) {
   const t = useT();
   const fmt = useI18nFormat();
@@ -265,7 +246,13 @@ export function RecentWorksPanel({ data }: { data: WorkbenchSummary }) {
                 aria-label={t("common.open_item", { name: title })}
               >
                 <div className="aspect-[4/3] overflow-hidden border-b border-border bg-subtle">
-                  <WorkThumbnail assetId={work.thumbnail_asset_id} title={title} />
+                  <WorkMediaThumbnail
+                    assetId={work.thumbnail_asset_id}
+                    hasVideo={work.has_video}
+                    alt=""
+                    eager
+                    className="h-full w-full object-cover transition-transform duration-slow ease-expo group-hover:scale-[1.025]"
+                  />
                 </div>
                 <div className="p-3" id={work.thumbnail_asset_id ? `dashboard-work-${work.thumbnail_asset_id}` : undefined}>
                   <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-fg">{title}</h3>
@@ -291,20 +278,27 @@ export function RecentWorksPanel({ data }: { data: WorkbenchSummary }) {
 }
 
 function buildActivities(data: WorkbenchSummary, t: ReturnType<typeof useT>): DashboardActivity[] {
+  const recentDownloadSources = new Set(
+    data.recent.download_jobs
+      .map((job) => job.subscription_source_id)
+      .filter((id): id is string => Boolean(id)),
+  );
   const downloads = data.recent.download_jobs.map((job) => {
-    const progress = progressValue(job.progress_data);
+    const active = ACTIVE_STATUSES.has(job.status.toLowerCase());
+    const progress = active ? progressValue(job.progress_data) : { percent: null, label: null };
     return {
       key: `download:${job.id}`,
       id: job.id,
       kind: "download" as const,
       source: job.source,
       title: job.creator_name || job.subscription_name || sourceHandle(job.source_url) || job.id.slice(0, 8),
-      detail: job.pipeline_stage || t("dashboard.activity_download"),
+      detail: job.outcome ? t(`sync_outcome.${job.outcome.code}_desc`) : job.pipeline_stage || t("dashboard.activity_download"),
       status: job.status,
       timestamp: job.updated_at || job.created_at,
       href: `/admin/jobs?tab=downloads&job=${job.id}`,
       progress: progress.percent,
       progressLabel: progress.label,
+      outcome: job.outcome,
       retryable: FAILED_STATUSES.has(job.status.toLowerCase()),
     };
   });
@@ -325,7 +319,7 @@ function buildActivities(data: WorkbenchSummary, t: ReturnType<typeof useT>): Da
       retryable: FAILED_STATUSES.has(job.status.toLowerCase()),
     };
   });
-  const syncs = data.recent.successful_syncs.map((sync) => ({
+  const syncs = data.recent.successful_syncs.filter((sync) => !recentDownloadSources.has(sync.source_id)).map((sync) => ({
     key: `sync:${sync.source_id}`,
     id: sync.source_id,
     kind: "sync" as const,
@@ -388,6 +382,7 @@ function ActivityRow({
       <div className="ml-auto flex min-h-11 shrink-0 items-center gap-1 sm:gap-2">
         <div className="text-right">
           <StatusBadge status={activity.status} className="py-0 text-[11px]" />
+          {activity.outcome && <span className="mt-1 block"><SyncOutcomeBadge outcome={activity.outcome} /></span>}
           <p className="mt-1 text-[11px] tabular text-muted">{fmt.relative(activity.timestamp)}</p>
         </div>
         {activity.retryable && canRetry && (
@@ -514,14 +509,14 @@ export function AttentionBanner({
             ? t("dashboard.attention_storage")
             : t("dashboard.attention_scheduler");
   const href = data.attention.failed_import_count && !data.attention.failed_download_count
-    ? "/admin/jobs?tab=imports&status=failed"
+    ? "/admin/jobs?tab=imports&q=kind%3Aimport%20status%3Afailed"
     : data.attention.auth_unhealthy_count && !data.attention.failed_download_count
-      ? "/admin/settings/auth-status"
+      ? adminRoutes.schedulerAuth
       : data.attention.low_disk_warning && !data.attention.failed_download_count
         ? "/admin/data-mgmt"
         : data.attention.scheduler_disabled_warning && !data.attention.failed_download_count
           ? "/admin/scheduler"
-          : "/admin/jobs?status=failed";
+          : "/admin/jobs?q=status%3Afailed";
 
   return (
     <section className="flex flex-col gap-4 rounded-lg border border-danger/50 bg-danger-subtle p-4 sm:flex-row sm:items-center" aria-labelledby="dashboard-attention-heading">

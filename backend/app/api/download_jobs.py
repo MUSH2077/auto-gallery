@@ -9,6 +9,7 @@ from app.schemas.download_job import DownloadJobCreate, DownloadJobRead
 from app.schemas.import_job import ImportJobRead
 from app.services.download import DownloadService
 from app.services.progress import ProgressTracker
+from app.services.search_language import SearchQueryError
 from app.services.task_engine import TaskEngine, TaskEngineError
 
 router = APIRouter(dependencies=[RequirePermission("tasks")])
@@ -22,12 +23,15 @@ async def list_jobs(status: str | None = None, source: str | None = None,
                     sort_by: str = "created_at", sort_order: str = "desc",
                     offset: int = 0, limit: int = 50, db: AsyncSession = Depends(get_db)):
     svc = DownloadService(db)
-    return await svc.list_jobs(status=status, source=source,
-                               subscription_id=subscription_id,
-                               subscription_source_id=subscription_source_id,
-                               q=q,
-                               sort_by=sort_by, sort_order=sort_order,
-                               offset=offset, limit=limit)
+    try:
+        return await svc.list_jobs(status=status, source=source,
+                                   subscription_id=subscription_id,
+                                   subscription_source_id=subscription_source_id,
+                                   q=q,
+                                   sort_by=sort_by, sort_order=sort_order,
+                                   offset=offset, limit=limit)
+    except SearchQueryError as exc:
+        raise HTTPException(status_code=422, detail=exc.diagnostic.payload()) from exc
 
 
 @router.get("/{job_id}", response_model=DownloadJobRead)
@@ -239,9 +243,13 @@ async def batch_by_filter(
 
 
 @router.get("/{job_id}/progress")
-async def get_progress(job_id: UUID):
+async def get_progress(job_id: UUID, db: AsyncSession = Depends(get_db)):
     """Get the latest progress snapshot for a download job."""
-    progress = ProgressTracker.get(str(job_id))
+    try:
+        job = await DownloadService(db).get_job(job_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Job not found")
+    progress = job.progress_data
     if not progress:
         raise HTTPException(status_code=404, detail="No progress data available")
     return {"job_id": str(job_id), **progress}
@@ -273,5 +281,5 @@ async def get_pipeline(job_id: UUID, db: AsyncSession = Depends(get_db)):
         "job_id": str(job.id),
         "current_stage": current_stage,
         "stages": pipeline,
-        "progress": ProgressTracker.get(str(job_id)),
+        "progress": job.progress_data,
     }

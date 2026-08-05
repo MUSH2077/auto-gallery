@@ -11,7 +11,7 @@ import { usePermissions } from "@/lib/usePermissions";
 import { useDebounce } from "@/lib/useDebounce";
 import { formatBytes } from "@/lib/format";
 import { usePresence, useStaggeredEntrance } from "@/lib/motion";
-import { PageHeader, PageShell, SectionPanel, Banner, EmptyState, PermissionGuard } from "@/components";
+import { PageHeader, PageShell, SectionPanel, Banner, EmptyState, PermissionGuard, SmartSearchInput } from "@/components";
 import { useToast } from "@/components/Toast";
 
 // Mirrors ManualUploadService.ALLOWED_EXTENSIONS (backend/app/services/manual_upload.py).
@@ -74,7 +74,8 @@ function StatusPill({ status }: { status: RowStatus }) {
 
 // Searchable creator combobox — only rendered for users with `curation`
 // permission (see ManualUploadService._resolve_identity: creator_id requires
-// curation, else the backend 403s). Debounced search over api.listCreators.
+// curation, else the backend 403s). Results use the same canonical search
+// language and creator index as every other internal creator search.
 function CreatorPicker({
   creatorId, creatorLabel, onSelect, onClear, disabled,
 }: {
@@ -92,8 +93,8 @@ function CreatorPicker({
   const ref = useRef<HTMLDivElement>(null);
 
   const results = useQuery({
-    queryKey: queryKeys.creators.list(0, 20, { search: debouncedQuery || undefined }),
-    queryFn: () => api.listCreators(0, 20, debouncedQuery ? { search: debouncedQuery } : undefined),
+    queryKey: ["search", "creator-picker", debouncedQuery],
+    queryFn: () => api.search(debouncedQuery, 0, 20, "creator-picker"),
     enabled: open,
   });
 
@@ -107,28 +108,18 @@ function CreatorPicker({
 
   return (
     <div ref={ref} className="relative">
-      <input
+      <SmartSearchInput
         value={creatorId ? creatorLabel || "" : query}
-        onChange={(e) => {
+        onChange={(value) => {
           if (creatorId) onClear();
-          setQuery(e.target.value);
+          setQuery(value);
         }}
         onFocus={() => setOpen(true)}
+        scope="creator-picker"
         placeholder={t("upload.creator_search_placeholder")}
-        className="input w-full pr-8"
+        className="w-full"
         disabled={disabled}
       />
-      {creatorId && (
-        <button
-          type="button"
-          onClick={() => { onClear(); setQuery(""); }}
-          className="absolute right-2 top-1/2 -translate-y-1/2 text-muted hover:text-fg"
-          aria-label={t("common.clear")}
-          disabled={disabled}
-        >
-          &times;
-        </button>
-      )}
       {mounted && (
         <div className={`popover ${closing ? "popover-exit" : ""} absolute z-10 mt-1 max-h-64 w-full overflow-auto rounded-md border border-border bg-surface shadow-overlay dark:shadow-overlay-dark`}>
           <button
@@ -139,7 +130,7 @@ function CreatorPicker({
             {t("upload.creator_use_personal_space")}
           </button>
           {results.isLoading && <div className="px-3 py-2 text-xs text-muted">{t("common.loading")}</div>}
-          {results.data?.items.map((c) => (
+          {results.data?.groups.creators?.items.map((c) => (
             <button
               type="button"
               key={c.id}
@@ -149,7 +140,7 @@ function CreatorPicker({
               {c.display_name || c.name}
             </button>
           ))}
-          {results.data && results.data.items.length === 0 && (
+          {results.data && (results.data.groups.creators?.items.length || 0) === 0 && (
             <div className="px-3 py-2 text-xs text-muted">{t("common.no_data")}</div>
           )}
         </div>
@@ -304,9 +295,10 @@ function UploadPageContent() {
   }
 
   return (
-    <PageShell size="normal">
+    <PageShell>
       <PageHeader title={t("upload.title")} description={t("upload.description")} />
 
+      <div data-page-primary-content>
       {me.data && (
         <Banner tone={overQuota ? "warning" : "info"} title={t("upload.quota_title")} className="mb-4">
           <span className="font-mono">
@@ -419,6 +411,7 @@ function UploadPageContent() {
             {isSubmitting ? t("upload.submitting") : t("upload.submit", { count: queuedRows.length })}
           </button>
         </div>
+      </div>
       </div>
     </PageShell>
   );

@@ -184,7 +184,7 @@ async def get_asset_dedup_scan(
 
 
 # Compatibility endpoint retained for permission checks and older clients.
-@curation_ops_router.get("/dedup/duplicates")
+@curation_ops_router.get("/dedup/duplicates", deprecated=True)
 async def list_duplicates(
     db: AsyncSession = Depends(get_db),
 ):
@@ -200,7 +200,7 @@ async def list_duplicates(
     }
 
 
-@curation_ops_router.post("/dedup/scan")
+@curation_ops_router.post("/dedup/scan", deprecated=True)
 async def scan_duplicates(
     db: AsyncSession = Depends(get_db),
 ):
@@ -210,7 +210,7 @@ async def scan_duplicates(
     )
 
 
-@curation_ops_router.get("/merge-candidates")
+@curation_ops_router.get("/merge-candidates", deprecated=True)
 async def list_merge_candidates(
     db: AsyncSession = Depends(get_db),
 ):

@@ -1,0 +1,189 @@
+asyncapi: 2.6.0
+info:
+  title: auto-gallery realtime task events
+  version: 0.1.0
+  description: |
+    Authenticated WebSocket contract for task status and progress events.
+    Internal Redis channels and worker-control signals are not part of this
+    public LAN interface.
+  license:
+    name: AGPL-3.0-only
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+servers:
+  current:
+    url: "{host}/api/v1/ws"
+    protocol: wss
+    description: Current auto-gallery host. Use ws on an HTTP-only LAN.
+    variables:
+      host:
+        default: gallery.example.test
+    security:
+      - sessionCookie: []
+      - oneTimeTicket: []
+channels:
+  /api/v1/ws:
+    description: Global task event stream for the authenticated installation.
+    publish:
+      operationId: sendRealtimeCommand
+      message:
+        oneOf:
+          - $ref: "#/components/messages/Ping"
+          - $ref: "#/components/messages/Subscribe"
+          - $ref: "#/components/messages/Unsubscribe"
+    subscribe:
+      operationId: receiveRealtimeEvent
+      message:
+        oneOf:
+          - $ref: "#/components/messages/Connected"
+          - $ref: "#/components/messages/Pong"
+          - $ref: "#/components/messages/Subscribed"
+          - $ref: "#/components/messages/Unsubscribed"
+          - $ref: "#/components/messages/StatusChange"
+          - $ref: "#/components/messages/Progress"
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: ag_token
+      description: JWT session cookie created by the admin web login flow.
+    oneTimeTicket:
+      type: apiKey
+      in: query
+      name: ticket
+      description: Short-lived ticket returned by POST /api/v1/auth/ws-ticket.
+  schemas:
+    TaskIdentity:
+      type: object
+      required: [task_id, task_type, timestamp]
+      properties:
+        task_id:
+          type: string
+          format: uuid
+        task_type:
+          type: string
+          enum: [download, import]
+        timestamp:
+          type: string
+          format: date-time
+    ProgressData:
+      type: object
+      required: [stage]
+      properties:
+        stage:
+          type: string
+        current:
+          type: integer
+          minimum: 0
+        total:
+          type: integer
+          minimum: 0
+        percent:
+          type: number
+          minimum: 0
+          maximum: 100
+      additionalProperties: true
+  messages:
+    Ping:
+      name: ping
+      payload:
+        type: object
+        required: [action]
+        properties:
+          action:
+            const: ping
+    Subscribe:
+      name: subscribe
+      payload:
+        type: object
+        required: [action, task_id]
+        properties:
+          action:
+            const: subscribe
+          task_id:
+            type: string
+            format: uuid
+    Unsubscribe:
+      name: unsubscribe
+      payload:
+        type: object
+        required: [action, task_id]
+        properties:
+          action:
+            const: unsubscribe
+          task_id:
+            type: string
+            format: uuid
+    Connected:
+      name: connected
+      payload:
+        type: object
+        required: [type, client_id]
+        properties:
+          type:
+            const: connected
+          client_id:
+            type: string
+            format: uuid
+    Pong:
+      name: pong
+      payload:
+        type: object
+        required: [type]
+        properties:
+          type:
+            const: pong
+    Subscribed:
+      name: subscribed
+      payload:
+        type: object
+        required: [type, task_id]
+        properties:
+          type:
+            const: subscribed
+          task_id:
+            type: string
+            format: uuid
+    Unsubscribed:
+      name: unsubscribed
+      payload:
+        type: object
+        required: [type, task_id]
+        properties:
+          type:
+            const: unsubscribed
+          task_id:
+            type: string
+            format: uuid
+    StatusChange:
+      name: status_change
+      payload:
+        allOf:
+          - $ref: "#/components/schemas/TaskIdentity"
+          - type: object
+            required: [type, old_status, new_status]
+            properties:
+              type:
+                const: status_change
+              old_status:
+                type: string
+              new_status:
+                type: string
+              operator:
+                type: string
+              note:
+                type: string
+              progress:
+                $ref: "#/components/schemas/ProgressData"
+    Progress:
+      name: progress
+      payload:
+        allOf:
+          - $ref: "#/components/schemas/TaskIdentity"
+          - type: object
+            required: [type, progress]
+            properties:
+              type:
+                const: progress
+              progress:
+                $ref: "#/components/schemas/ProgressData"

@@ -51,6 +51,13 @@ export interface TaskRun {
   }[];
 }
 
+export interface SyncOutcome {
+  code: "new_content" | "no_changes" | "no_content";
+  metadata_count: number;
+  media_count: number;
+  completed_at: string;
+}
+
 export interface TaskRunListResponse {
   total: number;
   items: TaskRun[];
@@ -163,6 +170,7 @@ export interface RepositoryLatestJob {
   created_at?: string | null;
   updated_at?: string | null;
   error_log_excerpt?: string | null;
+  outcome?: SyncOutcome | null;
 }
 
 export interface CreatorRepository {
@@ -198,6 +206,7 @@ export interface RepositoryRecentJob {
   status: string;
   retry_count: number;
   error_log_excerpt?: string | null;
+  outcome?: SyncOutcome | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -208,6 +217,7 @@ export interface RepositoryRecentWork {
   posted_at?: string | null;
   thumbnail_asset_id?: string | null;
   asset_count: number;
+  has_video?: boolean;
   is_nsfw: boolean;
   is_ai_generated: boolean;
   is_favorite: boolean;
@@ -462,6 +472,7 @@ export interface WorkbenchSummary {
       status: string;
       pipeline_stage?: string | null;
       progress_data?: JobProgress | null;
+      outcome?: SyncOutcome | null;
       created_at?: string | null;
       updated_at?: string | null;
       error_log_excerpt?: string | null;
@@ -488,6 +499,7 @@ export interface WorkbenchSummary {
       id: string;
       title?: string | null;
       thumbnail_asset_id?: string | null;
+      has_video?: boolean;
       source?: string | null;
       creator_name?: string | null;
       created_at?: string | null;
@@ -587,6 +599,7 @@ export interface DownloadJob {
   worker_pid?: number | null;
   pipeline_stage?: string | null;
   progress_data?: JobProgress | null;
+  outcome?: SyncOutcome | null;
 }
 
 export interface JobProgress {
@@ -596,6 +609,7 @@ export interface JobProgress {
   percent?: number;
   message?: string;
   assets?: number;
+  outcome_code?: SyncOutcome["code"];
 }
 
 export interface WorkListItem {
@@ -611,6 +625,7 @@ export interface WorkListItem {
   creator_name?: string;
   creator_id?: string;
   has_ugoira?: boolean;
+  has_video?: boolean;
   preview_asset_ids?: string[];
   is_favorite?: boolean;
   curation_visibility?: string;
@@ -717,7 +732,14 @@ export interface CreatorSearchHit {
   display_name: string;
   description?: string;
   is_active: boolean;
+  is_favorite?: boolean;
+  danbooru_artist_id?: number | null;
+  subscription_count?: number;
+  source_count?: number;
+  repository_count?: number;
+  last_synced_at?: string | null;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface TagSearchHit {
@@ -725,6 +747,143 @@ export interface TagSearchHit {
   normalized_name: string;
   category?: string;
   created_at: string;
+}
+
+export type SearchScope =
+  | "global"
+  | "works"
+  | "creators"
+  | "tags"
+  | "repositories"
+  | "subscriptions"
+  | "tasks"
+  | "scheduler"
+  | "creator-picker";
+
+export type SearchTarget =
+  | "works"
+  | "creators"
+  | "tags"
+  | "repositories"
+  | "subscriptions"
+  | "tasks"
+  | "scheduler";
+
+export interface SearchTextToken {
+  kind: "text";
+  value: string;
+  quoted: boolean;
+  start: number;
+  end: number;
+}
+
+export interface SearchQualifierToken {
+  kind: "qualifier";
+  key: string;
+  value: string;
+  negated: boolean;
+  quoted: boolean;
+  start: number;
+  end: number;
+}
+
+export type SearchToken = SearchTextToken | SearchQualifierToken;
+
+export interface SearchDiagnostic {
+  code: string;
+  message: string;
+  start: number;
+  end: number;
+  token: string;
+  suggestions: string[];
+}
+
+export interface SearchSuggestion {
+  kind: "qualifier" | "value" | "repair";
+  label: string;
+  description: string;
+  query: string;
+}
+
+export interface SearchParsedQuery {
+  raw: string;
+  canonical: string;
+  scope: SearchScope;
+  targets: SearchTarget[];
+  tokens: SearchToken[];
+}
+
+export interface RepositorySearchHit {
+  id: string;
+  name: string;
+  source: string;
+  source_creator_id?: string | null;
+  source_url?: string | null;
+  creator_id: string;
+  creator_name: string;
+  subscription_id: string;
+  subscription_name?: string | null;
+  is_enabled: boolean;
+  auth_healthy: boolean;
+  auth_status?: string | null;
+  last_synced_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SubscriptionSearchHit {
+  id: string;
+  name: string;
+  creator_id: string;
+  creator_name: string;
+  creator_display_name?: string | null;
+  is_active: boolean;
+  sync_enabled: boolean;
+  sync_interval_hours: number;
+  schedule_mode?: string | null;
+  scheduled_times?: string | null;
+  last_synced_at?: string | null;
+  source_count: number;
+  enabled_source_count: number;
+  running_job_count: number;
+  failed_job_count: number;
+  latest_job_id?: string | null;
+  latest_job_status?: string | null;
+  latest_job_created_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SearchGroups {
+  works?: { total: number; items: SearchWorkResult[] };
+  creators?: { total: number; items: CreatorSearchHit[] };
+  tags?: { total: number; items: (TagSearchHit & { usage_count?: number })[] };
+  repositories?: { total: number; items: RepositorySearchHit[] };
+  subscriptions?: { total: number; items: SubscriptionSearchHit[] };
+  tasks?: { total: number; items: TaskRun[] };
+  scheduler?: { total: number; items: SchedulerDecisionItem[] };
+}
+
+export interface SearchResponse {
+  query: string;
+  canonical_query: string;
+  parsed: SearchParsedQuery;
+  groups: SearchGroups;
+  total: number;
+  results: SearchWorkResult[];
+  creators: CreatorSearchHit[];
+  tags: (TagSearchHit & { usage_count?: number })[];
+  repositories: RepositorySearchHit[];
+  subscriptions: SubscriptionSearchHit[];
+}
+
+export interface SearchAssistResponse {
+  query: string;
+  canonical_query?: string | null;
+  parsed?: SearchParsedQuery | null;
+  diagnostics: SearchDiagnostic[];
+  suggestions: SearchSuggestion[];
+  catalog: { key: string; negatable: boolean; values: string[] }[];
 }
 
 export interface DedupSettings {
@@ -1124,7 +1283,6 @@ export interface UploadResponse {
 
 export type GeneratedWork = components["schemas"]["WorkRead"];
 export type GeneratedWorkList = components["schemas"]["WorkList"];
-export type GeneratedAsset = components["schemas"]["AssetRead"];
 export type GeneratedCreator = components["schemas"]["CreatorRead"];
 export type GeneratedSubscription = components["schemas"]["SubscriptionRead"];
 
@@ -1138,6 +1296,7 @@ export interface ShowcaseItem {
   asset_id: string;
   thumb_url: string;
   preview_url: string;
+  media_kind?: string;
   width: number | null;
   height: number | null;
 }

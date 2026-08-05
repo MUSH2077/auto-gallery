@@ -21,6 +21,7 @@ from app.repositories.work import WorkRepository
 from app.schemas.showcase import ShowcaseItem, ShowcaseSampleResponse
 from app.services.cache import cache_get, cache_key, cache_set
 from app.services.media_signing import signed_media_url
+from app.services.media_assets import media_kind
 
 _require_library = RequirePermission("library")
 
@@ -90,19 +91,42 @@ async def sample(
     random.shuffle(works)
 
     asset_ids = [w.thumbnail_asset_id for w in works if w.thumbnail_asset_id]
-    dims: dict[UUID, tuple[int | None, int | None]] = {}
+    media: dict[UUID, tuple[int | None, int | None, str, str | None]] = {}
     if asset_ids:
         rows = (await db.execute(
-            select(Asset.id, Asset.width, Asset.height).where(Asset.id.in_(asset_ids))
+            select(
+                Asset.id,
+                Asset.width,
+                Asset.height,
+                Asset.mime_type,
+                Asset.file_name,
+                Asset.thumb_lg_path,
+            ).where(Asset.id.in_(asset_ids))
         )).all()
-        dims = {r.id: (r.width, r.height) for r in rows}
+        media = {
+            row.id: (
+                row.width,
+                row.height,
+                media_kind(row.mime_type, row.file_name),
+                row.thumb_lg_path,
+            )
+            for row in rows
+        }
 
     items: list[ShowcaseItem] = []
     for w in works:
         if not w.thumbnail_asset_id:
             continue  # nothing to render — skip rather than emit a blank plane
         aid = str(w.thumbnail_asset_id)
-        width, height = dims.get(w.thumbnail_asset_id, (None, None))
+        width, height, asset_kind, poster_path = media.get(
+            w.thumbnail_asset_id,
+            (None, None, "unknown", None),
+        )
+        preview_url = (
+            signed_media_url(aid, "poster")
+            if asset_kind == "video" and poster_path
+            else signed_media_url(aid, "preview")
+        )
         items.append(ShowcaseItem(
             work_id=str(w.id),
             title=w.title,
@@ -110,7 +134,8 @@ async def sample(
             source=getattr(w, "source", None),
             asset_id=aid,
             thumb_url=f"/media/thumb/{aid}",
-            preview_url=signed_media_url(aid, "preview"),
+            preview_url=preview_url,
+            media_kind=asset_kind,
             width=width,
             height=height,
         ))

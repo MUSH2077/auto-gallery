@@ -96,6 +96,7 @@ temp/
 .playwright-mcp/
 .superpowers/
 admin-web/test-results/
+admin-web/public/api-docs/
 
 # --- gallery-dl ---
 # Ignore runtime configs with auth tokens

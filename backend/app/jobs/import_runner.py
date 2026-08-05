@@ -1,4 +1,5 @@
 from app.services.image_utils import can_generate_thumbnail, get_mime_type, get_image_dims, can_compute_phash, IMAGE_EXTS
+from app.services.media_assets import browser_video_mime_type, render_video_derivatives
 import asyncio
 import json
 import logging
@@ -28,10 +29,11 @@ from app.providers import registry
 from app.repositories.download_job import DownloadJobRepository
 from app.services.job_progress import apply_download_progress, apply_import_progress
 from app.services.job_manifest import append_manifest_event, update_manifest
+from app.services.download_finalization import finalize_download_job
 from app.models.task_state import transition_import_job
 from app.services.settings import get_download_defaults
 from app.services.redis_client import get_redis
-from app.services.subscription_enqueue import mark_source_sync_success
+from app.services.sync_outcome import build_sync_outcome
 from app.services.curation import CurationService
 from app.services.gitllery import project_commit_safe
 from app.services.work_import import WorkImportService
@@ -359,8 +361,9 @@ async def run_import_job(import_job_id: str):
         batch_count = 0
         BATCH_SIZE = 50
 
-        # Batch Meilisearch documents
-        meili_docs = []
+        # Search documents are always built centrally from authoritative rows.
+        # The importer only carries stable work identities across batches.
+        meili_work_ids: list[UUID] = []
 
         _process_started = monotonic()  # "process" stage timing (per-work loop)
         for src_work_id, items in groups.items():
@@ -585,11 +588,34 @@ async def run_import_job(import_job_id: str):
                         except Exception as _thumb_err:
                             logger.warning("Thumbnail failed for %s: %s", fp, _thumb_err)
                     elif fp.suffix.lower() in VIDEO_EXTS:
-                        # No ffmpeg/video thumbnailer exists yet (services/thumbnail.py
-                        # is pyvips/image-only). Skip gracefully rather than attempt
-                        # and fail -- one failed asset must not break the import.
-                        logger.info("Skipping thumbnail generation for video asset %s "
-                                    "(no video thumbnailer configured)", fp)
+                        derivatives = await asyncio.to_thread(
+                            render_video_derivatives,
+                            fp,
+                            lib_dir,
+                            fp.stem,
+                        )
+                        if derivatives.inspection:
+                            asset.width = derivatives.inspection.width
+                            asset.height = derivatives.inspection.height
+                            asset.duration = derivatives.inspection.duration
+                            asset.mime_type = browser_video_mime_type(
+                                asset.file_name,
+                                asset.mime_type,
+                            )
+                        if derivatives.thumbnail_path:
+                            asset.thumb_sm_path = str(
+                                derivatives.thumbnail_path.relative_to(settings.library_root)
+                            )
+                        if derivatives.poster_path:
+                            asset.thumb_lg_path = str(
+                                derivatives.poster_path.relative_to(settings.library_root)
+                            )
+                        if derivatives.error:
+                            logger.warning(
+                                "Video derivatives incomplete for asset %s: %s",
+                                asset.id,
+                                derivatives.error,
+                            )
 
                     # Compute sha256 in thread pool (CPU-bound hashing)
                     try:
@@ -627,7 +653,6 @@ async def run_import_job(import_job_id: str):
                 try:
                     tags = provider.parse_source_tags(first_raw)
                     seen = set()
-                    tag_names = []  # collected for Meilisearch, avoids re-query
                     for td in tags:
                         n = td.get("original_name", "").lower().strip()
                         if not n or n in seen:
@@ -644,7 +669,6 @@ async def run_import_job(import_job_id: str):
                                 WorkTag.tag_id == tag.id))).scalar_one_or_none():
                             db.add(WorkTag(work_id=work.id, tag_id=tag.id,
                                            source=provider.source_name))
-                            tag_names.append(n)
                         if not (await db.execute(select(WorkSourceTag).where(
                                 WorkSourceTag.work_source_id == ws.id,
                                 WorkSourceTag.tag_id == tag.id))).scalar_one_or_none():
@@ -662,7 +686,7 @@ async def run_import_job(import_job_id: str):
                     logger.warning("Failed to write metadata.json for %s/%s", provider.source_name, src_work_id, exc_info=True)
 
                 curation = CurationService(db)
-                curation_commit, curation_visibility = await curation.record_imported_work(
+                curation_commit, _curation_visibility = await curation.record_imported_work(
                     work,
                     creator_id=linked_creator_id,
                     repository_id=dj.subscription_source_id,
@@ -670,24 +694,7 @@ async def run_import_job(import_job_id: str):
                     source_work_id=src_work_id,
                 )
 
-                # Collect Meilisearch document for this work
-                # tag_names collected during tag processing above
-                asset_count = len(asset_files)
-                if curation_visibility == "visible":
-                    meili_docs.append({
-                        "id": str(work.id),
-                        "title": work.title or "",
-                        "description": (work.description or "")[:500],
-                        "creator_name": display_name or "",
-                        "is_nsfw": work.is_nsfw,
-                        "is_ai_generated": work.is_ai_generated,
-                        "source": provider.source_name,
-                        "tags": [str(tn) for tn in tag_names],
-                        "thumbnail_asset_id": str(work.thumbnail_asset_id) if work.thumbnail_asset_id else None,
-                        "asset_count": asset_count,
-                        "posted_at": _posted_at_json(work.posted_at),
-                        "created_at": work.created_at.isoformat() if work.created_at else None,
-                    })
+                meili_work_ids.append(work.id)
 
                 # Commit work and batch Meilisearch periodically
                 await db.commit()
@@ -725,14 +732,14 @@ async def run_import_job(import_job_id: str):
                             exc_info=True,
                         )
                 batch_count += 1
-                if batch_count >= BATCH_SIZE and meili_docs:
+                if batch_count >= BATCH_SIZE and meili_work_ids:
                     try:
                         from app.services.search import SearchService
                         svc = SearchService(db)
-                        await svc._batch_index_works(meili_docs)
+                        await svc.index_works(meili_work_ids)
                     except Exception:
                         logger.warning("Batch Meilisearch index failed", exc_info=True)
-                    meili_docs = []
+                    meili_work_ids = []
                     batch_count = 0
 
             # Keep source metadata as an auditable, restart-safe input. The
@@ -741,11 +748,21 @@ async def run_import_job(import_job_id: str):
                 from app.services.artifact_ledger import managed_artifact_row
                 ledger = ArtifactLedger(ledger_db)
                 await ledger.mark_work(dj.id, src_work_id, "done")
-                library_paths = [lib_dir / "metadata.json", *lib_dir.glob("*.thumbnail.webp")]
+                library_paths = [
+                    lib_dir / "metadata.json",
+                    *lib_dir.glob("*.thumbnail.webp"),
+                    *lib_dir.glob("*.poster.webp"),
+                ]
                 await ledger.upsert_many([
                     managed_artifact_row(path, Path(settings.library_root), "library",
                                          provider.source_name, _creator_dir, src_work_id,
-                                         "metadata_json" if path.name == "metadata.json" else "thumbnail")
+                                         (
+                                             "metadata_json"
+                                             if path.name == "metadata.json"
+                                             else "video_poster"
+                                             if path.name.endswith(".poster.webp")
+                                             else "thumbnail"
+                                         ))
                     for path in library_paths if path.exists()
                 ])
                 await ledger_db.commit()
@@ -768,14 +785,20 @@ async def run_import_job(import_job_id: str):
                 logger.debug("Failed to check image files in %s", work_dir, exc_info=True)
 
         # Flush remaining Meilisearch batch
-        if meili_docs:
+        if meili_work_ids:
             async with async_session() as db:
                 try:
                     from app.services.search import SearchService
                     svc = SearchService(db)
-                    await svc._batch_index_works(meili_docs)
+                    await svc.index_works(meili_work_ids)
                 except Exception:
                     logger.warning("Failed to flush remaining Meilisearch batch", exc_info=True)
+        async with async_session() as db:
+            try:
+                from app.services.search import SearchService
+                await SearchService(db).refresh_reference_indexes()
+            except Exception:
+                logger.warning("Failed to refresh reference search indexes", exc_info=True)
 
         # Stop control listener + heartbeat
         heartbeat.stop()
@@ -874,15 +897,31 @@ async def run_import_job(import_job_id: str):
                 dj_repo = DownloadJobRepository(db)
                 dj = await dj_repo.get(ij.download_job_id)
                 if dj:
-                    await dj_repo.update_status(dj, status, message if status == "failed" else None)
-                    apply_download_progress(dj, status, message)
                     update_manifest(dj, import_stats=stats)
                     append_manifest_event(dj, "import_complete", status=status, **stats)
                     append_manifest_event(dj, "stage_timing", stage="parse", ms=_parse_ms)
                     append_manifest_event(dj, "stage_timing", stage="process", ms=_process_ms)
-                    if status == "complete" and dj.subscription_source_id:
-                        await mark_source_sync_success(db, dj.subscription_source_id)
-                await db.commit()
+                    manifest = dj.manifest or {}
+                    outcome = (
+                        build_sync_outcome(
+                            "new_content" if stats["works"] > 0 else "no_changes",
+                            metadata_count=int(manifest.get("metadata_json_count") or total_groups),
+                            media_count=int(manifest.get("image_count") or stats["assets"]),
+                        )
+                        if status == "complete"
+                        else None
+                    )
+                    await finalize_download_job(
+                        db,
+                        dj,
+                        status=status,
+                        outcome=outcome,
+                        error=message if status == "failed" else None,
+                        message=message,
+                        assets=stats["assets"],
+                    )
+                else:
+                    await db.commit()
 
         logger.info("Import finished: %d works, %d assets, %d skipped, %d multi-page (batched)",
                      stats["works"], stats["assets"], stats.get("skipped", 0), stats["multi_page"])

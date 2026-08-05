@@ -22,14 +22,15 @@ from app.models.task_state import transition_download_job
 from app.jobs.stage_timing import stage_timer
 from app.services.job_manifest import append_manifest_event, update_manifest
 from app.services.job_progress import apply_download_progress, apply_import_progress, publish_progress
+from app.services.download_finalization import finalize_download_job
 from app.services.redis_client import get_redis
 from app.services.settings import (
     build_effective_gallerydl_config,
     extractor_key_for_source,
     get_download_defaults,
 )
-from app.services.subscription_enqueue import mark_source_sync_success
 from app.services.artifact_discovery import group_metadata_by_work, media_files_for_group
+from app.services.sync_outcome import build_sync_outcome, had_sync_baseline
 
 logger = logging.getLogger(__name__)
 
@@ -911,9 +912,10 @@ async def run_download_job(job_id: str):
                 apply_download_progress(
                     _manifest_job,
                     "post_download",
-                    f"Found {metadata_count} metadata files and {image_count} media files",
+                    None,
                     current=metadata_count,
                     total=metadata_count or None,
+                    percent=90,
                     assets=image_count,
                 )
                 await _manifest_db.commit()
@@ -950,28 +952,38 @@ async def run_download_job(job_id: str):
             async with async_session() as _sub_db:
                 _sub_job = await DownloadJobRepository(_sub_db).get(job_uuid)
                 is_subscription = bool(_sub_job and _sub_job.subscription_source_id)
-            new_status, new_error = classify_no_metadata_outcome(
+            decision = classify_no_metadata_outcome(
                 image_count=image_count,
                 auth_warning=auth_warning,
                 is_subscription=is_subscription,
+                had_sync_baseline=had_sync_baseline(_sub_job) if _sub_job else False,
             )
-            if new_status == "failed" and auth_warning:
-                new_error = f"{new_error}\n{stderr_text[:2000]}"
+            error = decision.error
+            if decision.status == "failed" and auth_warning:
+                error = f"{error}\n{stderr_text[:2000]}"
 
             async with async_session() as db3:
                 repo3 = DownloadJobRepository(db3)
                 j3 = await repo3.get(job_uuid)
                 if j3:
-                    await repo3.update_status(j3, new_status, new_error)
-                    apply_download_progress(
+                    outcome = (
+                        build_sync_outcome(
+                            decision.outcome_code,
+                            metadata_count=metadata_count,
+                            media_count=image_count,
+                        )
+                        if decision.outcome_code
+                        else None
+                    )
+                    await finalize_download_job(
+                        db3,
                         j3,
-                        "complete" if new_status == "complete" else "failed",
-                        new_error or "Download complete; no new metadata to import",
+                        status=decision.status,
+                        outcome=outcome,
+                        error=error,
+                        message=error,
                         assets=image_count,
                     )
-                    if new_status == "complete" and j3.subscription_source_id:
-                        await mark_source_sync_success(db3, j3.subscription_source_id)
-                    await db3.commit()
 
     elif result is not None and result.returncode != 0:
         # Non-zero exit — maybe partial files were downloaded

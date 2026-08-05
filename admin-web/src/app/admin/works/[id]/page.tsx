@@ -5,10 +5,15 @@ import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { AssetFilmstrip, AssetImage, PageHeader, PageShell, SourceBadge, ErrorState, EmptyState, isArchiveAsset } from "@/components";
+import { AssetFilmstrip, AssetViewer, WorkMediaThumbnail, PageHeader, PageShell, SourceBadge, ErrorState, EmptyState } from "@/components";
 import { Breadcrumb } from "@/components/Breadcrumb";
 import { usePermissions } from "@/lib/usePermissions";
 import { FullImageLightbox, ArrowIcon, DisclosurePanel, type AssetData } from "@/components/WorkViewerParts";
+import { useI18nFormat } from "@/lib/i18n-format";
+import { quoteSearchValue, searchUrl } from "@/lib/search-query";
+import { Star } from "lucide-react";
+import { adminRoutes } from "@/lib/adminRoutes";
+import { formatMediaDuration } from "@/lib/media";
 
 interface WorkSourceData {
   id: string;
@@ -38,6 +43,9 @@ function WorkViewerShell({ workId }: { workId: string }) {
   useEffect(() => {
     if (!totalPages) return;
     const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("video, input, textarea, select, button, a, [role='slider']")) return;
       if (event.key === "ArrowLeft") changePage(-1);
       if (event.key === "ArrowRight") changePage(1);
     };
@@ -46,16 +54,16 @@ function WorkViewerShell({ workId }: { workId: string }) {
   }, [totalPages]);
 
   if (assets.isLoading) return <div className="card p-4 animate-pulse"><div className="h-[60vh] rounded-md bg-subtle" /></div>;
-  if (!assets.data || !assets.data.length) return <div className="card p-4"><EmptyState title={t("work_detail.no_assets_title", "No assets")} description={t("work_detail.no_assets")} /></div>;
+  if (!assets.data || !assets.data.length) return <div className="card p-4"><EmptyState title={t("work_detail.no_assets_title")} description={t("work_detail.no_assets")} /></div>;
 
   const current = assets.data[activeIndex] as AssetData;
-  const currentIsArchive = isArchiveAsset(current);
 
   return (
     <section className="card overflow-hidden">
       <div
         className="relative flex min-h-[58vh] items-center justify-center bg-canvas"
         onWheel={(event) => {
+          if ((event.target as HTMLElement).closest("video")) return;
           if (totalPages <= 1) return;
           wheelDelta.current += event.deltaY;
           if (Math.abs(wheelDelta.current) < 80) return;
@@ -64,39 +72,19 @@ function WorkViewerShell({ workId }: { workId: string }) {
           wheelDelta.current = 0;
         }}
       >
-        {currentIsArchive ? (
-          <div className="mx-4 rounded-md border border-border bg-surface p-8 text-center">
-            <div className="mx-auto mb-3 flex h-20 w-20 items-center justify-center rounded-md border border-border bg-subtle font-mono text-base font-semibold text-muted">ZIP</div>
-            <div className="text-sm font-medium text-fg">{t("work_detail.archive_asset")}</div>
-            <div className="mt-1 max-w-md truncate text-xs text-muted">{current.file_name}</div>
-            <a href={current.original_url || ""} className="btn-ghost mt-4 inline-flex text-xs" target="_blank" rel="noopener noreferrer">
-              {t("work_detail.download_original")}
-            </a>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setFullAsset(current)}
-            className="group flex h-full min-h-[58vh] w-full items-center justify-center p-3"
-            title={t("work_detail.view_full", "View full image")}
-          >
-            <AssetImage
-              key={current.id}
-              src={current.preview_url}
-              assetId={current.id}
-              size="preview"
-              alt={current.file_name}
-              className="fade-in max-h-[72vh] max-w-full object-contain no-outline transition-transform duration-150 group-hover:scale-[1.005]"
-            />
-          </button>
-        )}
+        <AssetViewer
+          key={current.id}
+          workId={workId}
+          asset={current}
+          onOpenImage={() => setFullAsset(current)}
+        />
 
         {totalPages > 1 && (
           <>
-            <button type="button" onClick={() => changePage(-1)} className="absolute left-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-md border border-border bg-surface/90 text-fg shadow-overlay hover:bg-subtle" aria-label={t("works.prev")}>
+            <button type="button" onClick={() => changePage(-1)} className="absolute left-3 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-md border border-border bg-surface/90 text-fg shadow-overlay hover:bg-subtle" aria-label={t("works.prev")}>
               <ArrowIcon direction="left" />
             </button>
-            <button type="button" onClick={() => changePage(1)} className="absolute right-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-md border border-border bg-surface/90 text-fg shadow-overlay hover:bg-subtle" aria-label={t("works.next")}>
+            <button type="button" onClick={() => changePage(1)} className="absolute right-3 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-md border border-border bg-surface/90 text-fg shadow-overlay hover:bg-subtle" aria-label={t("works.next")}>
               <ArrowIcon direction="right" />
             </button>
             <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-md bg-black/70 px-2 py-1 text-xs font-medium text-white">
@@ -108,13 +96,16 @@ function WorkViewerShell({ workId }: { workId: string }) {
 
       <div className="border-t border-border p-3">
         <AssetFilmstrip assets={assets.data as AssetData[]} activeIndex={activeIndex} onSelect={setActiveIndex} />
-        <div className="mt-3 grid gap-2 text-xs text-muted sm:grid-cols-3">
+        <div className="mt-3 grid gap-2 text-xs text-muted sm:grid-cols-4">
           <div className="min-w-0"><span className="font-medium text-fg">{t("work_detail.file")}</span><div className="truncate font-mono">{current.file_name}</div></div>
           {current.width && current.height && (
             <div><span className="font-medium text-fg">{t("work_detail.dimensions")}</span><div>{current.width} &times; {current.height}</div></div>
           )}
           {current.mime_type && (
             <div><span className="font-medium text-fg">{t("work_detail.format")}</span><div>{current.mime_type}</div></div>
+          )}
+          {formatMediaDuration(current.duration) && (
+            <div><span className="font-medium text-fg">{t("media.duration")}</span><div>{formatMediaDuration(current.duration)}</div></div>
           )}
         </div>
       </div>
@@ -124,17 +115,19 @@ function WorkViewerShell({ workId }: { workId: string }) {
 }
 
 function WorkHistory({ workId }: { workId: string }) {
+  const t = useT();
+  const fmt = useI18nFormat();
   const commits = useQuery({
     queryKey: queryKeys.curation.subject("work", workId),
     queryFn: () => api.listCurationCommits({ subject_type: "work", subject_id: workId, limit: 20 }),
   });
   if (commits.isLoading) return <div className="animate-pulse"><div className="h-20 rounded-md bg-subtle" /></div>;
-  if (!commits.data?.items.length) return <EmptyState title="No history yet" description="Curation commits touching this work will appear here." />;
+  if (!commits.data?.items.length) return <EmptyState title={t("work_detail.no_history")} description={t("work_detail.no_history_desc")} />;
   return (
     <div>
       <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-medium uppercase tracking-wide text-muted">History</h3>
-        <Link href={`/admin/curation?subject_type=work&subject_id=${workId}`} className="text-xs text-accent hover:underline">Open curation</Link>
+        <h3 className="text-sm font-medium uppercase tracking-wide text-muted">{t("work_detail.history")}</h3>
+        <Link href={`${adminRoutes.curation}?subject_type=work&subject_id=${workId}`} className="text-xs text-accent hover:underline">{t("work_detail.open_curation")}</Link>
       </div>
       <div className="space-y-3">
         {commits.data.items.map((commit) => (
@@ -145,7 +138,7 @@ function WorkHistory({ workId }: { workId: string }) {
               <span className="mx-1.5">·</span>
               <span>{commit.trigger}</span>
               <span className="mx-1.5">·</span>
-              <span>{new Date(commit.occurred_at).toLocaleString()}</span>
+              <span>{fmt.dateTime(commit.occurred_at)}</span>
             </div>
             <div className="mt-1 flex flex-wrap gap-1.5">
               {commit.changes.filter((c) => c.subject_id === workId).map((change) => (
@@ -161,6 +154,7 @@ function WorkHistory({ workId }: { workId: string }) {
 
 export default function WorkDetailPage() {
   const t = useT();
+  const fmt = useI18nFormat();
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
@@ -224,7 +218,7 @@ export default function WorkDetailPage() {
         title={w.title || t("work_detail.untitled")}
         description={
           <span className="flex flex-wrap items-center gap-3">
-            {primaryWs && <SourceBadge source={primaryWs.source} href={`/admin/works?source=${primaryWs.source}`} />}
+            {primaryWs && <SourceBadge source={primaryWs.source} href={searchUrl("/admin/works", `source:${primaryWs.source}`)} />}
             {w.creator_name && w.creator_id && (
               <span className="text-sm">
                 {t("work_detail.by")}{" "}
@@ -254,9 +248,9 @@ export default function WorkDetailPage() {
               {workTags.data && workTags.data.length > 0 && (
                 <div className="mb-3 flex flex-wrap gap-2">
                   {workTags.data.map((tag) => (
-                    <button key={tag.id} onClick={() => router.push(`/admin/tags/${tag.id}`)}
+                    <button key={tag.id} onClick={() => router.push(searchUrl("/admin/works", `type:work tag:${quoteSearchValue(tag.normalized_name)}`))}
                       className="badge border-accent/30 bg-accent-subtle text-accent hover:border-accent"
-                      title={`Search: ${tag.normalized_name}${tag.category ? ` (${tag.category})` : ""}`}>
+                      title={t("work_detail.search_tag", { tag: `${tag.normalized_name}${tag.category ? ` (${tag.category})` : ""}` })}>
                       {tag.normalized_name}
                       {tag.category && <span className="text-xs text-muted">({tag.category})</span>}
                     </button>
@@ -266,9 +260,9 @@ export default function WorkDetailPage() {
               {rawTags.length > 0 && (
                 <div className="flex flex-wrap gap-2">
                   {rawTags.map((tag, i) => (
-                    <button key={`${tag}-${i}`} onClick={() => router.push(`/admin/search?q=${encodeURIComponent(tag)}`)}
+                    <button key={`${tag}-${i}`} onClick={() => router.push(searchUrl("/admin/works", `type:work tag:${quoteSearchValue(tag)}`))}
                       className="badge border-border bg-subtle text-muted hover:border-accent hover:text-accent"
-                      title={`Search source tag: ${tag}`}>
+                      title={t("work_detail.search_source_tag", { tag })}>
                       {tag}
                     </button>
                   ))}
@@ -298,10 +292,10 @@ export default function WorkDetailPage() {
               <div className="space-y-3">
                 {wsList.map((s) => <SourceRecord key={s.id} source={s} />)}
               </div>
-            ) : <EmptyState title={t("work_detail.no_source_records")} description={t("work_detail.no_source_records_desc", "Source metadata is created during import.")} />}
+            ) : <EmptyState title={t("work_detail.no_source_records")} description={t("work_detail.no_source_records_desc")} />}
           </DisclosurePanel>
 
-          <DisclosurePanel storageKey={`work-detail:${id}:history`} title="History">
+          <DisclosurePanel storageKey={`work-detail:${id}:history`} title={t("work_detail.history")}>
             <WorkHistory workId={id} />
           </DisclosurePanel>
         </div>
@@ -319,28 +313,29 @@ export default function WorkDetailPage() {
               </div>
               {canCurate && (
                 <button onClick={() => toggleFavorite.mutate(id)}
-                  className={`shrink-0 text-2xl ${work.data?.is_favorite ? "text-warning" : "text-muted hover:text-warning"}`}
-                  title={work.data?.is_favorite ? t("common.unfavorite") : t("common.favorite")}>
-                  {work.data?.is_favorite ? "★" : "☆"}
+                  className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-md ${work.data?.is_favorite ? "text-warning" : "text-muted hover:bg-subtle hover:text-warning"}`}
+                  title={work.data?.is_favorite ? t("common.unfavorite") : t("common.favorite")}
+                  aria-label={work.data?.is_favorite ? t("common.unfavorite") : t("common.favorite")}>
+                  <Star className="h-6 w-6" fill={work.data?.is_favorite ? "currentColor" : "none"} aria-hidden="true" />
                 </button>
               )}
             </div>
             <dl className="space-y-2 text-sm">
               {primaryWs?.source_work_id && <div className="flex justify-between gap-3"><dt className="text-muted">{t("work_detail.work_id")}</dt><dd className="truncate font-mono text-xs">{primaryWs.source_work_id}</dd></div>}
-              <div className="flex justify-between gap-3"><dt className="text-muted">{t("work_detail.posted")}</dt><dd>{createDate ? new Date(createDate).toLocaleDateString() : t("work_detail.unknown")}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-muted">{t("work_detail.posted")}</dt><dd>{createDate ? fmt.date(createDate) : t("work_detail.unknown")}</dd></div>
               {rawWidth && rawHeight && <div className="flex justify-between gap-3"><dt className="text-muted">{t("work_detail.dimensions")}</dt><dd>{rawWidth} &times; {rawHeight}</dd></div>}
               <div className="flex justify-between gap-3"><dt className="text-muted">{t("work_detail.pages")}</dt><dd>{pageCount}</dd></div>
               {illustType && <div className="flex justify-between gap-3"><dt className="text-muted">{t("work_detail.type")}</dt><dd className="capitalize">{illustType}</dd></div>}
-              <div className="flex justify-between gap-3"><dt className="text-muted">{t("work_detail.imported")}</dt><dd className="text-right text-xs">{new Date(w.created_at).toLocaleString()}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-muted">{t("work_detail.imported")}</dt><dd className="text-right text-xs">{fmt.dateTime(w.created_at)}</dd></div>
             </dl>
             <div className="mt-4 flex flex-wrap gap-2">
               {canCurate && visibility === "visible" ? (
                 <button onClick={() => curateWork.mutate("trash")} disabled={curateWork.isPending} className="btn-danger text-xs">
-                  Move to Trash
+                  {t("work_detail.move_to_trash")}
                 </button>
               ) : canCurate && visibility === "trashed" ? (
                 <button onClick={() => curateWork.mutate("restore")} disabled={curateWork.isPending} className="btn-ghost text-xs">
-                  Restore
+                  {t("work_detail.restore")}
                 </button>
               ) : null}
               {primaryWs?.source_url && (
@@ -355,13 +350,13 @@ export default function WorkDetailPage() {
             <div className="card grid grid-cols-2 gap-2 p-3">
               {totalView !== undefined && (
                 <div className="rounded-md bg-accent-subtle p-3 text-center text-accent">
-                  <div className="tabular text-xl font-semibold">{totalView.toLocaleString()}</div>
+                  <div className="tabular text-xl font-semibold">{fmt.number(totalView)}</div>
                   <div className="text-xs">{t("work_detail.views")}</div>
                 </div>
               )}
               {totalBookmarks !== undefined && (
                 <div className="rounded-md bg-warning-subtle p-3 text-center text-warning">
-                  <div className="tabular text-xl font-semibold">{totalBookmarks.toLocaleString()}</div>
+                  <div className="tabular text-xl font-semibold">{fmt.number(totalBookmarks)}</div>
                   <div className="text-xs">{t("work_detail.bookmarks")}</div>
                 </div>
               )}
@@ -386,7 +381,10 @@ function MoreFromCreator({ creatorId, currentWorkId }: { creatorId: string; curr
   const t = useT();
   const works = useQuery({
     queryKey: ["more-from-creator", creatorId],
-    queryFn: () => api.listWorks(0, 6, { creator_id: creatorId, sort_by: "posted_at", sort_order: "desc" }),
+    queryFn: async () => {
+      const result = await api.search(`creator:${creatorId} sort:posted-desc`, 0, 6, "works");
+      return result.groups.works || { total: 0, items: [] };
+    },
   });
   if (works.isLoading || !works.data?.items?.length) return null;
   const others = works.data.items.filter(w => w.id !== currentWorkId).slice(0, 5);
@@ -398,13 +396,13 @@ function MoreFromCreator({ creatorId, currentWorkId }: { creatorId: string; curr
         {others.map(w => (
           <Link key={w.id} href={`/admin/works/${w.id}`} className="group">
             <div className="aspect-[4/3] overflow-hidden rounded-md bg-subtle">
-              <AssetImage assetId={w.thumbnail_asset_id} alt={w.title || ""} className="h-full w-full object-cover" fallback={t("works.na")} />
+              <WorkMediaThumbnail assetId={w.thumbnail_asset_id} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" fallback={t("works.na")} />
             </div>
             <p className="text-xs mt-1 truncate group-hover:text-accent">{w.title || t("works.untitled")}</p>
           </Link>
         ))}
       </div>
-      <Link href={`/admin/works?creator=${creatorId}`} className="text-xs text-accent hover:underline mt-2 inline-block">
+      <Link href={searchUrl("/admin/works", `creator:${creatorId} sort:posted-desc`)} className="text-xs text-accent hover:underline mt-2 inline-block">
         {t("work_detail.view_all_from_creator")}
       </Link>
     </div>

@@ -61,7 +61,7 @@ test.describe("2. All pages load", () => {
     "/admin/settings", "/admin/settings/gallerydl", "/admin/settings/proxy",
     "/admin/settings/auth-status", "/admin/settings/logs", "/admin/settings/backup",
     "/admin/settings/download-defaults", "/admin/settings/subscription-defaults",
-    "/admin/settings/dedup", "/admin/settings/scheduler-defaults", "/admin/settings/profile",
+    "/admin/settings/dedup", "/admin/settings/scheduler-defaults", "/admin/profile",
   ];
   for (const p of pages) {
     test(p, async ({ page }) => {

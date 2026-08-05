@@ -14,6 +14,7 @@ versions.
 | Deployment sizing | [Deployment profiles](deployment-profiles.md) | [English only](deployment-profiles.md) |
 | gallery-dl settings | [Configuration](gallerydl-config.md) | [配置](gallerydl-config.zh.md) |
 | Provider behavior and authentication | [Providers](providers.md) | [Provider](providers.zh.md) |
+| LAN HTTP and WebSocket contract | [API contracts](api/README.md) | [API 契约](api/README.zh.md) |
 | Known operational risks | [Risk register](risks.md) | [风险登记](risks.zh.md) |
 | Privacy-safe distribution | [Distribution](distribution.md) | [分发与隐私](distribution.zh.md) |
 
@@ -22,6 +23,7 @@ versions.
 | Topic | English | 简体中文 |
 |---|---|---|
 | System boundaries and data flow | [Architecture](architecture.md) | [架构](architecture.zh.md) |
+| Compound search syntax and API | [Search language / 搜索语言](search.md) | [Search language / 搜索语言](search.md) |
 | Local development and tests | [Development](development.md) | [开发](development.zh.md) |
 | Release process | [Release checklist](release-checklist.md) | — |
 | Contribution workflow | [Contributing](../CONTRIBUTING.md) | [贡献](../CONTRIBUTING.zh.md) |

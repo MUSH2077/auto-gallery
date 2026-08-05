@@ -13,6 +13,12 @@ from pathlib import Path
 
 from app.config import settings
 from app.services.image_utils import can_generate_thumbnail
+from app.services.media_assets import (
+    browser_video_mime_type,
+    is_browser_playable_video,
+    media_kind,
+    render_video_derivatives,
+)
 
 logger = logging.getLogger(__name__)
 RENDERER_VERSION = "2"
@@ -89,7 +95,62 @@ async def sync_thumbnails(asset_rows: list, lib_dir: Path, file_index,
     generated = 0
     for asset, _as in asset_rows:
         fp = Path(settings.download_root) / asset.file_path
-        if fp.exists() and can_generate_thumbnail(fp.suffix):
+        if not fp.exists():
+            continue
+        kind = media_kind(asset.mime_type, asset.file_name)
+        if kind == "video" and is_browser_playable_video(asset.mime_type, asset.file_name):
+            try:
+                expected_paths = {
+                    lib_dir / f"{fp.stem}.thumbnail.webp",
+                    lib_dir / f"{fp.stem}.poster.webp",
+                }
+                existing_paths = {path for path in expected_paths if path.exists()}
+                derivatives = await asyncio.to_thread(
+                    render_video_derivatives,
+                    fp,
+                    lib_dir,
+                    fp.stem,
+                    force=force,
+                )
+                if derivatives.inspection:
+                    asset.width = derivatives.inspection.width
+                    asset.height = derivatives.inspection.height
+                    asset.duration = derivatives.inspection.duration
+                    asset.mime_type = browser_video_mime_type(asset.file_name, asset.mime_type)
+                produced = [
+                    ("thumbnail", derivatives.thumbnail_path),
+                    ("video_poster", derivatives.poster_path),
+                ]
+                for file_type, path in produced:
+                    if not path:
+                        continue
+                    relative = str(path.relative_to(settings.library_root))
+                    if file_type == "thumbnail":
+                        asset.thumb_sm_path = relative
+                    else:
+                        asset.thumb_lg_path = relative
+                    if file_index is not None:
+                        file_index.upsert(
+                            file_path=relative,
+                            storage_root="library",
+                            source=source,
+                            creator_dir=creator_dir,
+                            work_id=work_id,
+                            file_name=path.name,
+                            file_type=file_type,
+                            file_size=path.stat().st_size,
+                        )
+                    if force or path not in existing_paths:
+                        generated += 1
+                if derivatives.error:
+                    logger.warning(
+                        "Video derivatives incomplete for asset %s: %s",
+                        asset.id,
+                        derivatives.error,
+                    )
+            except Exception:
+                logger.warning("Video enrichment failed for %s", fp.name, exc_info=True)
+        elif can_generate_thumbnail(fp.suffix):
             try:
                 expected = lib_dir / f"{fp.stem}.thumbnail.webp"
                 if not force and expected.exists() and expected.stat().st_mtime_ns >= fp.stat().st_mtime_ns:

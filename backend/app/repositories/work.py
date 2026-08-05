@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select, func, and_, or_
@@ -11,7 +12,6 @@ class WorkRepository:
         self.session = session
 
     async def list_all(self, offset: int = 0, limit: int = 50,
-                       search: str | None = None,
                        source: str | None = None,
                        creator_id: str | None = None,
                        tag: str | None = None,
@@ -61,6 +61,21 @@ class WorkRepository:
             .group_by(WorkSource.work_id)
             .subquery()
         )
+        video_agg = (
+            select(
+                WorkSource.work_id,
+                (func.count(AssetSource.id) > 0).label("has_video"),
+            )
+            .join(AssetSource, AssetSource.work_source_id == WorkSource.id)
+            .join(Asset, Asset.id == AssetSource.asset_id)
+            .where(or_(
+                Asset.mime_type.like("video/%"),
+                Asset.file_name.ilike("%.mp4"),
+                Asset.file_name.ilike("%.webm"),
+            ))
+            .group_by(WorkSource.work_id)
+            .subquery()
+        )
 
         stmt = (
             select(
@@ -70,17 +85,17 @@ class WorkRepository:
                 ws_agg.c.creator_name.label("creator_name"),
                 ws_agg.c.creator_id.label("creator_id"),
                 func.coalesce(ug_agg.c.has_ugoira, False).label("has_ugoira"),
+                func.coalesce(video_agg.c.has_video, False).label("has_video"),
             )
             .outerjoin(ws_agg, ws_agg.c.work_id == Work.id)
             .outerjoin(ac_agg, ac_agg.c.work_id == Work.id)
             .outerjoin(ug_agg, ug_agg.c.work_id == Work.id)
+            .outerjoin(video_agg, video_agg.c.work_id == Work.id)
             .outerjoin(WorkCurationState, WorkCurationState.work_id == Work.id)
         )
 
         # Build WHERE conditions
         conditions = []
-        if search:
-            conditions.append(Work.title.ilike(f"%{search}%"))
         if is_nsfw is not None:
             conditions.append(Work.is_nsfw == is_nsfw)
         if is_favorite is not None:
@@ -150,6 +165,7 @@ class WorkRepository:
             w.creator_name = row[3]
             w.creator_id = str(row[4]) if row[4] else None
             w.has_ugoira = bool(row[5])
+            w.has_video = bool(row[6])
             w.preview_asset_ids = []
             w.curation_visibility = curation_visibility if curation_visibility != "all" else "visible"
             works.append(w)
@@ -212,14 +228,19 @@ class WorkRepository:
             .where(AssetSource.work_source_id == work_source_id)
         )
         return list(result.scalars().all())
-    async def get_creator_timeline(self, creator_id: UUID,
-                                    from_date: str | None = None,
-                                    to_date: str | None = None) -> tuple[list[dict], list[str]]:
-        """Return per-source work counts and work IDs per day for a creator timeline grid."""
+    async def get_creator_timeline(
+        self,
+        creator_id: UUID,
+        from_date: datetime | None = None,
+        to_date: datetime | None = None,
+    ) -> tuple[list[dict], list[str]]:
+        """Return per-source publishing events and work IDs per UTC day."""
+        event_timestamp = func.coalesce(WorkSource.posted_at, Work.posted_at)
+        event_date = func.date(func.timezone("UTC", event_timestamp))
         cols = [
-            func.date(Work.posted_at).label("date"),
+            event_date.label("date"),
             WorkSource.source,
-            func.count(Work.id).label("cnt"),
+            func.count(func.distinct(WorkSource.id)).label("cnt"),
             func.array_agg(func.distinct(Work.id)).label("work_ids"),
         ]
         stmt = (
@@ -230,13 +251,13 @@ class WorkRepository:
                   (SourceCreator.source_creator_id == WorkSource.source_creator_id)
                   & (SourceCreator.source == WorkSource.source))
             .where(SourceCreator.creator_id == creator_id)
-            .where(Work.posted_at.isnot(None))
+            .where(event_timestamp.isnot(None))
         )
         if from_date:
-            stmt = stmt.where(Work.posted_at >= from_date)
+            stmt = stmt.where(event_timestamp >= from_date)
         if to_date:
-            stmt = stmt.where(Work.posted_at < to_date)
-        stmt = stmt.group_by(func.date(Work.posted_at), WorkSource.source).order_by("date")
+            stmt = stmt.where(event_timestamp < to_date)
+        stmt = stmt.group_by(event_date, WorkSource.source).order_by(event_date, WorkSource.source)
         result = await self.session.execute(stmt)
         rows = result.all()
         days: dict[str, dict] = {}

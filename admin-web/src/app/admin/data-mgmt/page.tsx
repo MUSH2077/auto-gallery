@@ -1,15 +1,19 @@
 "use client";
-import { Fragment, useState } from "react";
-import Link from "next/link";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { PageHeader, ConfirmDialog, PageShell, StatCard, StatusBadge, PermissionGuard } from "@/components";
+import { PageHeader, ConfirmDialog, Modal, PageShell, StatusBadge, PermissionGuard } from "@/components";
+import ChartFrame from "@/components/charts/ChartFrame";
+import StorageColonnade, { type StorageColonnadeGroup } from "@/components/charts/StorageColonnade";
+import TickDonut from "@/components/charts/TickDonut";
+import type { ChartDatum } from "@/components/charts/types";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useStaggeredEntrance } from "@/lib/motion";
 import { useRouter } from "next/navigation";
-import { getSourceColor } from "@/lib/sourceColors";
+import { useI18nFormat } from "@/lib/i18n-format";
+import { adminRoutes } from "@/lib/adminRoutes";
 
 type Severity = "error" | "warning" | "info";
 
@@ -40,6 +44,7 @@ function severityBadge(s: string, t: (k: string) => string) {
 
 export default function DataManagementPage() {
   const t = useT();
+  const fmt = useI18nFormat();
   const router = useRouter();
   const qc = useQueryClient();
   const notify = useNotifications();
@@ -50,7 +55,6 @@ export default function DataManagementPage() {
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [integrityItems, setIntegrityItems] = useState<{ type: string; description: string; count: number; items: any[] } | null>(null);
   const [dangerConfirm, setDangerConfirm] = useState("");
-  const [expandedCreators, setExpandedCreators] = useState<Set<string>>(new Set());
 
   // ── Data queries ──
   const systemInfo = useQuery({
@@ -121,7 +125,10 @@ export default function DataManagementPage() {
 
   const createBackupMut = useMutation({
     mutationFn: () => api.createBackup(),
-    onSuccess: (d: any) => { setResult({ ok: true, msg: "Backup: " + d.filename + " (" + d.size_mb + " MB)" }); backups.refetch(); },
+    onSuccess: (d: any) => {
+      setResult({ ok: true, msg: t("backup.created", { filename: d.filename, size: d.size_mb }) });
+      backups.refetch();
+    },
     onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
   });
 
@@ -145,7 +152,7 @@ export default function DataManagementPage() {
       setActiveAction(vars.key);
     },
     onSuccess: (data, vars) => {
-      setResult({ ok: true, msg: `${vars.title} queued` });
+      setResult({ ok: true, msg: t("datamgmt.action_queued", { action: vars.title }) });
       notify.startOperationJob(data.job_id, "admin-clear", vars.title, { entity: vars.entity });
       if (vars.entity === "creators" || vars.entity === "all") {
         qc.setQueryData(queryKeys.creators.count, { count: 0 });
@@ -173,27 +180,62 @@ export default function DataManagementPage() {
   const issues = integrity.data?.issues || [];
   const dbStats = breakdown?.db_stats || integrity.data?.db_stats;
   const lastBackup = backups.data?.backups?.[0];
-  const totalSourceSize = breakdown?.sources
-    ? Object.values(breakdown.sources).reduce((sum, s) => sum + s.size_mb, 0)
-    : 0;
-  const sourceEntries = breakdown?.sources
-    ? Object.entries(breakdown.sources).sort(([, a], [, b]) => b.size_mb - a.size_mb)
-    : [];
+  const totalSourceSize = useMemo(() => (
+    breakdown?.sources
+      ? Object.values(breakdown.sources).reduce((sum, storage) => sum + storage.size_mb, 0)
+      : 0
+  ), [breakdown?.sources]);
+  const sourceEntries = useMemo(() => (
+    breakdown?.sources
+      ? Object.entries(breakdown.sources).sort(([, left], [, right]) => right.size_mb - left.size_mb)
+      : []
+  ), [breakdown?.sources]);
   const creatorEntries = breakdown?.creator_tree || [];
   const unlinkedRepositories = breakdown?.unlinked_repositories || [];
+  const sourceStorageData = useMemo<ChartDatum[]>(() => (
+    sourceEntries.map(([source, storage]) => ({
+      id: source,
+      label: source,
+      value: storage.size_mb,
+      colorRole: `source:${source}`,
+      description: t("charts.storage_source_row", {
+        source,
+        size: formatSize(storage.size_mb),
+        count: storage.work_count,
+      }),
+    }))
+  ), [sourceEntries, t]);
+  const sourceStorageLeader = sourceStorageData[0];
+  const storageGroups = useMemo<StorageColonnadeGroup[]>(() => (
+    creatorEntries.map((creator) => ({
+      id: creator.creator_id,
+      label: creator.display_name,
+      value: creator.size_mb,
+      href: `/admin/creators/${creator.creator_id}`,
+      workCount: creator.work_count,
+      children: creator.repositories.map((repository) => ({
+        id: `${creator.creator_id}:${repository.source}:${repository.directory_name}`,
+        label: repository.directory_name,
+        value: repository.size_mb,
+        href: repository.repository_id
+          ? adminRoutes.repository(repository.repository_id)
+          : undefined,
+        source: repository.source,
+        sourceLabel: repository.source_display_name,
+        workCount: repository.work_count,
+      })),
+    }))
+  ), [creatorEntries]);
+  const creatorStorageLeader = storageGroups[0];
   const integrityItemKeys = (integrityItems?.items || []).map(
     (item, index) => item.id || item.path || item.file_name || item.name || `item:${index}`,
-  );
-  const sourceEntrance = useStaggeredEntrance(sourceEntries.map(([source]) => `source:${source}`));
-  const creatorEntrance = useStaggeredEntrance(
-    creatorEntries.map((creator) => creator.creator_id),
   );
   const issueEntrance = useStaggeredEntrance(issues.map((issue) => issue.type));
   const integrityItemEntrance = useStaggeredEntrance(integrityItemKeys);
 
   return (
     <PermissionGuard module="system">
-    <PageShell size="normal">
+    <PageShell>
       <PageHeader title={t("datamgmt.title")} description={t("datamgmt.desc")} />
 
       {result && (
@@ -216,164 +258,114 @@ export default function DataManagementPage() {
             <StatusBadge status={clearOperation.status} className="uppercase" />
           </div>
           <div className="mt-1 text-xs opacity-80">
-            {clearOperation.error || clearOperation.result?.message || clearOperation.progress?.label || "Queued in the background"}
+            {clearOperation.error || clearOperation.result?.message || clearOperation.progress?.label || t("datamgmt.queued_background")}
           </div>
         </div>
       )}
 
-      {/* ═══ Stats Cards ═══ */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-6">
-        {[
-          { label: t("datamgmt.stats_works"), value: dbStats?.works ?? "-", color: "blue" },
-          { label: t("datamgmt.stats_assets"), value: dbStats?.assets ?? "-", color: "indigo" },
-          { label: t("datamgmt.stats_creators"), value: creatorCount.data?.count ?? "-", color: "purple" },
-          { label: t("datamgmt.stats_subs"), value: subCount.data?.count ?? "-", color: "green" },
-          { label: t("datamgmt.stats_tags"), value: dbStats?.tags ?? "-", color: "amber" },
-          { label: t("datamgmt.stats_downloads"), value: info ? formatSize(info.downloads_size_mb) : "-", color: "pink" },
-          { label: t("datamgmt.stats_library"), value: info ? formatSize(info.library_size_mb) : "-", color: "teal" },
-        ].map((s) => (
-          <StatCard key={s.label} label={s.label} value={s.value} tone={s.color === "green" ? "success" : s.color === "amber" ? "warning" : "active"} className="p-3 text-center [&>div:first-child]:text-xl" />
-        ))}
-      </div>
-
-      <div className="grid grid-cols-1 gap-6 mb-6 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)]">
-        {/* ═══ Storage Distribution ═══ */}
-        <div className="card p-4">
-          <h3 className="font-medium text-sm mb-3">{t("datamgmt.storage_title")}</h3>
-          {breakdown?.sources && Object.keys(breakdown.sources).length > 0 ? (
-            <div className="space-y-2">
-              {sourceEntries.map(([source, s], index) => {
-                  const pct = totalSourceSize > 0 ? (s.size_mb / totalSourceSize) * 100 : 0;
-                  const color = getSourceColor(source);
-                  const entrance = sourceEntrance(`source:${source}`, index);
-                  return (
-                    <div key={source} className={entrance.className} style={entrance.style}>
-                      <div className="flex items-center justify-between text-xs mb-0.5">
-                        <span className="font-medium capitalize">{source}</span>
-                        <span className="text-muted">
-                          {formatSize(s.size_mb)} · {s.work_count} {t("datamgmt.storage_works_label")}
-                        </span>
-                      </div>
-                      <div className="w-full h-3 bg-subtle rounded-full overflow-hidden">
-                        <div className="h-full w-full rounded-full transition-transform duration-slow" style={{ transform: `scaleX(${Math.max(pct, 2) / 100})`, transformOrigin: "left", backgroundColor: color }} />
-                      </div>
-                    </div>
-                  );
-                })}
-              <div className="pt-2 border-t text-xs text-muted flex justify-between">
-                <span>Total</span>
-                <span className="font-medium">{formatSize(totalSourceSize)}</span>
-              </div>
-            </div>
-          ) : (
-            <p className="text-sm text-muted text-center py-6">{t("datamgmt.storage_no_data")}</p>
-          )}
+      <section
+        data-page-primary-content
+        aria-labelledby="data-ledger-title"
+        className="mb-6 overflow-hidden rounded-md border border-border bg-border"
+      >
+        <div className="bg-surface px-4 py-3">
+          <h2 id="data-ledger-title" className="text-sm font-semibold text-fg">{t("charts.metric_ledger_title")}</h2>
+          <p className="mt-1 text-xs text-muted">{t("charts.metric_ledger_desc")}</p>
         </div>
-
-        {/* ═══ Creator Storage Top ═══ */}
-        <div className="card p-4">
-          <h3 className="font-medium text-sm mb-3">{t("datamgmt.storage_creators_title")}</h3>
-          {creatorEntries.length > 0 || unlinkedRepositories.length > 0 ? (
-            <div className="overflow-x-auto">
-              {creatorEntries.length > 0 && <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-muted border-b">
-                    <th className="text-left py-1.5 font-medium">#</th>
-                    <th className="text-left py-1.5 font-medium">{t("datamgmt.storage_creator_col")}</th>
-                    <th className="text-left py-1.5 font-medium">{t("datamgmt.storage_repositories_label")}</th>
-                    <th className="text-right py-1.5 font-medium">{t("datamgmt.storage_works_label")}</th>
-                    <th className="text-right py-1.5 font-medium">Size</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {creatorEntries.map((creator, index) => {
-                    const entrance = creatorEntrance(creator.creator_id, index);
-                    const expanded = expandedCreators.has(creator.creator_id);
-                    const detailId = `creator-storage-${creator.creator_id}`;
-                    return (
-                      <Fragment key={creator.creator_id}>
-                        <tr className={`${entrance.className} border-b border-border/60 hover:bg-subtle dark:hover:bg-subtle`} style={entrance.style}>
-                          <td className="py-1 text-muted">{index + 1}</td>
-                          <td className="py-1">
-                            <div className="flex min-w-0 items-center gap-1">
-                              <button
-                                type="button"
-                                className="btn-icon h-8 min-h-8 w-8 min-w-8 shrink-0 text-muted"
-                                aria-expanded={expanded}
-                                aria-controls={detailId}
-                                aria-label={expanded ? t("datamgmt.storage_collapse") : t("datamgmt.storage_expand")}
-                                onClick={() => setExpandedCreators((current) => {
-                                  const next = new Set(current);
-                                  if (next.has(creator.creator_id)) next.delete(creator.creator_id);
-                                  else next.add(creator.creator_id);
-                                  return next;
-                                })}
-                              >
-                                <svg viewBox="0 0 16 16" aria-hidden="true" className={`h-4 w-4 transition-transform ${expanded ? "rotate-90" : ""}`}>
-                                  <path d="m6 3 5 5-5 5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                                </svg>
-                              </button>
-                              <Link href={`/admin/creators/${creator.creator_id}`} className="truncate font-semibold text-accent hover:underline">
-                                {creator.display_name}
-                              </Link>
-                            </div>
-                          </td>
-                          <td className="py-1 text-muted">{creator.repository_count}</td>
-                          <td className="py-1 text-right font-medium">{creator.work_count}</td>
-                          <td className="py-1 text-right font-mono font-semibold text-fg">{formatSize(creator.size_mb)}</td>
-                        </tr>
-                        {expanded && creator.repositories.map((repository, repositoryIndex) => (
-                          <tr
-                            id={repositoryIndex === 0 ? detailId : undefined}
-                            key={`${creator.creator_id}:${repository.source}:${repository.directory_name}`}
-                            className="border-b border-border/40 bg-subtle/40"
-                          >
-                            <td />
-                            <td className="py-1.5 pl-10">
-                              {repository.repository_id ? (
-                                <Link href={`/admin/repositories/${repository.repository_id}`} className="inline-flex min-w-0 items-center gap-2 text-accent hover:underline">
-                                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: getSourceColor(repository.source) }} />
-                                  <span className="truncate font-medium">{repository.directory_name}</span>
-                                </Link>
-                              ) : (
-                                <span className="inline-flex min-w-0 items-center gap-2 text-muted">
-                                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: getSourceColor(repository.source) }} />
-                                  <span className="truncate">{repository.directory_name}</span>
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-1.5 capitalize text-muted">{repository.source_display_name}</td>
-                            <td className="py-1.5 text-right">{repository.work_count}</td>
-                            <td className="py-1.5 text-right font-mono text-fg">{formatSize(repository.size_mb)}</td>
-                          </tr>
-                        ))}
-                      </Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>}
-              {unlinkedRepositories.length > 0 && (
-                <div className="mt-4 border-t border-border pt-3">
-                  <h4 className="text-xs font-semibold text-warning">{t("datamgmt.storage_unlinked_title")}</h4>
-                  <p className="mt-1 text-xs text-muted">{t("datamgmt.storage_unlinked_desc")}</p>
-                  <div className="mt-2 space-y-1">
-                    {unlinkedRepositories.map((repository) => (
-                      <div key={`${repository.disk_source}:${repository.directory_name}`} className="flex items-center justify-between gap-3 rounded-md bg-subtle px-3 py-2 text-xs">
-                        <span className="min-w-0 truncate">
-                          <span className="mr-2 inline-block h-2 w-2 rounded-full" style={{ backgroundColor: getSourceColor(repository.source) }} />
-                          {repository.source}/{repository.directory_name}
-                        </span>
-                        <span className="shrink-0 font-mono">{formatSize(repository.size_mb)}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+        <dl className="grid grid-cols-2 gap-px md:grid-cols-4 2xl:grid-cols-7">
+          {[
+            { label: t("datamgmt.stats_works"), value: dbStats?.works ?? "-" },
+            { label: t("datamgmt.stats_assets"), value: dbStats?.assets ?? "-" },
+            { label: t("datamgmt.stats_creators"), value: creatorCount.data?.count ?? "-" },
+            { label: t("datamgmt.stats_subs"), value: subCount.data?.count ?? "-" },
+            { label: t("datamgmt.stats_tags"), value: dbStats?.tags ?? "-" },
+            { label: t("datamgmt.stats_downloads"), value: info ? formatSize(info.downloads_size_mb) : "-" },
+            { label: t("datamgmt.stats_library"), value: info ? formatSize(info.library_size_mb) : "-" },
+          ].map((metric, index) => (
+            <div
+              key={metric.label}
+              className={`min-h-24 min-w-0 overflow-hidden bg-surface px-4 py-3 ${index === 6 ? "col-span-2 2xl:col-span-1" : ""}`}
+            >
+              <dt className="flex min-w-0 items-start gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted [overflow-wrap:anywhere]">
+                <span className="shrink-0 font-mono text-accent">{String(index + 1).padStart(2, "0")}</span>
+                {metric.label}
+              </dt>
+              <dd className="mt-3 font-mono text-xl font-semibold tabular-nums text-fg [overflow-wrap:anywhere]">{metric.value}</dd>
             </div>
+          ))}
+        </dl>
+      </section>
+
+      <div className="mb-6 grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.35fr)]">
+        <ChartFrame
+          title={t("datamgmt.storage_title")}
+          insight={sourceStorageLeader
+            ? t("charts.storage_insight", {
+              source: sourceStorageLeader.label,
+              size: formatSize(sourceStorageLeader.value),
+              share: fmt.number(
+                totalSourceSize > 0 ? (sourceStorageLeader.value / totalSourceSize) * 100 : 0,
+                { maximumFractionDigits: 1 },
+              ),
+            })
+            : t("datamgmt.storage_no_data")}
+          description={t("charts.storage_encoding")}
+          testId="storage-source-chart"
+        >
+          {sourceStorageData.length ? (
+            <TickDonut
+              data={sourceStorageData}
+              otherLabel={t("charts.other_sources")}
+              formatValue={formatSize}
+            />
           ) : (
-            <p className="text-sm text-muted text-center py-6">{t("datamgmt.storage_no_data")}</p>
+            <p className="py-8 text-center text-sm text-muted">{t("datamgmt.storage_no_data")}</p>
           )}
-        </div>
+        </ChartFrame>
+
+        <ChartFrame
+          title={t("datamgmt.storage_creators_title")}
+          insight={creatorStorageLeader
+            ? t("charts.storage_tree_insight", {
+              creator: creatorStorageLeader.label,
+              size: formatSize(creatorStorageLeader.value),
+            })
+            : t("datamgmt.storage_no_data")}
+          description={t("charts.storage_tree_encoding")}
+          testId="creator-storage-chart"
+        >
+          {storageGroups.length ? (
+            <StorageColonnade
+              groups={storageGroups}
+              formatValue={formatSize}
+              worksLabel={t("datamgmt.storage_works_label")}
+              repositoriesLabel={t("datamgmt.storage_repositories_label")}
+            />
+          ) : (
+            <p className="py-8 text-center text-sm text-muted">{t("datamgmt.storage_no_data")}</p>
+          )}
+
+          {unlinkedRepositories.length > 0 ? (
+            <section className="mt-5 border-t border-border pt-4" aria-labelledby="unlinked-storage-title">
+              <h3 id="unlinked-storage-title" className="text-sm font-semibold text-warning">{t("datamgmt.storage_unlinked_title")}</h3>
+              <p className="mt-1 text-xs text-muted">{t("datamgmt.storage_unlinked_desc")}</p>
+              <ul className="mt-3 divide-y divide-border rounded-md border border-border bg-subtle">
+                {unlinkedRepositories.map((repository) => (
+                  <li
+                    key={`${repository.disk_source}:${repository.directory_name}`}
+                    className="grid min-h-11 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 text-xs"
+                  >
+                    <span className="min-w-0 truncate text-fg">
+                      <span className="mr-2 font-semibold">{repository.source}</span>
+                      {repository.directory_name}
+                    </span>
+                    <span className="font-mono tabular-nums text-muted">{formatSize(repository.size_mb)}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+        </ChartFrame>
       </div>
 
       {/* ═══ Integrity Check ═══ */}
@@ -451,7 +443,7 @@ export default function DataManagementPage() {
 
             {integrity.data.checked_at && (
               <p className="text-xs text-muted mt-3">
-                {t("datamgmt.integrity_checked_at")}: {new Date(integrity.data.checked_at).toLocaleString()}
+                {t("datamgmt.integrity_checked_at")}: {fmt.dateTime(integrity.data.checked_at)}
               </p>
             )}
           </>
@@ -463,16 +455,13 @@ export default function DataManagementPage() {
 
         {/* Integrity items modal */}
         {integrityItems && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setIntegrityItems(null)}>
-            <div className="card-elevated p-4 max-w-xl w-full mx-4 max-h-[70vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="font-medium text-sm">
-                  {t("datamgmt.integrity_items_modal_title")
-                    .replace("{type}", integrityItems.description)
-                    .replace("{count}", String(integrityItems.count))}
-                </h3>
-                <button onClick={() => setIntegrityItems(null)} className="text-muted hover:text-muted text-lg">&times;</button>
-              </div>
+          <Modal
+            open
+            onClose={() => setIntegrityItems(null)}
+            title={t("datamgmt.integrity_items_modal_title")
+              .replace("{type}", integrityItems.description)
+              .replace("{count}", String(integrityItems.count))}
+          >
               <div className="space-y-1 max-h-96 overflow-auto">
                 {integrityItems.items.map((item, i) => {
                   const itemKey = integrityItemKeys[i];
@@ -495,8 +484,7 @@ export default function DataManagementPage() {
                   );
                 })}
               </div>
-            </div>
-          </div>
+          </Modal>
         )}
       </div>
 
@@ -511,7 +499,7 @@ export default function DataManagementPage() {
                 <p className="text-xs text-muted">{t("datamgmt.cleanup_json_desc")}</p>
               </div>
               <button onClick={() => cleanupJSON.mutate()} disabled={cleanupJSON.isPending}
-                className="shrink-0 ml-3 px-3 py-1.5 text-xs bg-warning text-white rounded hover:bg-warning/90 disabled:opacity-50">
+                className="btn-ghost ml-3 min-h-11 shrink-0 text-xs text-warning">
                 {cleanupJSON.isPending ? "..." : t("datamgmt.cleanup_json_btn")}
               </button>
             </div>
@@ -521,7 +509,7 @@ export default function DataManagementPage() {
                 <p className="text-xs text-muted">{t("datamgmt.cleanup_reindex_desc")}</p>
               </div>
               <button onClick={() => rebuildLibrary.mutate()} disabled={rebuildLibrary.isPending}
-                className="shrink-0 ml-3 px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50">
+                className="btn-primary ml-3 shrink-0 text-xs">
                 {rebuildLibrary.isPending ? "..." : t("datamgmt.cleanup_reindex_btn")}
               </button>
             </div>
@@ -562,7 +550,7 @@ export default function DataManagementPage() {
                 <div className="text-xs text-muted">{t("datamgmt.backup_recent")}</div>
                 <div className="text-sm font-medium mt-0.5">
                   {lastBackup
-                    ? new Date(lastBackup.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+                    ? fmt.dateTime(lastBackup.created_at)
                     : t("datamgmt.backup_none")}
                 </div>
               </div>
@@ -623,21 +611,21 @@ export default function DataManagementPage() {
             const isCurrentOperation = clearOperation?.status === "running" && clearOperation.meta?.entity === actionEntity;
             const isPending = (clearOperationMutation.isPending && activeAction === a.key) || isCurrentOperation;
             return (
-              <div key={a.key} className={`flex items-center justify-between p-3 rounded-lg border-l-4 ${
-                a.color === "red" ? "border-l-red-500 bg-subtle" :
-                a.color === "orange" ? "border-l-orange-500 bg-subtle" :
-                "border-l-blue-500 bg-subtle"
+              <div key={a.key} className={`flex min-w-0 flex-col items-stretch gap-3 rounded-md border-l-4 p-3 sm:flex-row sm:items-center sm:justify-between ${
+                a.color === "red" ? "border-l-danger bg-danger-subtle/30" :
+                a.color === "orange" ? "border-l-warning bg-warning-subtle/30" :
+                "border-l-accent bg-accent-subtle/30"
               }`}>
-                <div>
-                  <p className="text-sm font-medium dark:text-white">{a.title}</p>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-fg">{a.title}</p>
                   <p className="text-xs text-muted">{a.desc}</p>
                 </div>
                 <button
                   onClick={() => setConfirmAction(a.key)}
                   disabled={!dangerUnlocked || isPending}
-                  className={`shrink-0 ml-3 px-4 py-1.5 text-xs text-white rounded disabled:opacity-30 transition-opacity ${
+                  className={`min-h-11 w-full shrink-0 rounded-md px-4 py-1.5 text-xs font-semibold text-white transition-opacity disabled:opacity-30 sm:ml-3 sm:w-auto ${
                     a.color === "red" ? "bg-danger hover:bg-danger/90" :
-                    a.color === "orange" ? "bg-orange-600 hover:bg-orange-700" :
+                    a.color === "orange" ? "bg-warning text-canvas hover:bg-warning/90" :
                     "bg-accent hover:bg-accent/90"
                   }`}
                 >

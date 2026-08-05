@@ -55,6 +55,20 @@ bash scripts/debug.sh quick
 | `GET /api/v1/system/logs` | Admin | Tail buffered log output |
 | `GET /media/thumb/{asset_id}` | No | Thumbnail serving (used by frontend img tags) |
 
+### Repair video metadata and posters
+
+The video repair command is read-only by default. It only targets stored MP4
+and WebM assets; apply mode writes derived WebP files under `LIBRARY_ROOT` and
+repairs existing asset metadata without changing original media.
+
+```bash
+# Preview the number of affected video assets
+docker compose run --rm backend python scripts/backfill_video_assets.py
+
+# Apply the idempotent repair
+docker compose run --rm backend python scripts/backfill_video_assets.py --apply
+```
+
 ### Container Health Checks
 
 | Container | Check | Interval | Timeout |

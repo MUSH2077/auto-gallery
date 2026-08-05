@@ -9,17 +9,31 @@ import { countUp } from "@/lib/motion";
  * animate. Reduced motion / low-end fall back to instant text inside
  * countUp itself.
  */
-export default function MotionNumber({ value, className }: { value: number; className?: string }) {
+export default function MotionNumber({
+  value,
+  className,
+  format = (number) => String(Math.round(number)),
+  animateInitial = false,
+  animationKey,
+}: {
+  value: number;
+  className?: string;
+  format?: (value: number) => string;
+  animateInitial?: boolean;
+  animationKey?: string | number;
+}) {
   const ref = useRef<HTMLSpanElement>(null);
   const prev = useRef<number | null>(null);
+  const formatRef = useRef(format);
+  formatRef.current = format;
 
   useEffect(() => {
     const el = ref.current;
     const from = prev.current;
     prev.current = value;
-    if (!el || from === null || from === value) return;
-    countUp(el, from, value);
-  }, [value]);
+    if (!el || (from === null && !animateInitial) || from === value) return;
+    countUp(el, from ?? 0, value, { format: (number) => formatRef.current(number) });
+  }, [animateInitial, animationKey, value]);
 
-  return <span ref={ref} className={className}>{value}</span>;
+  return <span ref={ref} className={className}>{format(value)}</span>;
 }

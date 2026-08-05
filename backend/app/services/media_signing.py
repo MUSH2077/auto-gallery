@@ -9,7 +9,7 @@ from hashlib import sha256
 from app.config import settings
 
 MEDIA_SIGNED_URL_TTL_SECONDS = 10 * 60
-SIGNED_MEDIA_SIZES = {"preview", "original"}
+SIGNED_MEDIA_SIZES = {"preview", "original", "poster", "stream"}
 
 
 def _message(asset_id: str, size: str, expires: int) -> str:
@@ -41,8 +41,13 @@ def verify_media_token(asset_id: str, size: str, expires: int | str | None, toke
 
 def signed_media_url(asset_id: str, size: str, ttl_seconds: int = MEDIA_SIGNED_URL_TTL_SECONDS) -> str:
     """Build a relative signed media URL for preview/original image access."""
+    return signed_media_ticket(asset_id, size, ttl_seconds)[0]
+
+
+def signed_media_ticket(asset_id: str, size: str, ttl_seconds: int) -> tuple[str, int]:
+    """Build a signed media URL and return its exact expiry timestamp."""
     if size not in SIGNED_MEDIA_SIZES:
         raise ValueError(f"Unsupported signed media size: {size}")
     expires = int(time.time()) + ttl_seconds
     token = sign_media_token(asset_id, size, expires)
-    return f"/media/{size}/{asset_id}?expires={expires}&token={token}"
+    return f"/media/{size}/{asset_id}?expires={expires}&token={token}", expires

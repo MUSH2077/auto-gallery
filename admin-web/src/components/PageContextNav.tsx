@@ -5,44 +5,47 @@ import { usePathname } from "next/navigation";
 import { ChevronDown } from "lucide-react";
 
 import {
-  ADMIN_CONTEXT_LINKS,
   ADMIN_LINK_MODULE,
+  ADMIN_MANAGEMENT_LINKS,
   findAdminNavLink,
-  pathnameMatches,
+  hasAdminPermission,
 } from "@/lib/adminNavigation";
 import { useT } from "@/lib/i18n";
 import { usePermissions } from "@/lib/usePermissions";
 
+/**
+ * Navigation for governance destinations which intentionally do not occupy a
+ * sidebar row. First-class peer pages use the sidebar and never render this
+ * second switcher.
+ */
 export default function PageContextNav() {
   const pathname = usePathname();
   const t = useT();
   const { has, isAdmin } = usePermissions();
   const current = findAdminNavLink(pathname);
-  if (!current) return null;
 
-  const links = ADMIN_CONTEXT_LINKS[current.context].filter((item) => {
+  if (!current || !ADMIN_MANAGEMENT_LINKS.some((item) => item.href === current.href)) return null;
+
+  const links = ADMIN_MANAGEMENT_LINKS.filter((item) => {
     if (item.adminOnly && !isAdmin) return false;
-    const module = ADMIN_LINK_MODULE[item.href];
-    return !module || has(module);
+    return hasAdminPermission(ADMIN_LINK_MODULE[item.href], has);
   });
   if (links.length <= 1) return null;
 
-  const active = links.find((item) => pathnameMatches(pathname, item.href)) || current;
+  const active = links.find((item) => item.href === current.href) || links[0];
 
   return (
     <div className="mt-4 border-t border-border pt-3">
-      <nav aria-label={t("nav.secondary", "相关页面")} className="hidden min-w-0 items-center gap-1 md:flex">
+      <nav aria-label={t("nav.management_sections")} className="hidden min-w-0 items-center gap-1 md:flex">
         {links.map((item) => {
-          const selected = pathnameMatches(pathname, item.href);
+          const selected = item.href === current.href;
           return (
             <Link
               key={item.href}
               href={item.href}
               aria-current={selected ? "page" : undefined}
               className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                selected
-                  ? "bg-accent-subtle text-accent"
-                  : "text-muted hover:bg-subtle hover:text-fg"
+                selected ? "bg-accent-subtle text-accent" : "text-muted hover:bg-subtle hover:text-fg"
               }`}
             >
               {t(item.labelKey)}
@@ -56,11 +59,11 @@ export default function PageContextNav() {
           <ChevronDown className="h-4 w-4 shrink-0 text-muted transition-transform group-open:rotate-180" strokeWidth={1.8} aria-hidden />
         </summary>
         <nav
-          aria-label={t("nav.secondary", "相关页面")}
+          aria-label={t("nav.management_sections")}
           className="absolute left-0 right-0 z-30 mt-1 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-overlay"
         >
           {links.map((item) => {
-            const selected = pathnameMatches(pathname, item.href);
+            const selected = item.href === current.href;
             return (
               <Link
                 key={item.href}

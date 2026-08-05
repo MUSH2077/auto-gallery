@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 
 import type { Tag } from "@/lib/api";
 import { bubbleStaggerDelay, motionConfig, motionTokens, useEnterOnce } from "@/lib/motion";
+import { quoteSearchValue, searchUrl } from "@/lib/search-query";
 
 interface BubbleNode {
   data: Tag;
@@ -124,7 +125,7 @@ export default function TagBubbleChart({
               style={style}
             >
               <Link
-                href={`/admin/tags/${node.data.id}`}
+                href={searchUrl("/admin/works", `type:work tag:${quoteSearchValue(node.data.normalized_name)}`)}
                 title={`${node.data.normalized_name} · ${node.data.category || "tag"} · ${node.data.usage_count}`}
                 aria-label={`${node.data.normalized_name}, ${node.data.category || "tag"}, ${node.data.usage_count}`}
                 className="tag-bubble flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-full border text-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"

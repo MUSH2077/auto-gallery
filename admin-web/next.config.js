@@ -11,6 +11,34 @@ const nextConfig = {
   async rewrites() {
     return [
       {
+        source: '/docs',
+        destination: 'http://backend:8000/docs',
+      },
+      {
+        source: '/redoc',
+        destination: 'http://backend:8000/redoc',
+      },
+      {
+        source: '/openapi.json',
+        destination: 'http://backend:8000/openapi.json',
+      },
+      {
+        source: '/api/docs',
+        destination: 'http://backend:8000/api/docs',
+      },
+      {
+        source: '/api/redoc',
+        destination: 'http://backend:8000/api/redoc',
+      },
+      {
+        source: '/api/openapi.json',
+        destination: 'http://backend:8000/api/openapi.json',
+      },
+      {
+        source: '/api/asyncapi.yaml',
+        destination: 'http://backend:8000/api/asyncapi.yaml',
+      },
+      {
         source: '/api/v1/:path*',
         destination: 'http://backend:8000/api/v1/:path*',
       },

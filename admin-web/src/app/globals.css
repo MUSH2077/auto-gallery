@@ -12,12 +12,13 @@
    ────────────────────────────────────────────────────────────────────────── */
 @layer base {
   :root {
+    --admin-sidebar-width: 248px;
     --ag-bg: 243 246 250;        --ag-surface: 255 255 255;   --ag-subtle: 238 242 247;
     --ag-border: 207 216 227;    --ag-muted: 79 91 109;       --ag-text: 23 33 48;
-    --ag-accent: 37 99 235;      --ag-success: 22 133 74;     --ag-warning: 180 104 3;
-    --ag-danger: 210 45 63;      --ag-focus: 37 99 235;
+    --ag-accent: 29 78 216;      --ag-success: 15 105 55;     --ag-warning: 139 79 0;
+    --ag-danger: 185 28 48;      --ag-focus: 29 78 216;
     --ag-primary: 37 99 235;     --ag-primary-hover: 29 78 216;  --ag-on-primary: 255 255 255;
-    --ag-input: 255 255 255;     --ag-placeholder: 128 142 161;
+    --ag-input: 255 255 255;     --ag-placeholder: 83 97 116;
     --ag-nav: 23 33 48;          --ag-nav-fg: 255 255 255;
     --ag-accent-subtle: 226 235 255;  --ag-danger-subtle: 255 233 236;  --ag-warning-subtle: 255 244 214;  --ag-success-subtle: 224 247 234;
   }
@@ -26,7 +27,7 @@
     --ag-border: 48 62 83;       --ag-muted: 147 160 180;     --ag-text: 229 235 244;
     --ag-accent: 96 165 250;     --ag-success: 74 222 128;    --ag-warning: 251 191 36;
     --ag-danger: 251 113 133;    --ag-focus: 96 165 250;
-    --ag-primary: 37 99 235;     --ag-primary-hover: 59 130 246;  --ag-on-primary: 255 255 255;
+    --ag-primary: 37 99 235;     --ag-primary-hover: 29 78 216;  --ag-on-primary: 255 255 255;
     --ag-input: 10 18 32;        --ag-placeholder: 102 119 143;
     --ag-nav: 8 15 28;           --ag-nav-fg: 229 235 244;
     --ag-accent-subtle: 20 42 78;  --ag-danger-subtle: 63 30 41;  --ag-warning-subtle: 60 47 20;  --ag-success-subtle: 22 54 40;
@@ -140,7 +141,10 @@
     --ag-accent-subtle: 35 42 64;  --ag-danger-subtle: 58 37 50;  --ag-warning-subtle: 58 53 39;  --ag-success-subtle: 36 58 44;
   }
 
-  html { @apply transition-colors duration-300; }
+  html {
+    scrollbar-gutter: stable;
+    @apply transition-colors duration-300;
+  }
   body {
     background: rgb(var(--ag-bg));
     color: rgb(var(--ag-text));
@@ -170,6 +174,7 @@
   html.dark img:not(.no-outline) { outline-color: rgba(255,255,255,0.08); }
 
   .btn-primary, .btn-ghost, .btn-danger, .btn-icon, .clickable { min-height: 32px; }
+  button, [role="button"] { min-height: 24px; }
 
   /* Tactile press (P3 motion primitive). Unlayered so it cleanly extends the
      @layer components transition-property to include transform — no cancel. */
@@ -198,11 +203,20 @@
       opacity: 1 !important;
       animation: none !important;
     }
+    .chart-mark-enter, .chart-dot-enter, .activity-source-enter,
+    .chart-tick-enter, .chart-tally-enter, .chart-series-hair,
+    .chart-series-point, .chart-series-path, .creator-narrative-item {
+      opacity: 1 !important;
+      animation: none !important;
+      stroke-dashoffset: 0 !important;
+      transform: none !important;
+    }
   }
 
   /* Touch ergonomics (P2): comfortable 44px hit areas on coarse pointers,
      keeping the dense 32px desktop sizing for mouse users. */
   @media (pointer: coarse) {
+    button, [role="button"] { min-height: 44px; min-width: 44px; }
     .btn-primary, .btn-ghost, .btn-danger, .btn-icon, .clickable,
     .input, .select, .textarea { min-height: 44px; }
     .btn-icon { min-width: 44px; }
@@ -384,9 +398,6 @@
     @apply text-base font-semibold tracking-normal;
     font-family: inherit;
   }
-  .page-transition {
-    animation: fadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-  }
   @keyframes fadeUp {
     from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: translateY(0); }
@@ -397,6 +408,89 @@
     opacity: 0;
     animation: fadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     animation-delay: var(--delay, 0ms);
+  }
+  .activity-desktop { display: block; }
+  .activity-mobile { display: none; }
+  .activity-calendar-cell { min-height: 8px; }
+  @keyframes chartMarkReveal {
+    from { opacity: 0; transform: scaleY(0); }
+    to { opacity: 1; transform: scaleY(1); }
+  }
+  @keyframes chartDotReveal {
+    from { opacity: 0; transform: scale(0); }
+    to { opacity: 1; transform: scale(var(--dot-scale, 1)); }
+  }
+  .chart-mark-enter {
+    transform-box: fill-box;
+    transform-origin: center bottom;
+    animation: chartMarkReveal 400ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: var(--chart-delay, 0ms);
+  }
+  .chart-dot-enter {
+    transform-origin: center;
+    animation: chartDotReveal 400ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: var(--chart-delay, 0ms);
+  }
+  @keyframes activitySourcePop {
+    0% { opacity: 0; transform: scale(0.15); }
+    72% { opacity: 1; transform: scale(1.12); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  .activity-source-enter {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: activitySourcePop 520ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    animation-delay: var(--chart-delay, 0ms);
+  }
+  @keyframes chartTickRise {
+    from { opacity: 0; transform: scaleY(0); }
+    to { opacity: 1; transform: scaleY(var(--tick-scale, 1)); }
+  }
+  .chart-tick-enter {
+    transform-origin: center bottom;
+    animation: chartTickRise 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: var(--chart-delay, 0ms);
+  }
+  @keyframes chartTallyFill {
+    from { opacity: 0; transform: scaleX(0); }
+    to { opacity: 1; transform: scaleX(1); }
+  }
+  .chart-tally-enter {
+    animation: chartTallyFill 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: var(--chart-delay, 0ms);
+  }
+  @keyframes chartLineDraw {
+    from { stroke-dashoffset: 1; }
+    to { stroke-dashoffset: 0; }
+  }
+  .chart-series-enter .chart-series-path {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: chartLineDraw 620ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .chart-series-enter .chart-series-hair {
+    transform-box: fill-box;
+    transform-origin: center bottom;
+    animation: chartMarkReveal 400ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: var(--chart-delay, 0ms);
+  }
+  .chart-series-enter .chart-series-point {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: chartDotReveal 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: var(--chart-delay, 0ms);
+  }
+  @keyframes creatorNarrativeRise {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .creator-narrative-item {
+    animation: creatorNarrativeRise 400ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: var(--chart-delay, 0ms);
+  }
+  @media (max-width: 767px), (pointer: coarse) {
+    .activity-desktop { display: none; }
+    .activity-mobile { display: block; }
   }
   @keyframes bubblePop {
     0% { opacity: 0; transform: scale(0.35); }

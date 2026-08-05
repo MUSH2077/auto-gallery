@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { PageHeader, PageShell } from "@/components";
 import {
   type WorkPreviewDelayMs,
@@ -60,33 +59,28 @@ export default function AppearanceSettingsPage() {
   const { settings, updateSettings, resetSettings } = useAppearanceSettings();
 
   const themeOptions: { value: Theme; label: string }[] = [
-    { value: "light", label: t("theme.light", "Light") },
-    { value: "dark", label: t("theme.dark", "Dark") },
-    { value: "system", label: t("theme.system", "System") },
+    { value: "light", label: t("theme.light") },
+    { value: "dark", label: t("theme.dark") },
+    { value: "system", label: t("theme.system") },
   ];
   const previewDelayOptions: WorkPreviewDelayMs[] = [150, 250, 400];
   const previewSizeOptions: { value: WorkPreviewSize; label: string }[] = [
-    { value: "medium", label: t("appearance.preview_size_medium", "Medium") },
-    { value: "large", label: t("appearance.preview_size_large", "Large") },
-    { value: "fit", label: t("appearance.preview_size_fit", "Fit") },
+    { value: "medium", label: t("appearance.preview_size_medium") },
+    { value: "large", label: t("appearance.preview_size_large") },
+    { value: "fit", label: t("appearance.preview_size_fit") },
   ];
   const sensitivityOptions: { value: WorkPreviewWheelSensitivity; label: string }[] = [
-    { value: "normal", label: t("appearance.wheel_normal", "Normal") },
-    { value: "relaxed", label: t("appearance.wheel_relaxed", "Relaxed") },
+    { value: "normal", label: t("appearance.wheel_normal") },
+    { value: "relaxed", label: t("appearance.wheel_relaxed") },
   ];
 
   return (
-    <PageShell size="normal" className="page-transition">
-      <div className="mb-4">
-        <Link href="/admin/settings" className="text-sm text-accent hover:underline">
-          {t("common.back", "Back")}
-        </Link>
-      </div>
-      <PageHeader title={t("appearance.title", "Appearance")} description={t("appearance.desc", "Display and gallery interaction preferences.")} />
+    <PageShell>
+      <PageHeader title={t("appearance.title")} description={t("appearance.desc")} />
 
       <section className="card p-5">
-        <h2 className="section-title mb-2">{t("appearance.interface", "Interface")}</h2>
-        <SettingRow title={t("appearance.theme", "Theme")} description={t("appearance.theme_desc", "Choose light, dark, or system mode.")}>
+        <h2 className="section-title mb-2">{t("appearance.interface")}</h2>
+        <SettingRow title={t("appearance.theme")} description={t("appearance.theme_desc")}>
           <div className="segmented-control">
             {themeOptions.map((option) => (
               <OptionButton key={option.value} value={option.value} activeValue={theme} onSelect={setTheme}>
@@ -98,8 +92,8 @@ export default function AppearanceSettingsPage() {
       </section>
 
       <section className="card mt-5 p-5">
-        <h2 className="section-title mb-2">{t("appearance.works", "Works")}</h2>
-        <SettingRow title={t("appearance.work_preview", "Enlarged preview")} description={t("appearance.work_preview_desc", "Show original-image hover previews on the works grid.")}>
+        <h2 className="section-title mb-2">{t("appearance.works")}</h2>
+        <SettingRow title={t("appearance.work_preview")} description={t("appearance.work_preview_desc")}>
           <button
             type="button"
             onClick={() => updateSettings({ workPreviewEnabled: !settings.workPreviewEnabled })}
@@ -111,7 +105,7 @@ export default function AppearanceSettingsPage() {
             {settings.workPreviewEnabled ? t("common.on") : t("common.off")}
           </button>
         </SettingRow>
-        <SettingRow title={t("appearance.preview_delay", "Preview delay")} description={t("appearance.preview_delay_desc", "Delay before the enlarged preview opens.")}>
+        <SettingRow title={t("appearance.preview_delay")} description={t("appearance.preview_delay_desc")}>
           <div className="segmented-control">
             {previewDelayOptions.map((delay) => (
               <OptionButton key={delay} value={delay} activeValue={settings.workPreviewDelayMs} onSelect={(value) => updateSettings({ workPreviewDelayMs: value })}>
@@ -120,7 +114,7 @@ export default function AppearanceSettingsPage() {
             ))}
           </div>
         </SettingRow>
-        <SettingRow title={t("appearance.preview_size", "Preview size")} description={t("appearance.preview_size_desc", "Maximum size for the original-image preview.")}>
+        <SettingRow title={t("appearance.preview_size")} description={t("appearance.preview_size_desc")}>
           <div className="segmented-control">
             {previewSizeOptions.map((option) => (
               <OptionButton key={option.value} value={option.value} activeValue={settings.workPreviewSize} onSelect={(value) => updateSettings({ workPreviewSize: value })}>
@@ -129,7 +123,7 @@ export default function AppearanceSettingsPage() {
             ))}
           </div>
         </SettingRow>
-        <SettingRow title={t("appearance.wheel_sensitivity", "Wheel paging")} description={t("appearance.wheel_sensitivity_desc", "How much wheel movement is needed to switch pages.")}>
+        <SettingRow title={t("appearance.wheel_sensitivity")} description={t("appearance.wheel_sensitivity_desc")}>
           <div className="segmented-control">
             {sensitivityOptions.map((option) => (
               <OptionButton key={option.value} value={option.value} activeValue={settings.workPreviewWheelSensitivity} onSelect={(value) => updateSettings({ workPreviewWheelSensitivity: value })}>
@@ -142,15 +136,15 @@ export default function AppearanceSettingsPage() {
 
       <section className="mt-5 flex items-center justify-between rounded-md border border-border bg-surface p-4">
         <div>
-          <div className="text-sm font-medium text-fg">{t("appearance.reset", "Reset appearance")}</div>
-          <div className="mt-1 text-xs text-muted">{t("appearance.reset_desc", "Restore gallery interaction preferences to defaults.")}</div>
+          <div className="text-sm font-medium text-fg">{t("appearance.reset")}</div>
+          <div className="mt-1 text-xs text-muted">{t("appearance.reset_desc")}</div>
         </div>
         <button
           type="button"
           onClick={resetSettings}
           className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-muted hover:bg-subtle hover:text-fg"
         >
-          {t("common.reset", "Reset")}
+          {t("common.reset")}
         </button>
       </section>
     </PageShell>

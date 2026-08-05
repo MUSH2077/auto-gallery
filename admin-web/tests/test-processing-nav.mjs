@@ -9,7 +9,7 @@ import { BASE, launchBrowser } from './helpers.mjs';
   await page.fill('input[autocomplete="current-password"]', 'admin');
   await page.click('button[type="submit"]');
   await page.waitForURL('**/admin', { timeout: 10000 });
-  await page.click('nav a[href="/admin/reference/danbooru"]');
+  await page.click('nav a[href="/admin/upload/danbooru"]');
   await page.waitForURL('**/danbooru', { timeout: 10000 });
   await page.waitForTimeout(1000);
   
@@ -55,7 +55,7 @@ import { BASE, launchBrowser } from './helpers.mjs';
   }
   
   // Go back to Danbooru and check if job is still tracked
-  await page.goto(BASE + '/admin/reference/danbooru', { waitUntil: 'networkidle', timeout: 5000 });
+  await page.goto(BASE + '/admin/upload/danbooru', { waitUntil: 'networkidle', timeout: 5000 });
   await page.waitForTimeout(2000);
   const restored = await page.evaluate(() => {
     const hasProgress = !!document.querySelector('.bg-blue-600');

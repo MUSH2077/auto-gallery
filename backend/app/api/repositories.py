@@ -1,11 +1,12 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import RequirePermission
 from app.database import get_db
+from app.models.asset import Asset
 from app.models.asset_source import AssetSource
 from app.models.creator import Creator
 from app.models.download_job import DownloadJob
@@ -21,6 +22,7 @@ from app.schemas.curation import RepositoryGraphResponse
 from app.services.curation import CurationService
 from app.services.subscription_enqueue import enqueue_subscription_source_sync
 from app.services.repository_identity import resolve_repository_source_creator_ids
+from app.services.sync_outcome import download_job_outcome
 
 router = APIRouter(dependencies=[RequirePermission("library")])
 
@@ -75,6 +77,7 @@ def _job_payload(job: DownloadJob) -> dict:
         "source_url": job.source_url,
         "status": job.status,
         "retry_count": job.retry_count,
+        "outcome": download_job_outcome(job),
         "error_log_excerpt": (job.error_log or "")[:240] or None,
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "updated_at": job.updated_at.isoformat() if job.updated_at else None,
@@ -143,12 +146,28 @@ async def get_repository(source_id: UUID, db: AsyncSession = Depends(get_db)):
     recent_works = []
     if source_creator_ids:
         asset_count_sq = (
-            select(AssetSource.work_source_id, func.count(AssetSource.asset_id).label("asset_count"))
+            select(
+                AssetSource.work_source_id,
+                func.count(AssetSource.asset_id).label("asset_count"),
+                (
+                    func.count(AssetSource.asset_id).filter(or_(
+                        Asset.mime_type.like("video/%"),
+                        Asset.file_name.ilike("%.mp4"),
+                        Asset.file_name.ilike("%.webm"),
+                    )) > 0
+                ).label("has_video"),
+            )
+            .join(Asset, Asset.id == AssetSource.asset_id)
             .group_by(AssetSource.work_source_id)
             .subquery()
         )
         works_result = await db.execute(
-            select(Work, WorkSource, func.coalesce(asset_count_sq.c.asset_count, 1))
+            select(
+                Work,
+                WorkSource,
+                func.coalesce(asset_count_sq.c.asset_count, 1),
+                func.coalesce(asset_count_sq.c.has_video, False),
+            )
             .join(WorkSource, WorkSource.work_id == Work.id)
             .outerjoin(asset_count_sq, asset_count_sq.c.work_source_id == WorkSource.id)
             .outerjoin(WorkCurationState, WorkCurationState.work_id == Work.id)
@@ -160,13 +179,14 @@ async def get_repository(source_id: UUID, db: AsyncSession = Depends(get_db)):
             .order_by(WorkSource.posted_at.desc(), Work.created_at.desc())
             .limit(12)
         )
-        for work, work_source, asset_count in works_result:
+        for work, work_source, asset_count, has_video in works_result:
             recent_works.append({
                 "id": str(work.id),
                 "title": work.title or work_source.title,
                 "posted_at": _iso(work_source.posted_at or work.posted_at),
                 "thumbnail_asset_id": str(work.thumbnail_asset_id) if work.thumbnail_asset_id else None,
                 "asset_count": int(asset_count or 1),
+                "has_video": bool(has_video),
                 "is_nsfw": work.is_nsfw,
                 "is_ai_generated": work.is_ai_generated,
                 "is_favorite": work.is_favorite,

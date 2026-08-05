@@ -1,10 +1,12 @@
 export { default as StatusBadge } from "./StatusBadge";
 export { getStatusTone } from "./StatusBadge";
+export { SyncOutcomeBadge, SyncOutcomeNotice } from "./SyncOutcomeBadge";
 export { default as SourceBadge } from "./SourceBadge";
 export { default as Banner } from "./Banner";
 export { default as PageHeader } from "./PageHeader";
-export { default as PageShell } from "./PageShell";
 export { default as PageContextNav } from "./PageContextNav";
+export { default as PageShell } from "./PageShell";
+export { default as Pagination } from "./Pagination";
 export { default as AdaptiveToolbar } from "./AdaptiveToolbar";
 export { OverflowText, CompactUrl, ErrorSummary, compactUrl } from "./OverflowText";
 export { default as PageSection } from "./PageSection";
@@ -25,7 +27,6 @@ export { default as DataTable } from "./DataTable";
 export { CardSkeleton, TableSkeleton } from "./LoadingSkeleton";
 export { default as Modal } from "./Modal";
 export { default as ErrorBoundary } from "./ErrorBoundary";
-export { default as WorkGrid } from "./WorkGrid";
 export { default as RepositoryCard } from "./RepositoryCard";
 export { default as GitlleryPanel } from "./GitlleryPanel";
 export { Breadcrumb, type Crumb } from "./Breadcrumb";
@@ -35,10 +36,16 @@ export { RealProgressBar } from "./RealProgressBar";
 export { default as MotionNumber } from "./MotionNumber";
 export { default as TagBubbleChart } from "./TagBubbleChart";
 export { BatchByFilter } from "./BatchByFilter";
+export { SmartSearchInput, useSearchBatchComposer, useSearchComposer } from "./SmartSearchInput";
 export { AssetFilmstrip, AssetImage, WorkPreviewOverlay, isArchiveAsset } from "./work-interactions";
 export type { MediaAsset } from "./work-interactions";
+export {
+  AssetPreviewMedia,
+  AssetViewer,
+  VideoBadge,
+  WorkMediaThumbnail,
+} from "./MediaAssetRenderer";
 
-export { default as PageLayout } from "./PageLayout";
 export { TaskDetailDrawer, JobDetailDrawer } from "./JobDrawers";
 export { FullImageLightbox, DisclosurePanel } from "./WorkViewerParts";
 export type { AssetData } from "./WorkViewerParts";

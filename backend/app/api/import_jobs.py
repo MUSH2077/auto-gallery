@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import RequirePermission, get_admin_key
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, cast, String, or_
+from sqlalchemy import select
 
 from app.database import get_db
 from app.models.import_job import ImportJob
@@ -14,6 +14,8 @@ from app.schemas.import_job import ImportJobRead
 from app.models.task_state import transition_import_job
 from app.services.job_progress import import_progress_from_job
 from app.services.progress import ProgressTracker
+from app.services.search import SearchService
+from app.services.search_language import SearchQueryError, compose_search_query
 from app.services.task_engine import TaskEngine, TaskEngineError
 
 logger = logging.getLogger(__name__)
@@ -125,35 +127,25 @@ async def list_import_jobs(
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(ImportJob)
+    canonical = q or ""
     if status:
-        stmt = stmt.where(ImportJob.status == status)
+        canonical = compose_search_query(
+            canonical,
+            "tasks",
+            key="status",
+            value=status,
+            operation="add",
+        ).canonical
     if download_job_id:
-        stmt = stmt.where(ImportJob.download_job_id == download_job_id)
-    if q:
-        pattern = f"%{q.strip()}%"
-        stmt = stmt.where(or_(
-            cast(ImportJob.id, String).ilike(pattern),
-            cast(ImportJob.download_job_id, String).ilike(pattern),
-            ImportJob.error_log.ilike(pattern),
-        ))
-    count_stmt = select(func.count(ImportJob.id))
-    if status:
-        count_stmt = count_stmt.where(ImportJob.status == status)
-    if download_job_id:
-        count_stmt = count_stmt.where(ImportJob.download_job_id == download_job_id)
-    if q:
-        pattern = f"%{q.strip()}%"
-        count_stmt = count_stmt.where(or_(
-            cast(ImportJob.id, String).ilike(pattern),
-            cast(ImportJob.download_job_id, String).ilike(pattern),
-            ImportJob.error_log.ilike(pattern),
-        ))
-    total_result = await db.execute(count_stmt)
-    total = total_result.scalar_one()
-    stmt = stmt.order_by(ImportJob.created_at.desc()).offset(offset).limit(limit)
-    result = await db.execute(stmt)
-    jobs = list(result.scalars().all())
+        canonical = f"{canonical} {download_job_id}".strip()
+    try:
+        total, jobs = await SearchService(db).search_import_jobs(
+            canonical,
+            offset=offset,
+            limit=limit,
+        )
+    except SearchQueryError as exc:
+        raise HTTPException(status_code=422, detail=exc.diagnostic.payload()) from exc
     ctx = await _enrich_import_context(db, jobs)
     items = []
     for j in jobs:

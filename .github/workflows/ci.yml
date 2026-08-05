@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["main", "master", "develop"]
   pull_request:
 
 permissions:
@@ -66,11 +66,20 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://autogallery:test-db@localhost:5432/autogallery
           REDIS_URL: redis://localhost:6379/0
         run: python -m pytest
+      - name: Check generated API contracts
+        working-directory: backend
+        env:
+          SECRET_KEY: ci-secret-key-32chars-minimum-value
+          ADMIN_PASSWORD: ci-admin-password
+          DATABASE_URL: postgresql+asyncpg://autogallery:test-db@localhost:5432/autogallery
+          REDIS_URL: redis://localhost:6379/0
+          MEILI_MASTER_KEY: ci-meilisearch-master-key-32chars
+        run: python scripts/export_api_contracts.py --check
 
   admin-web:
     name: Admin checks
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -84,12 +93,39 @@ jobs:
       - name: Audit npm dependencies
         working-directory: admin-web
         run: npm audit --audit-level=high --registry=https://registry.npmjs.org
+      - name: Check admin translations
+        working-directory: admin-web
+        run: npm run check:i18n
+      - name: Check shared chart contract
+        working-directory: admin-web
+        run: npm run check:charts
+      - name: Check shared media contract
+        working-directory: admin-web
+        run: npm run check:media
+      - name: Check unified search contract
+        working-directory: admin-web
+        run: npm run check:search-contract
+      - name: Check canonical admin routes
+        working-directory: admin-web
+        run: npm run check:admin-routes
+      - name: Check generated OpenAPI types
+        working-directory: admin-web
+        run: npm run check:api-types
       - name: Typecheck admin web
         working-directory: admin-web
         run: npm run typecheck
       - name: Build admin web
         working-directory: admin-web
         run: npm run build
+      - name: Install Playwright Chromium
+        working-directory: admin-web
+        run: npx playwright install --with-deps chromium
+      - name: Run admin UI quality checks
+        working-directory: admin-web
+        env:
+          PLAYWRIGHT_MANAGE_SERVER: "1"
+          PLAYWRIGHT_SERVER_MODE: "production"
+        run: npx playwright test tests/e2e/admin-shell.spec.ts tests/e2e/search.spec.ts --project=chromium --workers=1
 
   dependency-review:
     name: Dependency review
@@ -172,6 +208,10 @@ jobs:
           test -f docs/distribution.md
           test -f docs/distribution.zh.md
           test -f docs/architecture.md
+          test -f docs/api/openapi.json
+          test -f docs/api/asyncapi.yaml
+          test -f docs/api/README.zh.md
+          test -f docs/api/capability-matrix.md
           test -f docs/risks.md
           test -f docs/release-checklist.md
 

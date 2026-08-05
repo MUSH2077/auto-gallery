@@ -336,7 +336,7 @@ class CurationService:
         commit.stats = {"work_count": changed}
         await self.db.commit()
         await self.db.refresh(commit)
-        await self._remove_from_search([str(w.id) for w in works])
+        await self._refresh_search([str(w.id) for w in works])
         return commit
 
     async def restore_works(self, work_ids: list[UUID], *, reason: str | None = None, message: str | None = None, trigger: str = "work_restore") -> CurationCommit:
@@ -373,6 +373,7 @@ class CurationService:
         commit.stats = {"work_count": changed}
         await self.db.commit()
         await self.db.refresh(commit)
+        await self._refresh_search([str(w.id) for w in works])
         return commit
 
     async def record_work_favorite(self, work: Work, before_favorite: bool, after_favorite: bool) -> CurationCommit:
@@ -516,7 +517,7 @@ class CurationService:
         await self.db.commit()
         await self.db.refresh(commit)
         if action == "archive" and work_count:
-            await self._remove_from_search([str(w.id) for w in await self._works_for_creator(creator_id)])
+            await self._refresh_search([str(w.id) for w in await self._works_for_creator(creator_id)])
         return commit
 
     async def _works_for_creator(self, creator_id: UUID) -> list[Work]:
@@ -830,7 +831,7 @@ class CurationService:
         commit.stats = {"work_count": len(works), "asset_count": len(assets), "bytes_reclaimed": bytes_reclaimed}
         await self.db.commit()
         await self.db.refresh(commit)
-        await self._remove_from_search([str(w.id) for w in works])
+        await self._refresh_search([str(w.id) for w in works], purge=True)
         return commit
 
     async def _purge_candidate_works(self, work_ids: list[UUID] | None) -> list[Work]:
@@ -1234,11 +1235,14 @@ class CurationService:
             "impact": {"trashed_work_count": trashed},
         }]
 
-    async def _remove_from_search(self, work_ids: list[str]) -> None:
+    async def _refresh_search(self, work_ids: list[str], *, purge: bool = False) -> None:
         try:
             from app.services.search import SearchService
             svc = SearchService(self.db)
-            for work_id in work_ids:
-                await svc.delete_work(work_id)
+            if purge:
+                for work_id in work_ids:
+                    await svc.delete_work(work_id)
+            else:
+                await svc.index_works([UUID(work_id) for work_id in work_ids])
         except Exception:
             pass

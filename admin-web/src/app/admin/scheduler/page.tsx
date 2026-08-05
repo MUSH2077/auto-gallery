@@ -1,18 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys, QueueBreakdown, SchedulerDecisionItem } from "@/lib/api";
+import { api, queryKeys, QueueBreakdown, SchedulerDecisionItem, SEARCH_PAGE_SIZE } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { pollInterval, hasActiveTask } from "@/lib/polling";
 import { scheduleModeLabel, schedulerDecisionLabel, useI18nFormat } from "@/lib/i18n-format";
 import { useStaggeredEntrance } from "@/lib/motion";
-import { PageHeader, PageShell, EmptyState, ErrorState, SourceBadge, StatusBadge, PermissionGuard, SelectionBar, RowActionMenu } from "@/components";
+import { AdaptiveToolbar, FilterBar, PageHeader, PageShell, Pagination, EmptyState, ErrorState, SourceBadge, StatCard, StatusBadge, PermissionGuard, SelectionBar, RowActionMenu, SmartSearchInput, useSearchComposer } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useNotifications } from "@/components/NotificationCenter";
 import { usePermissions } from "@/lib/usePermissions";
+import { adminRoutes } from "@/lib/adminRoutes";
 
 function decisionTone(item: SchedulerDecisionItem): string {
   if (item.due) return "border-accent/30 bg-accent-subtle text-accent dark:border-accent/30 dark:bg-accent-subtle dark:text-accent";
@@ -23,16 +24,6 @@ function decisionTone(item: SchedulerDecisionItem): string {
     return "border-warning/30 bg-warning-subtle text-warning dark:bg-warning-subtle dark:text-warning";
   }
   return "border-border bg-subtle text-muted dark:border-border dark:bg-subtle dark:text-muted";
-}
-
-function SummaryTile({ label, value, sub, danger }: { label: string; value: string | number; sub?: string; danger?: boolean }) {
-  return (
-    <div className="card p-4">
-      <div className={`tabular text-2xl font-semibold ${danger ? "text-danger dark:text-danger" : "text-fg"}`}>{value}</div>
-      <div className="mt-1 text-xs font-medium uppercase text-muted">{label}</div>
-      {sub && <div className="mt-1 text-xs text-placeholder dark:text-muted">{sub}</div>}
-    </div>
-  );
 }
 
 function queueLabel(t: ReturnType<typeof useT>, key: string): string {
@@ -58,16 +49,101 @@ function QueueRow({ name, stats }: { name: string; stats: QueueBreakdown }) {
   );
 }
 
-function matchesDecisionFilter(item: SchedulerDecisionItem, filter: string): boolean {
-  if (!filter) return true;
-  if (filter === "due") return item.due;
-  if (filter === "blocked") return ["auth_unhealthy", "url_invalid", "unknown_provider", "provider_not_downloadable"].includes(item.reason);
-  if (filter === "waiting") return !item.due && ["interval_not_due", "outside_fixed_time_window", "already_attempted_in_window", "already_synced_in_window"].includes(item.reason);
-  if (filter === "manual") return item.reason === "manual_mode" || item.effective_mode === "manual";
-  if (filter === "auth") return !item.auth_healthy || item.reason === "auth_unhealthy";
-  if (filter === "url") return !item.url_valid || item.reason === "url_invalid";
-  if (filter === "disabled") return ["scheduler_disabled", "source_disabled", "subscription_inactive", "subscription_sync_disabled"].includes(item.reason);
-  return true;
+function AuthStatusSection({ enabled }: { enabled: boolean }) {
+  const t = useT();
+  const fmt = useI18nFormat();
+  const auth = useQuery({
+    queryKey: queryKeys.admin.authStatus,
+    queryFn: api.getAuthStatus,
+    enabled,
+    refetchInterval: enabled ? 30000 : false,
+  });
+
+  if (!enabled) return null;
+
+  return (
+    <section id="auth-status" aria-labelledby="auth-status-heading" className="mb-6 scroll-mt-20">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 id="auth-status-heading" className="text-base font-semibold">{t("auth.title")}</h2>
+          <p className="mt-1 text-sm text-muted">{t("auth.desc")}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => auth.refetch()}
+          disabled={auth.isFetching}
+          className="btn-ghost min-h-11 self-start px-4 sm:self-auto"
+        >
+          {auth.isFetching ? t("common.loading") : t("scheduler.refresh")}
+        </button>
+      </div>
+
+      {auth.isLoading && (
+        <div aria-hidden="true" className="space-y-2">
+          {Array.from({ length: 3 }).map((_, index) => (
+            <div key={index} className="h-16 animate-pulse rounded-md bg-subtle" />
+          ))}
+        </div>
+      )}
+      {auth.error && <ErrorState message={(auth.error as Error).message} onRetry={() => auth.refetch()} />}
+
+      {auth.data && (
+        <>
+          <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+            <StatCard label={t("auth.total")} value={auth.data.summary.total} />
+            <StatCard label={t("auth.healthy")} value={auth.data.summary.healthy} tone="success" />
+            <StatCard label={t("auth.unhealthy")} value={auth.data.summary.unhealthy} tone={auth.data.summary.unhealthy > 0 ? "danger" : "neutral"} />
+            <StatCard label={t("auth.unknown")} value={auth.data.summary.unknown} />
+          </div>
+
+          {auth.data.sources.length === 0 ? (
+            <EmptyState title={t("auth.no_sources")} description={t("auth.no_sources_desc")} />
+          ) : (
+            <div className="table-shell divide-y divide-border">
+              {auth.data.sources.map((source) => (
+                <div key={source.id} className="flex min-w-0 flex-col gap-3 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <SourceBadge source={source.source} />
+                    <div className="min-w-0">
+                      <Link href={adminRoutes.creator(source.creator.id)} className="font-medium text-accent hover:underline">
+                        {source.creator.display_name || source.creator.name}
+                      </Link>
+                      <div className="mt-0.5 break-all font-mono text-xs text-muted">{source.source_url}</div>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+                    {!source.is_enabled && <span className="badge">{t("auth.disabled")}</span>}
+                    {source.auth_healthy === true && (
+                      <span className="inline-flex items-center gap-1 rounded bg-success-subtle px-2 py-1 text-xs text-success">
+                        <span aria-hidden="true" className="h-2 w-2 rounded-full bg-success" />{t("auth.healthy")}
+                      </span>
+                    )}
+                    {source.auth_healthy === false && (
+                      <span className="inline-flex items-center gap-1 rounded bg-danger-subtle px-2 py-1 text-xs text-danger">
+                        <span aria-hidden="true" className="h-2 w-2 rounded-full bg-danger" />{t("auth.unhealthy")}
+                      </span>
+                    )}
+                    {source.auth_healthy === null && (
+                      <span className="badge inline-flex items-center gap-1">
+                        <span aria-hidden="true" className="h-2 w-2 rounded-full bg-muted" />{t("auth.unknown")}
+                      </span>
+                    )}
+                    {source.last_successful_auth && (
+                      <span className="text-xs text-muted">{t("auth.last_success")} {fmt.dateTime(source.last_successful_auth)}</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <p className="mt-4 rounded-md border border-accent/20 bg-accent-subtle p-4 text-sm text-accent">
+            {t("auth.how")}
+          </p>
+        </>
+      )}
+    </section>
+  );
 }
 
 function AdminOperationsSection() {
@@ -130,7 +206,7 @@ function AdminOperationsSection() {
                   {op.operation_type === "admin-rebuild" ? t("scheduler.rebuild_library") :
                    op.operation_type === "admin-clear" ? t("datamgmt.clear_all") :
                    op.operation_type === "admin-disk-import" ? t("datamgmt.disk_import") :
-                   op.operation_type === "subscription-sync-batch" ? t("scheduler.subscription_sync_batch", "Subscription sync batch") :
+                   op.operation_type === "subscription-sync-batch" ? t("scheduler.subscription_sync_batch") :
                    op.operation_type}
                 </div>
                 {op.progress_data && (
@@ -156,11 +232,29 @@ export default function SchedulerPage() {
   const toast = useToast();
   const qc = useQueryClient();
   const { has } = usePermissions();
+  const canManageTasks = has("tasks");
+  const canViewAuth = has("system");
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
-  const filter = sp.get("filter") || "";
   const search = sp.get("q") || "";
+  const rawPage = Number.parseInt(sp.get("page") || "1", 10);
+  const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+  const searchOffset = (page - 1) * SEARCH_PAGE_SIZE;
+
+  useEffect(() => {
+    if (!canViewAuth || window.location.hash !== "#auth-status") return;
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        document.getElementById("auth-status")?.scrollIntoView({ block: "start" });
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [canViewAuth]);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectAll, setSelectAll] = useState(false);
@@ -173,8 +267,19 @@ export default function SchedulerPage() {
     router.replace(next.toString() ? `${pathname}?${next.toString()}` : pathname, { scroll: false });
   };
 
-  const queue = useQuery({ queryKey: ["queue-stats"], queryFn: api.queueStats, refetchInterval: 15000 });
-  const decisions = useQuery({ queryKey: queryKeys.schedulerDecisions, queryFn: api.schedulerDecisions, refetchInterval: 15000 });
+  const queue = useQuery({ queryKey: ["queue-stats"], queryFn: api.queueStats, enabled: canManageTasks, refetchInterval: canManageTasks ? 15000 : false });
+  const decisions = useQuery({ queryKey: queryKeys.schedulerDecisions, queryFn: api.schedulerDecisions, enabled: canManageTasks, refetchInterval: canManageTasks ? 15000 : false });
+  const searchedDecisions = useQuery({
+    queryKey: ["search", "scheduler", search, searchOffset, SEARCH_PAGE_SIZE],
+    queryFn: () => api.search(search, searchOffset, SEARCH_PAGE_SIZE, "scheduler"),
+    enabled: canManageTasks,
+    refetchInterval: canManageTasks ? 15000 : false,
+  });
+  const filterComposer = useSearchComposer({
+    value: search,
+    scope: "scheduler",
+    onChange: (query) => updateParams({ q: query || null, page: null }),
+  });
 
   const syncNow = useMutation({
     mutationFn: () => api.triggerSyncNow("force_eligible"),
@@ -185,7 +290,7 @@ export default function SchedulerPage() {
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
       toast.success({
         message: t("scheduler.sync_batch_result", { enqueued: data.enqueued_count, skipped: data.skipped_count }),
-        action: { label: t("jobs.open_task", "View task"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${data.task_id}`) },
+        action: { label: t("jobs.open_task"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${data.task_id}`) },
       });
     },
     onError: (e: Error) => toast.error(e.message),
@@ -198,7 +303,7 @@ export default function SchedulerPage() {
       qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
       toast.info({
         message: t("scheduler.scan_result", { enqueued: data.enqueued_count, skipped: data.skipped_count }),
-        action: { label: t("jobs.open_task", "View task"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${data.task_id}`) },
+        action: { label: t("jobs.open_task"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${data.task_id}`) },
       });
     },
     onError: (e: Error) => toast.error(e.message),
@@ -215,7 +320,7 @@ export default function SchedulerPage() {
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
       qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
       if (data.status === "enqueued") {
-        toast.success(data.message || t("repo_detail.sync_queued", "Sync queued"));
+        toast.success(data.message || t("repo_detail.sync_queued"));
       } else {
         const reason = typeof data.reason === "object" ? data.reason?.message : data.reason;
         toast.warning(reason || data.message || t("subscriptions.sync_no_jobs"));
@@ -250,15 +355,14 @@ export default function SchedulerPage() {
   });
 
   const items = decisions.data?.items || [];
-  const filteredItems = items.filter((item) => {
-    const q = search.trim().toLowerCase();
-    return matchesDecisionFilter(item, filter)
-      && (!q
-        || item.creator_name.toLowerCase().includes(q)
-        || item.source.toLowerCase().includes(q)
-        || (item.source_url || "").toLowerCase().includes(q)
-        || (item.source_creator_id || "").toLowerCase().includes(q));
-  });
+  const schedulerGroup = searchedDecisions.data?.groups.scheduler;
+  const filteredItems = schedulerGroup?.items || [];
+  const visibleIdsKey = filteredItems.map((item) => item.source_id).join("|");
+  const selectedModes = new Set(
+    searchedDecisions.data?.parsed.tokens
+      .filter((token) => token.kind === "qualifier" && token.key === "is" && !token.negated)
+      .map((token) => token.value) || [],
+  );
   const decisionEntrance = useStaggeredEntrance(filteredItems.map((item) => item.source_id));
   const queueRows = queue.data?.queues ? Object.entries(queue.data.queues) : [];
   const queueEntrance = useStaggeredEntrance(queueRows.map(([name]) => name));
@@ -274,15 +378,23 @@ export default function SchedulerPage() {
     ["blocked", t("scheduler.filter_blocked")],
     ["waiting", t("scheduler.filter_waiting")],
     ["manual", t("scheduler.filter_manual")],
-    ["auth", t("scheduler.filter_auth")],
-    ["url", t("scheduler.filter_url")],
     ["disabled", t("scheduler.filter_disabled")],
   ];
-  const lastUpdated = Math.max(queue.dataUpdatedAt || 0, decisions.dataUpdatedAt || 0);
+  const lastUpdated = Math.max(queue.dataUpdatedAt || 0, decisions.dataUpdatedAt || 0, searchedDecisions.dataUpdatedAt || 0);
   const refreshAll = () => {
     qc.invalidateQueries({ queryKey: ["queue-stats"] });
     qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
+    qc.invalidateQueries({ queryKey: ["search", "scheduler"] });
   };
+
+  useEffect(() => {
+    const visibleIds = new Set(visibleIdsKey ? visibleIdsKey.split("|") : []);
+    setSelected((current) => {
+      const next = new Set(Array.from(current).filter((id) => visibleIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+    setSelectAll(false);
+  }, [visibleIdsKey]);
 
   const handleSelectAll = () => {
     if (selectAll) { setSelected(new Set()); setSelectAll(false); return; }
@@ -300,56 +412,67 @@ export default function SchedulerPage() {
   };
 
   return (
-    <PermissionGuard module="tasks">
-    <PageShell size="wide">
+    <PermissionGuard anyOf={["tasks", "system"]}>
+    <PageShell>
       <PageHeader title={t("scheduler.title")} description={t("scheduler.explain_desc")} />
-      <div className="mb-4 flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-2.5">
-        <button onClick={refreshAll} className="btn-ghost px-5 py-2.5">
-          {t("scheduler.refresh")}
-        </button>
-        <button onClick={() => runDueScan.mutate()} disabled={runDueScan.isPending} className="btn-ghost px-5 py-2.5">
-          {runDueScan.isPending ? t("scheduler.scanning", "Scanning...") : t("scheduler.run_due_scan", "Run scheduler scan")}
-        </button>
-        <button onClick={() => syncNow.mutate()} disabled={syncNow.isPending} className="btn-primary px-5 py-2.5">
-          {syncNow.isPending ? t("scheduler.syncing") : t("scheduler.sync_eligible_now", "Sync eligible now")}
-        </button>
-        {queue.data && queue.data.failed_jobs > 0 && (
-          <button onClick={() => clearFailed.mutate()} disabled={clearFailed.isPending} className="btn-danger px-5 py-2.5">
-            {clearFailed.isPending ? "..." : t("scheduler.clear_all")}
-          </button>
-        )}
+      {canManageTasks && (
+      <>
+      <div data-page-primary-content>
+        <AdaptiveToolbar
+          className="mb-4"
+          leading={
+            <>
+              <button onClick={refreshAll} className="btn-ghost px-5 py-2.5">
+                {t("scheduler.refresh")}
+              </button>
+              <button onClick={() => runDueScan.mutate()} disabled={runDueScan.isPending} className="btn-ghost px-5 py-2.5">
+                {runDueScan.isPending ? t("scheduler.scanning") : t("scheduler.run_due_scan")}
+              </button>
+              <button onClick={() => syncNow.mutate()} disabled={syncNow.isPending} className="btn-primary px-5 py-2.5">
+                {syncNow.isPending ? t("scheduler.syncing") : t("scheduler.sync_eligible_now")}
+              </button>
+              {queue.data && queue.data.failed_jobs > 0 && (
+                <button onClick={() => clearFailed.mutate()} disabled={clearFailed.isPending} className="btn-danger px-5 py-2.5">
+                  {clearFailed.isPending ? "..." : t("scheduler.clear_all")}
+                </button>
+              )}
+            </>
+          }
+        />
       </div>
 
-      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-border bg-white p-3 dark:border-border dark:bg-surface">
-        <input
+      <FilterBar meta={t("scheduler.last_updated", { time: lastUpdated ? fmt.time(new Date(lastUpdated).toISOString()) : "—" })}>
+        <SmartSearchInput
           value={search}
-          onChange={(e) => updateParams({ q: e.target.value || null })}
-          className="input w-full min-w-0 px-3 py-1.5 text-sm sm:w-auto sm:min-w-[240px]"
+          onChange={(query) => updateParams({ q: query || null, page: null })}
+          scope="scheduler"
+          className="w-full sm:min-w-[320px] sm:max-w-xl"
           placeholder={t("scheduler.search_placeholder")}
-          aria-label={t("scheduler.search_placeholder")}
         />
-        <div className="flex flex-wrap gap-1">
+        <div className="segmented-control flex-wrap">
           {filterOptions.map(([key, label]) => (
             <button
               key={key}
-              onClick={() => updateParams({ filter: key || null })}
-              className={`rounded-md border px-2.5 py-1.5 text-xs font-medium ${filter === key ? "border-accent bg-accent-subtle text-accent dark:border-accent dark:bg-accent-subtle dark:text-accent" : "border-border hover:bg-subtle dark:border-border dark:hover:bg-subtle"}`}
+              onClick={() => filterComposer.mutate({
+                key: "is",
+                value: key || null,
+                operation: "replace-group",
+                replace_values: ["due", "blocked", "waiting", "manual", "disabled"],
+              })}
+              className={`segment ${key ? selectedModes.has(key) : selectedModes.size === 0 ? "segment-active" : ""}`}
             >
               {label}
             </button>
           ))}
         </div>
-        <div className="w-full text-xs text-muted sm:ml-auto sm:w-auto">
-          {t("scheduler.last_updated", { time: lastUpdated ? fmt.time(new Date(lastUpdated).toISOString()) : "—" })}
-        </div>
-      </div>
+      </FilterBar>
 
       {queue.data && (
         <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
-          <SummaryTile label={t("scheduler.queued")} value={queue.data.default_queue} sub={t("scheduler.default_queue_short")} />
-          <SummaryTile label={t("scheduler.scheduled")} value={queue.data.scheduled_queue} sub={queue.data.next_sync_scan_at ? fmt.dateTime(queue.data.next_sync_scan_at) : t("scheduler.no_scan")} />
-          <SummaryTile label={t("dashboard.failed")} value={queue.data.failed_jobs} danger={queue.data.failed_jobs > 0} />
-          <SummaryTile label={t("dashboard.auto_sync")} value={queue.data.scheduler_enabled === false ? t("common.off") : t("common.on")} danger={queue.data.scheduler_enabled === false} sub={`${scheduleModeLabel(t, queue.data.scheduler_mode)} · ${queue.data.scheduler_timezone || "UTC"}`} />
+          <StatCard label={t("scheduler.queued")} value={queue.data.default_queue} sub={t("scheduler.default_queue_short")} />
+          <StatCard label={t("scheduler.scheduled")} value={queue.data.scheduled_queue} sub={queue.data.next_sync_scan_at ? fmt.dateTime(queue.data.next_sync_scan_at) : t("scheduler.no_scan")} />
+          <StatCard label={t("dashboard.failed")} value={queue.data.failed_jobs} tone={queue.data.failed_jobs > 0 ? "danger" : "neutral"} />
+          <StatCard label={t("dashboard.auto_sync")} value={queue.data.scheduler_enabled === false ? t("common.off") : t("common.on")} tone={queue.data.scheduler_enabled === false ? "danger" : "neutral"} sub={`${scheduleModeLabel(t, queue.data.scheduler_mode)} · ${queue.data.scheduler_timezone || "UTC"}`} />
         </div>
       )}
 
@@ -396,7 +519,7 @@ export default function SchedulerPage() {
                 return (
                   <Link
                     key={name}
-                    href={`/admin/jobs?tab=${name === "imports" ? "imports" : "downloads"}${stats.failed ? "&status=failed" : ""}`}
+                    href={`/admin/jobs?tab=${name === "imports" ? "imports" : "downloads"}${stats.failed ? "&q=status%3Afailed" : ""}`}
                     className="rounded-full border border-warning/30 bg-warning-subtle px-2 py-1 text-warning hover:underline dark:bg-warning-subtle dark:text-warning"
                   >
                     {t("scheduler.queue_attention", { queue: name, failed: stats.failed, scheduled: stats.scheduled, started: stats.started })}
@@ -408,6 +531,13 @@ export default function SchedulerPage() {
         </section>
       )}
 
+      </>
+      )}
+
+      <AuthStatusSection enabled={canViewAuth} />
+
+      {canManageTasks && (
+      <>
       <AdminOperationsSection />
 
       <section>
@@ -451,9 +581,9 @@ export default function SchedulerPage() {
             )}
         </SelectionBar>
 
-        {decisions.isLoading && <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-20 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div>}
-        {decisions.error && <ErrorState message={(decisions.error as Error).message} onRetry={() => decisions.refetch()} />}
-        {decisions.data && filteredItems.length === 0 && <EmptyState title={t("scheduler.no_sources")} description={t("scheduler.no_sources_desc")} />}
+        {searchedDecisions.isLoading && <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-20 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div>}
+        {searchedDecisions.error && <ErrorState message={(searchedDecisions.error as Error).message} onRetry={() => searchedDecisions.refetch()} />}
+        {searchedDecisions.data && filteredItems.length === 0 && <EmptyState title={t("scheduler.no_sources")} description={t("scheduler.no_sources_desc")} />}
         {filteredItems.length > 0 && (
           <div className="table-shell overflow-hidden">
             <div className="hidden grid-cols-[auto_1.2fr_1fr_1fr_1fr_1fr] gap-3 border-b border-border bg-subtle px-4 py-2 text-xs font-semibold uppercase text-muted lg:grid">
@@ -505,8 +635,8 @@ export default function SchedulerPage() {
                       <RowActionMenu
                         label={t("common.more_actions")}
                         items={[
-                          { label: t("scheduler.open_repository"), href: `/admin/repositories/${item.source_id}` },
-                          { label: t("scheduler.open_jobs"), href: `/admin/jobs?tab=downloads&subscription_source_id=${item.source_id}` },
+                          { label: t("scheduler.open_repository"), href: adminRoutes.repository(item.source_id) },
+                          { label: t("scheduler.open_jobs"), href: `/admin/jobs?tab=downloads&q=${encodeURIComponent(`kind:download repo:${item.source_id}`)}` },
                           { label: t("scheduler.manage"), href: `/admin/subscriptions/${item.subscription_id}` },
                         ]}
                       />
@@ -518,7 +648,17 @@ export default function SchedulerPage() {
             </div>
           </div>
         )}
+        {searchedDecisions.data ? (
+          <Pagination
+            page={page}
+            pageSize={SEARCH_PAGE_SIZE}
+            total={schedulerGroup?.total || 0}
+            onPageChange={(nextPage) => updateParams({ page: nextPage === 1 ? null : String(nextPage) })}
+          />
+        ) : null}
       </section>
+      </>
+      )}
     </PageShell>
     </PermissionGuard>
   );

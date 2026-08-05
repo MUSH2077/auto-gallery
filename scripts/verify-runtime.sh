@@ -55,6 +55,67 @@ echo "ok: backend readiness endpoint"
 compose exec -T backend curl -sf http://localhost:8000/api/v1/system/health >/dev/null
 echo "ok: backend health endpoint"
 
+docs_anonymous_status="$(compose exec -T backend curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/api/openapi.json)"
+if [[ "$docs_anonymous_status" != "401" ]]; then
+  echo "Protected OpenAPI endpoint returned $docs_anonymous_status to an anonymous client" >&2
+  exit 1
+fi
+echo "ok: API contract rejects anonymous access"
+
+compose exec -T backend python3 - <<'PY'
+import asyncio
+
+import httpx
+from sqlalchemy import select
+
+from app.auth import create_access_token
+from app.database import async_session
+from app.models.user import User
+
+
+async def verify_docs() -> None:
+    async with async_session() as db:
+        username = (
+            await db.execute(select(User.username).where(User.is_admin.is_(True)).limit(1))
+        ).scalar_one()
+    token = create_access_token(username, must_change_password=False)
+    async with httpx.AsyncClient(
+        base_url="http://admin-web:3000",
+        cookies={"ag_token": token},
+        timeout=20,
+    ) as client:
+        for path in (
+            "/api/docs",
+            "/api/redoc",
+            "/api/openapi.json",
+            "/api/asyncapi.yaml",
+            "/api-docs/swagger-ui-bundle.js",
+            "/api-docs/redoc.standalone.js",
+        ):
+            response = await client.get(path)
+            response.raise_for_status()
+        for legacy, canonical in (
+            ("/docs", "/api/docs"),
+            ("/redoc", "/api/redoc"),
+            ("/openapi.json", "/api/openapi.json"),
+        ):
+            response = await client.get(legacy)
+            if response.status_code != 308 or response.headers.get("location") != canonical:
+                raise RuntimeError(
+                    f"Legacy API docs redirect {legacy} returned "
+                    f"{response.status_code} -> {response.headers.get('location')}"
+                )
+        business = await client.get("/api/v1/system/storage")
+        if business.status_code != 401:
+            raise RuntimeError(
+                f"Business API accepted cookie-only authentication ({business.status_code})"
+            )
+
+
+asyncio.run(verify_docs())
+PY
+echo "ok: authenticated offline API documentation"
+
 compose exec -T admin-web wget -q -O /dev/null http://127.0.0.1:3000/
 echo "ok: admin-web homepage"
 

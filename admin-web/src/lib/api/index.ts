@@ -71,13 +71,14 @@ export const api = {
   queueStats: () => request<T.QueueStatsResponse>("/api/v1/system/queue-stats"),
 
   // Unified task runs
-  listTasks: (params?: { kind?: string; status?: string; operation_type?: string; source?: string; q?: string; offset?: number; limit?: number }) => {
+  listTasks: (params?: { kind?: string; status?: string; operation_type?: string; source?: string; q?: string; include_account?: boolean; offset?: number; limit?: number }) => {
     const q = new URLSearchParams();
     if (params?.kind) q.set("kind", params.kind);
     if (params?.status) q.set("status", params.status);
     if (params?.operation_type) q.set("operation_type", params.operation_type);
     if (params?.source) q.set("source", params.source);
     if (params?.q) q.set("q", params.q);
+    if (params?.include_account) q.set("include_account", "true");
     q.set("offset", String(params?.offset || 0));
     q.set("limit", String(params?.limit || 50));
     return request<T.TaskRunListResponse>(`/api/v1/tasks?${q.toString()}`);
@@ -104,16 +105,9 @@ export const api = {
 
   countCreators: () => request<{ count: number }>("/api/v1/creators/count"),
   countSubscriptions: () => request<{ count: number }>("/api/v1/subscriptions/count"),
-  listCreators: (offset = 0, limit = 50, filters?: {
-    search?: string; is_active?: boolean; has_danbooru?: boolean;
-    has_subscription?: boolean; is_favorite?: boolean;
-  }) => {
+  listCreators: (offset = 0, limit = 50, query = "") => {
     const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
-    if (filters?.search) params.set("search", filters.search);
-    if (filters?.is_active !== undefined) params.set("is_active", String(filters.is_active));
-    if (filters?.has_danbooru !== undefined) params.set("has_danbooru", String(filters.has_danbooru));
-    if (filters?.has_subscription !== undefined) params.set("has_subscription", String(filters.has_subscription));
-    if (filters?.is_favorite !== undefined) params.set("is_favorite", String(filters.is_favorite));
+    if (query) params.set("q", query);
     return request<T.CreatorListResponse>(`/api/v1/creators?${params.toString()}`);
   },
 
@@ -122,7 +116,12 @@ export const api = {
       const q = new URLSearchParams();
       if (fromDate) q.set("from_date", fromDate);
       if (toDate) q.set("to_date", toDate);
-      return request<{ creator_id: string; sources: string[]; days: { date: string; total: number; [source: string]: number | string }[]; total: number }>(`/api/v1/creators/${creatorId}/timeline?${q.toString()}`);
+      return request<{
+        creator_id: string;
+        sources: string[];
+        days: { date: string; total: number; [source: string]: number | string | string[] }[];
+        total: number;
+      }>(`/api/v1/creators/${creatorId}/timeline?${q.toString()}`);
     },
 
   getCreatorStats: (id: string) =>
@@ -181,14 +180,9 @@ export const api = {
     request<void>(`/api/v1/creators/${creatorId}/links/${linkId}`, { method: "DELETE" }),
 
   // Subscriptions
-  listSubscriptions: (offset = 0, limit = 50, filters?: {
-    search?: string; is_active?: boolean; sync_enabled?: boolean; never_synced?: boolean;
-  }) => {
+  listSubscriptions: (offset = 0, limit = 50, query = "") => {
     const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
-    if (filters?.search) params.set("search", filters.search);
-    if (filters?.is_active !== undefined) params.set("is_active", String(filters.is_active));
-    if (filters?.sync_enabled !== undefined) params.set("sync_enabled", String(filters.sync_enabled));
-    if (filters?.never_synced !== undefined) params.set("never_synced", String(filters.never_synced));
+    if (query) params.set("q", query);
     return request<T.Subscription[]>(`/api/v1/subscriptions?${params.toString()}`);
   },
 
@@ -395,11 +389,34 @@ export const api = {
     request<{ status: string }>(`/api/v1/tags/${id}`, { method: "DELETE" }),
 
   // Search
-  search: (q: string, offset = 0, limit = 20, kind = "all") => {
-    const params = new URLSearchParams({ q, offset: String(offset), limit: String(limit) });
-    if (kind !== "all") params.set("kind", kind);
-    return request<{ results: T.SearchWorkResult[]; total: number; query?: string; creators?: { id: string; name: string; display_name?: string }[]; tags?: { id: string; normalized_name: string; category?: string }[] }>(`/api/v1/search?${params.toString()}`);
+  search: (q: string, offset = 0, limit = 20, scope: T.SearchScope = "global") => {
+    const params = new URLSearchParams({ q, offset: String(offset), limit: String(limit), scope });
+    return request<T.SearchResponse>(`/api/v1/search?${params.toString()}`);
   },
+
+  assistSearch: (data: {
+    before_cursor: string;
+    after_cursor?: string;
+    scope?: T.SearchScope;
+    limit?: number;
+    compose?: {
+      key: string;
+      value?: string | null;
+      operation?: "set" | "add" | "toggle" | "remove" | "replace-group";
+      negated?: boolean;
+      replace_values?: string[];
+    };
+    composes?: {
+      key: string;
+      value?: string | null;
+      operation?: "set" | "add" | "toggle" | "remove" | "replace-group";
+      negated?: boolean;
+      replace_values?: string[];
+    }[];
+  }) => request<T.SearchAssistResponse>("/api/v1/search/assist", {
+    method: "POST",
+    body: JSON.stringify(data),
+  }),
 
   getTagDetail: (id: string) => request<T.TagDetail>(`/api/v1/tags/${id}`),
 

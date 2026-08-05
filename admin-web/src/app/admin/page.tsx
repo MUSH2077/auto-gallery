@@ -109,7 +109,7 @@ export default function Dashboard() {
   }
 
   return (
-    <PageShell className="page-transition">
+    <PageShell>
       <h1 className="sr-only">{t("dashboard.title")}</h1>
 
       {!workbench.data ? (

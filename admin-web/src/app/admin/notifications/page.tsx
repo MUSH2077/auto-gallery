@@ -1,12 +1,13 @@
 "use client";
 import { useMemo, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
 import { api, queryKeys } from "@/lib/api";
 import type { TaskRun } from "@/lib/api/types";
 import { useStaggeredEntrance } from "@/lib/motion";
 import { PageHeader, PageShell, EmptyState, ErrorState, StatusBadge, SourceBadge, PermissionGuard } from "@/components";
+import { useI18nFormat } from "@/lib/i18n-format";
+import Link from "next/link";
 
 type Filter = "all" | "tasks" | "account";
 const PAGE_SIZE = 50;
@@ -21,14 +22,9 @@ function taskLink(task: TaskRun): string | null {
   return null;
 }
 
-function timeStr(iso?: string | null): string {
-  if (!iso) return "";
-  return new Date(iso).toLocaleString();
-}
-
 export default function NotificationsPage() {
   const t = useT();
-  const router = useRouter();
+  const fmt = useI18nFormat();
   const [filter, setFilter] = useState<Filter>("all");
 
   // Account is a single-kind server filter; "tasks" has no single kind param,
@@ -38,7 +34,7 @@ export default function NotificationsPage() {
   const query = useInfiniteQuery({
     queryKey: [...queryKeys.tasks.all, "feed", filter],
     queryFn: ({ pageParam = 0 }) =>
-      api.listTasks({ kind: kindParam, offset: pageParam as number, limit: PAGE_SIZE }),
+      api.listTasks({ kind: kindParam, include_account: true, offset: pageParam as number, limit: PAGE_SIZE }),
     initialPageParam: 0,
     getNextPageParam: (lastPage, pages) => {
       const loaded = pages.reduce((n, p) => n + p.items.length, 0);
@@ -54,14 +50,14 @@ export default function NotificationsPage() {
   const itemEntrance = useStaggeredEntrance(items.map((task) => task.id));
 
   const filters: { key: Filter; label: string }[] = [
-    { key: "all", label: t("notifications.filter_all", "全部") },
-    { key: "tasks", label: t("notifications.filter_tasks", "任务") },
-    { key: "account", label: t("notifications.filter_account", "账户") },
+    { key: "all", label: t("notifications.filter_all") },
+    { key: "tasks", label: t("notifications.filter_tasks") },
+    { key: "account", label: t("notifications.filter_account") },
   ];
 
   return (
     <PermissionGuard module="tasks">
-    <PageShell size="normal" className="page-transition">
+    <PageShell>
       <PageHeader title={t("notifications.title")} description={t("notifications.desc")} />
 
       <div className="mb-4 flex gap-1">
@@ -81,7 +77,7 @@ export default function NotificationsPage() {
       </div>
 
       {query.isError ? (
-        <ErrorState message={t("notifications.load_error", "加载通知失败")} onRetry={() => query.refetch()} />
+        <ErrorState message={t("notifications.load_error")} onRetry={() => query.refetch()} />
       ) : query.isLoading ? (
         <div className="space-y-3">
           {[0, 1, 2].map((i) => (
@@ -99,13 +95,7 @@ export default function NotificationsPage() {
               task.progress_total && task.progress_current !== undefined && task.progress_total > 0
                 ? Math.round(((task.progress_current ?? 0) / task.progress_total) * 100)
                 : null;
-            return (
-              <div
-                key={task.id}
-                className={`card p-4 ${entrance.className} ${link ? "cursor-pointer hover:border-accent/50" : ""}`}
-                style={entrance.style}
-                onClick={() => link && router.push(link)}
-              >
+            const content = (
                 <div className="flex items-start gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="mb-1 flex items-center gap-2">
@@ -123,9 +113,22 @@ export default function NotificationsPage() {
                         />
                       </div>
                     )}
-                    <p className="mt-1 text-[10px] text-muted tabular">{timeStr(task.created_at)}</p>
+                    <time className="mt-1 block text-[10px] text-muted tabular" dateTime={task.created_at || undefined}>{fmt.dateTime(task.created_at)}</time>
                   </div>
                 </div>
+            );
+            return link ? (
+              <Link
+                key={task.id}
+                href={link}
+                className={`card block p-4 hover:border-accent/50 ${entrance.className}`}
+                style={entrance.style}
+              >
+                {content}
+              </Link>
+            ) : (
+              <div key={task.id} className={`card p-4 ${entrance.className}`} style={entrance.style}>
+                {content}
               </div>
             );
           })}
@@ -137,7 +140,7 @@ export default function NotificationsPage() {
                 disabled={query.isFetchingNextPage}
                 className="btn-ghost px-4 py-1.5 text-xs"
               >
-                {t("notifications.load_more", "加载更多")}
+                {t("notifications.load_more")}
               </button>
             </div>
           )}

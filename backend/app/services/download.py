@@ -14,10 +14,13 @@ from app.services.job_manifest import append_manifest_event, update_manifest
 from app.services.job_progress import apply_download_progress
 from app.services.progress import ProgressTracker
 from app.services.redis_client import get_redis
+from app.services.search import SearchService
+from app.services.search_language import compose_search_query
 
 logger = logging.getLogger(__name__)
 
 RQ_JOB_TIMEOUT = 7200  # 2 hours — must exceed gallery-dl subprocess timeout
+ACTIVE_DOWNLOAD_STATUSES = {"pending", "enqueued", "downloading", "downloaded", "importing"}
 
 
 class DownloadService:
@@ -66,6 +69,8 @@ class DownloadService:
 
     def _enrich_progress(self, jobs):
         for job in jobs:
+            if getattr(job, "status", None) not in ACTIVE_DOWNLOAD_STATUSES:
+                continue
             progress = ProgressTracker.get(str(job.id))
             if progress:
                 job.progress_data = progress
@@ -77,23 +82,39 @@ class DownloadService:
                         q: str | None = None,
                         sort_by: str = "created_at", sort_order: str = "desc",
                         offset: int = 0, limit: int = 50):
-        jobs = await self.repo.list_all(status=status, source=source,
-                                        subscription_id=subscription_id,
-                                        subscription_source_id=subscription_source_id,
-                                        q=q,
-                                        sort_by=sort_by, sort_order=sort_order,
-                                        offset=offset, limit=limit)
+        canonical = q or ""
+        for key, value in (
+            ("status", status),
+            ("source", source),
+            ("repo", subscription_source_id),
+        ):
+            if value:
+                canonical = compose_search_query(
+                    canonical,
+                    "tasks",
+                    key=key,
+                    value=value,
+                    operation="add",
+                ).canonical
+        if sort_by in {"created_at", "updated_at"}:
+            sort_value = f"{'updated' if sort_by == 'updated_at' else 'created'}-{'asc' if sort_order == 'asc' else 'desc'}"
+            canonical = compose_search_query(
+                canonical,
+                "tasks",
+                key="sort",
+                value=sort_value,
+                operation="set",
+            ).canonical
+        jobs = await SearchService(self.db).search_download_jobs(
+            canonical,
+            offset=offset,
+            limit=limit,
+        )
+        # Kept only for legacy API callers. New UI deep-links use ``repo:``.
+        if subscription_id:
+            jobs = [job for job in jobs if str(job.subscription_id) == str(subscription_id)]
         jobs = await self._enrich_job_context(jobs)
         self._enrich_progress(jobs)
-        if q:
-            needle = q.strip().lower()
-            jobs = [
-                job for job in jobs
-                if needle in str(job.id).lower()
-                or needle in (job.source_url or "").lower()
-                or needle in (getattr(job, "creator_name", None) or "").lower()
-                or needle in (getattr(job, "subscription_name", None) or "").lower()
-            ]
         return jobs
 
     async def get_job(self, job_id: UUID):

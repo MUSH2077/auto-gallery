@@ -1,22 +1,28 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth";
+import { adminRoutes } from "@/lib/adminRoutes";
 import { usePresence } from "@/lib/motion";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import AppSidebar from "@/components/AppSidebar";
 import AppTopBar from "@/components/AppTopBar";
+import { useT } from "@/lib/i18n";
+import {
+  ADMIN_SIDEBAR_COMPACT_WIDTH,
+  ADMIN_SIDEBAR_EXPANDED_WIDTH,
+  LEGACY_SIDEBAR_KEY,
+  SIDEBAR_MID_KEY,
+  SIDEBAR_WIDE_KEY,
+} from "@/lib/adminSidebar";
 
 export const dynamic = 'force-dynamic';
-
-const LEGACY_SIDEBAR_KEY = "auto-gallery-sidebar";
-const SIDEBAR_WIDE_KEY = "auto-gallery-sidebar-wide-v2";
-const SIDEBAR_MID_KEY = "auto-gallery-sidebar-mid-v2";
 
 type DesktopSidebarMode = "expanded" | "compact";
 type ViewportTier = "mobile" | "mid" | "wide";
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
+  const t = useT();
   const { isAuthenticated, isLoading, user } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
@@ -30,17 +36,20 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
       !isLoading
       && isAuthenticated
       && user?.must_change_password
-      && pathname !== "/admin/settings/profile"
+      && pathname !== adminRoutes.profile
       && pathname !== "/admin/login"
     ) {
-      router.replace("/admin/settings/profile");
+      router.replace(adminRoutes.profile);
     }
   }, [isAuthenticated, isLoading, pathname, router, user?.must_change_password]);
 
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-subtle">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-border" />
+        <div role="status" className="flex items-center gap-3 text-sm text-muted">
+          <span aria-hidden="true" className="animate-spin rounded-full h-8 w-8 border-b-2 border-border" />
+          <span className="sr-only">{t("common.loading")}</span>
+        </div>
       </div>
     );
   }
@@ -51,14 +60,19 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 }
 
 function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const [wideMode, setWideMode] = useState<DesktopSidebarMode>("expanded");
   const [midMode, setMidMode] = useState<DesktopSidebarMode>("compact");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [viewportTier, setViewportTier] = useState<ViewportTier>("wide");
+  const [sidebarReady, setSidebarReady] = useState(false);
   const { mounted: drawerMounted, closing: drawerClosing } = usePresence(mobileOpen);
   const sidebarTriggerRef = useRef<HTMLButtonElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  const previousPathRef = useRef(pathname);
+  const restoreDrawerFocusRef = useRef(true);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     try {
       const legacy = localStorage.getItem(LEGACY_SIDEBAR_KEY);
       const storedWide = localStorage.getItem(SIDEBAR_WIDE_KEY);
@@ -74,7 +88,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
     } catch {}
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const mobile = window.matchMedia("(max-width: 767px)");
     const mid = window.matchMedia("(min-width: 768px) and (max-width: 1279px)");
     const syncViewport = () => {
@@ -83,6 +97,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
       if (tier !== "mobile") setMobileOpen(false);
     };
     syncViewport();
+    setSidebarReady(true);
     mobile.addEventListener("change", syncViewport);
     mid.addEventListener("change", syncViewport);
     return () => {
@@ -102,6 +117,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        restoreDrawerFocusRef.current = true;
         setMobileOpen(false);
         return;
       }
@@ -125,17 +141,39 @@ function AppShell({ children }: { children: React.ReactNode }) {
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
       document.body.style.overflow = previousOverflow;
-      (sidebarTriggerRef.current || previousFocus)?.focus();
+      if (restoreDrawerFocusRef.current) {
+        (sidebarTriggerRef.current || previousFocus)?.focus();
+      }
     };
   }, [drawerMounted, mobileOpen]);
 
+  useEffect(() => {
+    if (previousPathRef.current === pathname) return;
+    previousPathRef.current = pathname;
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      mainRef.current?.focus({ preventScroll: true });
+    });
+  }, [pathname]);
+
   const desktopMode = viewportTier === "mid" ? midMode : wideMode;
   const desktopCompact = desktopMode === "compact";
-  const sidebarWidth = desktopCompact ? 64 : 248;
+  const sidebarWidth = desktopCompact
+    ? ADMIN_SIDEBAR_COMPACT_WIDTH
+    : ADMIN_SIDEBAR_EXPANDED_WIDTH;
+
+  useLayoutEffect(() => {
+    if (!sidebarReady) return;
+    document.documentElement.style.setProperty("--admin-sidebar-width", `${sidebarWidth}px`);
+  }, [sidebarReady, sidebarWidth]);
 
   const toggleSidebar = () => {
     if (viewportTier === "mobile") {
-      setMobileOpen((open) => !open);
+      setMobileOpen((open) => {
+        restoreDrawerFocusRef.current = true;
+        return !open;
+      });
       return;
     }
     const setter = viewportTier === "mid" ? setMidMode : setWideMode;
@@ -147,15 +185,9 @@ function AppShell({ children }: { children: React.ReactNode }) {
     });
   };
 
-  const shellStyle = useMemo(
-    () => ({ "--admin-sidebar-width": `${sidebarWidth}px` } as React.CSSProperties),
-    [sidebarWidth],
-  );
-
   return (
     <div
       className="grid min-h-screen grid-cols-1 md:grid-cols-[var(--admin-sidebar-width)_minmax(0,1fr)]"
-      style={shellStyle}
     >
       <aside
         id="admin-sidebar"
@@ -168,7 +200,10 @@ function AppShell({ children }: { children: React.ReactNode }) {
         <>
           <div
             className={`fixed inset-0 z-50 bg-black/30 md:hidden ${drawerClosing ? "overlay-backdrop-exit" : "overlay-backdrop"}`}
-            onClick={() => setMobileOpen(false)}
+            onClick={() => {
+              restoreDrawerFocusRef.current = true;
+              setMobileOpen(false);
+            }}
             aria-hidden
           />
           <aside
@@ -179,8 +214,14 @@ function AppShell({ children }: { children: React.ReactNode }) {
             className={`fixed inset-y-0 left-0 z-[60] border-r border-border bg-subtle md:hidden ${drawerClosing ? "drawer-left-exit" : "drawer-left"}`}
           >
             <AppSidebar
-              onNavigate={() => setMobileOpen(false)}
-              onDismiss={() => setMobileOpen(false)}
+              onNavigate={() => {
+                restoreDrawerFocusRef.current = false;
+                setMobileOpen(false);
+              }}
+              onDismiss={() => {
+                restoreDrawerFocusRef.current = true;
+                setMobileOpen(false);
+              }}
             />
           </aside>
         </>
@@ -192,13 +233,21 @@ function AppShell({ children }: { children: React.ReactNode }) {
           sidebarId={viewportTier === "mobile" ? "admin-mobile-sidebar" : "admin-sidebar"}
           sidebarTriggerRef={sidebarTriggerRef}
         />
-        <main id="main-content" className="min-h-[calc(100vh-56px)] min-w-0">{children}</main>
+        <main
+          ref={mainRef}
+          id="main-content"
+          tabIndex={-1}
+          className="min-h-[calc(100vh-56px)] min-w-0 outline-none"
+        >
+          {children}
+        </main>
       </div>
     </div>
   );
 }
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
+  const t = useT();
   const pathname = usePathname();
   const isLoginPage = pathname === "/admin/login";
 
@@ -209,7 +258,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   return (
     <ErrorBoundary>
       <AuthGuard>
-        <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-subtle focus:text-fg focus:rounded">Skip to content</a>
+        <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-subtle focus:text-fg focus:rounded">{t("common.skip_to_content")}</a>
         <AppShell>{children}</AppShell>
       </AuthGuard>
     </ErrorBoundary>

@@ -58,10 +58,10 @@ package.json 与 node_modules 均无 anime.js / framer-motion / motion / gsap。
 |---|---|---|
 | 仪表盘 `/admin` | MetricCard 数字滚动(count-up)、MiniBar 生长、WorkGrid SVG 热力图逐格浮现 | 数字插值、SVG、动态 stagger 只能 JS |
 | 任务中心 `/admin/jobs` | 状态变更行闪烁反馈(WS `status_change` 触发)、JobLifecycle 步进点过渡、Drawer 滑入滑出+遮罩、进度条平滑插值 | 事件驱动的一次性反馈、可中断序列 |
-| 去重审核 `/admin/dedup` + merge-candidates + creators/duplicates | 对比卡对开揭示 timeline、合并成功时卡片收拢汇合反馈 | 多元素时序编排 |
+| 去重审核 `/admin/data-mgmt/dedup` + merge-candidates + creators/duplicates | 对比卡对开揭示 timeline、合并成功时卡片收拢汇合反馈 | 多元素时序编排 |
 | 作品详情 `/admin/works/[id]` | Lightbox 从缩略图 rect 放大展开(shared-element 感)、filmstrip 切换 | FLIP 式 rect→rect 变换需测量+JS |
 | 通知 NotificationBell / notifications 页 | 新通知条目滑入、badge 计数 pop | 列表项 enter/exit 编排 |
-| 策展 `/admin/curation` | commit 时间线卡片沿线 stagger | 动态延迟 |
+| 策展 `/admin/data-mgmt/curation` | commit 时间线卡片沿线 stagger | 动态延迟 |
 
 ### 3.2 只应该用 CSS transition、不要强行上 anime.js 的地方
 
