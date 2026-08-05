@@ -672,3 +672,19 @@ async def clear_failed_jobs():
             reg.remove(job_id, delete_job=True)
             total += 1
     return {"status": "ok", "message": f"Removed {total} failed jobs from Redis"}
+
+
+@tasks_ops_router.post("/system/reindex-works")
+async def reindex_works():
+    """Rebuild the entire works Meilisearch index from the database.
+
+    Paginates through all visible works in batches and re-adds them to
+    the search index.  Useful after Meilisearch data loss or schema
+    migrations.
+    """
+    from app.database import async_session
+    from app.services.search import SearchService
+
+    async with async_session() as db:
+        result = await SearchService(db).refresh_works_index()
+    return {"status": "ok", **result}

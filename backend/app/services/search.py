@@ -806,7 +806,7 @@ class SearchService:
         has_filters = bool(parsed.qualifiers)
         if not text and not has_filters and len(targets) == 1:
             target = targets[0]
-            if target in ("creators", "subscriptions", "tags", "repositories"):
+            if target in ("creators", "subscriptions", "tags", "repositories", "works"):
                 groups[target] = await self._search_reference_db(target, offset, limit)
 
         meili_targets = [t for t in targets if t in MEILI_TARGET_INDEX and t not in groups]
@@ -1729,6 +1729,8 @@ class SearchService:
             return await self._search_creators_db(offset, limit)
         if target == "subscriptions":
             return await self._search_subscriptions_db(offset, limit)
+        if target == "works":
+            return await self._search_works_db(offset, limit)
         # Tags and repositories already have their own DB endpoints;
         # fall through for any future targets.
         return {"total": 0, "items": []}
@@ -1887,6 +1889,171 @@ class SearchService:
 
         return {"total": total, "items": items}
 
+    async def _search_works_db(self, offset: int, limit: int) -> dict:
+        """Direct DB query for works listing — no Meilisearch dependency.
+
+        Returns the same document shape as _search_meili() for the works
+        index.  Uses simple batch-loading (same pattern as other _search_*_db
+        methods) to avoid heavy subquery joins on 50k+ rows.
+        """
+
+        # ── Count visible works ──
+        total = (
+            await self.db.execute(
+                select(func.count(Work.id))
+                .outerjoin(WorkCurationState, WorkCurationState.work_id == Work.id)
+                .where(
+                    or_(
+                        WorkCurationState.visibility.is_(None),
+                        WorkCurationState.visibility == "visible",
+                    )
+                )
+            )
+        ).scalar() or 0
+
+        # ── Paginated works (simple query, no joins) ──
+        work_rows = (
+            await self.db.execute(
+                select(Work)
+                .outerjoin(WorkCurationState, WorkCurationState.work_id == Work.id)
+                .where(
+                    or_(
+                        WorkCurationState.visibility.is_(None),
+                        WorkCurationState.visibility == "visible",
+                    )
+                )
+                .order_by(Work.created_at.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+        ).scalars().all()
+
+        if not work_rows:
+            return {"total": total, "items": []}
+
+        work_ids = [w.id for w in work_rows]
+
+        # ── Batch-load sources & creators ──
+        source_rows = (
+            await self.db.execute(
+                select(
+                    WorkSource.work_id,
+                    WorkSource.source,
+                    WorkSource.source_work_id,
+                    SourceCreator.display_name,
+                    SourceCreator.creator_id,
+                )
+                .outerjoin(
+                    SourceCreator,
+                    (SourceCreator.source_creator_id == WorkSource.source_creator_id)
+                    & (SourceCreator.source == WorkSource.source),
+                )
+                .where(WorkSource.work_id.in_(work_ids))
+            )
+        ).all()
+        source_map: dict[UUID, str] = {}
+        creator_name_map: dict[UUID, str] = {}
+        creator_id_map: dict[UUID, str] = {}
+        for wid, src, _swid, sc_name, sc_cid in source_rows:
+            if wid not in source_map:
+                source_map[wid] = src
+            if wid not in creator_name_map and sc_name:
+                creator_name_map[wid] = sc_name
+            if wid not in creator_id_map and sc_cid:
+                creator_id_map[wid] = str(sc_cid)
+
+        # ── Batch-load asset counts ──
+        asset_counts: dict[UUID, int] = {}
+        ac_rows = (
+            await self.db.execute(
+                select(WorkSource.work_id, func.count(AssetSource.id))
+                .join(AssetSource, AssetSource.work_source_id == WorkSource.id)
+                .where(WorkSource.work_id.in_(work_ids))
+                .group_by(WorkSource.work_id)
+            )
+        ).all()
+        for wid, cnt in ac_rows:
+            asset_counts[wid] = cnt
+
+        # ── Batch-load preview asset IDs ──
+        preview_map: dict[UUID, list[str]] = defaultdict(list)
+        asset_rows = (
+            await self.db.execute(
+                select(WorkSource.work_id, Asset.id)
+                .join(AssetSource, AssetSource.work_source_id == WorkSource.id)
+                .join(Asset, Asset.id == AssetSource.asset_id)
+                .where(WorkSource.work_id.in_(work_ids))
+                .order_by(WorkSource.work_id, Asset.file_name)
+            )
+        ).all()
+        for wid, aid in asset_rows:
+            if len(preview_map[wid]) < 10:
+                preview_map[wid].append(str(aid))
+
+        # ── Batch-load tags ──
+        tag_map: dict[str, set[str]] = defaultdict(set)
+        tag_rows = (
+            await self.db.execute(
+                select(WorkTag.work_id, Tag.normalized_name)
+                .join(Tag, Tag.id == WorkTag.tag_id)
+                .where(WorkTag.work_id.in_(work_ids))
+            )
+        ).all()
+        for wid, name in tag_rows:
+            tag_map[str(wid)].add(name)
+
+        items: list[dict] = []
+        for work in work_rows:
+            key = str(work.id)
+            src = source_map.get(work.id)
+            cname = creator_name_map.get(work.id)
+            cid = creator_id_map.get(work.id)
+            asset_count = asset_counts.get(work.id, 0)
+            previews = preview_map.get(work.id, [])
+            tags = sorted(tag_map[key])
+
+            items.append({
+                "id": key,
+                "title": work.title or "",
+                "description": (work.description or "")[:1000],
+                "posted_at": _iso(work.posted_at),
+                "created_at": _iso(work.created_at),
+                "updated_at": _iso(work.updated_at),
+                "posted_ts": _timestamp(work.posted_at),
+                "created_ts": _timestamp(work.created_at),
+                "updated_ts": _timestamp(work.updated_at),
+                "is_nsfw": bool(work.is_nsfw),
+                "is_ai_generated": bool(work.is_ai_generated),
+                "is_favorite": bool(work.is_favorite),
+                "thumbnail_asset_id": (
+                    str(work.thumbnail_asset_id)
+                    if work.thumbnail_asset_id
+                    else (previews[0] if previews else None)
+                ),
+                "preview_asset_ids": previews,
+                "asset_count": asset_count,
+                "source": src or "unknown",
+                "sources": [src] if src else [],
+                "creator_name": cname or "",
+                "creator_names": [cname] if cname else [],
+                "creator_id": cid or "",
+                "creator_ids": [cid] if cid else [],
+                "tags": tags,
+                "has_tags": bool(tags),
+                "has_description": bool((work.description or "").strip()),
+                "has_multiple_assets": asset_count > 1,
+                "has_image": False,
+                "has_animation": False,
+                "has_ugoira": False,
+                "has_video": False,
+                "visibility": "visible",
+                "curation_visibility": "visible",
+                "repository_ids": [],
+                "source_work_ids": [],
+            })
+
+        return {"total": total, "items": items}
+
     async def refresh_reference_indexes(self) -> None:
         """Refresh creator/tag/repository/subscription projections.
 
@@ -1910,6 +2077,87 @@ class SearchService:
             await asyncio.to_thread(_run)
         except Exception:
             logger.warning("Reference search indexing failed", exc_info=True)
+
+    async def refresh_works_index(self, batch_size: int = 500) -> dict:
+        """Rebuild the entire works Meilisearch index in batches.
+
+        Unlike reference indexes (creators/tags/repos/subscriptions) which
+        are small enough for atomic replacement, the works index can contain
+        50k+ documents.  This method paginates through all works, builds
+        their documents, and adds them to Meilisearch in batches.
+
+        Returns a summary dict with timing and counts.
+        """
+        import time
+        started = time.monotonic()
+
+        # Count total works (visible only)
+        total = (
+            await self.db.execute(
+                select(func.count(Work.id))
+                .outerjoin(WorkCurationState, WorkCurationState.work_id == Work.id)
+                .where(
+                    or_(
+                        WorkCurationState.visibility.is_(None),
+                        WorkCurationState.visibility == "visible",
+                    )
+                )
+            )
+        ).scalar() or 0
+
+        if total == 0:
+            return {"total": 0, "batches": 0, "seconds": 0}
+
+        batch_count = 0
+        work_ids: list[UUID] = []
+        offset = 0
+        # Process works ordered by id for stable pagination
+        while offset < total:
+            batch_rows = (
+                await self.db.execute(
+                    select(Work.id)
+                    .outerjoin(WorkCurationState, WorkCurationState.work_id == Work.id)
+                    .where(
+                        or_(
+                            WorkCurationState.visibility.is_(None),
+                            WorkCurationState.visibility == "visible",
+                        )
+                    )
+                    .order_by(Work.created_at.desc())
+                    .offset(offset)
+                    .limit(batch_size)
+                )
+            ).scalars().all()
+
+            if not batch_rows:
+                break
+
+            documents = await self._build_work_documents(batch_rows)
+            if documents:
+                def _run() -> None:
+                    client = _client()
+                    _ensure_indexes(client)
+                    _wait_for_task(
+                        client,
+                        client.index(WORKS_INDEX).add_documents(documents),
+                    )
+
+                try:
+                    await asyncio.to_thread(_run)
+                except Exception:
+                    logger.warning(
+                        "Batch work reindex failed (offset=%d)", offset, exc_info=True
+                    )
+
+            batch_count += 1
+            offset += batch_size
+
+        elapsed = time.monotonic() - started
+        logger.info(
+            "Works index rebuild complete: %d works in %d batches (%.1fs)",
+            total, batch_count, elapsed,
+        )
+        return {"total": total, "batches": batch_count, "seconds": round(elapsed, 1)}
 
     async def _batch_index_works(self, docs: list[dict]) -> None:
         """Compatibility adapter for imports; new callers should pass IDs.
