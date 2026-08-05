@@ -799,7 +799,17 @@ class SearchService:
         resolved = await self._resolve_qualifiers(parsed)
 
         groups: dict[str, dict] = {}
-        meili_targets = [target for target in targets if target in MEILI_TARGET_INDEX]
+
+        # Empty query (no text, no filters) on a single reference target:
+        # use direct DB for real-time listing — no Meilisearch index dependency.
+        text = _free_text(parsed)
+        has_filters = bool(parsed.qualifiers)
+        if not text and not has_filters and len(targets) == 1:
+            target = targets[0]
+            if target in ("creators", "subscriptions", "tags", "repositories"):
+                groups[target] = await self._search_reference_db(target, offset, limit)
+
+        meili_targets = [t for t in targets if t in MEILI_TARGET_INDEX and t not in groups]
         if meili_targets:
             groups.update(await self._search_meili(parsed, meili_targets, resolved, offset, limit, force_sfw))
         if "tasks" in targets:
@@ -1705,6 +1715,177 @@ class SearchService:
             await asyncio.to_thread(_run)
         except Exception:
             logger.warning("Batch work indexing failed", exc_info=True)
+
+    async def _search_reference_db(
+        self, target: str, offset: int, limit: int
+    ) -> dict:
+        """Direct DB list query for real-time listing — no index dependency.
+
+        Used when the search query is empty (no text, no filters) on a single
+        reference target.  Returns the same document shape as _search_meili()
+        so callers don't need to distinguish the two paths.
+        """
+        if target == "creators":
+            return await self._search_creators_db(offset, limit)
+        if target == "subscriptions":
+            return await self._search_subscriptions_db(offset, limit)
+        # Tags and repositories already have their own DB endpoints;
+        # fall through for any future targets.
+        return {"total": 0, "items": []}
+
+    async def _search_creators_db(self, offset: int, limit: int) -> dict:
+        # Total count
+        total = (await self.db.execute(
+            select(func.count()).select_from(Creator)
+        )).scalar() or 0
+
+        # Paginated rows
+        rows = (await self.db.execute(
+            select(Creator).order_by(Creator.name).offset(offset).limit(limit)
+        )).scalars().all()
+
+        if not rows:
+            return {"total": total, "items": []}
+
+        creator_ids = [row.id for row in rows]
+
+        # Source counts
+        source_rows = (await self.db.execute(
+            select(SourceCreator.creator_id, SourceCreator.source, SourceCreator.source_creator_id)
+            .where(SourceCreator.creator_id.in_(creator_ids))
+        )).all()
+        sources: dict[str, set[str]] = defaultdict(set)
+        source_ids: dict[str, set[str]] = defaultdict(set)
+        for cid, source, sc_id in source_rows:
+            sources[str(cid)].add(source)
+            source_ids[str(cid)].add(sc_id)
+
+        # Subscription / repository counts
+        sub_rows = (await self.db.execute(
+            select(
+                Subscription.creator_id,
+                func.count(func.distinct(Subscription.id)),
+                func.count(SubscriptionSource.id),
+                func.max(SubscriptionSource.last_synced_at),
+            )
+            .outerjoin(SubscriptionSource, SubscriptionSource.subscription_id == Subscription.id)
+            .where(Subscription.creator_id.in_(creator_ids))
+            .group_by(Subscription.creator_id)
+        )).all()
+        sub_counts = {
+            str(cid): (int(sc), int(rc), ls)
+            for cid, sc, rc, ls in sub_rows
+        }
+
+        items = [{
+            "id": str(creator.id),
+            "name": creator.name,
+            "name_sort": (creator.display_name or creator.name).lower(),
+            "display_name": creator.display_name or creator.name,
+            "description": (creator.description or "")[:1000],
+            "thumbnail_url": creator.thumbnail_url,
+            "is_active": bool(creator.is_active),
+            "is_favorite": bool(creator.is_favorite),
+            "danbooru_artist_id": creator.danbooru_artist_id,
+            "has_danbooru": creator.danbooru_artist_id is not None,
+            "has_subscription": sub_counts.get(str(creator.id), (0, 0, None))[0] > 0,
+            "has_repository": sub_counts.get(str(creator.id), (0, 0, None))[1] > 0,
+            "subscription_count": sub_counts.get(str(creator.id), (0, 0, None))[0],
+            "repository_count": sub_counts.get(str(creator.id), (0, 0, None))[1],
+            "source_count": len(sources[str(creator.id)]),
+            "last_synced_at": _iso(sub_counts.get(str(creator.id), (0, 0, None))[2]),
+            "sources": sorted(sources[str(creator.id)]),
+            "source_creator_ids": sorted(source_ids[str(creator.id)]),
+            "created_at": _iso(creator.created_at),
+            "updated_at": _iso(creator.updated_at),
+            "created_ts": _timestamp(creator.created_at),
+            "updated_ts": _timestamp(creator.updated_at),
+        } for creator in rows]
+
+        return {"total": total, "items": items}
+
+    async def _search_subscriptions_db(self, offset: int, limit: int) -> dict:
+        # Total count
+        total = (await self.db.execute(
+            select(func.count()).select_from(Subscription)
+        )).scalar() or 0
+
+        # Paginated rows
+        rows = (await self.db.execute(
+            select(Subscription, Creator)
+            .join(Creator, Creator.id == Subscription.creator_id)
+            .order_by(Subscription.updated_at.desc())
+            .offset(offset).limit(limit)
+        )).all()
+
+        if not rows:
+            return {"total": total, "items": []}
+
+        sub_ids = [sub.id for sub, _ in rows]
+
+        # Sources per subscription
+        source_rows = (await self.db.execute(
+            select(SubscriptionSource)
+            .where(SubscriptionSource.subscription_id.in_(sub_ids))
+            .order_by(SubscriptionSource.created_at)
+        )).scalars().all()
+        by_sub: dict[str, list[SubscriptionSource]] = defaultdict(list)
+        for repo in source_rows:
+            by_sub[str(repo.subscription_id)].append(repo)
+
+        # Latest jobs
+        job_rows = (await self.db.execute(
+            select(DownloadJob)
+            .where(DownloadJob.subscription_id.in_(sub_ids))
+            .order_by(DownloadJob.created_at.desc())
+        )).scalars().all()
+        jobs_by_sub: dict[str, list[DownloadJob]] = defaultdict(list)
+        for job in job_rows:
+            if job.subscription_id:
+                jobs_by_sub[str(job.subscription_id)].append(job)
+
+        items = []
+        for subscription, creator in rows:
+            repositories = by_sub[str(subscription.id)]
+            jobs = jobs_by_sub[str(subscription.id)]
+            latest_job = jobs[0] if jobs else None
+            latest_sync = max(
+                (repo.last_synced_at for repo in repositories if repo.last_synced_at),
+                default=subscription.last_synced_at,
+            )
+            items.append({
+                "id": str(subscription.id),
+                "name": subscription.name or creator.display_name or creator.name,
+                "name_sort": (subscription.name or creator.display_name or creator.name).lower(),
+                "creator_id": str(creator.id),
+                "creator_name": creator.display_name or creator.name,
+                "is_active": bool(subscription.is_active),
+                "sync_enabled": bool(subscription.sync_enabled),
+                "sync_interval_hours": subscription.sync_interval_hours,
+                "schedule_mode": subscription.schedule_mode,
+                "scheduled_times": subscription.scheduled_times,
+                "never_synced": latest_sync is None,
+                "has_last_sync": latest_sync is not None,
+                "last_synced_at": _iso(latest_sync),
+                "repository_ids": [str(repo.id) for repo in repositories],
+                "source_count": len(repositories),
+                "enabled_source_count": sum(1 for repo in repositories if repo.is_enabled),
+                "running_job_count": sum(1 for job in jobs if job.status in {"enqueued", "downloading", "downloaded", "importing"}),
+                "failed_job_count": sum(1 for job in jobs if job.status in {"failed", "stale"}),
+                "latest_job_id": str(latest_job.id) if latest_job else None,
+                "latest_job_status": latest_job.status if latest_job else None,
+                "latest_job_created_at": _iso(latest_job.created_at) if latest_job else None,
+                "sources": sorted({repo.source for repo in repositories}),
+                "source_urls": [repo.source_url for repo in repositories if repo.source_url],
+                "source_creator_ids": [repo.source_creator_id for repo in repositories if repo.source_creator_id],
+                "created_at": _iso(subscription.created_at),
+                "updated_at": _iso(subscription.updated_at),
+                "created_ts": _timestamp(subscription.created_at),
+                "updated_ts": _timestamp(subscription.updated_at),
+                "synced_ts": _timestamp(latest_sync),
+            })
+
+        return {"total": total, "items": items}
 
     async def refresh_reference_indexes(self) -> None:
         """Refresh creator/tag/repository/subscription projections.
