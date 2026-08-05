@@ -543,6 +543,7 @@
             "title": "Aspect Ratio Delta"
           },
           "facts": {
+            "additionalProperties": true,
             "title": "Facts",
             "type": "object"
           },
@@ -1408,10 +1409,12 @@
       "CurationBackfillStatusResponse": {
         "properties": {
           "existing": {
+            "additionalProperties": true,
             "title": "Existing",
             "type": "object"
           },
           "expected": {
+            "additionalProperties": true,
             "title": "Expected",
             "type": "object"
           },
@@ -1420,6 +1423,7 @@
             "type": "boolean"
           },
           "missing": {
+            "additionalProperties": true,
             "title": "Missing",
             "type": "object"
           }
@@ -1442,6 +1446,7 @@
           "after_state": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1453,6 +1458,7 @@
           "before_state": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1474,6 +1480,7 @@
           "diff": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1490,6 +1497,7 @@
           "impact": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1596,6 +1604,7 @@
           "metadata": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1641,6 +1650,7 @@
           "stats": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1690,6 +1700,7 @@
           },
           "conflicts": {
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Conflicts",
@@ -2099,6 +2110,7 @@
           "manifest": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -2159,6 +2171,7 @@
           "progress_data": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -2691,6 +2704,7 @@
           "progress_data": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -3031,6 +3045,7 @@
             "type": "array"
           },
           "preferences": {
+            "additionalProperties": true,
             "title": "Preferences",
             "type": "object"
           },
@@ -3384,6 +3399,7 @@
       "PreferencesIn": {
         "properties": {
           "preferences": {
+            "additionalProperties": true,
             "title": "Preferences",
             "type": "object"
           }
@@ -3397,6 +3413,7 @@
       "PreferencesOut": {
         "properties": {
           "preferences": {
+            "additionalProperties": true,
             "title": "Preferences",
             "type": "object"
           }
@@ -3462,6 +3479,7 @@
           },
           "assets": {
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Assets",
@@ -3477,6 +3495,7 @@
           },
           "works": {
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Works",
@@ -3602,6 +3621,7 @@
         "properties": {
           "changes_summary": {
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Changes Summary",
@@ -3629,6 +3649,7 @@
           "stats": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -3736,6 +3757,7 @@
             "type": "string"
           },
           "impact": {
+            "additionalProperties": true,
             "title": "Impact",
             "type": "object"
           },
@@ -4005,6 +4027,7 @@
           "raw_metadata": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -4078,6 +4101,7 @@
           "raw_metadata": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -6309,6 +6333,7 @@
               "schema": {
                 "anyOf": [
                   {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   {
@@ -6700,6 +6725,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -7868,6 +7894,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -8455,6 +8482,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -9643,6 +9671,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -9852,6 +9881,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -12587,6 +12617,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -12664,6 +12695,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -12741,6 +12773,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -13117,6 +13150,7 @@
               "schema": {
                 "anyOf": [
                   {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   {
@@ -13293,6 +13327,7 @@
               "schema": {
                 "anyOf": [
                   {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   {
@@ -13464,6 +13499,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -13912,6 +13948,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -14223,6 +14260,7 @@
               "schema": {
                 "anyOf": [
                   {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   {
@@ -14316,6 +14354,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -14549,6 +14588,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -14626,6 +14666,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -14787,6 +14828,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -14864,6 +14906,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -14941,6 +14984,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -15018,6 +15062,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -15172,6 +15217,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -15249,6 +15295,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -16375,6 +16422,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -16452,6 +16500,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -17954,6 +18003,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -18281,6 +18331,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -18628,6 +18679,7 @@
               "schema": {
                 "anyOf": [
                   {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   {
@@ -18723,6 +18775,7 @@
               "schema": {
                 "anyOf": [
                   {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   {
@@ -19636,6 +19689,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
@@ -19713,6 +19767,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Data",
                 "type": "object"
               }
