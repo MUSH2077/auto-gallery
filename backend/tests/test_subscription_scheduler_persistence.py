@@ -51,4 +51,5 @@ def test_success_invalidates_and_enqueue_advances_persisted_due_time():
     enqueue = inspect.getsource(subscription_enqueue.enqueue_subscription_source_sync)
     assert "ss.next_sync_at = None" in success
     assert "scheduler_config: dict | None = None" in enqueue
-    assert "ss.next_sync_at = next_subscription_check_at" in enqueue
+    assert "next_sync_at = next_subscription_check_at" in enqueue
+    assert enqueue.index("await publish_prepared_download(") < enqueue.index(".values(last_attempted_at=now, next_sync_at=next_sync_at)")

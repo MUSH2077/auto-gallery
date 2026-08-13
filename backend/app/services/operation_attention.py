@@ -206,7 +206,11 @@ async def upsert_repository_sync_receipt(
             ),
         },
     ).returning(RepositorySyncReceipt)
-    return (await db.execute(stmt)).scalar_one()
+    receipt = (await db.execute(stmt)).scalar_one()
+    from app.services.search_projection_outbox import request_search_projection
+
+    await request_search_projection(db, subscription_ids=[job.subscription_id])
+    return receipt
 
 
 async def reconcile_task_truth(
@@ -241,6 +245,7 @@ async def reconcile_task_truth(
         "recovered": 0,
         "issues": [],
     }
+    projection_subscription_ids: set[UUID] = set()
     task_service = TaskService(db)
 
     expected_indexes = {
@@ -286,6 +291,9 @@ async def reconcile_task_truth(
         if receipt is not None:
             receipt.recovered = True
             receipt.recovered_at = receipt.recovered_at or recovered_at
+            source = await db.get(SubscriptionSource, receipt.repository_id)
+            if source is not None:
+                projection_subscription_ids.add(source.subscription_id)
         await task_service.update_task(task, attention_state="resolved")
         await task_service.add_event(
             task,
@@ -477,6 +485,13 @@ async def reconcile_task_truth(
     if dry_run:
         await db.rollback()
     else:
+        if projection_subscription_ids:
+            from app.services.search_projection_outbox import request_search_projection
+
+            await request_search_projection(
+                db,
+                subscription_ids=projection_subscription_ids,
+            )
         await _write_maintenance_audit(
             db,
             "task_reconciliation",
@@ -656,6 +671,77 @@ async def compact_terminal_tasks(
             report,
         )
         await db.commit()
+    return report
+
+
+async def restore_missed_subscription_slot(
+    db: AsyncSession,
+    *,
+    slot_at: datetime,
+    source_ids: list[UUID],
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """Restore a known missed slot without reopening already-attempted work.
+
+    Requiring an exported source-id allowlist keeps this maintenance operation
+    incident-scoped. Repeating the same call is a no-op because restored rows no
+    longer have ``next_sync_at > slot_at``.
+    """
+
+    slot = slot_at.replace(tzinfo=timezone.utc) if slot_at.tzinfo is None else slot_at.astimezone(timezone.utc)
+    identities = list(dict.fromkeys(source_ids))
+    if not identities:
+        return {"dry_run": dry_run, "requested": 0, "matched": 0, "issues": []}
+    rows = list((await db.execute(
+        select(SubscriptionSource)
+        .join(Subscription, Subscription.id == SubscriptionSource.subscription_id)
+        .where(
+            SubscriptionSource.id.in_(identities),
+            Subscription.is_active.is_(True),
+            Subscription.sync_enabled.is_(True),
+            SubscriptionSource.is_enabled.is_(True),
+            SubscriptionSource.next_sync_at.is_not(None),
+            SubscriptionSource.next_sync_at > slot,
+            or_(
+                SubscriptionSource.last_attempted_at.is_(None),
+                SubscriptionSource.last_attempted_at < slot,
+            ),
+            or_(
+                SubscriptionSource.last_synced_at.is_(None),
+                SubscriptionSource.last_synced_at < slot,
+            ),
+        )
+        .order_by(SubscriptionSource.id)
+        .with_for_update(skip_locked=True)
+    )).scalars())
+    issues = [
+        {
+            "source_id": str(source.id),
+            "subscription_id": str(source.subscription_id),
+            "from_next_sync_at": source.next_sync_at.isoformat() if source.next_sync_at else None,
+            "to_next_sync_at": slot.isoformat(),
+        }
+        for source in rows
+    ]
+    report = {
+        "dry_run": dry_run,
+        "requested": len(identities),
+        "matched": len(rows),
+        "slot_at": slot.isoformat(),
+        "issues": issues,
+    }
+    if dry_run:
+        await db.rollback()
+        return report
+    for source in rows:
+        source.next_sync_at = slot
+    await _write_maintenance_audit(
+        db,
+        "subscription_slot_restore",
+        [str(source.id) for source in rows],
+        report,
+    )
+    await db.commit()
     return report
 
 

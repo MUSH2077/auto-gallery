@@ -142,12 +142,26 @@ def _schedule_decision(
     last_attempted_at,
     now: datetime,
     tz,
+    persisted_next_sync_at: datetime | None = None,
 ) -> dict:
     """Return a scheduler decision with a reason and optional fixed-time window."""
     mode = sub.schedule_mode or system_config.get("schedule_mode", "interval")
 
     if mode == "manual":
         return {"due": False, "mode": mode, "reason": "manual_mode"}
+
+    persisted_due = _as_tz(persisted_next_sync_at, tz)
+    if persisted_due is not None and persisted_due <= now:
+        return {
+            "due": True,
+            "mode": mode,
+            "reason": (
+                "fixed_time_backlog_due"
+                if mode == "fixed_time"
+                else "interval_backlog_due"
+            ),
+            "scheduled_for": persisted_due.isoformat(),
+        }
 
     if mode == "interval":
         if not last_synced_at:
@@ -178,31 +192,51 @@ def _schedule_decision(
                 "reason": "interval_fallback_due" if last_synced and last_synced < cutoff else "interval_fallback_not_due",
             }
 
-        scan_minutes = int(system_config.get("scheduler_scan_interval_minutes", FALLBACK_SCAN_MINUTES))
-        window = timedelta(minutes=max(scan_minutes, 5) + 5)
         last_synced = _as_tz(last_synced_at, tz)
         last_attempted = _as_tz(last_attempted_at, tz)
-
-        for day_offset in (0, -1):
-            day = now.date() + timedelta(days=day_offset)
-            for h, m, s_val in scheduled:
-                st = datetime(day.year, day.month, day.day, h, m, s_val, tzinfo=tz)
-                window_end = st + window
-                if not (st <= now <= window_end):
-                    continue
-                payload = {
-                    "mode": mode,
-                    "window_start": st.isoformat(),
-                    "window_end": window_end.isoformat(),
-                    "scheduled_time": st.time().isoformat(),
-                }
-                if last_synced and last_synced >= st:
-                    return {**payload, "due": False, "reason": "already_synced_in_window"}
-                if last_attempted and last_attempted >= st:
-                    return {**payload, "due": False, "reason": "already_attempted_in_window"}
-                return {**payload, "due": True, "reason": "fixed_time_window_due"}
-
-        return {"due": False, "mode": mode, "reason": "outside_fixed_time_window"}
+        created_at = _as_tz(getattr(sub, "created_at", None), tz)
+        latest_slot = max(
+            (
+                datetime(day.year, day.month, day.day, hour, minute, second, tzinfo=tz)
+                for day_offset in (-1, 0)
+                for day in (now.date() + timedelta(days=day_offset),)
+                for hour, minute, second in scheduled
+                if datetime(
+                    day.year,
+                    day.month,
+                    day.day,
+                    hour,
+                    minute,
+                    second,
+                    tzinfo=tz,
+                ) <= now
+                and (
+                    created_at is None
+                    or datetime(
+                        day.year,
+                        day.month,
+                        day.day,
+                        hour,
+                        minute,
+                        second,
+                        tzinfo=tz,
+                    ) >= created_at
+                )
+            ),
+            default=None,
+        )
+        if latest_slot is None:
+            return {"due": False, "mode": mode, "reason": "fixed_time_not_reached"}
+        payload = {
+            "mode": mode,
+            "scheduled_for": latest_slot.isoformat(),
+            "scheduled_time": latest_slot.time().isoformat(),
+        }
+        if last_synced and last_synced >= latest_slot:
+            return {**payload, "due": False, "reason": "already_synced_in_slot"}
+        if last_attempted and last_attempted >= latest_slot:
+            return {**payload, "due": False, "reason": "already_attempted_in_slot"}
+        return {**payload, "due": True, "reason": "fixed_time_backlog_due"}
 
     if not last_synced_at:
         return {"due": True, "mode": mode, "reason": "never_synced_interval_fallback"}
@@ -217,7 +251,15 @@ def _schedule_decision(
     }
 
 
-def _should_sync_now(sub, system_config: dict, last_synced_at, now: datetime, tz, last_attempted_at=None) -> bool:
+def _should_sync_now(
+    sub,
+    system_config: dict,
+    last_synced_at,
+    now: datetime,
+    tz,
+    last_attempted_at=None,
+    persisted_next_sync_at=None,
+) -> bool:
     """Check whether a sync is due, respecting per-subscription schedule strategy.
 
     Priority: subscription value > system default > hardcoded fallback.
@@ -225,7 +267,15 @@ def _should_sync_now(sub, system_config: dict, last_synced_at, now: datetime, tz
 
     Modes: 'manual'=never, 'interval'=every N hours, 'fixed_time'=at scheduled times.
     """
-    return bool(_schedule_decision(sub, system_config, last_synced_at, last_attempted_at, now, tz)["due"])
+    return bool(_schedule_decision(
+        sub,
+        system_config,
+        last_synced_at,
+        last_attempted_at,
+        now,
+        tz,
+        persisted_next_sync_at,
+    )["due"])
 
 
 def _next_fixed_time_window(
@@ -315,14 +365,11 @@ def _next_fixed_check_at(
             tz,
         )
 
-    window = timedelta(minutes=max(
-        int(system_config.get("scheduler_scan_interval_minutes", FALLBACK_SCAN_MINUTES)),
-        5,
-    ) + 5)
     synced = _as_tz(last_synced_at, tz)
     attempted = _as_tz(last_attempted_at, tz)
-    candidates: list[tuple[datetime, datetime]] = []
-    for day_offset in (-1, 0, 1, 2):
+    created_at = _as_tz(getattr(sub, "created_at", None), tz)
+    candidates: list[datetime] = []
+    for day_offset in (-1, 0, 1):
         day = now.date() + timedelta(days=day_offset)
         for hour, minute, second in scheduled:
             start = datetime(
@@ -334,24 +381,25 @@ def _next_fixed_check_at(
                 second,
                 tzinfo=tz,
             )
-            candidates.append((start, start + window))
+            if created_at is None or start >= created_at:
+                candidates.append(start)
 
-    for start, end in sorted(candidates, key=lambda item: item[0]):
-        if end < now:
-            continue
-        completed = bool(
-            (synced and synced >= start)
-            or (attempted and attempted >= start)
+    elapsed = sorted((candidate for candidate in candidates if candidate <= now), reverse=True)
+    if elapsed:
+        latest_slot = elapsed[0]
+        published = bool(
+            (synced and synced >= latest_slot)
+            or (attempted and attempted >= latest_slot)
         )
-        if start <= now <= end:
-            if not completed:
-                return _utc(now)
-            continue
-        if start > now:
-            return _utc(start)
+        if not published:
+            # Persist the logical slot itself, rather than the scan time. This
+            # makes backlog age and ordering truthful after downtime/pressure.
+            return _utc(latest_slot)
 
-    # The two-day horizon above is deliberately ample for daily fixed times;
-    # retain a safe retry if malformed timezone data ever defeats it.
+    future = sorted(candidate for candidate in candidates if candidate > now)
+    if future:
+        return _utc(future[0])
+
     return _utc(now + timedelta(days=1))
 
 
@@ -405,20 +453,34 @@ def schedule_decision_snapshot(
     last_attempted_at,
     now: datetime,
     tz,
+    persisted_next_sync_at: datetime | None = None,
 ) -> dict:
     """Read-only schedule explanation used by APIs and tests.
 
     This mirrors the enqueue scanner decision without mutating any source state.
     """
-    decision = _schedule_decision(sub, system_config, last_synced_at, last_attempted_at, now, tz)
+    decision = _schedule_decision(
+        sub,
+        system_config,
+        last_synced_at,
+        last_attempted_at,
+        now,
+        tz,
+        persisted_next_sync_at,
+    )
     mode = decision.get("mode") or sub.schedule_mode or system_config.get("schedule_mode", "interval")
     scan_minutes = int(system_config.get("scheduler_scan_interval_minutes", FALLBACK_SCAN_MINUTES))
 
-    next_due_at = None
+    persisted_due = _as_tz(persisted_next_sync_at, tz)
+    next_due_at = persisted_due.isoformat() if persisted_due is not None else None
     window_start = decision.get("window_start")
     window_end = decision.get("window_end")
 
-    if mode == "interval":
+    if persisted_due is not None:
+        pass
+    elif decision.get("due") and decision.get("scheduled_for"):
+        next_due_at = str(decision["scheduled_for"])
+    elif mode == "interval":
         if last_synced_at:
             interval_hours = sub.sync_interval_hours or int(
                 system_config.get("default_sync_interval_hours", FALLBACK_INTERVAL_HOURS))
@@ -559,11 +621,17 @@ async def _sync_subscriptions_locked(parent_task_id=None):
                     admission.reason.get("code"),
                     admission.reason,
                 )
+            from app.services.device_profile import current_device_profile
+
+            device_profile = current_device_profile()
             enqueue_budget = (
                 0
                 if admission.reason or not scheduler_enabled
                 else _automatic_scan_batch_limit(
-                    settings.scheduler_scan_batch_size,
+                    min(
+                        settings.scheduler_scan_batch_size,
+                        device_profile.scheduler_publish_limit,
+                    ),
                     admission.remaining_slots,
                     admission.throughput_scale,
                 )
@@ -592,11 +660,17 @@ async def _sync_subscriptions_locked(parent_task_id=None):
                         ss.last_attempted_at,
                         now,
                         tz,
+                        ss.next_sync_at,
                     )
                     decisions.append(decision)
                     if decision["due"]:
                         due_count += 1
-                        ss.next_sync_at = _utc(now)
+                        # Preserve an expired persisted timestamp: it is the
+                        # durable proof that this source still owes work from a
+                        # previous fixed-time slot. NULL rows use now only as a
+                        # fair initial claim cursor.
+                        if ss.next_sync_at is None:
+                            ss.next_sync_at = _utc(now)
                     else:
                         ss.next_sync_at = next_subscription_check_at(
                             sub,
@@ -609,8 +683,6 @@ async def _sync_subscriptions_locked(parent_task_id=None):
                 if source_rows:
                     await db.commit()
 
-            retry_check_at = _utc(now) + timedelta(minutes=max(scan_minutes, 5))
-            retry_later: list[SubscriptionSource] = []
             for (ss, sub), decision in zip(source_rows, decisions):
                 log_context = {"source_id": str(ss.id), "source": ss.source, "timezone": tz_name}
                 if not decision["due"]:
@@ -620,7 +692,6 @@ async def _sync_subscriptions_locked(parent_task_id=None):
 
                 if ss.auth_healthy is False:
                     skipped_count += 1
-                    retry_later.append(ss)
                     logger.debug("Auto-sync skipped source: auth unhealthy", extra={**log_context, "decision": "auth_unhealthy"})
                     continue
 
@@ -649,16 +720,10 @@ async def _sync_subscriptions_locked(parent_task_id=None):
                                 extra={**log_context, **decision, "job_id": result["job_id"], "source_url": result.get("source_url")})
                 else:
                     skipped_count += 1
-                    retry_later.append(ss)
                     if result.get("status") == "error":
                         error_count += 1
                     logger.debug("Auto-sync skipped source after enqueue check",
                                  extra={**log_context, **decision, "skip_reason": result.get("skip_reason") or result})
-
-            if retry_later:
-                for source in retry_later:
-                    source.next_sync_at = retry_check_at
-                await db.commit()
 
     mode = config.get("schedule_mode", "interval")
     logger.info("Auto-sync scan complete: %d jobs created, %d skipped (enabled=%s, mode=%s, timezone=%s, scan_every=%dm, default_interval=%dh)",
@@ -703,6 +768,7 @@ async def _sync_subscriptions_locked(parent_task_id=None):
         "due": due_count,
         "enqueue_budget": enqueue_budget,
         "due_backlog_deferred": budget_deferred_count,
+        "device_profile": device_profile.name,
         # The synchronous RQ wrapper fills the durable successor timestamp.
         "rescheduled_at": None,
         "_scan_interval_minutes": max(scan_minutes, 5),

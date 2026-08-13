@@ -1,7 +1,7 @@
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from app.auth import RequirePermission
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,7 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
-from app.schemas.subscription import SubscriptionCreate, SubscriptionRead, SubscriptionUpdate
+from app.schemas.subscription import (
+    SubscriptionCreate,
+    SubscriptionRead,
+    SubscriptionSummariesResponse,
+    SubscriptionUpdate,
+)
 from app.schemas.subscription_source import SubscriptionSourceCreate, SubscriptionSourceRead, SubscriptionSourceUpdate
 from app.services.subscription import SubscriptionService
 from app.services.search import SearchBackendUnavailable, SearchService
@@ -106,6 +111,25 @@ async def batch_toggle_sync(data: dict, db: AsyncSession = Depends(get_db)):
             results.append({"id": sid, "status": "error", "error": "internal_error"})
     invalidate_api_caches("subscriptions", "creators")
     return {"status": "ok", "results": results}
+
+
+@router.get("/summaries", response_model=SubscriptionSummariesResponse)
+async def get_subscription_summaries(
+    ids: str = Query(..., min_length=36, max_length=1900),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return authoritative operational and schedule state for one list page."""
+
+    raw_ids = [value.strip() for value in ids.split(",") if value.strip()]
+    if not raw_ids or len(raw_ids) > 50:
+        raise HTTPException(status_code=422, detail="ids must contain between 1 and 50 UUIDs")
+    try:
+        subscription_ids = [UUID(value) for value in raw_ids]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="ids contains an invalid UUID") from exc
+    from app.services.subscription_summary import subscription_summaries
+
+    return await subscription_summaries(db, subscription_ids)
 
 
 @router.post("/{subscription_id}/sync-now")

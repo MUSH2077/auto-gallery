@@ -6,8 +6,9 @@ import urllib.request
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Literal
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from app.auth import RequirePermission
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -552,6 +553,7 @@ async def workbench_summary(
 @tasks_ops_router.get("/system/scheduler-decisions")
 async def scheduler_decisions(
     view: Literal["attention", "all"] = "all",
+    subscription_ids: str | None = None,
     offset: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
@@ -575,12 +577,25 @@ async def scheduler_decisions(
     )
     overdue_cutoff = now - timedelta(minutes=scan_minutes * 2)
 
-    rows = list((await db.execute(
+    statement = (
         select(SubscriptionSource, Subscription, Creator)
         .join(Subscription, SubscriptionSource.subscription_id == Subscription.id)
         .join(Creator, Subscription.creator_id == Creator.id)
         .order_by(Creator.display_name, Creator.name, SubscriptionSource.source, SubscriptionSource.created_at.desc())
-    )).all())
+    )
+    if subscription_ids:
+        try:
+            selected_ids = [
+                UUID(value.strip())
+                for value in subscription_ids.split(",")
+                if value.strip()
+            ]
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="subscription_ids contains an invalid UUID") from exc
+        if not selected_ids or len(selected_ids) > 50:
+            raise HTTPException(status_code=422, detail="subscription_ids must contain between 1 and 50 UUIDs")
+        statement = statement.where(Subscription.id.in_(selected_ids))
+    rows = list((await db.execute(statement)).all())
 
     items = []
     for ss, sub, creator in rows:
@@ -588,7 +603,15 @@ async def scheduler_decisions(
         can_download = bool(provider_state["can_download"])
         url_valid = bool(provider_state["url_valid"])
         auth_healthy = ss.auth_healthy is not False
-        decision = schedule_decision_snapshot(sub, config, ss.last_synced_at, ss.last_attempted_at, now, tz)
+        decision = schedule_decision_snapshot(
+            sub,
+            config,
+            ss.last_synced_at,
+            ss.last_attempted_at,
+            now,
+            tz,
+            ss.next_sync_at,
+        )
         due = bool(decision.get("due"))
         reason = str(decision.get("reason"))
 

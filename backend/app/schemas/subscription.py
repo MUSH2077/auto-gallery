@@ -50,3 +50,42 @@ class SubscriptionRead(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class SubscriptionLatestState(BaseModel):
+    state: str
+    status: str | None = None
+    occurred_at: datetime | None = None
+    outcome_code: str | None = None
+    reason_code: str | None = None
+    repository_id: UUID | None = None
+    task_id: UUID | None = None
+
+
+class SubscriptionScheduleSummary(BaseModel):
+    configured_mode: str
+    effective_mode: str
+    inherited: bool
+    timezone: str
+    scheduled_times: str | None = None
+    sync_interval_hours: int
+    next_due_at: datetime | None = None
+    oldest_due_at: datetime | None = None
+    due_sources: int = 0
+    overdue_sources: int = 0
+    blocked_sources: int = 0
+
+
+class SubscriptionSummary(BaseModel):
+    subscription_id: UUID
+    latest_state: SubscriptionLatestState
+    active_count: int = 0
+    attention_count: int = 0
+    source_count: int = 0
+    enabled_source_count: int = 0
+    schedule: SubscriptionScheduleSummary
+
+
+class SubscriptionSummariesResponse(BaseModel):
+    items: list[SubscriptionSummary]
+    updated_at: datetime

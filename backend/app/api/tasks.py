@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 from typing import Literal
 
@@ -24,6 +25,7 @@ from app.services.operation_attention import (
     compact_terminal_tasks,
     operations_overview,
     reconcile_task_truth,
+    restore_missed_subscription_slot,
 )
 
 router = APIRouter(dependencies=[RequirePermission("tasks")])
@@ -37,6 +39,12 @@ class ReconcileTasksRequest(BaseModel):
 class CompactTasksRequest(BaseModel):
     dry_run: bool = True
     limit: int = Field(200, ge=1, le=1000)
+
+
+class RestoreSubscriptionSlotRequest(BaseModel):
+    slot_at: datetime
+    source_ids: list[UUID] = Field(min_length=1, max_length=500)
+    dry_run: bool = True
 
 
 @router.get("")
@@ -119,6 +127,19 @@ async def compact_tasks(
     db: AsyncSession = Depends(get_db),
 ):
     return await compact_terminal_tasks(db, dry_run=data.dry_run, limit=data.limit)
+
+
+@router.post("/reconcile-subscription-slot", dependencies=[RequirePermission("system")])
+async def reconcile_subscription_slot(
+    data: RestoreSubscriptionSlotRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    return await restore_missed_subscription_slot(
+        db,
+        slot_at=data.slot_at,
+        source_ids=data.source_ids,
+        dry_run=data.dry_run,
+    )
 
 
 @router.get("/{task_id}")

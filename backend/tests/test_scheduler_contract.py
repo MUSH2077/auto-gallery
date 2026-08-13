@@ -96,11 +96,16 @@ def test_scheduler_supervisor_runs_watchdog_every_sixty_seconds():
     assert "scheduler_watchdog()" in source
 
 
-def _sub(mode=None, interval=6, times=None):
-    return SimpleNamespace(schedule_mode=mode, sync_interval_hours=interval, scheduled_times=times)
+def _sub(mode=None, interval=6, times=None, created_at=None):
+    return SimpleNamespace(
+        schedule_mode=mode,
+        sync_interval_hours=interval,
+        scheduled_times=times,
+        created_at=created_at,
+    )
 
 
-def test_fixed_time_never_synced_waits_until_window():
+def test_fixed_time_never_synced_waits_until_first_slot():
     from app.jobs.subscription_sync import _should_sync_now
 
     tz = ZoneInfo("Asia/Shanghai")
@@ -110,10 +115,16 @@ def test_fixed_time_never_synced_waits_until_window():
         "scheduler_scan_interval_minutes": 60,
     }
     now = datetime(2026, 6, 5, 12, 20, tzinfo=tz)
-    assert _should_sync_now(_sub(), config, None, now, tz) is False
+    assert _should_sync_now(
+        _sub(created_at=datetime(2026, 6, 5, 10, 0, tzinfo=tz)),
+        config,
+        None,
+        now,
+        tz,
+    ) is False
 
 
-def test_fixed_time_window_triggers_once_and_uses_attempted_at():
+def test_fixed_time_slot_triggers_once_and_uses_attempted_at():
     from app.jobs.subscription_sync import _should_sync_now
 
     tz = ZoneInfo("Asia/Shanghai")
@@ -127,6 +138,44 @@ def test_fixed_time_window_triggers_once_and_uses_attempted_at():
 
     attempted = datetime(2026, 6, 5, 12, 41, tzinfo=tz)
     assert _should_sync_now(_sub(), config, None, now, tz, last_attempted_at=attempted) is False
+
+
+def test_fixed_time_slot_remains_due_after_old_execution_window():
+    from app.jobs.subscription_sync import _should_sync_now, schedule_decision_snapshot
+
+    tz = ZoneInfo("Asia/Shanghai")
+    config = {
+        "schedule_mode": "fixed_time",
+        "scheduled_times": "22:00",
+        "scheduler_scan_interval_minutes": 5,
+    }
+    slot = datetime(2026, 8, 13, 22, 0, tzinfo=tz)
+    now = slot + timedelta(hours=3)
+
+    assert _should_sync_now(_sub(), config, None, now, tz) is True
+    decision = schedule_decision_snapshot(_sub(), config, None, None, now, tz)
+    assert decision["reason"] == "fixed_time_backlog_due"
+    assert decision["next_due_at"] == slot.isoformat()
+
+
+def test_persisted_due_timestamp_survives_resource_deferral():
+    from app.jobs.subscription_sync import schedule_decision_snapshot
+
+    tz = ZoneInfo("Asia/Shanghai")
+    slot = datetime(2026, 8, 13, 22, 0, tzinfo=tz)
+    now = slot + timedelta(days=1, hours=1)
+    decision = schedule_decision_snapshot(
+        _sub(mode="fixed_time", times="22:00"),
+        {"scheduler_scan_interval_minutes": 5},
+        None,
+        None,
+        now,
+        tz,
+        persisted_next_sync_at=slot,
+    )
+    assert decision["due"] is True
+    assert decision["reason"] == "fixed_time_backlog_due"
+    assert decision["next_due_at"] == slot.isoformat()
 
 
 def test_fixed_time_does_not_trigger_before_scheduled_time():
@@ -230,7 +279,11 @@ def test_schedule_decision_snapshot_exposes_next_due_for_interval_and_fixed_time
     assert interval["next_due_at"] == datetime(2026, 6, 5, 15, 30, tzinfo=tz).isoformat()
 
     fixed = schedule_decision_snapshot(
-        _sub(mode="fixed_time", times="12:40,18:00"),
+        _sub(
+            mode="fixed_time",
+            times="12:40,18:00",
+            created_at=datetime(2026, 6, 5, 10, 0, tzinfo=tz),
+        ),
         {"scheduler_scan_interval_minutes": 60},
         None,
         None,
@@ -238,7 +291,7 @@ def test_schedule_decision_snapshot_exposes_next_due_for_interval_and_fixed_time
         tz,
     )
     assert fixed["due"] is False
-    assert fixed["reason"] == "outside_fixed_time_window"
+    assert fixed["reason"] == "fixed_time_not_reached"
     assert fixed["next_due_at"] == datetime(2026, 6, 5, 12, 40, tzinfo=tz).isoformat()
     assert fixed["window_start"] == datetime(2026, 6, 5, 12, 40, tzinfo=tz).isoformat()
 

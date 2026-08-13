@@ -152,6 +152,10 @@ export default function SchedulerPage() {
   const attentionItems = attention.data?.items || [];
   const blockedCount = attentionItems.filter((item) => !item.is_overdue).length;
   const overdueCount = attentionItems.filter((item) => item.is_overdue).length;
+  const oldestOverdueAt = attentionItems
+    .filter((item) => item.is_overdue && item.next_due_at)
+    .map((item) => item.next_due_at as string)
+    .sort()[0] || null;
   const visibleAttention = !queue.data?.scheduler_enabled && attentionItems.length > 0
     ? [attentionItems[0]]
     : attentionItems;
@@ -188,6 +192,7 @@ export default function SchedulerPage() {
               <span><span className="text-muted">{t("scheduler.last_scan")}</span> <strong>{fmt.dateTime(loop?.last_finished_at)}</strong></span>
               <span><span className="text-muted">{t("scheduler.next_scan")}</span> <strong>{fmt.dateTime(loop?.next_scan_at || queue.data?.next_sync_scan_at)}</strong></span>
               <span><span className="text-muted">{t("scheduler.overdue")}</span> <strong className={overdueCount ? "text-warning" : ""}>{overdueCount}</strong></span>
+              {oldestOverdueAt && <span><span className="text-muted">{t("scheduler.oldest_due")}</span> <strong className="text-warning">{fmt.dateTime(oldestOverdueAt)}</strong></span>}
               <span><span className="text-muted">{t("scheduler.blocked")}</span> <strong className={blockedCount ? "text-danger" : ""}>{blockedCount}</strong></span>
             </div>
             {has("tasks") && (

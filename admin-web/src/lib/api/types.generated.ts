@@ -2675,6 +2675,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/subscriptions/summaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Subscription Summaries
+         * @description Return authoritative operational and schedule state for one list page.
+         */
+        get: operations["get_api_v1_subscriptions_summaries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/subscriptions/{subscription_id}": {
         parameters: {
             query?: never;
@@ -3126,6 +3146,26 @@ export interface paths {
          * @description See the request, response, permission, and risk metadata for this operation.
          */
         post: operations["post_api_v1_tasks_reconcile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/reconcile-subscription-slot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile Subscription Slot
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_tasks_reconcile_subscription_slot"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5203,6 +5243,21 @@ export interface components {
             /** Password */
             password: string;
         };
+        /** RestoreSubscriptionSlotRequest */
+        RestoreSubscriptionSlotRequest: {
+            /**
+             * Dry Run
+             * @default true
+             */
+            dry_run: boolean;
+            /**
+             * Slot At
+             * Format: date-time
+             */
+            slot_at: string;
+            /** Source Ids */
+            source_ids: string[];
+        };
         /** RuleSuggestionRead */
         RuleSuggestionRead: {
             /** Confidence */
@@ -5390,6 +5445,23 @@ export interface components {
              */
             timezone: string;
         };
+        /** SubscriptionLatestState */
+        SubscriptionLatestState: {
+            /** Occurred At */
+            occurred_at?: string | null;
+            /** Outcome Code */
+            outcome_code?: string | null;
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Repository Id */
+            repository_id?: string | null;
+            /** State */
+            state: string;
+            /** Status */
+            status?: string | null;
+            /** Task Id */
+            task_id?: string | null;
+        };
         /** SubscriptionRead */
         SubscriptionRead: {
             /**
@@ -5447,6 +5519,40 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** SubscriptionScheduleSummary */
+        SubscriptionScheduleSummary: {
+            /**
+             * Blocked Sources
+             * @default 0
+             */
+            blocked_sources: number;
+            /** Configured Mode */
+            configured_mode: string;
+            /**
+             * Due Sources
+             * @default 0
+             */
+            due_sources: number;
+            /** Effective Mode */
+            effective_mode: string;
+            /** Inherited */
+            inherited: boolean;
+            /** Next Due At */
+            next_due_at?: string | null;
+            /** Oldest Due At */
+            oldest_due_at?: string | null;
+            /**
+             * Overdue Sources
+             * @default 0
+             */
+            overdue_sources: number;
+            /** Scheduled Times */
+            scheduled_times?: string | null;
+            /** Sync Interval Hours */
+            sync_interval_hours: number;
+            /** Timezone */
+            timezone: string;
         };
         /** SubscriptionSourceCreate */
         SubscriptionSourceCreate: {
@@ -5519,6 +5625,46 @@ export interface components {
             source_creator_id?: string | null;
             /** Source Url */
             source_url?: string | null;
+        };
+        /** SubscriptionSummariesResponse */
+        SubscriptionSummariesResponse: {
+            /** Items */
+            items: components["schemas"]["SubscriptionSummary"][];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** SubscriptionSummary */
+        SubscriptionSummary: {
+            /**
+             * Active Count
+             * @default 0
+             */
+            active_count: number;
+            /**
+             * Attention Count
+             * @default 0
+             */
+            attention_count: number;
+            /**
+             * Enabled Source Count
+             * @default 0
+             */
+            enabled_source_count: number;
+            latest_state: components["schemas"]["SubscriptionLatestState"];
+            schedule: components["schemas"]["SubscriptionScheduleSummary"];
+            /**
+             * Source Count
+             * @default 0
+             */
+            source_count: number;
+            /**
+             * Subscription Id
+             * Format: uuid
+             */
+            subscription_id: string;
         };
         /** SubscriptionUpdate */
         SubscriptionUpdate: {
@@ -10391,6 +10537,7 @@ export interface operations {
                 subscription_id?: string | null;
                 subscription_source_id?: string | null;
                 q?: string | null;
+                visibility?: "actionable" | "all";
                 sort_by?: string;
                 sort_order?: string;
                 offset?: number;
@@ -11258,6 +11405,7 @@ export interface operations {
                 status?: string | null;
                 download_job_id?: string | null;
                 q?: string | null;
+                visibility?: "actionable" | "all";
                 offset?: number;
                 limit?: number;
             };
@@ -12946,6 +13094,55 @@ export interface operations {
             };
         };
     };
+    get_api_v1_subscriptions_summaries: {
+        parameters: {
+            query: {
+                ids: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionSummariesResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_api_v1_subscriptions_subscription_id: {
         parameters: {
             query?: never;
@@ -13600,7 +13797,12 @@ export interface operations {
     };
     get_api_v1_system_scheduler_decisions: {
         parameters: {
-            query?: never;
+            query?: {
+                view?: "attention" | "all";
+                subscription_ids?: string | null;
+                offset?: number;
+                limit?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -13634,13 +13836,13 @@ export interface operations {
                     "application/json": components["schemas"]["ApiError"];
                 };
             };
-            /** @description Request or search-language validation failed. */
+            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ValidationError"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -14112,6 +14314,7 @@ export interface operations {
                 source?: string | null;
                 q?: string | null;
                 include_account?: boolean;
+                visibility?: "actionable" | "all";
                 offset?: number;
                 limit?: number;
             };
@@ -14270,6 +14473,57 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ReconcileTasksRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_tasks_reconcile_subscription_slot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestoreSubscriptionSlotRequest"];
             };
         };
         responses: {

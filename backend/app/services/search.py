@@ -2867,39 +2867,68 @@ class SearchService:
             by_subscription[str(repository.subscription_id)].append(repository)
 
         running_statuses = {"enqueued", "downloading", "downloaded", "importing"}
-        failed_statuses = {"failed", "stale"}
         job_stats_rows = (await self.db.execute(
             select(
                 DownloadJob.subscription_id,
                 func.count(DownloadJob.id).filter(
                     DownloadJob.status.in_(running_statuses)
                 ),
-                func.count(DownloadJob.id).filter(
-                    DownloadJob.status.in_(failed_statuses)
-                ),
             )
             .where(DownloadJob.subscription_id.in_(selected_ids))
             .group_by(DownloadJob.subscription_id)
         )).all()
-        job_stats = {
-            str(subscription_id): (int(running), int(failed))
-            for subscription_id, running, failed in job_stats_rows
+        running_stats = {
+            str(subscription_id): int(running)
+            for subscription_id, running in job_stats_rows
         }
-        # PostgreSQL DISTINCT ON reads only the latest row per subscription
-        # into Python instead of materializing the entire job history.
+        attention_rows = (await self.db.execute(
+            select(
+                DownloadJob.subscription_id,
+                func.count(TaskRun.id.distinct()),
+            )
+            .join(
+                TaskRun,
+                and_(
+                    TaskRun.subject_type == "download_job",
+                    TaskRun.subject_id == DownloadJob.id,
+                ),
+            )
+            .where(
+                DownloadJob.subscription_id.in_(selected_ids),
+                TaskRun.attention_state == "open",
+            )
+            .group_by(DownloadJob.subscription_id)
+        )).all()
+        attention_stats = {
+            str(subscription_id): int(attention)
+            for subscription_id, attention in attention_rows
+        }
+        # Compatibility fields now describe only actionable operational rows;
+        # completed and resolved history belongs to repository receipts.
         latest_job_rows = (await self.db.execute(
             select(
                 DownloadJob.subscription_id,
                 DownloadJob.id,
-                DownloadJob.status,
-                DownloadJob.created_at,
+                TaskRun.status,
+                TaskRun.updated_at,
+            )
+            .join(
+                TaskRun,
+                and_(
+                    TaskRun.subject_type == "download_job",
+                    TaskRun.subject_id == DownloadJob.id,
+                ),
             )
             .where(DownloadJob.subscription_id.in_(selected_ids))
+            .where(or_(
+                TaskRun.status.in_({"enqueued", "running", "paused", "recovering"}),
+                TaskRun.attention_state == "open",
+            ))
             .distinct(DownloadJob.subscription_id)
             .order_by(
                 DownloadJob.subscription_id,
-                DownloadJob.created_at.desc(),
-                DownloadJob.id.desc(),
+                TaskRun.updated_at.desc(),
+                TaskRun.id.desc(),
             )
         )).all()
         latest_jobs = {
@@ -2909,7 +2938,8 @@ class SearchService:
         documents = []
         for subscription, creator in rows:
             repositories = by_subscription[str(subscription.id)]
-            running_jobs, failed_jobs = job_stats.get(str(subscription.id), (0, 0))
+            running_jobs = running_stats.get(str(subscription.id), 0)
+            failed_jobs = attention_stats.get(str(subscription.id), 0)
             latest_job = latest_jobs.get(str(subscription.id))
             latest_sync = max((repo.last_synced_at for repo in repositories if repo.last_synced_at), default=subscription.last_synced_at)
             documents.append({
@@ -3306,22 +3336,45 @@ class SearchService:
         for repo in source_rows:
             by_sub[str(repo.subscription_id)].append(repo)
 
-        # Latest jobs
-        job_rows = (await self.db.execute(
-            select(DownloadJob)
-            .where(DownloadJob.subscription_id.in_(sub_ids))
-            .order_by(DownloadJob.created_at.desc())
-        )).scalars().all()
-        jobs_by_sub: dict[str, list[DownloadJob]] = defaultdict(list)
-        for job in job_rows:
-            if job.subscription_id:
-                jobs_by_sub[str(job.subscription_id)].append(job)
+        running_rows = (await self.db.execute(
+            select(DownloadJob.subscription_id, func.count(DownloadJob.id))
+            .where(
+                DownloadJob.subscription_id.in_(sub_ids),
+                DownloadJob.status.in_({"enqueued", "downloading", "downloaded", "importing"}),
+            )
+            .group_by(DownloadJob.subscription_id)
+        )).all()
+        running_by_sub = {
+            str(subscription_id): int(count)
+            for subscription_id, count in running_rows
+        }
+        actionable_rows = (await self.db.execute(
+            select(DownloadJob, TaskRun)
+            .join(
+                TaskRun,
+                and_(
+                    TaskRun.subject_type == "download_job",
+                    TaskRun.subject_id == DownloadJob.id,
+                ),
+            )
+            .where(
+                DownloadJob.subscription_id.in_(sub_ids),
+                or_(
+                    TaskRun.status.in_({"enqueued", "running", "paused", "recovering"}),
+                    TaskRun.attention_state == "open",
+                ),
+            )
+            .order_by(TaskRun.updated_at.desc(), TaskRun.id.desc())
+        )).all()
+        actionable_by_sub: dict[str, list[tuple[DownloadJob, TaskRun]]] = defaultdict(list)
+        for job, task in actionable_rows:
+            actionable_by_sub[str(job.subscription_id)].append((job, task))
 
         items = []
         for subscription, creator in rows:
             repositories = by_sub[str(subscription.id)]
-            jobs = jobs_by_sub[str(subscription.id)]
-            latest_job = jobs[0] if jobs else None
+            actionable = actionable_by_sub[str(subscription.id)]
+            latest_job = actionable[0] if actionable else None
             latest_sync = max(
                 (repo.last_synced_at for repo in repositories if repo.last_synced_at),
                 default=subscription.last_synced_at,
@@ -3343,11 +3396,11 @@ class SearchService:
                 "repository_ids": [str(repo.id) for repo in repositories],
                 "source_count": len(repositories),
                 "enabled_source_count": sum(1 for repo in repositories if repo.is_enabled),
-                "running_job_count": sum(1 for job in jobs if job.status in {"enqueued", "downloading", "downloaded", "importing"}),
-                "failed_job_count": sum(1 for job in jobs if job.status in {"failed", "stale"}),
-                "latest_job_id": str(latest_job.id) if latest_job else None,
-                "latest_job_status": latest_job.status if latest_job else None,
-                "latest_job_created_at": _iso(latest_job.created_at) if latest_job else None,
+                "running_job_count": running_by_sub.get(str(subscription.id), 0),
+                "failed_job_count": sum(1 for _job, task in actionable if task.attention_state == "open"),
+                "latest_job_id": str(latest_job[0].id) if latest_job else None,
+                "latest_job_status": latest_job[1].status if latest_job else None,
+                "latest_job_created_at": _iso(latest_job[1].updated_at) if latest_job else None,
                 "sources": sorted({repo.source for repo in repositories}),
                 "source_urls": [repo.source_url for repo in repositories if repo.source_url],
                 "source_creator_ids": [repo.source_creator_id for repo in repositories if repo.source_creator_id],

@@ -92,6 +92,7 @@ class Settings(BaseSettings):
     resource_budget_base_read_mb_per_second: float = 20.0
     resource_budget_base_write_mb_per_second: float = 10.0
     resource_governance_mode: str = "shadow"  # shadow | enforce
+    resource_device_profile: str = "auto"  # auto | compact | standard | performance
     # Optional rollout allowlist for soft AIMD enforcement. An empty value in
     # enforce mode preserves the historical all-profiles behavior; deploy
     # tooling always sets an explicit list during staged rollout.
@@ -169,6 +170,15 @@ class Settings(BaseSettings):
         }:
             errors.append(
                 "RESOURCE_GOVERNANCE_MODE must be shadow or enforce."
+            )
+        if self.resource_device_profile.strip().lower() not in {
+            "auto",
+            "compact",
+            "standard",
+            "performance",
+        }:
+            errors.append(
+                "RESOURCE_DEVICE_PROFILE must be auto, compact, standard, or performance."
             )
         if self.resource_memory_reserve_mode.strip().lower() not in {
             "auto",

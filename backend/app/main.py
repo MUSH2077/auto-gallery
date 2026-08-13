@@ -672,7 +672,13 @@ async def _resource_pressure_health() -> dict:
         configured = max(1, min(5, int(defaults.get("download_concurrency", 3))))
     except Exception:
         logger.debug("Download concurrency health fallback used", exc_info=True)
-    cap = max(1, min(5, int(settings.download_concurrency_cap)))
+    from app.services.device_profile import current_device_profile
+
+    device_profile = current_device_profile()
+    cap = min(
+        max(1, min(5, int(settings.download_concurrency_cap))),
+        device_profile.download_concurrency_limit,
+    )
     desired_effective = min(configured, cap)
     running_effective = None
     for supervisor in supervisors.values():
@@ -695,6 +701,7 @@ async def _resource_pressure_health() -> dict:
         "download_concurrency": {
             "configured": configured,
             "cap": cap,
+            "device_profile": device_profile.name,
             # A live supervisor heartbeat is the authoritative actual value.
             # Fall back to the deployment calculation during startup or while
             # upgrading from an image that predates supervisor telemetry.

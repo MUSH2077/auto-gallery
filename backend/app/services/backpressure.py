@@ -98,10 +98,13 @@ _download_admission_snapshot: ContextVar[DownloadAdmissionSnapshot | None] = Con
 
 
 def _download_queue_limit() -> int:
+    from app.services.device_profile import current_device_profile
+
     try:
-        return max(1, int(settings.download_queue_max_pending))
+        configured = max(1, int(settings.download_queue_max_pending))
     except (TypeError, ValueError):
-        return DEFAULT_MAX_QUEUED_DOWNLOADS
+        configured = DEFAULT_MAX_QUEUED_DOWNLOADS
+    return min(configured, current_device_profile().download_queue_limit)
 
 
 def _redis_capacity_reason(redis) -> dict[str, Any] | None:

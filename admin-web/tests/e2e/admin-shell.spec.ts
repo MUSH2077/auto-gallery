@@ -446,6 +446,34 @@ async function installFixtureRoutes(context: BrowserContext) {
           items: [],
         },
       });
+    } else if (path === "/api/v1/subscriptions/summaries") {
+      const ids = (url.searchParams.get("ids") || "").split(",").filter(Boolean);
+      await route.fulfill({
+        json: {
+          updated_at: "2026-07-27T12:00:00Z",
+          items: ids.map((subscriptionId) => ({
+            subscription_id: subscriptionId,
+            latest_state: { state: "never_synced", status: null },
+            active_count: 0,
+            attention_count: 0,
+            source_count: 0,
+            enabled_source_count: 0,
+            schedule: {
+              configured_mode: "inherit",
+              effective_mode: "interval",
+              inherited: true,
+              timezone: "UTC",
+              scheduled_times: null,
+              sync_interval_hours: 6,
+              next_due_at: "2026-07-27T18:00:00Z",
+              oldest_due_at: null,
+              due_sources: 0,
+              overdue_sources: 0,
+              blocked_sources: 0,
+            },
+          })),
+        },
+      });
     } else if (path === "/api/v1/download-jobs") {
       await route.fulfill({ json: [longDownloadJob] });
     } else if (path === "/api/v1/tasks") {
@@ -1817,6 +1845,105 @@ test("settings no longer duplicates data management or language controls", async
   await expect(main.getByRole("heading", { name: "Language" })).toHaveCount(0);
   await expect(main.getByRole("link", { name: /Auth & Cookie Status/ })).toHaveCount(0);
   await page.screenshot({ path: "/tmp/auto-gallery-settings-clean.png", fullPage: false });
+});
+
+test("subscription list uses one authoritative latest state and page-scoped summary ids", async ({ page }) => {
+  const subscriptionId = "11111111-1111-4111-8111-111111111111";
+  let requestedIds = "";
+  await page.route("**/api/v1/search**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname !== "/api/v1/search" || url.searchParams.get("scope") !== "subscriptions") {
+      await route.fallback();
+      return;
+    }
+    const item = {
+      id: subscriptionId,
+      creator_id: "22222222-2222-4222-8222-222222222222",
+      creator_name: "isaya_(pixiv4541633)",
+      creator_display_name: "isaya_(pixiv4541633)",
+      name: "isaya_(pixiv4541633)",
+      is_active: true,
+      sync_enabled: true,
+      sync_interval_hours: 6,
+      schedule_mode: null,
+      scheduled_times: null,
+      last_synced_at: "2026-08-13T14:07:00Z",
+      source_count: 3,
+      enabled_source_count: 1,
+      running_job_count: 0,
+      failed_job_count: 1,
+      latest_job_status: "stale",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-08-13T14:07:00Z",
+    };
+    await route.fulfill({ json: {
+      query: "",
+      canonical_query: "",
+      parsed: { raw: "", canonical: "", scope: "subscriptions", targets: ["subscriptions"], tokens: [] },
+      groups: { subscriptions: { total: 1, items: [item] } },
+      total: 1,
+      results: [],
+      subscriptions: [item],
+    } });
+  });
+  await page.route("**/api/v1/subscriptions/summaries**", async (route) => {
+    const url = new URL(route.request().url());
+    requestedIds = url.searchParams.get("ids") || "";
+    await route.fulfill({ json: {
+      updated_at: "2026-08-13T14:10:00Z",
+      items: [{
+        subscription_id: subscriptionId,
+        latest_state: {
+          state: "success",
+          status: "complete",
+          occurred_at: "2026-08-13T14:07:00Z",
+          outcome_code: "no_changes",
+          repository_id: "33333333-3333-4333-8333-333333333333",
+        },
+        active_count: 0,
+        attention_count: 0,
+        source_count: 3,
+        enabled_source_count: 1,
+        schedule: {
+          configured_mode: "inherit",
+          effective_mode: "fixed_time",
+          inherited: true,
+          timezone: "Asia/Shanghai",
+          scheduled_times: "22:00",
+          sync_interval_hours: 6,
+          next_due_at: "2026-08-14T14:00:00Z",
+          oldest_due_at: null,
+          due_sources: 0,
+          overdue_sources: 0,
+          blocked_sources: 0,
+        },
+      }],
+    } });
+  });
+
+  for (const viewport of [
+    { name: "desktop", width: 1440, height: 960 },
+    { name: "tablet", width: 768, height: 1024 },
+    { name: "mobile", width: 390, height: 844 },
+  ] as const) {
+    await page.setViewportSize(viewport);
+    await page.goto("/admin/subscriptions");
+    await expect(page.getByText("Sync successful · No new works")).toBeVisible();
+    await expect(page.getByText("1 failed")).toHaveCount(0);
+    await expect(page.getByText("Stale", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("System default · Daily at 22:00")).toBeVisible();
+    await expectNoPageOverflow(page);
+    const results = await new AxeBuilder({ page })
+      .include("#main-content")
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+      .analyze();
+    expect(results.violations, `subscription status should pass axe at ${viewport.width}px`).toEqual([]);
+    await page.screenshot({
+      path: `/tmp/auto-gallery-subscription-latest-${viewport.name}.png`,
+      fullPage: true,
+    });
+  }
+  expect(requestedIds).toBe(subscriptionId);
 });
 
 test("compact scheduler omits healthy auth details and storage chart footers are removed", async ({ page }) => {

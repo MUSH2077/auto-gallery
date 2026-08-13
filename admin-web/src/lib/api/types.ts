@@ -376,6 +376,53 @@ export interface Subscription {
   updated_at: string;
 }
 
+export type SubscriptionLatestStateKind =
+  | "active"
+  | "attention"
+  | "success"
+  | "never_synced"
+  | "manual"
+  | "disabled";
+
+export interface SubscriptionLatestState {
+  state: SubscriptionLatestStateKind;
+  status?: string | null;
+  occurred_at?: string | null;
+  outcome_code?: string | null;
+  reason_code?: string | null;
+  repository_id?: string | null;
+  task_id?: string | null;
+}
+
+export interface SubscriptionScheduleSummary {
+  configured_mode: string;
+  effective_mode: string;
+  inherited: boolean;
+  timezone: string;
+  scheduled_times?: string | null;
+  sync_interval_hours: number;
+  next_due_at?: string | null;
+  oldest_due_at?: string | null;
+  due_sources: number;
+  overdue_sources: number;
+  blocked_sources: number;
+}
+
+export interface SubscriptionSummary {
+  subscription_id: string;
+  latest_state: SubscriptionLatestState;
+  active_count: number;
+  attention_count: number;
+  source_count: number;
+  enabled_source_count: number;
+  schedule: SubscriptionScheduleSummary;
+}
+
+export interface SubscriptionSummariesResponse {
+  items: SubscriptionSummary[];
+  updated_at: string;
+}
+
 export interface SubscriptionSource {
   id: string;
   subscription_id: string;

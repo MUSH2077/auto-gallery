@@ -7,7 +7,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorRepository, queryKeys, SubscriptionSource as SS, ProviderInfo } from "@/lib/api";
 import { PageHeader, PageShell, StatusBadge, Modal, ConfirmDialog, ErrorState, EmptyState, RepositoryCard } from "@/components";
 import { useToast } from "@/components/Toast";
-import { useI18nFormat } from "@/lib/i18n-format";
+import { scheduleModeLabel, useI18nFormat } from "@/lib/i18n-format";
 
 function AddSourceForm({ subId, onClose }: { subId: string; onClose: () => void }) {
   const [source, setSource] = useState("pixiv"); const [sourceUrl, setSourceUrl] = useState(""); const [sourceCreatorId, setSourceCreatorId] = useState("");
@@ -75,8 +75,17 @@ export default function SubscriptionDetailPage() {
 
   const sub = useQuery({ queryKey: queryKeys.subscriptions.detail(id), queryFn: () => api.getSubscription(id) });
   const sources = useQuery({ queryKey: queryKeys.subscriptions.sources(id), queryFn: () => api.listSubscriptionSources(id) });
+  const summaries = useQuery({
+    queryKey: queryKeys.subscriptions.summaries([id]),
+    queryFn: () => api.subscriptionSummaries([id]),
+    refetchInterval: 15000,
+  });
   const jobs = useQuery({ queryKey: [...queryKeys.downloadJobs.all, "subscription", id], queryFn: () => api.listDownloadJobs({ subscription_id: id, limit: 50 }), refetchInterval: 12000 });
-  const decisions = useQuery({ queryKey: [...queryKeys.schedulerDecisions, "subscription", id], queryFn: api.schedulerDecisions, refetchInterval: 15000 });
+  const decisions = useQuery({
+    queryKey: [...queryKeys.schedulerDecisions, "subscription", id],
+    queryFn: () => api.schedulerDecisionsForSubscriptions([id]),
+    refetchInterval: 15000,
+  });
   const providerInfos = useQuery({ queryKey: queryKeys.sources, queryFn: api.sources });
   const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
   const [showAddSource, setShowAddSource] = useState(false);
@@ -88,7 +97,11 @@ export default function SubscriptionDetailPage() {
 
   const update = useMutation({
     mutationFn: (data: Record<string, unknown>) => api.updateSubscription(id, data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.subscriptions.detail(id) }); setEditing(false); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.detail(id) });
+      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.summaries([id]) });
+      setEditing(false);
+    },
   });
   const toggleSource = useMutation({
     mutationFn: ({ ssId, enabled }: { ssId: string; enabled: boolean }) => api.updateSubscriptionSource(id, ssId, { is_enabled: enabled }),
@@ -143,6 +156,12 @@ export default function SubscriptionDetailPage() {
   if (sub.error) return <PageShell><ErrorState message={(sub.error as Error).message} onRetry={() => sub.refetch()} /></PageShell>;
   if (!sub.data) return null;
   const s = sub.data;
+  const schedule = summaries.data?.items[0]?.schedule;
+  const effectiveScheduleText = schedule?.effective_mode === "fixed_time"
+    ? `${scheduleModeLabel(t, "fixed_time")} · ${t("subscriptions.schedule_daily", { time: schedule.scheduled_times || "—" })}`
+    : schedule?.effective_mode === "manual"
+      ? t("subscriptions.manual")
+      : `${scheduleModeLabel(t, "interval")} · ${t("subscriptions.schedule_interval", { hours: schedule?.sync_interval_hours || s.sync_interval_hours })}`;
   const providerMap = new Map((providerInfos.data?.sources || []).map((p: ProviderInfo) => [p.source_name, p]));
   const toRepo = (ss: SS): CreatorRepository => {
     const provider = providerMap.get(ss.source);
@@ -201,7 +220,7 @@ export default function SubscriptionDetailPage() {
               <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.auto_sync")}</dt><dd>{s.sync_enabled ? <span className="text-success dark:text-success">{t("subscription_detail.sync_enabled")}</span> : <span className="text-placeholder dark:text-muted">{t("subscription_detail.sync_disabled")}</span>}</dd></div>
               <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.sync_strategy")}</dt><dd className="text-xs">
                 {!s.schedule_mode || s.schedule_mode === "inherit" ? (
-                  <span className="text-muted">{t("subscription_detail.strategy_inherit")}</span>
+                  <span className="text-muted">{t("subscriptions.schedule_inherited", { schedule: effectiveScheduleText })}</span>
                 ) : s.schedule_mode === "manual" ? (
                   <span className="text-orange-600">{t("subscription_detail.strategy_manual")}</span>
                 ) : s.schedule_mode === "fixed_time" ? (
@@ -257,7 +276,7 @@ export default function SubscriptionDetailPage() {
             <label className="block text-sm font-medium mb-1">{t("subscription_detail.sync_strategy")}</label>
             <select value={editMode} onChange={(e) => setEditMode(e.target.value)}
               className="select w-full">
-              <option value="">{t("subscription_detail.strategy_inherit")}</option>
+              <option value="">{t("subscriptions.schedule_inherited", { schedule: effectiveScheduleText })}</option>
               <option value="interval">{t("subscription_detail.strategy_interval")}</option>
               <option value="fixed_time">{t("subscription_detail.strategy_fixed_time")}</option>
               <option value="manual">{t("subscription_detail.strategy_manual")}</option>

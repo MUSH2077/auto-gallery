@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from uuid import UUID
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update as sql_update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -232,16 +232,15 @@ async def enqueue_subscription_source_sync(
             source_url=normalized_url,
         )
         append_manifest_event(job, "created", trigger=trigger)
-        ss.last_attempted_at = now
         if scheduler_config is None:
             scheduler_config = await get_scheduler_config(db)
         from app.jobs.subscription_sync import next_subscription_check_at
 
-        ss.next_sync_at = next_subscription_check_at(
+        next_sync_at = next_subscription_check_at(
             sub,
             scheduler_config,
             ss.last_synced_at,
-            ss.last_attempted_at,
+            now,
             now,
         )
         # Flush caller-owned state before opening the SAVEPOINT. SQLAlchemy
@@ -306,6 +305,16 @@ async def enqueue_subscription_source_sync(
                 "skip_reason": code,
                 "reason": {"code": code, "message": str(exc), "retryable": True, "details": details},
             }
+
+        # Publication is the scheduling boundary. A rejected Redis enqueue must
+        # leave the logical slot due; only an accepted deterministic RQ job may
+        # advance the source to its next interval/fixed-time slot.
+        await db.execute(
+            sql_update(SubscriptionSource)
+            .where(SubscriptionSource.id == ss.id)
+            .values(last_attempted_at=now, next_sync_at=next_sync_at)
+        )
+        await db.commit()
 
         try:
             from app.services.job_progress import publish_progress

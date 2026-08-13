@@ -4243,6 +4243,36 @@
         "title": "ResetPasswordOut",
         "type": "object"
       },
+      "RestoreSubscriptionSlotRequest": {
+        "properties": {
+          "dry_run": {
+            "default": true,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "slot_at": {
+            "format": "date-time",
+            "title": "Slot At",
+            "type": "string"
+          },
+          "source_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Source Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "slot_at",
+          "source_ids"
+        ],
+        "title": "RestoreSubscriptionSlotRequest",
+        "type": "object"
+      },
       "RuleSuggestionRead": {
         "properties": {
           "confidence": {
@@ -4645,6 +4675,88 @@
         "title": "SubscriptionDefaults",
         "type": "object"
       },
+      "SubscriptionLatestState": {
+        "properties": {
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "outcome_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome Code"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "repository_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Id"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "SubscriptionLatestState",
+        "type": "object"
+      },
       "SubscriptionRead": {
         "properties": {
           "created_at": {
@@ -4836,6 +4948,89 @@
           "updated_at"
         ],
         "title": "SubscriptionRead",
+        "type": "object"
+      },
+      "SubscriptionScheduleSummary": {
+        "properties": {
+          "blocked_sources": {
+            "default": 0,
+            "title": "Blocked Sources",
+            "type": "integer"
+          },
+          "configured_mode": {
+            "title": "Configured Mode",
+            "type": "string"
+          },
+          "due_sources": {
+            "default": 0,
+            "title": "Due Sources",
+            "type": "integer"
+          },
+          "effective_mode": {
+            "title": "Effective Mode",
+            "type": "string"
+          },
+          "inherited": {
+            "title": "Inherited",
+            "type": "boolean"
+          },
+          "next_due_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Due At"
+          },
+          "oldest_due_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Due At"
+          },
+          "overdue_sources": {
+            "default": 0,
+            "title": "Overdue Sources",
+            "type": "integer"
+          },
+          "scheduled_times": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled Times"
+          },
+          "sync_interval_hours": {
+            "title": "Sync Interval Hours",
+            "type": "integer"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "configured_mode",
+          "effective_mode",
+          "inherited",
+          "timezone",
+          "sync_interval_hours"
+        ],
+        "title": "SubscriptionScheduleSummary",
         "type": "object"
       },
       "SubscriptionSourceCreate": {
@@ -5078,6 +5273,70 @@
           }
         },
         "title": "SubscriptionSourceUpdate",
+        "type": "object"
+      },
+      "SubscriptionSummariesResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SubscriptionSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "updated_at"
+        ],
+        "title": "SubscriptionSummariesResponse",
+        "type": "object"
+      },
+      "SubscriptionSummary": {
+        "properties": {
+          "active_count": {
+            "default": 0,
+            "title": "Active Count",
+            "type": "integer"
+          },
+          "attention_count": {
+            "default": 0,
+            "title": "Attention Count",
+            "type": "integer"
+          },
+          "enabled_source_count": {
+            "default": 0,
+            "title": "Enabled Source Count",
+            "type": "integer"
+          },
+          "latest_state": {
+            "$ref": "#/components/schemas/SubscriptionLatestState"
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/SubscriptionScheduleSummary"
+          },
+          "source_count": {
+            "default": 0,
+            "title": "Source Count",
+            "type": "integer"
+          },
+          "subscription_id": {
+            "format": "uuid",
+            "title": "Subscription Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subscription_id",
+          "latest_state",
+          "schedule"
+        ],
+        "title": "SubscriptionSummary",
         "type": "object"
       },
       "SubscriptionUpdate": {
@@ -13444,6 +13703,20 @@
           },
           {
             "in": "query",
+            "name": "visibility",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "enum": [
+                "actionable",
+                "all"
+              ],
+              "title": "Visibility",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "sort_by",
             "required": false,
             "schema": {
@@ -14868,6 +15141,20 @@
                 }
               ],
               "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "visibility",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "enum": [
+                "actionable",
+                "all"
+              ],
+              "title": "Visibility",
+              "type": "string"
             }
           },
           {
@@ -17637,6 +17924,84 @@
         "x-response-schema-status": "generic"
       }
     },
+    "/api/v1/subscriptions/summaries": {
+      "get": {
+        "description": "Return authoritative operational and schedule state for one list page.",
+        "operationId": "get_api_v1_subscriptions_summaries",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "ids",
+            "required": true,
+            "schema": {
+              "maxLength": 1900,
+              "minLength": 36,
+              "title": "Ids",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionSummariesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Subscription Summaries",
+        "tags": [
+          "subscriptions"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "subscriptions"
+        ]
+      }
+    },
     "/api/v1/subscriptions/{subscription_id}": {
       "delete": {
         "description": "See the request, response, permission, and risk metadata for this operation.",
@@ -18672,6 +19037,58 @@
       "get": {
         "description": "Explain current scheduler decisions at subscription-source granularity.\n\nThis endpoint is deliberately read-only: it does not enqueue jobs or mutate\nlast_attempted_at/last_synced_at.",
         "operationId": "get_api_v1_system_scheduler_decisions",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "enum": [
+                "attention",
+                "all"
+              ],
+              "title": "View",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "subscription_ids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subscription Ids"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -18707,11 +19124,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ValidationError"
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             },
-            "description": "Request or search-language validation failed."
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -19565,6 +19982,20 @@
           },
           {
             "in": "query",
+            "name": "visibility",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "enum": [
+                "actionable",
+                "all"
+              ],
+              "title": "Visibility",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "offset",
             "required": false,
             "schema": {
@@ -19882,6 +20313,83 @@
         "x-dangerous": false,
         "x-permission-mode": "allOf",
         "x-required-permissions": [
+          "tasks"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/tasks/reconcile-subscription-slot": {
+      "post": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "post_api_v1_tasks_reconcile_subscription_slot",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreSubscriptionSlotRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reconcile Subscription Slot",
+        "tags": [
+          "tasks"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system",
           "tasks"
         ],
         "x-response-schema-status": "generic"

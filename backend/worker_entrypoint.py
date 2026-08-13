@@ -55,7 +55,12 @@ def resolve_concurrency_cap(value=None, *, lo=1, hi=5) -> int:
 
 def resolve_download_concurrency(db_value, argv_value) -> tuple[int, int, int]:
     configured = resolve_concurrency(db_value, argv_value, default=3)
-    cap = resolve_concurrency_cap()
+    from app.services.device_profile import current_device_profile
+
+    cap = min(
+        resolve_concurrency_cap(),
+        current_device_profile().download_concurrency_limit,
+    )
     return configured, cap, min(configured, cap)
 
 

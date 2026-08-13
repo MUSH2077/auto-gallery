@@ -11,6 +11,7 @@ const STATUS_KEYS = new Set([
 const SCHEDULER_REASON_KEYS = new Set([
   "already_attempted_in_window", "already_synced_in_window", "auth_unhealthy",
   "fixed_time_window_due", "interval_due", "interval_not_due", "manual_mode",
+  "fixed_time_backlog_due", "interval_backlog_due",
   "never_synced_interval", "no_decision", "outside_fixed_time_window",
   "provider_not_downloadable", "scheduler_disabled", "source_disabled",
   "subscription_inactive", "subscription_sync_disabled", "unknown_provider", "url_invalid",

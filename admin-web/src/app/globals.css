@@ -337,7 +337,7 @@
   }
   .entity-avatar {
     @apply flex h-10 w-10 shrink-0 items-center justify-center rounded-full
-           border border-border bg-accent text-sm font-semibold text-white;
+           border border-border bg-accent-subtle text-sm font-semibold text-accent;
   }
   .entity-main {
     @apply min-w-0 flex-1;

@@ -93,6 +93,11 @@ class SubscriptionService:
         # Merge system defaults: provided values take precedence over defaults
         defaults = await get_subscription_defaults(self.db)
         merged = {**defaults, **{k: v for k, v in data.items() if v is not None}}
+        if merged.get("schedule_mode") == "manual" or not merged.get("sync_enabled", True):
+            merged["schedule_mode"] = "manual"
+            merged["sync_enabled"] = False
+        else:
+            merged["sync_enabled"] = True
         sub = await self.repo.create(merged)
         await request_search_projection(
             self.db,
@@ -104,6 +109,16 @@ class SubscriptionService:
 
     async def update_subscription(self, sub_id: UUID, data: dict):
         sub = await self.get_subscription(sub_id)
+        if "schedule_mode" in data:
+            if data.get("schedule_mode") == "manual":
+                data["sync_enabled"] = False
+            else:
+                data["sync_enabled"] = True
+        elif "sync_enabled" in data:
+            if data.get("sync_enabled") is False:
+                data["schedule_mode"] = "manual"
+            elif sub.schedule_mode == "manual":
+                data["schedule_mode"] = None
         old_creator_id = sub.creator_id
         new_creator_id = data.get("creator_id")
         _context_creator, repository_ids, affected_work_ids, _states = (

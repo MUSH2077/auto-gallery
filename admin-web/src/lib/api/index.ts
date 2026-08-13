@@ -57,6 +57,14 @@ export const api = {
     request<T.SchedulerDecisionsResponse>(
       `/api/v1/system/scheduler-decisions?view=${view}&offset=${offset}&limit=${limit}`,
     ),
+  schedulerDecisionsForSubscriptions: (ids: string[]) => {
+    const params = new URLSearchParams({
+      view: "all",
+      subscription_ids: ids.join(","),
+      limit: "500",
+    });
+    return request<T.SchedulerDecisionsResponse>(`/api/v1/system/scheduler-decisions?${params.toString()}`);
+  },
 
   systemLogs: (limit?: number, level?: string, nameFilter?: string) => {
     const params = new URLSearchParams();
@@ -203,6 +211,11 @@ export const api = {
   },
 
   getSubscription: (id: string) => request<T.Subscription>(`/api/v1/subscriptions/${id}`),
+
+  subscriptionSummaries: (ids: string[]) => {
+    const params = new URLSearchParams({ ids: ids.join(",") });
+    return request<T.SubscriptionSummariesResponse>(`/api/v1/subscriptions/summaries?${params.toString()}`);
+  },
 
   createSubscription: (data: { creator_id: string; name?: string; is_active?: boolean; sync_enabled?: boolean }) =>
     request<T.Subscription>("/api/v1/subscriptions", { method: "POST", body: JSON.stringify(data) }),
@@ -785,6 +798,7 @@ export const queryKeys = {
     list: (page = 0, limit = 50, filters?: unknown) => ["subscriptions", "list", page, limit, filters || {}] as const,
     detail: (id: string) => ["subscriptions", id] as const,
     sources: (id: string) => ["subscriptions", id, "sources"] as const,
+    summaries: (ids: string[]) => ["subscriptions", "summaries", ids.join(",")] as const,
   },
   repositories: {
     detail: (id: string) => ["repositories", id] as const,
