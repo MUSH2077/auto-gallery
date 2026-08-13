@@ -1,11 +1,12 @@
 """GitlleryService — project the authoritative curation DAG onto disk.
 
-Read-only on the database; all mutation is filesystem. Best-effort and
-idempotent: re-projecting a commit is a no-op, a missed projection is caught up.
+PostgreSQL remains authoritative; disk projection is best-effort and
+idempotent. A bulk catch-up also fences the durable intents it has covered.
 """
 from __future__ import annotations
 
 import asyncio
+from itertools import islice
 import logging
 import zlib
 from datetime import datetime, timedelta, timezone
@@ -13,16 +14,33 @@ from pathlib import Path
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import select, tuple_
+from sqlalchemy import func, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import CurationChange, CurationCommit
+from app.models import (
+    CurationChange,
+    CurationCommit,
+    GitlleryProjectionOutbox,
+    GitlleryProjectionTarget,
+    GitlleryRepositoryState,
+)
+from app.services.gitllery.objects import hash_payload
 from app.services.gitllery.repo import GitlleryRepo, SCHEMA_VERSION
 from app.services.gitllery.slicing import RepoDescriptor, RepoResolver
+from app.services.heavy_io import LocalHeavyIOLock
 from app.services.locks import redis_lock
+from gitllery_format import SegmentRepository
 
 logger = logging.getLogger(__name__)
+
+
+def gitllery_projection_lock() -> LocalHeavyIOLock:
+    """Process-lifetime ordering fence shared by bulk and outbox writers."""
+
+    return LocalHeavyIOLock(
+        Path(settings.library_root) / ".gitllery-projection.lock"
+    )
 
 
 def _change_payload(change: CurationChange) -> dict:
@@ -38,15 +56,111 @@ def _change_payload(change: CurationChange) -> dict:
 class GitlleryService:
     def __init__(self, db: AsyncSession):
         self.db = db
+        self.last_projection_high_water: tuple[datetime, UUID] | None = None
 
     async def _changes_for_commit(self, commit_id: UUID) -> list[CurationChange]:
         rows = await self.db.execute(
             select(CurationChange).where(CurationChange.commit_id == commit_id)
-            .order_by(CurationChange.created_at, CurationChange.id))
+            .order_by(
+                CurationChange.sequence.asc().nulls_last(),
+                CurationChange.created_at,
+                CurationChange.id,
+            ))
         return list(rows.scalars().all())
 
     def _repo_for(self, desc: RepoDescriptor) -> GitlleryRepo:
         return GitlleryRepo(Path(settings.library_root), desc.source, desc.creator_dir)
+
+    def _segment_repo_for(self, desc: RepoDescriptor) -> SegmentRepository:
+        creator_root = (
+            Path(settings.library_root) / desc.source / desc.creator_dir
+        ).resolve()
+        creator_root.relative_to(Path(settings.library_root).resolve())
+        if settings.gitllery_projection_mode == "active":
+            dirname = ".gitllery"
+        else:
+            generation = "".join(
+                character
+                for character in settings.gitllery_build_generation
+                if character.isalnum() or character in {"-", "_"}
+            ) or "segment-r1"
+            dirname = f".gitllery.build-{generation}"
+        repository = SegmentRepository(creator_root / dirname)
+        repository.root.relative_to(Path(settings.library_root).resolve())
+        return repository
+
+    @staticmethod
+    def _segment_commit_payload(
+        commit: CurationCommit,
+        changes: list[CurationChange],
+        *,
+        repository_parent_commit_id: str | None,
+    ) -> dict:
+        return {
+            "commit_id": str(commit.id),
+            # Each portable repository has its own complete chain. Keep the
+            # authoritative global parent separately for audit/debugging.
+            "parent_commit_id": repository_parent_commit_id,
+            "authoritative_parent_commit_id": (
+                str(commit.parent_commit_id) if commit.parent_commit_id else None
+            ),
+            "actor_type": commit.actor_type,
+            "actor_id": commit.actor_id,
+            "message": commit.message,
+            "trigger": commit.trigger,
+            "dedupe_key": commit.dedupe_key,
+            "reverts_commit_id": (
+                str(commit.reverts_commit_id) if commit.reverts_commit_id else None
+            ),
+            "occurred_at": (
+                commit.occurred_at.isoformat() if commit.occurred_at else None
+            ),
+            "created_at": commit.created_at.isoformat(),
+            "stats": commit.stats or {},
+            "metadata": commit.extra_metadata or {},
+            "changes": [
+                {
+                    "change_id": str(change.id),
+                    "subject_type": change.subject_type,
+                    "subject_id": change.subject_id,
+                    "action": change.action,
+                    "sequence": change.sequence,
+                    "before_state": change.before_state,
+                    "after_state": change.after_state,
+                    "diff": change.diff or {},
+                    "impact": change.impact or {},
+                }
+                for change in changes
+            ],
+        }
+
+    def _project_commit_to_segment_repo(
+        self,
+        desc: RepoDescriptor,
+        commit: CurationCommit,
+        changes: list[CurationChange],
+    ) -> bool:
+        repo = self._segment_repo_for(desc)
+        with repo.projection_lock():
+            repo.initialise(
+                repository_id=desc.repository_id,
+                source=desc.source,
+                creator_dir=desc.creator_dir,
+                generation=settings.gitllery_build_generation,
+            )
+            manifest = repo.read_manifest()
+            commit_id = str(commit.id)
+            if str(manifest.get("last_complete_commit_id")) == commit_id:
+                return False
+            payload = self._segment_commit_payload(
+                commit,
+                changes,
+                repository_parent_commit_id=manifest.get(
+                    "last_complete_commit_id"
+                ),
+            )
+            repo.append([payload])
+            return True
 
     def _ensure_init(self, repo: GitlleryRepo, desc: RepoDescriptor) -> None:
         if repo.exists():
@@ -61,6 +175,8 @@ class GitlleryService:
                 "creator_dir": desc.creator_dir,
                 "object_hash": "sha256",
                 "compression": "zlib",
+                "projection_layout": "sharded-v2",
+                "entity_shard": "sha256-prefix-2",
             },
             f"{desc.source} / {desc.creator_dir} curation history",
         )
@@ -68,59 +184,184 @@ class GitlleryService:
     def _apply_commit_to_repo(
         self, repo: GitlleryRepo, desc: RepoDescriptor,
         commit: CurationCommit, changes: list[CurationChange],
+        *,
+        projected_ids: set[str] | None = None,
+        ordered_outbox: bool = False,
     ) -> str | None:
-        """Write blobs+tree+commit for one repo. Returns new commit hash, or None if already projected."""
+        """Append one bounded v2 projection under the repository file lock."""
+
         self._ensure_init(repo, desc)
-        # Authoritative idempotency guard: this re-reads HEAD's chain under the
-        # caller's per-repo redis_lock, so even if the lock expired mid-pass or a
-        # concurrent projector advanced HEAD, an already-projected commit is never
-        # re-appended. Any pre-lock cached check (e.g. in project_pending) is only
-        # an optimization; this is the check that actually prevents duplication.
-        if str(commit.id) in repo.projected_db_commit_ids():
+        with repo.projection_lock():
+            return self._apply_commit_to_repo_locked(
+                repo,
+                commit,
+                changes,
+                projected_ids=projected_ids,
+                ordered_outbox=ordered_outbox,
+            )
+
+    def _apply_commit_to_repo_locked(
+        self,
+        repo: GitlleryRepo,
+        commit: CurationCommit,
+        changes: list[CurationChange],
+        *,
+        projected_ids: set[str] | None,
+        ordered_outbox: bool,
+    ) -> str | None:
+        commit_id = str(commit.id)
+        head = repo.head_commit()
+        head_object: dict = {}
+        if head:
+            try:
+                head_object = repo.objects.read(head)
+            except (OSError, ValueError, zlib.error) as exc:
+                raise ValueError("cannot resolve Gitllery HEAD") from exc
+            if hash_payload(head_object) != head:
+                raise ValueError("Gitllery HEAD failed content verification")
+
+        # The only ambiguous crash window is HEAD advanced / root manifest not
+        # yet replaced. The commit embeds the complete small manifest, so retry
+        # repairs that watermark in O(1) and never appends a duplicate.
+        if head_object.get("db_commit_id") == commit_id:
+            repo.recover_projection_manifest(head, head_object)
             return None
 
-        index = repo.read_index()
-        entries: dict[str, str] = dict((index.get("tree_entries") or {}))
+        manifest = repo.projection_manifest_for_update()
+        already_projected = (
+            commit_id in projected_ids
+            if projected_ids is not None
+            else manifest.get("last_db_commit_id") == commit_id
+        )
+        if already_projected:
+            return None
+
+        affected_shards: dict[str, dict] = {}
+        changed_entries: dict[str, str] = {}
+        payloads: list[dict] = []
+        base_is_legacy = manifest.get("base") is not None
         for change in changes:
             entity_key = f"{change.subject_type}/{change.subject_id}"
+            prefix = repo.shard_for_entity(entity_key)
+            shard = affected_shards.get(prefix)
+            if shard is None:
+                shard = repo.read_projection_shard(prefix, manifest)
+                affected_shards[prefix] = shard
+            entities = shard.setdefault("entities", {})
+            entries = shard.setdefault("entries", {})
             after = change.after_state
             if after is None:
-                entries.pop(entity_key, None)
-                index.setdefault("entities", {}).pop(entity_key, None)
-            else:
-                blob_hash = repo.objects.write(
-                    {"type": "blob", "subject_type": change.subject_type,
-                     "subject_id": change.subject_id, "state": after})
-                entries[entity_key] = blob_hash
-                index.setdefault("entities", {})[entity_key] = after
+                changed_entries.pop(entity_key, None)
+                if base_is_legacy:
+                    # An overlay needs a tombstone to hide its immutable v1
+                    # base. A fully migrated v2 shard can simply remove the key.
+                    entities[entity_key] = None
+                    entries[entity_key] = None
+                else:
+                    entities.pop(entity_key, None)
+                    entries.pop(entity_key, None)
+                continue
+            blob = {
+                "type": "blob",
+                "subject_type": change.subject_type,
+                "subject_id": change.subject_id,
+                "state": after,
+            }
+            blob_hash = hash_payload(blob)
+            payloads.append(blob)
+            entities[entity_key] = after
+            entries[entity_key] = blob_hash
+            changed_entries[entity_key] = blob_hash
 
-        tree_hash = repo.objects.write({"type": "tree", "entries": entries})
-        commit_hash = repo.objects.write({
+        shards = dict(manifest.get("shards") or {})
+        for prefix, shard in affected_shards.items():
+            entities = dict(shard.get("entities") or {})
+            entries = dict(shard.get("entries") or {})
+            if not entities and not entries and not base_is_legacy:
+                shards.pop(prefix, None)
+                continue
+            shard_payload = {
+                "type": "tree-shard-v2",
+                "prefix": prefix,
+                "entities": entities,
+                "entries": entries,
+            }
+            payloads.append(shard_payload)
+            shards[prefix] = hash_payload(shard_payload)
+
+        tree_payload = {
+            "type": "tree-v2",
+            "schema_version": SCHEMA_VERSION,
+            "base_tree": (
+                (manifest.get("base") or {}).get("tree")
+                if base_is_legacy
+                else None
+            ),
+            "shards": shards,
+            # Compatibility delta: rebuild only asks each historical commit's
+            # tree for entities changed by that commit.
+            "entries": changed_entries,
+        }
+        tree_hash = hash_payload(tree_payload)
+        commit_created_at = (
+            getattr(commit, "created_at", None)
+            or commit.occurred_at
+            or datetime.now(timezone.utc)
+        )
+        projection = {
+            "schema_version": SCHEMA_VERSION,
+            "generation": int(manifest.get("generation") or 0) + 1,
+            "tree": tree_hash,
+            "last_db_commit_id": commit_id,
+            "last_db_created_at": commit_created_at.isoformat(),
+            "base": manifest.get("base"),
+            "shards": shards,
+        }
+        commit_payload = {
             "type": "commit",
             "tree": tree_hash,
-            "parent": repo.head_commit(),
-            "db_commit_id": str(commit.id),
+            "parent": head,
+            "db_commit_id": commit_id,
             "actor_type": commit.actor_type,
             "actor_id": commit.actor_id,
             "message": commit.message,
             "trigger": commit.trigger,
             "dedupe_key": commit.dedupe_key,
-            "reverts": str(commit.reverts_commit_id) if commit.reverts_commit_id else None,
-            "occurred_at": commit.occurred_at.isoformat() if commit.occurred_at else None,
+            "reverts": (
+                str(commit.reverts_commit_id)
+                if commit.reverts_commit_id
+                else None
+            ),
+            "occurred_at": (
+                commit.occurred_at.isoformat()
+                if commit.occurred_at
+                else None
+            ),
             "stats": commit.stats or {},
-            "changes": [_change_payload(c) for c in changes],
-        })
+            "changes": [_change_payload(change) for change in changes],
+            "projection": projection,
+        }
+        commit_hash = hash_payload(commit_payload)
+
+        # Bulk blobs and affected shards share one fsync. Keep the small tree
+        # and commit loose so routine HEAD/tree probes never inflate a pack
+        # containing media-sized entity states or shard snapshots. The total
+        # remains bounded well below 20 fsyncs per projection.
+        repo.objects.write_many(payloads)
+        repo.objects.write(tree_payload)
+        repo.objects.write(commit_payload)
+
+        # Object publication precedes the ref; the small manifest follows it.
+        # This ordering makes every crash state either unreachable garbage or
+        # recoverable from the new HEAD commit.
         actor = commit.actor_id or commit.actor_type or "system"
         repo.set_head(commit_hash, actor=actor, message=commit.message)
-        index["head"] = commit_hash
-        index["tree"] = tree_hash
-        index["tree_entries"] = entries
-        repo.write_index(index)
+        repo.write_projection_manifest({**projection, "head": commit_hash})
         return commit_hash
 
-    _BULK_BATCH = 500
+    _BULK_BATCH = 25
 
-    async def _commit_batches(self):
+    async def _commit_batches(self, high_water: tuple[datetime, UUID]):
         """Yield ordered commits in keyset-paged batches of _BULK_BATCH.
 
         Bulk walks (reconcile/backfill jobs) must never materialize the whole
@@ -129,69 +370,301 @@ class GitlleryService:
         """
         last: tuple | None = None
         while True:
-            stmt = select(CurationCommit).order_by(
-                CurationCommit.occurred_at, CurationCommit.created_at, CurationCommit.id
-            ).limit(self._BULK_BATCH)
+            stmt = (
+                select(CurationCommit)
+                .where(
+                    tuple_(CurationCommit.created_at, CurationCommit.id)
+                    <= tuple_(*high_water)
+                )
+                .order_by(
+                    CurationCommit.created_at,
+                    CurationCommit.id,
+                )
+                .limit(self._BULK_BATCH)
+            )
             if last is not None:
                 stmt = stmt.where(
-                    tuple_(CurationCommit.occurred_at, CurationCommit.created_at, CurationCommit.id)
+                    tuple_(CurationCommit.created_at, CurationCommit.id)
                     > tuple_(*last))
             batch = list((await self.db.execute(stmt)).scalars().all())
             if not batch:
                 return
             yield batch
-            last = (batch[-1].occurred_at, batch[-1].created_at, batch[-1].id)
+            last = (batch[-1].created_at, batch[-1].id)
 
-    async def project_pending(self, repository_id: str | None = None) -> dict[str, int]:
-        """Project every not-yet-projected commit. O(batch) memory: commits,
-        changes, and work_source lookups are all fetched per batch. Runs from
-        the operations queue (run_gitllery_sync_operation), not inline."""
+    async def project_pending(
+        self,
+        repository_id: str | None = None,
+        *,
+        resource_owner: str | None = None,
+    ) -> dict[str, int]:
+        """Project not-yet-projected commits in governed, bounded batches.
+
+        The v2 root manifest is the durable per-repository watermark.  Older
+        code rebuilt a set by walking HEAD to the root for every repository,
+        making each reconcile O(history) before it could do useful work.  A
+        single ordered pass now skips through the manifest watermark and then
+        appends only its tail.  Each 25-commit batch releases PostgreSQL before
+        filesystem work and releases the resource permit before AIMD cooldown.
+        """
+        from app.services.heavy_io import adaptive_resource_slice
+
+        # A curation intent can affect several repositories. A scoped writer
+        # cannot safely acknowledge that global intent, so promote explicit
+        # scoped reconciliation to one ordered library pass.
+        requested_repository_id = repository_id
+        repository_id = None
+        high_water_row = (
+            await self.db.execute(
+                select(CurationCommit.created_at, CurationCommit.id)
+                .order_by(
+                    CurationCommit.created_at.desc(),
+                    CurationCommit.id.desc(),
+                )
+                .limit(1)
+            )
+        ).first()
+        if high_water_row is None:
+            self.last_projection_high_water = None
+            await self.db.commit()
+            return {}
+        high_water = (high_water_row[0], high_water_row[1])
+        self.last_projection_high_water = high_water
+        await self.db.commit()
         resolver = RepoResolver(self.db)
         counts: dict[str, int] = {}
-        # repo_id -> (GitlleryRepo, RepoDescriptor, projected db_commit_id set)
-        repo_cache: dict[str, tuple[GitlleryRepo, RepoDescriptor, set[str]]] = {}
-        async for batch in self._commit_batches():
+        # repo_id -> (repo, descriptor, durable last commit id, watermark seen)
+        repo_cache: dict[
+            str,
+            tuple[GitlleryRepo, RepoDescriptor, str | None, bool],
+        ] = {}
+        owner = resource_owner or (
+            f"gitllery-sync:{requested_repository_id or 'all'}"
+        )
+        async for batch in self._commit_batches(high_water):
             changes_by_commit = await self._changes_for_commits([c.id for c in batch])
+            outbox_rows = await self.db.execute(
+                select(
+                    GitlleryProjectionOutbox.commit_id,
+                    GitlleryProjectionOutbox.state,
+                ).where(
+                    GitlleryProjectionOutbox.commit_id.in_([c.id for c in batch])
+                )
+            )
+            outbox_states = {
+                commit_id: state
+                for commit_id, state in outbox_rows.all()
+            }
+            incomplete_intents = {
+                commit_id
+                for commit_id, state in outbox_states.items()
+                if state != "complete"
+            }
             work_ids = sorted({ch.subject_id for chs in changes_by_commit.values()
                                for ch in chs if ch.subject_type == "work"})
             await resolver.preload_work_sources(work_ids=work_ids)
+            prepared: list[tuple[CurationCommit, dict]] = []
             for commit in batch:
-                changes = changes_by_commit.get(commit.id, [])
-                sliced = await resolver.slice_changes(changes)
-                for rid, (desc, repo_changes) in sliced.items():
-                    if repository_id is not None and rid != repository_id:
-                        continue
-                    if rid not in repo_cache:
-                        repo = self._repo_for(desc)
-                        self._ensure_init(repo, desc)
-                        repo_cache[rid] = (repo, desc, repo.projected_db_commit_ids())
-                    repo, desc_cached, projected = repo_cache[rid]
-                    if str(commit.id) in projected:
-                        continue
-                    # Bulk path (reconcile/backfill): a single commit can fan out to
-                    # thousands of blob writes, so allow a longer hold than the
-                    # single-commit project_commit (60s). Lock expiry is still safe —
-                    # the object store is content-addressed and the under-lock HEAD
-                    # re-check in _apply_commit_to_repo prevents any duplication.
-                    async with redis_lock(f"gitllery:{rid}", ttl_seconds=300) as acquired:
-                        if not acquired:
-                            continue
-                        new_hash = self._apply_commit_to_repo(repo, desc_cached, commit, repo_changes)
-                    if new_hash is not None:
-                        projected.add(str(commit.id))
-                        counts[rid] = counts.get(rid, 0) + 1
+                prepared.append(
+                    (
+                        commit,
+                        await resolver.slice_changes(
+                            changes_by_commit.get(commit.id, [])
+                        ),
+                    )
+                )
+            # ORM objects use expire_on_commit=False. Close the implicit read
+            # transaction before waiting for or holding any filesystem permit.
+            await self.db.commit()
+
+            # The iterator itself is capped at 25. In constrained mode consume
+            # only the granted prefix, release/cool down, then reacquire before
+            # advancing the database keyset.
+            offset = 0
+            while offset < len(prepared):
+                async with adaptive_resource_slice(
+                    "git_projection",
+                    owner,
+                    max_work_units=len(prepared) - offset,
+                    max_slice_seconds=20.0,
+                ) as limits:
+                    granted = max(1, min(int(limits.work_units), len(prepared) - offset))
+                    selected = prepared[offset : offset + granted]
+                    for commit, sliced in selected:
+                        force_replay = commit.id in incomplete_intents
+                        for rid, (desc, repo_changes) in sliced.items():
+                            if rid not in repo_cache:
+                                repo = self._repo_for(desc)
+                                self._ensure_init(repo, desc)
+                                manifest = repo.projection_manifest_for_update()
+                                watermark = manifest.get("last_db_commit_id")
+                                repo_cache[rid] = (
+                                    repo,
+                                    desc,
+                                    str(watermark) if watermark else None,
+                                    watermark is None,
+                                )
+                            (
+                                repo,
+                                desc_cached,
+                                watermark,
+                                watermark_seen,
+                            ) = repo_cache[rid]
+                            commit_id = str(commit.id)
+                            if not watermark_seen:
+                                at_watermark = commit_id == watermark
+                                watermark_seen = at_watermark
+                                repo_cache[rid] = (
+                                    repo,
+                                    desc_cached,
+                                    watermark,
+                                    watermark_seen,
+                                )
+                                if force_replay and not at_watermark:
+                                    already_present = await asyncio.to_thread(
+                                        repo.has_projected_db_commit_id,
+                                        commit_id,
+                                    )
+                                    if already_present:
+                                        continue
+                                    raise RuntimeError(
+                                        "Gitllery pre-watermark projection gap "
+                                        f"for repository {rid}; run a staged "
+                                        "repository rebuild instead of replaying "
+                                        "historical state onto the live HEAD"
+                                    )
+                                continue
+                            async with redis_lock(
+                                f"gitllery:{rid}",
+                                ttl_seconds=300,
+                            ) as acquired:
+                                if not acquired:
+                                    raise RuntimeError(
+                                        f"gitllery repository {rid} is busy"
+                                    )
+                                new_hash = self._apply_commit_to_repo(
+                                    repo,
+                                    desc_cached,
+                                    commit,
+                                    repo_changes,
+                                    ordered_outbox=True,
+                                )
+                            if new_hash is not None:
+                                counts[rid] = counts.get(rid, 0) + 1
+                        if commit.id in incomplete_intents:
+                            # Commit-by-commit fencing closes the disk/DB crash
+                            # window: before the next commit can move HEAD, this
+                            # one is either durable in both places or remains
+                            # the idempotent current HEAD on retry.
+                            await self._complete_bulk_outbox([commit.id])
+                    offset += len(selected)
+            resolver.clear_batch_cache()
+        unresolved = [
+            rid
+            for rid, (
+                _repo,
+                _desc,
+                watermark,
+                seen,
+            ) in repo_cache.items()
+            if watermark is not None and not seen
+        ]
+        if unresolved:
+            raise RuntimeError(
+                "Gitllery projection watermark is missing from PostgreSQL: "
+                + ", ".join(sorted(unresolved)[:10])
+            )
         if counts:
             _invalidate_status_cache()
         return counts
 
-    async def backfill(self) -> dict[str, int]:
-        # Ensure every source-creator repo exists, then project all commits.
-        resolver = RepoResolver(self.db)
-        for desc in await resolver.all_repositories():
-            self._ensure_init(self._repo_for(desc), desc)
-        return await self.project_pending()
+    async def _complete_bulk_outbox(self, commit_ids: list[UUID]) -> None:
+        """Fence intents covered by a successful library-wide bulk prefix."""
 
-    async def project_commit(self, commit_id: UUID) -> list[str]:
+        if not commit_ids:
+            return
+        await self.db.execute(
+            update(GitlleryProjectionOutbox)
+            .where(
+                GitlleryProjectionOutbox.commit_id.in_(commit_ids),
+                GitlleryProjectionOutbox.state != "complete",
+            )
+            .values(
+                state="complete",
+                completed_at=datetime.now(timezone.utc),
+                lease_expires_at=None,
+                last_error=None,
+                projection_stats={"mode": "bulk_sync"},
+            )
+        )
+        await self.db.commit()
+
+    async def backfill(
+        self,
+        *,
+        resource_owner: str | None = None,
+    ) -> dict[str, int]:
+        # Ensure every source-creator repo exists, then project all commits.
+        from app.services.heavy_io import adaptive_resource_slice
+
+        resolver = RepoResolver(self.db)
+        descriptors = await resolver.all_repositories()
+        await self.db.commit()
+        owner = resource_owner or "gitllery-backfill"
+        for start in range(0, len(descriptors), self._BULK_BATCH):
+            batch = descriptors[start : start + self._BULK_BATCH]
+            offset = 0
+            while offset < len(batch):
+                async with adaptive_resource_slice(
+                    "git_projection",
+                    owner,
+                    max_work_units=len(batch) - offset,
+                    max_slice_seconds=20.0,
+                ) as limits:
+                    granted = max(
+                        1,
+                        min(int(limits.work_units), len(batch) - offset),
+                    )
+                    for desc in batch[offset : offset + granted]:
+                        self._ensure_init(self._repo_for(desc), desc)
+                    offset += granted
+        return await self.project_pending(resource_owner=owner)
+
+    async def migrate_repository_v2(self, repository_id: str) -> dict:
+        """Explicit maintenance migration; never called by project_commit."""
+
+        resolver = RepoResolver(self.db)
+        desc = next(
+            (
+                candidate
+                for candidate in await resolver.all_repositories()
+                if candidate.key() == repository_id
+            ),
+            None,
+        )
+        if desc is None:
+            raise HTTPException(status_code=404, detail="repository not found")
+        repo = self._repo_for(desc)
+        self._ensure_init(repo, desc)
+        async with redis_lock(
+            f"gitllery:{repository_id}",
+            ttl_seconds=1800,
+        ) as acquired:
+            if not acquired:
+                raise RuntimeError(
+                    f"gitllery repository {repository_id} is busy"
+                )
+            result = await asyncio.to_thread(repo.migrate_v1_to_v2)
+        if result.get("migrated"):
+            _invalidate_status_cache()
+        return {"repository_id": repository_id, **result}
+
+    async def project_commit(
+        self,
+        commit_id: UUID,
+        *,
+        ordered_outbox: bool = False,
+    ) -> list[str]:
         commit = await self.db.get(CurationCommit, commit_id)
         if commit is None:
             return []
@@ -203,13 +676,71 @@ class GitlleryService:
                 if not acquired:
                     logger.warning("gitllery: could not lock repo %s; skipping (catch-up will retry)",
                                    repository_id)
+                    if ordered_outbox:
+                        raise RuntimeError(
+                            f"gitllery repository {repository_id} is busy"
+                        )
                     continue
-                repo = self._repo_for(desc)
-                if self._apply_commit_to_repo(repo, desc, commit, repo_changes) is not None:
+                mode = settings.gitllery_projection_mode.strip().lower()
+                if mode not in {"shadow", "active"}:
+                    raise RuntimeError(
+                        f"unsupported Gitllery projection mode: {mode}"
+                    )
+                projected = await asyncio.to_thread(
+                    self._project_commit_to_segment_repo,
+                    desc,
+                    commit,
+                    repo_changes,
+                )
+                if projected:
                     affected.append(repository_id)
         if affected:
             _invalidate_status_cache()
         return affected
+
+    async def _assert_append_order(
+        self,
+        repo: GitlleryRepo,
+        commit: CurationCommit,
+    ) -> bool:
+        """Refuse a historical live-HEAD replay; gaps require staged rebuild."""
+
+        if not repo.exists():
+            return False
+        manifest = repo.projection_manifest_for_update()
+        watermark = manifest.get("last_db_commit_id")
+        if not watermark or str(watermark) == str(commit.id):
+            return False
+        watermark_created_at = manifest.get("last_db_created_at")
+        watermark_id: UUID
+        try:
+            watermark_id = UUID(str(watermark))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Gitllery manifest has an invalid DB watermark") from exc
+        if watermark_created_at:
+            watermark_ts = datetime.fromisoformat(str(watermark_created_at))
+        else:
+            watermark_commit = await self.db.get(CurationCommit, watermark_id)
+            if watermark_commit is None:
+                raise RuntimeError(
+                    "Gitllery manifest watermark is absent from PostgreSQL"
+                )
+            watermark_ts = watermark_commit.created_at
+        current_ts = commit.created_at
+        if current_ts.tzinfo is None:
+            current_ts = current_ts.replace(tzinfo=timezone.utc)
+        if watermark_ts.tzinfo is None:
+            watermark_ts = watermark_ts.replace(tzinfo=timezone.utc)
+        if (current_ts, commit.id) < (watermark_ts, watermark_id):
+            if await asyncio.to_thread(
+                repo.has_projected_db_commit_id,
+                str(commit.id),
+            ):
+                return True
+            raise RuntimeError(
+                "Gitllery pre-watermark projection gap requires a staged rebuild"
+            )
+        return False
 
     async def _tail_commits(self, checkpoint: tuple[datetime, str]) -> list[CurationCommit]:
         """Commits strictly after the checkpoint position (created_at, id)."""
@@ -310,9 +841,29 @@ class GitlleryService:
         tree_hash = commit_obj.get("tree")
         if not tree_hash or not repo.objects.verify(tree_hash):
             return False
-        for blob_hash in (repo.objects.read(tree_hash).get("entries") or {}).values():
-            if not repo.objects.verify(blob_hash):
+        tree = repo.objects.read(tree_hash)
+        for blob_hash in (tree.get("entries") or {}).values():
+            if blob_hash and not repo.objects.verify(blob_hash):
                 return False
+        if tree.get("type") == "tree-v2":
+            base_tree = tree.get("base_tree")
+            if base_tree:
+                if not repo.objects.verify(base_tree):
+                    return False
+                for blob_hash in (
+                    repo.objects.read(base_tree).get("entries") or {}
+                ).values():
+                    if blob_hash and not repo.objects.verify(blob_hash):
+                        return False
+            for shard_hash in (tree.get("shards") or {}).values():
+                if not repo.objects.verify(shard_hash):
+                    return False
+                shard = repo.objects.read(shard_hash)
+                if shard.get("type") != "tree-shard-v2":
+                    return False
+                for blob_hash in (shard.get("entries") or {}).values():
+                    if blob_hash and not repo.objects.verify(blob_hash):
+                        return False
         return True
 
     async def _live_state(self, subject_type: str, subject_id: str) -> dict | None:
@@ -353,6 +904,9 @@ class GitlleryService:
         return drift
 
     async def status(self, repository_id: str | None = None, deep: bool = False) -> dict:
+        mode = settings.gitllery_projection_mode.strip().lower()
+        if mode in {"shadow", "active"}:
+            return await self._segment_status(repository_id, deep=deep)
         if repository_id is not None:
             known = {d.key() for d in await RepoResolver(self.db).all_repositories()}
             if repository_id not in known:
@@ -415,6 +969,94 @@ class GitlleryService:
         cache_set(key, result, TTL["gitllery:status"])
         return result
 
+    async def _segment_status(
+        self,
+        repository_id: str | None,
+        *,
+        deep: bool,
+    ) -> dict:
+        descriptors = {
+            descriptor.key(): descriptor
+            for descriptor in await RepoResolver(self.db).all_repositories()
+            if repository_id is None or descriptor.key() == repository_id
+        }
+        if repository_id is not None and repository_id not in descriptors:
+            raise HTTPException(status_code=404, detail="repository not found")
+        states_stmt = select(GitlleryRepositoryState)
+        if repository_id is not None:
+            states_stmt = states_stmt.where(
+                GitlleryRepositoryState.repository_key == repository_id
+            )
+        states = {
+            state.repository_key: state
+            for state in (await self.db.execute(states_stmt)).scalars()
+        }
+        pending_stmt = (
+            select(
+                GitlleryProjectionTarget.repository_key,
+                func.count(GitlleryProjectionTarget.id),
+            )
+            .where(GitlleryProjectionTarget.state != "complete")
+            .group_by(GitlleryProjectionTarget.repository_key)
+        )
+        if repository_id is not None:
+            pending_stmt = pending_stmt.where(
+                GitlleryProjectionTarget.repository_key == repository_id
+            )
+        pending = {
+            key: int(count)
+            for key, count in (await self.db.execute(pending_stmt)).all()
+        }
+        repositories = []
+        missing = behind_total = 0
+        for key, descriptor in descriptors.items():
+            state = states.get(key)
+            repo = self._segment_repo_for(descriptor)
+            exists_on_disk = repo.exists()
+            if not exists_on_disk:
+                missing += 1
+            behind = pending.get(key, 0)
+            behind_total += behind
+            integrity = True
+            drift: list[str] = []
+            if deep and exists_on_disk:
+                verification = await asyncio.to_thread(repo.verify, deep=True)
+                integrity = verification.ok
+                drift = list(verification.errors)
+            repositories.append(
+                {
+                    "repository_id": key,
+                    "source": descriptor.source,
+                    "creator_dir": descriptor.creator_dir,
+                    "exists": exists_on_disk,
+                    "behind": behind,
+                    "object_integrity_ok": integrity,
+                    "drift": drift,
+                    "clean": exists_on_disk and behind == 0 and integrity,
+                    "product_version": "v1",
+                    "format_id": "gitllery-segment",
+                    "format_revision": 1,
+                    "projection_mode": settings.gitllery_projection_mode,
+                    "head_segment": state.head_segment if state else None,
+                    "last_complete_commit_id": (
+                        str(state.last_complete_commit_id)
+                        if state and state.last_complete_commit_id
+                        else None
+                    ),
+                }
+            )
+        return {
+            "repositories": repositories,
+            "missing_repos": missing,
+            "behind_total": behind_total,
+            "deep": deep,
+            "needs_reconcile": False,
+            "product_version": "v1",
+            "format_id": "gitllery-segment",
+            "format_revision": 1,
+            "projection_mode": settings.gitllery_projection_mode,
+        }
+
     async def reconcile(self, repository_id: str | None = None) -> dict:
         projected = await self.project_pending(repository_id)
         return {"projected": projected, "status": await self.status(repository_id)}
@@ -428,6 +1070,31 @@ class GitlleryService:
         desc = next((d for d in await resolver.all_repositories() if d.key() == repository_id), None)
         if desc is None:
             raise HTTPException(status_code=404, detail="repository not found")
+        if settings.gitllery_projection_mode.strip().lower() in {"shadow", "active"}:
+            repo = self._segment_repo_for(desc)
+            if not repo.exists():
+                return {"repository_id": repository_id, "entries": [], "total": 0}
+            manifest = await asyncio.to_thread(repo.read_manifest)
+            commits = await asyncio.to_thread(
+                lambda: list(islice(repo.iter_commits(newest_first=True), limit))
+            )
+            entries = [
+                {
+                    "commit": commit.get("commit_id"),
+                    "db_commit_id": commit.get("commit_id"),
+                    "message": commit.get("message", ""),
+                    "trigger": commit.get("trigger"),
+                    "actor": commit.get("actor_id") or commit.get("actor_type"),
+                    "occurred_at": commit.get("occurred_at"),
+                    "change_count": len(commit.get("changes") or []),
+                }
+                for commit in commits
+            ]
+            return {
+                "repository_id": repository_id,
+                "entries": entries,
+                "total": int(manifest.get("commit_count") or 0),
+            }
         repo = self._repo_for(desc)
         entries = []
         cur = repo.head_commit()
@@ -452,6 +1119,35 @@ class GitlleryService:
                 })
             cur = obj.get("parent")
         return {"repository_id": repository_id, "entries": entries, "total": total}
+
+    async def verify_segment_repository(
+        self,
+        repository_id: str,
+        *,
+        deep: bool,
+    ) -> dict:
+        descriptor = next(
+            (
+                item
+                for item in await RepoResolver(self.db).all_repositories()
+                if item.key() == repository_id
+            ),
+            None,
+        )
+        if descriptor is None:
+            raise HTTPException(status_code=404, detail="repository not found")
+        repo = self._segment_repo_for(descriptor)
+        if not repo.exists():
+            raise HTTPException(status_code=404, detail="segment repository not built")
+        result = await asyncio.to_thread(repo.verify, deep=deep)
+        if result.ok:
+            await self.db.execute(
+                update(GitlleryRepositoryState)
+                .where(GitlleryRepositoryState.repository_key == repository_id)
+                .values(last_verified_at=datetime.now(timezone.utc), last_error=None)
+            )
+            await self.db.commit()
+        return {"repository_id": repository_id, "deep": deep, **result.as_dict()}
 
 
 _CHECKPOINT_KEY = "gitllery:checkpoint"
@@ -514,8 +1210,11 @@ def _invalidate_status_cache() -> None:
     cache_delete_pattern("gitllery:status:*")
 
 
-async def rebuild_checkpoint(db: AsyncSession) -> bool:
-    """Set the checkpoint to the newest commit position.
+async def rebuild_checkpoint(
+    db: AsyncSession,
+    position: tuple[datetime, UUID] | None = None,
+) -> bool:
+    """Set the checkpoint to an explicitly verified commit position.
 
     Only valid right after a full successful project_pending (the library is
     fully projected at that instant). Called from the queued reconcile job so
@@ -523,19 +1222,39 @@ async def rebuild_checkpoint(db: AsyncSession) -> bool:
     False when the newest commit is younger than the in-flight-tx clamp —
     harmless: the next reconcile (or a later clean status) will set it.
     """
-    last = (await db.execute(
-        select(CurationCommit.created_at, CurationCommit.id)
-        .order_by(CurationCommit.created_at.desc(), CurationCommit.id.desc())
-        .limit(1))).first()
-    if last is None:
-        return False
-    return _advance_checkpoint(last[0], last[1])
+    if position is None:
+        last = (
+            await db.execute(
+                select(CurationCommit.created_at, CurationCommit.id)
+                .order_by(
+                    CurationCommit.created_at.desc(),
+                    CurationCommit.id.desc(),
+                )
+                .limit(1)
+            )
+        ).first()
+        if last is None:
+            return False
+        position = (last[0], last[1])
+    return _advance_checkpoint(position[0], position[1])
 
 
 async def project_commit_safe(db: AsyncSession, commit_id) -> None:
-    """Best-effort projection: never raises into the caller's request/job."""
+    """Persist a projection intent without adding filesystem I/O to callers."""
     try:
         cid = commit_id if isinstance(commit_id, UUID) else UUID(str(commit_id))
-        await GitlleryService(db).project_commit(cid)
+        from app.services.gitllery_outbox import request_gitllery_projection
+        from app.database import async_session
+
+        # Keep the caller's transaction boundary unchanged. Curation callers
+        # invoke this after their authoritative commit; the independent short
+        # transaction closes the DB->filesystem crash window durably.
+        async with async_session() as outbox_db:
+            await request_gitllery_projection(outbox_db, cid)
+            await outbox_db.commit()
     except Exception:
-        logger.warning("gitllery projection failed for commit %s", commit_id, exc_info=True)
+        logger.warning(
+            "gitllery projection intent failed for commit %s",
+            commit_id,
+            exc_info=True,
+        )

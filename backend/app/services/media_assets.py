@@ -154,19 +154,24 @@ def render_video_derivatives(
     poster_path = library_dir / f"{name}.poster.webp"
     seek_seconds = min(3.0, max(0.1, (inspection.duration or 1.0) * 0.1))
     errors: list[str] = []
+    source_mtime_ns = source_path.stat().st_mtime_ns
+    pending: list[tuple[Path, int]] = []
 
     for target, max_size in ((thumbnail_path, 400), (poster_path, 1280)):
-        if not force and target.exists() and target.stat().st_mtime_ns >= source_path.stat().st_mtime_ns:
+        if not force and target.exists() and target.stat().st_mtime_ns >= source_mtime_ns:
             continue
-        error = _render_video_frame(
+        pending.append((target, max_size))
+
+    if pending:
+        error = _render_video_frames(
             source_path,
-            target,
+            pending,
             seek_seconds=seek_seconds,
-            max_size=max_size,
             timeout_seconds=render_timeout_seconds,
         )
         if error:
-            errors.append(f"{target.name}: {error}")
+            target_names = ", ".join(target.name for target, _ in pending)
+            errors.append(f"{target_names}: {error}")
 
     return VideoDerivatives(
         inspection=inspection,
@@ -192,52 +197,117 @@ def _render_video_frame(
     max_size: int,
     timeout_seconds: int,
 ) -> str | None:
-    """Render one representative frame, retrying from time zero once."""
+    """Compatibility wrapper for rendering one representative frame."""
+
+    return _render_video_frames(
+        source_path,
+        [(target_path, max_size)],
+        seek_seconds=seek_seconds,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _render_video_frames(
+    source_path: Path,
+    targets: list[tuple[Path, int]],
+    *,
+    seek_seconds: float,
+    timeout_seconds: int,
+) -> str | None:
+    """Decode once and fan one frame out to every requested WebP size."""
+
+    if not targets:
+        return None
 
     for seek in (seek_seconds, 0.0):
-        temp_path = target_path.with_name(f".{target_path.stem}.{uuid.uuid4().hex}.tmp.webp")
+        temp_paths = [
+            target.with_name(f".{target.stem}.{uuid.uuid4().hex}.tmp.webp")
+            for target, _ in targets
+        ]
+        output_labels = [f"frame{index}" for index in range(len(targets))]
+        filters: list[str] = []
+        if len(targets) == 1:
+            filter_inputs = ["0:v:0"]
+        else:
+            split_labels = [f"split{index}" for index in range(len(targets))]
+            filters.append(
+                f"[0:v:0]split={len(targets)}"
+                + "".join(f"[{label}]" for label in split_labels)
+            )
+            filter_inputs = split_labels
+        for filter_input, output_label, (_, max_size) in zip(
+            filter_inputs,
+            output_labels,
+            targets,
+        ):
+            filters.append(
+                f"[{filter_input}]"
+                f"scale=w='min({max_size},iw)':h='min({max_size},ih)'"
+                ":force_original_aspect_ratio=decrease:force_divisible_by=2"
+                f"[{output_label}]"
+            )
+
+        command = [
+            "ffmpeg",
+            "-nostdin",
+            "-loglevel",
+            "error",
+            # Bound decoder, filter graph, and encoder fan-out.  The output
+            # ``-threads`` option is repeated because ffmpeg scopes it per
+            # output codec context.
+            "-threads",
+            "1",
+            "-filter_threads",
+            "1",
+            "-filter_complex_threads",
+            "1",
+            "-ss",
+            f"{seek:.3f}",
+            "-i",
+            str(source_path),
+            "-filter_complex",
+            ";".join(filters),
+        ]
+        for output_label, temp_path in zip(output_labels, temp_paths):
+            command.extend([
+                "-map",
+                f"[{output_label}]",
+                "-frames:v",
+                "1",
+                "-an",
+                "-c:v",
+                "libwebp",
+                "-threads",
+                "1",
+                "-quality",
+                "80",
+                "-y",
+                str(temp_path),
+            ])
         try:
             result = subprocess.run(
-                [
-                    "ffmpeg",
-                    "-nostdin",
-                    "-loglevel",
-                    "error",
-                    "-ss",
-                    f"{seek:.3f}",
-                    "-i",
-                    str(source_path),
-                    "-map",
-                    "0:v:0",
-                    "-frames:v",
-                    "1",
-                    "-vf",
-                    (
-                        f"scale=w='min({max_size},iw)':h='min({max_size},ih)'"
-                        ":force_original_aspect_ratio=decrease:force_divisible_by=2"
-                    ),
-                    "-c:v",
-                    "libwebp",
-                    "-quality",
-                    "80",
-                    "-y",
-                    str(temp_path),
-                ],
+                command,
                 capture_output=True,
                 text=True,
                 timeout=timeout_seconds,
                 check=False,
             )
-            if result.returncode == 0 and temp_path.exists() and temp_path.stat().st_size > 0:
-                os.replace(temp_path, target_path)
+            valid_outputs = all(
+                temp_path.exists() and temp_path.stat().st_size > 0
+                for temp_path in temp_paths
+            )
+            if result.returncode == 0 and valid_outputs:
+                for (target_path, _), temp_path in zip(targets, temp_paths):
+                    os.replace(temp_path, target_path)
                 return None
             detail = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "no frame produced"
         except (OSError, subprocess.TimeoutExpired) as exc:
             detail = f"ffmpeg unavailable or timed out: {type(exc).__name__}"
         finally:
-            try:
-                if temp_path.exists():
-                    temp_path.unlink()
-            except OSError:
-                pass
+            for temp_path in temp_paths:
+                try:
+                    if temp_path.exists():
+                        temp_path.unlink()
+                except OSError:
+                    pass
     return detail[:300]

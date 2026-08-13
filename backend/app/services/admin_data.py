@@ -38,15 +38,104 @@ ENTITIES = {
         "work_curation_states", "asset_storage_states",
         "assets", "work_sources", "works",
     ],
-    "creators": [
-        "subscription_sources", "subscriptions",
-        "source_creators", "creator_links", "creator_curation_states", "creators",
-    ],
+    "creators": ["source_creators", "creator_links", "creator_curation_states", "creators"],
+    "subscriptions": ["subscription_sources", "subscriptions"],
     "jobs": ["task_runs", "import_jobs", "download_jobs"],
     "tags": ["work_source_tags", "work_tags", "tags"],
-    "library": [],
     "settings": [],
 }
+
+CONFIRMATION_PHRASES = {
+    "works": "DELETE-WORKS",
+    "creators": "DELETE-CREATORS",
+    "subscriptions": "DELETE-SUBSCRIPTIONS",
+    "tags": "DELETE-TAGS",
+    "jobs": "DELETE-JOBS",
+    "settings": "RESET-SETTINGS",
+    "all": "DELETE-ALL-DATA",
+}
+
+
+async def preview_clear_entity_data(entity: str, db: AsyncSession) -> dict:
+    """Return a read-only, domain-scoped impact preview."""
+
+    if entity != "all" and entity not in ENTITIES:
+        raise ValueError(f"Unknown entity: {entity}")
+    preview_tables = {
+        "works": ["works", "work_sources", "assets", "asset_sources"],
+        "creators": ["creators", "source_creators", "subscriptions", "subscription_sources", "download_jobs", "import_jobs"],
+        "subscriptions": ["subscriptions", "subscription_sources", "download_jobs", "import_jobs"],
+        "tags": ["tags", "work_tags", "work_source_tags"],
+        "jobs": ["task_runs", "task_events", "download_jobs", "import_jobs"],
+        "settings": ["system_settings"],
+        "all": ["works", "creators", "subscriptions", "subscription_sources", "tags", "task_runs", "download_jobs", "import_jobs", "assets"],
+    }[entity]
+    counts: dict[str, int] = {}
+    for table in preview_tables:
+        counts[table] = int(
+            (await db.execute(text(f"SELECT COUNT(*) FROM {table}"))).scalar_one()
+        )
+    return {
+        "entity": entity,
+        "confirmation_phrase": CONFIRMATION_PHRASES[entity],
+        "counts": counts,
+        "preserves_repository_sync_receipts": entity == "jobs",
+        "deletes_media_files": entity in {"works", "all"},
+    }
+
+
+async def _clear_subscriptions(db: AsyncSession) -> dict[str, int]:
+    """Delete subscription-owned operational rows before their parents."""
+
+    results: dict[str, int] = {}
+    # Scope operational cleanup to jobs that are actually owned by a
+    # subscription/repository. Manual imports and unrelated downloads remain.
+    task_result = await db.execute(
+        text(
+            """
+            DELETE FROM task_runs
+            WHERE (
+                subject_type = 'download_job'
+                AND subject_id IN (
+                    SELECT id FROM download_jobs
+                    WHERE subscription_id IS NOT NULL
+                       OR subscription_source_id IS NOT NULL
+                )
+            ) OR (
+                subject_type = 'import_job'
+                AND subject_id IN (
+                    SELECT ij.id
+                    FROM import_jobs ij
+                    JOIN download_jobs dj ON dj.id = ij.download_job_id
+                    WHERE dj.subscription_id IS NOT NULL
+                       OR dj.subscription_source_id IS NOT NULL
+                )
+            )
+            """
+        )
+    )
+    results["task_runs"] = task_result.rowcount or 0
+    statements = {
+        "import_jobs": """
+            DELETE FROM import_jobs
+            WHERE download_job_id IN (
+                SELECT id FROM download_jobs
+                WHERE subscription_id IS NOT NULL
+                   OR subscription_source_id IS NOT NULL
+            )
+        """,
+        "download_jobs": """
+            DELETE FROM download_jobs
+            WHERE subscription_id IS NOT NULL
+               OR subscription_source_id IS NOT NULL
+        """,
+        "subscription_sources": "DELETE FROM subscription_sources",
+        "subscriptions": "DELETE FROM subscriptions",
+    }
+    for table, statement in statements.items():
+        result = await db.execute(text(statement))
+        results[table] = result.rowcount or 0
+    return results
 
 
 async def clear_entity_data(entity: str, db: AsyncSession) -> dict:
@@ -73,7 +162,7 @@ async def clear_entity_data(entity: str, db: AsyncSession) -> dict:
         _clear_files([str(settings.download_root), str(settings.library_root)])
         results["files"] = "downloads + library cleared"
         await _clear_search_index(db, "all")
-        results["failed_jobs"] = clear_failed_rq_jobs()
+        results["failed_jobs"] = await clear_failed_rq_jobs(db)
         invalidate_creator_subscription_caches(include_works=True)
         invalidate_api_caches("tags")
         return {"status": "ok", "message": "All data cleared", "deleted": results}
@@ -81,15 +170,6 @@ async def clear_entity_data(entity: str, db: AsyncSession) -> dict:
     tables = ENTITIES.get(entity)
     if tables is None:
         raise ValueError(f"Unknown entity: {entity}")
-
-    if entity == "library":
-        _clear_files([str(settings.library_root)])
-        invalidate_api_caches("works", "creators")
-        return {
-            "status": "ok",
-            "message": "Library metadata and thumbnails cleared (media files untouched)",
-            "deleted": {"library_files": "cleared"},
-        }
 
     if entity == "settings":
         deleted = await _reset_settings(db)
@@ -100,19 +180,26 @@ async def clear_entity_data(entity: str, db: AsyncSession) -> dict:
             "deleted": {"settings": deleted},
         }
 
-    results = await _delete_tables(tables, db)
+    if entity in {"subscriptions", "creators"}:
+        results = await _clear_subscriptions(db)
+        if entity == "creators":
+            results.update(await _delete_tables(tables, db))
+    else:
+        results = await _delete_tables(tables, db)
+    if entity == "works":
+        storage_result = await db.execute(text("DELETE FROM storage_artifacts"))
+        results["storage_artifacts"] = storage_result.rowcount or 0
     await db.commit()
 
     if entity == "works":
         _clear_files([str(settings.download_root), str(settings.library_root)])
         results["files"] = "downloads + library cleared"
         await _clear_search_index(db, "works")
-        # Also clear storage_artifacts
-        await db.execute(text("DELETE FROM storage_artifacts"))
         invalidate_api_caches("works", "creators", "subscriptions")
     elif entity == "creators":
         invalidate_creator_subscription_caches(include_works=True)
     elif entity == "jobs":
+        results["failed_rq_jobs"] = await clear_failed_rq_jobs(db)
         invalidate_api_caches("subscriptions", "creators")
     elif entity == "tags":
         invalidate_api_caches("tags", "works")
@@ -208,6 +295,7 @@ async def rebuild_library_index(db: AsyncSession, options: dict | None = None, p
         )).all()
         assets_by_source = {}
         library_artifacts = []
+        projection_work_ids: set[UUID] = set()
         for ws_id, asset, asset_source in asset_rows:
             assets_by_source.setdefault(ws_id, []).append((asset, asset_source))
 
@@ -278,12 +366,17 @@ async def rebuild_library_index(db: AsyncSession, options: dict | None = None, p
                 )
                 stats["metadata_written"] += 1
                 stats["thumbnails_generated"] += generated
+                projection_work_ids.add(work.id)
             except Exception:
                 errors += 1
                 logger.warning("Library rebuild: failed work %s source %s", work.id, ws.source, exc_info=True)
 
         stats["scanned"] += len(page)
         await ArtifactLedger(db).upsert_many(library_artifacts)
+        if projection_work_ids:
+            from app.services.search_projection_outbox import request_search_projection
+
+            await request_search_projection(db, projection_work_ids)
         await db.commit()
         cursor_created_at, cursor_id = page[-1].created_at, page[-1].id
         cursor = {"created_at": cursor_created_at.isoformat(), "id": str(cursor_id)}
@@ -347,20 +440,53 @@ def _clear_files(paths: list[str]) -> None:
             logger.warning("Failed to clear files in %s", path, exc_info=True)
 
 
-def clear_failed_rq_jobs() -> int:
-    """Remove failed RQ jobs across all queues; best effort for clear-all."""
+async def clear_failed_rq_jobs(db: AsyncSession, *, dry_run: bool = False) -> int:
+    """Export and remove failed RQ entries not referenced by active tasks.
+
+    Queue names are discovered from Redis rather than assumed. The exported
+    manifest makes this maintenance action auditable and repeatable.
+    """
     from rq import Queue
     from rq.registry import FailedJobRegistry
+    from app.models.task_run import TaskRun
 
     try:
         redis = get_redis()
+        active_rq_ids = set(
+            (
+                await db.execute(
+                    select(TaskRun.rq_job_id).where(
+                        TaskRun.status.in_({"enqueued", "running", "paused", "recovering"}),
+                        TaskRun.rq_job_id.is_not(None),
+                    )
+                )
+            ).scalars()
+        )
+        queues = list(Queue.all(connection=redis))
+        known_names = {queue.name for queue in queues}
+        if "default" not in known_names:
+            queues.append(Queue(connection=redis))
         total = 0
-        for qname in ("default", "downloads", "imports", "scheduled"):
-            queue = Queue(connection=redis) if qname == "default" else Queue(name=qname, connection=redis)
+        manifest: list[dict[str, str]] = []
+        for queue in queues:
             registry = FailedJobRegistry(queue=queue)
             for job_id in registry.get_job_ids():
-                registry.remove(job_id, delete_job=True)
-                total += 1
+                if job_id in active_rq_ids:
+                    continue
+                manifest.append({"queue": queue.name, "job_id": job_id})
+        audit_dir = Path(settings.app_config_root) / "audits"
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        audit_path = audit_dir / f"rq-failed-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+        audit_path.write_text(
+            json.dumps({"dry_run": dry_run, "items": manifest}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        if dry_run:
+            return len(manifest)
+        registries = {queue.name: FailedJobRegistry(queue=queue) for queue in queues}
+        for item in manifest:
+            registries[item["queue"]].remove(item["job_id"], delete_job=True)
+            total += 1
         return total
     except Exception:
         logger.warning("Failed to clear Redis failed-job registries", exc_info=True)

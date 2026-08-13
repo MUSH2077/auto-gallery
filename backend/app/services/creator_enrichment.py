@@ -137,6 +137,11 @@ async def enrich_creator_by_id(db: AsyncSession, creator_id: UUID) -> dict[str, 
     sc = next((s for s in scs if s.source == "pixiv"), scs[0] if scs else None)
 
     result = await enrich_creator_from_danbooru(db, creator, source_creator=sc)
+    # Enrichment can add repositories/source identities in addition to
+    # changing the creator.  Persist all derived projection requests in the
+    # same transaction as those domain mutations.
+    from app.services.creator import CreatorService
+    await CreatorService(db)._request_creator_projection(creator_id)
     await db.commit()
     return result
 
@@ -183,6 +188,8 @@ async def reenrich_pending(
             counts["not_found"] += 1
         else:
             counts["errors"] += 1
+        from app.services.creator import CreatorService
+        await CreatorService(db)._request_creator_projection(creator.id)
         await db.commit()
 
         items.append({
@@ -229,9 +236,11 @@ async def fetch_and_link_danbooru_artist(
             return 0
 
         c = await db.get(Creator, creator_id)
+        creator_projection_changed = False
         if c and artist:
             if c.danbooru_artist_id is None:
                 c.danbooru_artist_id = artist.get("id")
+                creator_projection_changed = True
             await db.flush()
 
         created = 0
@@ -255,7 +264,9 @@ async def fetch_and_link_danbooru_artist(
             ))
             created += 1
 
-        if created:
+        if created or creator_projection_changed:
+            from app.services.search_projection_outbox import request_search_projection
+            await request_search_projection(db, creator_ids=[creator_id])
             await db.commit()
         return created
     except Exception as e:

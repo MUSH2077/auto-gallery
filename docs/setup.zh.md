@@ -110,7 +110,9 @@ HOST_MEILISEARCH=/volume1/auto-gallery/docker/meilisearch
 docker compose up -d
 ```
 
-此命令启动全部服务：postgres、redis、meilisearch、backend、worker、scheduler 和 admin-web。后端启动时会自动执行数据库迁移，无需单独运行迁移步骤。
+此命令启动全部服务：postgres、redis、meilisearch、一次性 `migrate` 服务、backend、
+worker-download、worker-import、worker-operations、scheduler 和 admin-web。backend 与
+各 Worker 会等待 `migrate` 成功完成，不再在每次重启时重复执行迁移。
 
 等待健康检查通过：
 

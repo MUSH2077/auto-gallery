@@ -1,5 +1,10 @@
-.next
+.next/
 node_modules/
+.turbo/
+coverage/
+playwright-report/
+test-results/
+.playwright-artifacts/
 .git/
 *.md
 .DS_Store

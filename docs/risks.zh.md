@@ -81,12 +81,18 @@
 
 ### 5. Meilisearch 索引一致性
 
-**风险**：向 PostgreSQL 和 Meilisearch 双写可能漂移。定期重建索引意味着搜索结果可能滞后。
+**风险**：PostgreSQL 与异步 Meilisearch 投影可能漂移；Meilisearch 不可用时
+投影可能积压。
 
 **缓解措施**：
-- v1：管理员触发的全量重建索引（手动但一致）
-- v2：应用层双写 + 定期对账
-- 接受 v1 中搜索结果可能滞后数分钟
+- PostgreSQL 业务写入与合并式投影 outbox 意图位于同一事务，普通导入不等待
+  Meilisearch。
+- 单一有界消费者同一时间最多提交一个 Meilisearch 写任务，并提供重试、退避和
+  可观测的积压时长。
+- 全量重建使用版本化 staging、主键游标批次，并在原子交换前重放重建水位之后的
+  outbox 变更。
+- 全文检索故障时明确返回 `503 search_unavailable`，结构化作品列表仍由
+  PostgreSQL 提供。
 
 ---
 
@@ -107,7 +113,9 @@
 **风险**：一个 worker 一次处理一个任务。同步拥有 1000+ 作品的创作者需要数小时/数天。
 
 **决策**：v1 接受此风险（个人归档，非实时服务）。
-Worker 可水平扩展：`docker compose up --scale worker=3`。只要每个任务使用唯一的 DOWNLOAD_ROOT 子目录（`<job_id>`），扩展即安全。调度器可错开订阅同步时间避免惊群效应。
+8 GiB NAS 配置会把下载有效并发固定为 1。不要手工扩容 worker；未来增加并行度
+必须通过资源档案租约、同来源 archive 锁、staging manifest 和公平调度器，并在
+混合负载验证后逐步启用。
 
 ---
 
@@ -258,7 +266,8 @@ Worker 可水平扩展：`docker compose up --scale worker=3`。只要每个任�
 ## 低风险
 
 ### L1. Alembic 迁移执行
-通过 `docker compose run --rm backend alembic upgrade head` 在启动前运行迁移。添加启动检查：若有待执行迁移则拒绝启动。
+Compose 通过一次性的 `migrate` 服务执行 `alembic upgrade head`；Backend 与
+Worker 等待迁移成功完成，普通容器重启不再反复执行迁移并形成崩溃循环。
 
 ### L2. 文件命名 / 重新组织
 gallery-dl 在下载时命名文件。导入任务可重新组织。Asset 路径在导入后存储于数据库，非导入前。gallery-dl 文件组织配置变更会影响后续下载，但不会重写已导入的 asset 路径。
@@ -267,7 +276,9 @@ gallery-dl 在下载时命名文件。导入任务可重新组织。Asset 路径
 创作者身份（Phase 4）无需 Danbooru（Phase 5）即可工作。Danbooru 丰富身份信息，并非使其可用。排序正确。
 
 ### L4. gallery-dl 归档数据库
-gallery-dl 的 SQLite 归档文件追踪已下载的 URL。调度器定期对 DOWNLOAD_ROOT 中的 archive-*.sqlite3 文件执行 VACUUM。如果归档文件增大，vacuum 开销可能与下载 I/O 冲突。
+gallery-dl 的 SQLite 归档文件追踪已下载的 URL。维护固定在 03:30：每日仅执行
+轻量 `PRAGMA optimize`，完整 `VACUUM` 只在周日、队列空闲、资源压力正常且取得
+全局重 I/O 锁时运行。这会显著降低维护 I/O 冲突，但不能完全消除维护窗口风险。
 
 ### L5. Provider 数量增长
 随着 provider 数量增长（目前 8 个：Pixiv、X、Iwara、Danbooru、Pinterest、LOFTER、Bilibili、微博），admin-web 设置页面和 gallery-dl 配置必须相应扩展。每个新 provider 在 gallery-dl 配置 UI 中添加一个选项卡，在 API 中添加字段。这在可管理范围内，但增加了文档和维护负担。

@@ -12,7 +12,7 @@ import { useT } from "@/lib/i18n";
 import { scheduleModeLabel, schedulerDecisionLabel, statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { adminRoutes } from "@/lib/adminRoutes";
 
-type TabKey = "overview" | "jobs" | "works" | "tags" | "activity" | "config";
+type TabKey = "overview" | "content" | "history" | "settings";
 
 function hostFromUrl(url?: string | null): string {
   if (!url) return "repo";
@@ -66,7 +66,7 @@ function JobsList({ jobs }: { jobs: RepositoryRecentJob[] }) {
   return (
     <div className="divide-y divide-border rounded-md border border-border bg-white dark:divide-border dark:border-border dark:bg-surface">
       {jobs.map((job) => (
-        <Link key={job.id} href="/admin/jobs" className="block p-4 hover:bg-subtle dark:hover:bg-subtle">
+        <div key={job.id} className="p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -74,8 +74,8 @@ function JobsList({ jobs }: { jobs: RepositoryRecentJob[] }) {
                   {statusLabel(t, job.status)}
                 </span>
                 {job.outcome && <SyncOutcomeBadge outcome={job.outcome} />}
-                <span className="font-mono text-xs text-muted">{job.id.slice(0, 8)}</span>
                 {job.retry_count > 0 && <Pill tone="warn">{t("repo_detail.retry_count", { count: job.retry_count })}</Pill>}
+                {job.recovered && <Pill tone="good">{t("repo_detail.recovered")}</Pill>}
               </div>
               {job.error_log_excerpt && ["failed", "stale"].includes(job.status) && <p className="mt-2 line-clamp-2 text-xs text-danger dark:text-danger">{job.error_log_excerpt}</p>}
             </div>
@@ -84,7 +84,7 @@ function JobsList({ jobs }: { jobs: RepositoryRecentJob[] }) {
               <div>{fmt.dateTime(job.updated_at)}</div>
             </div>
           </div>
-        </Link>
+        </div>
       ))}
     </div>
   );
@@ -311,7 +311,7 @@ export default function RepositoryDetailPage() {
   const repositoryTags = useQuery({
     queryKey: queryKeys.repositories.tags(id, tagPage),
     queryFn: () => api.getRepositoryTags(id, tagPage * tagLimit, tagLimit),
-    enabled: tab === "tags",
+    enabled: tab === "content",
   });
 
   const repo = detail.data?.repository;
@@ -349,17 +349,16 @@ export default function RepositoryDetailPage() {
   }
   if (!detail.data || !repo) return null;
 
-  const { creator, subscription, provider, recent_jobs, recent_works } = detail.data;
+  const { creator, subscription, provider, recent_works } = detail.data;
+  const syncHistory = detail.data.sync_history || detail.data.recent_jobs || [];
   const running = !!repo.latest_job && ["pending", "downloading", "downloaded", "importing"].includes(repo.latest_job.status);
   const canSync = repo.is_repository && repo.is_enabled && !running;
   const hint = nextActionHint(detail.data, decision);
   const tabs: { key: TabKey; label: string; count?: number }[] = [
     { key: "overview", label: t("repo_detail.tab_overview") },
-    { key: "jobs", label: t("repo_detail.tab_jobs"), count: recent_jobs.length },
-    { key: "works", label: t("repo_detail.tab_works"), count: recent_works.length },
-    { key: "tags", label: t("repo_detail.tab_tags"), count: repositoryTags.data?.total },
-    { key: "activity", label: t("repo_detail.tab_graph") },
-    { key: "config", label: t("repo_detail.tab_config") },
+    { key: "content", label: t("repo_detail.tab_content"), count: recent_works.length },
+    { key: "history", label: t("repo_detail.tab_sync_history"), count: syncHistory.length },
+    { key: "settings", label: t("repo_detail.tab_settings") },
   ];
 
   return (
@@ -420,8 +419,8 @@ export default function RepositoryDetailPage() {
               <div className="font-semibold">{t("repo_detail.next_action")}</div>
               <div className="mt-1">{t(hint.text)}</div>
               <div className="mt-3 flex flex-wrap gap-2">
-                <Link href={`/admin/jobs?tab=downloads&q=${encodeURIComponent(`kind:download repo:${id}`)}`} className="btn-ghost text-xs">{t("repo_detail.open_jobs")}</Link>
-                <Link href="/admin/scheduler" className="btn-ghost text-xs">{t("repo_detail.open_scheduler")}</Link>
+                <Link href={`${adminRoutes.jobs}?view=attention&q=${encodeURIComponent(id)}`} className="btn-ghost text-xs">{t("repo_detail.open_jobs")}</Link>
+                <Link href={adminRoutes.settingsSection("scheduler-defaults")} className="btn-ghost text-xs">{t("repo_detail.open_scheduler")}</Link>
                 <button onClick={() => sync.mutate()} disabled={!canSync || sync.isPending} className="btn-primary text-xs disabled:opacity-50">{t("repo.sync_now")}</button>
               </div>
             </div>
@@ -441,32 +440,34 @@ export default function RepositoryDetailPage() {
               <section>
                 <div className="mb-3 flex items-center justify-between">
                   <h2 className="text-base font-semibold">{t("repo_detail.recent_jobs")}</h2>
-                  <button onClick={() => setTab("jobs")} className="text-sm text-accent hover:underline dark:text-accent">{t("common.view_all")}</button>
+                  <button onClick={() => setTab("history")} className="text-sm text-accent hover:underline dark:text-accent">{t("common.view_all")}</button>
                 </div>
-                <JobsList jobs={recent_jobs.slice(0, 4)} />
+                <JobsList jobs={syncHistory.slice(0, 4)} />
               </section>
               <section>
                 <div className="mb-3 flex items-center justify-between">
                   <h2 className="text-base font-semibold">{t("repo_detail.recent_works")}</h2>
-                  <button onClick={() => setTab("works")} className="text-sm text-accent hover:underline dark:text-accent">{t("common.view_all")}</button>
+                  <button onClick={() => setTab("content")} className="text-sm text-accent hover:underline dark:text-accent">{t("common.view_all")}</button>
                 </div>
                 <WorksGrid works={recent_works.slice(0, 4)} />
               </section>
             </div>
           </div>
         )}
-        {tab === "jobs" && (
+        {tab === "history" && (
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm text-muted">{t("repo_detail.jobs_filtered_desc")}</p>
-              <Link href={`/admin/jobs?tab=downloads&q=${encodeURIComponent(`kind:download repo:${id}`)}`} className="btn-ghost text-sm">{t("repo_detail.open_in_jobs")}</Link>
+              <Link href={`${adminRoutes.jobs}?view=attention&q=${encodeURIComponent(id)}`} className="btn-ghost text-sm">{t("repo_detail.open_in_jobs")}</Link>
             </div>
-            <JobsList jobs={recent_jobs} />
+            <JobsList jobs={syncHistory} />
+            <RepositoryGraph repositoryId={id} />
           </div>
         )}
-        {tab === "works" && <WorksGrid works={recent_works} />}
-        {tab === "tags" && (
+        {tab === "content" && (
           <div className="space-y-4">
+            <WorksGrid works={recent_works} />
+            <h2 className="pt-3 text-base font-semibold">{t("repo_detail.tab_tags")}</h2>
             {repositoryTags.isLoading && (
               <div className="flex min-h-72 flex-wrap items-center justify-center gap-3">
                 {Array.from({ length: 16 }).map((_, index) => {
@@ -511,8 +512,7 @@ export default function RepositoryDetailPage() {
             )}
           </div>
         )}
-        {tab === "activity" && <RepositoryGraph repositoryId={id} />}
-        {tab === "config" && <ConfigRows detail={detail.data} decision={decision} />}
+        {tab === "settings" && <ConfigRows detail={detail.data} decision={decision} />}
       </section>
     </PageShell>
   );

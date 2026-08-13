@@ -162,7 +162,7 @@ class AssetDedupOutbox(TimestampMixin, Base):
     __tablename__ = "asset_dedup_outbox"
     __table_args__ = (
         CheckConstraint(
-            "event_type IN ('hardlink', 'quarantine', 'purge')",
+            "event_type IN ('observe', 'hardlink', 'quarantine', 'purge')",
             name="ck_asset_dedup_outbox_event_type",
         ),
         CheckConstraint(

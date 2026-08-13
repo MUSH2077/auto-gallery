@@ -19,5 +19,13 @@ class Asset(TimestampMixin, Base):
     thumb_sm_path: Mapped[str | None] = mapped_column(String(2000))
     thumb_md_path: Mapped[str | None] = mapped_column(String(2000))
     thumb_lg_path: Mapped[str | None] = mapped_column(String(2000))
+    # Derivatives are cacheable only for an exact source fingerprint and
+    # algorithm revision.  Keeping this on the authoritative asset row makes
+    # crash/retry checks O(1) and prevents comparing pHashes from incompatible
+    # algorithms.
+    derivative_version: Mapped[str | None] = mapped_column(String(80))
+    derivative_source_size: Mapped[int | None] = mapped_column(BigInteger)
+    derivative_source_mtime_ns: Mapped[int | None] = mapped_column(BigInteger)
+    phash_version: Mapped[str | None] = mapped_column(String(80))
 
     asset_sources = relationship("AssetSource", back_populates="asset")

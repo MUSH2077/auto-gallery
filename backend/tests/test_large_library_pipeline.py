@@ -48,8 +48,10 @@ def test_metadata_writer_is_versioned_and_leaves_no_temp_file(tmp_path):
 def test_download_worker_passes_every_queue_to_each_process():
     import worker_entrypoint
 
-    source = inspect.getsource(worker_entrypoint.main)
-    assert "cmd.extend(queues)" in source
+    queues = ["downloads", "downloads:pixiv", "downloads:x"]
+    command = worker_entrypoint._worker_command(queues, with_scheduler=False)
+    assert command[-len(queues):] == queues
+    source = inspect.getsource(worker_entrypoint._worker_command)
     assert "queues[i % len(queues)]" not in source
 
 

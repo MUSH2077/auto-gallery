@@ -93,7 +93,10 @@ def test_clear_entity_data_invalidates_related_cache_domains(monkeypatch):
 
     monkeypatch.setattr(admin_data, "_clear_files", lambda _paths: None)
     monkeypatch.setattr(admin_data, "_clear_search_index", fake_clear_search)
-    monkeypatch.setattr(admin_data, "clear_failed_rq_jobs", lambda: 0)
+    async def fake_clear_failed_rq_jobs(_db):
+        return 0
+
+    monkeypatch.setattr(admin_data, "clear_failed_rq_jobs", fake_clear_failed_rq_jobs)
     monkeypatch.setattr(
         admin_data,
         "invalidate_api_caches",
@@ -116,6 +119,7 @@ def test_clear_entity_data_invalidates_related_cache_domains(monkeypatch):
 
 def test_danbooru_import_invalidates_creator_subscription_caches(monkeypatch):
     from app.services import danbooru_import
+    from app.services.creator import CreatorService
 
     class Result:
         def scalar_one_or_none(self):
@@ -150,6 +154,9 @@ def test_danbooru_import_invalidates_creator_subscription_caches(monkeypatch):
     async def fake_subscription_defaults(_db):
         return {"sync_interval_hours": 6, "sync_enabled": True, "is_active": True}
 
+    async def fake_creator_projection(_service, _creator_id):
+        return None
+
     monkeypatch.setattr(
         danbooru_import.danbooru_svc,
         "search_and_extract",
@@ -166,6 +173,7 @@ def test_danbooru_import_invalidates_creator_subscription_caches(monkeypatch):
     monkeypatch.setattr(danbooru_import.danbooru_svc, "_classify_url", lambda _url: "pixiv")
     monkeypatch.setattr(danbooru_import, "find_existing_creator", fake_find_existing_creator)
     monkeypatch.setattr(danbooru_import, "get_subscription_defaults", fake_subscription_defaults)
+    monkeypatch.setattr(CreatorService, "_request_creator_projection", fake_creator_projection)
     monkeypatch.setattr(
         danbooru_import,
         "invalidate_creator_subscription_caches",

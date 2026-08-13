@@ -1,20 +1,87 @@
 import logging
 from uuid import UUID
 
-from sqlalchemy import select, delete as sql_delete, update as sql_update, and_
+from sqlalchemy import func, select, delete as sql_delete, update as sql_update, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.subscription import SubscriptionRepository
-from app.models import SubscriptionSource, DownloadJob, ImportJob, CreatorLink, Subscription, SourceCreator
+from app.models import (
+    SubscriptionSource,
+    DownloadJob,
+    ImportJob,
+    CreatorLink,
+    Subscription,
+    SourceCreator,
+    WorkSource,
+)
 from app.providers import registry
 from app.services.settings import get_subscription_defaults
+from app.services.search_projection_outbox import request_search_projection
 
 logger = logging.getLogger(__name__)
+
+SCHEDULE_FIELDS = {
+    "is_active",
+    "sync_enabled",
+    "sync_interval_hours",
+    "schedule_mode",
+    "scheduled_times",
+}
+
 
 class SubscriptionService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.repo = SubscriptionRepository(db)
+
+    async def _work_ids_for_repository_states(
+        self,
+        states: list[tuple[str, str | None, str | None]],
+    ) -> set[UUID]:
+        """Resolve only works whose embedded repository IDs can change."""
+
+        predicates = []
+        for source, source_creator_id, source_url in states:
+            if source_creator_id:
+                predicates.append(and_(
+                    WorkSource.source == source,
+                    WorkSource.source_creator_id == source_creator_id,
+                ))
+            if source_url:
+                # Search projection URL matching is source-agnostic after URL
+                # normalization, so the invalidation predicate must be too.
+                normalized_url = source_url.strip().rstrip("/").lower()
+                predicates.append(
+                    func.lower(func.rtrim(func.btrim(WorkSource.source_url), "/"))
+                    == normalized_url
+                )
+        if not predicates:
+            return set()
+        return set((await self.db.execute(
+            select(WorkSource.work_id).where(or_(*predicates)).distinct()
+        )).scalars().all())
+
+    async def _projection_context(
+        self,
+        subscription_id: UUID,
+    ) -> tuple[UUID | None, set[UUID], set[UUID], list[tuple[str, str | None, str | None]]]:
+        subscription = await self.db.get(Subscription, subscription_id)
+        creator_id = subscription.creator_id if subscription else None
+        rows = (await self.db.execute(
+            select(
+                SubscriptionSource.id,
+                SubscriptionSource.source,
+                SubscriptionSource.source_creator_id,
+                SubscriptionSource.source_url,
+            ).where(SubscriptionSource.subscription_id == subscription_id)
+        )).all()
+        repository_ids = {row.id for row in rows}
+        states = [
+            (row.source, row.source_creator_id, row.source_url)
+            for row in rows
+        ]
+        work_ids = await self._work_ids_for_repository_states(states)
+        return creator_id, repository_ids, work_ids, states
 
     async def get_subscription(self, sub_id: UUID):
         sub = await self.repo.get(sub_id)
@@ -27,6 +94,11 @@ class SubscriptionService:
         defaults = await get_subscription_defaults(self.db)
         merged = {**defaults, **{k: v for k, v in data.items() if v is not None}}
         sub = await self.repo.create(merged)
+        await request_search_projection(
+            self.db,
+            creator_ids=[sub.creator_id],
+            subscription_ids=[sub.id],
+        )
         await self.db.commit()
         return sub
 
@@ -34,8 +106,17 @@ class SubscriptionService:
         sub = await self.get_subscription(sub_id)
         old_creator_id = sub.creator_id
         new_creator_id = data.get("creator_id")
+        _context_creator, repository_ids, affected_work_ids, _states = (
+            await self._projection_context(sub_id)
+        )
 
         sub = await self.repo.update(sub, data)
+        if SCHEDULE_FIELDS.intersection(data):
+            await self.db.execute(
+                sql_update(SubscriptionSource)
+                .where(SubscriptionSource.subscription_id == sub_id)
+                .values(next_sync_at=None)
+            )
 
         # When creator_id changes, propagate to SourceCreators that were
         # previously linked to the old creator_id AND match this
@@ -55,6 +136,22 @@ class SubscriptionService:
             )
             sub_sources = [row[0] for row in ss_result.all()]
             if sub_sources:
+                moved_work_rows = (await self.db.execute(
+                    select(WorkSource.work_id)
+                    .join(
+                        SourceCreator,
+                        and_(
+                            SourceCreator.source == WorkSource.source,
+                            SourceCreator.source_creator_id == WorkSource.source_creator_id,
+                        ),
+                    )
+                    .where(
+                        SourceCreator.creator_id == old_creator_id,
+                        SourceCreator.source.in_(sub_sources),
+                    )
+                    .distinct()
+                )).scalars().all()
+                affected_work_ids.update(moved_work_rows)
                 await self.db.execute(
                     sql_update(SourceCreator)
                     .where(
@@ -69,11 +166,23 @@ class SubscriptionService:
                     old_creator_id, new_creator_id, sub_sources,
                 )
 
+        creator_ids = {old_creator_id, sub.creator_id}
+        creator_ids.discard(None)
+        await request_search_projection(
+            self.db,
+            affected_work_ids,
+            creator_ids=creator_ids,
+            repository_ids=repository_ids,
+            subscription_ids=[sub.id],
+        )
         await self.db.commit()
         return sub
 
     async def delete_subscription(self, sub_id: UUID):
         sub = await self.get_subscription(sub_id)
+        creator_id, repository_ids, affected_work_ids, _states = (
+            await self._projection_context(sub_id)
+        )
 
         # 1. Delete download jobs and their import jobs first
         djs = await self.db.execute(
@@ -92,6 +201,13 @@ class SubscriptionService:
 
         # 3. Delete the subscription
         await self.db.delete(sub)
+        await request_search_projection(
+            self.db,
+            affected_work_ids,
+            creator_ids=[creator_id] if creator_id else (),
+            deleted_repository_ids=repository_ids,
+            deleted_subscription_ids=[sub_id],
+        )
         await self.db.commit()
 
     async def add_source(self, data: dict):
@@ -107,12 +223,25 @@ class SubscriptionService:
                 raise ValueError(f"Invalid URL for source '{source}': {url}")
             data["source_url"] = normalized
         ss = await self.repo.add_source(data)
+        sub = await self.repo.get(ss.subscription_id)
+        creator_id = sub.creator_id if sub else None
+        affected_work_ids = await self._work_ids_for_repository_states([(
+            ss.source,
+            ss.source_creator_id,
+            ss.source_url,
+        )])
+        await request_search_projection(
+            self.db,
+            affected_work_ids,
+            creator_ids=[creator_id] if creator_id else (),
+            repository_ids=[ss.id],
+            subscription_ids=[ss.subscription_id],
+        )
         await self.db.commit()
 
         # Auto-enrich creator with Danbooru reference data
-        sub = await self.repo.get(ss.subscription_id)
-        if sub:
-            await self._enrich_creator_from_danbooru(sub.creator_id, url)
+        if creator_id:
+            await self._enrich_creator_from_danbooru(creator_id, url)
 
         return ss
 
@@ -123,6 +252,7 @@ class SubscriptionService:
         ss = await self.repo.get_source(ss_id)
         if not ss:
             raise ValueError("SubscriptionSource not found")
+        old_state = (ss.source, ss.source_creator_id, ss.source_url)
         if "source_url" in data and data.get("source_url"):
             try:
                 provider = registry.get(ss.source)
@@ -133,6 +263,20 @@ class SubscriptionService:
                 raise ValueError(f"Invalid URL for source '{ss.source}': {data['source_url']}")
             data["source_url"] = normalized
         ss = await self.repo.update_source(ss, data)
+        if {"source_url", "source_creator_id", "is_enabled"}.intersection(data):
+            ss.next_sync_at = None
+        sub = await self.repo.get(ss.subscription_id)
+        affected_work_ids = await self._work_ids_for_repository_states([
+            old_state,
+            (ss.source, ss.source_creator_id, ss.source_url),
+        ])
+        await request_search_projection(
+            self.db,
+            affected_work_ids,
+            creator_ids=[sub.creator_id] if sub else (),
+            repository_ids=[ss.id],
+            subscription_ids=[ss.subscription_id],
+        )
         await self.db.commit()
         # Refresh so the returned object is fully loaded for Pydantic serialization.
         # commit() expires all loaded state; without this, lazy-loading fails with
@@ -144,7 +288,21 @@ class SubscriptionService:
         ss = await self.repo.get_source(ss_id)
         if not ss:
             raise ValueError("SubscriptionSource not found")
+        subscription_id = ss.subscription_id
+        sub = await self.repo.get(subscription_id)
+        affected_work_ids = await self._work_ids_for_repository_states([(
+            ss.source,
+            ss.source_creator_id,
+            ss.source_url,
+        )])
         await self.repo.delete_source(ss)
+        await request_search_projection(
+            self.db,
+            affected_work_ids,
+            creator_ids=[sub.creator_id] if sub else (),
+            deleted_repository_ids=[ss_id],
+            subscription_ids=[subscription_id],
+        )
         await self.db.commit()
 
     async def _enrich_creator_from_danbooru(self, creator_id: UUID, source_url: str) -> int:
@@ -226,6 +384,13 @@ class SubscriptionService:
             "skipped": skipped,
             "errors": errors,
         }
+
+        # DownloadJob state is embedded in the subscription document.  Queue
+        # the projection before any of the outcome branches commits it.
+        await request_search_projection(
+            self.db,
+            subscription_ids=[subscription_id],
+        )
 
         if errors and not job_ids:
             await task_service.update_task(parent_task, status="failed", result=summary, error="All enqueue attempts failed")

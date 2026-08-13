@@ -1,4 +1,5 @@
 export type MediaKind = "image" | "animated_image" | "video" | "archive" | "unknown";
+export type DerivativeStatus = "ready" | "pending" | "processing" | "failed";
 
 export interface MediaAssetData {
   id: string;
@@ -17,7 +18,12 @@ export interface MediaAssetData {
   poster_url?: string;
   preview_url?: string;
   original_url?: string;
+  derivative_status?: DerivativeStatus;
   created_at?: string;
+}
+
+export function derivativeIsPending(status?: DerivativeStatus | null): boolean {
+  return status === "pending" || status === "processing";
 }
 
 export function resolveMediaKind(asset: Pick<MediaAssetData, "media_kind" | "mime_type" | "file_name">): MediaKind {

@@ -94,6 +94,8 @@ async def reset_auth_health(source_id: UUID, db: AsyncSession = Depends(get_db))
     ss.auth_status = None
     ss.auth_error_reason = None
     ss.last_auth_checked_at = None
+    from app.services.search_projection_outbox import request_search_projection
+    await request_search_projection(db, repository_ids=[ss.id])
     await db.commit()
 
     return {
@@ -116,13 +118,15 @@ async def reset_all_auth_health(db: AsyncSession = Depends(get_db)):
         .values(auth_healthy=True, auth_status=None, auth_error_reason=None, last_auth_checked_at=None)
         .returning(SubscriptionSource.id)
     )
+    reset_ids = [row[0] for row in result.all()]
+    from app.services.search_projection_outbox import request_search_projection
+    await request_search_projection(db, repository_ids=reset_ids)
     await db.commit()
-    reset_ids = [str(r[0]) for r in result.all()]
 
     return {
         "status": "ok",
         "message": f"Reset auth health for {len(reset_ids)} source(s).",
-        "reset_source_ids": reset_ids,
+        "reset_source_ids": [str(source_id) for source_id in reset_ids],
     }
 
 

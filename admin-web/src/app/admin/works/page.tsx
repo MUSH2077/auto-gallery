@@ -1,10 +1,10 @@
 "use client";
-import { useState, useEffect, useRef, Suspense } from "react";
+import { useState, useEffect, useMemo, useRef, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
-import { api, queryKeys, WorkListItem, type SearchQualifierToken } from "@/lib/api";
+import { api, queryKeys, WorkListItem, type SearchQualifierToken, type SearchResponse } from "@/lib/api";
 import type { WorkAsset } from "@/lib/api/endpoints/works";
 import { useAppearanceSettings } from "@/lib/appearance";
 import { useStaggeredEntrance, type StaggeredEntranceProps } from "@/lib/motion";
@@ -15,6 +15,7 @@ import { useI18nFormat } from "@/lib/i18n-format";
 import { Star } from "lucide-react";
 import { searchUrl } from "@/lib/search-query";
 import { resolveMediaKind } from "@/lib/media";
+import DomainDangerZone from "@/components/DomainDangerZone";
 
 type PreviewState = {
   work: WorkListItem;
@@ -142,7 +143,7 @@ function WorkCard({
         className="absolute inset-0 z-0 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       />
       <div className="pointer-events-none relative z-10 flex h-32 items-center justify-center overflow-hidden bg-subtle text-xs text-muted">
-        <WorkMediaThumbnail assetId={currentId} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" fallback={t("works.na")} />
+        <WorkMediaThumbnail assetId={currentId} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" fallback={currentId ? t("media.derivative_pending") : t("works.na")} />
         {selectable && (
           <label className="pointer-events-auto absolute left-1 top-1 z-20 flex h-7 w-7 items-center justify-center rounded bg-black/60 text-white shadow-sm">
             <span className="sr-only">{t("works.select_work")}</span>
@@ -247,7 +248,10 @@ function WorksContent() {
   // q is the only search state. Page and view remain navigation/presentation
   // state and are deliberately outside the search language.
   const search = sp.get("q") ?? "";
-  const page = Number(sp.get("p") ?? "0");
+  const requestedPage = Number(sp.get("p") ?? "0");
+  const page = Number.isSafeInteger(requestedPage) && requestedPage >= 0
+    ? requestedPage
+    : 0;
   const viewMode = (sp.get("view") as ViewMode) ?? "grid";
   const limit = 30;
 
@@ -271,14 +275,23 @@ function WorksContent() {
     return () => clearTimeout(timer);
   }, [inputVal]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function updateParams(updates: Record<string, string | null>, resetPage = true) {
+  function updateParams(
+    updates: Record<string, string | null>,
+    resetPage = true,
+    history: "replace" | "push" = "replace",
+  ) {
     const p = new URLSearchParams(sp.toString());
     stripLegacyWorkQuery(p);
     for (const [k, v] of Object.entries(updates)) {
       if (v === null || v === "") p.delete(k); else p.set(k, v);
     }
     if (resetPage) p.delete("p");
-    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+    const href = `${pathname}?${p.toString()}`;
+    if (history === "push") {
+      router.push(href, { scroll: false });
+    } else {
+      router.replace(href, { scroll: false });
+    }
   }
 
   function setSearchQuery(next: string) {
@@ -308,13 +321,53 @@ function WorksContent() {
   const worksQueryKey = [...queryKeys.works.all, "compound-search", page, search] as const;
   const worksQuery = useQuery({
     queryKey: worksQueryKey,
-    queryFn: () => api.search(search, page * limit, limit, "works"),
+    queryFn: ({ signal }) => {
+      const previous = page > 0
+        ? qc.getQueryData<SearchResponse>([
+            ...queryKeys.works.all,
+            "compound-search",
+            page - 1,
+            search,
+          ])
+        : undefined;
+      return api.search(
+        search,
+        page * limit,
+        limit,
+        "works",
+        signal,
+        previous?.next_cursor,
+      );
+    },
     placeholderData: (previous) => previous,
+    staleTime: 60_000,
   });
   const works = {
     ...worksQuery,
     data: worksQuery.data?.groups.works,
   };
+
+  useEffect(() => {
+    // placeholderData belongs to the previous page/query.  Its cursor must
+    // never seed the next-page cache, otherwise a fast page/filter change can
+    // cache page N under the key for page N+1 (or send a stale-query cursor).
+    if (!worksQuery.data || worksQuery.isPlaceholderData) return;
+    const total = worksQuery.data?.groups.works?.total ?? 0;
+    const nextPage = page + 1;
+    if (nextPage * limit >= total) return;
+    void qc.prefetchQuery({
+      queryKey: [...queryKeys.works.all, "compound-search", nextPage, search],
+      queryFn: ({ signal }) => api.search(
+        search,
+        nextPage * limit,
+        limit,
+        "works",
+        signal,
+        worksQuery.data?.next_cursor,
+      ),
+      staleTime: 60_000,
+    });
+  }, [limit, page, qc, search, worksQuery.data, worksQuery.isPlaceholderData]);
 
   const qualifierTokens = (worksQuery.data?.parsed.tokens || []).filter(
     (token): token is SearchQualifierToken => token.kind === "qualifier",
@@ -351,13 +404,22 @@ function WorksContent() {
     queryFn: () => api.getWorkAssets(preview!.work.id),
     enabled: !!preview && previewEnabled,
     staleTime: 60000,
+    refetchInterval: (query) => query.state.data?.some(
+      (asset) => asset.derivative_status === "pending" || asset.derivative_status === "processing",
+    ) ? 15_000 : false,
   });
+  const previewAssetIds = useMemo(
+    () => previewAssets.data?.length
+      ? previewAssets.data.slice(0, 10).map((asset) => asset.id)
+      : preview?.assetIds || [],
+    [preview?.assetIds, previewAssets.data],
+  );
 
   useEffect(() => {
-    if (!preview || !previewAssets.data?.length || !preview.assetIds.length) return;
+    if (!preview || !previewAssets.data?.length || !previewAssetIds.length) return;
     const byId = new Map<string, WorkAsset>(previewAssets.data.map((asset) => [asset.id, asset]));
     [preview.pageIndex, preview.pageIndex - 1, preview.pageIndex + 1].forEach((idx) => {
-      const id = preview.assetIds[(idx + preview.assetIds.length) % preview.assetIds.length];
+      const id = previewAssetIds[(idx + previewAssetIds.length) % previewAssetIds.length];
       const asset = id ? byId.get(id) : undefined;
       const src = asset
         ? resolveMediaKind(asset) === "video"
@@ -368,7 +430,7 @@ function WorksContent() {
       const img = new Image();
       img.src = src;
     });
-  }, [preview, previewAssets.data]);
+  }, [preview, previewAssetIds, previewAssets.data]);
 
   useEffect(() => {
     setSelectedWorkIds(new Set());
@@ -396,7 +458,17 @@ function WorksContent() {
   });
 
   const batchTrash = useMutation({
-    mutationFn: (ids: string[]) => api.batchCurateWorks(ids, "trash", "batch move to trash", `Move ${ids.length} works to trash`),
+    mutationFn: async (ids: string[]) => {
+      for (let start = 0; start < ids.length; start += 25) {
+        const chunk = ids.slice(start, start + 25);
+        await api.batchCurateWorks(
+          chunk,
+          "trash",
+          "batch move to trash",
+          `Move ${chunk.length} works to trash`,
+        );
+      }
+    },
     onSuccess: () => {
       setSelectedWorkIds(new Set());
       qc.invalidateQueries({ queryKey: queryKeys.works.all });
@@ -437,6 +509,12 @@ function WorksContent() {
           </button>
         ) : undefined}
       />
+
+      {worksQuery.isFetching && !worksQuery.isLoading && (
+        <div className="mb-2 h-0.5 w-full overflow-hidden rounded bg-subtle" role="status" aria-label={t("common.loading")}>
+          <div className="h-full w-1/3 animate-pulse rounded bg-accent" />
+        </div>
+      )}
 
       {/* Search & Filters */}
       <div data-page-primary-content className="mb-3 flex flex-wrap items-center gap-2 md:hidden">
@@ -705,7 +783,7 @@ function WorksContent() {
                 />
               )}
               <div className="w-12 h-12 bg-subtle rounded overflow-hidden shrink-0">
-                <WorkMediaThumbnail assetId={w.thumbnail_asset_id} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" fallback={t("works.na")} />
+                <WorkMediaThumbnail assetId={w.thumbnail_asset_id} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" fallback={w.thumbnail_asset_id ? t("media.derivative_pending") : t("works.na")} />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
@@ -748,7 +826,7 @@ function WorksContent() {
           title={preview.work.title}
           creatorName={preview.work.creator_name}
           source={preview.work.source}
-          assetIds={preview.assetIds}
+          assetIds={previewAssetIds}
           assets={previewAssets.data}
           isLoading={previewAssets.isLoading || (previewAssets.isFetching && !previewAssets.data)}
           isError={previewAssets.isError}
@@ -758,10 +836,10 @@ function WorksContent() {
           onMouseEnter={cancelClosePreview}
           onMouseLeave={scheduleClosePreview}
           onWheelPage={(delta) => {
-            if (preview.assetIds.length <= 1) return;
+            if (previewAssetIds.length <= 1) return;
             setPreview((current) => {
               if (!current) return current;
-              const next = (current.pageIndex + delta + current.assetIds.length) % current.assetIds.length;
+              const next = (current.pageIndex + delta + previewAssetIds.length) % previewAssetIds.length;
               return { ...current, pageIndex: next };
             });
           }}
@@ -772,12 +850,17 @@ function WorksContent() {
       {/* Pagination */}
       {(works.data?.total ?? 0) > 0 && (
         <div className="flex gap-2 justify-center">
-          <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-border dark:text-muted">{t("works.prev")}</button>
+          <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false, "push")} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-border dark:text-muted">{t("works.prev")}</button>
           <span className="px-3 py-1 text-sm text-muted">{t("works.page").replace("{page}", String(page + 1))}</span>
-          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!works.data || (page + 1) * limit >= works.data.total} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-border dark:text-muted">{t("works.next")}</button>
+          <button onClick={() => updateParams({ p: String(page + 1) }, false, "push")} disabled={!works.data || (page + 1) * limit >= works.data.total} className="px-3 py-1 text-sm border rounded disabled:opacity-30 dark:border-border dark:text-muted">{t("works.next")}</button>
         </div>
       )}
       {slideshow.node}
+      <DomainDangerZone
+        entity="works"
+        title={t("datamgmt.danger_clear_works")}
+        description={t("datamgmt.danger_clear_works_desc")}
+      />
     </PageShell>
   );
 }

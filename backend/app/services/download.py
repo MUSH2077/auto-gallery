@@ -80,6 +80,7 @@ class DownloadService:
                         subscription_id: str | None = None,
                         subscription_source_id: str | None = None,
                         q: str | None = None,
+                        visibility: str = "all",
                         sort_by: str = "created_at", sort_order: str = "desc",
                         offset: int = 0, limit: int = 50):
         canonical = q or ""
@@ -109,6 +110,7 @@ class DownloadService:
             canonical,
             offset=offset,
             limit=limit,
+            visibility=visibility,
         )
         # Kept only for legacy API callers. New UI deep-links use ``repo:``.
         if subscription_id:

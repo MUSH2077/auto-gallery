@@ -16,6 +16,8 @@ const me = {
   must_change_password: false,
 };
 
+const acceptanceHost = new URL(process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000").hostname;
+
 const workbench = {
   updated_at: "2026-07-27T12:00:00Z",
   queue: {
@@ -64,23 +66,21 @@ const longDownloadJob = {
   creator_name: "xianyuliangryo-with-a-very-long-creator-name",
   source: "x",
   source_url: "https://x.com/xianyuliangryo/status/123456789012345678901234567890",
-  status: "complete",
+  status: "downloading",
   operation_type: "download",
   retry_count: 0,
   created_at: "2026-07-27T11:40:00Z",
   updated_at: "2026-07-27T11:45:00Z",
   progress_data: {
-    stage: "post_download",
-    message: "Found 0 metadata files and 0 media files",
+    stage: "downloading",
+    current: 4,
+    total: 10,
+    percent: 40,
+    message: "Downloading media",
   },
-  pipeline_stage: "post_download",
-  error_log: "No new content since last sync (already archived or empty)",
-  outcome: {
-    code: "no_changes",
-    metadata_count: 0,
-    media_count: 0,
-    completed_at: "2026-07-27T11:45:00Z",
-  },
+  pipeline_stage: "downloading",
+  error_log: null,
+  outcome: null,
 };
 
 const providerFixtures = [
@@ -132,11 +132,12 @@ const REPRESENTATIVE_ROUTES = [
   "/admin/settings/dedup",
   "/admin/settings/download-defaults",
   "/admin/settings/gallerydl",
+  "/admin/settings/gitllery",
   "/admin/settings/logs",
   "/admin/profile",
   "/admin/settings/proxy",
   "/admin/settings/scheduler-defaults",
-  "/admin/settings/showcase",
+  "/admin/settings/slideshow",
   "/admin/settings/subscription-defaults",
 ] as const;
 
@@ -167,6 +168,19 @@ const PRIMARY_ADMIN_ROUTES = [
   "/admin/settings",
 ] as const;
 
+const OPERATION_REDESIGN_AUDIT_ROUTES = [
+  ["home", "/admin"],
+  ["works", "/admin/works"],
+  ["creators", "/admin/creators"],
+  ["subscriptions", "/admin/subscriptions"],
+  ["repository", "/admin/subscriptions/repositories/fixture-repository"],
+  ["operations", "/admin/jobs"],
+  ["legacy-scheduler", "/admin/scheduler"],
+  ["data", "/admin/data-mgmt"],
+  ["system", "/admin/system"],
+  ["settings", "/admin/settings"],
+] as const;
+
 const NAVIGATION_SELECTION_MATRIX = [
   ["/admin/works", "/admin/works"],
   ["/admin/tags", "/admin/tags"],
@@ -193,7 +207,7 @@ async function installFixtureRoutes(context: BrowserContext) {
   await context.addCookies([{
     name: "ag_token",
     value: "ui-test-token",
-    domain: "127.0.0.1",
+    domain: acceptanceHost,
     path: "/",
   }]);
   await context.addInitScript(() => {
@@ -404,6 +418,23 @@ async function installFixtureRoutes(context: BrowserContext) {
       });
     } else if (path === "/api/v1/users/1") {
       await route.fulfill({ json: { ...me, created_at: "2026-07-27T10:00:00Z" } });
+    } else if (path === "/api/v1/operations/overview") {
+      const view = (url.searchParams.get("view") || "attention") as "attention" | "active" | "resolved";
+      await route.fulfill({
+        json: {
+          view,
+          total: 0,
+          summary: {
+            attention: 0,
+            critical: 0,
+            warning: 0,
+            resolved: 0,
+            active: 0,
+            resource_limited: 0,
+          },
+          items: [],
+        },
+      });
     } else if (path === "/api/v1/system/workbench") {
       await route.fulfill({ json: workbench });
     } else if (path === "/api/v1/system/scheduler-decisions") {
@@ -490,6 +521,22 @@ async function installFixtureRoutes(context: BrowserContext) {
       await route.fulfill({ json: { count: 0 } });
     } else if (path === "/api/v1/users") {
       await route.fulfill({ json: [] });
+    } else if (path === "/api/v1/admin/system-info") {
+      await route.fulfill({
+        json: {
+          version: "fixture",
+          downloads_size_mb: 0,
+          library_size_mb: 0,
+          downloads_free_gb: 500,
+          archives_kb: {},
+        },
+      });
+    } else if (path === "/api/v1/admin/storage-breakdown") {
+      await route.fulfill({ json: { sources: {}, creator_tree: [], unlinked_repositories: [] } });
+    } else if (path === "/api/v1/admin/integrity-check") {
+      await route.fulfill({
+        json: { issues: [], db_stats: {}, checked_at: "2026-07-27T12:00:00Z" },
+      });
     } else if (path === "/api/v1/system/health") {
       await route.fulfill({
         json: {
@@ -519,6 +566,76 @@ async function installFixtureRoutes(context: BrowserContext) {
           }],
         },
       });
+    } else if (path === "/api/v1/admin/gitllery/settings") {
+      await route.fulfill({
+        json: {
+          product_name: "Gitllery",
+          product_version: "v1",
+          format_id: "gitllery-segment",
+          format_revision: 1,
+          projection_mode: "shadow",
+          build_generation: "segment-r1-fixture",
+          managed_by: "deployment_environment",
+          read_only: true,
+          capabilities: {
+            automatic_projection: { enabled: false, reason: "gitllery_shadow_only" },
+            reconcile: { enabled: false, reason: "gitllery_shadow_only" },
+            backfill: { enabled: false, reason: "gitllery_shadow_only" },
+            rebuild: { enabled: false, reason: "gitllery_shadow_only" },
+            push: { enabled: false, reason: "gitllery_shadow_only" },
+            pull: { enabled: false, reason: "gitllery_shadow_only" },
+            verify: { enabled: true, reason: null },
+            commit: { enabled: true, reason: null },
+          },
+          cli: {
+            max_works_per_commit: 25,
+            max_operations_per_commit: 100,
+            token_storage: "client_only",
+            server_stores_cli_token: false,
+            examples: {
+              config: "gitllery config set url http://auto-gallery.test",
+              login: "gitllery auth login --username admin",
+              status: "gitllery --remote status",
+              log: "gitllery --remote log --limit 50",
+              verify: "gitllery verify --remote",
+              commit: "gitllery --remote commit --message \"curate work\" work favorite 00000000-0000-0000-0000-000000000001 --set on",
+            },
+          },
+          governance_scope: {
+            observation: "host_and_auto_gallery",
+            enforcement: "auto_gallery_only",
+            modifies_other_projects: false,
+            modifies_host_configuration: false,
+          },
+          status: {
+            repositories: [{
+              repository_id: "pixiv:fixture",
+              source: "pixiv",
+              creator_dir: "Fixture Creator",
+              exists: true,
+              behind: 0,
+              object_integrity_ok: true,
+              drift: [],
+              clean: true,
+              product_version: "v1",
+              format_id: "gitllery-segment",
+              format_revision: 1,
+              projection_mode: "shadow",
+              head_segment: "segment-fixture-head",
+              last_complete_commit_id: "00000000-0000-0000-0000-000000000001",
+            }],
+            missing_repos: 0,
+            behind_total: 0,
+            needs_reconcile: false,
+            product_version: "v1",
+            format_id: "gitllery-segment",
+            format_revision: 1,
+            projection_mode: "shadow",
+          },
+        },
+      });
+    } else if (path === "/api/v1/curation/gitllery/verify") {
+      await route.fulfill({ json: { status: "enqueued", job_id: "verify-fixture" } });
     } else if (path === "/api/v1/admin/settings") {
       await route.fulfill({
         json: {
@@ -572,6 +689,10 @@ async function installFixtureRoutes(context: BrowserContext) {
           missing_repos: 0,
           behind_total: 0,
           needs_reconcile: false,
+          product_version: "v1",
+          format_id: "gitllery-segment",
+          format_revision: 1,
+          projection_mode: "shadow",
         },
       });
     } else if (path === "/api/v1/admin/backup/list") {
@@ -623,6 +744,92 @@ async function expectUniqueNavigationSelection(
 
 test.beforeEach(async ({ context }) => {
   await installFixtureRoutes(context);
+});
+
+test("operation redesign screenshot and accessibility audit", async ({ page }) => {
+  test.setTimeout(600_000);
+  const outputDir = process.env.PLAYWRIGHT_AUDIT_DIR || "/tmp/auto-gallery-ui-audit";
+  for (const viewport of [
+    { name: "desktop", width: 1440, height: 960 },
+    { name: "tablet", width: 768, height: 1024 },
+    { name: "mobile", width: 390, height: 844 },
+  ] as const) {
+    await page.setViewportSize(viewport);
+    for (const [name, route] of OPERATION_REDESIGN_AUDIT_ROUTES) {
+      await page.goto(route);
+      await expect(page.locator("#main-content")).toBeVisible();
+      await expect(page.getByRole("main")).toHaveCount(1);
+      await expectNoPageOverflow(page);
+      const results = await new AxeBuilder({ page })
+        .include("#main-content")
+        .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+        .analyze();
+      expect(
+        results.violations.map((violation) => ({
+          id: violation.id,
+          targets: violation.nodes.map((node) => node.target.join(" ")),
+        })),
+        `${route} should have no axe violations at ${viewport.width}px`,
+      ).toEqual([]);
+      await page.screenshot({
+        path: `${outputDir}/${viewport.name}-${name}.png`,
+        fullPage: true,
+      });
+    }
+  }
+});
+
+test("legacy showcase preferences migrate once into standalone slideshow settings", async ({ page }) => {
+  let preferencePayload: unknown = null;
+  await page.addInitScript(() => {
+    window.localStorage.removeItem("auto-gallery-slideshow-v1");
+    window.localStorage.setItem("auto-gallery-showcase-v1", JSON.stringify({
+      slideDwellMs: 7500,
+      slideTransition: "crossfade",
+      slideLoop: false,
+      slideShowMeta: false,
+      layoutMode: "webgl",
+      autoplay: true,
+    }));
+  });
+  await page.route("**/api/v1/auth/me/preferences", async (route) => {
+    preferencePayload = JSON.parse(route.request().postData() || "{}");
+    const parsed = preferencePayload;
+    const preferences = parsed && typeof parsed === "object" && "preferences" in parsed
+      ? parsed.preferences
+      : {};
+    await route.fulfill({ json: { preferences } });
+  });
+
+  await page.goto("/admin/settings/slideshow");
+  await expect(page.getByRole("heading", { level: 1, name: "Slideshow" })).toBeVisible();
+  await expect(page.getByLabel("Slide dwell time")).toHaveValue("7500");
+  await expect(page.getByRole("button", { name: "Crossfade" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Loop playback" })).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByRole("button", { name: "Show work info" })).toHaveAttribute("aria-pressed", "false");
+
+  const storage = await page.evaluate(() => ({
+    legacy: window.localStorage.getItem("auto-gallery-showcase-v1"),
+    slideshow: JSON.parse(window.localStorage.getItem("auto-gallery-slideshow-v1") || "null"),
+  }));
+  expect(storage.legacy).toBeNull();
+  expect(storage.slideshow).toMatchObject({
+    slideDwellMs: 7500,
+    slideTransition: "crossfade",
+    slideLoop: false,
+    slideShowMeta: false,
+  });
+  expect(storage.slideshow).not.toHaveProperty("layoutMode");
+  expect(storage.slideshow).not.toHaveProperty("autoplay");
+
+  await page.getByRole("button", { name: "Loop playback" }).click();
+  await expect.poll(() => preferencePayload, { timeout: 3000 }).not.toBeNull();
+  const saved = preferencePayload;
+  if (!saved || typeof saved !== "object" || !("preferences" in saved)) {
+    throw new Error("Expected the slideshow preferences request payload");
+  }
+  expect(saved.preferences).toHaveProperty("slideshow");
+  expect(saved.preferences).not.toHaveProperty("showcase");
 });
 
 test("stored compact sidebar keeps primary page shells stable and aligned from first paint", async ({ page }) => {
@@ -1249,6 +1456,164 @@ test("system and source tabs fetch only their active data and retain provider to
   await page.screenshot({ path: "/tmp/auto-gallery-system-sources.png", fullPage: true });
 });
 
+test("resource controller renders constrained compatibility state and authoritative concurrency", async ({ page }) => {
+  await page.route("**/api/v1/system/health", (route) => route.fulfill({
+    json: {
+      status: "degraded",
+      services: { postgres: "up", redis: "up", meilisearch: "up" },
+      version: "acceptance",
+      business: { outboxes: { search: { waiting: 12, processing: 1, failed: 0 } } },
+      resource_pressure: {
+        status: "warning",
+        controller_mode: "constrained",
+        hard_reasons: [],
+        soft_reasons: ["io_psi_high"],
+        sampled_at: "2026-08-11T00:00:00Z",
+        memory: { available_bytes: 2147483648, available_ratio: 0.25 },
+        swap: { free_bytes: 3221225472, free_ratio: 0.5 },
+        psi: { memory_full_avg10: 0.5, io_full_avg10: 18 },
+        redis: { usage_ratio: 0.5, writable: true },
+        download_concurrency: {
+          configured: 3,
+          cap: 1,
+          effective: 1,
+          desired_effective: 1,
+          restart_required: true,
+        },
+        budget: {
+          governance_mode: "shadow",
+          effective_throughput_scale: 1,
+          computed_throughput_scale: 0.5,
+          profiles: { import_db: { allowed: true } },
+          reservation: { active_count: 0, reserved_bytes: 0 },
+        },
+      },
+    },
+  }));
+  await page.goto("/admin/system");
+  await expect(page.getByRole("region", { name: "Resource protection" })).toBeVisible();
+  await expect(page.getByText("Constrained", { exact: true })).toBeVisible();
+  await expect(page.getByText("Shadow mode", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Resource protection" }).getByText("50%", { exact: true }).last()).toBeVisible();
+  await expect(page.getByText("1 / 1", { exact: true })).toBeVisible();
+  await page.goto("/admin/settings/download-defaults");
+  await expect(page.getByText("Saved setting 3, current worker effective concurrency 1, NAS cap 1.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Desired effective concurrency is 1; restart the download worker to apply it.", { exact: true })).toBeVisible();
+});
+
+test("critical compatibility state and dependency degradation remain explicit", async ({ page }) => {
+  await page.route("**/api/v1/system/health", (route) => route.fulfill({
+    json: {
+      status: "degraded",
+      services: { postgres: "up", redis: "down", meilisearch: "degraded" },
+      version: "acceptance",
+      business: {},
+      resource_pressure: {
+        status: "paused",
+        controller_mode: "critical",
+        hard_reasons: ["memory_available_critical", "redis_unavailable"],
+        soft_reasons: [],
+        sampled_at: "2026-08-11T00:00:00Z",
+        memory: { available_bytes: 1073741824, available_ratio: 0.125 },
+        swap: { free_bytes: 1073741824, free_ratio: 0.1 },
+        psi: { memory_full_avg10: 8, io_full_avg10: 30 },
+        redis: { usage_ratio: 0.95, writable: false },
+        download_concurrency: { configured: 1, cap: 1, effective: 0, restart_required: false },
+        controller: { governance_mode: "shadow", enforced_profiles: [] },
+        budget: { governance_mode: "shadow", effective_throughput_scale: 0, computed_throughput_scale: 0, profiles: {} },
+      },
+    },
+  }));
+  await page.goto("/admin/system");
+  await expect(page.getByRole("region", { name: "Resource protection" })).toBeVisible();
+  await expect(page.getByText("Hard protection", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Available memory is below the pause threshold/)).toBeVisible();
+});
+
+test("task rows expose running waiting and yielded resource states", async ({ page }) => {
+  await page.route("**/api/v1/tasks**", (route) => route.fulfill({
+    json: {
+      total: 3,
+      offset: 0,
+      limit: 50,
+      items: [
+        { id: "task-running", kind: "admin", operation_type: "media", status: "running", resource_state: "running", title: "Running fixture", created_at: "2026-08-11T00:00:00Z" },
+        { id: "task-waiting", kind: "admin", operation_type: "search", status: "running", resource_state: "waiting", resource_reason: "profile_memory_reserve", title: "Waiting fixture", created_at: "2026-08-11T00:00:00Z" },
+        { id: "task-yielded", kind: "admin", operation_type: "import", status: "running", resource_state: "yielded", resource_reason: "slice_complete", title: "Yielded fixture", created_at: "2026-08-11T00:00:00Z" },
+      ],
+    },
+  }));
+  await page.goto("/admin/jobs?tab=admin");
+  await expect(page.getByText("Resource granted", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Waiting for resources/)).toBeVisible();
+  await expect(page.getByText(/Resources yielded/)).toBeVisible();
+  await expect(page.getByText(/Not enough memory headroom/)).toBeVisible();
+});
+
+test("a 30-work page submits curation in bounded 25-work chunks", async ({ page }) => {
+  const chunks: string[][] = [];
+  const works = Array.from({ length: 30 }, (_, index) => ({
+    id: `fixture-work-${String(index).padStart(2, "0")}`,
+    title: `Fixture work ${index}`,
+    description: null,
+    posted_at: "2026-08-11T00:00:00Z",
+    is_nsfw: false,
+    is_ai_generated: false,
+    asset_count: 0,
+    is_favorite: false,
+    created_at: "2026-08-11T00:00:00Z",
+    updated_at: "2026-08-11T00:00:00Z",
+  }));
+  await page.route("**/api/v1/search**", (route) => route.fulfill({ json: {
+    query: "",
+    canonical_query: "",
+    parsed: { raw: "", canonical: "", scope: "works", targets: ["works"], tokens: [] },
+    groups: { works: { items: works, total: 30 } },
+    total: 30,
+    results: [],
+    creators: [],
+    tags: [],
+    repositories: [],
+    subscriptions: [],
+  } }));
+  await page.route("**/api/v1/works/batch-curate", async (route) => {
+    chunks.push((route.request().postDataJSON() as { ids: string[] }).ids);
+    await route.fulfill({ json: { id: `commit-${chunks.length}`, changes: [] } });
+  });
+  page.on("dialog", (dialog) => dialog.accept());
+  await page.goto("/admin/works");
+  await page.getByRole("button", { name: "Select page" }).click();
+  await page.getByRole("button", { name: "Move to trash" }).click();
+  await expect.poll(() => chunks.length).toBe(2);
+  expect(chunks.map((chunk) => chunk.length)).toEqual([25, 5]);
+});
+
+test("pending derivatives render the original and retain a recovery label", async ({ page }) => {
+  let originalRequests = 0;
+  await page.route("**/api/v1/works/fixture-work/assets", (route) => route.fulfill({
+    json: [{
+      id: "pending-asset",
+      file_name: "pending.jpg",
+      file_path: "acceptance/pending.jpg",
+      mime_type: "image/jpeg",
+      media_kind: "image",
+      derivative_status: "pending",
+      original_url: "/media/original/pending-asset",
+      created_at: "2026-08-11T00:00:00Z",
+    }],
+  }));
+  await page.route("**/media/original/pending-asset", async (route) => {
+    originalRequests += 1;
+    await route.fulfill({
+      contentType: "image/png",
+      body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
+    });
+  });
+  await page.goto("/admin/works/fixture-work");
+  await expect(page.getByText("Preview is being generated in the background").first()).toBeVisible();
+  await expect.poll(() => originalRequests).toBeGreaterThan(0);
+});
+
 test("system and source tabs preserve module-level permissions", async ({ page }) => {
   let healthRequests = 0;
   let sourceRequests = 0;
@@ -1364,38 +1729,40 @@ test("migrated admin URLs return permanent redirects and preserve deep-link stat
   }
 });
 
-test("tasks and scheduler paginate the unified search contract without exceeding 100", async ({ page }) => {
-  const requested = { tasks: [] as number[], scheduler: [] as number[] };
-  await page.route("**/api/v1/search**", async (route) => {
+test("tasks request actionable pages while scheduler paginates its normal-plan view", async ({ page }) => {
+  const requestedTaskOffsets: number[] = [];
+  await page.route("**/api/v1/tasks**", async (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname !== "/api/v1/search") {
+    if (url.pathname !== "/api/v1/tasks") {
       await route.fallback();
       return;
     }
-    const scope = url.searchParams.get("scope");
-    if (scope !== "tasks" && scope !== "scheduler") {
-      await route.fallback();
+    expect(url.searchParams.get("visibility")).toBe("actionable");
+    const limit = Number(url.searchParams.get("limit") || 0);
+    if (limit !== 100) {
+      await route.fulfill({ json: { items: [], total: 0, offset: 0, limit } });
       return;
     }
-    expect(url.searchParams.get("limit")).toBe("100");
     const offset = Number(url.searchParams.get("offset") || 0);
-    requested[scope].push(offset);
+    requestedTaskOffsets.push(offset);
     const task = {
       id: `task-${offset}`,
       kind: "admin",
       operation_type: "contract-check",
-      status: "complete",
+      status: "running",
       title: `Task page ${offset / 100 + 1}`,
       created_at: "2026-07-27T10:00:00Z",
     };
-    const decision = {
-      subscription_id: `subscription-${offset}`,
+    await route.fulfill({ json: { items: [task], total: 205, offset, limit: 100 } });
+  });
+  const decisions = Array.from({ length: 55 }, (_, index) => ({
+      subscription_id: `subscription-${index}`,
       subscription_name: "Fixture subscription",
       subscription_active: true,
       subscription_sync_enabled: true,
-      creator_id: `creator-${offset}`,
-      creator_name: `Creator page ${offset / 100 + 1}`,
-      source_id: `repository-${offset}`,
+      creator_id: `creator-${index}`,
+      creator_name: `Scheduled creator ${index + 1}`,
+      source_id: `repository-${index}`,
       source: "pixiv",
       source_url: "https://www.pixiv.net/users/10000001",
       source_enabled: true,
@@ -1408,22 +1775,20 @@ test("tasks and scheduler paginate the unified search contract without exceeding
       auth_healthy: true,
       url_valid: true,
       can_download: true,
-    };
-    const items = scope === "tasks" ? [task] : [decision];
-    await route.fulfill({
-      json: {
-        query: "",
-        canonical_query: "",
-        parsed: { raw: "", canonical: "", scope, targets: [scope], tokens: [] },
-        groups: { [scope]: { total: 205, items } },
-        total: 205,
-        results: [],
-        creators: [],
-        tags: [],
-        repositories: [],
-        subscriptions: [],
-      },
-    });
+      attention: false,
+      is_overdue: false,
+    }));
+  await page.route("**/api/v1/system/scheduler-decisions**", async (route) => {
+    const url = new URL(route.request().url());
+    const view = url.searchParams.get("view") || "all";
+    await route.fulfill({ json: {
+      updated_at: "2026-07-27T12:00:00Z",
+      scheduler_enabled: true,
+      timezone: "UTC",
+      view,
+      total: view === "attention" ? 0 : decisions.length,
+      items: view === "attention" ? [] : decisions,
+    } });
   });
 
   await page.goto("/admin/jobs");
@@ -1432,16 +1797,15 @@ test("tasks and scheduler paginate the unified search contract without exceeding
   await page.getByRole("navigation", { name: "Pagination" }).getByRole("button", { name: "Next" }).click();
   await expect(page).toHaveURL(/\/admin\/jobs\?page=2$/);
   await expect(page.getByText("Task page 2")).toBeVisible();
-  expect(requested.tasks).toContain(0);
-  expect(requested.tasks).toContain(100);
+  expect(requestedTaskOffsets).toContain(0);
+  expect(requestedTaskOffsets).toContain(100);
 
   await page.goto("/admin/scheduler");
-  await expect(page.getByText("Creator page 1")).toBeVisible();
+  await page.locator("details").filter({ hasText: "Healthy schedules" }).locator("summary").click();
+  await expect(page.getByText("Scheduled creator 1", { exact: true })).toBeVisible();
   await page.getByRole("navigation", { name: "Pagination" }).getByRole("button", { name: "Next" }).click();
   await expect(page).toHaveURL(/\/admin\/scheduler\?page=2$/);
-  await expect(page.getByText("Creator page 2")).toBeVisible();
-  expect(requested.scheduler).toContain(0);
-  expect(requested.scheduler).toContain(100);
+  await expect(page.getByText("Scheduled creator 26", { exact: true })).toBeVisible();
 });
 
 test("settings no longer duplicates data management or language controls", async ({ page }) => {
@@ -1455,27 +1819,25 @@ test("settings no longer duplicates data management or language controls", async
   await page.screenshot({ path: "/tmp/auto-gallery-settings-clean.png", fullPage: false });
 });
 
-test("auth health is integrated into scheduler and storage chart footers are removed", async ({ page }) => {
+test("compact scheduler omits healthy auth details and storage chart footers are removed", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto("/admin/scheduler#auth-status");
   await expect(page.getByRole("heading", { level: 1, name: "Scheduler" })).toBeVisible();
-  const authSection = page.locator("#auth-status");
-  await expect(authSection.getByRole("heading", { name: "Auth & Cookie Status" })).toBeVisible();
-  await expect(authSection).toBeInViewport();
-  await expect(authSection.getByRole("link", { name: "Atlas Studio" })).toHaveAttribute("href", "/admin/creators/fixture-creator");
-  await expect(authSection.getByText("Healthy", { exact: true }).last()).toBeVisible();
+  await expect(page.locator("#auth-status").getByRole("heading", { name: "Needs attention" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Auth & Cookie Status" })).toHaveCount(0);
+  await expect(page.getByText("Healthy schedules", { exact: true })).toBeVisible();
   await page.screenshot({ path: "/tmp/auto-gallery-scheduler-auth-status.png", fullPage: true });
 
   await page.goto("/admin/settings/auth-status?from=legacy");
   await expect(page).toHaveURL(/\/admin\/scheduler\?from=legacy#auth-status$/);
-  await expect(page.locator("#auth-status")).toBeVisible();
+  await expect(page.locator("#auth-status").getByRole("heading", { name: "Needs attention" })).toBeVisible();
 
   await page.goto("/admin/data-mgmt");
   await expect(page.getByText("Source: original media storage scan · exact capacity retained for every source")).toHaveCount(0);
   await expect(page.getByText("Source: creator and repository storage tree · sorted by total storage")).toHaveCount(0);
 });
 
-test("scheduler separates task controls from system auth-health permissions", async ({ page }) => {
+test("scheduler separates task controls from system status permissions", async ({ page }) => {
   let authRequests = 0;
   await page.route("**/api/v1/admin/auth-status", async (route) => {
     authRequests += 1;
@@ -1490,10 +1852,12 @@ test("scheduler separates task controls from system auth-health permissions", as
     },
   }));
   await page.goto("/admin/scheduler#auth-status");
-  await expect(page.locator("#auth-status").getByRole("heading", { name: "Auth & Cookie Status" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Scheduler" })).toBeVisible();
+  await expect(page.locator("#auth-status").getByRole("heading", { name: "Needs attention" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Auth & Cookie Status" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Run scheduler scan" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Sync eligible now" })).toHaveCount(0);
-  await expect.poll(() => authRequests).toBeGreaterThan(0);
+  expect(authRequests).toBe(0);
 
   authRequests = 0;
   await page.route("**/api/v1/auth/me", (route) => route.fulfill({
@@ -1506,7 +1870,8 @@ test("scheduler separates task controls from system auth-health permissions", as
   }));
   await page.goto("/admin/scheduler");
   await expect(page.getByRole("button", { name: "Run scheduler scan" })).toBeVisible();
-  await expect(page.locator("#auth-status")).toHaveCount(0);
+  await expect(page.locator("#auth-status").getByRole("heading", { name: "Needs attention" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Auth & Cookie Status" })).toHaveCount(0);
   expect(authRequests).toBe(0);
 });
 
@@ -1534,7 +1899,7 @@ test("settings children use clickable breadcrumbs without duplicate back control
     ["/admin/settings/logs", "System Logs"],
     ["/admin/settings/proxy", "Network Proxy"],
     ["/admin/settings/scheduler-defaults", "Scheduler Defaults"],
-    ["/admin/settings/showcase", "Showcase"],
+    ["/admin/settings/slideshow", "Slideshow"],
     ["/admin/settings/subscription-defaults", "Subscription Defaults"],
     ["/admin/settings/users", "User Management"],
   ] as const;
@@ -1676,16 +2041,26 @@ test("query-only task navigation preserves the current viewport", async ({ page 
   const retainedY = await page.evaluate(() => window.scrollY);
   await page.getByRole("tab", { name: "Import" }).evaluate((element: HTMLElement) => element.click());
   await expect(page).toHaveURL(/\/admin\/jobs\?tab=imports$/);
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(retainedY);
+  await expect.poll(() => page.evaluate((targetY) => {
+    const maxScrollY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    return Math.abs(window.scrollY - Math.min(targetY, maxScrollY)) <= 1;
+  }, retainedY)).toBe(true);
 });
 
 test("shared dialogs trap focus, close with Escape, and restore their trigger", async ({ page }) => {
+  await page.route("**/api/v1/admin/clear/preview/all", (route) => route.fulfill({ json: {
+    entity: "all",
+    confirmation_phrase: "DELETE-ALL-DATA",
+    counts: {},
+    preserves_repository_sync_receipts: false,
+    deletes_media_files: true,
+  } }));
   await page.goto("/admin/data-mgmt");
-  await page.getByPlaceholder("CONFIRM DELETE").fill("CONFIRM DELETE");
-  const trigger = page.getByRole("button", { name: "Delete All Works" });
+  const trigger = page.getByRole("button", { name: "Delete All Data" });
   await trigger.click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
+  await dialog.getByRole("textbox", { name: "Type DELETE-ALL-DATA to confirm" }).fill("DELETE-ALL-DATA");
   await expect.poll(() => page.evaluate(() => Boolean(document.activeElement?.closest('[role="dialog"]')))).toBe(true);
   await page.keyboard.press("Shift+Tab");
   await expect.poll(() => page.evaluate(() => Boolean(document.activeElement?.closest('[role="dialog"]')))).toBe(true);
@@ -1703,14 +2078,17 @@ test("compact tablet sidebar and long job metadata do not create root overflow",
   await page.screenshot({ path: "/tmp/auto-gallery-jobs-tablet.png", fullPage: true });
 });
 
-test("completed no-change sync uses an outcome badge without an error or progress bar", async ({ page }) => {
+test("completed syncs are omitted from the actionable download page", async ({ page }) => {
+  let requestedVisibility: string | null = null;
+  await page.route("**/api/v1/download-jobs**", async (route) => {
+    const url = new URL(route.request().url());
+    requestedVisibility = url.searchParams.get("visibility");
+    await route.fulfill({ json: [] });
+  });
   await page.goto("/admin/jobs?tab=downloads");
-  await expect(page.locator("span").filter({ hasText: /^Complete$/ })).toBeVisible();
-  await expect(page.getByText("No new works", { exact: true })).toBeVisible();
-  await expect(page.getByText("Sync completed; no new works were found to import.")).toBeVisible();
-  await expect(page.getByText("Found 0 metadata files and 0 media files")).toHaveCount(0);
-  await expect(page.getByText("No new content since last sync (already archived or empty)")).toHaveCount(0);
-  await expect(page.getByText("Verifying download")).toHaveCount(0);
+  await expect.poll(() => requestedVisibility).toBe("actionable");
+  await expect(page.locator("span").filter({ hasText: /^Complete$/ })).toHaveCount(0);
+  await expect(page.getByText("Sync completed; no new works were found to import.")).toHaveCount(0);
 });
 
 test("200 percent equivalent reflow and reduced motion keep content visible", async ({ page }) => {
@@ -1731,6 +2109,40 @@ test("390 pixel mobile layout stays within the viewport", async ({ page }) => {
   await expect(page.locator('[data-page-header] nav[aria-label="Related pages"]')).toHaveCount(0);
   await expectNoPageOverflow(page);
   await page.screenshot({ path: "/tmp/auto-gallery-danbooru-single-active-mobile.png", fullPage: false });
+});
+
+test("Gitllery v1 settings expose safe shadow controls, CLI copy, verify, and creator navigation", async ({ context, page }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/admin/settings");
+  const settingsLink = page.getByRole("link", { name: /Gitllery/ });
+  await expect(settingsLink).toHaveAttribute("href", "/admin/settings/gitllery");
+  await settingsLink.click();
+
+  await expect(page.getByRole("heading", { level: 1, name: "Gitllery Settings" })).toBeVisible();
+  await expect(page.getByText("Gitllery v1 is fixed to shadow mode")).toBeVisible();
+  await expect(page.getByText("segment-r1-fixture")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Reconcile: Unavailable" })).toBeDisabled();
+  await expect(page.getByText("Each commit accepts at most 25 works and 100 operations.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Copy config command" }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .toBe("gitllery config set url http://auto-gallery.test");
+
+  const verifyRequest = page.waitForRequest((request) => (
+    request.url().includes("/api/v1/curation/gitllery/verify")
+    && request.method() === "POST"
+  ));
+  await page.getByRole("button", { name: "Queue verify" }).click();
+  await verifyRequest;
+  await expect(page.getByText("Bounded Gitllery v1 verify task queued")).toBeVisible();
+
+  await page.goto("/admin/creators/fixture-creator");
+  await expect(page.getByRole("link", { name: "Open Gitllery log" })).toHaveAttribute(
+    "href",
+    "/admin/data-mgmt/curation?subject_type=creator&subject_id=fixture-creator",
+  );
+  const creatorSettingsLink = page.getByRole("link", { name: "Open Gitllery settings" });
+  await expect(creatorSettingsLink).toHaveAttribute("href", "/admin/settings/gitllery");
 });
 
 test("mobile drawer is discoverable, dismissible, and the task page stays in bounds", async ({ page }) => {

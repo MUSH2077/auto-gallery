@@ -1,0 +1,38 @@
+# Optional cgroup-v2 block-I/O throttle for an 8GB NAS on spinning storage.
+#
+# Usage (only after resolving and validating the physical device):
+#   NAS_BLOCK_DEVICE=/dev/sdb docker compose \
+#     -f docker-compose.yaml -f docker-compose.nas-io.yaml config
+#   NAS_BLOCK_DEVICE=/dev/sdb docker compose \
+#     -f docker-compose.yaml -f docker-compose.nas-io.yaml up -d
+#
+# btrfs, dm-crypt, RAID and device-mapper stacks may account I/O on a lower
+# device than the bind-mount source. Keep this file opt-in and verify the live
+# cgroup io.max values before relying on it.
+
+x-nas-io-20r-10w: &nas-io-20r-10w
+  device_read_bps:
+    - path: ${NAS_BLOCK_DEVICE:?set NAS_BLOCK_DEVICE to the physical block device backing auto-gallery data}
+      rate: 20mb
+  device_write_bps:
+    - path: ${NAS_BLOCK_DEVICE:?set NAS_BLOCK_DEVICE to the physical block device backing auto-gallery data}
+      rate: 10mb
+
+services:
+  meilisearch:
+    blkio_config: *nas-io-20r-10w
+
+  worker-download:
+    blkio_config: *nas-io-20r-10w
+
+  worker-operations:
+    blkio_config: *nas-io-20r-10w
+
+  worker-import:
+    blkio_config:
+      device_read_bps:
+        - path: ${NAS_BLOCK_DEVICE:?set NAS_BLOCK_DEVICE to the physical block device backing auto-gallery data}
+          rate: 30mb
+      device_write_bps:
+        - path: ${NAS_BLOCK_DEVICE:?set NAS_BLOCK_DEVICE to the physical block device backing auto-gallery data}
+          rate: 15mb

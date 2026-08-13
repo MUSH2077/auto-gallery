@@ -7,21 +7,12 @@ business sync immediately.
 """
 import asyncio
 import time
-from datetime import timedelta
 
-from rq import Queue
-from rq.registry import ScheduledJobRegistry, StartedJobRegistry
-from app.config import settings
+import redis as redis_lib
 from app.database import async_session
-from app.services.redis_client import get_redis
+from app.services.queue_admission import QueueAdmissionError
+from app.services.scheduler_loop import ensure_next_subscription_scan
 from app.services.settings import DEFAULT_SCAN_MINUTES, get_scheduler_config
-from app.jobs.subscription_sync import sync_subscriptions
-
-r = get_redis()
-q = Queue(name="scheduled", connection=r)
-
-def _job_is_sync(job) -> bool:
-    return "sync_subscriptions" in (getattr(job, "func_name", "") or str(job))
 
 
 async def _scan_interval_minutes() -> int:
@@ -42,22 +33,35 @@ async def _scan_interval_minutes() -> int:
     return DEFAULT_SCAN_MINUTES
 
 
-# Check if a sync_subscriptions job is already queued, scheduled, or started
-queued_jobs = q.get_jobs()
-scheduled_registry = ScheduledJobRegistry(queue=q)
-started_registry = StartedJobRegistry(queue=q)
-scheduled_jobs = [
-    q.fetch_job(job_id)
-    for job_id in scheduled_registry.get_job_ids()
-]
-started_jobs = [
-    q.fetch_job(job_id)
-    for job_id in started_registry.get_job_ids()
-]
-has_sync = any(_job_is_sync(j) for j in queued_jobs + [j for j in scheduled_jobs if j] + [j for j in started_jobs if j])
-if not has_sync:
-    interval = asyncio.run(_scan_interval_minutes())
-    q.enqueue_in(timedelta(minutes=interval), sync_subscriptions)
-    print(f"Scheduled initial subscription sync scan in {interval} minutes")
-else:
-    print("Subscription sync already queued, skipping bootstrap")
+# The scheduler container runs this before its worker supervisor.  Redis
+# capacity/unavailability is an expected degraded state, so wait in-process
+# with bounded backoff instead of entering a Docker restart loop.
+retry_delays = (5, 15, 30, 60)
+attempt = 0
+while True:
+    try:
+        interval = asyncio.run(_scan_interval_minutes())
+        ensured = ensure_next_subscription_scan(interval)
+        if ensured.get("created"):
+            print(f"Scheduled initial subscription sync scan in {interval} minutes")
+        else:
+            print("Subscription sync already queued, skipping bootstrap")
+        break
+    except QueueAdmissionError as exc:
+        delay = retry_delays[min(attempt, len(retry_delays) - 1)]
+        attempt += 1
+        print(
+            f"Redis queue admission paused scheduler bootstrap ({exc.code}); "
+            f"retrying in {delay}s",
+            flush=True,
+        )
+        time.sleep(delay)
+    except (redis_lib.RedisError, OSError) as exc:
+        delay = retry_delays[min(attempt, len(retry_delays) - 1)]
+        attempt += 1
+        print(
+            f"Redis unavailable during scheduler bootstrap ({type(exc).__name__}); "
+            f"retrying in {delay}s",
+            flush=True,
+        )
+        time.sleep(delay)

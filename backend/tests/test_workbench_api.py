@@ -112,7 +112,6 @@ async def test_workbench_refresh_populates_cache_and_exposes_recent_context(monk
         "timezone": "Asia/Shanghai",
         "scheduler_scan_interval_minutes": 15,
     }))
-    monkeypatch.setattr(system, "get_download_defaults", AsyncMock(return_value={"timeout_seconds": 600}))
     monkeypatch.setattr(system, "_count_statuses", AsyncMock(side_effect=[1, 0, 1, 0]))
     monkeypatch.setattr(system, "_count_active_rebuilds", AsyncMock(return_value=0))
     monkeypatch.setattr(system, "_get_proxy_health_summary", AsyncMock(return_value={}))

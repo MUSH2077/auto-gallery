@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.services.media_assets import (
+    VideoInspection,
     browser_video_mime_type,
     _render_video_frame,
     inspect_video,
@@ -95,6 +96,38 @@ def test_video_probe_and_atomic_posters(tmp_path):
     first_mtime = result.poster_path.stat().st_mtime_ns
     repeated = render_video_derivatives(source, output, "source")
     assert repeated.poster_path.stat().st_mtime_ns == first_mtime
+
+
+def test_two_derivatives_share_one_ffmpeg_decode(tmp_path, monkeypatch):
+    from app.services import media_assets
+
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"fixture")
+    commands = []
+
+    monkeypatch.setattr(
+        media_assets,
+        "inspect_video",
+        lambda *_args, **_kwargs: VideoInspection(1920, 1080, 10.0, "h264", "mp4"),
+    )
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        for index, argument in enumerate(command):
+            if argument == "-y":
+                Path(command[index + 1]).write_bytes(b"webp")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(media_assets.subprocess, "run", fake_run)
+    result = render_video_derivatives(source, tmp_path / "library", "source")
+
+    assert result.error is None
+    assert len(commands) == 1
+    filter_graph = commands[0][commands[0].index("-filter_complex") + 1]
+    assert "split=2" in filter_graph
+    assert filter_graph.count("scale=") == 2
+    assert result.thumbnail_path and result.thumbnail_path.read_bytes() == b"webp"
+    assert result.poster_path and result.poster_path.read_bytes() == b"webp"
 
 
 def test_webm_probe_and_posters(tmp_path):

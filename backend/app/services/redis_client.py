@@ -29,6 +29,9 @@ def _get_pool() -> redis_lib.ConnectionPool:
             max_connections=20,          # hard cap — sufficient for all RQ workers + API
             socket_keepalive=True,
             socket_connect_timeout=5,
+            # Longer than the worker's bounded 10s dequeue, but finite so a
+            # black-holed Redis connection cannot stall pressure/lock guards.
+            socket_timeout=15,
             retry_on_timeout=True,
             health_check_interval=30,
             decode_responses=False,

@@ -20,8 +20,11 @@ venv/
 .dmypy.json
 dmypy.json
 .pytest_cache/
+.pytest_tmp/
+.testmondata
 .coverage
 .coverage.*
+coverage.xml
 htmlcov/
 .tox/
 .ruff_cache/
@@ -31,6 +34,12 @@ htmlcov/
 node_modules/
 .next/
 out/
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+blob-report/
+junit*.xml
 .tsbuildinfo
 *.tsbuildinfo
 next-env.d.ts
@@ -75,6 +84,7 @@ data/
 # --- Logs ---
 *.log
 logs/
+auto-gallery-*.jsonl
 
 # --- Backup files ---
 *.bak
@@ -95,7 +105,6 @@ temp/
 .cache/
 .playwright-mcp/
 .superpowers/
-admin-web/test-results/
 admin-web/public/api-docs/
 
 # --- gallery-dl ---

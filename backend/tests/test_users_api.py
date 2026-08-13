@@ -293,7 +293,7 @@ async def test_put_preferences_rejects_invalid_keys():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_put_preferences_accepts_showcase_key():
+async def test_put_preferences_accepts_slideshow_and_rejects_showcase_key():
     from app.database import async_session, engine
     from app.main import app
 
@@ -301,18 +301,25 @@ async def test_put_preferences_accepts_showcase_key():
     try:
         async with async_session() as db:
             await _clear(db)
-            await _seed_user(db, f"{PREFIX}prefs_showcase", is_admin=True)
+            await _seed_user(db, f"{PREFIX}prefs_slideshow", is_admin=True)
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            h = _headers(f"{PREFIX}prefs_showcase")
+            h = _headers(f"{PREFIX}prefs_slideshow")
             body = {"preferences": {"theme": "dark",
-                                    "showcase": {"scope": "favorites", "trailMax": 12}}}
+                                    "slideshow": {"slideDwellMs": 6000, "slideLoop": False}}}
             r = await client.put("/api/v1/auth/me/preferences", json=body, headers=h)
             assert r.status_code == 200, r.text
-            assert r.json()["preferences"]["showcase"]["scope"] == "favorites"
+            assert r.json()["preferences"]["slideshow"]["slideDwellMs"] == 6000
 
             me = await client.get("/api/v1/auth/me", headers=h)
-            assert me.json()["preferences"]["showcase"]["trailMax"] == 12
+            assert me.json()["preferences"]["slideshow"]["slideLoop"] is False
+
+            rejected = await client.put(
+                "/api/v1/auth/me/preferences",
+                json={"preferences": {"showcase": {"landing": "showcase"}}},
+                headers=h,
+            )
+            assert rejected.status_code == 400
     finally:
         async with async_session() as db:
             await _clear(db)

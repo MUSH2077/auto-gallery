@@ -1,5 +1,7 @@
 import hashlib
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -11,6 +13,7 @@ from app.services.asset_reconciliation import (
     metadata_time_bonus,
     phash_distance,
     structural_similarity,
+    versioned_phash_distance,
 )
 from app.services.asset_dedup_scope import canonical_source
 
@@ -19,11 +22,30 @@ def _sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _allow_asset_dedup_outbox(monkeypatch, module):
+    async def limits(*_args, **_kwargs):
+        return SimpleNamespace(allowed=True), {"status": "normal"}
+
+    @asynccontextmanager
+    async def slot(*_args, **_kwargs):
+        yield object()
+
+    monkeypatch.setattr(module, "current_profile_slice_limits", limits)
+    monkeypatch.setattr(module, "try_heavy_io_slot", slot)
+
+
 def test_phash_distance_is_hamming_distance():
     assert phash_distance("0000000000000000", "0000000000000000") == 0
     assert phash_distance("0000000000000000", "000000000000000f") == 4
     assert phash_distance(None, "0") is None
     assert phash_distance("not-hex", "0") is None
+
+
+def test_phash_distance_requires_matching_algorithm_versions():
+    assert versioned_phash_distance("0", "f", None, None) == 4
+    assert versioned_phash_distance("0", "f", "phash-v1", "phash-v1") == 4
+    assert versioned_phash_distance("0", "f", None, "phash-v1") is None
+    assert versioned_phash_distance("0", "f", "phash-v1", "phash-v2") is None
 
 
 def test_cross_source_aliases_and_metadata_time_bands():
@@ -814,10 +836,13 @@ async def test_asset_reconciliation_groups_assets_without_merging_works(
             ).scalar_one()
             assert outbox.event_type == "hardlink"
 
-            from app.jobs.asset_dedup import process_asset_dedup_outbox
+            from app.jobs import asset_dedup as asset_dedup_module
 
-            drain = await process_asset_dedup_outbox(limit=10)
-            assert drain == {"processed": 1, "failed": 0}
+            _allow_asset_dedup_outbox(monkeypatch, asset_dedup_module)
+            drain = await asset_dedup_module.process_asset_dedup_outbox(limit=10)
+            assert drain["processed"] == 1
+            assert drain["failed"] == 0
+            assert drain["more_likely"] is True
             assert left_path.stat().st_ino == right_path.stat().st_ino
             db.expire_all()
             storage_state = (
@@ -1016,10 +1041,13 @@ async def test_metadata_only_adds_score_after_visual_gate(tmp_path, monkeypatch)
             ).scalar_one()
             assert outbox.event_type == "quarantine"
 
-            from app.jobs.asset_dedup import process_asset_dedup_outbox
+            from app.jobs import asset_dedup as asset_dedup_module
 
-            drain = await process_asset_dedup_outbox(limit=10)
-            assert drain == {"processed": 1, "failed": 0}
+            _allow_asset_dedup_outbox(monkeypatch, asset_dedup_module)
+            drain = await asset_dedup_module.process_asset_dedup_outbox(limit=10)
+            assert drain["processed"] == 1
+            assert drain["failed"] == 0
+            assert drain["more_likely"] is True
             assert not left_path.exists()
             db.expire_all()
             storage_state = (

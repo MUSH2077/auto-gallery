@@ -14,7 +14,7 @@ def test_admin_has_effective_gallerydl_preview_endpoint():
 def test_health_exposes_business_metrics():
     import app.main as main
 
-    src = inspect.getsource(main.health)
+    src = inspect.getsource(main._build_health_snapshot)
     assert '"business"' in src
     assert "DownloadJob" in src
     assert "gallery-dl" in src or "gallerydl" in src

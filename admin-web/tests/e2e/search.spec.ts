@@ -251,7 +251,7 @@ async function installSearchFixtures(context: BrowserContext) {
   await context.addCookies([{
     name: "ag_token",
     value: "search-test-token",
-    domain: "127.0.0.1",
+    domain: new URL(process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000").hostname,
     path: "/",
   }]);
   await context.addInitScript(() => {

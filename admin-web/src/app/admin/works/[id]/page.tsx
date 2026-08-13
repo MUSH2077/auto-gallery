@@ -29,7 +29,13 @@ interface WorkSourceData {
 
 function WorkViewerShell({ workId }: { workId: string }) {
   const t = useT();
-  const assets = useQuery({ queryKey: ["works", workId, "assets"], queryFn: () => api.getWorkAssets(workId) });
+  const assets = useQuery({
+    queryKey: ["works", workId, "assets"],
+    queryFn: () => api.getWorkAssets(workId),
+    refetchInterval: (query) => query.state.data?.some(
+      (asset) => asset.derivative_status === "pending" || asset.derivative_status === "processing",
+    ) ? 15_000 : false,
+  });
   const [activeIndex, setActiveIndex] = useState(0);
   const [fullAsset, setFullAsset] = useState<AssetData | null>(null);
   const wheelDelta = useRef(0);
@@ -396,7 +402,7 @@ function MoreFromCreator({ creatorId, currentWorkId }: { creatorId: string; curr
         {others.map(w => (
           <Link key={w.id} href={`/admin/works/${w.id}`} className="group">
             <div className="aspect-[4/3] overflow-hidden rounded-md bg-subtle">
-              <WorkMediaThumbnail assetId={w.thumbnail_asset_id} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" fallback={t("works.na")} />
+              <WorkMediaThumbnail assetId={w.thumbnail_asset_id} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" fallback={w.thumbnail_asset_id ? t("media.derivative_pending") : t("works.na")} />
             </div>
             <p className="text-xs mt-1 truncate group-hover:text-accent">{w.title || t("works.untitled")}</p>
           </Link>

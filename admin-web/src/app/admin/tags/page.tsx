@@ -5,6 +5,7 @@ import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { PageHeader, PageShell, EmptyState, ErrorState, Modal, PermissionGuard, TagBubbleChart } from "@/components";
 import { usePermissions } from "@/lib/usePermissions";
+import DomainDangerZone from "@/components/DomainDangerZone";
 
 const CATEGORIES = ["general", "artist", "series", "character", "meta"];
 
@@ -93,6 +94,11 @@ export default function TagsPage() {
             className="btn-ghost px-3 py-1 text-sm disabled:opacity-30">{t("common.next")}</button>
         </div>
       )}
+      <DomainDangerZone
+        entity="tags"
+        title={t("datamgmt.danger_clear_tags")}
+        description={t("datamgmt.danger_clear_tags_desc")}
+      />
       </div>
     </PageShell>
     </PermissionGuard>

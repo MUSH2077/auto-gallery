@@ -1,4 +1,5 @@
 from uuid import UUID
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from app.auth import RequirePermission, get_admin_key
@@ -11,6 +12,7 @@ from app.services.download import DownloadService
 from app.services.progress import ProgressTracker
 from app.services.search_language import SearchQueryError
 from app.services.task_engine import TaskEngine, TaskEngineError
+from app.services.backpressure import DownloadAdmissionError
 
 router = APIRouter(dependencies=[RequirePermission("tasks")])
 
@@ -20,6 +22,7 @@ async def list_jobs(status: str | None = None, source: str | None = None,
                     subscription_id: str | None = None,
                     subscription_source_id: str | None = None,
                     q: str | None = None,
+                    visibility: Literal["actionable", "all"] = "all",
                     sort_by: str = "created_at", sort_order: str = "desc",
                     offset: int = 0, limit: int = 50, db: AsyncSession = Depends(get_db)):
     svc = DownloadService(db)
@@ -28,6 +31,7 @@ async def list_jobs(status: str | None = None, source: str | None = None,
                                    subscription_id=subscription_id,
                                    subscription_source_id=subscription_source_id,
                                    q=q,
+                                   visibility=visibility,
                                    sort_by=sort_by, sort_order=sort_order,
                                    offset=offset, limit=limit)
     except SearchQueryError as exc:
@@ -48,6 +52,8 @@ async def create_job(data: DownloadJobCreate, db: AsyncSession = Depends(get_db)
     svc = DownloadService(db)
     try:
         return await svc.create_job(data.model_dump())
+    except DownloadAdmissionError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.payload()) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -63,6 +69,8 @@ async def retry_job(
         result = await engine.retry_download(job_id, operator=operator)
         await db.commit()
         return result
+    except DownloadAdmissionError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.payload()) from e
     except TaskEngineError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -107,6 +115,8 @@ async def resume_job(
         result = await engine.resume_download(job_id, operator=operator)
         await db.commit()
         return result
+    except DownloadAdmissionError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.payload()) from e
     except TaskEngineError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

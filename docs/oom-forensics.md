@@ -1,4 +1,11 @@
-# Backend OOM / RAM forensics · backend 爆内存取证
+# NAS / container OOM forensics · NAS 与容器爆内存取证
+
+auto-gallery's 8GB-NAS profile disables container swap and pauses background
+work before the host reaches earlyoom territory. A host kill and a cgroup kill
+are different failures: collect both sets of evidence before changing a limit.
+
+auto-gallery 的 8GB NAS 配置会禁止容器使用 Swap，并在宿主机进入 earlyoom 区间前暂停
+后台任务。宿主机 earlyoom 与容器 cgroup OOM 是两类故障，调整限额前应分别取证。
 
 When the backend container OOMs on the NAS, collect the items below and paste
 them back. With the logging fix, the backend now logs its RSS every minute and
@@ -55,13 +62,69 @@ size. Read the top rows:
 
 ## 4. Container memory over time · 容器内存随时间
 
+For the 24–48 hour acceptance window, run the host-side sampler. It records
+host memory/Swap/PSI plus each auto-gallery container's cgroup-v2 current and
+peak memory, `memory.events.oom_kill`, Docker OOM state and restart count. The
+backend is deliberately not given the Docker socket.
+
+在 24–48 小时验收窗口内，使用宿主机采样器持续记录宿主内存、Swap、PSI，以及每个
+auto-gallery 容器的当前/峰值内存、`oom_kill` 和重启次数；应用容器不会获得 Docker Socket。
+
+```bash
+# one read-only sample
+python3 scripts/monitor-nas-resources.py | python3 -m json.tool
+
+# 24-hour JSONL evidence, one sample every 10 seconds
+python3 scripts/monitor-nas-resources.py --interval 10 --duration 86400 \
+  > auto-gallery-resource-soak.jsonl
+```
+
 ```bash
 docker stats --no-stream auto-gallery-backend-1
 # or a short sample while reproducing:
 for i in $(seq 1 20); do docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' auto-gallery-backend-1; sleep 5; done
 ```
 
-## 5. What were you doing? · 当时在做什么
+Inspect every auto-gallery cgroup rather than only the backend:
+
+```bash
+for id in $(docker compose ps -q); do
+  docker inspect "$id" --format '{{.Name}} OOM={{.State.OOMKilled}} restarts={{.RestartCount}} memory={{.HostConfig.Memory}} memory_swap={{.HostConfig.MemorySwap}}'
+done
+```
+
+`memory_swap` must equal `memory`. If it is twice the memory limit, the running
+container predates the NAS resource profile and must be recreated during a
+maintenance window.
+
+## 5. Host pressure and earlyoom · 宿主机压力与 earlyoom
+
+The resource controller is exposed in the authenticated system health response:
+
+```bash
+curl -s http://localhost:8818/api/v1/system/health \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+
+free -h
+cat /proc/pressure/memory
+cat /proc/pressure/io
+journalctl -u earlyoom --since "24 hours ago" | tail -n 200
+```
+
+Record `resource_pressure.status/reasons`, available memory, free-swap ratio,
+and PSI. In the protected profile, queued heavy work pauses when memory or swap
+crosses the hard threshold and resumes only after the configured hysteresis
+window. Do not disable earlyoom to hide these warnings.
+
+## 6. Safe swap recovery · 安全恢复 Swap
+
+Never run `swapoff` while free RAM is smaller than used swap. Stop development
+tools and heavy jobs first; on this class of NAS, use a planned reboot to obtain
+a clean baseline. After restart, record `free -h`, then compare swap growth over
+the next 24–48 hours. The acceptance target is no auto-gallery OOM/restart and
+no more than 256 MiB swap growth attributable to its workload.
+
+## 7. What were you doing? · 当时在做什么
 
 Note the action that triggered it (opening a page, a search, a reindex, a
 backfill, the gitllery panel, a backup…). Combined with the census + logs this
@@ -70,4 +133,5 @@ pins the root cause. 记下触发操作，配合普查+日志即可定位。
 ---
 
 **What to paste back · 贴回这些**: `backend-oom.log`, `backend-memory.json`, the
-`docker inspect` OOM line, and the action you were doing.
+system health pressure block, all `docker inspect` OOM/restart lines, relevant
+earlyoom lines, and the action you were doing.

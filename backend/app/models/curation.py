@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -31,6 +31,7 @@ class CurationChange(TimestampMixin, Base):
     subject_type: Mapped[str] = mapped_column(String(50), nullable=False)
     subject_id: Mapped[str] = mapped_column(String(255), nullable=False)
     action: Mapped[str] = mapped_column(String(100), nullable=False)
+    sequence: Mapped[int | None] = mapped_column(Integer)
     before_state: Mapped[dict | None] = mapped_column(JSONB)
     after_state: Mapped[dict | None] = mapped_column(JSONB)
     diff: Mapped[dict | None] = mapped_column(JSONB)

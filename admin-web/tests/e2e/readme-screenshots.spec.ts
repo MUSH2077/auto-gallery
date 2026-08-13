@@ -492,7 +492,7 @@ async function installRoutes(context: BrowserContext, unknownRequests: string[])
   await context.addCookies([{
     name: "ag_token",
     value: "readme-fixture-token",
-    domain: "127.0.0.1",
+    domain: new URL(process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000").hostname,
     path: "/",
   }]);
   await context.addInitScript(() => {

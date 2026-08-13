@@ -63,6 +63,7 @@ async def backfill_video_assets(
         "dry_run": not apply,
     }
     ledger_rows: list[dict] = []
+    changed_work_ids: set = set()
     for asset, work_source in unique.values():
         source_path = Path(settings.download_root) / asset.file_path
         creator_dir, library_dir = WorkImportService.library_directory(
@@ -130,8 +131,13 @@ async def backfill_video_assets(
                 )
             )
         report["repaired"] += 1
+        changed_work_ids.add(work_source.work_id)
 
     if apply:
         await ArtifactLedger(db).upsert_many(ledger_rows)
+        if changed_work_ids:
+            from app.services.search_projection_outbox import request_search_projection
+
+            await request_search_projection(db, changed_work_ids)
         await db.commit()
     return report

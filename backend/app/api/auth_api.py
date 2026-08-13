@@ -1,5 +1,4 @@
 """Authentication endpoints: login, me, change-password."""
-import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -21,12 +20,9 @@ from app.models.user import User
 from app.permissions import PERMISSION_MODULES
 from app.schemas.users import MeOut, PreferencesIn, PreferencesOut
 from app.services.rate_limiter import RateLimiter
-from app.services.tasks import TaskService
 from app.services.ws_tickets import issue_ws_ticket
 
-_ALLOWED_PREFERENCE_KEYS = {"theme", "palette", "lang", "appearance", "showcase"}
-
-logger = logging.getLogger(__name__)
+_ALLOWED_PREFERENCE_KEYS = {"theme", "palette", "lang", "appearance", "slideshow"}
 
 router = APIRouter()
 
@@ -103,17 +99,6 @@ async def login(body: LoginRequest, request: Request, session: AsyncSession = De
     user.last_login_at = func.now()
     await session.commit()
 
-    # Best-effort account audit, in its own transaction after the login commit —
-    # never block login if recording fails.
-    try:
-        await TaskService(session).record_account_event(
-            action="login", username=user.username, user_id=user.id, ip=client_ip,
-        )
-        await session.commit()
-    except Exception:  # noqa: BLE001 — audit is best-effort
-        await session.rollback()
-        logger.warning("Failed to record account-login event", exc_info=True)
-
     return TokenResponse(access_token=token, must_change_password=must_change_password)
 
 
@@ -181,15 +166,5 @@ async def change_password(
     user.updated_at = datetime.now(timezone.utc)
     await session.commit()
     token = create_access_token(user.username, must_change_password=False)
-
-    # Best-effort account audit, in its own transaction after the password commit.
-    try:
-        await TaskService(session).record_account_event(
-            action="password-change", username=user.username, user_id=user.id,
-        )
-        await session.commit()
-    except Exception:  # noqa: BLE001 — audit is best-effort
-        await session.rollback()
-        logger.warning("Failed to record account-password-change event", exc_info=True)
 
     return {"ok": True, "access_token": token, "token_type": "bearer", "must_change_password": False}

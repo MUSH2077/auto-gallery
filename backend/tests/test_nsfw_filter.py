@@ -201,7 +201,7 @@ async def test_search_service_adds_nsfw_filter_when_force_sfw(monkeypatch):
     from app.services import search as search_module
 
     fake = _FakeClient()
-    monkeypatch.setattr(search_module, "_client", lambda: fake)
+    monkeypatch.setattr(search_module, "_client", lambda **_kwargs: fake)
 
     svc = search_module.SearchService(db=None)
     await svc.search("cat", kind="works", force_sfw=True)
@@ -217,7 +217,7 @@ async def test_search_service_omits_nsfw_filter_by_default(monkeypatch):
     from app.services import search as search_module
 
     fake = _FakeClient()
-    monkeypatch.setattr(search_module, "_client", lambda: fake)
+    monkeypatch.setattr(search_module, "_client", lambda **_kwargs: fake)
 
     svc = search_module.SearchService(db=None)
     await svc.search("cat", kind="works")

@@ -10,6 +10,7 @@ from app.models.asset import Asset
 from app.models.asset_source import AssetSource
 from app.models.creator import Creator
 from app.models.download_job import DownloadJob
+from app.models.repository_sync_receipt import RepositorySyncReceipt
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.models.work import Work
@@ -84,12 +85,47 @@ def _job_payload(job: DownloadJob) -> dict:
     }
 
 
+def _receipt_payload(receipt: RepositorySyncReceipt, ss: SubscriptionSource) -> dict:
+    outcome = None
+    if isinstance(receipt.detail, dict) and isinstance(receipt.detail.get("outcome"), dict):
+        outcome = receipt.detail["outcome"]
+    return {
+        "id": str(receipt.id),
+        "receipt_id": str(receipt.id),
+        "task_id": None,
+        "original_task_id": str(receipt.source_task_id) if receipt.source_task_id else None,
+        "download_job_id": str(receipt.source_download_job_id),
+        "import_job_id": str(receipt.source_import_job_id) if receipt.source_import_job_id else None,
+        "subscription_id": str(ss.subscription_id),
+        "subscription_source_id": str(receipt.repository_id),
+        "source": receipt.source,
+        "source_url": ss.source_url,
+        "status": receipt.status,
+        "outcome_code": receipt.outcome_code,
+        "retry_count": receipt.attempts,
+        "attempts": receipt.attempts,
+        "metadata_count": receipt.metadata_count,
+        "media_count": receipt.media_count,
+        "works_imported": receipt.works_imported,
+        "duration_ms": receipt.duration_ms,
+        "error_code": receipt.error_code,
+        "error_log_excerpt": receipt.error_excerpt,
+        "recovered": receipt.recovered,
+        "recovered_at": _iso(receipt.recovered_at),
+        "outcome": outcome,
+        "started_at": _iso(receipt.started_at),
+        "finished_at": _iso(receipt.finished_at),
+        "created_at": _iso(receipt.finished_at),
+        "updated_at": _iso(receipt.updated_at),
+        "record_type": "sync_receipt",
+    }
+
+
 def _iso(value) -> str | None:
     return value.isoformat() if hasattr(value, "isoformat") else value
 
 
-def _repository_payload(ss: SubscriptionSource, provider: dict, latest_job: DownloadJob | None) -> dict:
-    latest_job_payload = _job_payload(latest_job) if latest_job else None
+def _repository_payload(ss: SubscriptionSource, provider: dict, latest_job_payload: dict | None) -> dict:
     return {
         "id": str(ss.id),
         "subscription_id": str(ss.subscription_id),
@@ -135,12 +171,30 @@ async def get_repository(source_id: UUID, db: AsyncSession = Depends(get_db)):
 
     jobs_result = await db.execute(
         select(DownloadJob)
-        .where(DownloadJob.subscription_source_id == ss.id)
+        .where(
+            DownloadJob.subscription_source_id == ss.id,
+            DownloadJob.status.in_(RUNNING_STATUSES),
+        )
         .order_by(DownloadJob.created_at.desc())
         .limit(10)
     )
-    recent_jobs = list(jobs_result.scalars().all())
-    latest_job = recent_jobs[0] if recent_jobs else None
+    active_jobs = list(jobs_result.scalars().all())
+    receipts_result = await db.execute(
+        select(RepositorySyncReceipt)
+        .where(RepositorySyncReceipt.repository_id == ss.id)
+        .order_by(
+            RepositorySyncReceipt.finished_at.desc(),
+            RepositorySyncReceipt.id.desc(),
+        )
+        .limit(50)
+    )
+    sync_receipts = list(receipts_result.scalars().all())
+    sync_history = [_receipt_payload(receipt, ss) for receipt in sync_receipts]
+    latest_job_payload = (
+        _job_payload(active_jobs[0])
+        if active_jobs
+        else (sync_history[0] if sync_history else None)
+    )
 
     source_creator_ids = await resolve_repository_source_creator_ids(db, ss, creator.id)
     recent_works = []
@@ -197,7 +251,7 @@ async def get_repository(source_id: UUID, db: AsyncSession = Depends(get_db)):
             })
 
     return {
-        "repository": _repository_payload(ss, provider, latest_job),
+        "repository": _repository_payload(ss, provider, latest_job_payload),
         "creator": {
             "id": str(creator.id),
             "name": creator.name,
@@ -216,7 +270,11 @@ async def get_repository(source_id: UUID, db: AsyncSession = Depends(get_db)):
             "last_synced_at": sub.last_synced_at.isoformat() if sub.last_synced_at else None,
         },
         "provider": provider,
-        "recent_jobs": [_job_payload(job) for job in recent_jobs],
+        # Compatibility view for older clients. Successful history is now a
+        # compact domain receipt and does not depend on TaskRun/DownloadJob.
+        "recent_jobs": sync_history,
+        "active_jobs": [_job_payload(job) for job in active_jobs],
+        "sync_history": sync_history,
         "recent_works": recent_works,
     }
 
@@ -275,7 +333,36 @@ async def get_repository_tags(
 @router.post("/{source_id}/sync-now")
 async def sync_repository(source_id: UUID, db: AsyncSession = Depends(get_db)):
     await _get_source_context(db, source_id)
-    return await enqueue_subscription_source_sync(db, source_id, trigger="manual_repository", force=False)
+    result = await enqueue_subscription_source_sync(
+        db,
+        source_id,
+        trigger="manual_repository",
+        force=False,
+    )
+    reason = result.get("reason") or {}
+    code = result.get("skip_reason") or reason.get("code")
+    hard_gate_codes = {
+        "queue_saturated",
+        "enqueue_busy",
+        "redis_capacity",
+        "redis_unwritable",
+        "disk_backpressure",
+        "import_backpressure",
+        "storage_unavailable",
+        "admission_check_failed",
+        "enqueue_failed",
+    }
+    if code in hard_gate_codes:
+        detail = {
+            "code": code,
+            "message": reason.get("message") or result.get("error") or str(code).replace("_", " "),
+            **(reason.get("details") or {}),
+        }
+        raise HTTPException(
+            status_code=429 if code == "queue_saturated" else 503,
+            detail=detail,
+        )
+    return result
 
 
 @router.get("/{source_id}/curation-graph", response_model=RepositoryGraphResponse)

@@ -6,7 +6,7 @@ import { useToast } from "@/components/Toast";
 import { useT, type TFunction } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, JobProgress, queryKeys, SEARCH_PAGE_SIZE, TaskRun, type SearchToken } from "@/lib/api";
-import { PageHeader, PageShell, Pagination, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, StatCard, PermissionGuard, CompactUrl, ErrorSummary, OverflowText, RowActionMenu, SmartSearchInput, SyncOutcomeNotice } from "@/components";
+import { PageHeader, PageShell, Pagination, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, PermissionGuard, CompactUrl, ErrorSummary, OverflowText, RowActionMenu, SmartSearchInput, SyncOutcomeNotice } from "@/components";
 import { TaskDetailDrawer, JobDetailDrawer, shortId } from "@/components/JobDrawers";
 import { useJobWebSocket } from "@/lib/useWebSocket";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
@@ -18,9 +18,9 @@ import { parseSyncOutcome } from "@/lib/syncOutcome";
 
 const JOB_LIST_LIMIT = 200;
 
-const STATUS_OPTIONS = ["", "enqueued", "downloading", "paused", "downloaded", "importing", "complete", "failed", "stale", "cancelled"];
-const IMPORT_STATUS_OPTIONS = ["", "enqueued", "running", "complete", "failed", "stale"];
-const TASK_STATUS_OPTIONS = ["", "enqueued", "running", "paused", "recovering", "complete", "failed", "cancelled", "stale"];
+const STATUS_OPTIONS = ["", "enqueued", "downloading", "paused", "downloaded", "importing", "failed", "stale"];
+const IMPORT_STATUS_OPTIONS = ["", "enqueued", "running", "paused", "recovering", "failed", "stale"];
+const TASK_STATUS_OPTIONS = ["", "enqueued", "running", "paused", "recovering", "failed", "stale"];
 const SOURCE_OPTIONS = ["", "pixiv", "x", "iwara", "danbooru", "pinterest", "lofter", "weibo", "bilibili"];
 type JobsTab = "all" | "downloads" | "imports" | "admin";
 type BatchAction = "retry" | "pause" | "resume" | "cancel" | "delete";
@@ -130,6 +130,40 @@ function operationLabel(t: TFunction, operationType?: string | null, kind?: stri
   return operationType || kind || "—";
 }
 
+function resourceReasonLabel(t: TFunction, reason?: string | null) {
+  if (!reason) return null;
+  const [code, detail] = reason.split(":", 2);
+  const key = `jobs.resource.reason.${code}`;
+  const translated = t(key);
+  if (translated === key) return reason;
+  return detail ? `${translated} (${detail})` : translated;
+}
+
+function TaskResourceState({ state, reason }: { state?: string | null; reason?: string | null }) {
+  const t = useT();
+  if (!state) return null;
+  const labelKey = `jobs.resource.${state}`;
+  const translated = t(labelKey);
+  const label = translated === labelKey ? state : translated;
+  const reasonLabel = resourceReasonLabel(t, reason);
+  const tone = state === "running"
+    ? "border-accent/30 bg-accent-subtle text-accent"
+    : state === "waiting"
+      ? "border-warning/30 bg-warning-subtle text-warning"
+      : "border-border bg-subtle text-muted";
+  const fullLabel = reasonLabel ? `${label} · ${reasonLabel}` : label;
+  return (
+    <span
+      className={`inline-flex max-w-[18rem] items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${tone}`}
+      title={fullLabel}
+      aria-label={fullLabel}
+    >
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full bg-current ${state === "running" ? "animate-pulse" : ""}`} />
+      <span className="truncate">{fullLabel}</span>
+    </span>
+  );
+}
+
 function JobsTabBar({
   activeTab,
   onChange,
@@ -139,8 +173,9 @@ function JobsTabBar({
 }) {
   const t = useT();
   return (
-    <div className="inline-flex gap-1 rounded-md bg-subtle p-1 dark:bg-subtle" role="tablist" aria-label={t("jobs.tabs_label")}>
-      {JOBS_TABS.map((tab) => {
+    <div className="max-w-full overflow-x-auto pb-1" role="presentation">
+      <div className="inline-flex min-w-max gap-1 rounded-md bg-subtle p-1 dark:bg-subtle" role="tablist" aria-label={t("jobs.tabs_label")}>
+        {JOBS_TABS.map((tab) => {
         const active = activeTab === tab.value;
         return (
           <button
@@ -149,14 +184,15 @@ function JobsTabBar({
             role="tab"
             aria-selected={active}
             onClick={() => onChange(tab.value)}
-            className={`rounded px-3 py-1.5 text-xs font-medium transition-colors ${
+            className={`min-h-11 rounded px-3 py-2 text-xs font-medium transition-colors ${
               active ? "bg-surface text-fg shadow-sm dark:bg-border" : "text-muted hover:bg-surface/60 hover:text-fg"
             }`}
           >
             {t(tab.labelKey)}
           </button>
         );
-      })}
+        })}
+      </div>
     </div>
   );
 }
@@ -219,6 +255,7 @@ function JobRowShell({
   typeLabel,
   id,
   source,
+  resourceState,
   primary,
   secondary,
   detail,
@@ -237,6 +274,7 @@ function JobRowShell({
   typeLabel: ReactNode;
   id: string;
   source?: ReactNode;
+  resourceState?: ReactNode;
   primary: ReactNode;
   secondary?: ReactNode;
   detail?: ReactNode;
@@ -272,6 +310,7 @@ function JobRowShell({
               <span className="truncate text-xs font-medium text-fg">{typeLabel}</span>
               {source || <span className="text-xs text-muted">—</span>}
               <span className="font-mono text-[10px] text-muted">{shortId(id)}</span>
+              {resourceState}
             </div>
             <div className="mt-1"><RowMeta primary={primary} secondary={secondary} /></div>
           </div>
@@ -304,12 +343,14 @@ function JobsFilterPanel({
   subscriptionSourceId,
   downloadJobId,
   selectAll,
+  batchMode,
   statusOptions,
   onTabChange,
   onQueryChange,
   onCompose,
   onClearFilters,
   onSelectAll,
+  onBatchModeChange,
   maintenanceActions,
 }: {
   activeTab: JobsTab;
@@ -320,6 +361,7 @@ function JobsFilterPanel({
   subscriptionSourceId: string;
   downloadJobId: string;
   selectAll: boolean;
+  batchMode: boolean;
   statusOptions: string[];
   onTabChange: (tab: JobsTab) => void;
   onQueryChange: (query: string) => void;
@@ -331,6 +373,7 @@ function JobsFilterPanel({
   }) => void;
   onClearFilters: () => void;
   onSelectAll: () => void;
+  onBatchModeChange: (enabled: boolean) => void;
   maintenanceActions?: ReactNode;
 }) {
   const t = useT();
@@ -379,7 +422,14 @@ function JobsFilterPanel({
             <option value="updated-desc">{t("jobs.sort_updated")}</option>
           </select>
         )}
-        <button onClick={onSelectAll} className="inline-flex h-11 items-center justify-center rounded-md border border-border bg-surface px-3 text-xs font-medium text-fg hover:bg-subtle">{selectAll ? t("common.deselect_all") : t("common.select_all")}</button>
+        {batchMode ? (
+          <>
+            <button onClick={onSelectAll} className="inline-flex h-11 items-center justify-center rounded-md border border-border bg-surface px-3 text-xs font-medium text-fg hover:bg-subtle">{selectAll ? t("common.deselect_all") : t("common.select_all")}</button>
+            <button onClick={() => onBatchModeChange(false)} className="inline-flex h-11 items-center justify-center rounded-md border border-border bg-surface px-3 text-xs font-medium text-muted hover:bg-subtle hover:text-fg">{t("common.cancel")}</button>
+          </>
+        ) : (
+          <button onClick={() => onBatchModeChange(true)} className="inline-flex h-11 items-center justify-center rounded-md border border-border bg-surface px-3 text-xs font-medium text-fg hover:bg-subtle">{t("operations.batch_mode")}</button>
+        )}
       </div>
     </div>
   );
@@ -502,6 +552,7 @@ function aggregateTaskGroup(node: TaskNode): { status: string; progress: JobProg
 
 function TaskRunRow({
   task,
+  batchMode,
   selected,
   onToggleSelect,
   openTaskDetail,
@@ -511,6 +562,7 @@ function TaskRunRow({
   indent = 0,
 }: {
   task: TaskRun;
+  batchMode: boolean;
   selected: Set<string>;
   onToggleSelect: (id: string) => void;
   openTaskDetail: (id: string) => void;
@@ -535,8 +587,9 @@ function TaskRunRow({
         entrance={entrance}
         status={task.status}
         typeLabel={operationLabel(t, task.operation_type, task.kind)}
-        select={<input type="checkbox" checked={selected.has(task.id)} onClick={(e) => e.stopPropagation()} onChange={() => onToggleSelect(task.id)} className="h-6 w-6 shrink-0 rounded border-border" aria-label={t("jobs.select_task", { id: shortId(task.id) })} />}
+        select={batchMode ? <input type="checkbox" checked={selected.has(task.id)} onClick={(e) => e.stopPropagation()} onChange={() => onToggleSelect(task.id)} className="h-6 w-6 shrink-0 rounded border-border" aria-label={t("jobs.select_task", { id: shortId(task.id) })} /> : undefined}
         source={task.source ? <SourceBadge source={task.source} /> : undefined}
+        resourceState={<TaskResourceState state={task.resource_state} reason={task.resource_reason} />}
         primary={task.title || task.operation_type || task.kind}
         secondary={task.subject_type && task.subject_id ? `${task.subject_type} · ${shortId(task.subject_id)}` : task.queue_name || task.rq_job_id}
         detail={task.source_url || task.queue_name || task.rq_job_id || task.subject_type}
@@ -559,6 +612,7 @@ function TaskRunRow({
 
 function UnifiedTaskList({
   tasks,
+  batchMode,
   isLoading,
   error,
   selected,
@@ -569,6 +623,7 @@ function UnifiedTaskList({
   openImportDetail,
 }: {
   tasks?: { total: number; items: TaskRun[] };
+  batchMode: boolean;
   isLoading: boolean;
   error: unknown;
   selected: Set<string>;
@@ -597,6 +652,7 @@ function UnifiedTaskList({
             <TaskRunRow
               key={task.id}
               task={task}
+              batchMode={batchMode}
               entrance={rowEntrance(task.id, index)}
               selected={selected}
               onToggleSelect={onToggleSelect}
@@ -613,6 +669,7 @@ function UnifiedTaskList({
 
 function TaskTreeChildren({
   nodes,
+  batchMode,
   selected,
   onToggleSelect,
   openTaskDetail,
@@ -621,6 +678,7 @@ function TaskTreeChildren({
   indent,
 }: {
   nodes: TaskNode[];
+  batchMode: boolean;
   selected: Set<string>;
   onToggleSelect: (id: string) => void;
   openTaskDetail: (id: string) => void;
@@ -635,6 +693,7 @@ function TaskTreeChildren({
         <div key={node.task.id} className="space-y-1">
           <TaskRunRow
             task={node.task}
+            batchMode={batchMode}
             entrance={nodeEntrance(node.task.id, index)}
             selected={selected}
             onToggleSelect={onToggleSelect}
@@ -646,6 +705,7 @@ function TaskTreeChildren({
           {node.children.length > 0 && (
             <TaskTreeChildren
               nodes={node.children}
+              batchMode={batchMode}
               selected={selected}
               onToggleSelect={onToggleSelect}
               openTaskDetail={openTaskDetail}
@@ -662,6 +722,7 @@ function TaskTreeChildren({
 
 function GroupedTaskList({
   tasks,
+  batchMode,
   isLoading,
   error,
   selected,
@@ -672,6 +733,7 @@ function GroupedTaskList({
   openImportDetail,
 }: {
   tasks?: { total: number; items: TaskRun[] };
+  batchMode: boolean;
   isLoading: boolean;
   error: unknown;
   selected: Set<string>;
@@ -728,6 +790,7 @@ function GroupedTaskList({
                 <TaskRunRow
                   key={node.task.id}
                   task={node.task}
+                  batchMode={batchMode}
                   entrance={rootEntrance(node.task.id, index)}
                   selected={selected}
                   onToggleSelect={onToggleSelect}
@@ -777,6 +840,7 @@ function GroupedTaskList({
                 {isOpen && (
                   <TaskTreeChildren
                     nodes={node.children}
+                    batchMode={batchMode}
                     selected={selected}
                     onToggleSelect={onToggleSelect}
                     openTaskDetail={openTaskDetail}
@@ -823,11 +887,27 @@ function JobsContent() {
   // WebSocket: invalidate queries on status change, update progress on progress events
   useJobWebSocket({
     onStatusChange: (msg) => {
+      const terminal = ["complete", "cancelled", "resolved", "acknowledged"].includes(msg.new_status || "");
+      if (terminal && msg.task_id) {
+        const removeCompleted = (old: unknown): unknown => {
+          if (Array.isArray(old)) return old.filter((item) => item?.id !== msg.task_id && item?.subject_id !== msg.task_id);
+          if (old && typeof old === "object" && Array.isArray((old as { items?: unknown[] }).items)) {
+            const typed = old as { items: Array<{ id?: string; subject_id?: string }>; total?: number };
+            const items = typed.items.filter((item) => item.id !== msg.task_id && item.subject_id !== msg.task_id);
+            return { ...typed, items, total: Math.max(0, (typed.total ?? items.length) - (typed.items.length - items.length)) };
+          }
+          return old;
+        };
+        qc.setQueriesData({ queryKey: queryKeys.downloadJobs.all }, removeCompleted);
+        qc.setQueriesData({ queryKey: queryKeys.importJobs.all }, removeCompleted);
+        qc.setQueriesData({ queryKey: queryKeys.tasks.all }, removeCompleted);
+        toast.info(t("jobs.completed_hidden"));
+      }
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
       qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
       qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
       qc.invalidateQueries({ queryKey: ["workbench"] });
-      if (msg.task_id && msg.new_status) {
+      if (msg.task_id && msg.new_status && !terminal) {
         triggerFlash(msg.task_id);
         toast.info(`${msg.task_id.slice(0, 8)}: ${msg.old_status} → ${msg.new_status}`);
       }
@@ -863,6 +943,7 @@ function JobsContent() {
   const [deleteType, setDeleteType] = useState<"dl" | "im">("dl");
   const [expandedImports, setExpandedImports] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [batchMode, setBatchMode] = useState(false);
 
   const updateParams = (updates: Record<string, string | null>, replace = true) => {
     const next = new URLSearchParams(sp.toString());
@@ -932,6 +1013,7 @@ function JobsContent() {
   const dlParams = useMemo(() => ({
     subscription_source_id: subscriptionSourceId || undefined,
     q: search || undefined,
+    visibility: "actionable" as const,
     offset: 0, limit: JOB_LIST_LIMIT,
   }), [subscriptionSourceId, search]);
 
@@ -957,6 +1039,7 @@ function JobsContent() {
       status: activeTab === "imports" ? status || undefined : undefined,
       download_job_id: downloadJobId || undefined,
       q: search || undefined,
+      visibility: "actionable" as const,
       offset: 0,
       limit: JOB_LIST_LIMIT,
     }),
@@ -967,13 +1050,21 @@ function JobsContent() {
   const importEntrance = useStaggeredEntrance((imports.data?.items ?? []).map((job) => job.id));
 
   const tasks = useQuery({
-    queryKey: ["search", "tasks", search, taskOffset, SEARCH_PAGE_SIZE],
-    queryFn: async () => {
-      const result = await api.search(search, taskOffset, SEARCH_PAGE_SIZE, "tasks");
-      return result.groups.tasks || { total: 0, items: [] };
-    },
+    queryKey: [...queryKeys.tasks.all, "actionable", search, taskOffset, SEARCH_PAGE_SIZE],
+    queryFn: () => api.listTasks({
+      q: search || undefined,
+      visibility: "actionable",
+      offset: taskOffset,
+      limit: SEARCH_PAGE_SIZE,
+    }),
     enabled: activeTab === "all" || activeTab === "admin",
     refetchInterval: (!status || isActiveTask(status)) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
+  });
+
+  const summaryTasks = useQuery({
+    queryKey: [...queryKeys.tasks.all, "actionable-summary"],
+    queryFn: () => api.listTasks({ visibility: "actionable", offset: 0, limit: JOB_LIST_LIMIT }),
+    refetchInterval: (query) => (query.state.data?.items || []).some((task) => isActiveTask(task.status)) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
   });
 
   useEffect(() => {
@@ -1116,6 +1207,20 @@ function JobsContent() {
     mutationFn: () => api.retryAllFailedJobs(),
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }),
   });
+  const compactPreview = useMutation({
+    mutationFn: () => api.compactTasks(true),
+  });
+  const compactTasks = useMutation({
+    mutationFn: () => api.compactTasks(false),
+    onSuccess: (result) => {
+      toast.info(t("jobs.compaction_result", { count: result.deleted_tasks }));
+      compactPreview.reset();
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+      qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
+    },
+    onError: (error) => toast.error((error as Error).message),
+  });
 
   const runSelectedTaskBatch = async (ids: string[], action: BatchAction) => {
     const actionMap = {
@@ -1197,27 +1302,42 @@ function JobsContent() {
     : activeTab === "downloads"
       ? STATUS_OPTIONS
       : TASK_STATUS_OPTIONS;
+  const summaryRows = summaryTasks.data?.items ?? [];
+  const summary = {
+    active: summaryRows.filter((task) => isActiveTask(task.status)).length,
+    paused: summaryRows.filter((task) => task.status === "paused").length,
+    failed: summaryRows.filter((task) => task.status === "failed" && task.attention_state === "open").length,
+    stale: summaryRows.filter((task) => task.status === "stale" && task.attention_state === "open").length,
+    waiting: summaryRows.filter((task) => task.resource_state === "waiting" && Boolean(task.resource_reason)).length,
+  };
 
   return (
     <PageShell>
       <PageHeader title={t("jobs.title")} description={t("jobs.desc")} />
 
-      {workbench.data && (
-        <div data-page-primary-content className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-          <StatCard label={t("jobs.summary_active")} value={workbench.data.queue.active_download_count + workbench.data.queue.active_import_count} sub={t("jobs.summary_active_sub")} tone="active" />
-          <StatCard label={t("jobs.summary_queued")} value={workbench.data.queue.default} sub={t("jobs.summary_queued_sub")} />
-          <StatCard label={t("jobs.summary_importing")} value={workbench.data.queue.active_import_count} sub={t("jobs.summary_importing_sub")} tone={workbench.data.queue.active_import_count ? "active" : "neutral"} />
-          <StatCard label={t("jobs.summary_failed")} value={workbench.data.queue.failed_download_count + workbench.data.queue.failed_import_count} tone={workbench.data.queue.failed_download_count + workbench.data.queue.failed_import_count ? "danger" : "neutral"} />
-          <StatCard label={t("jobs.summary_stale")} value={workbench.data.queue.stale_count} sub={t("jobs.summary_stale_sub")} tone={workbench.data.queue.stale_count ? "warning" : "neutral"} />
-        </div>
-      )}
+      <div data-page-primary-content className="mb-4 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-md border border-border bg-surface px-3 py-2.5 text-xs" aria-live="polite">
+        {([
+          ["jobs.summary_active", summary.active, "text-accent"],
+          ["jobs.status_paused", summary.paused, "text-muted"],
+          ["jobs.summary_failed", summary.failed, "text-danger"],
+          ["jobs.summary_stale", summary.stale, "text-warning"],
+          ["jobs.resource_waiting", summary.waiting, "text-warning"],
+        ] as const).map(([label, value, tone]) => (
+          <span key={label} className="inline-flex items-baseline gap-1.5">
+            <span className="text-muted">{t(label)}</span>
+            <strong className={`font-mono text-sm tabular-nums ${tone}`}>{value}</strong>
+          </span>
+        ))}
+      </div>
 
-      <JobsBatchToolbar
-        activeTab={activeTab}
-        selectedCount={selected.size}
-        onApply={(action) => batchJobs.mutate({ action })}
-        isApplying={batchJobs.isPending}
-      />
+      {batchMode && (
+        <JobsBatchToolbar
+          activeTab={activeTab}
+          selectedCount={selected.size}
+          onApply={(action) => batchJobs.mutate({ action })}
+          isApplying={batchJobs.isPending}
+        />
+      )}
 
       <JobsFilterPanel
         activeTab={activeTab}
@@ -1228,28 +1348,23 @@ function JobsContent() {
         subscriptionSourceId={subscriptionSourceId}
         downloadJobId={downloadJobId}
         selectAll={pageAllSelected}
+        batchMode={batchMode}
         statusOptions={statusOptions}
         onTabChange={handleTabChange}
         onQueryChange={(query) => updateParams({ q: query || null, page: null })}
         onCompose={composeQuery}
         onClearFilters={clearFilters}
         onSelectAll={handleSelectAll}
-        maintenanceActions={activeTab === "downloads" ? (
-          <RowActionMenu
-            label={t("jobs.maintenance_actions")}
-            items={[
-              { label: t("jobs.clear_failed"), onSelect: () => handleClear(["failed", "stale"]), tone: "danger", disabled: clearDL.isPending },
-              { label: t("jobs.clear_complete"), onSelect: () => handleClear(["complete"]), disabled: clearDL.isPending },
-              { label: t("jobs.kill_stuck"), onSelect: () => killStuck.mutate(), tone: "danger", disabled: killStuck.isPending },
-              { label: t("jobs.retry_all_failed"), onSelect: () => retryAllFailed.mutate(), disabled: retryAllFailed.isPending },
-            ]}
-          />
-        ) : undefined}
+        onBatchModeChange={(enabled) => {
+          setBatchMode(enabled);
+          if (!enabled) setSelected(new Set());
+        }}
       />
 
       {activeTab === "all" && (
         <GroupedTaskList
           tasks={tasks.data}
+          batchMode={batchMode}
           isLoading={tasks.isLoading}
           error={tasks.error}
           selected={selected}
@@ -1264,6 +1379,7 @@ function JobsContent() {
       {activeTab === "admin" && (
         <UnifiedTaskList
           tasks={tasks.data}
+          batchMode={batchMode}
           isLoading={tasks.isLoading}
           error={tasks.error}
           selected={selected}
@@ -1310,7 +1426,7 @@ function JobsContent() {
                     id={j.id}
                     status={j.status}
                     typeLabel={operationLabel(t, j.operation_type, "download")}
-                    select={<input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="h-6 w-6 shrink-0 rounded border-border" aria-label={t("jobs.select_download", { id: shortId(j.id) })} />}
+                    select={batchMode ? <input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="h-6 w-6 shrink-0 rounded border-border" aria-label={t("jobs.select_download", { id: shortId(j.id) })} /> : undefined}
                     source={j.source ? <SourceBadge source={j.source} /> : undefined}
                     primary={j.subscription_id ? (
                       <Link
@@ -1414,7 +1530,7 @@ function JobsContent() {
                     id={j.id}
                     status={j.status}
                     typeLabel={operationLabel(t, j.operation_type, "import")}
-                    select={<input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="h-6 w-6 shrink-0 rounded border-border" aria-label={t("jobs.select_import", { id: shortId(j.id) })} />}
+                    select={batchMode ? <input type="checkbox" checked={selected.has(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(j.id)} className="h-6 w-6 shrink-0 rounded border-border" aria-label={t("jobs.select_import", { id: shortId(j.id) })} /> : undefined}
                     source={j.source ? <SourceBadge source={j.source} /> : undefined}
                     primary={j.subscription_id ? (
                       <Link href={`/admin/subscriptions/${j.subscription_id}`} onClick={(e) => e.stopPropagation()} className="inline-flex min-h-6 items-center text-accent hover:underline dark:text-accent" title={j.creator_name || j.subscription_name || undefined}>
@@ -1462,6 +1578,37 @@ function JobsContent() {
           </div>
         )}
       </section>}
+
+      <details className="mb-8 rounded-md border border-danger/30 bg-danger/5">
+        <summary className="flex min-h-11 cursor-pointer items-center px-3 py-2 text-sm font-medium text-danger">
+          {t("jobs.danger_zone")}
+        </summary>
+        <div className="border-t border-danger/20 p-3">
+          <p className="mb-3 text-xs leading-relaxed text-muted">{t("jobs.danger_receipts_safe")}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className="btn-secondary min-h-11 text-xs" onClick={() => compactPreview.mutate()} disabled={compactPreview.isPending}>
+              {t("jobs.preview_compaction")}
+            </button>
+            {compactPreview.data && (
+              <>
+                <span className="text-xs text-muted" aria-live="polite">
+                  {t("jobs.compaction_preview", { count: compactPreview.data.matched, guarded: compactPreview.data.skipped_without_receipt })}
+                </span>
+                <button
+                  type="button"
+                  className="inline-flex min-h-11 items-center justify-center rounded-md border border-danger/40 px-3 text-xs font-medium text-danger hover:bg-danger/10"
+                  onClick={() => {
+                    if (confirm(t("jobs.compaction_confirm", { count: compactPreview.data?.matched || 0 }))) compactTasks.mutate();
+                  }}
+                  disabled={compactTasks.isPending || compactPreview.data.matched === 0}
+                >
+                  {t("jobs.compact_now")}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </details>
 
       <TaskDetailDrawer
         id={selectedTaskId}

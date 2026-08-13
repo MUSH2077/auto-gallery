@@ -278,12 +278,10 @@ export function RecentWorksPanel({ data }: { data: WorkbenchSummary }) {
 }
 
 function buildActivities(data: WorkbenchSummary, t: ReturnType<typeof useT>): DashboardActivity[] {
-  const recentDownloadSources = new Set(
-    data.recent.download_jobs
-      .map((job) => job.subscription_source_id)
-      .filter((id): id is string => Boolean(id)),
-  );
-  const downloads = data.recent.download_jobs.map((job) => {
+  const downloads = data.recent.download_jobs.filter((job) => {
+    const status = job.status.toLowerCase();
+    return ACTIVE_STATUSES.has(status) || FAILED_STATUSES.has(status);
+  }).map((job) => {
     const active = ACTIVE_STATUSES.has(job.status.toLowerCase());
     const progress = active ? progressValue(job.progress_data) : { percent: null, label: null };
     return {
@@ -295,14 +293,17 @@ function buildActivities(data: WorkbenchSummary, t: ReturnType<typeof useT>): Da
       detail: job.outcome ? t(`sync_outcome.${job.outcome.code}_desc`) : job.pipeline_stage || t("dashboard.activity_download"),
       status: job.status,
       timestamp: job.updated_at || job.created_at,
-      href: `/admin/jobs?tab=downloads&job=${job.id}`,
+      href: `/admin/jobs?view=${FAILED_STATUSES.has(job.status.toLowerCase()) ? "attention" : "active"}&task=${job.id}`,
       progress: progress.percent,
       progressLabel: progress.label,
       outcome: job.outcome,
       retryable: FAILED_STATUSES.has(job.status.toLowerCase()),
     };
   });
-  const imports = data.recent.import_jobs.map((job) => {
+  const imports = data.recent.import_jobs.filter((job) => {
+    const status = job.status.toLowerCase();
+    return ACTIVE_STATUSES.has(status) || FAILED_STATUSES.has(status);
+  }).map((job) => {
     const progress = progressValue(job.progress_data, job.progress_works_done, job.progress_works_total);
     return {
       key: `import:${job.id}`,
@@ -313,28 +314,13 @@ function buildActivities(data: WorkbenchSummary, t: ReturnType<typeof useT>): Da
       detail: job.progress_stage || t("dashboard.activity_import"),
       status: job.status,
       timestamp: job.updated_at || job.created_at,
-      href: `/admin/jobs?tab=imports&import_job=${job.id}`,
+      href: `/admin/jobs?view=${FAILED_STATUSES.has(job.status.toLowerCase()) ? "attention" : "active"}&task=${job.id}`,
       progress: progress.percent,
       progressLabel: progress.label,
       retryable: FAILED_STATUSES.has(job.status.toLowerCase()),
     };
   });
-  const syncs = data.recent.successful_syncs.filter((sync) => !recentDownloadSources.has(sync.source_id)).map((sync) => ({
-    key: `sync:${sync.source_id}`,
-    id: sync.source_id,
-    kind: "sync" as const,
-    source: sync.source,
-    title: sync.creator_name,
-    detail: t("dashboard.activity_sync"),
-    status: "complete",
-    timestamp: sync.last_synced_at,
-    href: `/admin/creators/${sync.creator_id}`,
-    progress: null,
-    progressLabel: null,
-    retryable: false,
-  }));
-
-  return [...downloads, ...imports, ...syncs]
+  return [...downloads, ...imports]
     .sort((left, right) => {
       const rightTime = right.timestamp ? Date.parse(right.timestamp) : 0;
       const leftTime = left.timestamp ? Date.parse(left.timestamp) : 0;
@@ -423,8 +409,6 @@ export function ActivityPanel({
   const grouped = {
     active: activities.filter((activity) => activityGroup(activity.status) === "active"),
     failed: activities.filter((activity) => activityGroup(activity.status) === "failed"),
-    complete: activities.filter((activity) => activityGroup(activity.status) === "complete"),
-    other: activities.filter((activity) => activityGroup(activity.status) === "other"),
   };
   const entrance = useStaggeredEntrance(activities.map((activity) => activity.key));
   let entranceIndex = 0;
@@ -439,14 +423,14 @@ export function ActivityPanel({
       </div>
       {activities.length ? (
         <div className="overflow-hidden rounded-lg border border-border">
-          {(["active", "failed", "complete", "other"] as const).map((group) => {
+          {(["failed", "active"] as const).map((group) => {
             const rows = grouped[group];
             if (!rows.length) return null;
             return (
               <div key={group} className="border-t border-border first:border-t-0">
                 <div className="flex items-center gap-2 bg-subtle px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted">
                   <span className={`h-2 w-2 rounded-full ${
-                    group === "failed" ? "bg-danger" : group === "active" ? "bg-accent" : group === "complete" ? "bg-success" : "bg-muted"
+                    group === "failed" ? "bg-danger" : "bg-accent"
                   }`} />
                   {t(`dashboard.activity_group_${group}`)}
                 </div>
@@ -515,8 +499,8 @@ export function AttentionBanner({
       : data.attention.low_disk_warning && !data.attention.failed_download_count
         ? "/admin/data-mgmt"
         : data.attention.scheduler_disabled_warning && !data.attention.failed_download_count
-          ? "/admin/scheduler"
-          : "/admin/jobs?q=status%3Afailed";
+          ? adminRoutes.settingsSection("scheduler-defaults")
+          : "/admin/jobs?view=attention";
 
   return (
     <section className="flex flex-col gap-4 rounded-lg border border-danger/50 bg-danger-subtle p-4 sm:flex-row sm:items-center" aria-labelledby="dashboard-attention-heading">

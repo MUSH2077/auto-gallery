@@ -40,8 +40,7 @@ curation history, and gallery-dl configuration.
   posting-time metadata can raise confidence, while ambiguous cases go to
   human review.
 - **Visual exploration.** Responsive work grids, creator storage trees, tag
-  bubbles, search, slideshows, and an optional showcase help browse large
-  collections.
+  bubbles, search, and full-screen slideshows help browse large collections.
 - **User-initiated video playback.** MP4 and WebM assets receive derived WebP
   covers for fast browsing and play with native browser controls only after an
   authorized click; GIF remains supported as an animated image.

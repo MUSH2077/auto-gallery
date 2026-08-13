@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Any, Iterable
 
 
 @dataclass
@@ -9,6 +10,22 @@ class ProviderCapabilities:
     supports_gallerydl: bool = False
     supports_tags: bool = False
     is_reference_only: bool = False
+    supports_download_cursor: bool = False
+
+
+@dataclass(frozen=True)
+class ProviderDownloadChunk:
+    """A provider-owned, resumable gallery-dl invocation.
+
+    Positional ``--range`` paging is not stable for every provider when new
+    remote posts arrive.  Providers therefore opt in explicitly and return the
+    exact gallery-dl arguments plus the checkpoint that becomes durable only
+    after artifact registration succeeds.
+    """
+
+    token: str
+    gallerydl_args: tuple[str, ...]
+    next_checkpoint: dict[str, Any] | None
 
 
 class BaseProvider(ABC):
@@ -66,3 +83,30 @@ class BaseProvider(ABC):
         scanning the entire source root.
         """
         return None
+
+    def plan_download_chunk(
+        self,
+        checkpoint: dict[str, Any] | None,
+        *,
+        batch_size: int,
+    ) -> ProviderDownloadChunk | None:
+        """Return a stable provider cursor chunk, or use the full safe path.
+
+        The default deliberately returns ``None``.  A provider must prove that
+        its cursor is stable under concurrent remote inserts before enabling
+        ``supports_download_cursor``; otherwise auto-gallery retains the
+        existing complete ``1-N`` gallery-dl invocation and archive semantics.
+        """
+
+        del checkpoint, batch_size
+        return None
+
+    def complete_download_chunk(
+        self,
+        chunk: ProviderDownloadChunk,
+        downloaded_work_ids: Iterable[str],
+    ) -> dict[str, Any] | None:
+        """Return the checkpoint to persist after ledger registration."""
+
+        del downloaded_work_ids
+        return chunk.next_checkpoint

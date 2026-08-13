@@ -22,9 +22,9 @@ from app.api.repositories import router as repositories_router
 from app.api.curation import router as curation_router
 from app.api.ws import router as ws_router
 from app.api.tasks import router as tasks_router
+from app.api.operations import router as operations_router
 from app.api.users import router as users_router
 from app.api.upload import router as upload_router
-from app.api.showcase import router as showcase_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(ws_router, tags=["websocket"])
@@ -39,6 +39,7 @@ api_router.include_router(subscriptions_router, prefix="/subscriptions", tags=["
 api_router.include_router(download_jobs_router, prefix="/download-jobs", tags=["download-jobs"])
 api_router.include_router(import_jobs_router, prefix="/import-jobs", tags=["import-jobs"])
 api_router.include_router(tasks_router, prefix="/tasks", tags=["tasks"])
+api_router.include_router(operations_router, prefix="/operations", tags=["operations"])
 api_router.include_router(repositories_router, prefix="/repositories", tags=["repositories"])
 api_router.include_router(curation_router, prefix="/curation", tags=["curation"])
 api_router.include_router(works_router, prefix="/works", tags=["works"])
@@ -51,4 +52,3 @@ api_router.include_router(admin_curation_ops_router, prefix="/admin", tags=["adm
 api_router.include_router(admin_tasks_ops_router, prefix="/admin", tags=["admin"])
 api_router.include_router(users_router, prefix="/users", tags=["users"])
 api_router.include_router(upload_router, prefix="/upload", tags=["upload"])
-api_router.include_router(showcase_router, prefix="/showcase", tags=["showcase"])

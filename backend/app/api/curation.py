@@ -3,8 +3,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import RequirePermission
-from app.database import async_session, get_db
+from app.auth import RequireAdminUser, RequirePermission
+from app.config import settings
+from app.database import get_db
 from app.schemas.curation import (
     CurationBackfillRunResponse,
     CurationBackfillStatusResponse,
@@ -17,12 +18,84 @@ from app.schemas.curation import (
     RuleSuggestionRead,
 )
 from app.schemas.gitllery import (
-    GitlleryLogResponse, GitlleryReconcileResponse, GitlleryRebuildResponse, GitlleryStatusResponse,
+    GitlleryCommandRequest,
+    GitlleryCommandResponse,
+    GitlleryLogResponse,
+    GitlleryReconcileResponse,
+    GitlleryStatusResponse,
+    GitlleryVerifyRequest,
 )
 from app.services.curation import CurationService
-from app.services.gitllery import GitlleryService, project_commit_safe
+from app.services.gitllery import GitlleryService
 
 router = APIRouter(dependencies=[RequirePermission("curation")])
+
+
+def _require_gitllery_projection_active() -> None:
+    if settings.gitllery_projection_mode.strip().lower() != "active":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "gitllery_shadow_only",
+                "message": "Gitllery v1 projection maintenance is disabled while shadow mode is active.",
+                "projection_mode": "shadow",
+            },
+        )
+
+
+@router.post("/gitllery/push")
+@router.post("/gitllery/pull")
+async def gitllery_transfer_shadow_only(_admin=RequireAdminUser):
+    """Reserve the v1 transfer command surface without unsafe disk mutation.
+
+    The portable transfer protocol is deliberately disabled in this rollout;
+    CLI clients receive the same stable shadow-only error as projection
+    maintenance instead of a misleading 404 or an implicit full-history walk.
+    """
+
+    _require_gitllery_projection_active()
+    raise HTTPException(
+        status_code=501,
+        detail={
+            "code": "gitllery_transfer_not_implemented",
+            "message": "Gitllery v1 push/pull is not enabled in this release.",
+        },
+    )
+
+
+@router.post(
+    "/gitllery/commands/preview",
+    response_model=GitlleryCommandResponse,
+)
+async def preview_gitllery_command(
+    command: GitlleryCommandRequest,
+    user=RequirePermission("curation"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Validate a Gitllery command without committing or touching disk."""
+
+    return await CurationService(db).execute_gitllery_command(
+        command,
+        actor_id=str(user.id),
+        dry_run=True,
+    )
+
+
+@router.post(
+    "/gitllery/commands/execute",
+    response_model=GitlleryCommandResponse,
+)
+async def execute_gitllery_command(
+    command: GitlleryCommandRequest,
+    user=RequirePermission("curation"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Atomically apply one bounded, idempotent Gitllery domain command."""
+
+    return await CurationService(db).execute_gitllery_command(
+        command,
+        actor_id=str(user.id),
+    )
 
 
 @router.get("/commits", response_model=CurationCommitListResponse)
@@ -63,6 +136,8 @@ async def run_curation_backfill():
         title="Curation baseline backfill",
         entity="curation-backfill",
         func="app.jobs.admin_operations.run_curation_backfill_operation",
+        job_timeout=7 * 24 * 60 * 60,
+        queue_name="maintenance",
     )
 
 
@@ -76,8 +151,6 @@ async def get_curation_commit(commit_id: UUID, db: AsyncSession = Depends(get_db
 async def revert_curation_commit(commit_id: UUID, db: AsyncSession = Depends(get_db)):
     svc = CurationService(db)
     result = await svc.revert_commit(commit_id)
-    if result.get("commit") is not None:
-        await project_commit_safe(db, result["commit"].id)
     return result
 
 
@@ -91,7 +164,6 @@ async def preview_purge(data: PurgePreviewRequest, db: AsyncSession = Depends(ge
 async def purge_trashed_works(data: PurgeRequest, db: AsyncSession = Depends(get_db)):
     svc = CurationService(db)
     commit = await svc.purge(data.work_ids, message=data.message)
-    await project_commit_safe(db, commit.id)
     return await svc.commit_payload(commit.id)
 
 
@@ -113,33 +185,66 @@ async def gitllery_repo_status(repository_id: str, deep: bool = Query(False),
 
 
 @router.post("/gitllery/reconcile")
-async def gitllery_reconcile(repository_id: str | None = None):
-    """Enqueue projection of pending commits (and checkpoint rebuild when
-    library-wide). The walk is O(history) and runs in a worker by design —
-    status() has no inline full-history fallback anymore."""
-    from app.services.operations import enqueue_admin_operation
-    return await enqueue_admin_operation(
-        lock_key="library:gitllery-sync:active",
-        operation_type="admin-gitllery-sync",
-        title="Gitllery sync",
-        entity="gitllery-sync",
-        func="app.jobs.admin_operations.run_gitllery_sync_operation",
-        options={"mode": "reconcile", "repository_id": repository_id},
-    )
+async def gitllery_reconcile(
+    repository_id: str | None = None,
+    _admin=RequireAdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """Wake the bounded v1 projection coordinator.
+
+    The repository hint is informational because one authoritative commit can
+    fan out to several portable repositories. No full-history walk runs in the
+    request or in one long RQ job.
+    """
+
+    _require_gitllery_projection_active()
+    from app.services.outbox_coordinator import outbox_counts, wake_pending_outboxes
+
+    counts = await outbox_counts(db)
+    wake = wake_pending_outboxes({"gitllery": max(1, counts.get("gitllery", 0))})
+    return {
+        "status": "enqueued",
+        "projection_scope": "library",
+        "repository_id": repository_id,
+        "ready": counts.get("gitllery", 0),
+        **wake,
+    }
 
 
 @router.post("/gitllery/backfill")
-async def gitllery_backfill():
-    """Enqueue repo initialization + full projection (first-sync path)."""
-    from app.services.operations import enqueue_admin_operation
-    return await enqueue_admin_operation(
-        lock_key="library:gitllery-sync:active",
-        operation_type="admin-gitllery-sync",
-        title="Gitllery sync",
-        entity="gitllery-sync",
-        func="app.jobs.admin_operations.run_gitllery_sync_operation",
-        options={"mode": "backfill", "repository_id": None},
+@router.post("/gitllery/build")
+async def gitllery_backfill(
+    _admin=RequireAdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """Capture missing historical intents, then wake bounded projection."""
+
+    _require_gitllery_projection_active()
+    from sqlalchemy import text
+    from app.services.outbox_coordinator import outbox_counts, wake_pending_outboxes
+
+    result = await db.execute(
+        text(
+            """
+            INSERT INTO gitllery_projection_outbox (
+              id, created_at, updated_at, commit_id, state, attempts, available_at
+            )
+            SELECT id, now(), now(), id, 'pending', 0, now()
+            FROM curation_commits
+            ON CONFLICT (commit_id) DO NOTHING
+            """
+        )
     )
+    await db.commit()
+    counts = await outbox_counts(db)
+    wake = wake_pending_outboxes({"gitllery": max(1, counts.get("gitllery", 0))})
+    return {
+        "status": "enqueued",
+        "captured": int(result.rowcount or 0),
+        "ready": counts.get("gitllery", 0),
+        "projection_mode": settings.gitllery_projection_mode,
+        **wake,
+    }
 
 
 @router.get("/repositories/{repository_id}/gitllery/log", response_model=GitlleryLogResponse)
@@ -148,68 +253,47 @@ async def gitllery_log(repository_id: str, limit: int = Query(50, ge=1, le=200),
     return await GitlleryService(db).log(repository_id, limit)
 
 
-@router.post("/gitllery/rebuild", response_model=GitlleryRebuildResponse)
+@router.post("/gitllery/rebuild")
 async def gitllery_rebuild(
     dry_run: bool = Query(True),
     repository_id: str | None = None,
+    _admin=RequireAdminUser,
     db: AsyncSession = Depends(get_db),
 ):
-    """Restore manual curation history from on-disk .gitllery repos into the DB.
+    """Compatibility alias for a side-by-side v1 projection build.
 
-    dry_run (default) runs inline and reports what WOULD happen without writing.
-    dry_run=false enqueues the real rebuild as an operations job (mirrors
-    import_from_disk in admin.py) since it may touch a large history.
+    The historical endpoint used to read disk directly into the public
+    database. That unsafe behavior is intentionally retired; disaster restore
+    has a separate staged workflow.
     """
     if dry_run:
-        report = await GitlleryService(db).rebuild_db_from_disk(repository_id, dry_run=True)
-        return report
+        return {
+            "status": "ready",
+            "dry_run": True,
+            "repository_id": repository_id,
+            "projection_mode": settings.gitllery_projection_mode,
+            "legacy_layout_will_remain_read_only": True,
+        }
+    _require_gitllery_projection_active()
+    return await gitllery_backfill(_admin, db)
 
-    from rq import Queue
-    import uuid
-    from app.services.redis_client import get_redis
-    from app.services.operations import get_operation_status, set_operation_status
-    from app.services.tasks import TaskService
 
-    options = {"repository_id": repository_id}
-    redis = get_redis()
-    job_id = str(uuid.uuid4())
-    active_job = redis.get("library:gitllery-rebuild:active")
-    if isinstance(active_job, bytes):
-        active_job = active_job.decode()
-    if active_job:
-        active_status = get_operation_status(active_job)
-        if not active_status or active_status.get("status") in {"complete", "failed", "cancelled"}:
-            redis.delete("library:gitllery-rebuild:active")
-    if not redis.set("library:gitllery-rebuild:active", job_id, nx=True, ex=604800):
-        active_job = redis.get("library:gitllery-rebuild:active")
-        if isinstance(active_job, bytes):
-            active_job = active_job.decode()
-        raise HTTPException(status_code=409, detail={"message": "Gitllery rebuild already running", "job_id": active_job})
+@router.post("/gitllery/verify")
+async def gitllery_verify(
+    request: GitlleryVerifyRequest,
+    _admin=RequireAdminUser,
+):
+    """Queue bounded verification; never scan repository history in HTTP."""
 
-    async with async_session() as task_db:
-        task = await TaskService(task_db).create_task(
-            task_id=UUID(job_id),
-            kind="admin",
-            operation_type="admin-gitllery-rebuild",
-            title="Rebuild curation from disk",
-            status="enqueued",
-            queue_name="operations",
-            progress={"phase": "enqueued", "label": "Gitllery rebuild queued"},
-            meta={"entity": "gitllery-rebuild", "repository_id": repository_id},
-        )
-        await task_db.commit()
-    set_operation_status(job_id, "enqueued", "admin-gitllery-rebuild",
-        progress={"phase": "enqueued", "label": "Gitllery rebuild queued"},
-        meta={"entity": "gitllery-rebuild", "repository_id": repository_id})
+    from app.services.operations import enqueue_admin_operation
 
-    rq_job = Queue(name="operations", connection=redis).enqueue(
-        "app.jobs.admin_operations.run_gitllery_rebuild_operation",
-        job_id, options, job_timeout=14400, result_ttl=604800)
-    async with async_session() as task_db:
-        svc = TaskService(task_db)
-        current = await svc.get(task.id)
-        if current:
-            await svc.update_task(current, rq_job_id=rq_job.id)
-            await task_db.commit()
-
-    return {"status": "enqueued", "job_id": job_id, "dry_run": False}
+    return await enqueue_admin_operation(
+        lock_key=f"gitllery:verify:{request.repository_id}",
+        operation_type="admin-gitllery-verify",
+        title="Verify Gitllery repository",
+        entity="gitllery-verify",
+        func="app.jobs.admin_operations.run_gitllery_verify_operation",
+        options=request.model_dump(),
+        job_timeout=7 * 24 * 60 * 60,
+        queue_name="maintenance",
+    )

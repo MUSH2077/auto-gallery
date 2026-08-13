@@ -9,6 +9,7 @@ import { api, queryKeys, type SearchQualifierToken, type SubscriptionSearchHit }
 import { PageHeader, PageSection, EmptyState, ErrorState, ConfirmDialog, Modal, StatusBadge, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityList, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { scheduleModeLabel, useI18nFormat } from "@/lib/i18n-format";
+import DomainDangerZone from "@/components/DomainDangerZone";
 
 type FilterMode = "all" | "active" | "inactive" | "sync_on" | "sync_off" | "never_synced";
 
@@ -424,6 +425,11 @@ function SubscriptionsContent() {
       </Modal>
       {deleteId && <ConfirmDialog open title={t("subscriptions.delete_title")} message={t("subscriptions.delete_msg")} onConfirm={() => del.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={del.isPending} error={(del.error as Error)?.message} />}
       {confirmBatchDel && <ConfirmDialog open title={t("subscriptions.batch_delete_title")} message={t("subscriptions.batch_delete_msg").replace("{count}", String(selected.size))} onConfirm={() => batchDel.mutate([...selected])} onCancel={() => setConfirmBatchDel(false)} isPending={batchDel.isPending} error={(batchDel.error as Error)?.message} />}
+      <DomainDangerZone
+        entity="subscriptions"
+        title={t("datamgmt.danger_clear_subs")}
+        description={t("datamgmt.danger_clear_subs_desc")}
+      />
     </PageShell>
   );
 }

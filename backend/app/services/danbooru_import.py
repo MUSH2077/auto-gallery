@@ -262,6 +262,8 @@ async def import_all_danbooru_artist(data: dict, db: AsyncSession) -> dict:
             ))
             source_creators_created += 1
 
+    from app.services.creator import CreatorService
+    await CreatorService(db)._request_creator_projection(creator_id)
     await db.commit()
     invalidate_creator_subscription_caches()
 

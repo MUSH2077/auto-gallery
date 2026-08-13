@@ -28,13 +28,11 @@ def test_delete_work_moves_to_trash_instead_of_hard_delete(monkeypatch):
             return SimpleNamespace(id=uuid4(), stats={"work_count": 1})
 
     monkeypatch.setattr(works, "CurationService", FakeCurationService)
-    monkeypatch.setattr(works, "cache_delete_pattern", lambda pattern: calls.setdefault("cache", pattern))
 
     asyncio.run(works.delete_work(work_id, db=FakeDB()))
 
     assert calls["trash"][0] == [work_id]
     assert "delete" not in calls
-    assert calls["cache"] == "works:*"
 
 
 def test_list_works_uses_canonical_search_query(monkeypatch):
@@ -83,7 +81,6 @@ def test_batch_curate_restore_uses_curation_service(monkeypatch):
             return {"id": str(obj_id), "changes": []}
 
     monkeypatch.setattr(works, "CurationService", FakeCurationService)
-    monkeypatch.setattr(works, "cache_delete_pattern", lambda _pattern: None)
 
     result = asyncio.run(works.batch_curate_works(
         BatchCurateRequest(ids=[work_id], action="restore", reason="mistake", message="restore it"),

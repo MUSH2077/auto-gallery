@@ -192,6 +192,8 @@ jobs:
         run: scripts/privacy-scan.sh
       - name: Validate Docker Compose config
         run: docker compose --env-file .env.ci config --quiet
+      - name: Validate queue, governance, and Gitllery v1 contracts
+        run: python3 scripts/check-governance-contracts.py
       - name: Build release package dry run
         run: |
           archive="$(scripts/package-release.sh ci)"

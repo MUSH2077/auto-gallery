@@ -578,17 +578,6 @@
     to   { transform: scale(1.08) translate3d(-1.5%, -1%, 0); }
   }
   .slide-kenburns { animation: kenBurns var(--slide-dwell, 5000ms) ease-out forwards; }
-  /* Showcase low-end/WebGL fallback: two identical image strips move by one
-     strip width for a seamless loop. Transform-only; reduced motion is routed
-     to the static grid before this class mounts, and the global kill-switch is
-     a second line of defense. */
-  @keyframes galleryDrift {
-    from { transform: translate3d(0, 0, 0); }
-    to   { transform: translate3d(-50%, 0, 0); }
-  }
-  .gallery-drift {
-    animation: galleryDrift var(--drift-duration, 60s) linear infinite;
-  }
   /* Two stacked layers crossfade via this shared opacity transition (240ms
      mirrors motionTokens.duration.slow — see src/lib/motion/tokens.ts);
      toggling opacity-0/opacity-100 on each layer drives the fade. */

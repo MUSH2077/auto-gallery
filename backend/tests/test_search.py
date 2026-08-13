@@ -118,6 +118,24 @@ class TestSearchService:
         assert "is_nsfw = true" in filters
         assert "is_nsfw = false" in filters
 
+    def test_structured_work_lists_use_database_projection(self):
+        from app.services.search import SearchService
+        from app.services.search_language import parse_search_query
+
+        for value in (
+            "",
+            "source:pixiv sort:posted-desc",
+            "is:favorite is:sfw sort:title-asc",
+            "is:trashed sort:updated-desc",
+            "has:multiple-assets",
+            "has:image has:video has:animation",
+            "repo:00000000-0000-0000-0000-000000000001",
+        ):
+            assert SearchService._works_db_compatible(
+                parse_search_query(value, "works")
+            )
+
+
 
 @pytest.mark.integration
 @pytest.mark.asyncio

@@ -34,6 +34,20 @@ class TaskRun(TimestampMixin, Base):
 
     # Lifecycle — values come from app.models.task_state (enqueued/running/complete/failed/...).
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="enqueued")
+    # Orthogonal to the business lifecycle. A task can remain ``running`` while
+    # yielding its resource permit, or remain ``enqueued`` while waiting for a
+    # safe budget. This preserves every existing status transition/API filter.
+    resource_state: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="waiting"
+    )
+    resource_reason: Mapped[str | None] = mapped_column(String(500))
+    attention_state: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="none"
+    )
+    reason_code: Mapped[str | None] = mapped_column(String(80))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    compactable_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     queue_name: Mapped[str | None] = mapped_column(String(80))
     rq_job_id: Mapped[str | None] = mapped_column(String(255))          # backing RQ job, for control signals
 

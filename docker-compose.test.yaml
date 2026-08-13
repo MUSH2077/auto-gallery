@@ -1,0 +1,91 @@
+# Disposable acceptance environment. Always combine this with docker-compose.yaml
+# and a generated env file from scripts/test-env.sh. Host paths are rejected by
+# test-env.sh unless they live below the marked test run root.
+x-test-labels: &test-labels
+  com.auto-gallery.environment: acceptance
+  com.auto-gallery.run-id: ${TEST_RUN_ID:?TEST_RUN_ID is required}
+
+services:
+  postgres:
+    restart: "no"
+    labels: *test-labels
+  redis:
+    restart: "no"
+    labels: *test-labels
+  meilisearch:
+    restart: "no"
+    labels: *test-labels
+  migrate:
+    restart: "no"
+    labels: *test-labels
+  backend:
+    restart: "no"
+    labels: *test-labels
+    ports: !override
+      - "127.0.0.1:${BACKEND_PORT:?BACKEND_PORT is required}:8000"
+    environment:
+      RESOURCE_GOVERNANCE_MODE: ${RESOURCE_GOVERNANCE_MODE:-shadow}
+      GITLLERY_PROJECTION_MODE: shadow
+      CORS_ORIGINS: http://127.0.0.1:${ADMIN_WEB_PORT}
+  worker-download:
+    restart: "no"
+    labels: *test-labels
+    extra_hosts: !reset []
+  worker-import:
+    restart: "no"
+    labels: *test-labels
+    extra_hosts: !reset []
+  worker-operations:
+    restart: "no"
+    labels: *test-labels
+    extra_hosts: !reset []
+  scheduler:
+    restart: "no"
+    labels: *test-labels
+    extra_hosts: !reset []
+  admin-web:
+    restart: "no"
+    labels: *test-labels
+    ports: !override
+      - "127.0.0.1:${ADMIN_WEB_PORT:?ADMIN_WEB_PORT is required}:3000"
+
+  provider-stub:
+    image: ${BACKEND_IMAGE:?BACKEND_IMAGE is required}
+    pull_policy: never
+    command: python -m http.server 8099 --directory /fixtures
+    volumes:
+      - ${TEST_FIXTURES:?TEST_FIXTURES is required}:/fixtures:ro
+    expose:
+      - "8099"
+    restart: "no"
+    mem_limit: 64M
+    memswap_limit: 64M
+    cpus: "0.05"
+    pids_limit: 16
+    oom_score_adj: 500
+    labels: *test-labels
+
+  pressure-memory:
+    profiles: ["load"]
+    image: ${BACKEND_IMAGE:?BACKEND_IMAGE is required}
+    pull_policy: never
+    command:
+      - python
+      - /acceptance/scripts/load/memory-pressure.py
+      - --require-container
+      - --target-mib
+      - ${MEMORY_PRESSURE_TARGET_MIB:-384}
+    volumes:
+      - .:/acceptance:ro
+    restart: "no"
+    mem_limit: 512M
+    memswap_limit: 512M
+    cpus: "0.10"
+    pids_limit: 16
+    oom_score_adj: 900
+    labels: *test-labels
+
+networks:
+  default:
+    internal: true
+    labels: *test-labels

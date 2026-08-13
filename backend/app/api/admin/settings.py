@@ -18,7 +18,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import and_, select
+from sqlalchemy import and_, select, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -28,7 +28,13 @@ logger = logging.getLogger(__name__)
 from app.auth import RequirePermission
 from app.database import async_session, get_db
 from app.models.system_setting import SystemSetting
+from app.models.subscription_source import SubscriptionSource
+from app.schemas.gitllery import GitllerySettingsResponse
 from app.services.redis_client import get_redis
+from app.services.queue_admission import (
+    QueueAdmissionError,
+    checked_enqueue_in,
+)
 from app.services import admin_data
 from app.services.admin_data import ENTITIES, clear_entity_data
 
@@ -41,30 +47,44 @@ def _job_is_sync_scan(job) -> bool:
 
 def _reschedule_subscription_sync_scan(config: dict) -> dict:
     """Replace pending subscription sync scans with the current interval."""
-    import redis as redis_lib
     from rq import Queue
     from rq.registry import ScheduledJobRegistry
 
     from app.jobs.subscription_sync import sync_subscriptions
 
     interval = max(int(config.get("scheduler_scan_interval_minutes", 60)), 5)
-    redis = redis_lib.from_url(settings.redis_url)
+    redis = get_redis()
     queue = Queue(name="scheduled", connection=redis)
     scheduled_registry = ScheduledJobRegistry(queue=queue)
 
-    removed = 0
+    scheduled_old_ids = []
     for job_id in list(scheduled_registry.get_job_ids()):
         job = queue.fetch_job(job_id)
         if job and _job_is_sync_scan(job):
-            scheduled_registry.remove(job_id, delete_job=True)
-            removed += 1
+            scheduled_old_ids.append(job_id)
 
+    queued_old_ids = []
     for job in list(queue.get_jobs()):
         if _job_is_sync_scan(job):
-            queue.remove(job.id)
-            removed += 1
+            queued_old_ids.append(job.id)
 
-    job = queue.enqueue_in(timedelta(minutes=interval), sync_subscriptions)
+    # Publish first so a late Redis capacity/write failure never deletes the
+    # only known-good recurring scan. The replacement is at least five minutes
+    # away, leaving time to remove the superseded entries below.
+    job = checked_enqueue_in(
+        queue,
+        timedelta(minutes=interval),
+        sync_subscriptions,
+    )
+    removed = 0
+    for old_job_id in scheduled_old_ids:
+        if old_job_id != job.id:
+            scheduled_registry.remove(old_job_id, delete_job=True)
+            removed += 1
+    for old_job_id in queued_old_ids:
+        if old_job_id != job.id:
+            queue.remove(old_job_id)
+            removed += 1
     return {"removed": removed, "job_id": job.id, "interval_minutes": interval}
 
 
@@ -147,10 +167,17 @@ async def _get_setting(db: AsyncSession, key: str, default: dict = None) -> dict
 async def _put_setting(db: AsyncSession, key: str, value: dict):
     result = await db.execute(select(SystemSetting).where(SystemSetting.key == key))
     row = result.scalar_one_or_none()
+    changed = row is None or row.value != value
     if row:
         row.value = value
     else:
         db.add(SystemSetting(key=key, value=value))
+    if key == "subscription_defaults" and changed:
+        # Inherited schedules can change for every source.  NULL is the durable
+        # invalidation marker consumed fairly by the next 100-row coverage pass.
+        await db.execute(
+            sql_update(SubscriptionSource).values(next_sync_at=None)
+        )
     await db.commit()
 
     # Invalidate caches when relevant settings change
@@ -862,6 +889,81 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
     return {"dedup": dedup, "subscription_defaults": sub, "download_defaults": dl, "proxy": proxy}
 
 
+@router.get("/gitllery/settings", response_model=GitllerySettingsResponse)
+async def get_gitllery_settings(db: AsyncSession = Depends(get_db)):
+    """Return Gitllery v1's deployment-managed, read-only control surface.
+
+    The parent admin router requires the ``system`` permission.  Keep this
+    response deliberately declarative: it exposes no environment values,
+    filesystem paths, credentials, or mutation controls.
+    """
+
+    from app.services.gitllery import GitlleryService
+
+    mode = settings.gitllery_projection_mode.strip().lower()
+    projection_mode: Literal["shadow", "active"] = (
+        "active" if mode == "active" else "shadow"
+    )
+    projection_reason = None if projection_mode == "active" else "gitllery_shadow_only"
+    projection_capability = {
+        "enabled": projection_mode == "active",
+        "reason": projection_reason,
+    }
+    transfer_capability = {
+        "enabled": False,
+        "reason": (
+            "gitllery_shadow_only"
+            if projection_mode == "shadow"
+            else "gitllery_transfer_not_implemented"
+        ),
+    }
+    status = await GitlleryService(db).status(deep=False)
+    return {
+        "product_name": "Gitllery",
+        "product_version": "v1",
+        "format_id": "gitllery-segment",
+        "format_revision": 1,
+        "projection_mode": projection_mode,
+        "build_generation": settings.gitllery_build_generation,
+        "managed_by": "deployment_environment",
+        "read_only": True,
+        "capabilities": {
+            "automatic_projection": projection_capability,
+            "reconcile": projection_capability,
+            "backfill": projection_capability,
+            "rebuild": projection_capability,
+            "push": transfer_capability,
+            "pull": transfer_capability,
+            "verify": {"enabled": True, "reason": None},
+            "commit": {"enabled": True, "reason": None},
+        },
+        "cli": {
+            "max_works_per_commit": 25,
+            "max_operations_per_commit": 100,
+            "token_storage": "client_only",
+            "server_stores_cli_token": False,
+            "examples": {
+                "config": "gitllery config set url http://auto-gallery.local",
+                "login": "gitllery auth login --username admin",
+                "status": "gitllery --remote status",
+                "log": "gitllery --remote log --limit 50",
+                "verify": "gitllery verify --remote",
+                "commit": (
+                    "gitllery --remote commit --message \"curate work\" "
+                    "work favorite 00000000-0000-0000-0000-000000000001 --set on"
+                ),
+            },
+        },
+        "governance_scope": {
+            "observation": "host_and_auto_gallery",
+            "enforcement": "auto_gallery_only",
+            "modifies_other_projects": False,
+            "modifies_host_configuration": False,
+        },
+        "status": status,
+    }
+
+
 @router.put("/settings")
 async def update_settings(data: AdminSettingsUpdate, db: AsyncSession = Depends(get_db)):
     sync_scan_reschedule = None
@@ -872,6 +974,8 @@ async def update_settings(data: AdminSettingsUpdate, db: AsyncSession = Depends(
         await _put_setting(db, "subscription_defaults", subscription_defaults)
         try:
             sync_scan_reschedule = _reschedule_subscription_sync_scan(subscription_defaults)
+        except QueueAdmissionError:
+            raise
         except Exception:
             logger.warning("Failed to reschedule subscription sync scan after settings update", exc_info=True)
     if data.download_defaults is not None:

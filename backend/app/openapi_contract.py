@@ -28,7 +28,6 @@ OPENAPI_TAGS = [
     {"name": "upload", "description": "Authenticated multipart media upload."},
     {"name": "admin", "description": "Administrative settings, backup, indexing, integrity, and deduplication operations."},
     {"name": "users", "description": "Administrator-only account and permission management."},
-    {"name": "showcase", "description": "Curated showcase samples."},
 ]
 
 _DEPRECATED_OPERATIONS: dict[tuple[str, str], str] = {
@@ -240,7 +239,6 @@ def _default_tag(path: str) -> str:
         "curation",
         "upload",
         "users",
-        "showcase",
         "admin",
     ):
         if tag in segments:

@@ -16,6 +16,7 @@ from app.database import get_db
 from app.services import danbooru as danbooru_svc
 from app.services.danbooru_import import import_all_danbooru_artist
 from app.services.operations import set_operation_status
+from app.services.queue_admission import checked_enqueue
 from app.services.redis_client import get_redis
 from app.models.creator_link import CreatorLink
 from app.models.source_creator import SourceCreator
@@ -108,8 +109,6 @@ async def batch_import_danbooru_artists(data: dict):
     Returns immediately with a job_id. Poll GET /danbooru/artist/batch-import/status
     for progress and results.
     """
-    import redis as redis_lib
-
     pixiv_ids = data.get("pixiv_ids", [])
     if not pixiv_ids or not isinstance(pixiv_ids, list):
         raise HTTPException(status_code=400, detail="pixiv_ids list is required")
@@ -137,16 +136,21 @@ async def batch_import_danbooru_artists(data: dict):
             "skipped_existing": skipped_existing,
         }
 
-    r = redis_lib.from_url(settings.redis_url)
+    r = get_redis()
     q = Queue(name="imports", connection=r)
 
     # Generate key before enqueue so it can be passed to the RQ function AND
     # returned as job_id. This ensures Redis keys match the polling ID.
     job_key = str(uuid.uuid4())
 
-    job = q.enqueue("app.jobs.batch_import.run_batch_import", pixiv_ids, job_key,
-                    job_timeout=3600,  # 1 hour max
-                    result_ttl=3600)
+    job = checked_enqueue(
+        q,
+        "app.jobs.batch_import.run_batch_import",
+        pixiv_ids,
+        job_key,
+        job_timeout=3600,  # 1 hour max
+        result_ttl=3600,
+    )
 
     logger.info("Enqueued batch import job_key=%s (rq_job=%s) with %d new pixiv_ids (%d duplicates removed, %d already exist — skipped)",
                 job_key, job.id, len(pixiv_ids), deduped, skipped_existing)
@@ -265,7 +269,6 @@ async def url_batch_import_danbooru(data: dict):
     Returns immediately with a job_id. Poll GET /danbooru/artist/batch-import/status
     for progress and results.
     """
-    import redis as redis_lib
     import uuid as uuid_mod
 
     urls = data.get("urls", [])
@@ -277,15 +280,20 @@ async def url_batch_import_danbooru(data: dict):
     if len(urls) > 100:
         raise HTTPException(status_code=400, detail="Too many URLs (max 100 per request)")
 
-    r = redis_lib.from_url(settings.redis_url)
+    r = get_redis()
     q = Queue(name="imports", connection=r)
 
     # Generate key before enqueue so Redis keys match the polling ID
     job_key = str(uuid_mod.uuid4())
 
-    job = q.enqueue("app.jobs.batch_import.run_url_batch_import", urls, job_key,
-                    job_timeout=3600,
-                    result_ttl=3600)
+    job = checked_enqueue(
+        q,
+        "app.jobs.batch_import.run_url_batch_import",
+        urls,
+        job_key,
+        job_timeout=3600,
+        result_ttl=3600,
+    )
 
     logger.info("Enqueued URL batch import job_key=%s (rq_job=%s) with %d URLs",
                 job_key, job.id, len(urls))

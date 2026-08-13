@@ -174,7 +174,10 @@ function SearchContent() {
           <ErrorState message={(results.error as Error).message} onRetry={() => results.refetch()} />
         )}
 
-        {results.data && deferredQuery.trim() && !results.isError && (
+        {/* TanStack Query keeps the last complete index result visible when a
+            later full-text request fails; the error above becomes a sync
+            warning instead of replacing the user's working result set. */}
+        {results.data && deferredQuery.trim() && (
           <>
             <div className="mb-5 overflow-x-auto border-b border-border" aria-label={t("search.title")}>
               <div className="flex min-w-max gap-1" role="tablist">

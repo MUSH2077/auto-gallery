@@ -31,8 +31,7 @@ from app.models.source_creator import SourceCreator
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.services.artifact_ledger import ArtifactLedger, artifact_row
-from app.services.redis_client import get_redis
-from rq import Queue
+from app.services.import_dispatch import prepare_import_dispatch, publish_prepared_import
 from sqlalchemy import select
 
 GDL_TIMEOUT = 600
@@ -256,19 +255,29 @@ async def fetch_metadata(source: str = "pixiv", creator_filter: str = None, dry_
                     await ArtifactLedger(db).upsert_many(rows_list)
 
                 ij_id = uuid4()
-                db.add(ImportJob(
+                import_job = ImportJob(
                     id=ij_id, download_job_id=dj_id,
                     status="enqueued",
                     user_note=f"Metadata fetch: {len(new_jsons)} works",
                     progress_stage="enqueued",
                     progress_works_total=len(new_jsons),
-                ))
+                )
+                db.add(import_job)
+                await db.flush()
+                prepared = await prepare_import_dispatch(
+                    db,
+                    import_job,
+                    job_timeout=7200,
+                    action="fetch-metadata",
+                )
                 await db.commit()
-
-            Queue(name="imports", connection=get_redis()).enqueue(
-                "app.jobs.import_runner.run_import_job",
-                str(ij_id), job_timeout=7200,
-            )
+                publication = await publish_prepared_import(
+                    db,
+                    ij_id,
+                    prepared.rq_job_id,
+                )
+                if publication == "invalid":
+                    raise RuntimeError("Invalid metadata import publication")
             ok += 1
 
         except subprocess.TimeoutExpired:

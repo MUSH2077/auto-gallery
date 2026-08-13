@@ -26,8 +26,7 @@ from app.models.source_creator import SourceCreator
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.services.artifact_ledger import ArtifactLedger, artifact_row
-from app.services.redis_client import get_redis
-from rq import Queue
+from app.services.import_dispatch import prepare_import_dispatch, publish_prepared_import
 from sqlalchemy import select
 
 
@@ -201,21 +200,30 @@ async def bootstrap_all(dry_run: bool = False):
                     await ArtifactLedger(db).upsert_many(rows_list)
 
                 ij_id = uuid4()
-                db.add(ImportJob(
+                import_job = ImportJob(
                     id=ij_id,
                     download_job_id=dj_id,
                     status="enqueued",
                     user_note=f"Bootstrap recovery: {len(json_files)} works",
                     progress_stage="enqueued",
                     progress_works_total=len(json_files),
-                ))
+                )
+                db.add(import_job)
+                await db.flush()
+                prepared = await prepare_import_dispatch(
+                    db,
+                    import_job,
+                    job_timeout=7200,
+                    action="bootstrap-import",
+                )
                 await db.commit()
-
-            Queue(name="imports", connection=get_redis()).enqueue(
-                "app.jobs.import_runner.run_import_job",
-                str(ij_id),
-                job_timeout=7200,
-            )
+                publication = await publish_prepared_import(
+                    db,
+                    ij_id,
+                    prepared.rq_job_id,
+                )
+                if publication == "invalid":
+                    raise RuntimeError("Invalid bootstrap import publication")
             enqueued += 1
             print(f"[{idx+1}/{total_creators}] OK {source}/{creator_dir}: {len(json_files)} works → {ij_id}")
 

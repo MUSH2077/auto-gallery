@@ -37,6 +37,10 @@ async def search(
     kind: str | None = Query(None, description="Deprecated entity type adapter"),
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
+    cursor: str | None = Query(
+        None,
+        description="Optional seek cursor for adjacent structured work pages",
+    ),
     user: User = _require_search,
     db: AsyncSession = Depends(get_db),
 ):
@@ -62,6 +66,7 @@ async def search(
             scope=scope,
             permissions=_permissions(user),
             force_sfw=not user.nsfw_visible,
+            cursor=cursor,
         )
     except SearchQueryError as error:
         _raise_search_error(error)
@@ -69,6 +74,11 @@ async def search(
         raise HTTPException(status_code=403, detail={"code": "permission_denied", "message": str(error)}) from error
     except SearchBackendUnavailable as error:
         raise HTTPException(status_code=503, detail={"code": "search_unavailable", "message": str(error)}) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_cursor", "message": str(error)},
+        ) from error
 
 
 @router.post("/assist")

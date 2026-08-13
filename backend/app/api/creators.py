@@ -23,7 +23,6 @@ from app.services.cache import (
     invalidate_creator_subscription_caches,
 )
 from app.services.curation import CurationService
-from app.services.gitllery import project_commit_safe
 from app.services.search import SearchBackendUnavailable, SearchService
 from app.services.search_language import SearchQueryError
 
@@ -85,7 +84,6 @@ async def batch_delete_creators(data: dict, db: AsyncSession = Depends(get_db)):
     ids = data.get("ids", [])
     svc = CreatorService(db)
     results = []
-    changed = False
     for cid in ids:
         try:
             creator_id = UUID(cid)
@@ -94,17 +92,13 @@ async def batch_delete_creators(data: dict, db: AsyncSession = Depends(get_db)):
             continue
         try:
             await svc.delete_creator(creator_id)
-            await SearchService(db).delete_creator(str(creator_id))
             results.append({"id": cid, "status": "deleted"})
-            changed = True
         except ValueError:
             results.append({"id": cid, "status": "error", "error": "not_found"})
         except Exception:
             logger.warning("batch_delete_creators failed for %s", cid, exc_info=True)
             results.append({"id": cid, "status": "error", "error": "internal_error"})
     invalidate_creator_subscription_caches(include_works=True)
-    if changed:
-        await SearchService(db).refresh_reference_indexes()
     return {"status": "ok", "results": results}
 
 
@@ -132,7 +126,6 @@ async def merge_creators_endpoint(data: dict, db: AsyncSession = Depends(get_db)
         raise HTTPException(status_code=400, detail="Invalid target_id")
     source_ids = data.get("source_ids", [])
     results = []
-    changed = False
     for source_id_str in source_ids:
         try:
             source_id = UUID(source_id_str)
@@ -145,9 +138,7 @@ async def merge_creators_endpoint(data: dict, db: AsyncSession = Depends(get_db)
             continue
         try:
             stats = await merge_creators(db, target_id, source_id)
-            await SearchService(db).delete_creator(str(source_id))
             results.append({"source_id": source_id_str, "status": "merged", **stats})
-            changed = True
         except ValueError:
             results.append({
                 "source_id": source_id_str,
@@ -167,8 +158,6 @@ async def merge_creators_endpoint(data: dict, db: AsyncSession = Depends(get_db)
                 "error": "merge_failed",
             })
     invalidate_creator_subscription_caches(include_works=True)
-    if changed:
-        await SearchService(db).refresh_reference_indexes()
     return {"status": "ok", "results": results}
 
 
@@ -189,7 +178,6 @@ async def create_creator(data: CreatorCreate, db: AsyncSession = Depends(get_db)
     svc = CreatorService(db)
     result = await svc.create_creator(data.model_dump())
     invalidate_api_caches("creators")
-    await SearchService(db).refresh_reference_indexes()
     return result
 
 
@@ -199,7 +187,6 @@ async def update_creator(creator_id: UUID, data: CreatorUpdate, db: AsyncSession
     try:
         result = await svc.update_creator(creator_id, data.model_dump(exclude_none=True))
         invalidate_api_caches("creators")
-        await SearchService(db).refresh_reference_indexes()
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -270,8 +257,6 @@ async def delete_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
     try:
         await svc.delete_creator(creator_id)
         invalidate_creator_subscription_caches(include_works=True)
-        await SearchService(db).delete_creator(str(creator_id))
-        await SearchService(db).refresh_reference_indexes()
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -282,7 +267,6 @@ async def toggle_creator_favorite(creator_id: UUID, db: AsyncSession = Depends(g
     try:
         result = await svc.toggle_favorite(creator_id)
         invalidate_api_caches("creators")
-        await SearchService(db).refresh_reference_indexes()
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -310,7 +294,6 @@ async def curate_creator(creator_id: UUID, data: CreatorCurationRequest, db: Asy
         reason=data.reason,
         message=data.message,
     )
-    await project_commit_safe(db, commit.id)
     invalidate_api_caches("creators", "works")
     return await svc.commit_payload(commit.id)
 

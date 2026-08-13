@@ -4,7 +4,7 @@ import { useRef, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, DownloadJob, ImportJob, queryKeys } from "@/lib/api";
 import { ErrorState, StatusBadge, SourceBadge, SyncOutcomeNotice } from "@/components";
-import { useT } from "@/lib/i18n";
+import { useT, type TFunction } from "@/lib/i18n";
 import { usePresence, motionTokens } from "@/lib/motion";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { classifyError } from "@/lib/jobCategory";
@@ -31,6 +31,15 @@ function DetailRow({ label, value }: { label: string; value?: ReactNode }) {
       <dd className="min-w-0 break-all">{value || "—"}</dd>
     </div>
   );
+}
+
+function resourceReasonLabel(t: TFunction, reason?: string | null) {
+  if (!reason) return null;
+  const [code, detail] = reason.split(":", 2);
+  const key = `jobs.resource.reason.${code}`;
+  const translated = t(key);
+  if (translated === key) return reason;
+  return detail ? `${translated} (${detail})` : translated;
 }
 
 export function TaskDetailDrawer({
@@ -91,6 +100,22 @@ export function TaskDetailDrawer({
             </div>
             <dl className="rounded-md border border-border px-3 dark:border-border">
               <DetailRow label={t("jobs.status")} value={<StatusBadge status={item.status} />} />
+              {item.resource_state ? (
+                <DetailRow
+                  label={t("jobs.resource.label")}
+                  value={(
+                    <span className="flex flex-wrap items-center gap-2">
+                      <StatusBadge
+                        status={item.resource_state}
+                        label={t(`jobs.resource.${item.resource_state}`)}
+                      />
+                      {item.resource_reason ? (
+                        <span className="text-xs text-muted">{resourceReasonLabel(t, item.resource_reason)}</span>
+                      ) : null}
+                    </span>
+                  )}
+                />
+              ) : null}
               <DetailRow label={t("jobs.kind")} value={item.kind} />
               <DetailRow label={t("jobs.operation")} value={item.operation_type || item.kind} />
               <DetailRow label={t("jobs.queue")} value={item.queue_name} />

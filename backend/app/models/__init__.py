@@ -33,6 +33,16 @@ from app.models.asset_dedup import (
     VisualAssetGroup,
     VisualAssetMember,
 )
+from app.models.pipeline_outbox import (
+    GitlleryBuild,
+    GitlleryProjectionOutbox,
+    GitlleryProjectionTarget,
+    GitlleryRepositoryState,
+    ImportCurationOutbox,
+    MediaDerivativeOutbox,
+)
+from app.models.search_projection_outbox import SearchProjectionOutbox
+from app.models.repository_sync_receipt import MaintenanceAuditEvent, RepositorySyncReceipt, SearchIndexState
 
 __all__ = [
     "Base",
@@ -68,4 +78,14 @@ __all__ = [
     "AssetDedupScan",
     "VisualAssetGroup",
     "VisualAssetMember",
+    "GitlleryProjectionOutbox",
+    "GitlleryProjectionTarget",
+    "GitlleryRepositoryState",
+    "GitlleryBuild",
+    "ImportCurationOutbox",
+    "MediaDerivativeOutbox",
+    "SearchProjectionOutbox",
+    "RepositorySyncReceipt",
+    "SearchIndexState",
+    "MaintenanceAuditEvent",
 ]

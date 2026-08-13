@@ -692,6 +692,8 @@
               "format": "uuid",
               "type": "string"
             },
+            "maxItems": 25,
+            "minItems": 1,
             "title": "Ids",
             "type": "array"
           },
@@ -870,6 +872,51 @@
           "new_password"
         ],
         "title": "ChangePasswordRequest",
+        "type": "object"
+      },
+      "ClearOperationRequest": {
+        "properties": {
+          "confirmation": {
+            "title": "Confirmation",
+            "type": "string"
+          },
+          "entity": {
+            "enum": [
+              "works",
+              "creators",
+              "subscriptions",
+              "tags",
+              "jobs",
+              "settings",
+              "all"
+            ],
+            "title": "Entity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity",
+          "confirmation"
+        ],
+        "title": "ClearOperationRequest",
+        "type": "object"
+      },
+      "CompactTasksRequest": {
+        "properties": {
+          "dry_run": {
+            "default": true,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 200,
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "CompactTasksRequest",
         "type": "object"
       },
       "CreatorCreate": {
@@ -1505,6 +1552,17 @@
               }
             ],
             "title": "Impact"
+          },
+          "sequence": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sequence"
           },
           "subject_id": {
             "title": "Subject Id",
@@ -2352,6 +2410,330 @@
         "title": "GalleryDLMultiConfig",
         "type": "object"
       },
+      "GitlleryCapabilities": {
+        "properties": {
+          "automatic_projection": {
+            "$ref": "#/components/schemas/GitlleryCapability"
+          },
+          "backfill": {
+            "$ref": "#/components/schemas/GitlleryCapability"
+          },
+          "commit": {
+            "$ref": "#/components/schemas/GitlleryCapability"
+          },
+          "pull": {
+            "$ref": "#/components/schemas/GitlleryCapability"
+          },
+          "push": {
+            "$ref": "#/components/schemas/GitlleryCapability"
+          },
+          "rebuild": {
+            "$ref": "#/components/schemas/GitlleryCapability"
+          },
+          "reconcile": {
+            "$ref": "#/components/schemas/GitlleryCapability"
+          },
+          "verify": {
+            "$ref": "#/components/schemas/GitlleryCapability"
+          }
+        },
+        "required": [
+          "automatic_projection",
+          "reconcile",
+          "backfill",
+          "rebuild",
+          "push",
+          "pull",
+          "verify",
+          "commit"
+        ],
+        "title": "GitlleryCapabilities",
+        "type": "object"
+      },
+      "GitlleryCapability": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "GitlleryCapability",
+        "type": "object"
+      },
+      "GitlleryCliSettings": {
+        "properties": {
+          "examples": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Examples",
+            "type": "object"
+          },
+          "max_operations_per_commit": {
+            "const": 100,
+            "default": 100,
+            "title": "Max Operations Per Commit",
+            "type": "integer"
+          },
+          "max_works_per_commit": {
+            "const": 25,
+            "default": 25,
+            "title": "Max Works Per Commit",
+            "type": "integer"
+          },
+          "server_stores_cli_token": {
+            "const": false,
+            "default": false,
+            "title": "Server Stores Cli Token",
+            "type": "boolean"
+          },
+          "token_storage": {
+            "const": "client_only",
+            "default": "client_only",
+            "title": "Token Storage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "examples"
+        ],
+        "title": "GitlleryCliSettings",
+        "type": "object"
+      },
+      "GitlleryCommandOperation": {
+        "properties": {
+          "action": {
+            "enum": [
+              "trash",
+              "restore",
+              "favorite",
+              "tag-add",
+              "tag-remove"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "work_id": {
+            "format": "uuid",
+            "title": "Work Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_id",
+          "action"
+        ],
+        "title": "GitlleryCommandOperation",
+        "type": "object"
+      },
+      "GitlleryCommandRequest": {
+        "properties": {
+          "expected_parent_commit_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Parent Commit Id"
+          },
+          "idempotency_key": {
+            "format": "uuid",
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "operations": {
+            "items": {
+              "$ref": "#/components/schemas/GitlleryCommandOperation"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Operations",
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "version": {
+            "const": 1,
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "message",
+          "idempotency_key",
+          "operations"
+        ],
+        "title": "GitlleryCommandRequest",
+        "type": "object"
+      },
+      "GitlleryCommandResponse": {
+        "properties": {
+          "changed": {
+            "title": "Changed",
+            "type": "integer"
+          },
+          "commit_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Id"
+          },
+          "outbox_state": {
+            "title": "Outbox State",
+            "type": "string"
+          },
+          "parent_commit_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Commit Id"
+          },
+          "projected_lag_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projected Lag Seconds"
+          },
+          "skipped": {
+            "title": "Skipped",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "committed",
+              "noop"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "changed",
+          "skipped",
+          "outbox_state"
+        ],
+        "title": "GitlleryCommandResponse",
+        "type": "object"
+      },
+      "GitlleryGovernanceScope": {
+        "properties": {
+          "enforcement": {
+            "const": "auto_gallery_only",
+            "default": "auto_gallery_only",
+            "title": "Enforcement",
+            "type": "string"
+          },
+          "modifies_host_configuration": {
+            "const": false,
+            "default": false,
+            "title": "Modifies Host Configuration",
+            "type": "boolean"
+          },
+          "modifies_other_projects": {
+            "const": false,
+            "default": false,
+            "title": "Modifies Other Projects",
+            "type": "boolean"
+          },
+          "observation": {
+            "const": "host_and_auto_gallery",
+            "default": "host_and_auto_gallery",
+            "title": "Observation",
+            "type": "string"
+          }
+        },
+        "title": "GitlleryGovernanceScope",
+        "type": "object"
+      },
       "GitlleryLogEntry": {
         "properties": {
           "actor": {
@@ -2445,64 +2827,6 @@
         "title": "GitlleryLogResponse",
         "type": "object"
       },
-      "GitlleryRebuildResponse": {
-        "properties": {
-          "changes_unmapped": {
-            "default": 0,
-            "title": "Changes Unmapped",
-            "type": "integer"
-          },
-          "commits_deduped": {
-            "default": 0,
-            "title": "Commits Deduped",
-            "type": "integer"
-          },
-          "commits_restored": {
-            "default": 0,
-            "title": "Commits Restored",
-            "type": "integer"
-          },
-          "commits_skipped_auto": {
-            "default": 0,
-            "title": "Commits Skipped Auto",
-            "type": "integer"
-          },
-          "dry_run": {
-            "default": false,
-            "title": "Dry Run",
-            "type": "boolean"
-          },
-          "job_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Job Id"
-          },
-          "states_applied": {
-            "default": 0,
-            "title": "States Applied",
-            "type": "integer"
-          },
-          "status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Status"
-          }
-        },
-        "title": "GitlleryRebuildResponse",
-        "type": "object"
-      },
       "GitlleryRepoStatus": {
         "properties": {
           "behind": {
@@ -2528,9 +2852,57 @@
             "title": "Exists",
             "type": "boolean"
           },
+          "format_id": {
+            "default": "gitllery-segment",
+            "title": "Format Id",
+            "type": "string"
+          },
+          "format_revision": {
+            "default": 1,
+            "title": "Format Revision",
+            "type": "integer"
+          },
+          "head_segment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Segment"
+          },
+          "last_complete_commit_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Complete Commit Id"
+          },
           "object_integrity_ok": {
             "title": "Object Integrity Ok",
             "type": "boolean"
+          },
+          "product_version": {
+            "default": "v1",
+            "title": "Product Version",
+            "type": "string"
+          },
+          "projection_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projection Mode"
           },
           "repository_id": {
             "title": "Repository Id",
@@ -2553,6 +2925,80 @@
         "title": "GitlleryRepoStatus",
         "type": "object"
       },
+      "GitllerySettingsResponse": {
+        "properties": {
+          "build_generation": {
+            "title": "Build Generation",
+            "type": "string"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/GitlleryCapabilities"
+          },
+          "cli": {
+            "$ref": "#/components/schemas/GitlleryCliSettings"
+          },
+          "format_id": {
+            "const": "gitllery-segment",
+            "default": "gitllery-segment",
+            "title": "Format Id",
+            "type": "string"
+          },
+          "format_revision": {
+            "const": 1,
+            "default": 1,
+            "title": "Format Revision",
+            "type": "integer"
+          },
+          "governance_scope": {
+            "$ref": "#/components/schemas/GitlleryGovernanceScope"
+          },
+          "managed_by": {
+            "const": "deployment_environment",
+            "default": "deployment_environment",
+            "title": "Managed By",
+            "type": "string"
+          },
+          "product_name": {
+            "const": "Gitllery",
+            "default": "Gitllery",
+            "title": "Product Name",
+            "type": "string"
+          },
+          "product_version": {
+            "const": "v1",
+            "default": "v1",
+            "title": "Product Version",
+            "type": "string"
+          },
+          "projection_mode": {
+            "enum": [
+              "shadow",
+              "active"
+            ],
+            "title": "Projection Mode",
+            "type": "string"
+          },
+          "read_only": {
+            "const": true,
+            "default": true,
+            "title": "Read Only",
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/GitlleryStatusResponse"
+          }
+        },
+        "required": [
+          "projection_mode",
+          "build_generation",
+          "capabilities",
+          "cli",
+          "governance_scope",
+          "status"
+        ],
+        "title": "GitllerySettingsResponse",
+        "type": "object"
+      },
       "GitlleryStatusResponse": {
         "properties": {
           "behind_total": {
@@ -2564,6 +3010,16 @@
             "title": "Deep",
             "type": "boolean"
           },
+          "format_id": {
+            "default": "gitllery-segment",
+            "title": "Format Id",
+            "type": "string"
+          },
+          "format_revision": {
+            "default": 1,
+            "title": "Format Revision",
+            "type": "integer"
+          },
           "missing_repos": {
             "title": "Missing Repos",
             "type": "integer"
@@ -2572,6 +3028,16 @@
             "default": false,
             "title": "Needs Reconcile",
             "type": "boolean"
+          },
+          "product_version": {
+            "default": "v1",
+            "title": "Product Version",
+            "type": "string"
+          },
+          "projection_mode": {
+            "default": "shadow",
+            "title": "Projection Mode",
+            "type": "string"
           },
           "repositories": {
             "items": {
@@ -2587,6 +3053,24 @@
           "behind_total"
         ],
         "title": "GitlleryStatusResponse",
+        "type": "object"
+      },
+      "GitlleryVerifyRequest": {
+        "properties": {
+          "deep": {
+            "default": false,
+            "title": "Deep",
+            "type": "boolean"
+          },
+          "repository_id": {
+            "title": "Repository Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository_id"
+        ],
+        "title": "GitlleryVerifyRequest",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -3459,6 +3943,7 @@
                   "format": "uuid",
                   "type": "string"
                 },
+                "maxItems": 25,
                 "type": "array"
               },
               {
@@ -3524,21 +4009,19 @@
             "title": "Message"
           },
           "work_ids": {
-            "anyOf": [
-              {
-                "items": {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Work Ids"
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 25,
+            "minItems": 1,
+            "title": "Work Ids",
+            "type": "array"
           }
         },
+        "required": [
+          "work_ids"
+        ],
         "title": "PurgeRequest",
         "type": "object"
       },
@@ -3595,6 +4078,24 @@
           }
         },
         "title": "RebuildLibraryRequest",
+        "type": "object"
+      },
+      "ReconcileTasksRequest": {
+        "properties": {
+          "dry_run": {
+            "default": true,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 500,
+            "maximum": 2000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "ReconcileTasksRequest",
         "type": "object"
       },
       "RepositoryGraphEdge": {
@@ -3893,110 +4394,6 @@
           "key"
         ],
         "title": "SearchComposeRequest",
-        "type": "object"
-      },
-      "ShowcaseItem": {
-        "properties": {
-          "asset_id": {
-            "title": "Asset Id",
-            "type": "string"
-          },
-          "creator_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Creator Name"
-          },
-          "height": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Height"
-          },
-          "media_kind": {
-            "default": "image",
-            "title": "Media Kind",
-            "type": "string"
-          },
-          "preview_url": {
-            "title": "Preview Url",
-            "type": "string"
-          },
-          "source": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source"
-          },
-          "thumb_url": {
-            "title": "Thumb Url",
-            "type": "string"
-          },
-          "title": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Title"
-          },
-          "width": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Width"
-          },
-          "work_id": {
-            "title": "Work Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "work_id",
-          "asset_id",
-          "thumb_url",
-          "preview_url"
-        ],
-        "title": "ShowcaseItem",
-        "type": "object"
-      },
-      "ShowcaseSampleResponse": {
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/ShowcaseItem"
-            },
-            "title": "Items",
-            "type": "array"
-          }
-        },
-        "required": [
-          "items"
-        ],
-        "title": "ShowcaseSampleResponse",
         "type": "object"
       },
       "SourceCreatorCreate": {
@@ -4582,6 +4979,18 @@
               }
             ],
             "title": "Last Synced At"
+          },
+          "next_sync_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Sync At"
           },
           "source": {
             "title": "Source",
@@ -5639,6 +6048,17 @@
           "created_at": {
             "format": "date-time",
             "title": "Created At",
+            "type": "string"
+          },
+          "derivative_status": {
+            "default": "ready",
+            "enum": [
+              "ready",
+              "pending",
+              "processing",
+              "failed"
+            ],
+            "title": "Derivative Status",
             "type": "string"
           },
           "duration": {
@@ -6938,6 +7358,92 @@
         "x-response-schema-status": "generic"
       }
     },
+    "/api/v1/admin/clear/preview/{entity}": {
+      "get": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "get_api_v1_admin_clear_preview_entity",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "entity",
+            "required": true,
+            "schema": {
+              "enum": [
+                "works",
+                "creators",
+                "subscriptions",
+                "tags",
+                "jobs",
+                "settings",
+                "all"
+              ],
+              "title": "Entity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Preview Clear Entity",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": true,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
     "/api/v1/admin/clear/{entity}": {
       "post": {
         "description": "Clear a specific entity or 'all' for complete cleanup.",
@@ -6948,11 +7454,30 @@
             "name": "entity",
             "required": true,
             "schema": {
+              "enum": [
+                "works",
+                "creators",
+                "subscriptions",
+                "tags",
+                "jobs",
+                "settings",
+                "all"
+              ],
               "title": "Entity",
               "type": "string"
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClearOperationRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
@@ -7964,6 +8489,71 @@
         "x-response-schema-status": "generic"
       }
     },
+    "/api/v1/admin/gitllery/settings": {
+      "get": {
+        "description": "Return Gitllery v1's deployment-managed, read-only control surface.\n\nThe parent admin router requires the ``system`` permission.  Keep this\nresponse deliberately declarative: it exposes no environment values,\nfilesystem paths, credentials, or mutation controls.",
+        "operationId": "get_api_v1_admin_gitllery_settings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitllerySettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Gitllery Settings",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
+      }
+    },
     "/api/v1/admin/import-progress": {
       "get": {
         "description": "Get current import job progress summary.",
@@ -8482,9 +9072,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "title": "Data",
-                "type": "object"
+                "$ref": "#/components/schemas/ClearOperationRequest"
               }
             }
           },
@@ -11633,7 +12221,7 @@
     },
     "/api/v1/curation/gitllery/backfill": {
       "post": {
-        "description": "Enqueue repo initialization + full projection (first-sync path).",
+        "description": "Capture missing historical intents, then wake bounded projection.",
         "operationId": "post_api_v1_curation_gitllery_backfill",
         "responses": {
           "200": {
@@ -11686,7 +12274,7 @@
         "tags": [
           "curation"
         ],
-        "x-admin-only": false,
+        "x-admin-only": true,
         "x-authentication": "bearer",
         "x-background-task": true,
         "x-dangerous": false,
@@ -11697,9 +12285,357 @@
         "x-response-schema-status": "generic"
       }
     },
+    "/api/v1/curation/gitllery/build": {
+      "post": {
+        "description": "Capture missing historical intents, then wake bounded projection.",
+        "operationId": "post_api_v1_curation_gitllery_build",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Gitllery Backfill",
+        "tags": [
+          "curation"
+        ],
+        "x-admin-only": true,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "curation"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/curation/gitllery/commands/execute": {
+      "post": {
+        "description": "Atomically apply one bounded, idempotent Gitllery domain command.",
+        "operationId": "post_api_v1_curation_gitllery_commands_execute",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitlleryCommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitlleryCommandResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Execute Gitllery Command",
+        "tags": [
+          "curation"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "curation"
+        ]
+      }
+    },
+    "/api/v1/curation/gitllery/commands/preview": {
+      "post": {
+        "description": "Validate a Gitllery command without committing or touching disk.",
+        "operationId": "post_api_v1_curation_gitllery_commands_preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitlleryCommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitlleryCommandResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Preview Gitllery Command",
+        "tags": [
+          "curation"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "curation"
+        ]
+      }
+    },
+    "/api/v1/curation/gitllery/pull": {
+      "post": {
+        "description": "Reserve the v1 transfer command surface without unsafe disk mutation.\n\nThe portable transfer protocol is deliberately disabled in this rollout;\nCLI clients receive the same stable shadow-only error as projection\nmaintenance instead of a misleading 404 or an implicit full-history walk.",
+        "operationId": "post_api_v1_curation_gitllery_pull",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Gitllery Transfer Shadow Only",
+        "tags": [
+          "curation"
+        ],
+        "x-admin-only": true,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "curation"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/curation/gitllery/push": {
+      "post": {
+        "description": "Reserve the v1 transfer command surface without unsafe disk mutation.\n\nThe portable transfer protocol is deliberately disabled in this rollout;\nCLI clients receive the same stable shadow-only error as projection\nmaintenance instead of a misleading 404 or an implicit full-history walk.",
+        "operationId": "post_api_v1_curation_gitllery_push",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Gitllery Transfer Shadow Only",
+        "tags": [
+          "curation"
+        ],
+        "x-admin-only": true,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "curation"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
     "/api/v1/curation/gitllery/rebuild": {
       "post": {
-        "description": "Restore manual curation history from on-disk .gitllery repos into the DB.\n\ndry_run (default) runs inline and reports what WOULD happen without writing.\ndry_run=false enqueues the real rebuild as an operations job (mirrors\nimport_from_disk in admin.py) since it may touch a large history.",
+        "description": "Compatibility alias for a side-by-side v1 projection build.\n\nThe historical endpoint used to read disk directly into the public\ndatabase. That unsafe behavior is intentionally retired; disaster restore\nhas a separate staged workflow.",
         "operationId": "post_api_v1_curation_gitllery_rebuild",
         "parameters": [
           {
@@ -11734,7 +12670,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GitlleryRebuildResponse"
+                  "$ref": "#/components/schemas/JsonValue"
                 }
               }
             },
@@ -11780,19 +12716,20 @@
         "tags": [
           "curation"
         ],
-        "x-admin-only": false,
+        "x-admin-only": true,
         "x-authentication": "bearer",
         "x-background-task": true,
         "x-dangerous": false,
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "curation"
-        ]
+        ],
+        "x-response-schema-status": "generic"
       }
     },
     "/api/v1/curation/gitllery/reconcile": {
       "post": {
-        "description": "Enqueue projection of pending commits (and checkpoint rebuild when\nlibrary-wide). The walk is O(history) and runs in a worker by design —\nstatus() has no inline full-history fallback anymore.",
+        "description": "Wake the bounded v1 projection coordinator.\n\nThe repository hint is informational because one authoritative commit can\nfan out to several portable repositories. No full-history walk runs in the\nrequest or in one long RQ job.",
         "operationId": "post_api_v1_curation_gitllery_reconcile",
         "parameters": [
           {
@@ -11863,7 +12800,7 @@
         "tags": [
           "curation"
         ],
-        "x-admin-only": false,
+        "x-admin-only": true,
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": false,
@@ -11949,6 +12886,82 @@
         "x-required-permissions": [
           "curation"
         ]
+      }
+    },
+    "/api/v1/curation/gitllery/verify": {
+      "post": {
+        "description": "Queue bounded verification; never scan repository history in HTTP.",
+        "operationId": "post_api_v1_curation_gitllery_verify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitlleryVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Gitllery Verify",
+        "tags": [
+          "curation"
+        ],
+        "x-admin-only": true,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "curation"
+        ],
+        "x-response-schema-status": "generic"
       }
     },
     "/api/v1/curation/purge": {
@@ -14580,6 +15593,108 @@
         "x-response-schema-status": "generic"
       }
     },
+    "/api/v1/operations/overview": {
+      "get": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "get_api_v1_operations_overview",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "attention",
+              "pattern": "^(attention|active|resolved)$",
+              "title": "View",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Operations Overview",
+        "tags": [
+          "operations"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": true,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "tasks"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
     "/api/v1/reference/danbooru/artist/batch-import": {
       "post": {
         "description": "Enqueue a batch import job for Pixiv user IDs via Danbooru.\n\nAccepts: {pixiv_ids: [\"1980643\", \"123456\", ...]}\nReturns immediately with a job_id. Poll GET /danbooru/artist/batch-import/status\nfor progress and results.",
@@ -15894,6 +17009,24 @@
               "title": "Limit",
               "type": "integer"
             }
+          },
+          {
+            "description": "Optional seek cursor for adjacent structured work pages",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional seek cursor for adjacent structured work pages",
+              "title": "Cursor"
+            }
           }
         ],
         "responses": {
@@ -16040,138 +17173,6 @@
           "upload"
         ],
         "x-response-schema-status": "generic"
-      }
-    },
-    "/api/v1/showcase/sample": {
-      "get": {
-        "description": "See the request, response, permission, and risk metadata for this operation.",
-        "operationId": "get_api_v1_showcase_sample",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "count",
-            "required": false,
-            "schema": {
-              "default": 24,
-              "maximum": 60,
-              "minimum": 1,
-              "title": "Count",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "scope",
-            "required": false,
-            "schema": {
-              "default": "all",
-              "pattern": "^(all|favorites)$",
-              "title": "Scope",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "source",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Source"
-            }
-          },
-          {
-            "in": "query",
-            "name": "tag",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Tag"
-            }
-          },
-          {
-            "in": "query",
-            "name": "include_nsfw",
-            "required": false,
-            "schema": {
-              "default": false,
-              "title": "Include Nsfw",
-              "type": "boolean"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ShowcaseSampleResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            },
-            "description": "Missing, invalid, or expired JWT."
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            },
-            "description": "Authenticated but not permitted."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Sample",
-        "tags": [
-          "showcase"
-        ],
-        "x-admin-only": false,
-        "x-authentication": "bearer",
-        "x-background-task": false,
-        "x-dangerous": false,
-        "x-permission-mode": "allOf",
-        "x-required-permissions": [
-          "library"
-        ]
       }
     },
     "/api/v1/sources": {
@@ -17601,6 +18602,72 @@
         "x-response-schema-status": "generic"
       }
     },
+    "/api/v1/system/reindex-works": {
+      "post": {
+        "description": "Queue a full Meilisearch rebuild on the protected import worker.\n\nThis compatibility endpoint used to run the whole-library scan inside the\nbackend request process, bypassing the NAS pressure and heavy-I/O gates.\nRoute it through the same operation as the admin data-management endpoint\nso the long coordinator cannot starve bounded operations outboxes.",
+        "operationId": "post_api_v1_system_reindex_works",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reindex Works",
+        "tags": [
+          "system"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": true,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "tasks"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
     "/api/v1/system/scheduler-decisions": {
       "get": {
         "description": "Explain current scheduler decisions at subscription-source granularity.\n\nThis endpoint is deliberately read-only: it does not enqueue jobs or mutate\nlast_attempted_at/last_synced_at.",
@@ -18579,6 +19646,247 @@
         "x-response-schema-status": "generic"
       }
     },
+    "/api/v1/tasks/anomalies": {
+      "get": {
+        "description": "Compatibility endpoint for the unified attention view.",
+        "operationId": "get_api_v1_tasks_anomalies",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Task Anomalies",
+        "tags": [
+          "tasks"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "tasks"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/tasks/compact": {
+      "post": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "post_api_v1_tasks_compact",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompactTasksRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Compact Tasks",
+        "tags": [
+          "tasks"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system",
+          "tasks"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/tasks/reconcile": {
+      "post": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "post_api_v1_tasks_reconcile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconcileTasksRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reconcile Tasks",
+        "tags": [
+          "tasks"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "tasks"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
     "/api/v1/tasks/{task_id}": {
       "get": {
         "description": "See the request, response, permission, and risk metadata for this operation.",
@@ -18643,6 +19951,84 @@
           }
         ],
         "summary": "Get Task",
+        "tags": [
+          "tasks"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "tasks"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/tasks/{task_id}/acknowledge": {
+      "post": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "post_api_v1_tasks_task_id_acknowledge",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Acknowledge Task",
         "tags": [
           "tasks"
         ],
@@ -20895,10 +22281,6 @@
     {
       "description": "Administrator-only account and permission management.",
       "name": "users"
-    },
-    {
-      "description": "Curated showcase samples.",
-      "name": "showcase"
     }
   ]
 }

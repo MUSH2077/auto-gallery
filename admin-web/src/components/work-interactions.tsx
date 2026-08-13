@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import type { WorkPreviewSize } from "@/lib/appearance";
 import SourceBadge from "./SourceBadge";
 import { useT } from "@/lib/i18n";
-import { resolveMediaKind, type MediaAssetData } from "@/lib/media";
+import { derivativeIsPending, resolveMediaKind, type MediaAssetData } from "@/lib/media";
 
 export type MediaAsset = MediaAssetData;
 
@@ -159,9 +159,11 @@ export function WorkPreviewOverlay({
   const currentId = assetIds[pageIndex] || assetIds[0];
   const currentAsset = assetById.get(currentId) || assets?.[pageIndex] || assets?.[0];
   const currentKind = currentAsset ? resolveMediaKind(currentAsset) : "unknown";
+  const derivativePending = derivativeIsPending(currentAsset?.derivative_status);
+  const derivativeFailed = currentAsset?.derivative_status === "failed";
   const currentSrc = currentKind === "video"
     ? currentAsset?.poster_url || currentAsset?.thumb_url || null
-    : currentAsset?.original_url || currentAsset?.preview_url || null;
+    : currentAsset?.preview_url || currentAsset?.original_url || null;
   const footerText = currentAsset?.file_name
     ? `${currentAsset.file_name}${creatorName ? ` · ${creatorName}` : ""}`
     : creatorName || t("works.unknown_creator");
@@ -195,7 +197,7 @@ export function WorkPreviewOverlay({
             src={currentSrc}
             alt={title || currentAsset?.file_name || ""}
             className="h-full w-full object-contain no-outline"
-            fallback={t("works.original_unavailable")}
+            fallback={derivativeFailed ? t("media.derivative_failed") : derivativePending ? t("media.derivative_pending") : t("works.original_unavailable")}
             onLoad={(event) => {
               const image = event.currentTarget;
               if (image.naturalWidth > 0 && image.naturalHeight > 0) {
@@ -209,8 +211,15 @@ export function WorkPreviewOverlay({
             }}
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center px-4 text-center text-xs text-muted">{t("works.original_unavailable")}</div>
+          <div className="flex h-full w-full items-center justify-center px-4 text-center text-xs text-muted">
+            {derivativeFailed ? t("media.derivative_failed") : derivativePending ? t("media.derivative_pending") : t("works.original_unavailable")}
+          </div>
         )}
+        {derivativePending || derivativeFailed ? (
+          <span className="pointer-events-none absolute left-2 top-2 rounded bg-black/75 px-2 py-1 text-[10px] font-medium text-white">
+            {derivativeFailed ? t("media.derivative_failed") : t("media.derivative_pending")}
+          </span>
+        ) : null}
         {currentKind === "video" && currentSrc ? (
           <span className="pointer-events-none absolute bottom-2 right-2 rounded bg-black/75 px-2 py-1 text-xs font-semibold text-white">
             {t("media.video_badge")}
@@ -269,12 +278,17 @@ export function AssetFilmstrip<T extends MediaAsset>({
               <span className="flex h-full w-full items-center justify-center bg-subtle font-mono text-[10px] font-semibold text-muted">
                 ZIP
               </span>
+            ) : derivativeIsPending(asset.derivative_status) && !asset.thumb_url && !asset.poster_url ? (
+              <span className="flex h-full w-full items-center justify-center bg-subtle px-1 text-center text-[9px] text-muted">
+                {t("media.derivative_pending")}
+              </span>
             ) : (
               <AssetImage
                 src={asset.thumb_url || (kind === "video" ? asset.poster_url : asset.preview_url)}
                 assetId={asset.id}
                 alt={asset.file_name || t("works.page_number", { page: index + 1 })}
                 className="h-full w-full object-cover"
+                fallback={asset.derivative_status === "failed" ? t("media.derivative_failed") : undefined}
               />
             )}
             {kind === "video" ? (

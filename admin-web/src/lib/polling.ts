@@ -1,6 +1,6 @@
 // Shared polling cadence so background refetch load stays predictable.
 // Active = something is in flight (poll fast); idle = poll slowly.
-export const POLL_ACTIVE_MS = 8000;
+export const POLL_ACTIVE_MS = 10000;
 export const POLL_IDLE_MS = 30000;
 
 export function pollInterval(active: boolean): number {

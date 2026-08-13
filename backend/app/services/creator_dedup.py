@@ -3,10 +3,18 @@
 import logging
 from uuid import UUID
 
-from sqlalchemy import select, or_
+from sqlalchemy import and_, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Creator, CreatorLink, SourceCreator
+from app.models import (
+    Creator,
+    CreatorLink,
+    SourceCreator,
+    Subscription,
+    SubscriptionSource,
+    WorkSource,
+)
+from app.services.search_projection_outbox import request_search_projection
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +150,29 @@ async def merge_creators(db: AsyncSession, target_id: UUID, source_id: UUID) -> 
     if not target or not source:
         raise ValueError("One or both creators not found")
 
+    affected_work_ids = set((await db.execute(
+        select(WorkSource.work_id)
+        .join(
+            SourceCreator,
+            and_(
+                SourceCreator.source == WorkSource.source,
+                SourceCreator.source_creator_id == WorkSource.source_creator_id,
+            ),
+        )
+        .where(SourceCreator.creator_id.in_([target_id, source_id]))
+        .distinct()
+    )).scalars().all())
+    subscription_ids = set((await db.execute(
+        select(Subscription.id).where(
+            Subscription.creator_id.in_([target_id, source_id])
+        )
+    )).scalars().all())
+    repository_ids = set((await db.execute(
+        select(SubscriptionSource.id)
+        .join(Subscription, Subscription.id == SubscriptionSource.subscription_id)
+        .where(Subscription.creator_id.in_([target_id, source_id]))
+    )).scalars().all())
+
     stats = {"links_moved": 0, "source_creators_moved": 0, "subscriptions_moved": 0}
 
     # Move creator_links
@@ -190,6 +221,14 @@ async def merge_creators(db: AsyncSession, target_id: UUID, source_id: UUID) -> 
 
     # Delete source creator
     await db.delete(source)
+    await request_search_projection(
+        db,
+        affected_work_ids,
+        creator_ids=[target_id],
+        deleted_creator_ids=[source_id],
+        repository_ids=repository_ids,
+        subscription_ids=subscription_ids,
+    )
     await db.commit()
 
     logger.info("Merged creator %s → %s: %s", source_id, target_id, stats)

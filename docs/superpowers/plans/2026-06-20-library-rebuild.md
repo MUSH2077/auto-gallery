@@ -218,7 +218,7 @@ docker compose up -d --force-recreate backend admin-web
 - [ ] **Step 3: Verify regenerated files**
 
 ```bash
-find /volume3/docker/auto-gallery/data/library -name "metadata.json" | head -5
+find /volume2/docker/auto-gallery/data/library -name "metadata.json" | head -5
 ```
 
 - [ ] **Step 4: Final commit**

@@ -6,10 +6,10 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.providers import registry
+from app.services.backpressure import admission_error, download_backpressure_reason
+from app.services.download_dispatch import prepare_download_dispatch, publish_prepared_download
 from app.services.job_manifest import append_manifest_event, update_manifest
 from app.services.job_progress import apply_download_progress
-from app.services.redis_client import get_redis
-from app.services.tasks import TaskService
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,20 @@ class DownloadOrchestrator:
                     "status": running.status if running else "pending",
                     "source_url": running.source_url if running else source_url,
                 }
+            reason = result.get("reason") or {}
+            code = result.get("skip_reason") or reason.get("code")
+            if code in {
+                "queue_saturated",
+                "enqueue_busy",
+                "redis_capacity",
+                "redis_unwritable",
+                "disk_backpressure",
+                "import_backpressure",
+                "storage_unavailable",
+                "admission_check_failed",
+                "enqueue_failed",
+            }:
+                raise admission_error({"code": code, **reason.get("details", {}), "message": reason.get("message")})
             raise ValueError(result.get("skip_reason") or result.get("error") or "Unable to enqueue source sync")
 
         if not source_url:
@@ -53,6 +67,14 @@ class DownloadOrchestrator:
         if not provider.validate_url(normalized_url):
             raise ValueError(f"Invalid URL for source '{source}': {source_url}")
 
+        pressure = await download_backpressure_reason(
+            self.db,
+            automatic=False,
+            include_queue=True,
+        )
+        if pressure:
+            raise admission_error(pressure)
+
         job = await repo.create({
             "subscription_id": data["subscription_id"],
             "subscription_source_id": subscription_source_id,
@@ -63,17 +85,39 @@ class DownloadOrchestrator:
         apply_download_progress(job, "enqueued", "Queued; waiting for download worker", publish=False)
         update_manifest(job, trigger="manual_url", source=source, source_url=normalized_url)
         append_manifest_event(job, "created", trigger="manual_url")
-        await TaskService(self.db).ensure_download_task(job)
-        await self.db.commit()
+        prepared = await prepare_download_dispatch(
+            self.db,
+            job,
+            queue_name="downloads",
+            job_timeout=RQ_JOB_TIMEOUT,
+            action="manual_url",
+        )
 
         try:
-            from rq import Queue
-            q = Queue(name="downloads", connection=get_redis())
-            q.enqueue("app.jobs.download.run_download_job", str(job.id), job_timeout=RQ_JOB_TIMEOUT)
-            apply_download_progress(job, "enqueued", "Queued; waiting for download worker")
-            append_manifest_event(job, "enqueued", queue="downloads")
-            await self.db.commit()
+            await publish_prepared_download(
+                self.db,
+                job,
+                prepared,
+                job_timeout=RQ_JOB_TIMEOUT,
+                action="manual_url",
+            )
         except Exception:
-            logger.warning("Failed to enqueue download job %s", job.id, exc_info=True)
+            logger.error("Failed to enqueue download job %s", job.id, exc_info=True)
+            raise
+
+        apply_download_progress(
+            job,
+            "enqueued",
+            "Queued; waiting for download worker",
+            publish=False,
+        )
+        try:
+            from app.services.job_progress import publish_progress
+
+            publish_progress(str(job.id), "download", job.progress_data)
+        except Exception:
+            # The durable DB row and RQ job already exist; an ephemeral pub/sub
+            # failure must not turn a valid queued job into an API failure.
+            logger.warning("Failed to publish queued progress for %s", job.id, exc_info=True)
 
         return {"job_id": str(job.id), "status": job.status, "source_url": normalized_url}

@@ -85,7 +85,7 @@ async def test_project_commit_writes_objects_refs_index(tmp_path, monkeypatch):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_project_pending_catches_up_missed_commit(tmp_path, monkeypatch):
+async def test_project_pending_refuses_live_replay_before_watermark(tmp_path, monkeypatch):
     from app.database import async_session, engine
     from app.services.curation import CurationService
     from app.services.gitllery import service as gsvc
@@ -112,10 +112,13 @@ async def test_project_pending_catches_up_missed_commit(tmp_path, monkeypatch):
             repo = GitlleryRepo(tmp_path, "pixiv", "七诗")
             assert str(c1.id) not in repo.projected_db_commit_ids()
 
-            result = await GitlleryService(db).project_pending()
-            assert sum(result.values()) >= 1
+            head_before = repo.head_commit()
+            with pytest.raises(RuntimeError, match="pre-watermark projection gap"):
+                await GitlleryService(db).project_pending()
+            assert repo.head_commit() == head_before
             ids = repo.projected_db_commit_ids()
-            assert {str(c1.id), str(c2.id)} <= ids
+            assert str(c1.id) not in ids
+            assert str(c2.id) in ids
     finally:
         async with async_session() as db:
             await _clear(db)
@@ -491,9 +494,8 @@ async def test_status_checkpoint_blocks_on_missed_projection(tmp_path, monkeypat
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_status_checkpoint_catchup_ordering(tmp_path, monkeypatch):
-    """Catch-up appends an old missed commit after newer ones in the chain —
-    the bounded HEAD-backwards walk must still account for both tail commits."""
+async def test_status_checkpoint_gap_requires_staged_rebuild(tmp_path, monkeypatch):
+    """A missed historical commit must not overwrite a newer live HEAD."""
     from app.database import async_session, engine
     from app.services.cache import cache_delete_pattern
     from app.services.curation import CurationService
@@ -526,12 +528,14 @@ async def test_status_checkpoint_catchup_ordering(tmp_path, monkeypatch):
             assert s["behind_total"] == 1        # c1 missing
             assert gsvc._read_checkpoint() == p0
 
-            # Catch-up appends c1 AFTER c2 in the chain (documented ordering).
-            await GitlleryService(db).project_pending()
+            # Historical after_state cannot be exposed on the live HEAD. Keep
+            # the verified checkpoint and require the staged rebuild path.
+            with pytest.raises(RuntimeError, match="pre-watermark projection gap"):
+                await GitlleryService(db).project_pending()
             cache_delete_pattern("gitllery:status:*")
             s2 = await GitlleryService(db).status()
-            assert s2["behind_total"] == 0
-            assert gsvc._read_checkpoint() != p0
+            assert s2["behind_total"] == 1
+            assert gsvc._read_checkpoint() == p0
     finally:
         async with async_session() as db:
             await _clear(db)

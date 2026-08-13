@@ -1,4 +1,4 @@
-"""Shared library synchronization — metadata.json + thumbnails + FileIndex registration."""
+"""Shared library synchronization with optional legacy FileIndex migration hooks."""
 
 from __future__ import annotations
 
@@ -168,22 +168,51 @@ async def sync_thumbnails(asset_rows: list, lib_dir: Path, file_index,
     return generated
 
 
+def _fsync_directory(path: Path) -> None:
+    """Make an atomic rename durable before completing its outbox row."""
+
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def write_metadata_json(lib_dir: Path, work, work_source, creator_name: str,
-                         assets_meta: list[dict], version: str | None = None) -> None:
+                         assets_meta: list[dict], version: str | None = None) -> bool:
+    """Atomically write one library projection, returning whether it changed.
+
+    Matching renderer versions are not rewritten.  The directory is still
+    fsynced before returning so a worker crash after ``os.replace`` but before
+    its PostgreSQL completion checkpoint is safely recoverable.
+    """
+
     lib_dir.mkdir(parents=True, exist_ok=True)
+    if version is not None and metadata_version(lib_dir) == version:
+        _fsync_directory(lib_dir)
+        return False
     target = lib_dir / "metadata.json"
     temp = lib_dir / f".metadata.{uuid.uuid4().hex}.tmp"
-    with open(temp, "w") as mf:
-        json.dump({
-            "work_id": str(work.id), "source": work_source.source,
-            "source_work_id": work_source.source_work_id, "title": work.title,
-            "posted_at": work.posted_at.isoformat() if work.posted_at else None,
-            "creator": creator_name, "assets": assets_meta,
-            "library_version": version,
-        }, mf, indent=2, ensure_ascii=False, default=str)
-        mf.flush()
-        os.fsync(mf.fileno())
-    os.replace(temp, target)
+    try:
+        with open(temp, "w", encoding="utf-8") as mf:
+            json.dump({
+                "work_id": str(work.id), "source": work_source.source,
+                "source_work_id": work_source.source_work_id, "title": work.title,
+                "posted_at": work.posted_at.isoformat() if work.posted_at else None,
+                "creator": creator_name, "assets": assets_meta,
+                "library_version": version,
+            }, mf, indent=2, ensure_ascii=False, default=str)
+            mf.flush()
+            os.fsync(mf.fileno())
+        os.replace(temp, target)
+        _fsync_directory(lib_dir)
+        return True
+    finally:
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            logger.debug("Unable to remove metadata temp file %s", temp, exc_info=True)
 
 
 def metadata_version(lib_dir: Path) -> str | None:
