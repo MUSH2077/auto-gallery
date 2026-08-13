@@ -16,7 +16,7 @@ from app.schemas.subscription import (
     SubscriptionUpdate,
 )
 from app.schemas.subscription_source import SubscriptionSourceCreate, SubscriptionSourceRead, SubscriptionSourceUpdate
-from app.services.subscription import SubscriptionService
+from app.services.subscription import SubscriptionService, SubscriptionValidationError
 from app.services.search import SearchBackendUnavailable, SearchService
 from app.services.search_language import SearchQueryError
 from app.services.cache import (
@@ -166,6 +166,8 @@ async def update_subscription(subscription_id: UUID, data: SubscriptionUpdate, d
         result = await svc.update_subscription(subscription_id, data.model_dump(exclude_unset=True))
         invalidate_creator_subscription_caches()
         return result
+    except SubscriptionValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

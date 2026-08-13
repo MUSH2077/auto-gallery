@@ -362,7 +362,7 @@ export interface Subscription {
   is_active: boolean;
   sync_enabled: boolean;
   sync_interval_hours: number;
-  schedule_mode?: string | null;
+  schedule_mode?: "inherit" | "interval" | "fixed_time" | "manual" | null;
   scheduled_times?: string | null;
   last_synced_at?: string;
   source_count?: number;
@@ -374,6 +374,15 @@ export interface Subscription {
   latest_job_created_at?: string;
   created_at: string;
   updated_at: string;
+  configured_mode?: string | null;
+  effective_mode?: string | null;
+  auto_enabled_source?: {
+    id: string;
+    source: string;
+    source_url?: string | null;
+    selection_reason: string;
+  } | null;
+  next_sync_at?: string | null;
 }
 
 export type SubscriptionLatestStateKind =
@@ -911,6 +920,15 @@ export interface DownloadJob {
   pipeline_stage?: string | null;
   progress_data?: JobProgress | null;
   outcome?: SyncOutcome | null;
+  reason_code?: string | null;
+  conflict_details?: Array<{
+    relative_path: string;
+    file_type: "metadata" | "media" | string;
+    classification: string;
+    staged_sha256?: string;
+    canonical_sha256?: string;
+  }>;
+  retryable?: boolean;
 }
 
 export interface JobProgress {

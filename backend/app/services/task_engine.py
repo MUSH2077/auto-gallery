@@ -431,6 +431,17 @@ class TaskEngine:
         """Retry a download job. Resets retry_count and clears error_log."""
         job = await self._get_download(job_id)
 
+        staging_events = [
+            event
+            for event in ((job.manifest or {}).get("events") or [])
+            if isinstance(event, dict) and event.get("event") == "staging_conflict"
+        ]
+        latest_staging_conflict = staging_events[-1] if staging_events else None
+        if latest_staging_conflict and latest_staging_conflict.get("conflict_details"):
+            raise TaskEngineError(
+                "This download has an unsafe canonical-file conflict and cannot be fixed by retrying"
+            )
+
         if job.status in {"failed", "stale"}:
             child = await self._latest_import_for_download(
                 job.id,

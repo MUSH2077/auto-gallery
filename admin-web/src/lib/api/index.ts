@@ -220,7 +220,14 @@ export const api = {
   createSubscription: (data: { creator_id: string; name?: string; is_active?: boolean; sync_enabled?: boolean }) =>
     request<T.Subscription>("/api/v1/subscriptions", { method: "POST", body: JSON.stringify(data) }),
 
-  updateSubscription: (id: string, data: Record<string, unknown>) =>
+  updateSubscription: (id: string, data: {
+    name?: string;
+    is_active?: boolean;
+    schedule_mode?: "inherit" | "interval" | "fixed_time" | "manual" | null;
+    sync_interval_hours?: number;
+    scheduled_times?: string | null;
+    sync_enabled?: boolean;
+  }) =>
     request<T.Subscription>(`/api/v1/subscriptions/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
 
   deleteSubscription: (id: string) =>

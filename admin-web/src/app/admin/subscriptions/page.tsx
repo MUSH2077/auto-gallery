@@ -397,10 +397,12 @@ function SubscriptionsContent() {
                   </div>
                   <div className="entity-meta">
                     <span>{t("subscriptions.sources_summary", { enabled: summary?.enabled_source_count ?? s.enabled_source_count ?? 0, total: summary?.source_count ?? s.source_count ?? 0 })}</span>
-                    <span className={s.sync_enabled ? "text-success" : ""}>{s.sync_enabled ? t("subscriptions.auto_sync") : t("subscriptions.manual")}</span>
                     <span>{t("subscriptions.last_success", { time: fmt.relative(s.last_synced_at, "subscriptions.never") })}</span>
                     <span>{scheduleLabel}</span>
                     <span>{t("subscriptions.next_due", { time: fmt.dateTime(schedule?.next_due_at) })}</span>
+                    {s.sync_enabled && (summary?.enabled_source_count ?? s.enabled_source_count ?? 0) === 0 && (
+                      <span className="text-warning">{t("subscriptions.no_enabled_source")}</span>
+                    )}
                   </div>
                 </div>
                 <div className="entity-actions" onClick={(event) => event.stopPropagation()}>

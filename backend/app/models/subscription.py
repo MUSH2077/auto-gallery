@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from uuid import UUID
 
@@ -11,6 +11,15 @@ class Subscription(TimestampMixin, Base):
     __tablename__ = "subscriptions"
     __table_args__ = (
         UniqueConstraint("creator_id", name="uq_subscriptions_creator"),
+        CheckConstraint(
+            "schedule_mode IS NULL OR schedule_mode IN ('interval', 'fixed_time', 'manual')",
+            name="ck_subscriptions_schedule_mode",
+        ),
+        CheckConstraint(
+            "(schedule_mode = 'manual' AND sync_enabled IS FALSE) OR "
+            "(schedule_mode IS DISTINCT FROM 'manual' AND sync_enabled IS TRUE)",
+            name="ck_subscriptions_schedule_sync_consistent",
+        ),
     )
 
     creator_id: Mapped[UUID] = mapped_column(ForeignKey("creators.id"), nullable=False)

@@ -1,4 +1,5 @@
 import json
+import hashlib
 import logging
 import os
 import re
@@ -12,6 +13,7 @@ from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 
 from app.config import settings
 from app.database import async_session
@@ -25,7 +27,7 @@ from app.models.subscription_source import SubscriptionSource
 from app.repositories.download_job import DownloadJobRepository
 from app.models.task_state import transition_download_job
 from app.jobs.stage_timing import stage_timer
-from app.services.job_manifest import append_manifest_event, update_manifest
+from app.services.job_manifest import append_manifest_event, redacted_manifest_config, update_manifest
 from app.services.job_progress import apply_download_progress, apply_import_progress, publish_progress
 from app.services.download_finalization import finalize_download_job
 from app.services.download_dispatch import prepare_download_dispatch, publish_prepared_download
@@ -921,12 +923,14 @@ async def run_download_job(job_id: str):
         seen = set()
         downloaded_work_ids: set[str] = set()
         delta_paths: set[Path] | None = None
+        metadata_updates: tuple[dict, ...] = ()
         if download_stage is not None:
             if proc is None or proc.poll() is None or _process_group_exists(proc.pid):
                 raise RuntimeError(
                     "refusing staging promotion while gallery-dl is still running"
                 )
-            promotion = download_stage.promote()
+            promotion = download_stage.promote(provider=provider)
+            metadata_updates = promotion.metadata_updates
             delta_paths = set(promotion.paths)
             metadata_paths = sorted(
                 path
@@ -1023,12 +1027,50 @@ async def run_download_job(job_id: str):
         # transaction.  A failed/paused/partial path never advances the cursor.
         async with async_session() as _ledger_db:
             _registered = await ArtifactLedger(_ledger_db).upsert_many(rows)
+            _ledger_job = None
+            if metadata_updates:
+                from app.models.repository_sync_receipt import MaintenanceAuditEvent
+
+                _ledger_job = await DownloadJobRepository(_ledger_db).get(job_uuid)
+                for metadata_update in metadata_updates:
+                    digest = hashlib.sha256(
+                        (
+                            f"{job_uuid}:{metadata_update.get('relative_path')}:"
+                            f"{metadata_update.get('replacement_sha256')}"
+                        ).encode("utf-8")
+                    ).hexdigest()
+                    summary = {
+                        **metadata_update,
+                        "download_job_id": str(job_uuid),
+                        "previous_metadata": redacted_manifest_config(
+                            metadata_update.get("previous_metadata")
+                        ),
+                    }
+                    await _ledger_db.execute(
+                        insert(MaintenanceAuditEvent)
+                        .values(
+                            event_type="download_metadata_update",
+                            idempotency_key=f"download_metadata_update:{digest}",
+                            summary=summary,
+                        )
+                        .on_conflict_do_nothing(index_elements=["idempotency_key"])
+                    )
+                    if _ledger_job is not None:
+                        append_manifest_event(
+                            _ledger_job,
+                            "metadata_updated",
+                            relative_path=metadata_update.get("relative_path"),
+                            source_work_id=metadata_update.get("source_work_id"),
+                            previous_sha256=metadata_update.get("previous_sha256"),
+                            replacement_sha256=metadata_update.get("replacement_sha256"),
+                            changed_fields=metadata_update.get("changed_fields"),
+                        )
             if (
                 completed_full_chunk
                 and provider_chunk is not None
                 and provider is not None
             ):
-                _ledger_job = await DownloadJobRepository(_ledger_db).get(job_uuid)
+                _ledger_job = _ledger_job or await DownloadJobRepository(_ledger_db).get(job_uuid)
                 if _ledger_job is not None:
                     update_manifest(
                         _ledger_job,
@@ -1075,6 +1117,7 @@ async def run_download_job(job_id: str):
                             j,
                             "staging_conflict",
                             conflicts=e.conflicts,
+                            conflict_details=e.details,
                         )
                         stage_message = "Download staging conflict; canonical files were not overwritten"
                     elif stage_discovery_error:
@@ -1092,6 +1135,27 @@ async def run_download_job(job_id: str):
                         "failed",
                         f"{stage_message}: {error_text[:140]}",
                     )
+                    from app.services.tasks import TaskService
+
+                    task_service = TaskService(db2)
+                    task = await task_service.get_by_subject("download_job", j.id)
+                    if task is not None:
+                        task_meta = dict(task.meta or {})
+                        if stage_conflict:
+                            task_meta["staging_conflict"] = {
+                                "classification": "unsafe_existing_target",
+                                "files": e.details,
+                            }
+                        await task_service.update_task(
+                            task,
+                            error=error_text,
+                            meta=task_meta,
+                            reason_code=(
+                                "download_staging_conflict"
+                                if stage_conflict
+                                else "download_staging_manifest_error"
+                            ),
+                        )
                 else:
                     j.retry_count += 1
                     if j.retry_count < max_retries:

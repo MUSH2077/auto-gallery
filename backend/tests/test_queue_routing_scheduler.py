@@ -131,6 +131,42 @@ def test_manual_download_retry_and_resume_use_downloads_queue(monkeypatch):
         ("publish", "downloads", "resume"),
     ]
 
+
+def test_unsafe_staging_conflict_cannot_be_blindly_retried():
+    """A classified canonical overwrite must require manual intervention."""
+    from app.services.task_engine import TaskEngine, TaskEngineError
+
+    job = SimpleNamespace(
+        id=uuid4(),
+        status="failed",
+        manifest={
+            "events": [
+                {
+                    "event": "staging_conflict",
+                    "conflict_details": {
+                        "file_type": "media",
+                        "old_sha256": "old",
+                        "new_sha256": "new",
+                    },
+                }
+            ]
+        },
+    )
+
+    class Repo:
+        async def get(self, _jid):
+            return job
+
+    engine = TaskEngine(_FakeDownloadDB())
+    engine.repo = Repo()
+
+    try:
+        asyncio.run(engine.retry_download(job.id))
+    except TaskEngineError as exc:
+        assert "cannot be fixed by retrying" in str(exc)
+    else:  # pragma: no cover - explicit assertion message for regressions
+        raise AssertionError("unsafe staging conflict was re-enqueued")
+
 def test_import_retry_and_resume_use_import_dispatch(monkeypatch):
     """TaskEngine retry/resume persist fixed-id imports dispatches."""
     from app.services import task_engine

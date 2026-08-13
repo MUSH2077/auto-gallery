@@ -1946,6 +1946,96 @@ test("subscription list uses one authoritative latest state and page-scoped summ
   expect(requestedIds).toBe(subscriptionId);
 });
 
+test("saving inherit sends the typed strategy and survives authoritative reload", async ({ page }) => {
+  let inherited = false;
+  let updatePayload: Record<string, unknown> | null = null;
+  const subscription = () => ({
+    id: "fixture-subscription",
+    creator_id: "fixture-creator",
+    name: "Fixture Subscription",
+    creator_name: "fixture-creator",
+    creator_display_name: "Fixture Creator",
+    is_active: true,
+    sync_enabled: inherited,
+    sync_interval_hours: 6,
+    schedule_mode: inherited ? null : "manual",
+    scheduled_times: null,
+    source_count: 1,
+    enabled_source_count: inherited ? 1 : 0,
+    running_job_count: 0,
+    failed_job_count: 0,
+    configured_mode: inherited ? "inherit" : "manual",
+    effective_mode: inherited ? "fixed_time" : "manual",
+    auto_enabled_source: inherited
+      ? { id: "fixture-source", source: "pixiv", source_url: "https://www.pixiv.net/users/1" }
+      : null,
+    next_sync_at: inherited ? "2026-08-14T14:00:00Z" : null,
+    created_at: "2026-07-27T10:00:00Z",
+    updated_at: "2026-08-13T14:07:00Z",
+  });
+
+  await page.route("**/api/v1/subscriptions/fixture-subscription", async (route) => {
+    if (route.request().method() === "PATCH") {
+      updatePayload = JSON.parse(route.request().postData() || "{}");
+      inherited = true;
+    }
+    await route.fulfill({ json: subscription() });
+  });
+  await page.route("**/api/v1/subscriptions/fixture-subscription/sources", async (route) => {
+    await route.fulfill({ json: [{
+      id: "fixture-source",
+      subscription_id: "fixture-subscription",
+      source: "pixiv",
+      source_url: "https://www.pixiv.net/users/1",
+      source_creator_id: "1",
+      is_enabled: inherited,
+      auth_healthy: true,
+      auth_status: "healthy",
+      next_sync_at: inherited ? "2026-08-14T14:00:00Z" : null,
+    }] });
+  });
+  await page.route("**/api/v1/subscriptions/summaries**", async (route) => {
+    await route.fulfill({ json: {
+      updated_at: "2026-08-13T14:10:00Z",
+      items: [{
+        subscription_id: "fixture-subscription",
+        latest_state: { state: "never_synced", status: null },
+        active_count: 0,
+        attention_count: 0,
+        source_count: 1,
+        enabled_source_count: inherited ? 1 : 0,
+        schedule: {
+          configured_mode: inherited ? "inherit" : "manual",
+          effective_mode: inherited ? "fixed_time" : "manual",
+          inherited,
+          timezone: "Asia/Shanghai",
+          scheduled_times: inherited ? "22:00" : null,
+          sync_interval_hours: 6,
+          next_due_at: inherited ? "2026-08-14T14:00:00Z" : null,
+          oldest_due_at: null,
+          due_sources: 0,
+          overdue_sources: 0,
+          blocked_sources: 0,
+        },
+      }],
+    } });
+  });
+
+  await page.goto("/admin/subscriptions/fixture-subscription");
+  await expect(page.getByText("Manual Only", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Edit" }).click();
+  await page.getByRole("dialog").locator("select").selectOption("inherit");
+  await page.getByRole("button", { name: "Save" }).click();
+
+  await expect.poll(() => updatePayload).not.toBeNull();
+  expect(updatePayload).toMatchObject({ schedule_mode: "inherit" });
+  expect(updatePayload).not.toHaveProperty("sync_enabled");
+  await expect(page.locator("dl").getByText("System default · Fixed time · Daily at 22:00")).toBeVisible();
+  await expect(page.locator("dl").getByText("Manual Only", { exact: true })).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator("dl").getByText("System default · Fixed time · Daily at 22:00")).toBeVisible();
+});
+
 test("compact scheduler omits healthy auth details and storage chart footers are removed", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto("/admin/scheduler#auth-status");

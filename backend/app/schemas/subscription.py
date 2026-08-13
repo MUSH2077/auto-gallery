@@ -1,7 +1,18 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel
+
+
+ScheduleMode = Literal["inherit", "interval", "fixed_time", "manual"]
+
+
+class ActivatedSubscriptionSource(BaseModel):
+    id: UUID
+    source: str
+    source_url: str | None = None
+    selection_reason: str
 
 
 class SubscriptionCreate(BaseModel):
@@ -10,7 +21,7 @@ class SubscriptionCreate(BaseModel):
     is_active: bool = True
     sync_enabled: bool = True
     sync_interval_hours: int = 6
-    schedule_mode: str | None = None
+    schedule_mode: ScheduleMode | None = None
     scheduled_times: str | None = None
 
     model_config = {"from_attributes": True}
@@ -21,7 +32,7 @@ class SubscriptionUpdate(BaseModel):
     is_active: bool | None = None
     sync_enabled: bool | None = None
     sync_interval_hours: int | None = None
-    schedule_mode: str | None = None
+    schedule_mode: ScheduleMode | None = None
     scheduled_times: str | None = None
 
     model_config = {"from_attributes": True}
@@ -48,6 +59,10 @@ class SubscriptionRead(BaseModel):
     latest_job_created_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    configured_mode: str | None = None
+    effective_mode: str | None = None
+    auto_enabled_source: ActivatedSubscriptionSource | None = None
+    next_sync_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 

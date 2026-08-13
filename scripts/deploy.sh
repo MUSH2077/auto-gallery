@@ -409,6 +409,11 @@ EOF
 set -euo pipefail
 cd "$PROJECT_ROOT"
 
+# The parent deploy process exports candidate image names.  A rollback must
+# resolve images from its frozen env file (and the rollback tags below), not
+# inherit those candidate overrides from the failed deploy process.
+unset BACKEND_IMAGE ADMIN_IMAGE
+
 # Preserve the new resource ceilings during rollback. Heavy workers stay
 # stopped; restore browsing first, then investigate before resuming work.
 docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \

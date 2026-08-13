@@ -9,6 +9,7 @@ file linked by the interrupted promotion from an unrelated pre-existing file.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import stat
 import uuid
@@ -20,6 +21,7 @@ from typing import Any
 
 MANIFEST_NAME = ".auto-gallery-stage.json"
 MANIFEST_VERSION = 1
+MAX_SAFE_METADATA_BYTES = 8 * 1024 * 1024
 _INCOMPLETE_SUFFIXES = (
     ".part",
     ".part-frag",
@@ -52,8 +54,9 @@ class DownloadStageDiscoveryError(DownloadStageError):
 class DownloadStageConflict(DownloadStageError):
     """A canonical target exists with different content or identity."""
 
-    def __init__(self, conflicts: list[str]):
+    def __init__(self, conflicts: list[str], details: list[dict[str, Any]] | None = None):
         self.conflicts = conflicts
+        self.details = details or []
         preview = ", ".join(conflicts[:5])
         if len(conflicts) > 5:
             preview += f" (+{len(conflicts) - 5} more)"
@@ -66,6 +69,7 @@ class StagePromotion:
 
     paths: tuple[Path, ...]
     conflicts: tuple[str, ...] = ()
+    metadata_updates: tuple[dict[str, Any], ...] = ()
 
 
 def staging_enabled() -> bool:
@@ -190,7 +194,7 @@ class DownloadStage:
         self._manifest["invalid_metadata"] = sorted(set(relative_paths))
         self._write_manifest()
 
-    def promote(self) -> StagePromotion:
+    def promote(self, *, provider: Any | None = None) -> StagePromotion:
         """Promote completed files without ever replacing an existing target."""
 
         staged_files = self._completed_staged_files()
@@ -201,38 +205,68 @@ class DownloadStage:
 
         self._manifest["state"] = "promoting"
         self._manifest["conflicts"] = []
+        self._manifest["conflict_details"] = []
+        metadata_updates = dict(self._manifest.get("metadata_updates") or {})
+        self._manifest["metadata_updates"] = metadata_updates
         # The complete recovery plan is durable before the first canonical link.
         self._write_manifest()
 
         conflicts: list[str] = []
+        conflict_details: list[dict[str, Any]] = []
         for relative in sorted(planned):
             staged = self.root / Path(PurePosixPath(relative))
             target = self._canonical_target(relative)
             if staged.exists() or staged.is_symlink():
                 self._validate_regular_file(staged, label="staged")
                 if target.exists() or target.is_symlink():
-                    if target.is_symlink() or not target.is_file() or not _files_equal(staged, target):
+                    if target.is_symlink() or not target.is_file():
                         conflicts.append(relative)
+                        conflict_details.append(_conflict_detail(relative, staged, target))
+                    elif not _files_equal(staged, target):
+                        update = _safe_metadata_update(
+                            relative,
+                            staged,
+                            target,
+                            provider=provider,
+                            expected_source=self.source,
+                        )
+                        if update is None:
+                            conflicts.append(relative)
+                            conflict_details.append(_conflict_detail(relative, staged, target))
+                        else:
+                            metadata_updates[relative] = update
             elif target.exists() or target.is_symlink():
                 if target.is_symlink() or not target.is_file():
                     conflicts.append(relative)
+                    conflict_details.append(_conflict_detail(relative, staged, target))
                     continue
                 target_identity = _file_identity(target)
-                if not (
+                recovered_update = metadata_updates.get(relative)
+                if (
+                    isinstance(recovered_update, dict)
+                    and recovered_update.get("replacement_sha256") == _sha256(target)
+                ):
+                    recovered_update["state"] = "applied"
+                    promoted[relative] = target_identity
+                elif not (
                     _same_inode(planned.get(relative), target_identity)
                     or _same_inode(promoted.get(relative), target_identity)
                 ):
                     conflicts.append(relative)
+                    conflict_details.append(_conflict_detail(relative, staged, target))
             else:
                 raise DownloadStageError(
                     f"planned staged file is missing from both trees: {relative}"
                 )
 
+        self._manifest["metadata_updates"] = metadata_updates
+        self._write_manifest()
         if conflicts:
             self._manifest["state"] = "conflict"
             self._manifest["conflicts"] = conflicts
+            self._manifest["conflict_details"] = conflict_details
             self._write_manifest()
-            raise DownloadStageConflict(conflicts)
+            raise DownloadStageConflict(conflicts, conflict_details)
 
         canonical_paths: list[Path] = []
         for relative in sorted(planned):
@@ -245,14 +279,48 @@ class DownloadStage:
                     # or be replaced after preflight while another process is
                     # writing the canonical tree.  Never discard the staged
                     # copy merely because the path now exists.
-                    if (
-                        target.is_symlink()
-                        or not target.is_file()
-                        or not _files_equal(staged, target)
-                    ):
-                        self._record_runtime_conflict(relative)
-                        raise DownloadStageConflict([relative])
+                    if target.is_symlink() or not target.is_file():
+                        detail = _conflict_detail(relative, staged, target)
+                        self._record_runtime_conflict(relative, detail=detail)
+                        raise DownloadStageConflict([relative], [detail])
+                    if not _files_equal(staged, target):
+                        expected_update = metadata_updates.get(relative)
+                        current_update = _safe_metadata_update(
+                            relative,
+                            staged,
+                            target,
+                            provider=provider,
+                            expected_source=self.source,
+                        )
+                        if (
+                            not isinstance(expected_update, dict)
+                            or current_update is None
+                            or expected_update.get("previous_sha256") != current_update.get("previous_sha256")
+                            or expected_update.get("replacement_sha256") != current_update.get("replacement_sha256")
+                        ):
+                            detail = _conflict_detail(relative, staged, target)
+                            self._record_runtime_conflict(relative, detail=detail)
+                            raise DownloadStageConflict([relative], [detail])
+                        # The previous payload is already durable in the stage
+                        # manifest.  A crash after replace is recovered by the
+                        # replacement hash during the next promote() call.
+                        os.replace(staged, target)
+                        _fsync_directory(target.parent)
+                        promoted[relative] = _file_identity(target)
+                        expected_update["state"] = "applied"
+                        metadata_updates[relative] = expected_update
+                        self._manifest["promoted"] = promoted
+                        self._manifest["metadata_updates"] = metadata_updates
+                        self._write_manifest()
+                        canonical_paths.append(target)
+                        continue
                     target_identity = _file_identity(target)
+                    recovered_update = metadata_updates.get(relative)
+                    if (
+                        isinstance(recovered_update, dict)
+                        and recovered_update.get("replacement_sha256") == _sha256(target)
+                    ):
+                        recovered_update["state"] = "applied"
                     if not os.path.samefile(staged, target):
                         # Record the accepted canonical identity before removing
                         # the redundant staged copy.  This closes the recovery
@@ -260,16 +328,18 @@ class DownloadStage:
                         promoted[relative] = target_identity
                         self._write_manifest()
                         if not _same_inode(target_identity, _file_identity(target)):
-                            self._record_runtime_conflict(relative)
-                            raise DownloadStageConflict([relative])
+                            detail = _conflict_detail(relative, staged, target)
+                            self._record_runtime_conflict(relative, detail=detail)
+                            raise DownloadStageConflict([relative], [detail])
                     staged.unlink()
                 else:
                     try:
                         os.link(staged, target, follow_symlinks=False)
                     except FileExistsError:
                         if target.is_symlink() or not target.is_file() or not _files_equal(staged, target):
-                            self._record_runtime_conflict(relative)
-                            raise DownloadStageConflict([relative])
+                            detail = _conflict_detail(relative, staged, target)
+                            self._record_runtime_conflict(relative, detail=detail)
+                            raise DownloadStageConflict([relative], [detail])
                         promoted[relative] = _file_identity(target)
                         self._write_manifest()
                     except OSError as exc:
@@ -290,9 +360,15 @@ class DownloadStage:
 
         self._manifest["state"] = "promoted"
         self._manifest["promoted"] = promoted
+        self._manifest["metadata_updates"] = metadata_updates
         self._write_manifest()
         self._remove_empty_directories()
-        return StagePromotion(tuple(canonical_paths))
+        applied_updates = tuple(
+            dict(update)
+            for _, update in sorted(metadata_updates.items())
+            if isinstance(update, dict) and update.get("state") == "applied"
+        )
+        return StagePromotion(tuple(canonical_paths), metadata_updates=applied_updates)
 
     def mark_registered(self) -> None:
         """Persist ledger completion, then remove an empty completed stage."""
@@ -420,11 +496,15 @@ class DownloadStage:
         if not stat.S_ISREG(info.st_mode):
             raise DownloadStageError(f"{label} path is not a regular file: {path.name}")
 
-    def _record_runtime_conflict(self, relative: str) -> None:
+    def _record_runtime_conflict(self, relative: str, *, detail: dict[str, Any] | None = None) -> None:
         conflicts = list(self._manifest.get("conflicts") or [])
         if relative not in conflicts:
             conflicts.append(relative)
         self._manifest["conflicts"] = conflicts
+        if detail is not None:
+            details = list(self._manifest.get("conflict_details") or [])
+            details.append(detail)
+            self._manifest["conflict_details"] = details
         self._manifest["state"] = "conflict"
         self._write_manifest()
 
@@ -496,6 +576,82 @@ def _files_equal(first: Path, second: Path) -> bool:
                 return False
             if not left_chunk:
                 return True
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _safe_metadata_update(
+    relative: str,
+    staged: Path,
+    target: Path,
+    *,
+    provider: Any | None,
+    expected_source: str | None,
+) -> dict[str, Any] | None:
+    if provider is None or staged.suffix.lower() != ".json" or target.suffix.lower() != ".json":
+        return None
+    if expected_source and getattr(provider, "source_name", None) != expected_source:
+        return None
+    if staged.stat().st_size > MAX_SAFE_METADATA_BYTES or target.stat().st_size > MAX_SAFE_METADATA_BYTES:
+        return None
+    try:
+        previous = json.loads(target.read_text(encoding="utf-8"))
+        replacement = json.loads(staged.read_text(encoding="utf-8"))
+        if not isinstance(previous, dict) or not isinstance(replacement, dict):
+            return None
+        previous_work = provider.parse_work_source(previous)
+        replacement_work = provider.parse_work_source(replacement)
+        previous_work_id = str(previous_work.get("source_work_id") or "").strip()
+        replacement_work_id = str(replacement_work.get("source_work_id") or "").strip()
+        previous_creator_id = str(previous_work.get("source_creator_id") or "").strip()
+        replacement_creator_id = str(replacement_work.get("source_creator_id") or "").strip()
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if (
+        not previous_work_id
+        or previous_work_id != replacement_work_id
+        or not previous_creator_id
+        or previous_creator_id != replacement_creator_id
+    ):
+        return None
+    changed_fields = sorted(
+        key
+        for key in set(previous) | set(replacement)
+        if previous.get(key) != replacement.get(key)
+    )
+    return {
+        "relative_path": relative,
+        "classification": "same_work_metadata_update",
+        "source": expected_source or getattr(provider, "source_name", None),
+        "source_work_id": previous_work_id,
+        "source_creator_id": previous_creator_id,
+        "previous_sha256": _sha256(target),
+        "replacement_sha256": _sha256(staged),
+        "previous_metadata": previous,
+        "changed_fields": changed_fields,
+        "staged_identity": _file_identity(staged),
+        "target_identity": _file_identity(target),
+        "state": "prepared",
+    }
+
+
+def _conflict_detail(relative: str, staged: Path, target: Path) -> dict[str, Any]:
+    detail: dict[str, Any] = {
+        "relative_path": relative,
+        "file_type": "metadata" if Path(relative).suffix.lower() == ".json" else "media",
+        "classification": "unsafe_existing_target",
+    }
+    if staged.exists() and staged.is_file() and not staged.is_symlink():
+        detail["staged_sha256"] = _sha256(staged)
+    if target.exists() and target.is_file() and not target.is_symlink():
+        detail["canonical_sha256"] = _sha256(target)
+    return detail
 
 
 def _fsync_directory(path: Path) -> None:

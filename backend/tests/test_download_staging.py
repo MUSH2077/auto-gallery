@@ -3,6 +3,7 @@ import os
 
 import pytest
 
+from app.providers.pixiv import PixivProvider
 from app.services import download_staging
 from app.services.download_staging import (
     MANIFEST_NAME,
@@ -198,3 +199,96 @@ def test_metadata_discovery_failure_keeps_recovery_manifest(tmp_path):
     manifest = json.loads(stage.manifest_path.read_text(encoding="utf-8"))
     assert manifest["state"] == "discovery_failed"
     assert manifest["invalid_metadata"] == ["pixiv/creator/invalid.json"]
+
+
+def _pixiv_metadata(*, creator_id="12539859", page_count=1, bookmarks=10):
+    return {
+        "id": 148166622,
+        "title": "愛彌斯",
+        "page_count": page_count,
+        "count": page_count,
+        "bookmarks": bookmarks,
+        "user": {"id": int(creator_id), "account": "ruzhaiii", "name": "ruzhaiii"},
+    }
+
+
+def test_same_work_metadata_update_is_auditable_and_adds_new_page(tmp_path):
+    download_root = tmp_path / "downloads"
+    target_dir = download_root / "pixiv" / "ruzhaiii" / "148166622"
+    target_dir.mkdir(parents=True)
+    target_json = target_dir / "148166622_p0.json"
+    target_json.write_text(json.dumps(_pixiv_metadata()), encoding="utf-8")
+    target_media = target_dir / "148166622_p0.jpg"
+    target_media.write_bytes(b"same-image")
+
+    stage = DownloadStage.open(download_root, "job-upstream-edit", "pixiv")
+    staged_dir = stage.root / target_dir.relative_to(download_root)
+    staged_dir.mkdir(parents=True)
+    (staged_dir / target_json.name).write_text(
+        json.dumps(_pixiv_metadata(page_count=2, bookmarks=99)),
+        encoding="utf-8",
+    )
+    (staged_dir / target_media.name).write_bytes(b"same-image")
+    (staged_dir / "148166622_p1.json").write_text(
+        json.dumps(_pixiv_metadata(page_count=2, bookmarks=99)),
+        encoding="utf-8",
+    )
+    (staged_dir / "148166622_p1.jpg").write_bytes(b"new-page")
+
+    promotion = stage.promote(provider=PixivProvider())
+
+    assert json.loads(target_json.read_text(encoding="utf-8"))["page_count"] == 2
+    assert (target_dir / "148166622_p1.jpg").read_bytes() == b"new-page"
+    assert len(promotion.metadata_updates) == 1
+    update = promotion.metadata_updates[0]
+    assert update["classification"] == "same_work_metadata_update"
+    assert update["source_work_id"] == "148166622"
+    assert update["source_creator_id"] == "12539859"
+    assert update["previous_metadata"]["page_count"] == 1
+    assert "page_count" in update["changed_fields"]
+
+
+def test_metadata_update_with_different_creator_remains_conflict(tmp_path):
+    download_root = tmp_path / "downloads"
+    target = download_root / "pixiv" / "ruzhaiii" / "148166622" / "148166622_p0.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps(_pixiv_metadata()), encoding="utf-8")
+    stage = DownloadStage.open(download_root, "job-identity-conflict", "pixiv")
+    staged = stage.root / target.relative_to(download_root)
+    staged.parent.mkdir(parents=True)
+    staged.write_text(
+        json.dumps(_pixiv_metadata(creator_id="999", page_count=2)),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DownloadStageConflict) as caught:
+        stage.promote(provider=PixivProvider())
+
+    assert caught.value.details[0]["file_type"] == "metadata"
+    assert json.loads(target.read_text(encoding="utf-8"))["user"]["id"] == 12539859
+
+
+def test_safe_metadata_replace_recovers_after_manifest_update_gap(tmp_path, monkeypatch):
+    download_root = tmp_path / "downloads"
+    target = download_root / "pixiv" / "ruzhaiii" / "148166622" / "148166622_p0.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps(_pixiv_metadata()), encoding="utf-8")
+    stage = DownloadStage.open(download_root, "job-metadata-recover", "pixiv")
+    staged = stage.root / target.relative_to(download_root)
+    staged.parent.mkdir(parents=True)
+    staged.write_text(json.dumps(_pixiv_metadata(page_count=2)), encoding="utf-8")
+
+    def crash_after_replace(_path):
+        raise RuntimeError("simulated crash after metadata replace")
+
+    monkeypatch.setattr(download_staging, "_fsync_directory", crash_after_replace)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        stage.promote(provider=PixivProvider())
+    assert not staged.exists()
+    assert json.loads(target.read_text(encoding="utf-8"))["page_count"] == 2
+
+    monkeypatch.undo()
+    recovered = DownloadStage.open(download_root, "job-metadata-recover", "pixiv")
+    promotion = recovered.promote(provider=PixivProvider())
+    assert promotion.paths == (target,)
+    assert promotion.metadata_updates[0]["state"] == "applied"

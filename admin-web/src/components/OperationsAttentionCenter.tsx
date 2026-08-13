@@ -134,7 +134,7 @@ export default function OperationsAttentionCenter() {
       const selected = (overview.data?.items || []).filter((item) => item.task_id && selectedTaskIds.has(item.task_id));
       const eligible = selected.filter((item) => (
         name === "retry"
-          ? !!item.task && ["failed", "stale", "cancelled"].includes(item.task.status)
+          ? item.available_actions.includes("retry")
           : item.status === "open"
       ));
       for (const item of eligible) {
@@ -307,7 +307,7 @@ export default function OperationsAttentionCenter() {
         {filteredGroups.map((group) => {
           const item = group[0];
           const task = item.task;
-          const retryable = !!task && ["failed", "stale", "cancelled"].includes(task.status);
+          const retryable = item.available_actions.includes("retry");
           const pausable = !!task && ["enqueued", "running", "recovering"].includes(task.status);
           const groupTaskIds = group.flatMap((candidate) => candidate.task_id ? [candidate.task_id] : []);
           return (

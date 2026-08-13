@@ -77,6 +77,10 @@ def infer_reason_code(status: str, error: str | None, *, orphaned: bool = False)
     if orphaned:
         return "orphaned_subject"
     lowered = (error or "").lower()
+    if "download staging conflict" in lowered:
+        return "download_staging_conflict"
+    if "download staging manifest" in lowered or "staging recovery manifest" in lowered:
+        return "download_staging_manifest_error"
     if "out of memory" in lowered or "oom" in lowered or "code -9" in lowered:
         return "out_of_memory"
     if "heartbeat" in lowered or status == "stale":
@@ -926,7 +930,16 @@ async def operations_overview(
             "task_id": str(task.id),
             "occurred_at": (task.updated_at or task.created_at).isoformat(),
             "source": task.source,
-            "available_actions": ["retry", "acknowledge", "open_repository", "copy_diagnostics"] if task.attention_state == "open" else ["pause", "resume", "open_repository"],
+            "available_actions": (
+                ["acknowledge", "open_repository", "copy_diagnostics"]
+                if task.attention_state == "open" and task.reason_code in {
+                    "download_staging_conflict",
+                    "download_staging_manifest_error",
+                }
+                else ["retry", "acknowledge", "open_repository", "copy_diagnostics"]
+                if task.attention_state == "open"
+                else ["pause", "resume", "open_repository"]
+            ),
             "task": payload,
         })
     if view == "attention":

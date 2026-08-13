@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import func, select, delete as sql_delete, update as sql_update, and_, or_
@@ -15,10 +16,18 @@ from app.models import (
     WorkSource,
 )
 from app.providers import registry
-from app.services.settings import get_subscription_defaults
+from app.services.settings import get_scheduler_config, get_subscription_defaults
 from app.services.search_projection_outbox import request_search_projection
+from app.services.subscription_source_selection import (
+    lock_subscription_sources,
+    select_primary_subscription_source,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class SubscriptionValidationError(ValueError):
+    """A requested subscription state is valid JSON but cannot be executed."""
 
 SCHEDULE_FIELDS = {
     "is_active",
@@ -92,7 +101,11 @@ class SubscriptionService:
     async def create_subscription(self, data: dict):
         # Merge system defaults: provided values take precedence over defaults
         defaults = await get_subscription_defaults(self.db)
+        if data.get("schedule_mode") == "inherit":
+            data["schedule_mode"] = None
         merged = {**defaults, **{k: v for k, v in data.items() if v is not None}}
+        if "schedule_mode" in data and data["schedule_mode"] is None:
+            merged["schedule_mode"] = None
         if merged.get("schedule_mode") == "manual" or not merged.get("sync_enabled", True):
             merged["schedule_mode"] = "manual"
             merged["sync_enabled"] = False
@@ -109,6 +122,15 @@ class SubscriptionService:
 
     async def update_subscription(self, sub_id: UUID, data: dict):
         sub = await self.get_subscription(sub_id)
+        await self.db.execute(
+            select(Subscription.id)
+            .where(Subscription.id == sub_id)
+            .with_for_update()
+        )
+        if data.get("schedule_mode") == "inherit":
+            data["schedule_mode"] = None
+        previous_mode = sub.schedule_mode
+        previous_sync_enabled = sub.sync_enabled
         if "schedule_mode" in data:
             if data.get("schedule_mode") == "manual":
                 data["sync_enabled"] = False
@@ -119,6 +141,34 @@ class SubscriptionService:
                 data["schedule_mode"] = "manual"
             elif sub.schedule_mode == "manual":
                 data["schedule_mode"] = None
+        automatic_transition = (
+            data.get("schedule_mode", sub.schedule_mode) != "manual"
+            and data.get("sync_enabled", sub.sync_enabled) is True
+            and (previous_mode == "manual" or not previous_sync_enabled)
+        )
+        auto_enabled_source = None
+        locked_sources: list[SubscriptionSource] = []
+        if automatic_transition:
+            locked_sources = await lock_subscription_sources(self.db, sub_id)
+            selection = await select_primary_subscription_source(
+                self.db,
+                sub,
+                sources=locked_sources,
+            )
+            if selection is None:
+                raise SubscriptionValidationError(
+                    "Automatic scheduling requires at least one downloadable source with a valid URL"
+                )
+            for source in locked_sources:
+                source.is_enabled = source.id == selection.source.id
+                source.next_sync_at = None
+            selection.source.source_url = selection.normalized_url
+            auto_enabled_source = {
+                "id": selection.source.id,
+                "source": selection.source.source,
+                "source_url": selection.normalized_url,
+                "selection_reason": selection.reason,
+            }
         old_creator_id = sub.creator_id
         new_creator_id = data.get("creator_id")
         _context_creator, repository_ids, affected_work_ids, _states = (
@@ -131,6 +181,20 @@ class SubscriptionService:
                 sql_update(SubscriptionSource)
                 .where(SubscriptionSource.subscription_id == sub_id)
                 .values(next_sync_at=None)
+            )
+        scheduler_config = await get_scheduler_config(self.db)
+        if automatic_transition and auto_enabled_source is not None:
+            from app.jobs.subscription_sync import next_future_subscription_check_at
+
+            selected = next(
+                source
+                for source in locked_sources
+                if source.id == auto_enabled_source["id"]
+            )
+            selected.next_sync_at = next_future_subscription_check_at(
+                sub,
+                scheduler_config,
+                datetime.now(timezone.utc),
             )
 
         # When creator_id changes, propagate to SourceCreators that were
@@ -191,6 +255,17 @@ class SubscriptionService:
             subscription_ids=[sub.id],
         )
         await self.db.commit()
+        sub.configured_mode = sub.schedule_mode or "inherit"
+        sub.effective_mode = sub.schedule_mode or str(
+            scheduler_config.get("schedule_mode") or "interval"
+        )
+        sub.auto_enabled_source = auto_enabled_source
+        enabled_next = [
+            source.next_sync_at
+            for source in locked_sources
+            if source.is_enabled and source.next_sync_at is not None
+        ]
+        sub.next_sync_at = min(enabled_next) if enabled_next else None
         return sub
 
     async def delete_subscription(self, sub_id: UUID):

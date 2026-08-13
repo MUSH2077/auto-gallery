@@ -1476,7 +1476,7 @@ function JobsContent() {
                         {j.status === "paused" && (
                           <RowButton onClick={() => resumeDL.mutate(j.id)} disabled={resumeDL.isPending}>{t("jobs.resume")}</RowButton>
                         )}
-                        {(j.status === "failed" || j.status === "stale" || j.status === "complete") && (
+                        {(j.status === "failed" || j.status === "stale" || j.status === "complete") && j.retryable !== false && (
                           <RowButton tone="primary" onClick={() => { setRetryId(j.id); retryDL.mutate(j.id); }} disabled={retryDL.isPending}>{t("jobs.retry")}</RowButton>
                         )}
                         <RowActionMenu

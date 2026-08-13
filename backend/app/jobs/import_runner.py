@@ -26,7 +26,7 @@ from app.jobs.worker_control import ControlListener, HeartbeatPublisher
 from app.models import (
     Work, WorkSource, Asset, AssetSource, Tag, WorkTag, WorkSourceTag, SourceCreator,
     CreatorCurationState, ImportCurationOutbox, MediaDerivativeOutbox,
-    SearchProjectionOutbox, WorkCurationState,
+    MaintenanceAuditEvent, SearchProjectionOutbox, WorkCurationState,
 )
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
@@ -51,6 +51,8 @@ from app.services.heavy_io import (
     wait_for_resource_capacity,
 )
 from app.services.media_derivatives import MEDIA_ALGORITHM_VERSION
+from app.services.media_derivatives import request_media_derivatives
+from app.services.import_projection import request_import_projection
 from app.services.resource_pressure import (
     current_profile_slice_limits,
     sleep_for_profile_slice_cooldown,
@@ -62,6 +64,7 @@ from app.services.search_projection_outbox import (
     DEFAULT_TAGS_INDEX_UID,
     DEFAULT_WORKS_INDEX_UID,
     mark_works_generation_pending,
+    request_search_projection,
 )
 from app.services.stage_metrics import measure_async_stage
 
@@ -793,6 +796,412 @@ async def _prepare_work_media(
     }
 
 
+def _asset_role(path: Path) -> str:
+    if path.suffix.lower() in VIDEO_EXTS:
+        return "video"
+    if path.suffix.lower() in ARCHIVE_EXTENSIONS:
+        return "archive"
+    if path.suffix.lower() == ".gif":
+        return "animation"
+    return "page"
+
+
+def _asset_derivative_request(
+    asset_id: UUID,
+    path: Path,
+    stat: os.stat_result,
+    *,
+    primary_derivative_ready: bool = False,
+) -> dict[str, Any]:
+    requested: dict[str, bool] = {"sha256": True, "dedup": True}
+    if can_compute_phash(path.suffix):
+        requested["phash"] = True
+    if not primary_derivative_ready:
+        if can_generate_thumbnail(path.suffix):
+            requested.update(thumbnail=True, dimensions=True)
+        elif path.suffix.lower() in VIDEO_EXTS:
+            requested.update(thumbnail=True, dimensions=True, video=True)
+    return {
+        "asset_id": asset_id,
+        "requested": requested,
+        "source_size": stat.st_size,
+        "source_mtime_ns": stat.st_mtime_ns,
+    }
+
+
+async def _update_existing_work_groups(
+    provider: Any,
+    download_job: DownloadJob,
+    prepared: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Refresh existing upstream works and append newly published assets.
+
+    Existing WorkSource rows used to be treated as an unconditional no-op.
+    That made a legitimate upstream metadata revision (for example a Pixiv
+    work growing from one page to two) land on disk while its database work
+    remained stale.  This path locks the authoritative source row, updates its
+    metadata, inserts only missing source assets, and commits all projection
+    intents and the audit event in the same transaction.
+    """
+
+    from app.services.artifact_ledger import ArtifactLedger
+
+    result: dict[str, Any] = {
+        "updated": 0,
+        "unchanged": 0,
+        "assets": 0,
+        "multi_page": 0,
+        "failures": {},
+    }
+    download_root = Path(settings.download_root).resolve()
+
+    for prepared_batch in _prepared_work_batches(prepared):
+        batch_ids = [source_work_id for source_work_id, _ in prepared_batch]
+        prepared_by_id = dict(prepared_batch)
+        media_by_id: dict[str, tuple[list[Path], dict[Path, os.stat_result]]] = {}
+        for source_work_id, prepared_work in prepared_batch:
+            try:
+                asset_files = media_files_for_group(
+                    prepared_work["items"],
+                    source_work_id,
+                )
+                if not asset_files:
+                    raise ValueError("no media assets found")
+                for path in asset_files:
+                    path.resolve().relative_to(download_root)
+                media_by_id[source_work_id] = (
+                    asset_files,
+                    {path: path.stat() for path in asset_files},
+                )
+            except Exception as error:
+                result["failures"][source_work_id] = _safe_work_error(error)
+
+        successful: list[str] = []
+        async with async_session() as db:
+            work_sources = list(
+                (
+                    await db.execute(
+                        select(WorkSource)
+                        .where(
+                            WorkSource.source == provider.source_name,
+                            WorkSource.source_work_id.in_(batch_ids),
+                        )
+                        .order_by(WorkSource.source_work_id, WorkSource.id)
+                        .with_for_update()
+                    )
+                ).scalars()
+            )
+            work_source_by_id = {
+                row.source_work_id: row for row in work_sources
+            }
+
+            for source_work_id in batch_ids:
+                if source_work_id in result["failures"]:
+                    continue
+                work_source = work_source_by_id.get(source_work_id)
+                if work_source is None:
+                    result["failures"][source_work_id] = (
+                        "existing WorkSource disappeared during update"
+                    )
+                    continue
+                prepared_work = prepared_by_id[source_work_id]
+                ws_data = prepared_work["ws_data"]
+                asset_files, file_stats = media_by_id[source_work_id]
+                try:
+                    async with db.begin_nested():
+                        work = (
+                            await db.execute(
+                                select(Work)
+                                .where(Work.id == work_source.work_id)
+                                .with_for_update()
+                            )
+                        ).scalar_one()
+                        existing_assets = list(
+                            (
+                                await db.execute(
+                                    select(AssetSource, Asset)
+                                    .join(Asset, Asset.id == AssetSource.asset_id)
+                                    .where(
+                                        AssetSource.work_source_id == work_source.id
+                                    )
+                                    .order_by(
+                                        AssetSource.ordinal.asc().nullslast(),
+                                        AssetSource.id,
+                                    )
+                                    .with_for_update(of=(AssetSource, Asset))
+                                )
+                            ).all()
+                        )
+                        existing_source_asset_ids = {
+                            row.source_asset_id
+                            for row, _asset in existing_assets
+                            if row.source_asset_id
+                        }
+                        occupied_ordinals = {
+                            row.ordinal
+                            for row, _asset in existing_assets
+                            if row.ordinal is not None
+                        }
+
+                        changed_fields = [
+                            field
+                            for field, old, new in (
+                                ("source_url", work_source.source_url, ws_data.get("source_url")),
+                                (
+                                    "source_creator_id",
+                                    work_source.source_creator_id,
+                                    ws_data.get("source_creator_id"),
+                                ),
+                                ("title", work_source.title, ws_data.get("title")),
+                                (
+                                    "description",
+                                    work_source.description,
+                                    ws_data.get("description"),
+                                ),
+                                (
+                                    "posted_at",
+                                    work_source.posted_at,
+                                    prepared_work["posted_at"],
+                                ),
+                                (
+                                    "raw_metadata",
+                                    work_source.raw_metadata,
+                                    ws_data.get("raw_metadata"),
+                                ),
+                            )
+                            if old != new
+                        ]
+                        old_raw_hash = hashlib.sha256(
+                            json.dumps(
+                                work_source.raw_metadata or {},
+                                sort_keys=True,
+                                ensure_ascii=False,
+                                default=str,
+                            ).encode("utf-8")
+                        ).hexdigest()
+                        new_raw_hash = hashlib.sha256(
+                            json.dumps(
+                                ws_data.get("raw_metadata") or {},
+                                sort_keys=True,
+                                ensure_ascii=False,
+                                default=str,
+                            ).encode("utf-8")
+                        ).hexdigest()
+                        work_source.source_url = ws_data.get("source_url")
+                        work_source.source_creator_id = ws_data.get(
+                            "source_creator_id"
+                        )
+                        work_source.title = ws_data.get("title")
+                        work_source.description = ws_data.get("description")
+                        work_source.posted_at = prepared_work["posted_at"]
+                        work_source.raw_metadata = ws_data.get("raw_metadata")
+
+                        new_asset_ids: list[UUID] = []
+                        derivative_requests: list[dict[str, Any]] = []
+                        for ordinal, path in enumerate(asset_files):
+                            source_asset_id = path.stem
+                            if source_asset_id in existing_source_asset_ids:
+                                continue
+                            if ordinal in occupied_ordinals:
+                                raise ValueError(
+                                    "new upstream asset conflicts with an existing ordinal"
+                                )
+                            stat = file_stats[path]
+                            asset_id = uuid4()
+                            asset = Asset(
+                                id=asset_id,
+                                file_name=path.name,
+                                file_path=str(path.resolve().relative_to(download_root)),
+                                file_size=stat.st_size,
+                                mime_type=get_mime_type(path.suffix),
+                            )
+                            db.add(asset)
+                            db.add(
+                                AssetSource(
+                                    id=uuid4(),
+                                    asset_id=asset_id,
+                                    work_source_id=work_source.id,
+                                    source=provider.source_name,
+                                    source_asset_id=source_asset_id,
+                                    ordinal=ordinal,
+                                    role=_asset_role(path),
+                                )
+                            )
+                            if work.thumbnail_asset_id is None and ordinal == 0:
+                                work.thumbnail_asset_id = asset_id
+                            new_asset_ids.append(asset_id)
+                            derivative_requests.append(
+                                _asset_derivative_request(asset_id, path, stat)
+                            )
+                            existing_source_asset_ids.add(source_asset_id)
+                            occupied_ordinals.add(ordinal)
+
+                        work_tag_rows = [
+                            {
+                                "id": uuid4(),
+                                "work_id": work.id,
+                                "tag_id": tag["id"],
+                                "source": provider.source_name,
+                            }
+                            for tag in prepared_work["tags"]
+                        ]
+                        if work_tag_rows:
+                            await db.execute(
+                                insert(WorkTag)
+                                .values(work_tag_rows)
+                                .on_conflict_do_nothing(
+                                    constraint="uq_work_tags_work_tag"
+                                )
+                            )
+                        work_source_tag_rows = [
+                            {
+                                "id": uuid4(),
+                                "work_source_id": work_source.id,
+                                "tag_id": tag["id"],
+                                "source": provider.source_name,
+                                "original_name": tag.get("original_name"),
+                            }
+                            for tag in prepared_work["tags"]
+                        ]
+                        if work_source_tag_rows:
+                            await db.execute(
+                                insert(WorkSourceTag)
+                                .values(work_source_tag_rows)
+                                .on_conflict_do_nothing(
+                                    constraint="uq_work_source_tags_source_tag"
+                                )
+                            )
+
+                        changed = bool(changed_fields or new_asset_ids)
+                        if changed:
+                            await request_media_derivatives(
+                                db,
+                                derivative_requests,
+                            )
+                            _creator_dir, lib_dir = (
+                                WorkImportService.library_directory(
+                                    provider.source_name,
+                                    prepared_work["first_raw"],
+                                    source_work_id,
+                                )
+                            )
+                            await request_import_projection(
+                                db,
+                                [
+                                    {
+                                        "work_id": work.id,
+                                        "creator_id": prepared_work[
+                                            "linked_creator_id"
+                                        ],
+                                        "repository_id": download_job.subscription_source_id,
+                                        "source": provider.source_name,
+                                        "source_work_id": source_work_id,
+                                        "metadata_path": str(
+                                            (lib_dir / "metadata.json").relative_to(
+                                                Path(settings.library_root)
+                                            )
+                                        ),
+                                        "force_metadata_refresh": True,
+                                    }
+                                ],
+                            )
+                            await request_search_projection(
+                                db,
+                                [work.id],
+                                creator_ids=(
+                                    [prepared_work["linked_creator_id"]]
+                                    if prepared_work["linked_creator_id"]
+                                    else []
+                                ),
+                                tag_ids=[tag["id"] for tag in prepared_work["tags"]],
+                                repository_ids=(
+                                    [download_job.subscription_source_id]
+                                    if download_job.subscription_source_id
+                                    else []
+                                ),
+                                subscription_ids=(
+                                    [download_job.subscription_id]
+                                    if download_job.subscription_id
+                                    else []
+                                ),
+                            )
+                            audit_digest = hashlib.sha256(
+                                (
+                                    f"{download_job.id}:{provider.source_name}:"
+                                    f"{source_work_id}"
+                                ).encode("utf-8")
+                            ).hexdigest()[:32]
+                            await db.execute(
+                                insert(MaintenanceAuditEvent)
+                                .values(
+                                    id=uuid4(),
+                                    event_type="existing_work_upstream_update",
+                                    idempotency_key=(
+                                        f"existing-work-update:{audit_digest}"
+                                    ),
+                                    summary={
+                                        "download_job_id": str(download_job.id),
+                                        "source": provider.source_name,
+                                        "source_work_id": source_work_id,
+                                        "work_id": str(work.id),
+                                        "changed_fields": changed_fields,
+                                        "old_metadata_sha256": old_raw_hash,
+                                        "new_metadata_sha256": new_raw_hash,
+                                        "asset_ids_added": [
+                                            str(value) for value in new_asset_ids
+                                        ],
+                                    },
+                                )
+                                .on_conflict_do_nothing(
+                                    index_elements=["idempotency_key"]
+                                )
+                            )
+                            result["updated"] += 1
+                            result["assets"] += len(new_asset_ids)
+                        else:
+                            result["unchanged"] += 1
+                        if len(existing_assets) + len(new_asset_ids) > 1:
+                            result["multi_page"] += 1
+                        successful.append(source_work_id)
+                except Exception as error:
+                    result["failures"][source_work_id] = _safe_work_error(error)
+                    logger.warning(
+                        "Existing work update failed for %s/%s: %s",
+                        provider.source_name,
+                        source_work_id,
+                        result["failures"][source_work_id],
+                        exc_info=True,
+                    )
+
+            ledger = ArtifactLedger(db)
+            if successful:
+                await ledger.mark_works(
+                    download_job.id,
+                    successful,
+                    "done",
+                    source=provider.source_name,
+                    preserve_active_leases=True,
+                )
+            for message in set(result["failures"].values()):
+                failed_ids = [
+                    source_work_id
+                    for source_work_id, value in result["failures"].items()
+                    if value == message and source_work_id in batch_ids
+                ]
+                if failed_ids:
+                    await ledger.mark_works(
+                        download_job.id,
+                        failed_ids,
+                        "failed",
+                        message,
+                        source=provider.source_name,
+                        preserve_active_leases=True,
+                    )
+            await db.commit()
+
+    return result
+
+
 BULK_SQL_PARAMETER_BUDGET = 24_000
 
 
@@ -888,15 +1297,6 @@ def _build_import_work(
             asset_row.update(primary_values)
             work.thumbnail_asset_id = asset_id
         asset_rows.append(asset_row)
-        role = (
-            "video"
-            if path.suffix.lower() in VIDEO_EXTS
-            else "archive"
-            if path.suffix.lower() in ARCHIVE_EXTENSIONS
-            else "animation"
-            if path.suffix.lower() == ".gif"
-            else "page"
-        )
         asset_source_rows.append(
             {
                 "id": uuid4(),
@@ -907,24 +1307,18 @@ def _build_import_work(
                 "source_url": None,
                 "raw_metadata": None,
                 "ordinal": index,
-                "role": role,
+                "role": _asset_role(path),
             }
         )
-        requested = {"sha256": True, "dedup": True}
-        if can_compute_phash(path.suffix):
-            requested["phash"] = True
-        if index > 0 or not primary_values.get("thumb_sm_path"):
-            if can_generate_thumbnail(path.suffix):
-                requested.update(thumbnail=True, dimensions=True)
-            elif path.suffix.lower() in VIDEO_EXTS:
-                requested.update(thumbnail=True, dimensions=True, video=True)
         derivative_requests.append(
-            {
-                "asset_id": asset_id,
-                "requested": requested,
-                "source_size": stat.st_size,
-                "source_mtime_ns": stat.st_mtime_ns,
-            }
+            _asset_derivative_request(
+                asset_id,
+                path,
+                stat,
+                primary_derivative_ready=(
+                    index == 0 and bool(primary_values.get("thumb_sm_path"))
+                ),
+            )
         )
 
     work_tag_rows = [
@@ -1521,16 +1915,11 @@ async def run_import_job(import_job_id: str):
             provider.source_name,
             list(groups),
         )
-        if existing_ids:
-            async with async_session() as ledger_db:
-                await ArtifactLedger(ledger_db).mark_works(
-                    dj.id,
-                    existing_ids,
-                    "done",
-                    source=provider.source_name,
-                    preserve_active_leases=True,
-                )
-                await ledger_db.commit()
+        existing_groups = {
+            source_work_id: items
+            for source_work_id, items in groups.items()
+            if source_work_id in existing_ids
+        }
         new_groups = {
             source_work_id: items
             for source_work_id, items in groups.items()
@@ -1543,6 +1932,42 @@ async def run_import_job(import_job_id: str):
         # provider request and is drained immediately below.
         prepared: dict[str, dict[str, Any]] = {}
         parse_failures: dict[str, str] = {}
+        existing_prepared: dict[str, dict[str, Any]] = {}
+        existing_group_items = list(existing_groups.items())
+        existing_prepare_offset = 0
+        while existing_prepare_offset < len(existing_group_items):
+            async with _import_resource_slice(
+                "import_db",
+                execution_owner,
+            ) as prepare_limits:
+                allowed = max(
+                    1,
+                    min(
+                        int(prepare_limits.work_units),
+                        IMPORT_WORK_BATCH_SIZE,
+                        len(existing_group_items) - existing_prepare_offset,
+                    ),
+                )
+                normalized, failures = await _prepare_import_metadata(
+                    provider,
+                    dj,
+                    dict(
+                        existing_group_items[
+                            existing_prepare_offset : existing_prepare_offset
+                            + allowed
+                        ]
+                    ),
+                )
+                existing_prepared.update(normalized)
+                parse_failures.update(failures)
+                existing_prepare_offset += allowed
+
+        existing_result = await _update_existing_work_groups(
+            provider,
+            dj,
+            existing_prepared,
+        )
+        parse_failures.update(existing_result["failures"])
         new_group_items = list(new_groups.items())
         prepare_offset = 0
         while prepare_offset < len(new_group_items):
@@ -1589,15 +2014,17 @@ async def run_import_job(import_job_id: str):
                 await ledger_db.commit()
 
         stats = {
-            "works": 0,
-            "assets": 0,
-            "multi_page": 0,
+            "works": int(existing_result["updated"]),
+            "assets": int(existing_result["assets"]),
+            "multi_page": int(existing_result["multi_page"]),
             "skipped": len(parse_failures),
-            "existing": len(existing_ids),
+            "existing": int(existing_result["unchanged"]),
         }
         _process_started = monotonic()
         pending_batches = deque(_prepared_work_batches(prepared))
-        accounted_existing = set(existing_ids)
+        accounted_existing = set(existing_prepared) - set(
+            existing_result["failures"]
+        )
         contended_round = 0
         while pending_batches:
             prepared_batch = pending_batches.popleft()

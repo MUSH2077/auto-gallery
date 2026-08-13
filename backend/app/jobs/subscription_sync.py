@@ -446,6 +446,46 @@ def next_subscription_check_at(
     )
 
 
+def next_future_subscription_check_at(
+    sub,
+    system_config: dict,
+    now: datetime,
+    tz=None,
+) -> datetime | None:
+    """Return the first future slot when a manual subscription becomes automatic."""
+
+    if tz is None:
+        try:
+            tz = ZoneInfo(system_config.get("timezone", "UTC"))
+        except Exception:
+            tz = timezone.utc
+    local_now = _as_tz(now, tz) or datetime.now(tz)
+    mode = sub.schedule_mode or system_config.get("schedule_mode", "interval")
+    if mode == "manual":
+        return None
+    if mode != "fixed_time":
+        interval_hours = sub.sync_interval_hours or int(
+            system_config.get("default_sync_interval_hours", FALLBACK_INTERVAL_HOURS)
+        )
+        return _utc(local_now + timedelta(hours=max(1, int(interval_hours))))
+    scheduled = _parse_scheduled_times(
+        sub.scheduled_times or system_config.get("scheduled_times", "")
+    )
+    if not scheduled:
+        interval_hours = sub.sync_interval_hours or int(
+            system_config.get("default_sync_interval_hours", FALLBACK_INTERVAL_HOURS)
+        )
+        return _utc(local_now + timedelta(hours=max(1, int(interval_hours))))
+    candidates = [
+        datetime(day.year, day.month, day.day, hour, minute, second, tzinfo=tz)
+        for day_offset in (0, 1, 2)
+        for day in (local_now.date() + timedelta(days=day_offset),)
+        for hour, minute, second in scheduled
+        if datetime(day.year, day.month, day.day, hour, minute, second, tzinfo=tz) > local_now
+    ]
+    return _utc(min(candidates)) if candidates else _utc(local_now + timedelta(days=1))
+
+
 def schedule_decision_snapshot(
     sub,
     system_config: dict,

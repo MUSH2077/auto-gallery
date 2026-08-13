@@ -79,13 +79,24 @@ async def request_import_projection(
                     metadata_available_at=now,
                 )
             )
-        elif row.state == "failed":
+            continue
+
+        # Existing works can legitimately receive upstream metadata changes or
+        # additional pages.  Keep the durable projection identity current and,
+        # when explicitly requested by that update path, invalidate an older
+        # metadata writer by clearing its lease token before requeueing it.
+        row.creator_id = record.get("creator_id")
+        row.repository_id = record.get("repository_id")
+        row.source = record.get("source")
+        row.source_work_id = record.get("source_work_id")
+        if record.get("metadata_path"):
+            row.metadata_path = record["metadata_path"]
+        if row.state == "failed":
             row.state = "pending"
             row.available_at = now
             row.last_error = None
         if (
-            row is not None
-            and row.metadata_state == "failed"
+            (row.metadata_state == "failed" or record.get("force_metadata_refresh"))
             and row.source
             and row.source_work_id
         ):
@@ -93,6 +104,7 @@ async def request_import_projection(
             row.metadata_available_at = now
             row.metadata_lease_expires_at = None
             row.metadata_lease_token = None
+            row.metadata_completed_at = None
             row.metadata_last_error = None
     return len(work_ids)
 

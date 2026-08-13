@@ -3695,6 +3695,20 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** ActivatedSubscriptionSource */
+        ActivatedSubscriptionSource: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Selection Reason */
+            selection_reason: string;
+            /** Source */
+            source: string;
+            /** Source Url */
+            source_url?: string | null;
+        };
         /** AdminSettingsUpdate */
         AdminSettingsUpdate: {
             dedup?: components["schemas"]["DedupSettings"] | null;
@@ -4452,6 +4466,10 @@ export interface components {
         };
         /** DownloadJobRead */
         DownloadJobRead: {
+            /** Conflict Details */
+            readonly conflict_details: {
+                [key: string]: unknown;
+            }[];
             /**
              * Created At
              * Format: date-time
@@ -4494,8 +4512,12 @@ export interface components {
             progress_data?: {
                 [key: string]: unknown;
             } | null;
+            /** Reason Code */
+            readonly reason_code: string | null;
             /** Retry Count */
             retry_count: number;
+            /** Retryable */
+            readonly retryable: boolean;
             /** Source */
             source: string;
             /** Source Url */
@@ -5393,7 +5415,7 @@ export interface components {
             /** Name */
             name?: string | null;
             /** Schedule Mode */
-            schedule_mode?: string | null;
+            schedule_mode?: ("inherit" | "interval" | "fixed_time" | "manual") | null;
             /** Scheduled Times */
             scheduled_times?: string | null;
             /**
@@ -5464,6 +5486,9 @@ export interface components {
         };
         /** SubscriptionRead */
         SubscriptionRead: {
+            auto_enabled_source?: components["schemas"]["ActivatedSubscriptionSource"] | null;
+            /** Configured Mode */
+            configured_mode?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -5478,6 +5503,8 @@ export interface components {
             creator_id: string;
             /** Creator Name */
             creator_name?: string | null;
+            /** Effective Mode */
+            effective_mode?: string | null;
             /** Enabled Source Count */
             enabled_source_count?: number | null;
             /** Failed Job Count */
@@ -5499,6 +5526,8 @@ export interface components {
             latest_job_status?: string | null;
             /** Name */
             name?: string | null;
+            /** Next Sync At */
+            next_sync_at?: string | null;
             /** Running Job Count */
             running_job_count?: number | null;
             /** Schedule Mode */
@@ -5673,7 +5702,7 @@ export interface components {
             /** Name */
             name?: string | null;
             /** Schedule Mode */
-            schedule_mode?: string | null;
+            schedule_mode?: ("inherit" | "interval" | "fixed_time" | "manual") | null;
             /** Scheduled Times */
             scheduled_times?: string | null;
             /** Sync Enabled */

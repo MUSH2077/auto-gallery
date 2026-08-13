@@ -9,6 +9,16 @@ from app.repositories.base import BaseRepository
 class SubscriptionRepository(BaseRepository[Subscription]):
     model = Subscription
 
+    async def update(self, obj: Subscription, data: dict) -> Subscription:
+        """Allow explicit NULL for the two fields whose NULL means inherit."""
+
+        nullable_fields = {"schedule_mode", "scheduled_times"}
+        for key, value in data.items():
+            if value is not None or key in nullable_fields:
+                setattr(obj, key, value)
+        await self.session.flush()
+        return obj
+
     async def get(self, sub_id: UUID) -> Subscription | None:
         """Get a single subscription with creator name fields populated."""
         stmt = (

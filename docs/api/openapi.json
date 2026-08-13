@@ -1,6 +1,41 @@
 {
   "components": {
     "schemas": {
+      "ActivatedSubscriptionSource": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "selection_reason": {
+            "title": "Selection Reason",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "selection_reason"
+        ],
+        "title": "ActivatedSubscriptionSource",
+        "type": "object"
+      },
       "AdminSettingsUpdate": {
         "properties": {
           "dedup": {
@@ -2087,6 +2122,15 @@
       },
       "DownloadJobRead": {
         "properties": {
+          "conflict_details": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "readOnly": true,
+            "title": "Conflict Details",
+            "type": "array"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -2238,9 +2282,26 @@
             ],
             "title": "Progress Data"
           },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "readOnly": true,
+            "title": "Reason Code"
+          },
           "retry_count": {
             "title": "Retry Count",
             "type": "integer"
+          },
+          "retryable": {
+            "readOnly": true,
+            "title": "Retryable",
+            "type": "boolean"
           },
           "source": {
             "title": "Source",
@@ -2319,7 +2380,10 @@
           "retry_count",
           "created_at",
           "updated_at",
-          "outcome"
+          "outcome",
+          "reason_code",
+          "conflict_details",
+          "retryable"
         ],
         "title": "DownloadJobRead",
         "type": "object"
@@ -4598,6 +4662,12 @@
           "schedule_mode": {
             "anyOf": [
               {
+                "enum": [
+                  "inherit",
+                  "interval",
+                  "fixed_time",
+                  "manual"
+                ],
                 "type": "string"
               },
               {
@@ -4759,6 +4829,27 @@
       },
       "SubscriptionRead": {
         "properties": {
+          "auto_enabled_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActivatedSubscriptionSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "configured_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configured Mode"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -4790,6 +4881,17 @@
               }
             ],
             "title": "Creator Name"
+          },
+          "effective_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Mode"
           },
           "enabled_source_count": {
             "anyOf": [
@@ -4879,6 +4981,18 @@
               }
             ],
             "title": "Name"
+          },
+          "next_sync_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Sync At"
           },
           "running_job_count": {
             "anyOf": [
@@ -5366,6 +5480,12 @@
           "schedule_mode": {
             "anyOf": [
               {
+                "enum": [
+                  "inherit",
+                  "interval",
+                  "fixed_time",
+                  "manual"
+                ],
                 "type": "string"
               },
               {

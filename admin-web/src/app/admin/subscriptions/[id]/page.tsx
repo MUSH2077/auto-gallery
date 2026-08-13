@@ -90,16 +90,27 @@ export default function SubscriptionDetailPage() {
   const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
   const [showAddSource, setShowAddSource] = useState(false);
   const [editing, setEditing] = useState(false); const [editName, setEditName] = useState("");
-  const [editMode, setEditMode] = useState(""); const [editInterval, setEditInterval] = useState(0);
+  const [editMode, setEditMode] = useState<"inherit" | "interval" | "fixed_time" | "manual">("inherit"); const [editInterval, setEditInterval] = useState(0);
   const [editTimes, setEditTimes] = useState("");
   const [deleteSsId, setDeleteSsId] = useState<string | null>(null);
   const [toggleId, setToggleId] = useState<string | null>(null);
 
   const update = useMutation({
-    mutationFn: (data: Record<string, unknown>) => api.updateSubscription(id, data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.detail(id) });
-      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.summaries([id]) });
+    mutationFn: (data: Parameters<typeof api.updateSubscription>[1]) => api.updateSubscription(id, data),
+    onSuccess: async (updated) => {
+      qc.setQueryData(queryKeys.subscriptions.detail(id), updated);
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: queryKeys.subscriptions.detail(id) }),
+        qc.invalidateQueries({ queryKey: queryKeys.subscriptions.summaries([id]) }),
+        qc.invalidateQueries({ queryKey: queryKeys.subscriptions.sources(id) }),
+        qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all }),
+        qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions }),
+      ]);
+      if (updated.auto_enabled_source) {
+        toast.success({
+          message: t("subscription_detail.primary_source_enabled", { source: updated.auto_enabled_source.source }),
+        });
+      }
       setEditing(false);
     },
   });
@@ -190,7 +201,7 @@ export default function SubscriptionDetailPage() {
     <PageShell>
       <PageHeader title={s.name || (s.creator_display_name || s.creator_name || getCreatorName(s.creator_id))} description={s.creator_display_name || s.creator_name ? `${t("subscription_detail.creator")} ${s.creator_display_name || s.creator_name}` : undefined}>
         <div className="flex gap-2">
-          <button onClick={() => { setEditName(s.name || ""); setEditMode(s.schedule_mode || ""); setEditInterval(s.sync_interval_hours || 24); setEditTimes(s.scheduled_times || ""); setEditing(true); }} className="btn-primary">{t("subscription_detail.edit")}</button>
+          <button onClick={() => { setEditName(s.name || ""); setEditMode(s.schedule_mode || "inherit"); setEditInterval(s.sync_interval_hours || 24); setEditTimes(s.scheduled_times || ""); setEditing(true); }} className="btn-primary">{t("subscription_detail.edit")}</button>
         </div>
       </PageHeader>
 
@@ -234,6 +245,12 @@ export default function SubscriptionDetailPage() {
             </dl>
           </div>
 
+          {s.sync_enabled && sources.data && !sources.data.some((source) => source.is_enabled) && (
+            <div className="mb-4 rounded-md border border-warning/40 bg-warning-subtle px-4 py-3 text-sm text-warning" role="alert">
+              {t("subscription_detail.no_enabled_source_warning")}
+            </div>
+          )}
+
           <div className="card p-4">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-medium">{t("subscription_detail.sources_title").replace("{count}", String(sources.data?.length || 0))}</h3>
@@ -274,9 +291,9 @@ export default function SubscriptionDetailPage() {
           <div><label className="block text-sm font-medium mb-1">{t("subscription_detail.name_field")}</label><input value={editName} onChange={(e) => setEditName(e.target.value)} className="input w-full" /></div>
           <div>
             <label className="block text-sm font-medium mb-1">{t("subscription_detail.sync_strategy")}</label>
-            <select value={editMode} onChange={(e) => setEditMode(e.target.value)}
+            <select value={editMode} onChange={(e) => setEditMode(e.target.value as typeof editMode)}
               className="select w-full">
-              <option value="">{t("subscriptions.schedule_inherited", { schedule: effectiveScheduleText })}</option>
+              <option value="inherit">{t("subscriptions.schedule_inherited", { schedule: effectiveScheduleText })}</option>
               <option value="interval">{t("subscription_detail.strategy_interval")}</option>
               <option value="fixed_time">{t("subscription_detail.strategy_fixed_time")}</option>
               <option value="manual">{t("subscription_detail.strategy_manual")}</option>
@@ -307,7 +324,7 @@ export default function SubscriptionDetailPage() {
             <button onClick={() => setEditing(false)} className="btn-ghost">{t("subscription_detail.cancel")}</button>
             <button onClick={() => update.mutate({
               name: editName || undefined,
-              schedule_mode: editMode || null,
+              schedule_mode: editMode,
               sync_interval_hours: editMode === "interval" ? editInterval : undefined,
               scheduled_times: editMode === "fixed_time" ? (editTimes || null) : undefined,
             })} disabled={update.isPending} className="btn-primary">{t("subscription_detail.save")}</button>
