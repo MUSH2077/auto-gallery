@@ -63,6 +63,17 @@ class TestSearchService:
         assert hasattr(SearchService, "reindex")
         assert inspect.iscoroutinefunction(SearchService.reindex)
 
+    def test_parallel_work_hydration_reserves_a_control_connection(self, monkeypatch):
+        from app.services import search
+
+        monkeypatch.setattr(search.settings, "db_pool_size", 1)
+        monkeypatch.setattr(search.settings, "db_max_overflow", 1)
+        assert search._parallel_work_hydration_supported() is False
+
+        monkeypatch.setattr(search.settings, "db_pool_size", 4)
+        monkeypatch.setattr(search.settings, "db_max_overflow", 1)
+        assert search._parallel_work_hydration_supported() is True
+
     def test_meili_filters_escape_values_and_preserve_or_semantics(self):
         from app.services.search import _compile_meili_filter
         from app.services.search_language import parse_search_query

@@ -349,6 +349,7 @@ INDEX_SETTINGS = {
 }
 
 WORK_PROJECTION_VERSION = 3
+WORK_HYDRATION_QUERY_COUNT = 4
 # The 4 MiB payload bound remains authoritative.  A larger identity window
 # amortizes the four indexed hydration scans on high-latency NAS storage; the
 # payload splitter still sends only one bounded Meilisearch write at a time.
@@ -365,6 +366,13 @@ MEILI_INCREMENTAL_SLICE_TIMEOUT_MS = 45_000
 INDEX_SETTINGS_CACHE_TTL = 30 * 24 * 60 * 60
 INDEX_WRITE_LOCK = "search:index-write"
 INDEX_WRITE_LOCK_TTL_SECONDS = 900
+
+
+def _parallel_work_hydration_supported() -> bool:
+    """Keep one worker connection free for heartbeats and task state."""
+
+    connection_capacity = int(settings.db_pool_size) + int(settings.db_max_overflow)
+    return connection_capacity >= WORK_HYDRATION_QUERY_COUNT + 1
 
 # A scoped works search only renders the gallery-card projection.  Avoid
 # faulting descriptions and full tag arrays from the mmap-backed index on every
@@ -4596,7 +4604,10 @@ class SearchService:
         ],
     ) -> list[dict]:
         async with async_session() as db:
-            service = SearchService(db, parallel_hydration=True)
+            service = SearchService(
+                db,
+                parallel_hydration=_parallel_work_hydration_supported(),
+            )
             service._repository_maps = repository_maps
             return await service._build_work_documents(work_ids)
 
@@ -4631,7 +4642,10 @@ class SearchService:
                     )
                     if not identities:
                         return (), 0
-                    batch_service = SearchService(db, parallel_hydration=True)
+                    batch_service = SearchService(
+                        db,
+                        parallel_hydration=_parallel_work_hydration_supported(),
+                    )
                     batch_service._repository_maps = repository_maps
                     documents = await batch_service._build_work_documents(
                         identities
