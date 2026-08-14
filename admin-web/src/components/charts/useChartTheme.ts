@@ -9,6 +9,7 @@ import { ensureContrast, parseHexColor, parseRgbTriplet, rgbCss, type RgbColor }
 import type { ChartColorRole } from "./types";
 
 interface ChartTheme {
+  isDark: boolean;
   surface: string;
   text: string;
   muted: string;
@@ -93,6 +94,7 @@ export function useChartTheme(): ChartTheme {
       return semantic("text");
     };
     return {
+      isDark: resolved === "dark",
       surface: semantic("surface"),
       text: semantic("text"),
       muted: semantic("muted"),
@@ -104,5 +106,5 @@ export function useChartTheme(): ChartTheme {
       danger: semantic("danger"),
       colorFor,
     };
-  }, [fallback, palette]);
+  }, [fallback, palette, resolved]);
 }

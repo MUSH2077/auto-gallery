@@ -68,6 +68,65 @@ def test_date_comparison_is_accepted():
     assert query.values("posted") == (">=2026-07-01",)
 
 
+def test_source_identity_qualifiers_are_generic_exact_and_source_paired():
+    query = parse_search_query(
+        "uid:PIXIV/1980643 pid:twitter/1234567890123456789",
+        "works",
+    )
+    assert query.values("uid") == ("pixiv/1980643",)
+    assert query.values("pid") == ("x/1234567890123456789",)
+    assert query.canonical == "uid:pixiv/1980643 pid:x/1234567890123456789"
+    assert parse_search_query("uid:pixiv/1980643", "global").targets == (
+        "works",
+        "creators",
+        "repositories",
+        "subscriptions",
+    )
+    assert parse_search_query("pid:pixiv/38362603", "global").targets == ("works",)
+
+
+@pytest.mark.parametrize(
+    ("raw", "canonical", "targets"),
+    [
+        (
+            "https://www.pixiv.net/users/1980643",
+            'url:"https://www.pixiv.net/users/1980643"',
+            ("works", "creators", "repositories", "subscriptions"),
+        ),
+        (
+            "https://www.pixiv.net/artworks/38362603",
+            'url:"https://www.pixiv.net/artworks/38362603"',
+            ("works",),
+        ),
+        (
+            "https://twitter.com/artist/status/1234567890123456789",
+            'url:"https://x.com/artist/status/1234567890123456789"',
+            ("works",),
+        ),
+    ],
+)
+def test_bare_supported_urls_are_canonical_qualifiers(raw, canonical, targets):
+    query = parse_search_query(raw, "global")
+    assert query.canonical == canonical
+    assert query.targets == targets
+
+
+@pytest.mark.parametrize(
+    ("raw", "code"),
+    [
+        ("uid:pixiv", "invalid_identity"),
+        ("pid:unknown/123", "invalid_identity"),
+        ("https://example.com/users/123", "unsupported_url"),
+        ("https://example.test/redirect?to=pixiv.net/users/123", "unsupported_url"),
+        ("pixivuid:123", "unknown_qualifier"),
+    ],
+)
+def test_invalid_source_identity_inputs_have_specific_diagnostics(raw, code):
+    with pytest.raises(SearchQueryError) as error:
+        parse_search_query(raw, "global")
+    assert error.value.diagnostic.code == code
+
+
 def test_compose_is_the_only_filter_mutation_surface():
     query = compose_search_query("landscape source:x", "works", key="source", value="pixiv", operation="set")
     assert query.canonical == "landscape source:pixiv"
@@ -97,3 +156,10 @@ def test_catalog_is_scope_aware():
     tasks = {item["key"]: item for item in qualifier_catalog("tasks")}
     assert "status" in tasks
     assert "tag" not in tasks
+    assert "uid" in works
+    assert "pid" in works
+    assert "url" in works
+    for item in works.values():
+        assert item["help_id"] == f"search.qualifier.{item['key']}"
+        assert item["example"]
+        assert item["description"]

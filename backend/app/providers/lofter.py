@@ -1,6 +1,6 @@
 import re
 
-from app.providers.base import BaseProvider, ProviderCapabilities
+from app.providers.base import BaseProvider, ProviderCapabilities, ProviderSearchURL
 
 
 class LofterProvider(BaseProvider):
@@ -36,6 +36,15 @@ class LofterProvider(BaseProvider):
             r"https?://(?!www\.)[\w-]+\.lofter\.com(/post/[\w_]+)?/?$",
             url,
         ))
+
+    def parse_search_url(self, input_text: str) -> ProviderSearchURL | None:
+        normalized = self.normalize_url(input_text)
+        if not normalized:
+            return None
+        return ProviderSearchURL(
+            kind="work" if "/post/" in normalized else "creator",
+            normalized_url=normalized,
+        )
 
     def build_gallerydl_config(self, subscription_source) -> dict:
         cfg = {

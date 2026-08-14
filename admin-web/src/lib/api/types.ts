@@ -1131,6 +1131,9 @@ export interface SearchSuggestion {
   kind: "qualifier" | "value" | "repair";
   label: string;
   description: string;
+  qualifier_key?: string;
+  help_id?: string;
+  example?: string;
   query: string;
 }
 
@@ -1227,7 +1230,14 @@ export interface SearchAssistResponse {
   parsed?: SearchParsedQuery | null;
   diagnostics: SearchDiagnostic[];
   suggestions: SearchSuggestion[];
-  catalog: { key: string; negatable: boolean; values: string[] }[];
+  catalog: {
+    key: string;
+    negatable: boolean;
+    values: string[];
+    help_id: string;
+    example: string;
+    description: string;
+  }[];
 }
 
 export interface DedupSettings {

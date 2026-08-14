@@ -1,6 +1,6 @@
 import re
 
-from app.providers.base import BaseProvider, ProviderCapabilities
+from app.providers.base import BaseProvider, ProviderCapabilities, ProviderSearchURL
 
 
 class PinterestProvider(BaseProvider):
@@ -39,6 +39,22 @@ class PinterestProvider(BaseProvider):
             r"https?://(?:[\w-]+\.)?pinterest\.\w+(?:\.\w+)?/(pin/\d+|[\w.-]+/(?:pins|[\w.-]+/?))",
             url,
         ))
+
+    def parse_search_url(self, input_text: str) -> ProviderSearchURL | None:
+        normalized = self.normalize_url(input_text)
+        if not normalized:
+            match = re.search(
+                r"pinterest\.\w+(?:\.\w+)?/([\w.-]+)/?(?:\?.*)?$",
+                input_text,
+            )
+            if match:
+                normalized = f"https://www.pinterest.com/{match.group(1)}/"
+        if not normalized:
+            return None
+        return ProviderSearchURL(
+            kind="work" if "/pin/" in normalized else "creator",
+            normalized_url=normalized,
+        )
 
     def build_gallerydl_config(self, subscription_source) -> dict:
         cfg = {

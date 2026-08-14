@@ -1,7 +1,7 @@
 import re
 import urllib.parse
 
-from app.providers.base import BaseProvider, ProviderCapabilities
+from app.providers.base import BaseProvider, ProviderCapabilities, ProviderSearchURL
 
 
 class DanbooruProvider(BaseProvider):
@@ -44,6 +44,28 @@ class DanbooruProvider(BaseProvider):
             r"https?://danbooru\.donmai\.us/(posts\?tags=.+|artists/\d+|pools/\d+)",
             url,
         ))
+
+    def parse_search_url(self, input_text: str) -> ProviderSearchURL | None:
+        match = re.search(r"danbooru\.donmai\.us/posts/(\d+)", input_text)
+        if match:
+            return ProviderSearchURL(
+                kind="work",
+                normalized_url=f"https://danbooru.donmai.us/posts/{match.group(1)}",
+            )
+        match = re.search(r"danbooru\.donmai\.us/artists/(\d+)", input_text)
+        if match:
+            return ProviderSearchURL(
+                kind="creator",
+                normalized_url=f"https://danbooru.donmai.us/artists/{match.group(1)}",
+            )
+        match = re.search(r"danbooru\.donmai\.us/posts\?tags=([^&\s]+)", input_text)
+        if match:
+            tags = urllib.parse.unquote(match.group(1))
+            return ProviderSearchURL(
+                kind="creator",
+                normalized_url=f"https://danbooru.donmai.us/posts?tags={urllib.parse.quote(tags, safe='')}",
+            )
+        return None
 
     def build_gallerydl_config(self, subscription_source) -> dict:
         cfg = {

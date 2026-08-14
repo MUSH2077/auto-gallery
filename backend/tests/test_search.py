@@ -72,6 +72,18 @@ class TestSearchService:
         assert '(tags = "a\\"b" OR tags = "landscape")' in filters
         assert '(sources != "x" AND sources != "pixiv")' in filters
 
+    def test_source_identity_meili_filters_keep_source_and_id_paired(self):
+        from app.services.search import _compile_meili_filter
+        from app.services.search_language import parse_search_query
+
+        query = parse_search_query(
+            "uid:pixiv/123 uid:x/123 pid:pixiv/456",
+            "works",
+        )
+        filters = _compile_meili_filter(query, "works", {}, force_sfw=False)
+        assert '(source_creator_keys = "pixiv/123" OR source_creator_keys = "x/123")' in filters
+        assert '(source_work_keys = "pixiv/456")' in filters
+
     def test_global_targets_are_trimmed_by_permission(self):
         from app.services.search import SearchService
         from app.services.search_language import parse_search_query
@@ -130,6 +142,9 @@ class TestSearchService:
             "has:multiple-assets",
             "has:image has:video has:animation",
             "repo:00000000-0000-0000-0000-000000000001",
+            "uid:pixiv/1980643",
+            "pid:pixiv/38362603",
+            'url:"https://www.pixiv.net/artworks/38362603"',
         ):
             assert SearchService._works_db_compatible(
                 parse_search_query(value, "works")

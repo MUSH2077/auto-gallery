@@ -1,7 +1,7 @@
 import os
 import re
 
-from app.providers.base import BaseProvider, ProviderCapabilities
+from app.providers.base import BaseProvider, ProviderCapabilities, ProviderSearchURL
 
 
 class PixivProvider(BaseProvider):
@@ -35,6 +35,17 @@ class PixivProvider(BaseProvider):
     def validate_url(self, url: str) -> bool:
         return bool(
             re.match(r"https?://(?:www\.)?pixiv\.net/(?:en/)?(artworks|users)/\d+", url)
+        )
+
+    def parse_search_url(self, input_text: str) -> ProviderSearchURL | None:
+        match = re.search(r"pixiv\.net/(?:en/)?(artworks|users)/(\d+)", input_text)
+        if not match:
+            return None
+        kind, identity = match.groups()
+        entity = "work" if kind == "artworks" else "creator"
+        return ProviderSearchURL(
+            kind=entity,
+            normalized_url=f"https://www.pixiv.net/{kind}/{identity}",
         )
 
     def build_gallerydl_config(self, subscription_source) -> dict:

@@ -11,6 +11,7 @@ import asyncio
 import base64
 from collections import defaultdict
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import datetime, time, timezone
 import hashlib
 import json
@@ -22,7 +23,7 @@ import time as monotonic_time
 from pathlib import PurePosixPath
 from threading import Lock
 from typing import Any, Awaitable, BinaryIO, Callable, Iterable
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 from uuid import UUID, uuid4
 from weakref import WeakKeyDictionary, WeakValueDictionary
 
@@ -92,10 +93,32 @@ from app.services.search_language import (
     qualifier_catalog,
 )
 from app.services.search_consistency import search_index_consistency
+from app.services.source_search_identity import (
+    ParsedSourceURL,
+    parse_source_identity,
+    parse_source_url,
+)
 from app.services.tasks import task_payload
 
 logger = logging.getLogger(__name__)
 _REBUILD_REPLAY_RECORD = struct.Struct(">16sQ")
+
+
+@dataclass(frozen=True)
+class ResolvedSourceURL:
+    parsed: ParsedSourceURL
+    work_ids: tuple[str, ...] = ()
+    creator_ids: tuple[str, ...] = ()
+    repository_ids: tuple[str, ...] = ()
+    subscription_ids: tuple[str, ...] = ()
+
+    def ids_for(self, target: SearchTarget) -> tuple[str, ...]:
+        return {
+            "works": self.work_ids,
+            "creators": self.creator_ids,
+            "repositories": self.repository_ids,
+            "subscriptions": self.subscription_ids,
+        }.get(target, ())
 
 
 async def _run_profiled_search_slice(
@@ -238,6 +261,8 @@ INDEX_SETTINGS = {
             "tags",
             "creator_ids",
             "repository_ids",
+            "source_creator_keys",
+            "source_work_keys",
             "has_tags",
             "has_description",
             "has_multiple_assets",
@@ -263,6 +288,7 @@ INDEX_SETTINGS = {
             "has_repository",
             "has_danbooru",
             "sources",
+            "source_creator_keys",
             "created_ts",
             "updated_ts",
         ],
@@ -289,6 +315,7 @@ INDEX_SETTINGS = {
             "creator_id",
             "subscription_id",
             "source",
+            "source_creator_keys",
             "is_enabled",
             "auth_healthy",
             "has_last_sync",
@@ -307,6 +334,7 @@ INDEX_SETTINGS = {
             "creator_id",
             "repository_ids",
             "sources",
+            "source_creator_keys",
             "is_active",
             "sync_enabled",
             "never_synced",
@@ -320,7 +348,7 @@ INDEX_SETTINGS = {
     },
 }
 
-WORK_PROJECTION_VERSION = 2
+WORK_PROJECTION_VERSION = 3
 # The 4 MiB payload bound remains authoritative.  A larger identity window
 # amortizes the four indexed hydration scans on high-latency NAS storage; the
 # payload splitter still sends only one bounded Meilisearch write at a time.
@@ -438,6 +466,8 @@ MEILI_FIELD = {
         "creator": "creator_ids",
         "tag": "tags",
         "source": "sources",
+        "uid": "source_creator_keys",
+        "pid": "source_work_keys",
         "posted": "posted_ts",
         "created": "created_ts",
         "updated": "updated_ts",
@@ -445,6 +475,7 @@ MEILI_FIELD = {
     "creators": {
         "creator": "id",
         "source": "sources",
+        "uid": "source_creator_keys",
         "created": "created_ts",
         "updated": "updated_ts",
     },
@@ -457,6 +488,7 @@ MEILI_FIELD = {
         "repo": "id",
         "creator": "creator_id",
         "source": "source",
+        "uid": "source_creator_keys",
         "created": "created_ts",
         "updated": "updated_ts",
         "synced": "synced_ts",
@@ -465,6 +497,7 @@ MEILI_FIELD = {
         "repo": "repository_ids",
         "creator": "creator_id",
         "source": "sources",
+        "uid": "source_creator_keys",
         "created": "created_ts",
         "updated": "updated_ts",
         "synced": "synced_ts",
@@ -1065,6 +1098,25 @@ def _normalize_url(value: str | None) -> str:
     return (value or "").strip().rstrip("/").lower()
 
 
+def _normalized_url_expression(column):
+    return func.lower(func.rtrim(func.btrim(column), "/"))
+
+
+def _source_url_identity_hint(parsed: ParsedSourceURL) -> str | None:
+    url = urlparse(parsed.normalized_url)
+    if parsed.source == "danbooru" and parsed.kind == "creator":
+        tags = parse_qs(url.query).get("tags")
+        if tags:
+            return unquote(tags[0])
+    parts = [part for part in url.path.split("/") if part]
+    if not parts:
+        return None
+    hint = parts[-2] if parts[-1] in {"article", "pins"} and len(parts) > 1 else parts[-1]
+    if parsed.source == "bilibili" and hint.startswith("cv"):
+        hint = hint[2:]
+    return hint or None
+
+
 def _meili_literal(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -1255,14 +1307,23 @@ def _grouped_qualifiers(query: SearchQuery, target: SearchTarget) -> dict[tuple[
     return grouped
 
 
-def _resolved_value(token: SearchQualifier, resolved: dict[tuple[str, str], str]) -> str:
-    return resolved.get((token.key, token.value), token.value)
+def _resolved_value(token: SearchQualifier, resolved: dict[tuple[str, str], Any]) -> str:
+    value = resolved.get((token.key, token.value), token.value)
+    return value if isinstance(value, str) else token.value
+
+
+def _resolved_source_url(
+    token: SearchQualifier,
+    resolved: dict[tuple[str, str], Any],
+) -> ResolvedSourceURL | None:
+    value = resolved.get((token.key, token.value))
+    return value if isinstance(value, ResolvedSourceURL) else None
 
 
 def _compile_meili_filter(
     query: SearchQuery,
     target: SearchTarget,
-    resolved: dict[tuple[str, str], str],
+    resolved: dict[tuple[str, str], Any],
     *,
     force_sfw: bool,
 ) -> str | None:
@@ -1281,6 +1342,18 @@ def _compile_meili_filter(
         elif key in {"posted", "created", "updated", "synced"}:
             for token in tokens:
                 expression = _date_expression(fields[key], token.value)
+                expressions.append(f"NOT ({expression})" if negated else expression)
+        elif key == "url":
+            for token in tokens:
+                source_url = _resolved_source_url(token, resolved)
+                identities = source_url.ids_for(target) if source_url else ()
+                if identities:
+                    identity_expression = " OR ".join(
+                        f"id = {_meili_literal(identity)}" for identity in identities
+                    )
+                    expression = f"({identity_expression})"
+                else:
+                    expression = 'id = "__source_url_no_match__"'
                 expressions.append(f"NOT ({expression})" if negated else expression)
         elif key in fields:
             field = fields[key]
@@ -1490,8 +1563,178 @@ class SearchService:
         suggestions = [f'tag:"{name}"' for name in candidates.scalars().all()]
         raise _diagnostic("unknown_value", f"Tag was not found: {value}", token, suggestions)
 
-    async def _resolve_qualifiers(self, query: SearchQuery) -> dict[tuple[str, str], str]:
-        resolved: dict[tuple[str, str], str] = {}
+    async def _resolve_source_url(
+        self,
+        value: str,
+        token: SearchQualifier,
+    ) -> ResolvedSourceURL:
+        parsed = parse_source_url(value)
+        if parsed is None:
+            raise _diagnostic(
+                "unsupported_url",
+                "URL is not a supported creator or work URL.",
+                token,
+            )
+        normalized = _normalize_url(parsed.normalized_url)
+        hint = _source_url_identity_hint(parsed)
+
+        if parsed.kind == "work":
+            matches = [_normalized_url_expression(WorkSource.source_url) == normalized]
+            if hint:
+                matches.extend((
+                    WorkSource.source_work_id == hint,
+                    _normalized_url_expression(WorkSource.source_url).like(
+                        f"%/{hint.lower()}"
+                    ),
+                ))
+            rows = (await self.db.execute(
+                select(WorkSource.work_id)
+                .where(WorkSource.source == parsed.source, or_(*matches))
+                .distinct()
+            )).scalars().all()
+            return ResolvedSourceURL(
+                parsed=parsed,
+                work_ids=tuple(sorted(str(identity) for identity in rows)),
+            )
+
+        pairs: set[tuple[str, str]] = set()
+        creator_ids: set[UUID] = set()
+        repository_ids: set[UUID] = set()
+        subscription_ids: set[UUID] = set()
+        work_ids: set[UUID] = set()
+
+        source_creator_matches = [
+            _normalized_url_expression(SourceCreator.source_url) == normalized,
+        ]
+        repository_matches = [
+            _normalized_url_expression(SubscriptionSource.source_url) == normalized,
+        ]
+        if hint:
+            source_creator_matches.append(SourceCreator.source_creator_id == hint)
+            if parsed.source in {"x", "iwara", "weibo"}:
+                source_creator_matches.extend((
+                    func.lower(func.coalesce(SourceCreator.raw_metadata.op("->>")("name"), ""))
+                    == hint.lower(),
+                    func.lower(func.coalesce(SourceCreator.raw_metadata.op("->>")("screen_name"), ""))
+                    == hint.lower(),
+                    func.lower(func.coalesce(SourceCreator.raw_metadata.op("->>")("username"), ""))
+                    == hint.lower(),
+                ))
+            repository_matches.append(SubscriptionSource.source_creator_id == hint)
+
+        source_rows = (await self.db.execute(
+            select(SourceCreator.source_creator_id, SourceCreator.creator_id)
+            .where(
+                SourceCreator.source == parsed.source,
+                or_(*source_creator_matches),
+            )
+        )).all()
+        for source_creator_id, creator_id in source_rows:
+            pairs.add((parsed.source, source_creator_id))
+            if creator_id:
+                creator_ids.add(creator_id)
+
+        repository_rows = (await self.db.execute(
+            select(
+                SubscriptionSource.id,
+                SubscriptionSource.subscription_id,
+                SubscriptionSource.source_creator_id,
+                Subscription.creator_id,
+            )
+            .join(Subscription, Subscription.id == SubscriptionSource.subscription_id)
+            .where(
+                SubscriptionSource.source == parsed.source,
+                or_(*repository_matches),
+            )
+        )).all()
+        for repository_id, subscription_id, source_creator_id, creator_id in repository_rows:
+            repository_ids.add(repository_id)
+            subscription_ids.add(subscription_id)
+            creator_ids.add(creator_id)
+            if source_creator_id:
+                pairs.add((parsed.source, source_creator_id))
+
+        if parsed.source == "danbooru" and "/artists/" in parsed.normalized_url and hint:
+            try:
+                artist_id = int(hint)
+            except ValueError:
+                artist_id = None
+            if artist_id is not None:
+                creator_ids.update((await self.db.execute(
+                    select(Creator.id).where(Creator.danbooru_artist_id == artist_id)
+                )).scalars().all())
+
+        if creator_ids:
+            creator_source_rows = (await self.db.execute(
+                select(SourceCreator.source_creator_id)
+                .where(
+                    SourceCreator.creator_id.in_(creator_ids),
+                    SourceCreator.source == parsed.source,
+                )
+            )).scalars().all()
+            pairs.update((parsed.source, identity) for identity in creator_source_rows)
+
+            creator_repository_rows = (await self.db.execute(
+                select(
+                    SubscriptionSource.id,
+                    SubscriptionSource.subscription_id,
+                    SubscriptionSource.source_creator_id,
+                )
+                .join(Subscription, Subscription.id == SubscriptionSource.subscription_id)
+                .where(
+                    Subscription.creator_id.in_(creator_ids),
+                    SubscriptionSource.source == parsed.source,
+                )
+            )).all()
+            for repository_id, subscription_id, source_creator_id in creator_repository_rows:
+                repository_ids.add(repository_id)
+                subscription_ids.add(subscription_id)
+                if source_creator_id:
+                    pairs.add((parsed.source, source_creator_id))
+
+        if pairs:
+            pair_conditions = [
+                and_(
+                    WorkSource.source == source,
+                    WorkSource.source_creator_id == source_creator_id,
+                )
+                for source, source_creator_id in pairs
+            ]
+            work_ids.update((await self.db.execute(
+                select(WorkSource.work_id).where(or_(*pair_conditions)).distinct()
+            )).scalars().all())
+
+            repository_pair_conditions = [
+                and_(
+                    SubscriptionSource.source == source,
+                    SubscriptionSource.source_creator_id == source_creator_id,
+                )
+                for source, source_creator_id in pairs
+            ]
+            related_repository_rows = (await self.db.execute(
+                select(
+                    SubscriptionSource.id,
+                    SubscriptionSource.subscription_id,
+                    Subscription.creator_id,
+                )
+                .join(Subscription, Subscription.id == SubscriptionSource.subscription_id)
+                .where(or_(*repository_pair_conditions))
+            )).all()
+            for repository_id, subscription_id, creator_id in related_repository_rows:
+                repository_ids.add(repository_id)
+                subscription_ids.add(subscription_id)
+                creator_ids.add(creator_id)
+
+        return ResolvedSourceURL(
+            parsed=parsed,
+            work_ids=tuple(sorted(str(identity) for identity in work_ids)),
+            creator_ids=tuple(sorted(str(identity) for identity in creator_ids)),
+            repository_ids=tuple(sorted(str(identity) for identity in repository_ids)),
+            subscription_ids=tuple(sorted(str(identity) for identity in subscription_ids)),
+        )
+
+    async def _resolve_qualifiers(self, query: SearchQuery) -> dict[tuple[str, str], Any]:
+        resolved: dict[tuple[str, str], Any] = {}
         for token in query.qualifiers:
             key = (token.key, token.value)
             if key in resolved:
@@ -1502,12 +1745,14 @@ class SearchService:
                 resolved[key], _ = await self._resolve_repository(token.value, token)
             elif token.key == "tag":
                 resolved[key], _ = await self._resolve_tag(token.value, token)
+            elif token.key == "url":
+                resolved[key] = await self._resolve_source_url(token.value, token)
         return resolved
 
     async def _hedged_structured_works_search(
         self,
         query: SearchQuery,
-        resolved: dict[tuple[str, str], str],
+        resolved: dict[tuple[str, str], Any],
         offset: int,
         limit: int,
         *,
@@ -1725,7 +1970,32 @@ class SearchService:
         # preserving the public compound-search contract.
         text = _free_text(parsed)
         has_filters = bool(parsed.qualifiers)
-        if not text and targets == ("works",) and self._works_db_compatible(parsed):
+        has_source_identity = any(
+            token.key in {"uid", "pid", "url"}
+            for token in parsed.qualifiers
+        )
+        if not text and has_source_identity:
+            for target in targets:
+                target_offset = offset if len(targets) == 1 else 0
+                target_limit = min(limit, 10) if len(targets) > 1 else limit
+                if target == "works":
+                    groups[target] = await self._search_works_db(
+                        parsed,
+                        resolved,
+                        target_offset,
+                        target_limit,
+                        force_sfw=force_sfw,
+                        cursor=cursor,
+                    )
+                elif target in {"creators", "repositories", "subscriptions"}:
+                    groups[target] = await self._search_identity_reference_db(
+                        target,
+                        parsed,
+                        resolved,
+                        target_offset,
+                        target_limit,
+                    )
+        elif not text and targets == ("works",) and self._works_db_compatible(parsed):
             groups["works"], execution = await self._hedged_structured_works_search(
                 parsed,
                 resolved,
@@ -1796,7 +2066,7 @@ class SearchService:
         self,
         query: SearchQuery,
         targets: list[SearchTarget],
-        resolved: dict[tuple[str, str], str],
+        resolved: dict[tuple[str, str], Any],
         offset: int,
         limit: int,
         force_sfw: bool,
@@ -1924,7 +2194,7 @@ class SearchService:
     async def _search_tasks(
         self,
         query: SearchQuery,
-        resolved: dict[tuple[str, str], str],
+        resolved: dict[tuple[str, str], Any],
         offset: int,
         limit: int,
         visibility: str = "all",
@@ -2168,7 +2438,7 @@ class SearchService:
     async def _search_scheduler(
         self,
         query: SearchQuery,
-        resolved: dict[tuple[str, str], str],
+        resolved: dict[tuple[str, str], Any],
         offset: int,
         limit: int,
     ) -> dict:
@@ -2401,7 +2671,10 @@ class SearchService:
                     entries.append({
                         "kind": "qualifier",
                         "label": replacement,
-                        "description": f"Filter with {key}:",
+                        "description": item["description"],
+                        "qualifier_key": key,
+                        "help_id": item["help_id"],
+                        "example": item["example"],
                         "query": f"{prefix}{replacement}{suffix}",
                     })
             return entries[:limit]
@@ -2589,6 +2862,8 @@ class SearchService:
 
         sources: dict[str, set[str]] = defaultdict(set)
         source_work_ids: dict[str, set[str]] = defaultdict(set)
+        source_creator_keys: dict[str, set[str]] = defaultdict(set)
+        source_work_keys: dict[str, set[str]] = defaultdict(set)
         creator_ids: dict[str, set[str]] = defaultdict(set)
         creator_names: dict[str, set[str]] = defaultdict(set)
         repository_ids: dict[str, set[str]] = defaultdict(set)
@@ -2597,6 +2872,9 @@ class SearchService:
             key = str(work_id)
             sources[key].add(source)
             source_work_ids[key].add(source_work_id)
+            source_work_keys[key].add(f"{source}/{source_work_id}")
+            if source_creator_id:
+                source_creator_keys[key].add(f"{source}/{source_creator_id}")
             if creator_id:
                 creator_ids[key].add(str(creator_id))
             display = creator_display or source_name or creator_name
@@ -2651,6 +2929,8 @@ class SearchService:
                 "source": ordered_sources[0] if ordered_sources else "unknown",
                 "sources": ordered_sources,
                 "source_work_ids": sorted(source_work_ids[key]),
+                "source_creator_keys": sorted(source_creator_keys[key]),
+                "source_work_keys": sorted(source_work_keys[key]),
                 "tags": sorted(tags[key]),
                 "is_nsfw": bool(work.is_nsfw),
                 "is_ai_generated": bool(work.is_ai_generated),
@@ -2699,9 +2979,30 @@ class SearchService:
         )).all()
         sources: dict[str, set[str]] = defaultdict(set)
         source_ids: dict[str, set[str]] = defaultdict(set)
+        source_creator_keys: dict[str, set[str]] = defaultdict(set)
         for creator_id, source, source_creator_id in source_rows:
             sources[str(creator_id)].add(source)
             source_ids[str(creator_id)].add(source_creator_id)
+            source_creator_keys[str(creator_id)].add(f"{source}/{source_creator_id}")
+        subscription_source_rows = (await self.db.execute(
+            select(
+                Subscription.creator_id,
+                SubscriptionSource.source,
+                SubscriptionSource.source_creator_id,
+            )
+            .join(
+                SubscriptionSource,
+                SubscriptionSource.subscription_id == Subscription.id,
+            )
+            .where(
+                Subscription.creator_id.in_(selected_ids),
+                SubscriptionSource.source_creator_id.is_not(None),
+            )
+        )).all()
+        for creator_id, source, source_creator_id in subscription_source_rows:
+            sources[str(creator_id)].add(source)
+            source_ids[str(creator_id)].add(source_creator_id)
+            source_creator_keys[str(creator_id)].add(f"{source}/{source_creator_id}")
         sub_rows = (await self.db.execute(
             select(
                 Subscription.creator_id,
@@ -2736,6 +3037,7 @@ class SearchService:
             "last_synced_at": _iso(sub_counts.get(str(creator.id), (0, 0, None))[2]),
             "sources": sorted(sources[str(creator.id)]),
             "source_creator_ids": sorted(source_ids[str(creator.id)]),
+            "source_creator_keys": sorted(source_creator_keys[str(creator.id)]),
             "created_at": _iso(creator.created_at),
             "updated_at": _iso(creator.updated_at),
             "created_ts": _timestamp(creator.created_at),
@@ -2820,6 +3122,10 @@ class SearchService:
             "name_sort": (repo.source_creator_id or repo.source_url or str(repo.id)).lower(),
             "source": repo.source,
             "source_creator_id": repo.source_creator_id,
+            "source_creator_keys": (
+                [f"{repo.source}/{repo.source_creator_id}"]
+                if repo.source_creator_id else []
+            ),
             "source_url": repo.source_url,
             "creator_id": str(creator.id),
             "creator_name": creator.display_name or creator.name,
@@ -2967,6 +3273,10 @@ class SearchService:
                 "sources": sorted({repo.source for repo in repositories}),
                 "source_urls": [repo.source_url for repo in repositories if repo.source_url],
                 "source_creator_ids": [repo.source_creator_id for repo in repositories if repo.source_creator_id],
+                "source_creator_keys": [
+                    f"{repo.source}/{repo.source_creator_id}"
+                    for repo in repositories if repo.source_creator_id
+                ],
                 "created_at": _iso(subscription.created_at),
                 "updated_at": _iso(subscription.updated_at),
                 "created_ts": _timestamp(subscription.created_at),
@@ -3236,6 +3546,217 @@ class SearchService:
         # fall through for any future targets.
         return {"total": 0, "items": []}
 
+    async def _search_identity_reference_db(
+        self,
+        target: SearchTarget,
+        query: SearchQuery,
+        resolved: dict[tuple[str, str], Any],
+        offset: int,
+        limit: int,
+    ) -> dict:
+        """Execute source-identity reference searches against committed rows."""
+
+        model = {
+            "creators": Creator,
+            "repositories": SubscriptionSource,
+            "subscriptions": Subscription,
+        }[target]
+        conditions: list[Any] = []
+
+        for (key, negated), tokens in _grouped_qualifiers(query, target).items():
+            expressions: list[Any] = []
+            for token in tokens:
+                value = _resolved_value(token, resolved)
+                expression = None
+                if key == "uid":
+                    source, identity = parse_source_identity(token.value)
+                    if target == "creators":
+                        expression = or_(
+                            Creator.id.in_(
+                                select(SourceCreator.creator_id).where(
+                                    SourceCreator.creator_id.is_not(None),
+                                    SourceCreator.source == source,
+                                    SourceCreator.source_creator_id == identity,
+                                )
+                            ),
+                            Creator.id.in_(
+                                select(Subscription.creator_id)
+                                .join(
+                                    SubscriptionSource,
+                                    SubscriptionSource.subscription_id == Subscription.id,
+                                )
+                                .where(
+                                    SubscriptionSource.source == source,
+                                    SubscriptionSource.source_creator_id == identity,
+                                )
+                            ),
+                        )
+                    elif target == "repositories":
+                        expression = and_(
+                            SubscriptionSource.source == source,
+                            SubscriptionSource.source_creator_id == identity,
+                        )
+                    else:
+                        expression = Subscription.id.in_(
+                            select(SubscriptionSource.subscription_id).where(
+                                SubscriptionSource.source == source,
+                                SubscriptionSource.source_creator_id == identity,
+                            )
+                        )
+                elif key == "url":
+                    source_url = _resolved_source_url(token, resolved)
+                    identities = source_url.ids_for(target) if source_url else ()
+                    expression = model.id.in_([UUID(identity) for identity in identities])
+                elif key == "source":
+                    if target == "creators":
+                        expression = Creator.id.in_(
+                            select(SourceCreator.creator_id).where(
+                                SourceCreator.creator_id.is_not(None),
+                                SourceCreator.source == value,
+                            )
+                        )
+                    elif target == "repositories":
+                        expression = SubscriptionSource.source == value
+                    else:
+                        expression = Subscription.id.in_(
+                            select(SubscriptionSource.subscription_id).where(
+                                SubscriptionSource.source == value
+                            )
+                        )
+                elif key == "creator":
+                    creator_id = UUID(value)
+                    if target == "creators":
+                        expression = Creator.id == creator_id
+                    elif target == "repositories":
+                        expression = SubscriptionSource.subscription_id.in_(
+                            select(Subscription.id).where(Subscription.creator_id == creator_id)
+                        )
+                    else:
+                        expression = Subscription.creator_id == creator_id
+                elif key == "repo":
+                    repository_id = UUID(value)
+                    if target == "repositories":
+                        expression = SubscriptionSource.id == repository_id
+                    elif target == "subscriptions":
+                        expression = Subscription.id.in_(
+                            select(SubscriptionSource.subscription_id).where(
+                                SubscriptionSource.id == repository_id
+                            )
+                        )
+                elif key == "is":
+                    if target == "creators":
+                        expression = {
+                            "favorite": Creator.is_favorite.is_(True),
+                            "active": Creator.is_active.is_(True),
+                            "inactive": Creator.is_active.is_(False),
+                        }.get(value)
+                    elif target == "repositories":
+                        expression = {
+                            "enabled": SubscriptionSource.is_enabled.is_(True),
+                            "disabled": SubscriptionSource.is_enabled.is_(False),
+                            "auth-ok": SubscriptionSource.auth_healthy.is_not(False),
+                            "auth-error": SubscriptionSource.auth_healthy.is_(False),
+                        }.get(value)
+                    else:
+                        expression = {
+                            "active": Subscription.is_active.is_(True),
+                            "inactive": Subscription.is_active.is_(False),
+                            "sync-enabled": Subscription.sync_enabled.is_(True),
+                            "sync-disabled": Subscription.sync_enabled.is_(False),
+                            "never-synced": and_(
+                                Subscription.last_synced_at.is_(None),
+                                ~select(SubscriptionSource.id).where(
+                                    SubscriptionSource.subscription_id == Subscription.id,
+                                    SubscriptionSource.last_synced_at.is_not(None),
+                                ).exists(),
+                            ),
+                        }.get(value)
+                elif key == "has":
+                    if target == "creators":
+                        expression = {
+                            "subscription": select(Subscription.id).where(
+                                Subscription.creator_id == Creator.id
+                            ).exists(),
+                            "repository": select(SubscriptionSource.id)
+                            .join(Subscription, Subscription.id == SubscriptionSource.subscription_id)
+                            .where(Subscription.creator_id == Creator.id)
+                            .exists(),
+                            "danbooru": Creator.danbooru_artist_id.is_not(None),
+                        }.get(value)
+                    elif target == "repositories":
+                        expression = {
+                            "last-sync": SubscriptionSource.last_synced_at.is_not(None),
+                            "source-creator-id": SubscriptionSource.source_creator_id.is_not(None),
+                        }.get(value)
+                    else:
+                        expression = select(SubscriptionSource.id).where(
+                            SubscriptionSource.subscription_id == Subscription.id,
+                            SubscriptionSource.last_synced_at.is_not(None),
+                        ).exists()
+                elif key in {"created", "updated", "synced"}:
+                    if key == "synced":
+                        if target == "subscriptions":
+                            expression = or_(
+                                _sql_date_expression(Subscription.last_synced_at, value),
+                                select(SubscriptionSource.id).where(
+                                    SubscriptionSource.subscription_id == Subscription.id,
+                                    _sql_date_expression(SubscriptionSource.last_synced_at, value),
+                                ).exists(),
+                            )
+                        elif target == "repositories":
+                            expression = _sql_date_expression(SubscriptionSource.last_synced_at, value)
+                    else:
+                        expression = _sql_date_expression(getattr(model, f"{key}_at"), value)
+                if expression is not None:
+                    expressions.append(not_(expression) if negated else expression)
+            if expressions:
+                conditions.append(and_(*expressions) if negated else or_(*expressions))
+
+        base = select(model.id)
+        if conditions:
+            base = base.where(and_(*conditions))
+        total = int((await self.db.execute(
+            select(func.count()).select_from(base.order_by(None).subquery())
+        )).scalar_one())
+
+        selected_sort = query.values("sort")
+        sort_name = selected_sort[0] if selected_sort else None
+        ascending = bool(sort_name and sort_name.endswith("-asc"))
+        if sort_name and sort_name.startswith("name-"):
+            column = {
+                "creators": Creator.name,
+                "repositories": SubscriptionSource.source_creator_id,
+                "subscriptions": Subscription.name,
+            }[target]
+        elif sort_name and sort_name.startswith("last-sync-"):
+            column = (
+                SubscriptionSource.last_synced_at
+                if target == "repositories" else Subscription.last_synced_at
+            )
+        elif sort_name and sort_name.startswith("created-"):
+            column = model.created_at
+        else:
+            column = model.updated_at if target != "creators" else Creator.name
+            ascending = target == "creators" if not sort_name else ascending
+        order = column.asc().nulls_last() if ascending else column.desc().nulls_last()
+        ids = list((await self.db.execute(
+            base.order_by(order, model.id.asc()).offset(offset).limit(limit)
+        )).scalars().all())
+        if not ids:
+            return {"total": total, "items": []}
+
+        builders = {
+            "creators": self._build_creator_documents,
+            "repositories": self._build_repository_documents,
+            "subscriptions": self._build_subscription_documents,
+        }
+        documents = await builders[target](ids)
+        documents_by_id = {document["id"]: document for document in documents}
+        return {
+            "total": total,
+            "items": [documents_by_id[str(identity)] for identity in ids if str(identity) in documents_by_id],
+        }
+
     async def _search_creators_db(self, offset: int, limit: int) -> dict:
         # Total count
         total = (await self.db.execute(
@@ -3428,6 +3949,9 @@ class SearchService:
             "created",
             "updated",
             "sort",
+            "uid",
+            "pid",
+            "url",
         }
         visibility_values = {
             token.value for token in query.qualifiers
@@ -3476,7 +4000,7 @@ class SearchService:
     def _work_filter_conditions(
         self,
         query: SearchQuery,
-        resolved: dict[tuple[str, str], str],
+        resolved: dict[tuple[str, str], Any],
         *,
         force_sfw: bool,
     ) -> tuple[list[Any], set[str], Any]:
@@ -3538,6 +4062,22 @@ class SearchService:
                     expression = Work.id.in_(
                         select(WorkSource.work_id).where(WorkSource.source == value)
                     )
+                elif key in {"uid", "pid"}:
+                    source, identity = parse_source_identity(token.value)
+                    identity_column = (
+                        WorkSource.source_creator_id
+                        if key == "uid" else WorkSource.source_work_id
+                    )
+                    expression = Work.id.in_(
+                        select(WorkSource.work_id).where(
+                            WorkSource.source == source,
+                            identity_column == identity,
+                        )
+                    )
+                elif key == "url":
+                    source_url = _resolved_source_url(token, resolved)
+                    identities = source_url.work_ids if source_url else ()
+                    expression = Work.id.in_([UUID(identity) for identity in identities])
                 elif key == "creator":
                     expression = Work.id.in_(
                         select(WorkSource.work_id)
@@ -3715,7 +4255,7 @@ class SearchService:
     async def _search_works_db(
         self,
         query: SearchQuery,
-        resolved: dict[tuple[str, str], str],
+        resolved: dict[tuple[str, str], Any],
         offset: int,
         limit: int,
         *,

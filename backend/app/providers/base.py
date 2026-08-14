@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 
 @dataclass
@@ -28,6 +28,14 @@ class ProviderDownloadChunk:
     next_checkpoint: dict[str, Any] | None
 
 
+@dataclass(frozen=True)
+class ProviderSearchURL:
+    """A provider-owned classification of a searchable public URL."""
+
+    kind: Literal["creator", "work"]
+    normalized_url: str
+
+
 class BaseProvider(ABC):
     @property
     @abstractmethod
@@ -46,6 +54,11 @@ class BaseProvider(ABC):
 
     @abstractmethod
     def validate_url(self, url: str) -> bool: ...
+
+    def parse_search_url(self, input_text: str) -> ProviderSearchURL | None:
+        """Classify a public creator/work URL without performing network I/O."""
+
+        return None
 
     @abstractmethod
     def build_gallerydl_config(self, subscription_source) -> dict: ...

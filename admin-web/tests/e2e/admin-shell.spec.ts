@@ -2349,7 +2349,11 @@ test("tag map loads every tag and supports ctrl-wheel zoom without pagination", 
   await expect.poll(async () => Number(await chart.getAttribute("data-zoom-level")))
     .toBeGreaterThan(initialZoom);
   if (fixtureCount <= 1_000) {
-    await expect(page.getByRole("link", { name: /map_tag_/ }).first()).toBeVisible();
+    const firstBubble = page.getByRole("link", { name: /map_tag_/ }).first();
+    await expect(firstBubble).toBeVisible();
+    await expect(firstBubble).toHaveAttribute("data-bubble-fill", / 34% 22%\)$/);
+    await expect(firstBubble).toHaveAttribute("data-bubble-border", / 36% 38%\)$/);
+    await expect(firstBubble).toHaveAttribute("data-bubble-text", / 55% 88%\)$/);
   }
   await expectNoPageOverflow(page);
   expect(consoleIssues).toEqual([]);

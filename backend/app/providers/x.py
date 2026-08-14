@@ -1,7 +1,7 @@
 import os
 import re
 
-from app.providers.base import BaseProvider, ProviderCapabilities
+from app.providers.base import BaseProvider, ProviderCapabilities, ProviderSearchURL
 
 
 class XProvider(BaseProvider):
@@ -37,6 +37,21 @@ class XProvider(BaseProvider):
 
     def validate_url(self, url: str) -> bool:
         return bool(re.match(r"https?://(?:twitter\.com|x\.com)/\w+(?:/status/\d+)?/?(?:\?.*)?$", url))
+
+    def parse_search_url(self, input_text: str) -> ProviderSearchURL | None:
+        match = re.search(r"(?:twitter\.com|x\.com)/(\w+)/status/(\d+)", input_text)
+        if match:
+            return ProviderSearchURL(
+                kind="work",
+                normalized_url=f"https://x.com/{match.group(1)}/status/{match.group(2)}",
+            )
+        match = re.search(r"(?:twitter\.com|x\.com)/(\w+)/?(?:\?.*)?$", input_text)
+        if match:
+            return ProviderSearchURL(
+                kind="creator",
+                normalized_url=f"https://x.com/{match.group(1)}",
+            )
+        return None
 
     def build_gallerydl_config(self, subscription_source) -> dict:
         cfg = {

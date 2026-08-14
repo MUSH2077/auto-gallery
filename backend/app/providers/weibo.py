@@ -1,7 +1,7 @@
 import os
 import re
 
-from app.providers.base import BaseProvider, ProviderCapabilities
+from app.providers.base import BaseProvider, ProviderCapabilities, ProviderSearchURL
 
 
 class WeiboProvider(BaseProvider):
@@ -113,6 +113,13 @@ class WeiboProvider(BaseProvider):
             return True
 
         return False
+
+    def parse_search_url(self, input_text: str) -> ProviderSearchURL | None:
+        normalized = self.normalize_url(input_text)
+        if not normalized:
+            return None
+        kind = "work" if "/detail/" in normalized else "creator"
+        return ProviderSearchURL(kind=kind, normalized_url=normalized)
 
     def build_gallerydl_config(self, subscription_source) -> dict:
         config: dict = {

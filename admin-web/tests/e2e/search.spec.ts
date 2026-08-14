@@ -223,8 +223,16 @@ async function fulfillAssist(route: Route) {
         description: "12 works",
         query: query.replace(/tag[:：][^\s]*$/i, "tag:aurora"),
       }]
-    : query === ""
-      ? [{ kind: "qualifier", label: "tag:", description: "Filter by exact tag", query: "tag:" }]
+    : query === "" || query === "t"
+      ? [{
+          kind: "qualifier",
+          label: "tag:",
+          description: "Filter by an exact normalized tag.",
+          qualifier_key: "tag",
+          help_id: "search.qualifier.tag",
+          example: "tag:landscape",
+          query: "tag:",
+        }]
       : [];
   await route.fulfill({
     json: {
@@ -242,7 +250,14 @@ async function fulfillAssist(route: Route) {
           }]
         : [],
       suggestions,
-      catalog: [{ key: "tag", negatable: true, values: [] }],
+      catalog: [{
+        key: "tag",
+        negatable: true,
+        values: [],
+        help_id: "search.qualifier.tag",
+        example: "tag:landscape",
+        description: "Filter by an exact normalized tag.",
+      }],
     },
   });
 }
@@ -338,6 +353,24 @@ async function installSearchFixtures(context: BrowserContext) {
       });
       return;
     }
+    if (path === "/api/v1/operations/overview") {
+      await route.fulfill({
+        json: {
+          view: url.searchParams.get("view") || "attention",
+          total: 0,
+          summary: {
+            attention: 0,
+            critical: 0,
+            warning: 0,
+            resolved: 0,
+            active: 0,
+            resource_limited: 0,
+          },
+          items: [],
+        },
+      });
+      return;
+    }
     if (path === "/api/v1/creators") {
       await route.fulfill({ json: { items: [creator], total: 1 } });
       return;
@@ -375,6 +408,17 @@ test("global search groups five entity types and supports keyboard suggestions a
   await page.getByRole("button", { name: "Remove search condition: tag:aurora" }).click();
   await expect(input).toHaveValue("");
   await expect(page).not.toHaveURL(/(?:\\?|&)q=/);
+});
+
+test("qualifier suggestions explain their purpose and example", async ({ page }) => {
+  await page.goto("/admin/search");
+  const input = page.getByRole("combobox", { name: "Search works..." });
+  await input.fill("t");
+  const option = page.getByRole("option", {
+    name: "tag: Filter by an exact normalized tag, for example tag:landscape",
+  });
+  await expect(option).toBeVisible();
+  await expect(page.getByText("Insert search qualifier")).toHaveCount(0);
 });
 
 test("entity tabs and visible work filters write only the canonical q parameter", async ({ page }) => {

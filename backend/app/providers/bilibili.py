@@ -1,6 +1,6 @@
 import re
 
-from app.providers.base import BaseProvider, ProviderCapabilities
+from app.providers.base import BaseProvider, ProviderCapabilities, ProviderSearchURL
 
 
 class BilibiliProvider(BaseProvider):
@@ -49,6 +49,21 @@ class BilibiliProvider(BaseProvider):
             r"https?://space\.bilibili\.com/\d+/favlist\?.*ftype=article",
         ]
         return any(re.match(p, url) for p in patterns)
+
+    def parse_search_url(self, input_text: str) -> ProviderSearchURL | None:
+        match = re.search(r"bilibili\.com/read/(?:cv|mobile/)?(\d+)", input_text)
+        if match:
+            return ProviderSearchURL(
+                kind="work",
+                normalized_url=f"https://www.bilibili.com/read/cv{match.group(1)}",
+            )
+        match = re.search(r"space\.bilibili\.com/(\d+)", input_text)
+        if match:
+            return ProviderSearchURL(
+                kind="creator",
+                normalized_url=f"https://space.bilibili.com/{match.group(1)}/article",
+            )
+        return None
 
     def build_gallerydl_config(self, subscription_source) -> dict:
         config: dict = {

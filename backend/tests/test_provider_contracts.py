@@ -31,3 +31,31 @@ def test_downloadable_provider_url_and_config_contract(source, url):
 def test_unknown_provider_raises_keyerror_contract():
     with pytest.raises(KeyError):
         registry.get("not-a-provider")
+
+
+@pytest.mark.parametrize(
+    ("source", "url", "kind"),
+    [
+        ("pixiv", "https://www.pixiv.net/users/11", "creator"),
+        ("pixiv", "https://www.pixiv.net/artworks/22", "work"),
+        ("x", "https://twitter.com/example", "creator"),
+        ("x", "https://x.com/example/status/22", "work"),
+        ("iwara", "https://www.iwara.tv/profile/example", "creator"),
+        ("iwara", "https://www.iwara.tv/video/example", "work"),
+        ("danbooru", "https://danbooru.donmai.us/artists/11", "creator"),
+        ("danbooru", "https://danbooru.donmai.us/posts/22", "work"),
+        ("weibo", "https://weibo.com/u/11", "creator"),
+        ("weibo", "https://weibo.com/detail/AbC22", "work"),
+        ("bilibili", "https://space.bilibili.com/11", "creator"),
+        ("bilibili", "https://www.bilibili.com/read/cv22", "work"),
+        ("pinterest", "https://www.pinterest.com/example/pins/", "creator"),
+        ("pinterest", "https://www.pinterest.com/pin/22", "work"),
+        ("lofter", "https://example.lofter.com/", "creator"),
+        ("lofter", "https://example.lofter.com/post/22_ab", "work"),
+    ],
+)
+def test_provider_search_urls_are_classified_without_network(source, url, kind):
+    parsed = registry.get(source).parse_search_url(url)
+    assert parsed is not None
+    assert parsed.kind == kind
+    assert parsed.normalized_url.startswith("https://")

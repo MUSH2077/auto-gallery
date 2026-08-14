@@ -57,6 +57,20 @@ const SPATIAL_BUCKET_SIZE = 192;
 const MAX_LABEL_NODES = 1_600;
 const LABEL_RADIUS_THRESHOLD = 13;
 
+function bubblePalette(hue: number, dark: boolean, hovered = false) {
+  return {
+    fill: dark
+      ? `hsl(${hue} 34% 22%)`
+      : `hsl(${hue} 58% 91%)`,
+    border: dark
+      ? `hsl(${hue} ${hovered ? 48 : 36}% ${hovered ? 56 : 38}%)`
+      : `hsl(${hue} ${hovered ? 50 : 42}% ${hovered ? 62 : 78}%)`,
+    text: dark
+      ? `hsl(${hue} 55% 88%)`
+      : `hsl(${hue} 45% 23%)`,
+  };
+}
+
 function hashString(value: string): number {
   let hash = 0;
   for (let index = 0; index < value.length; index += 1) {
@@ -283,7 +297,7 @@ export default function TagBubbleChart({
     context.clearRect(0, 0, viewport.width, viewport.height);
     context.fillStyle = theme.surface;
     context.fillRect(0, 0, viewport.width, viewport.height);
-    const dark = document.documentElement.classList.contains("dark");
+    const dark = theme.isDark;
 
     for (const node of layout.nodes) {
       const x = (node.x - view.centerX) * view.scale + viewport.width / 2;
@@ -298,21 +312,18 @@ export default function TagBubbleChart({
       ) continue;
       const hue = hashString(node.data.category || node.data.normalized_name) % 360;
       const isHovered = hovered?.node.data.id === node.data.id;
+      const palette = bubblePalette(hue, dark, isHovered);
       context.beginPath();
       context.arc(x, y, Math.max(0.7, radius), 0, Math.PI * 2);
-      context.fillStyle = dark
-        ? `hsl(${hue} 38% ${isHovered ? 34 : 24}%)`
-        : `hsl(${hue} 58% ${isHovered ? 82 : 90}%)`;
+      context.fillStyle = palette.fill;
       context.fill();
       if (radius >= 3) {
-        context.strokeStyle = dark
-          ? `hsl(${hue} 42% ${isHovered ? 62 : 42}%)`
-          : `hsl(${hue} 45% ${isHovered ? 54 : 76}%)`;
+        context.strokeStyle = palette.border;
         context.lineWidth = isHovered ? 2 : 1;
         context.stroke();
       }
     }
-  }, [hovered?.node.data.id, layout.nodes, theme.surface, view, viewport.height, viewport.width]);
+  }, [hovered?.node.data.id, layout.nodes, theme.isDark, theme.surface, view, viewport.height, viewport.width]);
 
   const worldPoint = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -441,12 +452,15 @@ export default function TagBubbleChart({
       </div>
 
       {visibleNodes.map(({ node, x, y, radius }) => {
+        const hue = hashString(node.data.category || node.data.normalized_name) % 360;
+        const palette = bubblePalette(hue, theme.isDark);
         const style = {
           left: x - radius,
           top: y - radius,
           width: radius * 2,
           height: radius * 2,
           fontSize: `${Math.max(10, Math.min(18, radius * 0.24))}px`,
+          color: palette.text,
         } as CSSProperties;
         return (
           <Link
@@ -457,7 +471,10 @@ export default function TagBubbleChart({
             )}
             title={`${node.data.normalized_name} · ${node.data.category || "tag"} · ${node.data.usage_count}`}
             aria-label={`${node.data.normalized_name}, ${node.data.category || "tag"}, ${node.data.usage_count}`}
-            className="absolute z-[1] flex flex-col items-center justify-center overflow-hidden rounded-full text-center text-fg outline-none hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-accent"
+            data-bubble-fill={palette.fill}
+            data-bubble-border={palette.border}
+            data-bubble-text={palette.text}
+            className="absolute z-[1] flex flex-col items-center justify-center overflow-hidden rounded-full text-center outline-none focus-visible:ring-2 focus-visible:ring-accent"
             style={style}
             onPointerDown={(event) => event.stopPropagation()}
           >
@@ -465,7 +482,7 @@ export default function TagBubbleChart({
               {node.data.normalized_name}
             </span>
             {radius >= 18 ? (
-              <span className="mt-0.5 text-[10px] font-medium text-muted">{node.data.usage_count}</span>
+              <span className="mt-0.5 text-[10px] font-medium opacity-70">{node.data.usage_count}</span>
             ) : null}
           </Link>
         );

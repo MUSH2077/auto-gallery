@@ -1,7 +1,7 @@
 import os
 import re
 
-from app.providers.base import BaseProvider, ProviderCapabilities
+from app.providers.base import BaseProvider, ProviderCapabilities, ProviderSearchURL
 
 
 class IwaraProvider(BaseProvider):
@@ -30,6 +30,17 @@ class IwaraProvider(BaseProvider):
 
     def validate_url(self, url: str) -> bool:
         return bool(re.match(r"https?://(?:www\.)?iwara\.tv/(video|profile|users)/[\w-]+", url))
+
+    def parse_search_url(self, input_text: str) -> ProviderSearchURL | None:
+        match = re.search(r"iwara\.tv/(video|profile|users)/([\w-]+)", input_text)
+        if not match:
+            return None
+        path, identity = match.groups()
+        normalized_path = "video" if path == "video" else "profile"
+        return ProviderSearchURL(
+            kind="work" if path == "video" else "creator",
+            normalized_url=f"https://www.iwara.tv/{normalized_path}/{identity}",
+        )
 
     def build_gallerydl_config(self, subscription_source) -> dict:
         cfg = {
