@@ -412,6 +412,9 @@ export const api = {
   listTags: (offset = 0, limit = 100, sortBy = "usage_count", sortOrder = "desc") =>
     request<T.Tag[]>(`/api/v1/tags?offset=${offset}&limit=${limit}&sort_by=${sortBy}&sort_order=${sortOrder}`),
 
+  listAllTags: (sortBy = "usage_count", sortOrder = "desc") =>
+    request<T.Tag[]>(`/api/v1/tags?include_all=true&sort_by=${sortBy}&sort_order=${sortOrder}`),
+
   createTag: (data: { normalized_name: string; category?: string }) =>
     request<T.Tag>("/api/v1/tags", { method: "POST", body: JSON.stringify(data) }),
 
@@ -616,9 +619,10 @@ export const api = {
   resetSettings: () =>
     request<{ status: string; message: string }>("/api/v1/admin/reset-settings", { method: "POST" }),
 
-  triggerSyncNow: (mode: "force_eligible" | "due_scan" = "force_eligible") =>
+  triggerSyncNow: (mode: "force_eligible" | "due_scan" | "manual_all_enabled" = "force_eligible") =>
     request<{
-      status: string; message: string; task_id: string; mode: "force_eligible" | "due_scan";
+      status: string; message: string; task_id: string; mode: "force_eligible" | "due_scan" | "manual_all_enabled";
+      candidate_count?: number;
       enqueued_count: number; skipped_count: number; error_count?: number;
       skipped_reasons?: Record<string, number>; job_ids: string[]; task_ids?: string[];
     }>("/api/v1/admin/scheduler/sync-now", { method: "POST", body: JSON.stringify({ mode }) }),
@@ -664,6 +668,29 @@ export const api = {
     }>(`/api/v1/admin/dedup/scans/${id}`),
 
   // Danbooru Reference
+  refreshAllDanbooruMappings: () =>
+    request<{
+      status: "enqueued";
+      job_id: string;
+      operation_type: "danbooru-mapping-refresh";
+      message: string;
+    }>("/api/v1/reference/danbooru/mappings/refresh", { method: "POST" }),
+
+  getDanbooruMappingRefreshStatus: (jobId: string) =>
+    request<{
+      job_id: string;
+      status: "queued" | "enqueued" | "running" | "complete" | "failed";
+      operation_type: "danbooru-mapping-refresh";
+      progress?: { phase?: string; label?: string; current?: number; scanned?: number; total?: number };
+      result?: {
+        scanned: number; total: number; found: number; not_found: number;
+        errors: number; skipped: number; aborted: boolean;
+      };
+      error?: string;
+      meta?: Record<string, any>;
+      updated_at?: number;
+    }>(`/api/v1/reference/danbooru/mappings/refresh/${jobId}`),
+
   getDanbooruArtist: (artistId: number) =>
     request<{
       artist: { id: number; name: string; other_names: string[]; pixiv_display_name?: string | null };

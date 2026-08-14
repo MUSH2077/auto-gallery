@@ -768,6 +768,8 @@ export interface paths {
          *     ``force_eligible`` means "sync everything the operator would reasonably
          *     expect to sync now": active/enabled/downloadable sources with healthy auth,
          *     valid URLs, and no running job.  It bypasses schedule windows only.
+         *     ``manual_all_enabled`` additionally includes subscriptions configured with
+         *     the explicit manual strategy while preserving every schedule setting.
          *     ``due_scan`` preserves the old behavior: run the scheduler's due-only scan.
          */
         post: operations["post_api_v1_admin_scheduler_sync_now"];
@@ -2376,6 +2378,46 @@ export interface paths {
          * @description Get Danbooru artist detail by ID (for alias chips on Creator Detail page).
          */
         get: operations["get_api_v1_reference_danbooru_artist_artist_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reference/danbooru/mappings/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh All Danbooru Mappings
+         * @description Incrementally refresh Danbooru mappings for every current creator.
+         */
+        post: operations["post_api_v1_reference_danbooru_mappings_refresh"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reference/danbooru/mappings/refresh/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Danbooru Mapping Refresh
+         * @description Return status only for the subscription-scoped mapping refresh job.
+         */
+        get: operations["get_api_v1_reference_danbooru_mappings_refresh_job_id"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4354,6 +4396,51 @@ export interface components {
              */
             visibility: string;
         };
+        /** DanbooruMappingRefreshEnqueueResponse */
+        DanbooruMappingRefreshEnqueueResponse: {
+            /** Job Id */
+            job_id: string;
+            /** Message */
+            message: string;
+            /**
+             * Operation Type
+             * @constant
+             */
+            operation_type: "danbooru-mapping-refresh";
+            /**
+             * Status
+             * @constant
+             */
+            status: "enqueued";
+        };
+        /** DanbooruMappingRefreshStatusResponse */
+        DanbooruMappingRefreshStatusResponse: {
+            /** Error */
+            error?: string | null;
+            /** Job Id */
+            job_id: string;
+            /** Meta */
+            meta?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Operation Type
+             * @constant
+             */
+            operation_type: "danbooru-mapping-refresh";
+            /** Progress */
+            progress?: {
+                [key: string]: unknown;
+            } | null;
+            /** Result */
+            result?: {
+                [key: string]: unknown;
+            } | null;
+            /** Status */
+            status: string;
+            /** Updated At */
+            updated_at?: number | null;
+        };
         /** DanbooruSourceConfig */
         DanbooruSourceConfig: {
             /** Api Key */
@@ -5302,7 +5389,7 @@ export interface components {
              * @default force_eligible
              * @enum {string}
              */
-            mode: "force_eligible" | "due_scan";
+            mode: "force_eligible" | "due_scan" | "manual_all_enabled";
         };
         /** SearchAssistRequest */
         SearchAssistRequest: {
@@ -12355,6 +12442,102 @@ export interface operations {
             };
         };
     };
+    post_api_v1_reference_danbooru_mappings_refresh: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DanbooruMappingRefreshEnqueueResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_reference_danbooru_mappings_refresh_job_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DanbooruMappingRefreshStatusResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     post_api_v1_reference_danbooru_url_batch_import: {
         parameters: {
             query?: never;
@@ -13979,6 +14162,7 @@ export interface operations {
                 limit?: number;
                 sort_by?: string;
                 sort_order?: string;
+                include_all?: boolean;
             };
             header?: never;
             path?: never;

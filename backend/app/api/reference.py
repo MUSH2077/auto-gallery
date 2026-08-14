@@ -3,10 +3,12 @@ import json
 import logging
 import uuid
 import re
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import RequirePermission
+from pydantic import BaseModel
 from rq import Queue
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,7 +17,11 @@ from app.config import settings
 from app.database import get_db
 from app.services import danbooru as danbooru_svc
 from app.services.danbooru_import import import_all_danbooru_artist
-from app.services.operations import set_operation_status
+from app.services.operations import (
+    enqueue_admin_operation,
+    get_operation_status,
+    set_operation_status,
+)
 from app.services.queue_admission import checked_enqueue
 from app.services.redis_client import get_redis
 from app.models.creator_link import CreatorLink
@@ -24,6 +30,24 @@ from app.models.source_creator import SourceCreator
 logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[RequirePermission("subscriptions")])
+
+
+class DanbooruMappingRefreshEnqueueResponse(BaseModel):
+    status: Literal["enqueued"]
+    job_id: str
+    operation_type: Literal["danbooru-mapping-refresh"]
+    message: str
+
+
+class DanbooruMappingRefreshStatusResponse(BaseModel):
+    job_id: str
+    status: str
+    operation_type: Literal["danbooru-mapping-refresh"]
+    progress: dict[str, Any] | None = None
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    meta: dict[str, Any] | None = None
+    updated_at: float | None = None
 
 
 @router.get("/danbooru/artist/{artist_id}")
@@ -39,6 +63,43 @@ async def get_danbooru_artist(artist_id: int):
 @router.get("/providers")
 async def list_reference_providers():
     return {"providers": [{"source_name": "danbooru_reference", "display_name": "Danbooru", "capabilities": {"is_reference_only": True}}]}
+
+
+@router.post(
+    "/danbooru/mappings/refresh",
+    response_model=DanbooruMappingRefreshEnqueueResponse,
+)
+async def refresh_all_danbooru_mappings():
+    """Incrementally refresh Danbooru mappings for every current creator."""
+
+    operation = await enqueue_admin_operation(
+        lock_key="library:creator-reenrich:active",
+        operation_type="danbooru-mapping-refresh",
+        title="Refresh all Danbooru mappings",
+        entity="creators",
+        func="app.jobs.admin_operations.run_creator_reenrich_operation",
+        options={"scope": "all"},
+        job_timeout=14400,
+        queue_name="maintenance",
+    )
+    return {
+        **operation,
+        "operation_type": "danbooru-mapping-refresh",
+        "message": "Danbooru mapping refresh queued",
+    }
+
+
+@router.get(
+    "/danbooru/mappings/refresh/{job_id}",
+    response_model=DanbooruMappingRefreshStatusResponse,
+)
+async def get_danbooru_mapping_refresh(job_id: str):
+    """Return status only for the subscription-scoped mapping refresh job."""
+
+    status = get_operation_status(job_id)
+    if not status or status.get("operation_type") != "danbooru-mapping-refresh":
+        raise HTTPException(status_code=404, detail="Danbooru mapping refresh not found")
+    return status
 
 
 @router.post("/danbooru/artist/preview")

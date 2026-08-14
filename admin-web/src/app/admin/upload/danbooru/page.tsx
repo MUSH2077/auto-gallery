@@ -1,10 +1,12 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { api, queryKeys } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useT } from "@/lib/i18n";
+import { usePermissions } from "@/lib/usePermissions";
 import { Banner, PageHeader, PageShell, EmptyState, ErrorState, SourceBadge, PermissionGuard, SectionPanel } from "@/components";
 import { Check, Copy } from "lucide-react";
 
@@ -298,6 +300,8 @@ export default function DanbooruReferencePage() {
   const t = useT();
   const notify = useNotifications();
   const toast = useToast();
+  const router = useRouter();
+  const { has } = usePermissions();
   const [searchUrl, setSearchUrl] = useState("");
   const [searchName, setSearchName] = useState("");
   const [searchPixivId, setSearchPixivId] = useState("");
@@ -314,6 +318,30 @@ export default function DanbooruReferencePage() {
   });
 
   const qc = useQueryClient();
+  const refreshMappings = useMutation({
+    mutationFn: () => api.refreshAllDanbooruMappings(),
+    onSuccess: (data) => {
+      const title = t("danbooru.refresh_all_title");
+      notify.startOperationJob(
+        data.job_id,
+        data.operation_type,
+        title,
+        { entity: "creators", scope: "all" },
+      );
+      toast.success({
+        title,
+        message: t("danbooru.refresh_queued"),
+        action: has("tasks")
+          ? { label: t("jobs.open_task"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${data.job_id}`) }
+          : undefined,
+      });
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+    },
+    onError: (error: Error) => toast.error({
+      title: t("danbooru.refresh_all_title"),
+      message: error.message,
+    }),
+  });
   const importMutation = useMutation({
     mutationFn: (creatorId: string) => api.importDanbooruArtist({ creator_id: creatorId, ...searchParams }),
     onSuccess: (data) => {
@@ -340,6 +368,8 @@ export default function DanbooruReferencePage() {
   // Polling runs in the context and survives all page navigation.
   const { batchJob } = notify;
   const importAllOperation = notify.operationJob?.kind === "danbooru-import-all" ? notify.operationJob : null;
+  const mappingRefreshOperation = notify.operationJob?.kind === "danbooru-mapping-refresh" ? notify.operationJob : null;
+  const mappingRefreshPending = refreshMappings.isPending || mappingRefreshOperation?.status === "running";
 
   // Fallback: on mount, directly check if there's a stored batch job and fetch result.
   // This handles edge cases where context state isn't restored after navigation.
@@ -462,7 +492,20 @@ export default function DanbooruReferencePage() {
   return (
     <PermissionGuard module="subscriptions">
     <PageShell>
-      <PageHeader title={t("danbooru.title")} description={t("danbooru.desc")} />
+      <PageHeader
+        title={t("danbooru.title")}
+        description={t("danbooru.desc")}
+        primaryAction={(
+          <button
+            type="button"
+            className="btn-primary min-h-11"
+            onClick={() => refreshMappings.mutate()}
+            disabled={mappingRefreshPending}
+          >
+            {mappingRefreshPending ? t("danbooru.refreshing_all") : t("danbooru.refresh_all")}
+          </button>
+        )}
+      />
 
       <div data-page-primary-content>
       <Banner tone="info" title={t("danbooru.search_info")} className="mb-6">

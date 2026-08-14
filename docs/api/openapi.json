@@ -1878,6 +1878,118 @@
         "title": "CurationStateRead",
         "type": "object"
       },
+      "DanbooruMappingRefreshEnqueueResponse": {
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "operation_type": {
+            "const": "danbooru-mapping-refresh",
+            "title": "Operation Type",
+            "type": "string"
+          },
+          "status": {
+            "const": "enqueued",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "job_id",
+          "operation_type",
+          "message"
+        ],
+        "title": "DanbooruMappingRefreshEnqueueResponse",
+        "type": "object"
+      },
+      "DanbooruMappingRefreshStatusResponse": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "meta": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meta"
+          },
+          "operation_type": {
+            "const": "danbooru-mapping-refresh",
+            "title": "Operation Type",
+            "type": "string"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "job_id",
+          "status",
+          "operation_type"
+        ],
+        "title": "DanbooruMappingRefreshStatusResponse",
+        "type": "object"
+      },
       "DanbooruSourceConfig": {
         "properties": {
           "api_key": {
@@ -4377,7 +4489,8 @@
             "default": "force_eligible",
             "enum": [
               "force_eligible",
-              "due_scan"
+              "due_scan",
+              "manual_all_enabled"
             ],
             "title": "Mode",
             "type": "string"
@@ -9730,7 +9843,7 @@
     },
     "/api/v1/admin/scheduler/sync-now": {
       "post": {
-        "description": "Manually trigger subscription sync work.\n\n``force_eligible`` means \"sync everything the operator would reasonably\nexpect to sync now\": active/enabled/downloadable sources with healthy auth,\nvalid URLs, and no running job.  It bypasses schedule windows only.\n``due_scan`` preserves the old behavior: run the scheduler's due-only scan.",
+        "description": "Manually trigger subscription sync work.\n\n``force_eligible`` means \"sync everything the operator would reasonably\nexpect to sync now\": active/enabled/downloadable sources with healthy auth,\nvalid URLs, and no running job.  It bypasses schedule windows only.\n``manual_all_enabled`` additionally includes subscriptions configured with\nthe explicit manual strategy while preserving every schedule setting.\n``due_scan`` preserves the old behavior: run the scheduler's due-only scan.",
         "operationId": "post_api_v1_admin_scheduler_sync_now",
         "requestBody": {
           "content": {
@@ -16731,6 +16844,147 @@
         "x-response-schema-status": "generic"
       }
     },
+    "/api/v1/reference/danbooru/mappings/refresh": {
+      "post": {
+        "description": "Incrementally refresh Danbooru mappings for every current creator.",
+        "operationId": "post_api_v1_reference_danbooru_mappings_refresh",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanbooruMappingRefreshEnqueueResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Refresh All Danbooru Mappings",
+        "tags": [
+          "reference"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": true,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "subscriptions"
+        ]
+      }
+    },
+    "/api/v1/reference/danbooru/mappings/refresh/{job_id}": {
+      "get": {
+        "description": "Return status only for the subscription-scoped mapping refresh job.",
+        "operationId": "get_api_v1_reference_danbooru_mappings_refresh_job_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanbooruMappingRefreshStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Danbooru Mapping Refresh",
+        "tags": [
+          "reference"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": true,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "subscriptions"
+        ]
+      }
+    },
     "/api/v1/reference/danbooru/url-batch-import": {
       "post": {
         "description": "Enqueue a batch import job for URLs via Danbooru lookup.\n\nAccepts: {urls: [\"https://pixiv.net/users/123\", ...]}\nReturns immediately with a job_id. Poll GET /danbooru/artist/batch-import/status\nfor progress and results.",
@@ -19458,6 +19712,16 @@
               "default": "desc",
               "title": "Sort Order",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_all",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include All",
+              "type": "boolean"
             }
           }
         ],

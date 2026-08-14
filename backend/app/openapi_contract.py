@@ -44,6 +44,7 @@ _BACKGROUND_PATH_PARTS = (
     "/re-enrich",
     "/import-from-disk",
     "/import-all/async",
+    "/mappings/refresh",
     "/dedup/scans",
     "/operations/",
 )

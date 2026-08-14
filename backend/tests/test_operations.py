@@ -3,6 +3,8 @@ import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 
 class FakeRedis:
     def __init__(self):
@@ -188,3 +190,53 @@ def test_danbooru_import_invalidates_creator_subscription_caches(monkeypatch):
     assert result["links_imported"] == 1
     assert result["sources_created"] == 2
     assert calls == ["invalidated"]
+
+
+@pytest.mark.asyncio
+async def test_reference_mapping_refresh_uses_shared_single_flight_operation(monkeypatch):
+    from app.api import reference
+
+    seen = {}
+
+    async def _enqueue(**kwargs):
+        seen.update(kwargs)
+        return {"status": "enqueued", "job_id": "refresh-job"}
+
+    monkeypatch.setattr(reference, "enqueue_admin_operation", _enqueue)
+
+    response = await reference.refresh_all_danbooru_mappings()
+
+    assert response == {
+        "status": "enqueued",
+        "job_id": "refresh-job",
+        "operation_type": "danbooru-mapping-refresh",
+        "message": "Danbooru mapping refresh queued",
+    }
+    assert seen["lock_key"] == "library:creator-reenrich:active"
+    assert seen["operation_type"] == "danbooru-mapping-refresh"
+    assert seen["options"] == {"scope": "all"}
+    assert seen["queue_name"] == "maintenance"
+
+
+@pytest.mark.asyncio
+async def test_reference_mapping_refresh_status_is_operation_scoped(monkeypatch):
+    from fastapi import HTTPException
+    from app.api import reference
+
+    expected = {
+        "job_id": "refresh-job",
+        "status": "running",
+        "operation_type": "danbooru-mapping-refresh",
+        "progress": {"scanned": 2, "total": 10},
+    }
+    monkeypatch.setattr(reference, "get_operation_status", lambda _job_id: expected)
+    assert await reference.get_danbooru_mapping_refresh("refresh-job") == expected
+
+    monkeypatch.setattr(reference, "get_operation_status", lambda _job_id: {
+        "job_id": "other-job",
+        "status": "running",
+        "operation_type": "admin-clear",
+    })
+    with pytest.raises(HTTPException) as exc:
+        await reference.get_danbooru_mapping_refresh("other-job")
+    assert exc.value.status_code == 404

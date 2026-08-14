@@ -146,6 +146,179 @@ async def enrich_creator_by_id(db: AsyncSession, creator_id: UUID) -> dict[str, 
     return result
 
 
+async def refresh_creator_mapping(
+    db: AsyncSession,
+    creator: Creator,
+) -> dict[str, Any]:
+    """Incrementally refresh one creator's Danbooru-derived mapping.
+
+    An existing ``danbooru_artist_id`` is authoritative: refresh it directly
+    instead of searching by a mutable display name or source URL.  Creators
+    without an established mapping use the same Pixiv-first discovery path as
+    the single-creator enrichment endpoint.  Existing links and subscription
+    settings are never removed or overwritten by this operation.
+    """
+
+    source_creators = (
+        (await db.execute(
+            select(SourceCreator)
+            .where(SourceCreator.creator_id == creator.id)
+            .order_by(SourceCreator.created_at, SourceCreator.id)
+        )).scalars().all()
+    )
+    if creator.danbooru_artist_id is None:
+        ordered_identities = [
+            *(item for item in source_creators if item.source == "pixiv"),
+            *(item for item in source_creators if item.source != "pixiv"),
+        ]
+        for source_creator in ordered_identities:
+            result = await enrich_creator_from_danbooru(
+                db,
+                creator,
+                source_creator=source_creator,
+            )
+            if result["status"] == STATUS_FOUND or result["status"].startswith(
+                "danbooru_error:"
+            ):
+                return result
+        return await enrich_creator_from_danbooru(
+            db,
+            creator,
+            source_creator=None,
+        )
+
+    source_creator = next(
+        (item for item in source_creators if item.source == "pixiv"),
+        source_creators[0] if source_creators else None,
+    )
+
+    identity = (
+        _identity_from_source_creator(source_creator)
+        if source_creator is not None
+        else MetadataIdentity(
+            source="manual",
+            source_creator_id=creator.name,
+            source_url="",
+            display_name=creator.display_name or creator.name,
+            raw_metadata={},
+            creator_dir="",
+        )
+    )
+    try:
+        artist = await asyncio.to_thread(
+            danbooru_svc.get_artist,
+            creator.danbooru_artist_id,
+        )
+    except DanbooruUnavailableError as exc:
+        logger.warning(
+            "Danbooru unavailable while refreshing creator %s: %s",
+            creator.id,
+            exc,
+        )
+        status = f"danbooru_error:{type(exc).__name__}"
+        if source_creator is not None:
+            _mark_attempt(source_creator, status)
+        return {"status": status}
+
+    if not artist:
+        if source_creator is not None:
+            _mark_attempt(source_creator, STATUS_NOT_FOUND)
+        return {"status": STATUS_NOT_FOUND}
+
+    links = danbooru_svc.extract_creator_links(artist)
+    await _apply_danbooru_artist(db, identity, artist, links, creator=creator)
+    if source_creator is not None:
+        _mark_attempt(source_creator, STATUS_FOUND)
+    return {
+        "status": STATUS_FOUND,
+        "artist_id": artist.get("id"),
+        "artist_name": artist.get("name"),
+    }
+
+
+async def refresh_all_creator_mappings(
+    db: AsyncSession,
+    *,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    """Refresh a start-of-run snapshot of every creator, one creator at a time."""
+
+    creator_ids = list((await db.execute(
+        select(Creator.id).order_by(Creator.created_at, Creator.id)
+    )).scalars().all())
+    total = len(creator_ids)
+    items: list[dict[str, Any]] = []
+    counts = {"found": 0, "not_found": 0, "errors": 0, "skipped": 0}
+    aborted = False
+    abort_reason: str | None = None
+
+    for creator_id in creator_ids:
+        creator = await db.get(Creator, creator_id)
+        if creator is None:
+            counts["skipped"] += 1
+            item = {
+                "creator_id": str(creator_id),
+                "status": "skipped_creator_missing",
+            }
+            items.append(item)
+        else:
+            display_name = creator.display_name or creator.name
+            try:
+                result = await refresh_creator_mapping(db, creator)
+                status = result["status"]
+                from app.services.creator import CreatorService
+
+                await CreatorService(db)._request_creator_projection(creator.id)
+                await db.commit()
+                if status == STATUS_FOUND:
+                    counts["found"] += 1
+                elif status == STATUS_NOT_FOUND:
+                    counts["not_found"] += 1
+                else:
+                    counts["errors"] += 1
+                item = {
+                    "creator_id": str(creator.id),
+                    "display_name": display_name,
+                    **result,
+                }
+                items.append(item)
+                if status.startswith("danbooru_error:"):
+                    aborted = True
+                    abort_reason = status
+            except Exception as exc:
+                await db.rollback()
+                logger.exception(
+                    "Danbooru mapping refresh failed for creator %s",
+                    creator_id,
+                )
+                counts["errors"] += 1
+                items.append({
+                    "creator_id": str(creator_id),
+                    "display_name": display_name,
+                    "status": f"error:{type(exc).__name__}",
+                    "error": str(exc),
+                })
+
+        if progress_cb:
+            progress_cb({
+                "current": len(items),
+                "scanned": len(items),
+                "total": total,
+                **counts,
+            })
+        if aborted:
+            break
+
+    return {
+        "scanned": len(items),
+        "total": total,
+        **counts,
+        "aborted": aborted,
+        "abort_reason": abort_reason,
+        "items": items,
+    }
+
+
 async def reenrich_pending(
     db: AsyncSession,
     *,

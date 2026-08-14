@@ -32,7 +32,7 @@ from app.services.redis_client import get_redis
 from ._routers import tasks_ops_router
 
 class SchedulerSyncNowRequest(BaseModel):
-    mode: Literal["force_eligible", "due_scan"] = "force_eligible"
+    mode: Literal["force_eligible", "due_scan", "manual_all_enabled"] = "force_eligible"
 
 
 @tasks_ops_router.post("/scheduler/sync-now")
@@ -42,6 +42,8 @@ async def trigger_sync_now(data: SchedulerSyncNowRequest | None = None, db: Asyn
     ``force_eligible`` means "sync everything the operator would reasonably
     expect to sync now": active/enabled/downloadable sources with healthy auth,
     valid URLs, and no running job.  It bypasses schedule windows only.
+    ``manual_all_enabled`` additionally includes subscriptions configured with
+    the explicit manual strategy while preserving every schedule setting.
     ``due_scan`` preserves the old behavior: run the scheduler's due-only scan.
     """
     from app.models.subscription import Subscription
@@ -51,12 +53,17 @@ async def trigger_sync_now(data: SchedulerSyncNowRequest | None = None, db: Asyn
 
     mode = (data or SchedulerSyncNowRequest()).mode
     task_service = TaskService(db)
+    task_title = {
+        "force_eligible": "Sync eligible subscription sources",
+        "manual_all_enabled": "Sync all enabled subscription sources",
+        "due_scan": "Run scheduler sync scan",
+    }[mode]
     parent_task = await task_service.create_task(
         kind="admin",
         operation_type="subscription-sync-batch",
-        title="Sync eligible subscription sources" if mode == "force_eligible" else "Run scheduler sync scan",
+        title=task_title,
         status="running",
-        queue_name="downloads" if mode == "force_eligible" else "scheduled",
+        queue_name="scheduled" if mode == "due_scan" else "downloads",
         progress={"phase": "scanning", "label": "Preparing subscription sync", "current": 0, "total": 0},
         meta={"mode": mode},
     )
@@ -85,16 +92,17 @@ async def trigger_sync_now(data: SchedulerSyncNowRequest | None = None, db: Asyn
         await db.commit()
         return {"status": summary.get("status", "ok"), "task_id": str(parent_task.id), "message": "Scheduler scan complete", **result}
 
+    eligibility = [
+        Subscription.is_active == True,  # noqa: E712
+        SubscriptionSource.is_enabled == True,  # noqa: E712
+    ]
+    if mode == "force_eligible":
+        eligibility.append(Subscription.sync_enabled == True)  # noqa: E712
+
     rows = list((await db.execute(
         select(SubscriptionSource)
         .join(Subscription, Subscription.id == SubscriptionSource.subscription_id)
-        .where(
-            and_(
-                Subscription.is_active == True,  # noqa: E712
-                Subscription.sync_enabled == True,  # noqa: E712
-                SubscriptionSource.is_enabled == True,  # noqa: E712
-            )
-        )
+        .where(and_(*eligibility))
         .order_by(SubscriptionSource.last_synced_at.asc().nullsfirst(), SubscriptionSource.created_at.asc())
     )).scalars().all())
 
@@ -117,7 +125,11 @@ async def trigger_sync_now(data: SchedulerSyncNowRequest | None = None, db: Asyn
             trigger="manual_scheduler_batch",
             force=False,
             parent_task_id=parent_task.id,
-            force_reason="scheduler_force_eligible",
+            force_reason=(
+                "scheduler_manual_all_enabled"
+                if mode == "manual_all_enabled"
+                else "scheduler_force_eligible"
+            ),
         )
         if result.get("status") == "enqueued":
             job_ids.append(result["job_id"])
@@ -139,6 +151,7 @@ async def trigger_sync_now(data: SchedulerSyncNowRequest | None = None, db: Asyn
 
     response = {
         "mode": mode,
+        "candidate_count": len(rows),
         "enqueued_count": len(job_ids),
         "skipped_count": len(skipped),
         "error_count": len(errors),

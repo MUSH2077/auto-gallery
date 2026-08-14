@@ -244,6 +244,12 @@ _RETRYABLE_ADMIN_OPERATIONS = {
         "creator-reenrich",
         "Creator re-enrichment queued",
     ),
+    "danbooru-mapping-refresh": (
+        "library:creator-reenrich:active",
+        "app.jobs.admin_operations.run_creator_reenrich_operation",
+        "creators",
+        "Danbooru mapping refresh queued",
+    ),
     "admin-rebuild": (
         "library:rebuild:active",
         "app.jobs.admin_operations.run_library_rebuild_operation",

@@ -220,7 +220,7 @@ def run_gitllery_rebuild_operation(job_id: str, options: dict | None = None) -> 
 
 
 def run_creator_reenrich_operation(job_id: str, options: dict | None = None) -> dict:
-    """Entry point for RQ workers — retry Danbooru mapping for flagged creators."""
+    """Entry point for RQ workers — refresh Danbooru creator mappings."""
     return asyncio.run(run_heavy_io_operation(
         "operation:creator-reenrich", job_id,
         lambda: _run_creator_reenrich_operation(job_id, options or {})))
@@ -228,8 +228,24 @@ def run_creator_reenrich_operation(job_id: str, options: dict | None = None) -> 
 
 async def _run_creator_reenrich_operation(job_id: str, options: dict) -> dict:
     from uuid import UUID
-    from app.services.creator_enrichment import reenrich_pending
+    from app.services.creator_enrichment import (
+        reenrich_pending,
+        refresh_all_creator_mappings,
+    )
     from app.services.tasks import TaskService
+
+    refresh_all = options.get("scope") == "all"
+    operation_type = (
+        "danbooru-mapping-refresh"
+        if refresh_all
+        else "admin-creator-reenrich"
+    )
+    entity = "creators" if refresh_all else "creator-reenrich"
+    running_label = (
+        "Refreshing all Danbooru mappings..."
+        if refresh_all
+        else "Searching Danbooru..."
+    )
 
     async with async_session() as task_db:
         svc = TaskService(task_db)
@@ -238,39 +254,51 @@ async def _run_creator_reenrich_operation(job_id: str, options: dict) -> dict:
             await svc.update_task(
                 task,
                 status="running",
-                progress={"phase": "running", "label": "Searching Danbooru..."},
+                progress={"phase": "running", "label": running_label},
             )
             await task_db.commit()
-    set_operation_status(job_id, "running", "admin-creator-reenrich",
-        progress={"phase": "running", "label": "Searching Danbooru..."},
-        meta={"entity": "creator-reenrich", **options})
+    set_operation_status(job_id, "running", operation_type,
+        progress={"phase": "running", "label": running_label},
+        meta={"entity": entity, **options})
     try:
         def update_progress(progress: dict):
-            set_operation_status(job_id, "running", "admin-creator-reenrich",
+            set_operation_status(job_id, "running", operation_type,
                 progress={**progress,
                           "label": f"Mapped {progress.get('found', 0)} of {progress.get('scanned', 0)} scanned"},
-                meta={"entity": "creator-reenrich", **options})
+                meta={"entity": entity, **options})
 
         async with async_session() as db:
-            result = await reenrich_pending(db, progress_cb=update_progress)
+            if refresh_all:
+                result = await refresh_all_creator_mappings(
+                    db,
+                    progress_cb=update_progress,
+                )
+            else:
+                result = await reenrich_pending(db, progress_cb=update_progress)
 
         label = f"Mapped {result['found']} creators ({result['not_found']} not on Danbooru)"
+        terminal_status = "complete"
+        terminal_error = None
         if result.get("aborted"):
             label += " — aborted: Danbooru unreachable"
+            terminal_status = "failed"
+            terminal_error = "Danbooru became unavailable; partial results were retained"
         async with async_session() as task_db:
             svc = TaskService(task_db)
             task = await svc.get(UUID(job_id))
             if task:
                 await svc.update_task(
                     task,
-                    status="complete",
-                    progress={"phase": "complete", "label": label},
+                    status=terminal_status,
+                    progress={"phase": terminal_status, "label": label},
                     result=result,
+                    error=terminal_error,
                 )
                 await task_db.commit()
-        set_operation_status(job_id, "complete", "admin-creator-reenrich",
-            progress={"phase": "complete", "label": label},
-            result=result, meta={"entity": "creator-reenrich", **options})
+        set_operation_status(job_id, terminal_status, operation_type,
+            progress={"phase": terminal_status, "label": label},
+            result=result, error=terminal_error,
+            meta={"entity": entity, **options})
         if result.get("found"):
             from app.services.cache import invalidate_api_caches, invalidate_creator_subscription_caches
             invalidate_api_caches("creators")
@@ -284,8 +312,8 @@ async def _run_creator_reenrich_operation(job_id: str, options: dict) -> dict:
             if task:
                 await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
                 await task_db.commit()
-        set_operation_status(job_id, "failed", "admin-creator-reenrich",
-            progress={"phase": "failed"}, error=str(exc), meta={"entity": "creator-reenrich", **options})
+        set_operation_status(job_id, "failed", operation_type,
+            progress={"phase": "failed"}, error=str(exc), meta={"entity": entity, **options})
         raise
     finally:
         from app.services.redis_client import get_redis

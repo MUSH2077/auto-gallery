@@ -53,3 +53,37 @@ def test_tag_detail_aggregates_usage_count_instead_of_reading_orm_attribute(monk
     assert detail.usage_count == 7
     assert detail.top_creators[0].creator_id == creator_id
     assert detail.top_creators[0].work_count == 3
+
+
+def test_list_tags_include_all_removes_offset_and_limit(monkeypatch):
+    from app.api import tags
+
+    received = {}
+
+    async def fake_list_all(_repository, offset, limit, *, sort_by, sort_order):
+        received.update({
+            "offset": offset,
+            "limit": limit,
+            "sort_by": sort_by,
+            "sort_order": sort_order,
+        })
+        return []
+
+    monkeypatch.setattr(tags.TagRepository, "list_all", fake_list_all)
+
+    result = asyncio.run(tags.list_tags(
+        offset=250,
+        limit=50,
+        sort_by="name",
+        sort_order="asc",
+        include_all=True,
+        db=SimpleNamespace(),
+    ))
+
+    assert result == []
+    assert received == {
+        "offset": 0,
+        "limit": None,
+        "sort_by": "name",
+        "sort_order": "asc",
+    }

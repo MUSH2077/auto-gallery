@@ -26,9 +26,15 @@ curation_router = APIRouter(dependencies=[RequirePermission("curation")])
 async def list_tags(offset: int = 0, limit: int = 100,
                     sort_by: str = "usage_count",
                     sort_order: str = "desc",
+                    include_all: bool = False,
                     db: AsyncSession = Depends(get_db)):
     repo = TagRepository(db)
-    return await repo.list_all(offset, limit, sort_by=sort_by, sort_order=sort_order)
+    return await repo.list_all(
+        0 if include_all else offset,
+        None if include_all else limit,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
 
 
 @router.get("/{tag_id}", response_model=TagDetail)

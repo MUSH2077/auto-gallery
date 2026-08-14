@@ -2073,7 +2073,7 @@ test("scheduler separates task controls from system status permissions", async (
   await expect(page.locator("#auth-status").getByRole("heading", { name: "Needs attention" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Auth & Cookie Status" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Run scheduler scan" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Sync eligible now" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Sync all enabled sources" })).toHaveCount(0);
   expect(authRequests).toBe(0);
 
   authRequests = 0;
@@ -2087,9 +2087,58 @@ test("scheduler separates task controls from system status permissions", async (
   }));
   await page.goto("/admin/scheduler");
   await expect(page.getByRole("button", { name: "Run scheduler scan" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sync all enabled sources" })).toBeVisible();
   await expect(page.locator("#auth-status").getByRole("heading", { name: "Needs attention" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Auth & Cookie Status" })).toHaveCount(0);
   expect(authRequests).toBe(0);
+});
+
+test("Danbooru refresh and scheduler sync-all send the bounded batch modes", async ({ page }) => {
+  let refreshRequests = 0;
+  let schedulerPayload: unknown = null;
+
+  await page.route("**/api/v1/reference/danbooru/mappings/refresh", async (route) => {
+    refreshRequests += 1;
+    await route.fulfill({ json: {
+      status: "enqueued",
+      job_id: "mapping-refresh-job",
+      operation_type: "danbooru-mapping-refresh",
+      message: "Danbooru mapping refresh queued",
+    } });
+  });
+  await page.route("**/api/v1/reference/danbooru/mappings/refresh/mapping-refresh-job", async (route) => {
+    await route.fulfill({ json: {
+      job_id: "mapping-refresh-job",
+      status: "complete",
+      operation_type: "danbooru-mapping-refresh",
+      progress: { phase: "complete", current: 2, total: 2 },
+      result: { scanned: 2, total: 2, found: 2, not_found: 0, errors: 0, skipped: 0, aborted: false },
+    } });
+  });
+  await page.route("**/api/v1/admin/scheduler/sync-now", async (route) => {
+    schedulerPayload = JSON.parse(route.request().postData() || "{}");
+    await route.fulfill({ json: {
+      status: "ok",
+      message: "queued",
+      task_id: "sync-all-task",
+      mode: "manual_all_enabled",
+      candidate_count: 3,
+      enqueued_count: 2,
+      skipped_count: 1,
+      error_count: 0,
+      job_ids: ["one", "two"],
+    } });
+  });
+
+  await page.goto("/admin/upload/danbooru");
+  await page.getByRole("button", { name: "Refresh all mappings" }).click();
+  await expect.poll(() => refreshRequests).toBe(1);
+  await expect(page.getByText("The incremental mapping refresh for all creators is queued. Follow its progress in notifications.")).toBeVisible();
+
+  await page.goto("/admin/scheduler");
+  await page.getByRole("button", { name: "Sync all enabled sources" }).click();
+  await expect.poll(() => schedulerPayload).toEqual({ mode: "manual_all_enabled" });
+  await expect(page.getByText("Checked 3 enabled sources: 2 queued, 1 skipped, 0 failed")).toBeVisible();
 });
 
 test("mobile data management switcher keeps curation and dedup reachable", async ({ page }) => {
@@ -2246,6 +2295,70 @@ test("pathname navigation resets the viewport without hiding the page heading", 
   })).toBe(true);
   await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe("main-content");
   await page.screenshot({ path: "/tmp/auto-gallery-upload-top-fixed.png", fullPage: false });
+});
+
+test("tag map loads every tag and supports ctrl-wheel zoom without pagination", async ({ page }) => {
+  const consoleIssues: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error" || message.type() === "warning") {
+      consoleIssues.push(message.text());
+    }
+  });
+  page.on("pageerror", (error) => consoleIssues.push(error.message));
+  const fixtureCount = Number(process.env.TAG_MAP_FIXTURE_COUNT || 240);
+  const tagFixtures = Array.from({ length: fixtureCount }, (_, index) => ({
+    id: `map-tag-${index}`,
+    normalized_name: `map_tag_${String(index).padStart(3, "0")}`,
+    category: index % 5 === 0 ? "meta" : "general",
+    usage_count: 1 + ((index * 37) % 500),
+    created_at: "2026-08-14T00:00:00Z",
+  }));
+  let includeAll = false;
+  await page.route("**/api/v1/tags?*", async (route) => {
+    const url = new URL(route.request().url());
+    includeAll = url.searchParams.get("include_all") === "true";
+    await route.fulfill({ json: tagFixtures });
+  });
+
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto("/admin/tags");
+
+  const chart = page.getByTestId("tag-bubble-chart");
+  await expect(chart).toBeVisible({ timeout: 15_000 });
+  await expect(page).toHaveURL(/\/admin\/tags$/);
+  await expect(page).toHaveTitle(/auto-gallery/i);
+  await expect(page.getByRole("heading", { level: 1, name: "Tags" })).toBeVisible();
+  await expect(page.locator("[data-nextjs-dialog-overlay]")).toHaveCount(0);
+  await expect(chart).toHaveAttribute("data-tag-count", String(fixtureCount));
+  expect(includeAll).toBe(true);
+  await expect(page.getByText("Ctrl + wheel to zoom · Drag to pan")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Previous" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Next" })).toHaveCount(0);
+
+  const initialZoom = Number(await chart.getAttribute("data-zoom-level"));
+  const box = await chart.boundingBox();
+  expect(box).not.toBeNull();
+  await chart.dispatchEvent("wheel", { deltaY: -260 });
+  await expect(chart).toHaveAttribute("data-zoom-level", initialZoom.toFixed(3));
+  await chart.dispatchEvent("wheel", {
+    ctrlKey: true,
+    deltaY: -260,
+    clientX: (box?.x || 0) + (box?.width || 0) / 2,
+    clientY: (box?.y || 0) + (box?.height || 0) / 2,
+  });
+  await expect.poll(async () => Number(await chart.getAttribute("data-zoom-level")))
+    .toBeGreaterThan(initialZoom);
+  if (fixtureCount <= 1_000) {
+    await expect(page.getByRole("link", { name: /map_tag_/ }).first()).toBeVisible();
+  }
+  await expectNoPageOverflow(page);
+  expect(consoleIssues).toEqual([]);
+  await page.screenshot({ path: "/tmp/auto-gallery-tag-map-zoomed.png", fullPage: false });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(chart).toBeVisible();
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: "/tmp/auto-gallery-tag-map-mobile.png", fullPage: false });
 });
 
 test("query-only task navigation preserves the current viewport", async ({ page }) => {

@@ -91,6 +91,16 @@ function operationResultMessage(operation: OperationJobState, t: TFunction): str
     if (operation.result?.found === false) return operation.result.message || t("notification.no_danbooru_match");
     return t("notification.creators_refreshed");
   }
+  if (operation.kind === "danbooru-mapping-refresh" && operation.status === "completed") {
+    return t("danbooru.refresh_result", {
+      found: operation.result?.found || 0,
+      scanned: operation.result?.scanned || 0,
+      total: operation.result?.total || 0,
+      notFound: operation.result?.not_found || 0,
+      skipped: operation.result?.skipped || 0,
+      errors: operation.result?.errors || 0,
+    });
+  }
   return operation.result?.message || t("status.completed");
 }
 
@@ -131,6 +141,15 @@ function refreshOperationQueries(
       refetches.push(qc.refetchQueries({ queryKey: queryKeys.subscriptions.sources(subscriptionId), type: "all" }));
     }
     void Promise.all(refetches);
+    return;
+  }
+
+  if (kind === "danbooru-mapping-refresh") {
+    refetchCreatorSubscriptionQueries(qc);
+    qc.invalidateQueries({ queryKey: queryKeys.workbench });
+    qc.invalidateQueries({ queryKey: ["repositories"] });
+    qc.invalidateQueries({ queryKey: ["creator-subscription-overview"] });
+    qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
     return;
   }
 
@@ -370,7 +389,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
   const operationStatusQuery = useQuery({
     queryKey: ["admin-operation-status-global", operationJob?.jobId],
-    queryFn: () => api.getAdminOperationStatus(operationJob?.jobId || ""),
+    queryFn: () => operationJob?.kind === "danbooru-mapping-refresh"
+      ? api.getDanbooruMappingRefreshStatus(operationJob.jobId)
+      : api.getAdminOperationStatus(operationJob?.jobId || ""),
     enabled: !!operationJob?.jobId && operationJob.status === "running",
     staleTime: 0,
     refetchInterval: (query) => {

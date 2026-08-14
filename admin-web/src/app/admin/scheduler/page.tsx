@@ -137,10 +137,21 @@ export default function SchedulerPage() {
     },
     onError: (error: Error) => toast.error(error.message),
   });
-  const syncEligible = useMutation({
-    mutationFn: () => api.triggerSyncNow("force_eligible"),
+  const syncAllEnabled = useMutation({
+    mutationFn: () => api.triggerSyncNow("manual_all_enabled"),
     onSuccess: (data) => {
-      toast.success(t("scheduler.sync_batch_result", { enqueued: data.enqueued_count, skipped: data.skipped_count }));
+      const message = t("scheduler.sync_all_result", {
+        total: data.candidate_count ?? data.enqueued_count + data.skipped_count + (data.error_count || 0),
+        enqueued: data.enqueued_count,
+        skipped: data.skipped_count,
+        errors: data.error_count || 0,
+      });
+      const options = {
+        message,
+        action: { label: t("jobs.open_task"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${data.task_id}`) },
+      };
+      if (data.error_count) toast.warning(options);
+      else toast.success(options);
       queryClient.invalidateQueries({ queryKey: queryKeys.system.queueStats });
       queryClient.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
       queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
@@ -197,13 +208,15 @@ export default function SchedulerPage() {
             </div>
             {has("tasks") && (
               <div className="flex flex-wrap items-center gap-2">
-                <button type="button" className="btn-primary min-h-11" onClick={() => runDueScan.mutate()} disabled={runDueScan.isPending}>
+                <button type="button" className="btn-secondary min-h-11" onClick={() => runDueScan.mutate()} disabled={runDueScan.isPending || syncAllEnabled.isPending}>
                   {runDueScan.isPending ? t("scheduler.scanning") : t("scheduler.run_due_scan")}
+                </button>
+                <button type="button" className="btn-primary min-h-11" onClick={() => syncAllEnabled.mutate()} disabled={syncAllEnabled.isPending || runDueScan.isPending}>
+                  {syncAllEnabled.isPending ? t("scheduler.syncing_all") : t("scheduler.sync_all_enabled")}
                 </button>
                 <RowActionMenu
                   label={t("common.more_actions")}
                   items={[
-                    { label: t("scheduler.sync_eligible_now"), onSelect: () => syncEligible.mutate(), disabled: syncEligible.isPending },
                     { label: t("scheduler.defaults_title"), href: adminRoutes.settingsSection("scheduler-defaults") },
                   ]}
                 />
