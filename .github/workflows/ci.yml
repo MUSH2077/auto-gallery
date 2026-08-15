@@ -52,7 +52,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [a-f, gitllery, imports-c-l, imports-m-r, jobs, large-library, manual-upload-validation, manual-upload-imports, media-migrations, n-z]
+        shard: [a-f, gitllery, imports-c-l, imports-m-r, jobs, large-library, manual-upload-validation, manual-upload-linking, manual-upload-imports, media-migrations, n-z]
     services:
       postgres:
         image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
@@ -88,6 +88,7 @@ jobs:
           ${{ matrix.shard == 'imports-c-l' ||
               matrix.shard == 'imports-m-r' ||
               matrix.shard == 'manual-upload-validation' ||
+              matrix.shard == 'manual-upload-linking' ||
               matrix.shard == 'manual-upload-imports' ||
               matrix.shard == 'media-migrations' ||
               matrix.shard == 'n-z' }}
@@ -118,10 +119,14 @@ jobs:
                 tests/test_manual_upload.py::test_save_upload_creator_id_without_curation_is_forbidden
               )
               ;;
-            manual-upload-imports)
+            manual-upload-linking)
               test_files=(
                 tests/test_manual_upload.py::test_save_upload_creator_id_with_curation_links_target_creator
                 tests/test_manual_upload.py::test_save_upload_personal_space_reused_across_two_uploads
+              )
+              ;;
+            manual-upload-imports)
+              test_files=(
                 tests/test_manual_upload.py::test_save_upload_runs_through_real_import_runner
                 tests/test_manual_upload.py::test_save_upload_honors_manual_is_nsfw_flag
                 tests/test_manual_upload.py::test_save_upload_video_asset_imports_through_real_import_runner
