@@ -789,6 +789,7 @@ def test_pause_latch_overrides_an_older_nonpaused_snapshot(monkeypatch):
 @pytest.mark.asyncio
 async def test_health_resource_shape_is_additive(monkeypatch):
     import app.main as main
+    from app.services import device_profile
     from app.services import resource_pressure as pressure_module
     from app.services import settings as settings_module
 
@@ -830,6 +831,15 @@ async def test_health_resource_shape_is_additive(monkeypatch):
         ),
     )
     monkeypatch.setattr(settings_module, "get_download_defaults", fake_defaults)
+    monkeypatch.setattr(
+        device_profile,
+        "current_device_profile",
+        lambda: device_profile.resolve_device_profile(
+            "standard",
+            memory_total_bytes=16 * GIB,
+            cpu_count=6,
+        ),
+    )
 
     payload = await main._resource_pressure_health()
 

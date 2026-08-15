@@ -302,10 +302,17 @@ class _QueueRedis:
 
 def test_download_queue_gate_returns_queue_saturated(monkeypatch):
     from app.services import backpressure
+    from app.services import device_profile
 
     redis = _QueueRedis()
     queue_counts = {name: 0 for name in backpressure.DOWNLOAD_QUEUE_NAMES}
     queue_counts["downloads"] = 100
+
+    monkeypatch.setattr(
+        device_profile,
+        "current_device_profile",
+        lambda: SimpleNamespace(download_queue_limit=100),
+    )
 
     class Queue:
         def __init__(self, name, connection):
