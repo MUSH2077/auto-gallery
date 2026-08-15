@@ -452,6 +452,8 @@ test("every internal search surface uses the shared smart-search contract", asyn
     await page.goto(route);
     if (route === "/admin/works") {
       await page.getByRole("button", { name: /Filters/ }).click();
+    } else if (route === "/admin/scheduler") {
+      await page.locator("details").filter({ hasText: "Healthy schedules" }).locator("summary").click();
     }
     await expect(page.locator("[data-smart-search]").first(), route).toBeVisible();
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
