@@ -843,6 +843,7 @@ async def test_health_resource_shape_is_additive(monkeypatch):
     assert payload["download_concurrency"] == {
         "configured": 4,
         "cap": 1,
+        "device_profile": "standard",
         "effective": 1,
         "desired_effective": 1,
         "restart_required": False,
