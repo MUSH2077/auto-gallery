@@ -150,6 +150,7 @@ async def test_build_maps_repository_map_survives_duplicate_subscription_sources
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="direct disk-to-public-DB restore was retired in Gitllery segment v1")
 async def test_rebuild_restores_state_and_manual_commits_idempotently(tmp_path, monkeypatch):
     from app.database import async_session, engine
     from app.services.curation import CurationService
@@ -235,6 +236,7 @@ async def test_rebuild_restores_state_and_manual_commits_idempotently(tmp_path, 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="direct disk-to-public-DB restore was retired in Gitllery segment v1")
 async def test_rebuild_remaps_reverts_chain(tmp_path, monkeypatch):
     """A rebuilt revert commit's reverts_commit_id points at the NEW id of the
     rebuilt commit it reverts (old→new commit re-mapping)."""
@@ -403,6 +405,7 @@ async def test_rebuild_refuses_on_live_manual_curation(tmp_path, monkeypatch):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="direct disk-to-public-DB restore was retired in Gitllery segment v1")
 async def test_rebuild_repository_id_filter_matches_current_id(tmp_path, monkeypatch):
     """rebuild(repository_id=<CURRENT subscription_source id>) resolves via
     (source, source_creator_id) and matches the on-disk repo whose config holds
