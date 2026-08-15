@@ -54,7 +54,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [a-f, gitllery, imports-c-l, imports-m-r, j-m, n-z]
+        shard: [a-f, gitllery, imports-c-l, imports-m-r, jobs, large-library, media-migrations, n-z]
     services:
       postgres:
         image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
@@ -102,7 +102,9 @@ jobs:
             gitllery) test_files=(tests/test_g*.py) ;;
             imports-c-l) test_files=(tests/test_import_{c,d,e,f,g,h,i,j,k,l}*.py) ;;
             imports-m-r) test_files=(tests/test_import_{m,n,o,p,q,r}*.py) ;;
-            j-m) test_files=(tests/test_{j,k,l,m}*.py) ;;
+            jobs) test_files=(tests/test_j*.py) ;;
+            large-library) test_files=(tests/test_l*.py) ;;
+            media-migrations) test_files=(tests/test_m*.py) ;;
             n-z) test_files=(tests/test_{n,o,p,q,r,s,t,u,v,w,x,y,z}*.py) ;;
           esac
           python -m pytest "${test_files[@]}"
