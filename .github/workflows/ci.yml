@@ -52,7 +52,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [a-f, gitllery, imports-c-l, imports-m-r, jobs, large-library, manual-upload-validation, manual-upload-linking, manual-upload-imports, media-migrations, n-z]
+        shard: [a-f, gitllery, imports-c-l, imports-m-r, jobs, large-library, manual-upload-validation, manual-upload-linking, manual-upload-import-images, manual-upload-import-video, media-migrations, n-z]
     services:
       postgres:
         image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
@@ -85,7 +85,8 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - name: Install system dependencies
         if: >-
-          ${{ matrix.shard == 'manual-upload-imports' ||
+          ${{ matrix.shard == 'manual-upload-import-images' ||
+              matrix.shard == 'manual-upload-import-video' ||
               matrix.shard == 'media-migrations' }}
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvips-dev ffmpeg
       - name: Install Python dependencies
@@ -120,10 +121,14 @@ jobs:
                 tests/test_manual_upload.py::test_save_upload_personal_space_reused_across_two_uploads
               )
               ;;
-            manual-upload-imports)
+            manual-upload-import-images)
               test_files=(
                 tests/test_manual_upload.py::test_save_upload_runs_through_real_import_runner
                 tests/test_manual_upload.py::test_save_upload_honors_manual_is_nsfw_flag
+              )
+              ;;
+            manual-upload-import-video)
+              test_files=(
                 tests/test_manual_upload.py::test_save_upload_video_asset_imports_through_real_import_runner
               )
               ;;
