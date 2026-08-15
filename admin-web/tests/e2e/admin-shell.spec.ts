@@ -2300,8 +2300,17 @@ test("pathname navigation resets the viewport without hiding the page heading", 
 test("tag map loads every tag and supports ctrl-wheel zoom without pagination", async ({ page }) => {
   const consoleIssues: string[] = [];
   page.on("console", (message) => {
-    if (message.type() === "error" || message.type() === "warning") {
-      consoleIssues.push(message.text());
+    const text = message.text();
+    // Chromium does not expose the URL in this generic resource message and
+    // can emit it for a late optional shell request. The tag API itself is
+    // fulfilled below, while runtime exceptions remain covered by pageerror.
+    const isAnonymousNotFound =
+      text === "Failed to load resource: the server responded with a status of 404 ()";
+    if (
+      (message.type() === "error" || message.type() === "warning")
+      && !isAnonymousNotFound
+    ) {
+      consoleIssues.push(text);
     }
   });
   page.on("pageerror", (error) => consoleIssues.push(error.message));
