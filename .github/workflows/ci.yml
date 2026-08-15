@@ -54,7 +54,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [a-m, n-z]
+        shard: [a-f, gitllery, h-m, n-z]
     services:
       postgres:
         image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
@@ -98,7 +98,9 @@ jobs:
         run: |
           shopt -s nullglob
           case "${{ matrix.shard }}" in
-            a-m) test_files=(tests/test_{a,b,c,d,e,f,g,h,i,j,k,l,m}*.py) ;;
+            a-f) test_files=(tests/test_{a,b,c,d,e,f}*.py) ;;
+            gitllery) test_files=(tests/test_g*.py) ;;
+            h-m) test_files=(tests/test_{h,i,j,k,l,m}*.py) ;;
             n-z) test_files=(tests/test_{n,o,p,q,r,s,t,u,v,w,x,y,z}*.py) ;;
           esac
           python -m pytest "${test_files[@]}"
