@@ -85,13 +85,8 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - name: Install system dependencies
         if: >-
-          ${{ matrix.shard == 'imports-c-l' ||
-              matrix.shard == 'imports-m-r' ||
-              matrix.shard == 'manual-upload-validation' ||
-              matrix.shard == 'manual-upload-linking' ||
-              matrix.shard == 'manual-upload-imports' ||
-              matrix.shard == 'media-migrations' ||
-              matrix.shard == 'n-z' }}
+          ${{ matrix.shard == 'manual-upload-imports' ||
+              matrix.shard == 'media-migrations' }}
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvips-dev ffmpeg
       - name: Install Python dependencies
         working-directory: backend
