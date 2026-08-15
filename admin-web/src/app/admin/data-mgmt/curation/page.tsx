@@ -10,6 +10,7 @@ import { useT } from "@/lib/i18n";
 import { useStaggeredEntrance } from "@/lib/motion";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { adminRoutes } from "@/lib/adminRoutes";
+import { usePermissions } from "@/lib/usePermissions";
 
 function formatBytes(bytes: number) {
   if (!bytes) return "0 B";
@@ -138,6 +139,7 @@ function CurationContent() {
   const sp = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
+  const { isAdmin } = usePermissions();
   const trigger = sp.get("trigger") || "";
   const includeBaseline = sp.get("include_baseline") !== "false";
   const subjectType = sp.get("subject_type") || undefined;
@@ -151,7 +153,12 @@ function CurationContent() {
       return result.groups.works || { total: 0, items: [] };
     },
   });
-  const purgePreview = useQuery({ queryKey: [...queryKeys.curation.all, "purge-preview"], queryFn: () => api.previewPurge(), refetchInterval: 30000 });
+  const purgePreview = useQuery({
+    queryKey: [...queryKeys.curation.all, "purge-preview"],
+    queryFn: () => api.previewPurge(),
+    refetchInterval: 30000,
+    enabled: isAdmin,
+  });
   const suggestions = useQuery({ queryKey: queryKeys.curation.suggestions, queryFn: api.curationRuleSuggestions });
   const backfillStatus = useQuery({ queryKey: queryKeys.curation.backfillStatus, queryFn: api.getCurationBackfillStatus, refetchInterval: 30000 });
   const commitItems = commits.data?.items ?? [];
@@ -304,7 +311,7 @@ function CurationContent() {
             </div>
             <div className="mt-3 flex gap-2">
               <Link href="/admin/works?curation=trashed" className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-subtle dark:border-border dark:hover:bg-subtle">{t("curation.open_trash")}</Link>
-              <button
+              {isAdmin && <button
                 onClick={() => {
                   if (window.confirm(t("curation.purge_confirm"))) purge.mutate();
                 }}
@@ -312,7 +319,7 @@ function CurationContent() {
                 className="rounded-md bg-danger px-3 py-1.5 text-xs font-medium text-white hover:bg-danger disabled:opacity-50"
               >
                 {t("curation.purge")}
-              </button>
+              </button>}
             </div>
           </div>
 

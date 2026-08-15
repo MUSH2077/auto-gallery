@@ -2,15 +2,17 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import type { CreatorRepository, RepositoryDetailResponse, RepositoryGraphNode, RepositoryRecentJob, RepositoryRecentWork, SchedulerDecisionItem } from "@/lib/api";
-import { Breadcrumb, EmptyState, ErrorState, PageShell, SourceBadge, SyncOutcomeBadge, SyncOutcomeNotice, TagBubbleChart, WorkMediaThumbnail } from "@/components";
+import { Breadcrumb, EmptyState, ErrorState, HierarchyDeletionDialog, PageShell, SourceBadge, SyncOutcomeBadge, SyncOutcomeNotice, TagBubbleChart, WorkMediaThumbnail } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { scheduleModeLabel, schedulerDecisionLabel, statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { adminRoutes } from "@/lib/adminRoutes";
+import { usePermissions } from "@/lib/usePermissions";
+import { useNotifications } from "@/components/NotificationCenter";
 
 type TabKey = "overview" | "content" | "history" | "settings";
 
@@ -300,10 +302,16 @@ export default function RepositoryDetailPage() {
   const fmt = useI18nFormat();
   const toast = useToast();
   const params = useParams();
+  const router = useRouter();
   const qc = useQueryClient();
+  const { isAdmin, has } = usePermissions();
+  const canManageRepositories = has("subscriptions");
+  const notify = useNotifications();
   const id = params.id as string;
   const [tab, setTab] = useState<TabKey>("overview");
   const [tagPage, setTagPage] = useState(0);
+  const [showDelete, setShowDelete] = useState(false);
+  const [deleteFiles, setDeleteFiles] = useState(false);
   const tagLimit = 50;
 
   const detail = useQuery({ queryKey: queryKeys.repositories.detail(id), queryFn: () => api.getRepository(id), refetchInterval: 12000 });
@@ -312,6 +320,11 @@ export default function RepositoryDetailPage() {
     queryKey: queryKeys.repositories.tags(id, tagPage),
     queryFn: () => api.getRepositoryTags(id, tagPage * tagLimit, tagLimit),
     enabled: tab === "content",
+  });
+  const deletionPreview = useQuery({
+    queryKey: ["deletion-preview", "repository", id],
+    queryFn: () => api.getRepositoryDeletionPreview(id),
+    enabled: showDelete,
   });
 
   const repo = detail.data?.repository;
@@ -339,6 +352,24 @@ export default function RepositoryDetailPage() {
       qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
     },
     onError: (e: Error) => toast.error(e.message),
+  });
+
+  const deleteRepository = useMutation({
+    mutationFn: () => api.deleteRepository(id, deleteFiles),
+    onSuccess: (result) => {
+      if (result.task_id) {
+        notify.startOperationJob(result.task_id, "hierarchy-delete", t("deletion.permanent_title"), {
+          entity: "hierarchy-delete", entity_type: "repository", entity_ids: [id],
+        });
+        toast.success(t("deletion.queued"));
+      } else {
+        toast.success(t("deletion.soft_deleted"));
+      }
+      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+      qc.invalidateQueries({ queryKey: ["repositories"] });
+      if (repo) router.push(adminRoutes.subscription(repo.subscription_id));
+    },
+    onError: (error: Error) => toast.error(error.message),
   });
 
   if (detail.isLoading) {
@@ -397,6 +428,11 @@ export default function RepositoryDetailPage() {
             <button onClick={() => toggle.mutate()} disabled={toggle.isPending} className="btn-ghost disabled:opacity-50">
               {repo.is_enabled ? t("repo.disable") : t("repo.enable")}
             </button>
+            {canManageRepositories && (isAdmin || repo.is_enabled) && (
+              <button onClick={() => { setDeleteFiles(false); setShowDelete(true); }} className={isAdmin ? "btn-danger" : "btn-ghost"}>
+                {isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
+              </button>
+            )}
             <Link href={`/admin/subscriptions/${subscription.id}`} className="btn-ghost">{t("repo_detail.open_subscription")}</Link>
             {repo.source_url && <a href={repo.source_url} target="_blank" rel="noopener noreferrer" className="btn-ghost">{t("repo_detail.open_source")}</a>}
           </div>
@@ -514,6 +550,19 @@ export default function RepositoryDetailPage() {
         )}
         {tab === "settings" && <ConfigRows detail={detail.data} decision={decision} />}
       </section>
+      <HierarchyDeletionDialog
+        open={showDelete}
+        title={isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
+        confirmationPhrase={repoName(repo)}
+        preview={deletionPreview.data}
+        previewLoading={deletionPreview.isLoading}
+        deleteFiles={deleteFiles}
+        onDeleteFilesChange={setDeleteFiles}
+        onConfirm={() => deleteRepository.mutate()}
+        onCancel={() => { setShowDelete(false); setDeleteFiles(false); }}
+        isPending={deleteRepository.isPending}
+        error={(deleteRepository.error as Error)?.message || (deletionPreview.error as Error)?.message}
+      />
     </PageShell>
   );
 }

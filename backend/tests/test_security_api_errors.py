@@ -1,9 +1,12 @@
 """Security regression tests for administrator-facing error responses."""
 
 import io
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException, Response
+from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 
 
@@ -43,37 +46,58 @@ async def test_gallerydl_connection_does_not_expose_internal_exception(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_subscription_batch_errors_use_stable_public_code(monkeypatch):
+async def test_subscription_batch_deletion_preserves_structured_conflict(monkeypatch):
     from app.api import subscriptions
+    from app.schemas.deletion import BatchDeletionRequest
+    from app.services import hierarchical_deletion
 
-    class FailingSubscriptionService:
+    class BlockingDeletionService:
         def __init__(self, _db):
             pass
 
-        async def delete_subscription(self, _subscription_id):
-            raise RuntimeError("database host is private")
+        async def scope(self, _entity_type, _entity_ids):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "deletion_active_tasks",
+                    "message": "Stop active tasks before deleting.",
+                    "task_ids": [str(uuid4())],
+                },
+            )
 
-    monkeypatch.setattr(subscriptions, "SubscriptionService", FailingSubscriptionService)
-
-    result = await subscriptions.batch_delete_subscriptions(
-        {"ids": [str(uuid4())]},
-        db=object(),
+    monkeypatch.setattr(
+        hierarchical_deletion,
+        "HierarchicalDeletionService",
+        BlockingDeletionService,
     )
 
-    assert result["results"][0]["error"] == "internal_error"
-    assert "database host" not in str(result)
+    with pytest.raises(HTTPException) as error:
+        await subscriptions.batch_delete_subscriptions(
+            BatchDeletionRequest(ids=[uuid4()]),
+            Response(),
+            user=SimpleNamespace(is_admin=False),
+            db=object(),
+        )
+
+    assert error.value.status_code == 409
+    assert error.value.detail["code"] == "deletion_active_tasks"
+    assert "private" not in str(error.value.detail)
+
+
+def test_hierarchy_batch_rejects_invalid_ids_at_the_contract_boundary():
+    from app.schemas.deletion import BatchDeletionRequest
+
+    with pytest.raises(ValidationError):
+        BatchDeletionRequest.model_validate({"ids": ["not-a-uuid"]})
 
 
 @pytest.mark.asyncio
-async def test_subscription_batch_expected_errors_use_public_codes(monkeypatch):
+async def test_subscription_batch_toggle_expected_errors_use_public_codes(monkeypatch):
     from app.api import subscriptions
 
     class MissingSubscriptionService:
         def __init__(self, _db):
             pass
-
-        async def delete_subscription(self, _subscription_id):
-            raise ValueError("Subscription not found")
 
         async def update_subscription(self, _subscription_id, _data):
             raise ValueError("Subscription not found")
@@ -81,47 +105,12 @@ async def test_subscription_batch_expected_errors_use_public_codes(monkeypatch):
     monkeypatch.setattr(subscriptions, "SubscriptionService", MissingSubscriptionService)
     missing_id = str(uuid4())
 
-    result = await subscriptions.batch_delete_subscriptions(
-        {"ids": ["not-a-uuid", missing_id]},
-        db=object(),
-    )
-
-    assert result["results"] == [
-        {"id": "not-a-uuid", "status": "error", "error": "invalid_id"},
-        {"id": missing_id, "status": "error", "error": "not_found"},
-    ]
-
     update_result = await subscriptions.batch_toggle_sync(
         {"ids": ["not-a-uuid", missing_id], "sync_enabled": False},
         db=object(),
     )
 
     assert update_result["results"] == [
-        {"id": "not-a-uuid", "status": "error", "error": "invalid_id"},
-        {"id": missing_id, "status": "error", "error": "not_found"},
-    ]
-
-
-@pytest.mark.asyncio
-async def test_creator_batch_expected_errors_use_public_codes(monkeypatch):
-    from app.api import creators
-
-    class MissingCreatorService:
-        def __init__(self, _db):
-            pass
-
-        async def delete_creator(self, _creator_id):
-            raise ValueError("Creator not found")
-
-    monkeypatch.setattr(creators, "CreatorService", MissingCreatorService)
-    missing_id = str(uuid4())
-
-    result = await creators.batch_delete_creators(
-        {"ids": ["not-a-uuid", missing_id]},
-        db=object(),
-    )
-
-    assert result["results"] == [
         {"id": "not-a-uuid", "status": "error", "error": "invalid_id"},
         {"id": missing_id, "status": "error", "error": "not_found"},
     ]

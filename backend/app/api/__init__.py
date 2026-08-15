@@ -19,6 +19,7 @@ from app.api.reference import router as reference_router
 from app.api.import_jobs import router as import_jobs_router
 from app.api.auth_api import router as auth_router
 from app.api.repositories import router as repositories_router
+from app.api.repositories import mutation_router as repositories_mutation_router
 from app.api.curation import router as curation_router
 from app.api.ws import router as ws_router
 from app.api.tasks import router as tasks_router
@@ -41,6 +42,7 @@ api_router.include_router(import_jobs_router, prefix="/import-jobs", tags=["impo
 api_router.include_router(tasks_router, prefix="/tasks", tags=["tasks"])
 api_router.include_router(operations_router, prefix="/operations", tags=["operations"])
 api_router.include_router(repositories_router, prefix="/repositories", tags=["repositories"])
+api_router.include_router(repositories_mutation_router, prefix="/repositories", tags=["repositories"])
 api_router.include_router(curation_router, prefix="/curation", tags=["curation"])
 api_router.include_router(works_router, prefix="/works", tags=["works"])
 api_router.include_router(works_curation_router, prefix="/works", tags=["works"])

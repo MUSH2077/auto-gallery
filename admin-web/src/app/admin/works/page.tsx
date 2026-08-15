@@ -68,6 +68,7 @@ function WorkCard({
   onCancelClosePreview,
   onPreviewPage,
   canCurate,
+  canPurge,
 }: {
   w: WorkListItem;
   onToggleFavorite: (id: string) => void;
@@ -86,6 +87,7 @@ function WorkCard({
   onCancelClosePreview: () => void;
   onPreviewPage: (workId: string, pageIndex: number) => void;
   canCurate: boolean;
+  canPurge: boolean;
 }) {
   const t = useT();
   const fmt = useI18nFormat();
@@ -195,7 +197,7 @@ function WorkCard({
         {trashMode && canCurate && (
           <div className="mt-3 flex gap-2">
             <button onClick={(e) => { e.stopPropagation(); onRestore?.(w.id); }} className="pointer-events-auto rounded border border-border px-2 py-1 text-xs hover:bg-subtle dark:border-border dark:hover:bg-subtle">{t("works.restore")}</button>
-            <button onClick={(e) => { e.stopPropagation(); onPurge?.(w.id); }} className="pointer-events-auto rounded bg-danger px-2 py-1 text-xs text-white hover:bg-danger">{t("works.purge")}</button>
+            {canPurge && <button onClick={(e) => { e.stopPropagation(); onPurge?.(w.id); }} className="pointer-events-auto rounded bg-danger px-2 py-1 text-xs text-white hover:bg-danger">{t("works.purge")}</button>}
           </div>
         )}
       </div>
@@ -213,7 +215,7 @@ function WorksContent() {
   const qc = useQueryClient();
   const sp = useSearchParams();
   const pathname = usePathname();
-  const { has } = usePermissions();
+  const { isAdmin, has } = usePermissions();
   const canCurate = has("curation");
   const { settings: appearance, updateSettings } = useAppearanceSettings();
   const [selectedWorkIds, setSelectedWorkIds] = useState<Set<string>>(new Set());
@@ -755,6 +757,7 @@ function WorksContent() {
                 if (window.confirm(t("works.purge_confirm"))) purgeWork.mutate(id);
               }}
               canCurate={canCurate}
+              canPurge={isAdmin}
             />
           ))}
         </div>
@@ -811,7 +814,7 @@ function WorksContent() {
               {canCurate && curationVisibility === "trashed" && (
                 <div className="flex shrink-0 gap-2">
                   <button onClick={(e) => { e.stopPropagation(); restoreWork.mutate(w.id); }} className="rounded border border-border px-2 py-1 text-xs hover:bg-subtle dark:border-border dark:hover:bg-subtle">{t("works.restore")}</button>
-                  <button onClick={(e) => { e.stopPropagation(); if (window.confirm(t("works.purge_confirm"))) purgeWork.mutate(w.id); }} className="rounded bg-danger px-2 py-1 text-xs text-white hover:bg-danger">{t("works.purge")}</button>
+                  {isAdmin && <button onClick={(e) => { e.stopPropagation(); if (window.confirm(t("works.purge_confirm"))) purgeWork.mutate(w.id); }} className="rounded bg-danger px-2 py-1 text-xs text-white hover:bg-danger">{t("works.purge")}</button>}
                 </div>
               )}
             </div>

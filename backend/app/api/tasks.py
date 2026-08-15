@@ -274,6 +274,12 @@ _RETRYABLE_ADMIN_OPERATIONS = {
         "curation-backfill",
         "Curation baseline backfill queued",
     ),
+    "hierarchy-delete": (
+        "library:hierarchy-delete:active",
+        "app.jobs.admin_operations.run_hierarchy_delete_operation",
+        "hierarchy-delete",
+        "Permanent deletion queued",
+    ),
     "asset-dedup-scan": (
         "lock:admin:asset-dedup-scan",
         "app.jobs.asset_dedup.run_asset_dedup_scan",
@@ -300,6 +306,7 @@ async def _retry_admin_task(task, svc: TaskService):
         if task.operation_type in {
             "admin-search-reindex",
             "admin-curation-backfill",
+            "hierarchy-delete",
         }
         else 3600
         if task.operation_type == "asset-dedup-scan"

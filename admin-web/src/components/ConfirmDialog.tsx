@@ -1,9 +1,9 @@
 "use client";
-import { useEffect, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useState } from "react";
 import { useT } from "@/lib/i18n";
 import Modal from "@/components/Modal";
 
-export default function ConfirmDialog({ open, title, message, onConfirm, onCancel, isPending, error, confirmationPhrase }: {
+export default function ConfirmDialog({ open, title, message, onConfirm, onCancel, isPending, error, confirmationPhrase, confirmDisabled, children }: {
   open: boolean;
   title: string;
   message: string;
@@ -12,6 +12,8 @@ export default function ConfirmDialog({ open, title, message, onConfirm, onCance
   isPending?: boolean;
   error?: string | null;
   confirmationPhrase?: string;
+  confirmDisabled?: boolean;
+  children?: ReactNode;
 }) {
   const t = useT();
   const inputId = useId();
@@ -36,10 +38,11 @@ export default function ConfirmDialog({ open, title, message, onConfirm, onCance
           />
         </div>
       )}
+      {children}
       {error && <p role="alert" className="mb-3 rounded-md border border-danger/30 bg-danger-subtle p-2 text-sm text-danger dark:border-danger/30 dark:bg-danger-subtle dark:text-danger">{error}</p>}
       <div className="flex flex-wrap justify-end gap-3">
           <button type="button" onClick={onCancel} disabled={isPending} className="btn-ghost">{t("common.cancel")}</button>
-          <button type="button" onClick={onConfirm} disabled={isPending || !confirmationMatches}
+          <button type="button" onClick={onConfirm} disabled={isPending || confirmDisabled || !confirmationMatches}
             className="btn-danger">
             {isPending ? t("common.processing") : t("common.confirm")}
           </button>
