@@ -24,8 +24,6 @@ jobs:
           python-version: "3.12"
           cache: "pip"
           cache-dependency-path: backend/requirements.txt
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvips-dev ffmpeg
       - name: Install Python dependencies
         working-directory: backend
         run: pip install --require-hashes -r requirements.txt
@@ -54,7 +52,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [a-f, gitllery, imports-c-l, imports-m-r, jobs, large-library, media-migrations, n-z]
+        shard: [a-f, gitllery, imports-c-l, imports-m-r, jobs, large-library, manual-upload, media-migrations, n-z]
     services:
       postgres:
         image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
@@ -86,6 +84,12 @@ jobs:
           cache: "pip"
           cache-dependency-path: backend/requirements.txt
       - name: Install system dependencies
+        if: >-
+          ${{ matrix.shard == 'imports-c-l' ||
+              matrix.shard == 'imports-m-r' ||
+              matrix.shard == 'manual-upload' ||
+              matrix.shard == 'media-migrations' ||
+              matrix.shard == 'n-z' }}
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvips-dev ffmpeg
       - name: Install Python dependencies
         working-directory: backend
@@ -104,7 +108,8 @@ jobs:
             imports-m-r) test_files=(tests/test_import_{m,n,o,p,q,r}*.py) ;;
             jobs) test_files=(tests/test_j*.py) ;;
             large-library) test_files=(tests/test_l*.py) ;;
-            media-migrations) test_files=(tests/test_m*.py) ;;
+            manual-upload) test_files=(tests/test_manual_upload.py) ;;
+            media-migrations) test_files=(tests/test_media*.py tests/test_migrations*.py) ;;
             n-z) test_files=(tests/test_{n,o,p,q,r,s,t,u,v,w,x,y,z}*.py) ;;
           esac
           python -m pytest "${test_files[@]}"
