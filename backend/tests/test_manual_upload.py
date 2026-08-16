@@ -7,6 +7,8 @@ the service against the real (isolated) test PostgreSQL/Redis.
 import io
 import json
 import uuid
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select, text
@@ -75,9 +77,10 @@ async def _fake_enqueue(download_job_id, import_error=None, new_json_paths=None)
     return "fake-import-job"
 
 
-async def _no_import_cooldown(*_args, **_kwargs):
+@asynccontextmanager
+async def _unthrottled_import_slice(*_args, **_kwargs):
     """Keep upload integration tests independent of host pressure sampling."""
-    return 0.0
+    yield SimpleNamespace(work_units=25, effective_scale=1.0)
 
 
 @pytest.mark.integration
@@ -406,8 +409,8 @@ async def test_save_upload_runs_through_real_import_runner(tmp_path, monkeypatch
     monkeypatch.setattr(settings, "download_root", str(download_root))
     monkeypatch.setattr(settings, "library_root", str(library_root))
     monkeypatch.setattr(
-        "app.jobs.import_runner.sleep_for_profile_slice_cooldown",
-        _no_import_cooldown,
+        "app.jobs.import_runner._import_resource_slice",
+        _unthrottled_import_slice,
     )
 
     try:
@@ -461,8 +464,8 @@ async def test_save_upload_honors_manual_is_nsfw_flag(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "download_root", str(download_root))
     monkeypatch.setattr(settings, "library_root", str(library_root))
     monkeypatch.setattr(
-        "app.jobs.import_runner.sleep_for_profile_slice_cooldown",
-        _no_import_cooldown,
+        "app.jobs.import_runner._import_resource_slice",
+        _unthrottled_import_slice,
     )
 
     try:
@@ -520,8 +523,8 @@ async def test_save_upload_video_asset_imports_through_real_import_runner(tmp_pa
     monkeypatch.setattr(settings, "download_root", str(download_root))
     monkeypatch.setattr(settings, "library_root", str(library_root))
     monkeypatch.setattr(
-        "app.jobs.import_runner.sleep_for_profile_slice_cooldown",
-        _no_import_cooldown,
+        "app.jobs.import_runner._import_resource_slice",
+        _unthrottled_import_slice,
     )
 
     try:
