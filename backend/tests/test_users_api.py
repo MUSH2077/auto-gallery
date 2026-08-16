@@ -105,6 +105,42 @@ async def test_admin_can_list_create_get_and_patch_users():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_password_writes_reject_values_over_bcrypt_byte_limit():
+    from app.database import async_session, engine
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    too_long_password = "界" * 25  # 75 UTF-8 bytes, despite being only 25 characters.
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            admin = await _seed_user(db, f"{PREFIX}password_admin", is_admin=True)
+            target = await _seed_user(db, f"{PREFIX}password_target")
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.post(
+                "/api/v1/users",
+                json={"username": f"{PREFIX}too_long", "password": too_long_password},
+                headers=_headers(admin.username),
+            )
+            assert r.status_code == 400
+            assert "at most 72 bytes" in r.json()["detail"]
+
+            r = await client.post(
+                "/api/v1/auth/change-password",
+                json={"current_password": "hunter22", "new_password": too_long_password},
+                headers=_headers(target.username),
+            )
+            assert r.status_code == 400
+            assert "at most 72 bytes" in r.json()["detail"]
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_non_admin_and_unauthenticated_are_rejected():
     from app.database import async_session, engine
     from app.main import app

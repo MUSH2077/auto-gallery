@@ -157,11 +157,15 @@ async def change_password(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
     if len(body.new_password) < 6:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New password must be at least 6 characters")
+    try:
+        new_password_hash = hash_password(body.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     # Re-fetch in this session to avoid detached instance
     result = await session.execute(select(User).where(User.id == current_user.id))
     user = result.scalars().first()
-    user.password_hash = hash_password(body.new_password)
+    user.password_hash = new_password_hash
     user.must_change_password = False
     user.updated_at = datetime.now(timezone.utc)
     await session.commit()
