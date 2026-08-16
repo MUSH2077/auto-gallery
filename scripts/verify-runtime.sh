@@ -19,6 +19,8 @@ case "$verify_scope" in
 esac
 
 env_file="${COMPOSE_ENV_FILE:-.env}"
+default_enforced_profiles="download_network,import_db,image_derive,video_derive,search_index,maintenance"
+expected_enforced_profiles="${VERIFY_EXPECT_ENFORCED_PROFILES-$default_enforced_profiles}"
 
 if [[ -f "$env_file" ]]; then
   set -a
@@ -111,7 +113,7 @@ compose exec -T \
   -e VERIFY_REQUIRE_NORMAL_PRESSURE="${VERIFY_REQUIRE_NORMAL_PRESSURE:-0}" \
   -e VERIFY_ALLOW_CRITICAL_PRESSURE="${VERIFY_ALLOW_CRITICAL_PRESSURE:-0}" \
   -e VERIFY_EXPECT_GOVERNANCE_MODE="${VERIFY_EXPECT_GOVERNANCE_MODE:-enforce}" \
-  -e VERIFY_EXPECT_ENFORCED_PROFILES="${VERIFY_EXPECT_ENFORCED_PROFILES:-}" \
+  -e VERIFY_EXPECT_ENFORCED_PROFILES="$expected_enforced_profiles" \
   -e VERIFY_EXPECT_MAX_SCALE="${VERIFY_EXPECT_MAX_SCALE:-1.0}" \
   backend python3 - <<'PY'
 import httpx
