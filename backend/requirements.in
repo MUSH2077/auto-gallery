@@ -18,7 +18,7 @@ Pillow==12.3.0
 python-multipart==0.0.32
 PyJWT[crypto]==2.13.0
 bcrypt==4.2.1
-structlog==24.4.0
+structlog==26.1.0
 meilisearch-python-sdk==7.3.0
 pytest==9.1.1
 pytest-asyncio==1.4.0
