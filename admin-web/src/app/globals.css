@@ -1,9 +1,8 @@
 /* Fonts via Chinese mirror (fonts.googleapis.com blocked in mainland China) */
 @import url('https://fonts.loli.net/css2?family=JetBrains+Mono:wght@400;500&display=swap');
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../../tailwind.config.ts";
 
 /* ──────────────────────────────────────────────────────────────────────────
    NEUTRAL OPERATIONS THEME
@@ -228,12 +227,13 @@
 
 @layer components {
   /* Neutral operations-console primitives. */
-  .card {
+  .card,
+  .card-elevated,
+  .card-interactive {
     @apply rounded-lg border border-border bg-surface;
   }
-  .card-elevated { @apply card; }
   .card-interactive {
-    @apply card hover:bg-subtle hover:border-accent/50 hover:-translate-y-px hover:shadow-md
+    @apply hover:bg-subtle hover:border-accent/50 hover:-translate-y-px hover:shadow-md
            active:translate-y-0 active:scale-[0.99];
     transition-property: background-color, border-color, transform, box-shadow;
     transition-duration: 150ms;

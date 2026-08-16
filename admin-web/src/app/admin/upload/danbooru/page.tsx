@@ -417,7 +417,7 @@ export default function DanbooruReferencePage() {
     mutationFn: (ids: string[]) => api.previewBatchImport(ids),
     onSuccess: setPixivPreview,
   });
-  const pixivDebounce = useRef<ReturnType<typeof setTimeout>>();
+  const pixivDebounce = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const handlePixivBlur = useCallback(() => {
     const ids = batchInput.split(/[\n,]+/).map((s) => s.trim()).filter((s) => /^\d+$/.test(s));
     if (ids.length === 0) { setPixivPreview(null); return; }
@@ -442,7 +442,7 @@ export default function DanbooruReferencePage() {
     mutationFn: (urls: string[]) => api.previewUrlBatchImport(urls),
     onSuccess: setUrlPreview,
   });
-  const urlDebounce = useRef<ReturnType<typeof setTimeout>>();
+  const urlDebounce = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const handleUrlBlur = useCallback(() => {
     const urls = urlBatchInput.split(/\n/).map((s) => s.trim()).filter((s) => s.startsWith("http"));
     if (urls.length === 0) { setUrlPreview(null); return; }

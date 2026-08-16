@@ -129,7 +129,7 @@ export function useStaggeredEntrance(
  */
 export function useViewportReveal<T extends HTMLElement>(
   key: string | number,
-): { ref: RefObject<T>; revealed: boolean } {
+): { ref: RefObject<T | null>; revealed: boolean } {
   const ref = useRef<T>(null);
   const [revealed, setRevealed] = useState(false);
 

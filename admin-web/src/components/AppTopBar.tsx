@@ -119,7 +119,7 @@ export default function AppTopBar({
   onToggleSidebar: () => void;
   sidebarExpanded: boolean;
   sidebarId: string;
-  sidebarTriggerRef?: RefObject<HTMLButtonElement>;
+  sidebarTriggerRef?: RefObject<HTMLButtonElement | null>;
 }) {
   const t = useT();
   const pathname = usePathname();
