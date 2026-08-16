@@ -150,6 +150,65 @@ async def test_creator_scope_protects_shared_works_and_soft_delete_stops_sync():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_creator_scope_conservatively_protects_unresolved_legacy_repository():
+    from app.models import (
+        Creator,
+        SourceCreator,
+        Subscription,
+        SubscriptionSource,
+        Work,
+        WorkSource,
+    )
+    from app.services.hierarchical_deletion import HierarchicalDeletionService
+
+    async with _test_session() as db:
+        target = Creator(name="legacy-delete-target")
+        survivor = Creator(name="legacy-repository-owner")
+        db.add_all([target, survivor])
+        await db.flush()
+        db.add(SourceCreator(
+            creator_id=target.id,
+            source="pixiv",
+            source_creator_id="legacy-100",
+        ))
+        target_subscription = Subscription(creator_id=target.id)
+        survivor_subscription = Subscription(creator_id=survivor.id)
+        db.add_all([target_subscription, survivor_subscription])
+        await db.flush()
+        db.add_all([
+            SubscriptionSource(
+                subscription_id=target_subscription.id,
+                source="pixiv",
+                source_creator_id="legacy-100",
+                source_url="https://www.pixiv.net/users/legacy-100",
+            ),
+            SubscriptionSource(
+                subscription_id=survivor_subscription.id,
+                source="pixiv",
+                source_creator_id=None,
+                source_url="https://www.pixiv.net/users/unresolved",
+            ),
+        ])
+        work = Work(title="protected-by-legacy-repository")
+        db.add(work)
+        await db.flush()
+        db.add(WorkSource(
+            work_id=work.id,
+            source="pixiv",
+            source_work_id="legacy-work-1",
+            source_creator_id="legacy-100",
+        ))
+        await db.flush()
+
+        scope = await HierarchicalDeletionService(db).scope("creator", [target.id])
+
+        assert scope.affected_work_ids == {work.id}
+        assert scope.exclusive_work_ids == set()
+        assert scope.shared_work_ids == {work.id}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_paused_download_blocks_repository_deletion_with_structured_conflict():
     from app.models import Creator, DownloadJob, Subscription, SubscriptionSource
     from app.services.hierarchical_deletion import HierarchicalDeletionService
@@ -455,6 +514,16 @@ def test_deletion_preview_reports_stable_active_task_count():
     assert scope.preview_payload(is_admin=True)["active_task_count"] == 2
 
 
+def test_batch_deletion_request_keeps_delete_files_optional_in_openapi():
+    from app.schemas.deletion import BatchDeletionRequest
+
+    schema = BatchDeletionRequest.model_json_schema()
+
+    assert schema["required"] == ["ids"]
+    assert "default" not in schema["properties"]["delete_files"]
+    assert BatchDeletionRequest(ids=[uuid4()]).delete_files is False
+
+
 @pytest.mark.asyncio
 async def test_hierarchy_purge_uses_whole_union_for_cross_batch_asset_ownership(monkeypatch):
     from app.services import hierarchical_deletion
@@ -465,7 +534,7 @@ async def test_hierarchy_purge_uses_whole_union_for_cross_batch_asset_ownership(
 
     repository_id = uuid4()
     work_ids = {uuid4() for _ in range(26)}
-    purge_calls = []
+    calls = []
 
     class FakeResult:
         def all(self):
@@ -481,11 +550,18 @@ async def test_hierarchy_purge_uses_whole_union_for_cross_batch_asset_ownership(
         def __init__(self, _db):
             pass
 
-        async def trash_works(self, _work_ids, **_kwargs):
+        async def trash_works(self, work_ids, **_kwargs):
+            calls.append(("trash", set(work_ids), None))
             return None
 
         async def purge(self, purge_ids, **kwargs):
-            purge_calls.append((set(purge_ids), set(kwargs["asset_scope_work_ids"])))
+            calls.append(
+                (
+                    "purge",
+                    set(purge_ids),
+                    set(kwargs["asset_scope_work_ids"]),
+                )
+            )
             return None
 
     class FakeDeletionService(HierarchicalDeletionService):
@@ -519,8 +595,9 @@ async def test_hierarchy_purge_uses_whole_union_for_cross_batch_asset_ownership(
         delete_files=True,
     )
 
-    assert [len(call[0]) for call in purge_calls] == [25, 1]
-    assert all(call[1] == work_ids for call in purge_calls)
+    assert [call[0] for call in calls] == ["trash", "trash", "purge", "purge"]
+    assert [len(call[1]) for call in calls] == [25, 1, 25, 1]
+    assert all(call[2] == work_ids for call in calls[2:])
 
 
 @pytest.mark.asyncio

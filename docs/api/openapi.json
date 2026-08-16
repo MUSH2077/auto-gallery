@@ -764,7 +764,6 @@
       "BatchDeletionRequest": {
         "properties": {
           "delete_files": {
-            "default": false,
             "title": "Delete Files",
             "type": "boolean"
           },

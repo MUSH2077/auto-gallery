@@ -34,4 +34,6 @@ class DeletionResultResponse(BaseModel):
 
 class BatchDeletionRequest(BaseModel):
     ids: list[UUID] = Field(min_length=1, max_length=100)
-    delete_files: bool = False
+    # Preserve the server default without making this optional request field
+    # look required to OpenAPI clients.
+    delete_files: bool = Field(default_factory=bool)

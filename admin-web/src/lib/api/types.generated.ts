@@ -4143,11 +4143,8 @@ export interface components {
         };
         /** BatchDeletionRequest */
         BatchDeletionRequest: {
-            /**
-             * Delete Files
-             * @default false
-             */
-            delete_files: boolean;
+            /** Delete Files */
+            delete_files?: boolean;
             /** Ids */
             ids: string[];
         };

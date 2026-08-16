@@ -31,7 +31,7 @@ from app.services.repository_identity import resolve_repository_source_creator_i
 from app.services.sync_outcome import download_job_outcome
 
 router = APIRouter(dependencies=[RequirePermission("library")])
-mutation_router = APIRouter(dependencies=[RequirePermission("subscriptions")])
+mutation_router = APIRouter()
 
 RUNNING_STATUSES = {"enqueued", "downloading", "downloaded", "importing"}
 

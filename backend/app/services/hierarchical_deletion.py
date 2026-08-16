@@ -224,17 +224,42 @@ class HierarchicalDeletionService:
             return
 
         surviving_claims: set[tuple[str, str]] = set()
-        surviving_repo_filters = [SubscriptionSource.source_creator_id.is_not(None)]
+        surviving_repo_filters = []
         if scope.repository_ids:
             surviving_repo_filters.append(~SubscriptionSource.id.in_(scope.repository_ids))
         repo_claims = (await self.db.execute(
-            select(SubscriptionSource.source, SubscriptionSource.source_creator_id).where(
-                *surviving_repo_filters
-            )
+            select(SubscriptionSource, Subscription.creator_id)
+            .join(Subscription, Subscription.id == SubscriptionSource.subscription_id)
+            .where(*surviving_repo_filters)
         )).all()
+        ambiguous_surviving_sources: set[str] = set()
+        for repository, creator_id in repo_claims:
+            if repository.source_creator_id:
+                surviving_claims.add(
+                    _identity(repository.source, repository.source_creator_id)
+                )
+                continue
+            resolved_ids = await resolve_repository_source_creator_ids(
+                self.db,
+                repository,
+                creator_id,
+            )
+            if resolved_ids:
+                surviving_claims.update(
+                    _identity(repository.source, source_creator_id)
+                    for source_creator_id in resolved_ids
+                )
+            else:
+                # Legacy repositories may predate paired identities.  When
+                # one cannot be resolved, preserve affected works from that
+                # source rather than risk purging content it still claims.
+                ambiguous_surviving_sources.add(
+                    _identity(repository.source, "")[0]
+                )
         surviving_claims.update(
-            _identity(row.source, row.source_creator_id) for row in repo_claims
-            if row.source_creator_id
+            identity
+            for identity in scope.identities
+            if identity[0] in ambiguous_surviving_sources
         )
         creator_claim_filters = [SourceCreator.creator_id.is_not(None)]
         if scope.entity_type == "creator" and scope.creator_ids:
@@ -466,7 +491,13 @@ class HierarchicalDeletionService:
         batches = list(self._chunks(scope.exclusive_work_ids))
         total = len(scope.exclusive_work_ids)
         processed = 0
+        progress_total = total * (2 if delete_files else 1)
         curation = CurationService(self.db)
+
+        # First commit the visibility transition for every exclusive work.
+        # Only then may a purge batch remove files while treating the whole
+        # deletion scope as owned; this prevents visible works in later
+        # batches from temporarily pointing at already-removed assets.
         for chunk in batches:
             state_rows = (await self.db.execute(
                 select(WorkCurationState.work_id, WorkCurationState.visibility).where(
@@ -485,7 +516,18 @@ class HierarchicalDeletionService:
                     message=f"Trash works before deleting {scope.entity_type}",
                     trigger="hierarchy_delete_trash",
                 )
-            if delete_files:
+            processed += len(chunk)
+            if progress:
+                await progress(processed, progress_total, "Trashing exclusive works")
+
+        if delete_files:
+            for chunk in batches:
+                state_rows = (await self.db.execute(
+                    select(WorkCurationState.work_id, WorkCurationState.visibility).where(
+                        WorkCurationState.work_id.in_(chunk)
+                    )
+                )).all()
+                states = {row.work_id: row.visibility for row in state_rows}
                 purge_ids = [
                     work_id for work_id in chunk
                     if states.get(work_id, "visible") != "purged"
@@ -497,9 +539,13 @@ class HierarchicalDeletionService:
                         strict_file_cleanup=True,
                         asset_scope_work_ids=list(scope.exclusive_work_ids),
                     )
-            processed += len(chunk)
-            if progress:
-                await progress(processed, total, "Deleting exclusive works")
+                processed += len(chunk)
+                if progress:
+                    await progress(
+                        processed,
+                        progress_total,
+                        "Deleting exclusive files",
+                    )
 
         await self._delete_domain_rows(scope)
         return {
