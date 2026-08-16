@@ -13,6 +13,7 @@ from app.auth import (
     decode_access_token_payload,
     ensure_admin_user,
     get_admin_key,
+    hash_password,
     verify_password,
 )
 from app.config import settings
@@ -31,6 +32,16 @@ def test_decode_access_token_still_returns_username() -> None:
     token = create_access_token("alice", must_change_password=False)
 
     assert decode_access_token(token) == "alice"
+
+
+def test_hash_password_enforces_bcrypt_utf8_byte_limit() -> None:
+    assert verify_password("a" * 72, hash_password("a" * 72))
+
+    with pytest.raises(ValueError, match="at most 72 bytes"):
+        hash_password("a" * 73)
+
+    with pytest.raises(ValueError, match="at most 72 bytes"):
+        hash_password("界" * 25)
 
 
 def _make_request(path: str) -> Request:

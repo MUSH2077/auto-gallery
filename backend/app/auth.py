@@ -11,12 +11,18 @@ from app.config import settings
 
 # ── Password hashing ──────────────────────────────────────────────────────────
 ALGORITHM = "HS256"
+BCRYPT_MAX_PASSWORD_BYTES = 72
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def hash_password(password: str) -> str:
-    return _bcrypt.hashpw(password.encode("utf-8"), _bcrypt.gensalt()).decode("utf-8")
+    encoded = password.encode("utf-8")
+    if len(encoded) > BCRYPT_MAX_PASSWORD_BYTES:
+        raise ValueError(
+            f"password must be at most {BCRYPT_MAX_PASSWORD_BYTES} bytes when UTF-8 encoded"
+        )
+    return _bcrypt.hashpw(encoded, _bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
