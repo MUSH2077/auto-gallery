@@ -1,6 +1,6 @@
 "use client";
 
-import { Github } from "lucide-react";
+import { Code2 } from "lucide-react";
 
 import { useT } from "@/lib/i18n";
 
@@ -30,7 +30,7 @@ export default function SourceCodeLink({
         compact ? "justify-center px-0" : "gap-2 px-3 text-xs font-medium"
       } ${className}`}
     >
-      <Github className="h-[18px] w-[18px] shrink-0" strokeWidth={1.8} aria-hidden />
+      <Code2 className="h-[18px] w-[18px] shrink-0" strokeWidth={1.8} aria-hidden />
       {compact ? <span className="sr-only">{label}</span> : <span>{label}</span>}
     </a>
   );
