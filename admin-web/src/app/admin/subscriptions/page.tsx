@@ -6,9 +6,10 @@ import { useStaggeredEntrance } from "@/lib/motion";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, type SearchQualifierToken, type SubscriptionSearchHit, type SubscriptionSummary } from "@/lib/api";
-import { PageHeader, PageSection, EmptyState, ErrorState, ConfirmDialog, Modal, StatusBadge, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityList, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer } from "@/components";
+import { PageHeader, PageSection, EmptyState, ErrorState, HierarchyDeletionDialog, Modal, StatusBadge, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityList, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useI18nFormat } from "@/lib/i18n-format";
+import { usePermissions } from "@/lib/usePermissions";
 import DomainDangerZone from "@/components/DomainDangerZone";
 
 type FilterMode = "all" | "active" | "inactive" | "sync_on" | "sync_off" | "never_synced";
@@ -76,6 +77,7 @@ function SubscriptionsContent() {
   const toast = useToast();
   const qc = useQueryClient();
   const notify = useNotifications();
+  const { isAdmin } = usePermissions();
   const sp = useSearchParams();
   const pathname = usePathname();
 
@@ -85,6 +87,7 @@ function SubscriptionsContent() {
   const limit = 25;
   const [showCreate, setShowCreate] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleteFiles, setDeleteFiles] = useState(false);
   const [syncingSubId, setSyncingSubId] = useState<string | null>(null);
 
   // Local input for search field — debounced 300ms before writing to URL
@@ -179,13 +182,36 @@ function SubscriptionsContent() {
     onSuccess: () => { setShowCreate(false); refreshSubscriptionViews(); },
   });
 
-  const del = useMutation({
-    mutationFn: (id: string) => api.deleteSubscription(id),
-    onSuccess: () => { setDeleteId(null); refreshSubscriptionViews(); },
-  });
-
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmBatchDel, setConfirmBatchDel] = useState(false);
+  const deletionPreview = useQuery({
+    queryKey: ["deletion-preview", "subscription", deleteId],
+    queryFn: () => api.getSubscriptionDeletionPreview(deleteId as string),
+    enabled: !!deleteId,
+  });
+  const batchDeletionPreview = useQuery({
+    queryKey: ["deletion-preview", "subscription", "batch", ...[...selected].sort()],
+    queryFn: () => api.previewBatchDeleteSubscriptions([...selected]),
+    enabled: confirmBatchDel && selected.size > 0,
+  });
+
+  const del = useMutation({
+    mutationFn: (id: string) => api.deleteSubscription(id, deleteFiles),
+    onSuccess: (result) => {
+      if (result.task_id) {
+        notify.startOperationJob(result.task_id, "hierarchy-delete", t("deletion.permanent_title"), {
+          entity: "hierarchy-delete", entity_type: "subscription", entity_ids: result.entity_ids,
+        });
+        toast.success({ message: t("deletion.queued") });
+      } else {
+        toast.success({ message: t("deletion.soft_deleted") });
+      }
+      setDeleteId(null);
+      setDeleteFiles(false);
+      refreshSubscriptionViews();
+    },
+    onError: (error: Error) => toast.error({ message: error.message }),
+  });
 
   const syncNow = useMutation({
     mutationFn: (id: string) => api.syncNowSubscription(id),
@@ -214,8 +240,31 @@ function SubscriptionsContent() {
   });
 
   const batchDel = useMutation({
-    mutationFn: (ids: string[]) => api.batchDeleteSubscriptions(ids),
-    onSuccess: () => { setSelected(new Set()); setConfirmBatchDel(false); refreshSubscriptionViews(); },
+    mutationFn: (ids: string[]) => api.batchDeleteSubscriptions(ids, deleteFiles),
+    onSuccess: (result) => {
+      if (result.task_id) {
+        notify.startOperationJob(result.task_id, "hierarchy-delete", t("deletion.permanent_title"), {
+          entity: "hierarchy-delete", entity_type: "subscription", entity_ids: result.entity_ids,
+        });
+        toast.success({ message: t("deletion.queued") });
+      } else {
+        toast.success({ message: t("deletion.soft_deleted") });
+      }
+      setSelected(new Set());
+      setConfirmBatchDel(false);
+      setDeleteFiles(false);
+      refreshSubscriptionViews();
+    },
+    onError: (error: Error) => toast.error({ message: error.message }),
+  });
+
+  const restoreSubscription = useMutation({
+    mutationFn: (id: string) => api.updateSubscription(id, { is_active: true }),
+    onSuccess: () => {
+      refreshSubscriptionViews();
+      toast.success({ message: t("notification.updated") });
+    },
+    onError: (error: Error) => toast.error({ message: error.message }),
   });
 
   const batchSync = useMutation({
@@ -298,7 +347,7 @@ function SubscriptionsContent() {
       <PageSection>
       <SelectionBar
         count={selected.size}
-        label={t("subscriptions.delete_selected").replace("{count}", String(selected.size))}
+        label={(isAdmin ? t("subscriptions.delete_selected") : t("deletion.disable_selected")).replace("{count}", String(selected.size))}
         clearLabel={t("common.clear")}
         onClear={() => setSelected(new Set())}
       >
@@ -306,8 +355,8 @@ function SubscriptionsContent() {
           className="btn-primary text-xs disabled:opacity-50">{t("subscriptions.enable_sync")}</button>
         <button onClick={() => batchSync.mutate({ ids: [...selected], enable: false })} disabled={batchSync.isPending}
           className="btn-ghost text-xs disabled:opacity-50">{t("subscriptions.disable_sync")}</button>
-        <button onClick={() => setConfirmBatchDel(true)} className="btn-danger text-xs">
-          {t("subscriptions.delete_selected").replace("{count}", String(selected.size))}
+        <button onClick={() => { setDeleteFiles(false); setConfirmBatchDel(true); }} className="btn-danger text-xs">
+          {(isAdmin ? t("subscriptions.delete_selected") : t("deletion.disable_selected")).replace("{count}", String(selected.size))}
         </button>
       </SelectionBar>
 
@@ -409,7 +458,7 @@ function SubscriptionsContent() {
                   <button
                     type="button"
                     onClick={() => syncNow.mutate(s.id)}
-                    disabled={syncNow.isPending}
+                    disabled={syncNow.isPending || !s.is_active}
                     className="btn-primary text-xs"
                   >
                     {syncingSubId === s.id ? t("subscriptions.syncing") : t("subscriptions.sync_all")}
@@ -417,7 +466,22 @@ function SubscriptionsContent() {
                   <RowActionMenu
                     label={t("common.more_actions")}
                     items={[
-                      { label: t("subscriptions.del"), tone: "danger", onSelect: () => setDeleteId(s.id) },
+                      {
+                        label: !isAdmin && !s.is_active
+                          ? t("creator_detail.restore")
+                          : isAdmin
+                            ? t("deletion.permanent_title")
+                            : t("deletion.soft_title"),
+                        tone: isAdmin || s.is_active ? "danger" : undefined,
+                        onSelect: () => {
+                          if (!isAdmin && !s.is_active) {
+                            restoreSubscription.mutate(s.id);
+                            return;
+                          }
+                          setDeleteFiles(false);
+                          setDeleteId(s.id);
+                        },
+                      },
                     ]}
                   />
                 </div>
@@ -440,8 +504,36 @@ function SubscriptionsContent() {
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title={t("subscriptions.new_sub_title")}>
         <CreateForm isPending={create.isPending} error={create.error} onSubmit={(data) => create.mutate(data)} onClose={() => setShowCreate(false)} />
       </Modal>
-      {deleteId && <ConfirmDialog open title={t("subscriptions.delete_title")} message={t("subscriptions.delete_msg")} onConfirm={() => del.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={del.isPending} error={(del.error as Error)?.message} />}
-      {confirmBatchDel && <ConfirmDialog open title={t("subscriptions.batch_delete_title")} message={t("subscriptions.batch_delete_msg").replace("{count}", String(selected.size))} onConfirm={() => batchDel.mutate([...selected])} onCancel={() => setConfirmBatchDel(false)} isPending={batchDel.isPending} error={(batchDel.error as Error)?.message} />}
+      {deleteId && (
+        <HierarchyDeletionDialog
+          open
+          title={isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
+          confirmationPhrase={subscriptionItems.find((subscription) => subscription.id === deleteId)?.name || deleteId}
+          preview={deletionPreview.data}
+          previewLoading={deletionPreview.isLoading}
+          deleteFiles={deleteFiles}
+          onDeleteFilesChange={setDeleteFiles}
+          onConfirm={() => del.mutate(deleteId)}
+          onCancel={() => { setDeleteId(null); setDeleteFiles(false); }}
+          isPending={del.isPending}
+          error={(del.error as Error)?.message || (deletionPreview.error as Error)?.message}
+        />
+      )}
+      {confirmBatchDel && (
+        <HierarchyDeletionDialog
+          open
+          title={isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
+          confirmationPhrase={String(selected.size)}
+          preview={batchDeletionPreview.data}
+          previewLoading={batchDeletionPreview.isLoading}
+          deleteFiles={deleteFiles}
+          onDeleteFilesChange={setDeleteFiles}
+          onConfirm={() => batchDel.mutate([...selected])}
+          onCancel={() => { setConfirmBatchDel(false); setDeleteFiles(false); }}
+          isPending={batchDel.isPending}
+          error={(batchDel.error as Error)?.message || (batchDeletionPreview.error as Error)?.message}
+        />
+      )}
       <DomainDangerZone
         entity="subscriptions"
         title={t("datamgmt.danger_clear_subs")}

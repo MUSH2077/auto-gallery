@@ -926,7 +926,15 @@ class CurationService:
         await self.db.flush()
         return commit, visibilities
 
-    async def curate_creator(self, creator_id: UUID, *, action: str, reason: str | None = None, message: str | None = None) -> CurationCommit:
+    async def curate_creator(
+        self,
+        creator_id: UUID,
+        *,
+        action: str,
+        reason: str | None = None,
+        message: str | None = None,
+        work_ids: list[UUID] | None = None,
+    ) -> CurationCommit:
         creator = await self.db.get(Creator, creator_id)
         if not creator:
             raise HTTPException(status_code=404, detail="Creator not found")
@@ -941,11 +949,13 @@ class CurationService:
         )
         before = self._creator_snapshot(creator, state)
         if action == "archive":
+            creator.is_active = False
             state.visibility = ARCHIVED
             state.archived_at = _now()
             state.archived_by_commit_id = commit.id
             state.reason = reason
         else:
+            creator.is_active = True
             state.visibility = VISIBLE
             state.restored_by_commit_id = commit.id
             state.reason = reason
@@ -967,7 +977,12 @@ class CurationService:
         await self.db.commit()
         await self.db.refresh(commit)
         if action == "archive":
-            async for works in self._work_batches_for_creator(creator_id):
+            batches = (
+                self._work_batches_for_creator(creator_id)
+                if work_ids is None
+                else self._work_batches_for_ids(work_ids)
+            )
+            async for works in batches:
                 work_commit = await self._create_commit(
                     message=(
                         f"Archive works for creator "
@@ -1052,6 +1067,27 @@ class CurationService:
                 return
             yield works
             last_id = works[-1].id
+
+    async def _work_batches_for_ids(self, work_ids: list[UUID]):
+        """Yield caller-scoped visible works in bounded, stable batches."""
+
+        ordered_ids = sorted(set(work_ids), key=str)
+        for index in range(0, len(ordered_ids), self.COMMIT_WORK_LIMIT):
+            chunk = ordered_ids[index:index + self.COMMIT_WORK_LIMIT]
+            works = list((await self.db.execute(
+                select(Work)
+                .outerjoin(WorkCurationState, WorkCurationState.work_id == Work.id)
+                .where(
+                    Work.id.in_(chunk),
+                    or_(
+                        WorkCurationState.id.is_(None),
+                        WorkCurationState.visibility == VISIBLE,
+                    ),
+                )
+                .order_by(Work.id)
+            )).scalars().all())
+            if works:
+                yield works
 
     async def backfill_status(self) -> dict:
         # count_only: we only need the number of groups here, not their works.
@@ -1466,7 +1502,14 @@ class CurationService:
             "assets": [{"id": str(a.id), "file_name": a.file_name, "file_size": a.file_size or 0} for a in assets],
         }
 
-    async def purge(self, work_ids: list[UUID] | None = None, *, message: str | None = None) -> CurationCommit:
+    async def purge(
+        self,
+        work_ids: list[UUID] | None = None,
+        *,
+        message: str | None = None,
+        strict_file_cleanup: bool = False,
+        asset_scope_work_ids: list[UUID] | None = None,
+    ) -> CurationCommit:
         if not work_ids:
             raise HTTPException(
                 status_code=400,
@@ -1480,7 +1523,10 @@ class CurationService:
         works = await self._purge_candidate_works(work_ids)
         if not works:
             raise HTTPException(status_code=400, detail="No trashed works are eligible for purge")
-        assets = await self._purge_candidate_assets([w.id for w in works])
+        assets = await self._purge_candidate_assets(
+            [w.id for w in works],
+            ownership_work_ids=asset_scope_work_ids,
+        )
         commit = await self._create_commit(
             message=message or f"Purge {len(works)} trashed work{'s' if len(works) != 1 else ''}",
             trigger="work_purge",
@@ -1504,7 +1550,11 @@ class CurationService:
         for asset in assets:
             before = {"id": str(asset.id), "file_name": asset.file_name, "storage_state": "available"}
             storage_state = await self._ensure_asset_state(asset.id)
-            reclaimed, missing = await self._delete_asset_files(asset, storage_state)
+            reclaimed, missing = await self._delete_asset_files(
+                asset,
+                storage_state,
+                strict=strict_file_cleanup,
+            )
             bytes_reclaimed += reclaimed
             storage_state.storage_state = PURGED
             storage_state.purged_at = _now()
@@ -1546,28 +1596,60 @@ class CurationService:
         rows = await self.db.execute(stmt.order_by(Work.updated_at.desc()))
         return list(rows.scalars().all())
 
-    async def _purge_candidate_assets(self, work_ids: list[UUID]) -> list[Asset]:
+    async def _purge_candidate_assets(
+        self,
+        work_ids: list[UUID],
+        *,
+        ownership_work_ids: list[UUID] | None = None,
+    ) -> list[Asset]:
         if not work_ids:
             return []
-        rows = await self.db.execute(
-            select(Asset)
-            .join(AssetSource, AssetSource.asset_id == Asset.id)
+        ownership_ids = set(ownership_work_ids or work_ids)
+        candidate_ids = set((await self.db.execute(
+            select(AssetSource.asset_id)
             .join(WorkSource, WorkSource.id == AssetSource.work_source_id)
             .where(WorkSource.work_id.in_(work_ids))
             .distinct()
-        )
-        candidates = list(rows.scalars().all())
+        )).scalars().all())
+        candidate_ids.update((await self.db.execute(
+            select(Work.thumbnail_asset_id).where(
+                Work.id.in_(work_ids),
+                Work.thumbnail_asset_id.is_not(None),
+            )
+        )).scalars().all())
+        if not candidate_ids:
+            return []
+        purged_asset_ids = set((await self.db.execute(
+            select(AssetStorageState.asset_id).where(
+                AssetStorageState.asset_id.in_(candidate_ids),
+                AssetStorageState.storage_state == PURGED,
+            )
+        )).scalars().all())
+        candidate_ids.difference_update(purged_asset_ids)
+        if not candidate_ids:
+            return []
+        candidates = list((await self.db.execute(
+            select(Asset).where(Asset.id.in_(candidate_ids))
+        )).scalars().all())
         eligible: list[Asset] = []
         for asset in candidates:
-            visible_refs = await self.db.execute(
+            outside_refs = await self.db.execute(
                 select(func.count(WorkSource.work_id))
                 .select_from(AssetSource)
                 .join(WorkSource, WorkSource.id == AssetSource.work_source_id)
-                .outerjoin(WorkCurationState, WorkCurationState.work_id == WorkSource.work_id)
                 .where(AssetSource.asset_id == asset.id)
-                .where((WorkCurationState.visibility.is_(None)) | (WorkCurationState.visibility == VISIBLE))
+                .where(~WorkSource.work_id.in_(ownership_ids))
             )
-            if (visible_refs.scalar() or 0) == 0:
+            outside_thumbnail_refs = await self.db.execute(
+                select(func.count(Work.id)).where(
+                    Work.thumbnail_asset_id == asset.id,
+                    ~Work.id.in_(ownership_ids),
+                )
+            )
+            if (
+                (outside_refs.scalar() or 0) == 0
+                and (outside_thumbnail_refs.scalar() or 0) == 0
+            ):
                 representative_group_id = (
                     await self.db.execute(
                         select(VisualAssetGroup.id).where(
@@ -1576,7 +1658,7 @@ class CurationService:
                     )
                 ).scalar_one_or_none()
                 if representative_group_id:
-                    group_visible_refs = (
+                    group_outside_refs = (
                         await self.db.execute(
                             select(func.count(func.distinct(WorkSource.work_id)))
                             .select_from(VisualAssetMember)
@@ -1589,20 +1671,14 @@ class CurationService:
                                 WorkSource,
                                 WorkSource.id == AssetSource.work_source_id,
                             )
-                            .outerjoin(
-                                WorkCurationState,
-                                WorkCurationState.work_id
-                                == WorkSource.work_id,
-                            )
                             .where(
                                 VisualAssetMember.group_id
                                 == representative_group_id,
-                                (WorkCurationState.visibility.is_(None))
-                                | (WorkCurationState.visibility == VISIBLE),
+                                ~WorkSource.work_id.in_(ownership_ids),
                             )
                         )
                     ).scalar_one()
-                    if group_visible_refs:
+                    if group_outside_refs:
                         continue
                 eligible.append(asset)
         return eligible
@@ -1682,6 +1758,8 @@ class CurationService:
         self,
         asset: Asset,
         storage_state: AssetStorageState | None = None,
+        *,
+        strict: bool = False,
     ) -> tuple[int, list[str]]:
         reclaimed = 0
         missing: list[str] = []
@@ -1691,6 +1769,10 @@ class CurationService:
             if not path:
                 if relative:
                     missing.append(relative)
+                    if strict:
+                        raise RuntimeError(
+                            f"Refusing to delete asset path outside managed storage: {relative}"
+                        )
                 continue
             if not path.exists():
                 missing.append(relative or str(path))
@@ -1703,8 +1785,12 @@ class CurationService:
                 if stat.st_nlink <= 1:
                     reclaimed += stat.st_size
                 path.unlink()
-            except OSError:
+            except OSError as exc:
                 missing.append(relative or str(path))
+                if strict:
+                    raise RuntimeError(
+                        f"Unable to delete managed asset file: {relative or path}"
+                    ) from exc
         return reclaimed, missing
 
     async def revert_commit(self, commit_id: UUID) -> dict:
@@ -1808,6 +1894,7 @@ class CurationService:
                 return "skipped"
             state = await self._ensure_creator_state(creator.id)
             current = self._creator_snapshot(creator, state)
+            creator.is_active = True
             state.visibility = VISIBLE
             state.restored_by_commit_id = revert_commit.id
             state.reason = "reverted"

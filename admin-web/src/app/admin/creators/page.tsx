@@ -3,7 +3,7 @@ import { useState, useMemo, useEffect, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, type SearchQualifierToken } from "@/lib/api";
 import { useStaggeredEntrance } from "@/lib/motion";
-import { PageHeader, PageSection, EmptyState, ErrorState, ConfirmDialog, Modal, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityList, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer } from "@/components";
+import { PageHeader, PageSection, EmptyState, ErrorState, HierarchyDeletionDialog, Modal, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityList, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useT } from "@/lib/i18n";
@@ -85,7 +85,7 @@ function CreatorsContent() {
   const notify = useNotifications();
   const sp = useSearchParams();
   const pathname = usePathname();
-  const { has } = usePermissions();
+  const { isAdmin, has } = usePermissions();
   const canCurate = has("curation");
 
   // Filter state derived from URL
@@ -96,6 +96,7 @@ function CreatorsContent() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmBatchDel, setConfirmBatchDel] = useState(false);
+  const [deleteFiles, setDeleteFiles] = useState(false);
   const limit = 25;
 
   // Local input for search field — debounced 300ms before writing to URL
@@ -162,6 +163,16 @@ function CreatorsContent() {
               : "all";
   const creatorItems = creators.data?.items || [];
   const creatorEntrance = useStaggeredEntrance(creatorItems.map((creator) => creator.id));
+  const deletionPreview = useQuery({
+    queryKey: ["deletion-preview", "creator", deleteId],
+    queryFn: () => api.getCreatorDeletionPreview(deleteId as string),
+    enabled: !!deleteId,
+  });
+  const batchDeletionPreview = useQuery({
+    queryKey: ["deletion-preview", "creator", "batch", ...[...selected].sort()],
+    queryFn: () => api.previewBatchDeleteCreators([...selected]),
+    enabled: confirmBatchDel && selected.size > 0,
+  });
 
   useEffect(() => {
     if (notify.operationJob?.kind !== "danbooru-import-all" || notify.operationJob.status !== "completed") return;
@@ -185,13 +196,49 @@ function CreatorsContent() {
   });
 
   const del = useMutation({
-    mutationFn: (id: string) => api.deleteCreator(id),
-    onSuccess: () => { setDeleteId(null); refreshCreatorViews(); toast.success({ message: t("notification.deleted") }); },
+    mutationFn: (id: string) => api.deleteCreator(id, deleteFiles),
+    onSuccess: (result) => {
+      if (result.task_id) {
+        notify.startOperationJob(result.task_id, "hierarchy-delete", t("deletion.permanent_title"), {
+          entity: "hierarchy-delete", entity_type: "creator", entity_ids: result.entity_ids,
+        });
+        toast.success({ message: t("deletion.queued") });
+      } else {
+        toast.success({ message: t("deletion.soft_deleted") });
+      }
+      setDeleteId(null);
+      setDeleteFiles(false);
+      refreshCreatorViews();
+    },
+    onError: (error: Error) => toast.error({ message: error.message }),
   });
 
   const batchDel = useMutation({
-    mutationFn: (ids: string[]) => api.batchDeleteCreators(ids),
-    onSuccess: () => { setSelected(new Set()); setConfirmBatchDel(false); refreshCreatorViews(); toast.success({ message: t("notification.deleted") }); },
+    mutationFn: (ids: string[]) => api.batchDeleteCreators(ids, deleteFiles),
+    onSuccess: (result) => {
+      if (result.task_id) {
+        notify.startOperationJob(result.task_id, "hierarchy-delete", t("deletion.permanent_title"), {
+          entity: "hierarchy-delete", entity_type: "creator", entity_ids: result.entity_ids,
+        });
+        toast.success({ message: t("deletion.queued") });
+      } else {
+        toast.success({ message: t("deletion.soft_deleted") });
+      }
+      setSelected(new Set());
+      setConfirmBatchDel(false);
+      setDeleteFiles(false);
+      refreshCreatorViews();
+    },
+    onError: (error: Error) => toast.error({ message: error.message }),
+  });
+
+  const restoreCreator = useMutation({
+    mutationFn: (id: string) => api.curateCreator(id, "restore"),
+    onSuccess: () => {
+      refreshCreatorViews();
+      toast.success({ message: t("notification.updated") });
+    },
+    onError: (error: Error) => toast.error({ message: error.message }),
   });
 
   useEffect(() => {
@@ -279,12 +326,12 @@ function CreatorsContent() {
       {canCurate && (
         <SelectionBar
           count={selected.size}
-          label={t("creators.delete_selected").replace("{count}", String(selected.size))}
+          label={(isAdmin ? t("creators.delete_selected") : t("deletion.archive_selected")).replace("{count}", String(selected.size))}
           clearLabel={t("common.clear")}
           onClear={() => setSelected(new Set())}
         >
-          <button onClick={() => setConfirmBatchDel(true)} className="btn-danger text-xs">
-            {t("creators.delete_selected").replace("{count}", String(selected.size))}
+          <button onClick={() => { setDeleteFiles(false); setConfirmBatchDel(true); }} className="btn-danger text-xs">
+            {(isAdmin ? t("creators.delete_selected") : t("deletion.archive_selected")).replace("{count}", String(selected.size))}
           </button>
         </SelectionBar>
       )}
@@ -366,9 +413,20 @@ function CreatorsContent() {
                     label={t("common.more_actions")}
                     items={[
                       {
-                        label: t("creators.del"),
-                        tone: "danger",
-                        onSelect: () => setDeleteId(c.id),
+                        label: !isAdmin && !c.is_active
+                          ? t("creator_detail.restore")
+                          : isAdmin
+                            ? t("deletion.permanent_title")
+                            : t("creator_detail.archive"),
+                        tone: isAdmin || c.is_active ? "danger" : undefined,
+                        onSelect: () => {
+                          if (!isAdmin && !c.is_active) {
+                            restoreCreator.mutate(c.id);
+                            return;
+                          }
+                          setDeleteFiles(false);
+                          setDeleteId(c.id);
+                        },
                       },
                     ]}
                   />
@@ -392,8 +450,36 @@ function CreatorsContent() {
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title={t("creators.new_creator_title")}>
         <CreateForm isPending={create.isPending} error={create.error} onSubmit={(data) => create.mutate(data)} onClose={() => setShowCreate(false)} />
       </Modal>
-      {deleteId && <ConfirmDialog open title={t("creators.delete_title")} message={t("creators.delete_msg")} onConfirm={() => del.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={del.isPending} error={(del.error as Error)?.message} />}
-      {confirmBatchDel && <ConfirmDialog open title={t("creators.batch_delete_title")} message={t("creators.batch_delete_msg").replace("{count}", String(selected.size))} onConfirm={() => batchDel.mutate([...selected])} onCancel={() => setConfirmBatchDel(false)} isPending={batchDel.isPending} error={(batchDel.error as Error)?.message} />}
+      {deleteId && (
+        <HierarchyDeletionDialog
+          open
+          title={isAdmin ? t("deletion.permanent_title") : t("creator_detail.archive")}
+          confirmationPhrase={creatorItems.find((creator) => creator.id === deleteId)?.display_name || creatorItems.find((creator) => creator.id === deleteId)?.name || deleteId}
+          preview={deletionPreview.data}
+          previewLoading={deletionPreview.isLoading}
+          deleteFiles={deleteFiles}
+          onDeleteFilesChange={setDeleteFiles}
+          onConfirm={() => del.mutate(deleteId)}
+          onCancel={() => { setDeleteId(null); setDeleteFiles(false); }}
+          isPending={del.isPending}
+          error={(del.error as Error)?.message || (deletionPreview.error as Error)?.message}
+        />
+      )}
+      {confirmBatchDel && (
+        <HierarchyDeletionDialog
+          open
+          title={isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
+          confirmationPhrase={String(selected.size)}
+          preview={batchDeletionPreview.data}
+          previewLoading={batchDeletionPreview.isLoading}
+          deleteFiles={deleteFiles}
+          onDeleteFilesChange={setDeleteFiles}
+          onConfirm={() => batchDel.mutate([...selected])}
+          onCancel={() => { setConfirmBatchDel(false); setDeleteFiles(false); }}
+          isPending={batchDel.isPending}
+          error={(batchDel.error as Error)?.message || (batchDeletionPreview.error as Error)?.message}
+        />
+      )}
       <DomainDangerZone
         entity="creators"
         title={t("datamgmt.danger_clear_creators")}

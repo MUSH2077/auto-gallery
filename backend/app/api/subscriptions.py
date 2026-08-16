@@ -1,7 +1,7 @@
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from app.auth import RequirePermission
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +16,11 @@ from app.schemas.subscription import (
     SubscriptionUpdate,
 )
 from app.schemas.subscription_source import SubscriptionSourceCreate, SubscriptionSourceRead, SubscriptionSourceUpdate
+from app.schemas.deletion import (
+    BatchDeletionRequest,
+    DeletionPreviewResponse,
+    DeletionResultResponse,
+)
 from app.services.subscription import SubscriptionService, SubscriptionValidationError
 from app.services.search import SearchBackendUnavailable, SearchService
 from app.services.search_language import SearchQueryError
@@ -65,27 +70,48 @@ async def list_subscriptions(
 
 # ── Batch Operations ──
 
-@router.post("/batch-delete")
-async def batch_delete_subscriptions(data: dict, db: AsyncSession = Depends(get_db)):
-    ids = data.get("ids", [])
-    svc = SubscriptionService(db)
-    results = []
-    for sid in ids:
-        try:
-            subscription_id = UUID(sid)
-        except (TypeError, ValueError):
-            results.append({"id": sid, "status": "error", "error": "invalid_id"})
-            continue
-        try:
-            await svc.delete_subscription(subscription_id)
-            results.append({"id": sid, "status": "deleted"})
-        except ValueError:
-            results.append({"id": sid, "status": "error", "error": "not_found"})
-        except Exception:
-            logger.warning("batch subscription delete failed for %s", sid, exc_info=True)
-            results.append({"id": sid, "status": "error", "error": "internal_error"})
+@router.post("/batch-deletion-preview", response_model=DeletionPreviewResponse)
+async def batch_subscription_deletion_preview(
+    data: BatchDeletionRequest,
+    user=RequirePermission("subscriptions"),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.hierarchical_deletion import HierarchicalDeletionService
+
+    scope = await HierarchicalDeletionService(db).scope("subscription", data.ids)
+    return scope.preview_payload(is_admin=user.is_admin)
+
+
+@router.post(
+    "/batch-delete",
+    response_model=DeletionResultResponse,
+    responses={202: {"model": DeletionResultResponse, "description": "Permanent deletion queued"}},
+)
+async def batch_delete_subscriptions(
+    data: BatchDeletionRequest,
+    response: Response,
+    user=RequirePermission("subscriptions"),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.hierarchical_deletion import (
+        HierarchicalDeletionService,
+        enqueue_permanent_deletion,
+    )
+
+    if data.delete_files and not user.is_admin:
+        raise HTTPException(status_code=403, detail="Administrator access required to delete files")
+    svc = HierarchicalDeletionService(db)
+    scope = await svc.scope("subscription", data.ids)
+    svc.ensure_no_active_jobs(scope)
+    if user.is_admin:
+        response.status_code = 202
+        result = await enqueue_permanent_deletion(
+            "subscription", data.ids, delete_files=data.delete_files
+        )
+    else:
+        result = await svc.soft_delete(scope)
     invalidate_creator_subscription_caches()
-    return {"status": "ok", "results": results}
+    return result
 
 
 @router.post("/batch-toggle-sync")
@@ -172,14 +198,49 @@ async def update_subscription(subscription_id: UUID, data: SubscriptionUpdate, d
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.delete("/{subscription_id}", status_code=204)
-async def delete_subscription(subscription_id: UUID, db: AsyncSession = Depends(get_db)):
-    svc = SubscriptionService(db)
-    try:
-        await svc.delete_subscription(subscription_id)
-        invalidate_creator_subscription_caches()
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+@router.get("/{subscription_id}/deletion-preview", response_model=DeletionPreviewResponse)
+async def subscription_deletion_preview(
+    subscription_id: UUID,
+    user=RequirePermission("subscriptions"),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.hierarchical_deletion import HierarchicalDeletionService
+
+    scope = await HierarchicalDeletionService(db).scope("subscription", [subscription_id])
+    return scope.preview_payload(is_admin=user.is_admin)
+
+
+@router.delete(
+    "/{subscription_id}",
+    response_model=DeletionResultResponse,
+    responses={202: {"model": DeletionResultResponse, "description": "Permanent deletion queued"}},
+)
+async def delete_subscription(
+    subscription_id: UUID,
+    response: Response,
+    delete_files: bool = Query(False),
+    user=RequirePermission("subscriptions"),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.hierarchical_deletion import (
+        HierarchicalDeletionService,
+        enqueue_permanent_deletion,
+    )
+
+    if delete_files and not user.is_admin:
+        raise HTTPException(status_code=403, detail="Administrator access required to delete files")
+    svc = HierarchicalDeletionService(db)
+    scope = await svc.scope("subscription", [subscription_id])
+    svc.ensure_no_active_jobs(scope)
+    if user.is_admin:
+        response.status_code = 202
+        result = await enqueue_permanent_deletion(
+            "subscription", [subscription_id], delete_files=delete_files
+        )
+    else:
+        result = await svc.soft_delete(scope)
+    invalidate_creator_subscription_caches()
+    return result
 
 
 @router.get("/{subscription_id}/sources", response_model=list[SubscriptionSourceRead])
@@ -216,11 +277,37 @@ async def update_subscription_source(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.delete("/{subscription_id}/sources/{ss_id}", status_code=204)
-async def delete_subscription_source(subscription_id: UUID, ss_id: UUID, db: AsyncSession = Depends(get_db)):
-    svc = SubscriptionService(db)
-    try:
-        await svc.delete_source(ss_id)
-        invalidate_creator_subscription_caches(include_works=True)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+@router.delete(
+    "/{subscription_id}/sources/{ss_id}",
+    response_model=DeletionResultResponse,
+    responses={202: {"model": DeletionResultResponse, "description": "Permanent deletion queued"}},
+)
+async def delete_subscription_source(
+    subscription_id: UUID,
+    ss_id: UUID,
+    response: Response,
+    delete_files: bool = Query(False),
+    user=RequirePermission("subscriptions"),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.hierarchical_deletion import (
+        HierarchicalDeletionService,
+        enqueue_permanent_deletion,
+    )
+
+    if delete_files and not user.is_admin:
+        raise HTTPException(status_code=403, detail="Administrator access required to delete files")
+    svc = HierarchicalDeletionService(db)
+    scope = await svc.scope("repository", [ss_id])
+    if subscription_id not in scope.subscription_ids:
+        raise HTTPException(status_code=404, detail="Repository not found in subscription")
+    svc.ensure_no_active_jobs(scope)
+    if user.is_admin:
+        response.status_code = 202
+        result = await enqueue_permanent_deletion(
+            "repository", [ss_id], delete_files=delete_files
+        )
+    else:
+        result = await svc.soft_delete(scope)
+    invalidate_creator_subscription_caches(include_works=True)
+    return result

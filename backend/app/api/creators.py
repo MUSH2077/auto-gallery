@@ -2,7 +2,7 @@ import logging
 from datetime import date, datetime, time, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from app.auth import RequirePermission
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +12,11 @@ from app.schemas.creator import CreatorCreate, CreatorListResponse, CreatorRead,
 from app.schemas.curation import CreatorCurationRequest, CurationCommitRead
 from app.schemas.source_creator import SourceCreatorCreate, SourceCreatorRead
 from app.schemas.creator_link import CreatorLinkCreate, CreatorLinkRead, CreatorLinkUpdate
+from app.schemas.deletion import (
+    BatchDeletionRequest,
+    DeletionPreviewResponse,
+    DeletionResultResponse,
+)
 from app.models.creator import Creator
 from app.services.creator import CreatorService
 from app.services.cache import (
@@ -78,28 +83,49 @@ async def list_creators(
 
 # ── Batch Operations ──
 
-@curation_router.post("/batch-delete")
-async def batch_delete_creators(data: dict, db: AsyncSession = Depends(get_db)):
-    """Delete multiple creators by ID list."""
-    ids = data.get("ids", [])
-    svc = CreatorService(db)
-    results = []
-    for cid in ids:
-        try:
-            creator_id = UUID(cid)
-        except (TypeError, ValueError):
-            results.append({"id": cid, "status": "error", "error": "invalid_id"})
-            continue
-        try:
-            await svc.delete_creator(creator_id)
-            results.append({"id": cid, "status": "deleted"})
-        except ValueError:
-            results.append({"id": cid, "status": "error", "error": "not_found"})
-        except Exception:
-            logger.warning("batch_delete_creators failed for %s", cid, exc_info=True)
-            results.append({"id": cid, "status": "error", "error": "internal_error"})
+@curation_router.post("/batch-deletion-preview", response_model=DeletionPreviewResponse)
+async def batch_creator_deletion_preview(
+    data: BatchDeletionRequest,
+    user=RequirePermission("curation"),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.hierarchical_deletion import HierarchicalDeletionService
+
+    scope = await HierarchicalDeletionService(db).scope("creator", data.ids)
+    return scope.preview_payload(is_admin=user.is_admin)
+
+
+@curation_router.post(
+    "/batch-delete",
+    response_model=DeletionResultResponse,
+    responses={202: {"model": DeletionResultResponse, "description": "Permanent deletion queued"}},
+)
+async def batch_delete_creators(
+    data: BatchDeletionRequest,
+    response: Response,
+    user=RequirePermission("curation"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Soft-delete creators for curators; enqueue permanent deletion for admins."""
+    from app.services.hierarchical_deletion import (
+        HierarchicalDeletionService,
+        enqueue_permanent_deletion,
+    )
+
+    if data.delete_files and not user.is_admin:
+        raise HTTPException(status_code=403, detail="Administrator access required to delete files")
+    svc = HierarchicalDeletionService(db)
+    scope = await svc.scope("creator", data.ids)
+    svc.ensure_no_active_jobs(scope)
+    if user.is_admin:
+        response.status_code = 202
+        result = await enqueue_permanent_deletion(
+            "creator", data.ids, delete_files=data.delete_files
+        )
+    else:
+        result = await svc.soft_delete(scope)
     invalidate_creator_subscription_caches(include_works=True)
-    return {"status": "ok", "results": results}
+    return result
 
 
 # ── Dedup & Merge ──
@@ -251,14 +277,49 @@ async def get_creator_subscription_overview(creator_id: UUID, db: AsyncSession =
     return await CreatorService(db).get_subscription_overview(creator_id)
 
 
-@curation_router.delete("/{creator_id}", status_code=204)
-async def delete_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
-    svc = CreatorService(db)
-    try:
-        await svc.delete_creator(creator_id)
-        invalidate_creator_subscription_caches(include_works=True)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+@curation_router.get("/{creator_id}/deletion-preview", response_model=DeletionPreviewResponse)
+async def creator_deletion_preview(
+    creator_id: UUID,
+    user=RequirePermission("curation"),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.hierarchical_deletion import HierarchicalDeletionService
+
+    scope = await HierarchicalDeletionService(db).scope("creator", [creator_id])
+    return scope.preview_payload(is_admin=user.is_admin)
+
+
+@curation_router.delete(
+    "/{creator_id}",
+    response_model=DeletionResultResponse,
+    responses={202: {"model": DeletionResultResponse, "description": "Permanent deletion queued"}},
+)
+async def delete_creator(
+    creator_id: UUID,
+    response: Response,
+    delete_files: bool = Query(False),
+    user=RequirePermission("curation"),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.hierarchical_deletion import (
+        HierarchicalDeletionService,
+        enqueue_permanent_deletion,
+    )
+
+    if delete_files and not user.is_admin:
+        raise HTTPException(status_code=403, detail="Administrator access required to delete files")
+    svc = HierarchicalDeletionService(db)
+    scope = await svc.scope("creator", [creator_id])
+    svc.ensure_no_active_jobs(scope)
+    if user.is_admin:
+        response.status_code = 202
+        result = await enqueue_permanent_deletion(
+            "creator", [creator_id], delete_files=delete_files
+        )
+    else:
+        result = await svc.soft_delete(scope)
+    invalidate_creator_subscription_caches(include_works=True)
+    return result
 
 
 @curation_router.post("/{creator_id}/favorite", response_model=CreatorRead)

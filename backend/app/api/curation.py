@@ -155,13 +155,21 @@ async def revert_curation_commit(commit_id: UUID, db: AsyncSession = Depends(get
 
 
 @router.post("/purge/preview", response_model=PurgePreviewResponse)
-async def preview_purge(data: PurgePreviewRequest, db: AsyncSession = Depends(get_db)):
+async def preview_purge(
+    data: PurgePreviewRequest,
+    _admin=RequireAdminUser,
+    db: AsyncSession = Depends(get_db),
+):
     svc = CurationService(db)
     return await svc.purge_preview(data.work_ids)
 
 
 @router.post("/purge", response_model=CurationCommitRead)
-async def purge_trashed_works(data: PurgeRequest, db: AsyncSession = Depends(get_db)):
+async def purge_trashed_works(
+    data: PurgeRequest,
+    _admin=RequireAdminUser,
+    db: AsyncSession = Depends(get_db),
+):
     svc = CurationService(db)
     commit = await svc.purge(data.work_ids, message=data.message)
     return await svc.commit_payload(commit.id)

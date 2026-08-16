@@ -5,9 +5,12 @@ import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorRepository, queryKeys, SubscriptionSource as SS, ProviderInfo } from "@/lib/api";
-import { PageHeader, PageShell, StatusBadge, Modal, ConfirmDialog, ErrorState, EmptyState, RepositoryCard } from "@/components";
+import { PageHeader, PageShell, StatusBadge, Modal, ConfirmDialog, ErrorState, EmptyState, HierarchyDeletionDialog, RepositoryCard } from "@/components";
 import { useToast } from "@/components/Toast";
 import { scheduleModeLabel, useI18nFormat } from "@/lib/i18n-format";
+import { usePermissions } from "@/lib/usePermissions";
+import { useNotifications } from "@/components/NotificationCenter";
+import { adminRoutes } from "@/lib/adminRoutes";
 
 function AddSourceForm({ subId, onClose }: { subId: string; onClose: () => void }) {
   const [source, setSource] = useState("pixiv"); const [sourceUrl, setSourceUrl] = useState(""); const [sourceCreatorId, setSourceCreatorId] = useState("");
@@ -71,6 +74,8 @@ export default function SubscriptionDetailPage() {
   const t = useT();
   const toast = useToast();
   const fmt = useI18nFormat();
+  const { isAdmin } = usePermissions();
+  const notify = useNotifications();
   const id = params.id as string;
 
   const sub = useQuery({ queryKey: queryKeys.subscriptions.detail(id), queryFn: () => api.getSubscription(id) });
@@ -94,6 +99,18 @@ export default function SubscriptionDetailPage() {
   const [editTimes, setEditTimes] = useState("");
   const [deleteSsId, setDeleteSsId] = useState<string | null>(null);
   const [toggleId, setToggleId] = useState<string | null>(null);
+  const [showDeleteSubscription, setShowDeleteSubscription] = useState(false);
+  const [deleteFiles, setDeleteFiles] = useState(false);
+  const subscriptionDeletionPreview = useQuery({
+    queryKey: ["deletion-preview", "subscription", id],
+    queryFn: () => api.getSubscriptionDeletionPreview(id),
+    enabled: showDeleteSubscription,
+  });
+  const repositoryDeletionPreview = useQuery({
+    queryKey: ["deletion-preview", "repository", deleteSsId],
+    queryFn: () => api.getRepositoryDeletionPreview(deleteSsId as string),
+    enabled: !!deleteSsId,
+  });
 
   const update = useMutation({
     mutationFn: (data: Parameters<typeof api.updateSubscription>[1]) => api.updateSubscription(id, data),
@@ -119,8 +136,38 @@ export default function SubscriptionDetailPage() {
     onSuccess: () => { sources.refetch(); setToggleId(null); },
   });
   const deleteSource = useMutation({
-    mutationFn: (ssId: string) => api.deleteSubscriptionSource(id, ssId),
-    onSuccess: () => { sources.refetch(); setDeleteSsId(null); },
+    mutationFn: (ssId: string) => api.deleteSubscriptionSource(id, ssId, deleteFiles),
+    onSuccess: (result) => {
+      if (result.task_id) {
+        notify.startOperationJob(result.task_id, "hierarchy-delete", t("deletion.permanent_title"), {
+          entity: "hierarchy-delete", entity_type: "repository", entity_ids: [deleteSsId],
+        });
+        toast.success(t("deletion.queued"));
+      } else {
+        toast.success(t("deletion.soft_deleted"));
+      }
+      sources.refetch();
+      setDeleteSsId(null);
+      setDeleteFiles(false);
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const deleteSubscription = useMutation({
+    mutationFn: () => api.deleteSubscription(id, deleteFiles),
+    onSuccess: (result) => {
+      if (result.task_id) {
+        notify.startOperationJob(result.task_id, "hierarchy-delete", t("deletion.permanent_title"), {
+          entity: "hierarchy-delete", entity_type: "subscription", entity_ids: [id],
+        });
+        toast.success(t("deletion.queued"));
+      } else {
+        toast.success(t("deletion.soft_deleted"));
+      }
+      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+      qc.invalidateQueries({ queryKey: queryKeys.creators.all });
+      router.push(adminRoutes.subscriptions);
+    },
+    onError: (error: Error) => toast.error(error.message),
   });
   const startSync = useMutation({
     mutationFn: (ssId: string) => {
@@ -201,6 +248,13 @@ export default function SubscriptionDetailPage() {
     <PageShell>
       <PageHeader title={s.name || (s.creator_display_name || s.creator_name || getCreatorName(s.creator_id))} description={s.creator_display_name || s.creator_name ? `${t("subscription_detail.creator")} ${s.creator_display_name || s.creator_name}` : undefined}>
         <div className="flex gap-2">
+          {!isAdmin && !s.is_active ? (
+            <button onClick={() => update.mutate({ is_active: true })} disabled={update.isPending} className="btn-ghost">{t("creator_detail.restore")}</button>
+          ) : (
+            <button onClick={() => { setDeleteFiles(false); setShowDeleteSubscription(true); }} className={isAdmin ? "btn-danger" : "btn-ghost"}>
+              {isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
+            </button>
+          )}
           <button onClick={() => { setEditName(s.name || ""); setEditMode(s.schedule_mode || "inherit"); setEditInterval(s.sync_interval_hours || 24); setEditTimes(s.scheduled_times || ""); setEditing(true); }} className="btn-primary">{t("subscription_detail.edit")}</button>
         </div>
       </PageHeader>
@@ -262,7 +316,7 @@ export default function SubscriptionDetailPage() {
                   <RepositoryCard key={ss.id} repo={toRepo(ss)}
                     onSync={() => startSync.mutate(ss.id)}
                     onToggle={() => setToggleId(ss.id)}
-                    onDelete={() => setDeleteSsId(ss.id)}
+                    onDelete={() => { setDeleteFiles(false); setDeleteSsId(ss.id); }}
                     syncPending={startSync.isPending}
                     togglePending={toggleSource.isPending}
                     decision={decisionBySource.get(ss.id)} />
@@ -335,7 +389,35 @@ export default function SubscriptionDetailPage() {
 
       <Modal open={showAddSource} onClose={() => setShowAddSource(false)} title={t("subscription_detail.add_source_title")}><AddSourceForm subId={id} onClose={() => setShowAddSource(false)} /></Modal>
       {toggleId && <ConfirmDialog open title={sources.data?.find((ss: SS) => ss.id === toggleId)?.is_enabled ? t("subscription_detail.disable_source_title") : t("subscription_detail.enable_source_title")} message={t("subscription_detail.toggle_source_msg")} onConfirm={() => { const ss = sources.data?.find((s: SS) => s.id === toggleId); if (ss) toggleSource.mutate({ ssId: toggleId, enabled: !ss.is_enabled }); }} onCancel={() => setToggleId(null)} isPending={toggleSource.isPending} error={(toggleSource.error as Error)?.message} />}
-      {deleteSsId && <ConfirmDialog open title={t("subscription_detail.delete_source_title")} message={t("subscription_detail.delete_source_msg")} onConfirm={() => deleteSource.mutate(deleteSsId)} onCancel={() => setDeleteSsId(null)} isPending={deleteSource.isPending} error={(deleteSource.error as Error)?.message} />}
+      <HierarchyDeletionDialog
+        open={showDeleteSubscription}
+        title={isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
+        confirmationPhrase={s.name || s.creator_display_name || s.creator_name || id}
+        preview={subscriptionDeletionPreview.data}
+        previewLoading={subscriptionDeletionPreview.isLoading}
+        deleteFiles={deleteFiles}
+        onDeleteFilesChange={setDeleteFiles}
+        onConfirm={() => deleteSubscription.mutate()}
+        onCancel={() => { setShowDeleteSubscription(false); setDeleteFiles(false); }}
+        isPending={deleteSubscription.isPending}
+        error={(deleteSubscription.error as Error)?.message || (subscriptionDeletionPreview.error as Error)?.message}
+      />
+      <HierarchyDeletionDialog
+        open={!!deleteSsId}
+        title={isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
+        confirmationPhrase={(() => {
+          const source = sources.data?.find((item: SS) => item.id === deleteSsId);
+          return source ? `${source.source}/${source.source_creator_id || source.id}` : (deleteSsId || "");
+        })()}
+        preview={repositoryDeletionPreview.data}
+        previewLoading={repositoryDeletionPreview.isLoading}
+        deleteFiles={deleteFiles}
+        onDeleteFilesChange={setDeleteFiles}
+        onConfirm={() => { if (deleteSsId) deleteSource.mutate(deleteSsId); }}
+        onCancel={() => { setDeleteSsId(null); setDeleteFiles(false); }}
+        isPending={deleteSource.isPending}
+        error={(deleteSource.error as Error)?.message || (repositoryDeletionPreview.error as Error)?.message}
+      />
     </PageShell>
   );
 }

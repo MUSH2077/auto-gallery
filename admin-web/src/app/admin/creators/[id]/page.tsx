@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
-import { GitlleryPanel, Modal, MotionNumber, PageShell, RepositoryCard, SourceBadge, StatusBadge, SmartSearchInput, WorkMediaThumbnail, type SlideItem } from "@/components";
+import { GitlleryPanel, HierarchyDeletionDialog, Modal, MotionNumber, PageShell, RepositoryCard, SourceBadge, StatusBadge, SmartSearchInput, WorkMediaThumbnail, type SlideItem } from "@/components";
 import ActivityDotMatrix, { type ActivityDay } from "@/components/charts/ActivityDotMatrix";
 import BallotTally from "@/components/charts/BallotTally";
 import ChartFrame from "@/components/charts/ChartFrame";
@@ -22,6 +22,8 @@ import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { quoteSearchValue, searchUrl } from "@/lib/search-query";
 import { adminRoutes } from "@/lib/adminRoutes";
+import { usePermissions } from "@/lib/usePermissions";
+import { useNotifications } from "@/components/NotificationCenter";
 
 type TabKey = "overview" | "repositories" | "works" | "links";
 
@@ -188,7 +190,10 @@ export default function CreatorDetailPage() {
   const fmt = useI18nFormat();
   const toast = useToast();
   const params = useParams();
+  const router = useRouter();
   const qc = useQueryClient();
+  const { isAdmin, has } = usePermissions();
+  const notify = useNotifications();
   const id = params.id as string;
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [showAddLink, setShowAddLink] = useState(false);
@@ -199,6 +204,8 @@ export default function CreatorDetailPage() {
   const [editDisplay, setEditDisplay] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const [narrativeMotionEnabled, setNarrativeMotionEnabled] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
+  const [deleteFiles, setDeleteFiles] = useState(false);
 
   useEffect(() => {
     setNarrativeMotionEnabled(motionConfig.shouldAnimate());
@@ -266,6 +273,11 @@ export default function CreatorDetailPage() {
     queryKey: queryKeys.curation.subject("creator", id),
     queryFn: () => api.listCurationCommits({ subject_type: "creator", subject_id: id, limit: 6 }),
   });
+  const deletionPreview = useQuery({
+    queryKey: ["deletion-preview", "creator", id],
+    queryFn: () => api.getCreatorDeletionPreview(id),
+    enabled: showDelete && has("curation"),
+  });
 
   const openEdit = () => {
     if (!creator.data) return;
@@ -295,6 +307,27 @@ export default function CreatorDetailPage() {
       toast.success(t("common.saved"));
     },
     onError: (e: Error) => toast.error(e.message),
+  });
+
+  const deleteCreator = useMutation({
+    mutationFn: () => api.deleteCreator(id, deleteFiles),
+    onSuccess: (result) => {
+      if (result.task_id) {
+        notify.startOperationJob(result.task_id, "hierarchy-delete", t("deletion.permanent_title"), {
+          entity: "hierarchy-delete",
+          entity_type: "creator",
+          entity_ids: [id],
+        });
+        toast.success(t("deletion.queued"));
+      } else {
+        toast.success(t("deletion.soft_deleted"));
+      }
+      qc.invalidateQueries({ queryKey: queryKeys.creators.all });
+      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+      qc.invalidateQueries({ queryKey: queryKeys.works.all });
+      router.push(adminRoutes.creators);
+    },
+    onError: (error: Error) => toast.error(error.message),
   });
 
   const syncRepo = useMutation({
@@ -454,10 +487,12 @@ export default function CreatorDetailPage() {
           <button onClick={() => toggleFavorite.mutate()} className="btn-ghost">
             {c.is_favorite ? t("creator_detail.unstar") : t("creator_detail.star")}
           </button>
-          {creatorVisibility === "visible" ? (
-            <button onClick={() => curateCreator.mutate("archive")} disabled={curateCreator.isPending} className="btn-ghost">{t("creator_detail.archive")}</button>
+          {(isAdmin || creatorVisibility === "visible") && has("curation") ? (
+            <button onClick={() => { setDeleteFiles(false); setShowDelete(true); }} className={isAdmin ? "btn-danger" : "btn-ghost"}>
+              {isAdmin ? t("deletion.permanent_title") : t("creator_detail.archive")}
+            </button>
           ) : (
-            <button onClick={() => curateCreator.mutate("restore")} disabled={curateCreator.isPending} className="btn-ghost">{t("creator_detail.restore")}</button>
+            has("curation") ? <button onClick={() => curateCreator.mutate("restore")} disabled={curateCreator.isPending} className="btn-ghost">{t("creator_detail.restore")}</button> : null
           )}
           <Link href={subscriptionHref} className="btn-ghost">
             {t("creator_detail.subscription")}
@@ -759,6 +794,19 @@ export default function CreatorDetailPage() {
           </div>
         </div>
       </Modal>
+      <HierarchyDeletionDialog
+        open={showDelete}
+        title={isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
+        confirmationPhrase={c.display_name || c.name}
+        preview={deletionPreview.data}
+        previewLoading={deletionPreview.isLoading}
+        deleteFiles={deleteFiles}
+        onDeleteFilesChange={setDeleteFiles}
+        onConfirm={() => deleteCreator.mutate()}
+        onCancel={() => { setShowDelete(false); setDeleteFiles(false); }}
+        isPending={deleteCreator.isPending}
+        error={(deleteCreator.error as Error)?.message || (deletionPreview.error as Error)?.message}
+      />
     </PageShell>
   );
 }

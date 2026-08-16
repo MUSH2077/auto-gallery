@@ -2412,6 +2412,108 @@ test("shared dialogs trap focus, close with Escape, and restore their trigger", 
   await expect(trigger).toBeFocused();
 });
 
+test("admin creator deletion loads impact, defaults file cleanup off, and submits the chosen mode", async ({ page }) => {
+  let deleteFiles: string | null = null;
+  await page.route("**/api/v1/creators/fixture-creator**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/deletion-preview")) {
+      await route.fulfill({ json: {
+        entity_type: "creator",
+        entity_ids: ["fixture-creator"],
+        mode: "permanent",
+        can_delete_files: true,
+        active_task_count: 0,
+        active_job_count: 0,
+        active_task_ids: [],
+        affected_work_count: 12,
+        exclusive_work_count: 8,
+        shared_work_count: 4,
+        exclusive_asset_count: 16,
+      } });
+      return;
+    }
+    if (url.pathname === "/api/v1/creators/fixture-creator" && route.request().method() === "DELETE") {
+      deleteFiles = url.searchParams.get("delete_files");
+      await route.fulfill({ status: 202, json: {
+        status: "enqueued",
+        mode: "permanent",
+        entity_type: "creator",
+        entity_ids: ["fixture-creator"],
+        delete_files: deleteFiles === "true",
+        task_id: "fixture-delete-task",
+      } });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.goto("/admin/creators/fixture-creator");
+  await page.getByRole("button", { name: "Permanently delete" }).click();
+  const dialog = page.getByRole("dialog", { name: "Permanently delete" });
+  await expect(dialog.getByText("12")).toBeVisible();
+  await expect(dialog.getByText("8")).toBeVisible();
+  await expect(dialog.getByText("4")).toBeVisible();
+  const cleanup = dialog.getByRole("checkbox", { name: /Also permanently delete exclusive work files/ });
+  await expect(cleanup).not.toBeChecked();
+  await cleanup.check();
+  await dialog.getByRole("textbox", { name: "Type Fixture Creator to confirm" }).fill("Fixture Creator");
+  await dialog.getByRole("button", { name: "Confirm" }).click();
+  await expect.poll(() => deleteFiles).toBe("true");
+  await expect(page).toHaveURL(/\/admin\/creators$/);
+});
+
+test("curation user sees recoverable creator archive without permanent file controls", async ({ page }) => {
+  await page.route("**/api/v1/auth/me", (route) => route.fulfill({ json: {
+    ...me,
+    is_admin: false,
+    permissions: ["library", "curation"],
+    modules: { library: true, curation: true },
+  } }));
+  let requested = false;
+  await page.route("**/api/v1/creators/fixture-creator**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/deletion-preview")) {
+      await route.fulfill({ json: {
+        entity_type: "creator",
+        entity_ids: ["fixture-creator"],
+        mode: "soft",
+        can_delete_files: false,
+        active_task_count: 0,
+        active_job_count: 0,
+        active_task_ids: [],
+        affected_work_count: 12,
+        exclusive_work_count: 8,
+        shared_work_count: 4,
+        exclusive_asset_count: 16,
+      } });
+      return;
+    }
+    if (url.pathname === "/api/v1/creators/fixture-creator" && route.request().method() === "DELETE") {
+      requested = true;
+      expect(url.searchParams.get("delete_files")).toBe("false");
+      await route.fulfill({ json: {
+        status: "soft_deleted",
+        mode: "soft",
+        entity_type: "creator",
+        entity_ids: ["fixture-creator"],
+        delete_files: false,
+      } });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.goto("/admin/creators/fixture-creator");
+  await page.getByRole("button", { name: "Archive" }).click();
+  const dialog = page.getByRole("dialog", { name: "Disable and hide" });
+  await expect(dialog).toContainText("Configuration and files are not permanently removed");
+  await expect(dialog.getByRole("checkbox")).toHaveCount(0);
+  await expect(dialog.getByRole("textbox")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Confirm" }).click();
+  await expect.poll(() => requested).toBe(true);
+  await expect(page).toHaveURL(/\/admin\/creators$/);
+});
+
 test("compact tablet sidebar and long job metadata do not create root overflow", async ({ page }) => {
   await page.setViewportSize({ width: 768, height: 1024 });
   await page.goto("/admin/jobs?tab=downloads");

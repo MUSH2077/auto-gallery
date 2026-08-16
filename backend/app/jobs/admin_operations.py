@@ -650,3 +650,140 @@ async def _run_curation_backfill_operation(job_id: str, options: dict) -> dict:
             "library:curation-backfill:active",
             job_id,
         )
+
+
+def run_hierarchy_delete_operation(job_id: str, options: dict | None = None) -> dict:
+    """Delete a repository/subscription/creator with bounded curation work."""
+
+    return asyncio.run(run_heavy_io_operation(
+        "operation:hierarchy-delete",
+        job_id,
+        lambda: _run_hierarchy_delete_operation(job_id, options or {}),
+    ))
+
+
+async def _run_hierarchy_delete_operation(job_id: str, options: dict) -> dict:
+    from uuid import UUID
+
+    from app.services.hierarchical_deletion import HierarchicalDeletionService
+    from app.services.tasks import TaskService
+
+    entity_type = options.get("entity_type")
+    if entity_type not in {"repository", "subscription", "creator"}:
+        raise ValueError(f"Unsupported hierarchy deletion type: {entity_type}")
+    entity_ids = [UUID(value) for value in options.get("entity_ids") or []]
+    if not entity_ids:
+        raise ValueError("Hierarchy deletion requires at least one target")
+    delete_files = bool(options.get("delete_files"))
+
+    async with async_session() as task_db:
+        svc = TaskService(task_db)
+        task = await svc.get(UUID(job_id))
+        if task:
+            await svc.update_task(
+                task,
+                status="running",
+                progress={
+                    "phase": "preflight",
+                    "label": "Checking deletion scope",
+                    "current": 0,
+                    "total": 0,
+                },
+            )
+            await task_db.commit()
+    set_operation_status(
+        job_id,
+        "running",
+        "hierarchy-delete",
+        progress={"phase": "preflight", "label": "Checking deletion scope"},
+        meta={"entity": "hierarchy-delete", **options},
+    )
+
+    async def publish_progress(current: int, total: int, label: str) -> None:
+        progress = {
+            "phase": "deleting",
+            "label": label,
+            "current": current,
+            "total": total,
+        }
+        async with async_session() as progress_db:
+            progress_service = TaskService(progress_db)
+            progress_task = await progress_service.get(UUID(job_id))
+            if progress_task:
+                await progress_service.update_task(progress_task, progress=progress)
+                await progress_db.commit()
+        set_operation_status(
+            job_id,
+            "running",
+            "hierarchy-delete",
+            progress=progress,
+            meta={"entity": "hierarchy-delete", **options},
+        )
+
+    try:
+        async with async_session() as db:
+            deletion = HierarchicalDeletionService(db)
+            scope = await deletion.scope(entity_type, entity_ids)
+            result = await deletion.permanent_delete(
+                scope,
+                delete_files=delete_files,
+                progress=publish_progress,
+            )
+        from app.services.cache import invalidate_creator_subscription_caches
+
+        invalidate_creator_subscription_caches(include_works=True)
+        async with async_session() as task_db:
+            svc = TaskService(task_db)
+            task = await svc.get(UUID(job_id))
+            if task:
+                await svc.update_task(
+                    task,
+                    status="complete",
+                    progress={
+                        "phase": "complete",
+                        "label": result["message"],
+                        "current": result["trashed_or_purged_works"],
+                        "total": result["trashed_or_purged_works"],
+                    },
+                    result=result,
+                )
+                await task_db.commit()
+        set_operation_status(
+            job_id,
+            "complete",
+            "hierarchy-delete",
+            progress={"phase": "complete", "label": result["message"]},
+            result=result,
+            meta={"entity": "hierarchy-delete", **options},
+        )
+        return result
+    except Exception as exc:
+        logger.exception("Hierarchy deletion failed: job_id=%s", job_id)
+        async with async_session() as task_db:
+            svc = TaskService(task_db)
+            task = await svc.get(UUID(job_id))
+            if task:
+                await svc.update_task(
+                    task,
+                    status="failed",
+                    progress={"phase": "failed", "label": "Deletion failed"},
+                    error=str(exc),
+                )
+                await task_db.commit()
+        set_operation_status(
+            job_id,
+            "failed",
+            "hierarchy-delete",
+            progress={"phase": "failed", "label": "Deletion failed"},
+            error=str(exc),
+            meta={"entity": "hierarchy-delete", **options},
+        )
+        raise
+    finally:
+        from app.services.redis_client import get_redis
+
+        release_owned_operation_lock(
+            get_redis(),
+            "library:hierarchy-delete:active",
+            job_id,
+        )

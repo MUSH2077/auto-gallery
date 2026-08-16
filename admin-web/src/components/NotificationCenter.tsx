@@ -101,6 +101,13 @@ function operationResultMessage(operation: OperationJobState, t: TFunction): str
       errors: operation.result?.errors || 0,
     });
   }
+  if (operation.kind === "hierarchy-delete" && operation.status === "completed") {
+    return t("deletion.result", {
+      targets: operation.result?.entity_ids?.length || 0,
+      processed: operation.result?.trashed_or_purged_works || 0,
+      shared: operation.result?.shared_works_preserved || 0,
+    });
+  }
   return operation.result?.message || t("status.completed");
 }
 
@@ -150,6 +157,20 @@ function refreshOperationQueries(
     qc.invalidateQueries({ queryKey: ["repositories"] });
     qc.invalidateQueries({ queryKey: ["creator-subscription-overview"] });
     qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+    return;
+  }
+
+  if (kind === "hierarchy-delete") {
+    refetchCreatorSubscriptionQueries(qc);
+    qc.invalidateQueries({ queryKey: queryKeys.works.all });
+    qc.invalidateQueries({ queryKey: queryKeys.curation.all });
+    qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+    qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
+    qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+    qc.invalidateQueries({ queryKey: queryKeys.workbench });
+    qc.invalidateQueries({ queryKey: ["repositories"] });
+    qc.invalidateQueries({ queryKey: ["creator-subscription-overview"] });
+    qc.invalidateQueries({ queryKey: ["storage-breakdown"] });
     return;
   }
 

@@ -23,6 +23,7 @@ export { default as EmptyState } from "./EmptyState";
 export { default as PermissionGuard } from "./PermissionGuard";
 export { default as ErrorState } from "./ErrorState";
 export { default as ConfirmDialog } from "./ConfirmDialog";
+export { default as HierarchyDeletionDialog } from "./HierarchyDeletionDialog";
 export { default as DataTable } from "./DataTable";
 export { CardSkeleton, TableSkeleton } from "./LoadingSkeleton";
 export { default as Modal } from "./Modal";

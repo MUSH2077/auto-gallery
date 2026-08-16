@@ -165,12 +165,20 @@ export const api = {
   updateCreator: (id: string, data: Record<string, unknown>) =>
     request<T.Creator>(`/api/v1/creators/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
 
-  deleteCreator: (id: string) =>
-    request<void>(`/api/v1/creators/${id}`, { method: "DELETE" }),
+  getCreatorDeletionPreview: (id: string) =>
+    request<T.DeletionPreview>(`/api/v1/creators/${id}/deletion-preview`),
 
-  batchDeleteCreators: (ids: string[]) =>
-    request<{ status: string; results: { id: string; status: string; error?: string }[] }>(
-      "/api/v1/creators/batch-delete", { method: "POST", body: JSON.stringify({ ids }) }),
+  deleteCreator: (id: string, deleteFiles = false) =>
+    request<T.DeletionResult>(`/api/v1/creators/${id}?delete_files=${deleteFiles}`, { method: "DELETE" }),
+
+  previewBatchDeleteCreators: (ids: string[]) =>
+    request<T.DeletionPreview>("/api/v1/creators/batch-deletion-preview", {
+      method: "POST", body: JSON.stringify({ ids }),
+    }),
+
+  batchDeleteCreators: (ids: string[], deleteFiles = false) =>
+    request<T.DeletionResult>(
+      "/api/v1/creators/batch-delete", { method: "POST", body: JSON.stringify({ ids, delete_files: deleteFiles }) }),
 
   listDuplicateCreators: () =>
     request<{ duplicates: { reason: string; description: string; creator_ids: string[]; creator_names: string[] }[]; total: number }>("/api/v1/creators/duplicates"),
@@ -230,12 +238,20 @@ export const api = {
   }) =>
     request<T.Subscription>(`/api/v1/subscriptions/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
 
-  deleteSubscription: (id: string) =>
-    request<void>(`/api/v1/subscriptions/${id}`, { method: "DELETE" }),
+  getSubscriptionDeletionPreview: (id: string) =>
+    request<T.DeletionPreview>(`/api/v1/subscriptions/${id}/deletion-preview`),
 
-  batchDeleteSubscriptions: (ids: string[]) =>
-    request<{ status: string; results: { id: string; status: string; error?: string }[] }>(
-      "/api/v1/subscriptions/batch-delete", { method: "POST", body: JSON.stringify({ ids }) }),
+  deleteSubscription: (id: string, deleteFiles = false) =>
+    request<T.DeletionResult>(`/api/v1/subscriptions/${id}?delete_files=${deleteFiles}`, { method: "DELETE" }),
+
+  previewBatchDeleteSubscriptions: (ids: string[]) =>
+    request<T.DeletionPreview>("/api/v1/subscriptions/batch-deletion-preview", {
+      method: "POST", body: JSON.stringify({ ids }),
+    }),
+
+  batchDeleteSubscriptions: (ids: string[], deleteFiles = false) =>
+    request<T.DeletionResult>(
+      "/api/v1/subscriptions/batch-delete", { method: "POST", body: JSON.stringify({ ids, delete_files: deleteFiles }) }),
 
   batchToggleSyncSubscriptions: (ids: string[], syncEnabled: boolean) =>
     request<{ status: string; results: { id: string; status: string; sync_enabled?: boolean; error?: string }[] }>(
@@ -257,8 +273,8 @@ export const api = {
   updateSubscriptionSource: (subId: string, ssId: string, data: Record<string, unknown>) =>
     request<T.SubscriptionSource>(`/api/v1/subscriptions/${subId}/sources/${ssId}`, { method: "PATCH", body: JSON.stringify(data) }),
 
-  deleteSubscriptionSource: (subId: string, ssId: string) =>
-    request<void>(`/api/v1/subscriptions/${subId}/sources/${ssId}`, { method: "DELETE" }),
+  deleteSubscriptionSource: (subId: string, ssId: string, deleteFiles = false) =>
+    request<T.DeletionResult>(`/api/v1/subscriptions/${subId}/sources/${ssId}?delete_files=${deleteFiles}`, { method: "DELETE" }),
 
   // Download Jobs
   listDownloadJobs: (params?: { status?: string; source?: string; subscription_id?: string; subscription_source_id?: string; q?: string; visibility?: "actionable" | "all"; sort_by?: string; sort_order?: string; offset?: number; limit?: number }) => {
@@ -330,6 +346,23 @@ export const api = {
   // Repositories
   getRepository: (id: string) =>
     request<T.RepositoryDetailResponse>(`/api/v1/repositories/${id}`),
+
+  getRepositoryDeletionPreview: (id: string) =>
+    request<T.DeletionPreview>(`/api/v1/repositories/${id}/deletion-preview`),
+
+  deleteRepository: (id: string, deleteFiles = false) =>
+    request<T.DeletionResult>(`/api/v1/repositories/${id}?delete_files=${deleteFiles}`, { method: "DELETE" }),
+
+  previewBatchDeleteRepositories: (ids: string[]) =>
+    request<T.DeletionPreview>("/api/v1/repositories/batch-deletion-preview", {
+      method: "POST", body: JSON.stringify({ ids }),
+    }),
+
+  batchDeleteRepositories: (ids: string[], deleteFiles = false) =>
+    request<T.DeletionResult>(
+      "/api/v1/repositories/batch-delete",
+      { method: "POST", body: JSON.stringify({ ids, delete_files: deleteFiles }) },
+    ),
 
   getRepositoryTags: (id: string, offset = 0, limit = 50) =>
     request<T.RepositoryTagsResponse>(`/api/v1/repositories/${id}/tags?offset=${offset}&limit=${limit}`),

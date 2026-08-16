@@ -761,6 +761,29 @@
         "title": "BatchCurateRequest",
         "type": "object"
       },
+      "BatchDeletionRequest": {
+        "properties": {
+          "delete_files": {
+            "title": "Delete Files",
+            "type": "boolean"
+          },
+          "ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "BatchDeletionRequest",
+        "type": "object"
+      },
       "BilibiliSourceConfig": {
         "properties": {
           "auto_enable_on_import": {
@@ -2157,6 +2180,158 @@
           }
         },
         "title": "DedupSettings",
+        "type": "object"
+      },
+      "DeletionPreviewResponse": {
+        "properties": {
+          "active_job_count": {
+            "default": 0,
+            "title": "Active Job Count",
+            "type": "integer"
+          },
+          "active_task_count": {
+            "default": 0,
+            "title": "Active Task Count",
+            "type": "integer"
+          },
+          "active_task_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Active Task Ids",
+            "type": "array"
+          },
+          "affected_work_count": {
+            "default": 0,
+            "title": "Affected Work Count",
+            "type": "integer"
+          },
+          "can_delete_files": {
+            "title": "Can Delete Files",
+            "type": "boolean"
+          },
+          "entity_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Entity Ids",
+            "type": "array"
+          },
+          "entity_type": {
+            "enum": [
+              "repository",
+              "subscription",
+              "creator"
+            ],
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "exclusive_asset_count": {
+            "default": 0,
+            "title": "Exclusive Asset Count",
+            "type": "integer"
+          },
+          "exclusive_work_count": {
+            "default": 0,
+            "title": "Exclusive Work Count",
+            "type": "integer"
+          },
+          "mode": {
+            "enum": [
+              "soft",
+              "permanent"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "shared_work_count": {
+            "default": 0,
+            "title": "Shared Work Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entity_type",
+          "entity_ids",
+          "mode",
+          "can_delete_files"
+        ],
+        "title": "DeletionPreviewResponse",
+        "type": "object"
+      },
+      "DeletionResultResponse": {
+        "properties": {
+          "delete_files": {
+            "default": false,
+            "title": "Delete Files",
+            "type": "boolean"
+          },
+          "entity_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Entity Ids",
+            "type": "array"
+          },
+          "entity_type": {
+            "enum": [
+              "repository",
+              "subscription",
+              "creator"
+            ],
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "mode": {
+            "enum": [
+              "soft",
+              "permanent"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "soft_deleted",
+              "enqueued"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          }
+        },
+        "required": [
+          "status",
+          "mode",
+          "entity_type",
+          "entity_ids"
+        ],
+        "title": "DeletionResultResponse",
         "type": "object"
       },
       "DownloadDefaults": {
@@ -10745,15 +10920,13 @@
     },
     "/api/v1/creators/batch-delete": {
       "post": {
-        "description": "Delete multiple creators by ID list.",
+        "description": "Soft-delete creators for curators; enqueue permanent deletion for admins.",
         "operationId": "post_api_v1_creators_batch_delete",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "title": "Data",
-                "type": "object"
+                "$ref": "#/components/schemas/BatchDeletionRequest"
               }
             }
           },
@@ -10764,11 +10937,21 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/DeletionResultResponse"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionResultResponse"
+                }
+              }
+            },
+            "description": "Permanent deletion queued"
           },
           "401": {
             "content": {
@@ -10817,8 +11000,82 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "curation"
+        ]
+      }
+    },
+    "/api/v1/creators/batch-deletion-preview": {
+      "post": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "post_api_v1_creators_batch_deletion_preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchDeletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
         ],
-        "x-response-schema-status": "generic"
+        "summary": "Batch Creator Deletion Preview",
+        "tags": [
+          "creators"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "curation"
+        ]
       }
     },
     "/api/v1/creators/count": {
@@ -11045,11 +11302,38 @@
               "title": "Creator Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "delete_files",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Delete Files",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
-          "204": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionResultResponse"
+                }
+              }
+            },
             "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionResultResponse"
+                }
+              }
+            },
+            "description": "Permanent deletion queued"
           },
           "401": {
             "content": {
@@ -11335,6 +11619,83 @@
           }
         ],
         "summary": "Curate Creator",
+        "tags": [
+          "creators"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "curation"
+        ]
+      }
+    },
+    "/api/v1/creators/{creator_id}/deletion-preview": {
+      "get": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "get_api_v1_creators_creator_id_deletion_preview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "creator_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Creator Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Creator Deletion Preview",
         "tags": [
           "creators"
         ],
@@ -13521,7 +13882,7 @@
         "tags": [
           "curation"
         ],
-        "x-admin-only": false,
+        "x-admin-only": true,
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": true,
@@ -13596,7 +13957,7 @@
         "tags": [
           "curation"
         ],
-        "x-admin-only": false,
+        "x-admin-only": true,
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": true,
@@ -17207,7 +17568,262 @@
         "x-response-schema-status": "generic"
       }
     },
+    "/api/v1/repositories/batch-delete": {
+      "post": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "post_api_v1_repositories_batch_delete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchDeletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionResultResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionResultResponse"
+                }
+              }
+            },
+            "description": "Permanent deletion queued"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Batch Delete Repositories",
+        "tags": [
+          "repositories"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": true,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "subscriptions"
+        ]
+      }
+    },
+    "/api/v1/repositories/batch-deletion-preview": {
+      "post": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "post_api_v1_repositories_batch_deletion_preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchDeletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Batch Repository Deletion Preview",
+        "tags": [
+          "repositories"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "subscriptions"
+        ]
+      }
+    },
     "/api/v1/repositories/{source_id}": {
+      "delete": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "delete_api_v1_repositories_source_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "delete_files",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Delete Files",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionResultResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionResultResponse"
+                }
+              }
+            },
+            "description": "Permanent deletion queued"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Repository",
+        "tags": [
+          "repositories"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": true,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "subscriptions"
+        ]
+      },
       "get": {
         "description": "See the request, response, permission, and risk metadata for this operation.",
         "operationId": "get_api_v1_repositories_source_id",
@@ -17408,6 +18024,83 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "library"
+        ]
+      }
+    },
+    "/api/v1/repositories/{source_id}/deletion-preview": {
+      "get": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "get_api_v1_repositories_source_id_deletion_preview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Repository Deletion Preview",
+        "tags": [
+          "repositories"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "subscriptions"
         ]
       }
     },
@@ -18084,9 +18777,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "title": "Data",
-                "type": "object"
+                "$ref": "#/components/schemas/BatchDeletionRequest"
               }
             }
           },
@@ -18097,11 +18788,21 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/DeletionResultResponse"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionResultResponse"
+                }
+              }
+            },
+            "description": "Permanent deletion queued"
           },
           "401": {
             "content": {
@@ -18150,8 +18851,82 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "subscriptions"
+        ]
+      }
+    },
+    "/api/v1/subscriptions/batch-deletion-preview": {
+      "post": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "post_api_v1_subscriptions_batch_deletion_preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchDeletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
         ],
-        "x-response-schema-status": "generic"
+        "summary": "Batch Subscription Deletion Preview",
+        "tags": [
+          "subscriptions"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "subscriptions"
+        ]
       }
     },
     "/api/v1/subscriptions/batch-toggle-sync": {
@@ -18390,11 +19165,38 @@
               "title": "Subscription Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "delete_files",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Delete Files",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
-          "204": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionResultResponse"
+                }
+              }
+            },
             "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionResultResponse"
+                }
+              }
+            },
+            "description": "Permanent deletion queued"
           },
           "401": {
             "content": {
@@ -18606,6 +19408,83 @@
         ]
       }
     },
+    "/api/v1/subscriptions/{subscription_id}/deletion-preview": {
+      "get": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "get_api_v1_subscriptions_subscription_id_deletion_preview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subscription_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Subscription Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Subscription Deletion Preview",
+        "tags": [
+          "subscriptions"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "subscriptions"
+        ]
+      }
+    },
     "/api/v1/subscriptions/{subscription_id}/sources": {
       "get": {
         "description": "See the request, response, permission, and risk metadata for this operation.",
@@ -18796,11 +19675,38 @@
               "title": "Ss Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "delete_files",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Delete Files",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
-          "204": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionResultResponse"
+                }
+              }
+            },
             "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionResultResponse"
+                }
+              }
+            },
+            "description": "Permanent deletion queued"
           },
           "401": {
             "content": {

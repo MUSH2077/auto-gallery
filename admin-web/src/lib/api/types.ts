@@ -328,6 +328,32 @@ export interface CreatorListResponse {
   total: number;
 }
 
+export type DeletionEntityType = "repository" | "subscription" | "creator";
+
+export interface DeletionPreview {
+  entity_type: DeletionEntityType;
+  entity_ids: string[];
+  mode: "soft" | "permanent";
+  can_delete_files: boolean;
+  active_task_count: number;
+  active_job_count: number;
+  active_task_ids: string[];
+  affected_work_count: number;
+  exclusive_work_count: number;
+  shared_work_count: number;
+  exclusive_asset_count: number;
+}
+
+export interface DeletionResult {
+  status: "soft_deleted" | "enqueued";
+  mode: "soft" | "permanent";
+  entity_type: DeletionEntityType;
+  entity_ids: string[];
+  delete_files: boolean;
+  task_id?: string | null;
+  message?: string | null;
+}
+
 export interface CreatorLink {
   id: string;
   creator_id: string;

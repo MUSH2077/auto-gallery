@@ -1004,9 +1004,29 @@ export interface paths {
         put?: never;
         /**
          * Batch Delete Creators
-         * @description Delete multiple creators by ID list.
+         * @description Soft-delete creators for curators; enqueue permanent deletion for admins.
          */
         post: operations["post_api_v1_creators_batch_delete"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/creators/batch-deletion-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Batch Creator Deletion Preview
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_creators_batch_deletion_preview"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1117,6 +1137,26 @@ export interface paths {
          * @description See the request, response, permission, and risk metadata for this operation.
          */
         post: operations["post_api_v1_creators_creator_id_curation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/creators/{creator_id}/deletion-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Creator Deletion Preview
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        get: operations["get_api_v1_creators_creator_id_deletion_preview"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2493,6 +2533,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/repositories/batch-delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Batch Delete Repositories
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_repositories_batch_delete"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repositories/batch-deletion-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Batch Repository Deletion Preview
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_repositories_batch_deletion_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/repositories/{source_id}": {
         parameters: {
             query?: never;
@@ -2507,7 +2587,11 @@ export interface paths {
         get: operations["get_api_v1_repositories_source_id"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Repository
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        delete: operations["delete_api_v1_repositories_source_id"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2525,6 +2609,26 @@ export interface paths {
          * @description See the request, response, permission, and risk metadata for this operation.
          */
         get: operations["get_api_v1_repositories_source_id_curation_graph"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repositories/{source_id}/deletion-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Repository Deletion Preview
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        get: operations["get_api_v1_repositories_source_id_deletion_preview"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2677,6 +2781,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/subscriptions/batch-deletion-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Batch Subscription Deletion Preview
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_subscriptions_batch_deletion_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/subscriptions/batch-toggle-sync": {
         parameters: {
             query?: never;
@@ -2763,6 +2887,26 @@ export interface paths {
          * @description See the request, response, permission, and risk metadata for this operation.
          */
         patch: operations["patch_api_v1_subscriptions_subscription_id"];
+        trace?: never;
+    };
+    "/api/v1/subscriptions/{subscription_id}/deletion-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Subscription Deletion Preview
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        get: operations["get_api_v1_subscriptions_subscription_id_deletion_preview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/subscriptions/{subscription_id}/sources": {
@@ -3997,6 +4141,13 @@ export interface components {
             /** Reason */
             reason?: string | null;
         };
+        /** BatchDeletionRequest */
+        BatchDeletionRequest: {
+            /** Delete Files */
+            delete_files?: boolean;
+            /** Ids */
+            ids: string[];
+        };
         /** BilibiliSourceConfig */
         BilibiliSourceConfig: {
             /** Auto Enable On Import */
@@ -4501,6 +4652,84 @@ export interface components {
              * @default 0.98
              */
             ssim_threshold: number;
+        };
+        /** DeletionPreviewResponse */
+        DeletionPreviewResponse: {
+            /**
+             * Active Job Count
+             * @default 0
+             */
+            active_job_count: number;
+            /**
+             * Active Task Count
+             * @default 0
+             */
+            active_task_count: number;
+            /** Active Task Ids */
+            active_task_ids?: string[];
+            /**
+             * Affected Work Count
+             * @default 0
+             */
+            affected_work_count: number;
+            /** Can Delete Files */
+            can_delete_files: boolean;
+            /** Entity Ids */
+            entity_ids: string[];
+            /**
+             * Entity Type
+             * @enum {string}
+             */
+            entity_type: "repository" | "subscription" | "creator";
+            /**
+             * Exclusive Asset Count
+             * @default 0
+             */
+            exclusive_asset_count: number;
+            /**
+             * Exclusive Work Count
+             * @default 0
+             */
+            exclusive_work_count: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "soft" | "permanent";
+            /**
+             * Shared Work Count
+             * @default 0
+             */
+            shared_work_count: number;
+        };
+        /** DeletionResultResponse */
+        DeletionResultResponse: {
+            /**
+             * Delete Files
+             * @default false
+             */
+            delete_files: boolean;
+            /** Entity Ids */
+            entity_ids: string[];
+            /**
+             * Entity Type
+             * @enum {string}
+             */
+            entity_type: "repository" | "subscription" | "creator";
+            /** Message */
+            message?: string | null;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "soft" | "permanent";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "soft_deleted" | "enqueued";
+            /** Task Id */
+            task_id?: string | null;
         };
         /** DownloadDefaults */
         DownloadDefaults: {
@@ -8712,9 +8941,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["BatchDeletionRequest"];
             };
         };
         responses: {
@@ -8724,7 +8951,67 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["DeletionResultResponse"];
+                };
+            };
+            /** @description Permanent deletion queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionResultResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_creators_batch_deletion_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BatchDeletionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionPreviewResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -8954,7 +9241,9 @@ export interface operations {
     };
     delete_api_v1_creators_creator_id: {
         parameters: {
-            query?: never;
+            query?: {
+                delete_files?: boolean;
+            };
             header?: never;
             path: {
                 creator_id: string;
@@ -8964,11 +9253,22 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            204: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["DeletionResultResponse"];
+                };
+            };
+            /** @description Permanent deletion queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionResultResponse"];
+                };
             };
             /** @description Missing, invalid, or expired JWT. */
             401: {
@@ -9074,6 +9374,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CurationCommitRead"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_creators_creator_id_deletion_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                creator_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionPreviewResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -12691,6 +13040,117 @@ export interface operations {
             };
         };
     };
+    post_api_v1_repositories_batch_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BatchDeletionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionResultResponse"];
+                };
+            };
+            /** @description Permanent deletion queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionResultResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_repositories_batch_deletion_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BatchDeletionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionPreviewResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_api_v1_repositories_source_id: {
         parameters: {
             query?: never;
@@ -12709,6 +13169,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_api_v1_repositories_source_id: {
+        parameters: {
+            query?: {
+                delete_files?: boolean;
+            };
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionResultResponse"];
+                };
+            };
+            /** @description Permanent deletion queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionResultResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -12763,6 +13283,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RepositoryGraphResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_repositories_source_id_deletion_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionPreviewResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -13162,9 +13731,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["BatchDeletionRequest"];
             };
         };
         responses: {
@@ -13174,7 +13741,67 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["DeletionResultResponse"];
+                };
+            };
+            /** @description Permanent deletion queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionResultResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_subscriptions_batch_deletion_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BatchDeletionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionPreviewResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -13406,7 +14033,9 @@ export interface operations {
     };
     delete_api_v1_subscriptions_subscription_id: {
         parameters: {
-            query?: never;
+            query?: {
+                delete_files?: boolean;
+            };
             header?: never;
             path: {
                 subscription_id: string;
@@ -13416,11 +14045,22 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            204: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["DeletionResultResponse"];
+                };
+            };
+            /** @description Permanent deletion queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionResultResponse"];
+                };
             };
             /** @description Missing, invalid, or expired JWT. */
             401: {
@@ -13473,6 +14113,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubscriptionRead"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_subscriptions_subscription_id_deletion_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                subscription_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionPreviewResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -13608,7 +14297,9 @@ export interface operations {
     };
     delete_api_v1_subscriptions_subscription_id_sources_ss_id: {
         parameters: {
-            query?: never;
+            query?: {
+                delete_files?: boolean;
+            };
             header?: never;
             path: {
                 subscription_id: string;
@@ -13619,11 +14310,22 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            204: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["DeletionResultResponse"];
+                };
+            };
+            /** @description Permanent deletion queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionResultResponse"];
+                };
             };
             /** @description Missing, invalid, or expired JWT. */
             401: {

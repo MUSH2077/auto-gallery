@@ -128,6 +128,8 @@ async def enqueue_subscription_source_sync(
     sub = await db.get(Subscription, ss.subscription_id)
     if not sub:
         return skip_result(ss.id, "subscription_not_found")
+    if not sub.is_active:
+        return skip_result(ss.id, "subscription_inactive")
     if not force and not ss.is_enabled:
         return skip_result(ss.id, "source_disabled")
     if not force and ss.auth_healthy is False:

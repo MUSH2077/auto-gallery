@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,14 +20,71 @@ from app.models.work_source_tag import WorkSourceTag
 from app.models.tag import Tag
 from app.providers import registry
 from app.schemas.curation import RepositoryGraphResponse
+from app.schemas.deletion import (
+    BatchDeletionRequest,
+    DeletionPreviewResponse,
+    DeletionResultResponse,
+)
 from app.services.curation import CurationService
 from app.services.subscription_enqueue import enqueue_subscription_source_sync
 from app.services.repository_identity import resolve_repository_source_creator_ids
 from app.services.sync_outcome import download_job_outcome
 
 router = APIRouter(dependencies=[RequirePermission("library")])
+mutation_router = APIRouter()
 
 RUNNING_STATUSES = {"enqueued", "downloading", "downloaded", "importing"}
+
+
+@mutation_router.post(
+    "/batch-deletion-preview",
+    response_model=DeletionPreviewResponse,
+)
+async def batch_repository_deletion_preview(
+    data: BatchDeletionRequest,
+    user=RequirePermission("subscriptions"),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.hierarchical_deletion import HierarchicalDeletionService
+
+    scope = await HierarchicalDeletionService(db).scope("repository", data.ids)
+    return scope.preview_payload(is_admin=user.is_admin)
+
+
+@mutation_router.post(
+    "/batch-delete",
+    response_model=DeletionResultResponse,
+    responses={202: {"model": DeletionResultResponse, "description": "Permanent deletion queued"}},
+)
+async def batch_delete_repositories(
+    data: BatchDeletionRequest,
+    response: Response,
+    user=RequirePermission("subscriptions"),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.cache import invalidate_creator_subscription_caches
+    from app.services.hierarchical_deletion import (
+        HierarchicalDeletionService,
+        enqueue_permanent_deletion,
+    )
+
+    if data.delete_files and not user.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Administrator access required to delete files",
+        )
+    service = HierarchicalDeletionService(db)
+    scope = await service.scope("repository", data.ids)
+    service.ensure_no_active_jobs(scope)
+    if user.is_admin:
+        response.status_code = 202
+        result = await enqueue_permanent_deletion(
+            "repository", data.ids, delete_files=data.delete_files
+        )
+    else:
+        result = await service.soft_delete(scope)
+    invalidate_creator_subscription_caches(include_works=True)
+    return result
 
 
 def _provider_payload(ss: SubscriptionSource) -> dict:
@@ -162,6 +219,50 @@ async def _get_source_context(db: AsyncSession, source_id: UUID):
     if not row:
         raise HTTPException(status_code=404, detail="Repository not found")
     return row
+
+
+@mutation_router.get("/{source_id}/deletion-preview", response_model=DeletionPreviewResponse)
+async def repository_deletion_preview(
+    source_id: UUID,
+    user=RequirePermission("subscriptions"),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.hierarchical_deletion import HierarchicalDeletionService
+
+    scope = await HierarchicalDeletionService(db).scope("repository", [source_id])
+    return scope.preview_payload(is_admin=user.is_admin)
+
+
+@mutation_router.delete(
+    "/{source_id}",
+    response_model=DeletionResultResponse,
+    responses={202: {"model": DeletionResultResponse, "description": "Permanent deletion queued"}},
+)
+async def delete_repository(
+    source_id: UUID,
+    response: Response,
+    delete_files: bool = Query(False),
+    user=RequirePermission("subscriptions"),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.hierarchical_deletion import (
+        HierarchicalDeletionService,
+        enqueue_permanent_deletion,
+    )
+
+    if delete_files and not user.is_admin:
+        raise HTTPException(status_code=403, detail="Administrator access required to delete files")
+    svc = HierarchicalDeletionService(db)
+    scope = await svc.scope("repository", [source_id])
+    svc.ensure_no_active_jobs(scope)
+    if user.is_admin:
+        response.status_code = 202
+        result = await enqueue_permanent_deletion(
+            "repository", [source_id], delete_files=delete_files
+        )
+    else:
+        result = await svc.soft_delete(scope)
+    return result
 
 
 @router.get("/{source_id}")
