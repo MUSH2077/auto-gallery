@@ -1051,8 +1051,8 @@ python-multipart==0.0.32 \
     --hash=sha256:be54b7f3fa167bb83e4fcd936b887b708f4e57fe75911c02aebf53efaf8d938e \
     --hash=sha256:ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23
     # via -r requirements.in
-pyvips==2.2.3 \
-    --hash=sha256:43bceced0db492654c93008246a58a508e0373ae1621116b87b322f2ac72212f
+pyvips==3.1.1 \
+    --hash=sha256:84fe744d023b1084ac2516bb17064cacd41c7f8aabf8e524dd383534941b9301
     # via -r requirements.in
 pywavelets==1.9.0 \
     --hash=sha256:07b26526db2476974581274c43a9c2447c917418c6bd03c8d305ad2a5cd9fac3 \
