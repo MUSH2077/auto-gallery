@@ -72,11 +72,27 @@ class _FakeDownloadDB:
 
 
 def test_manual_download_retry_and_resume_use_downloads_queue(monkeypatch):
-    """TaskEngine retry/resume enqueues to the downloads queue."""
+    """TaskEngine retry/resume persist and publish downloads dispatches."""
+    from app.services import task_engine
     from app.services.task_engine import TaskEngine
 
-    _patch_queue(monkeypatch)
-    monkeypatch.setattr("app.services.task_engine.get_redis", lambda: object())
+    calls = []
+
+    async def prepare(_db, _job, **kwargs):
+        calls.append(("prepare", kwargs["queue_name"], kwargs["action"]))
+        return SimpleNamespace(rq_job_id=f"download-{kwargs['action']}")
+
+    async def publish(_db, _job, _prepared, **kwargs):
+        calls.append(("publish", "downloads", kwargs["action"]))
+        return SimpleNamespace(id="rq-job")
+
+    monkeypatch.setattr(task_engine, "prepare_download_dispatch", prepare)
+    monkeypatch.setattr(task_engine, "publish_prepared_download", publish)
+    monkeypatch.setattr(
+        task_engine.TaskEventPublisher,
+        "publish_status_change",
+        lambda *_args, **_kwargs: None,
+    )
 
     job = SimpleNamespace(
         id=uuid4(),
@@ -108,17 +124,71 @@ def test_manual_download_retry_and_resume_use_downloads_queue(monkeypatch):
     job.status = "paused"
     asyncio.run(engine.resume_download(job.id))
 
-    enqueue_calls = [call for call in _FakeQueue.calls if call[0] == "enqueue"]
-    assert enqueue_calls
-    queues = {call[1] for call in enqueue_calls}
-    assert queues == {"downloads"}, f"Expected only downloads queue, got {queues}"
+    assert calls == [
+        ("prepare", "downloads", "retry"),
+        ("publish", "downloads", "retry"),
+        ("prepare", "downloads", "resume"),
+        ("publish", "downloads", "resume"),
+    ]
 
-def test_import_retry_uses_imports_queue(monkeypatch):
-    """TaskEngine retry_import enqueues to the imports queue."""
+
+def test_unsafe_staging_conflict_cannot_be_blindly_retried():
+    """A classified canonical overwrite must require manual intervention."""
+    from app.services.task_engine import TaskEngine, TaskEngineError
+
+    job = SimpleNamespace(
+        id=uuid4(),
+        status="failed",
+        manifest={
+            "events": [
+                {
+                    "event": "staging_conflict",
+                    "conflict_details": {
+                        "file_type": "media",
+                        "old_sha256": "old",
+                        "new_sha256": "new",
+                    },
+                }
+            ]
+        },
+    )
+
+    class Repo:
+        async def get(self, _jid):
+            return job
+
+    engine = TaskEngine(_FakeDownloadDB())
+    engine.repo = Repo()
+
+    try:
+        asyncio.run(engine.retry_download(job.id))
+    except TaskEngineError as exc:
+        assert "cannot be fixed by retrying" in str(exc)
+    else:  # pragma: no cover - explicit assertion message for regressions
+        raise AssertionError("unsafe staging conflict was re-enqueued")
+
+def test_import_retry_and_resume_use_import_dispatch(monkeypatch):
+    """TaskEngine retry/resume persist fixed-id imports dispatches."""
+    from app.services import task_engine
     from app.services.task_engine import TaskEngine
 
-    _patch_queue(monkeypatch)
-    monkeypatch.setattr("app.services.task_engine.get_redis", lambda: object())
+    calls = []
+
+    async def prepare(_db, _job, **kwargs):
+        calls.append(("prepare", kwargs["action"]))
+        return SimpleNamespace(rq_job_id=f"import-{kwargs['action']}-attempt-2")
+
+    async def publish(_db, job_id, rq_job_id, **_kwargs):
+        calls.append(("publish", job_id, rq_job_id))
+        return "replayed"
+
+    monkeypatch.setattr(task_engine, "prepare_import_dispatch", prepare)
+    monkeypatch.setattr(task_engine, "publish_prepared_import", publish)
+    monkeypatch.setattr(
+        task_engine.TaskEventPublisher,
+        "publish_status_change",
+        lambda *_args, **_kwargs: None,
+    )
 
     job = SimpleNamespace(
         id=uuid4(),
@@ -144,7 +214,12 @@ def test_import_retry_uses_imports_queue(monkeypatch):
     engine = TaskEngine(DB())
     engine.repo = Repo()
     asyncio.run(engine.retry_import(job.id))
+    job.status = "paused"
+    asyncio.run(engine.resume_import(job.id))
 
-    enqueue_calls = [call for call in _FakeQueue.calls if call[0] == "enqueue"]
-    assert enqueue_calls
-    assert enqueue_calls[-1][1] == "imports"
+    assert calls == [
+        ("prepare", "retry"),
+        ("publish", job.id, "import-retry-attempt-2"),
+        ("prepare", "resume"),
+        ("publish", job.id, "import-resume-attempt-2"),
+    ]

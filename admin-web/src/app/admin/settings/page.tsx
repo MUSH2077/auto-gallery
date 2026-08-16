@@ -6,6 +6,7 @@ import { PageHeader, PageShell, ErrorState, ConfirmDialog, PermissionGuard } fro
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import Link from "next/link";
+import DomainDangerZone from "@/components/DomainDangerZone";
 
 export default function SettingsPage() {
   const toast = useToast();
@@ -21,8 +22,9 @@ export default function SettingsPage() {
 
   const cards = [
     { href: "/admin/settings/appearance", title: t("settings.appearance"), desc: t("settings.appearance.desc") },
-    { href: "/admin/settings/showcase", title: t("showcase_settings.title"), desc: t("showcase_settings.desc") },
+    { href: "/admin/settings/slideshow", title: t("slideshow_settings.title"), desc: t("slideshow_settings.desc") },
     { href: "/admin/settings/gallerydl", title: t("settings.gallerydl"), desc: t("settings.gallerydl.desc") },
+    { href: "/admin/settings/gitllery", title: t("settings.gitllery"), desc: t("settings.gitllery.desc") },
     { href: "/admin/settings/scheduler-defaults", title: t("settings.scheduler_defaults"), desc: t("settings.scheduler_defaults.desc") },
     { href: "/admin/settings/subscription-defaults", title: t("settings.subscription_defaults"), desc: t("settings.subscription_defaults.desc") },
     { href: "/admin/settings/download-defaults", title: t("settings.download_defaults"), desc: t("settings.download_defaults.desc") },
@@ -101,6 +103,11 @@ export default function SettingsPage() {
       {confirmReindex && <ConfirmDialog open title={t("settings.reindex_confirm_title")} message={t("settings.reindex_confirm_msg")}
         onConfirm={() => reindex.mutate()} onCancel={() => setConfirmReindex(false)}
         isPending={reindex.isPending} error={(reindex.error as Error)?.message} />}
+      <DomainDangerZone
+        entity="settings"
+        title={t("datamgmt.danger_reset_settings")}
+        description={t("datamgmt.danger_reset_settings_desc")}
+      />
     </PageShell>
     </PermissionGuard>
   );

@@ -207,6 +207,14 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
                 stats["skipped_invalid_metadata"] += len(jsons) - len(invalid_paths)
                 continue
             await ArtifactLedger(db).upsert_many(rows)
+            # Identity provisioning and the synthetic DownloadJob both change
+            # creator/subscription/repository search documents.  Persist their
+            # projection request in this same transaction; the asynchronous
+            # drain must not sit on the disk-recovery critical path.
+            from app.services.creator import CreatorService
+            await CreatorService(db)._request_creator_projection(
+                provisioned.creator.id,
+            )
             await db.commit()
 
             import_job_id = await _enqueue_import(str(job.id), new_json_paths=new_paths)

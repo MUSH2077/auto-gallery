@@ -524,7 +524,7 @@ export default function CreatorDetailPage() {
             ) : <p className="text-sm text-muted">{t("curation.empty_title")}</p>}
           </section>
 
-          <GitlleryPanel />
+          <GitlleryPanel creatorId={id} />
 
           <section className="card p-4">
             <div className="mb-3 flex items-center justify-between">

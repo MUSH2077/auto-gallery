@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,7 +15,6 @@ from app.schemas.work import WorkRead, WorkList, WorkListResponse
 from app.schemas.asset import PlaybackTicketRead, WorkAssetRead
 from app.schemas.curation import BatchCurateRequest, CurationCommitRead
 from app.repositories.work import WorkRepository
-from app.services.cache import cache_delete_pattern
 from app.models.asset import Asset
 from app.models.asset_source import AssetSource
 from app.models.work import Work
@@ -22,11 +22,15 @@ from app.models.work_source import WorkSource
 from app.models.tag import Tag
 from app.models.work_tag import WorkTag
 from app.services.media_assets import is_browser_playable_video, media_kind
+from app.services.media_derivatives import (
+    media_derivative_status,
+    request_media_derivatives,
+)
 from app.services.media_signing import signed_media_ticket, signed_media_url
 from app.services.curation import CurationService
-from app.services.gitllery import project_commit_safe
 from app.services.search import SearchBackendUnavailable, SearchPermissionError, SearchService
 from app.services.search_language import SearchQueryError
+from app.services.search_projection_outbox import request_search_projection
 
 # Reused as-is (same closure) for both the router-level gate and the
 # per-route parameter below — FastAPI's per-request dependency cache keys on
@@ -100,8 +104,8 @@ async def toggle_work_favorite(work_id: UUID, user: User = _require_curation, db
     svc = CurationService(db)
     commit = await svc.record_work_favorite(work, before, bool(work.is_favorite))
     commit.stats = {"work_count": 1}
+    await request_search_projection(db, [work.id])
     await db.commit()
-    await project_commit_safe(db, commit.id)
     await db.refresh(work)
     work.curation_state = svc.work_state_payload(await svc.work_state(work_id))
     return work
@@ -144,6 +148,33 @@ async def get_work_assets(work_id: UUID, user: User = _require_library, db: Asyn
         .order_by(Asset.created_at)
     )
     assets = result.scalars().all()
+    derivative_states = await media_derivative_status(
+        db, [asset.id for asset in assets]
+    )
+    lazy_requests = []
+    for asset in assets:
+        kind = media_kind(asset.mime_type, asset.file_name)
+        if kind in {"image", "animated_image", "video"} and not asset.thumb_sm_path:
+            try:
+                stat = (Path(settings.download_root) / asset.file_path).stat()
+            except OSError:
+                continue
+            lazy_requests.append(
+                {
+                    "asset_id": asset.id,
+                    "requested": {
+                        "thumbnail": True,
+                        "dimensions": True,
+                        "video": kind == "video",
+                    },
+                    "source_size": stat.st_size,
+                    "source_mtime_ns": stat.st_mtime_ns,
+                }
+            )
+            derivative_states[asset.id] = "pending"
+    if lazy_requests:
+        await request_media_derivatives(db, lazy_requests)
+        await db.commit()
     return [{
         "id": str(a.id), "file_name": a.file_name, "file_path": a.file_path,
         "file_size": a.file_size,
@@ -163,6 +194,11 @@ async def get_work_assets(work_id: UUID, user: User = _require_library, db: Asyn
         ),
         "preview_url": signed_media_url(str(a.id), "preview"),
         "original_url": signed_media_url(str(a.id), "original"),
+        "derivative_status": (
+            "ready"
+            if derivative_states.get(a.id) in {None, "complete"}
+            else derivative_states[a.id]
+        ),
         "created_at": a.created_at.isoformat(),
     } for a in assets]
 
@@ -215,9 +251,7 @@ async def delete_work(work_id: UUID, db: AsyncSession = Depends(get_db)):
     if not work:
         raise HTTPException(status_code=404, detail="Work not found")
     svc = CurationService(db)
-    commit = await svc.trash_works([work_id], message=f"Move work to trash: {work.title or work_id}")
-    await project_commit_safe(db, commit.id)
-    cache_delete_pattern("works:*")
+    await svc.trash_works([work_id], message=f"Move work to trash: {work.title or work_id}")
 
 
 @curation_router.post("/batch-delete")
@@ -228,8 +262,6 @@ async def batch_delete_works(data: dict, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail="ids list is required")
     svc = CurationService(db)
     commit = await svc.trash_works([UUID(wid) for wid in ids], message=f"Move {len(ids)} works to trash")
-    await project_commit_safe(db, commit.id)
-    cache_delete_pattern("works:*")
     return {
         "status": "ok",
         "deleted": int((commit.stats or {}).get("work_count", 0)),
@@ -247,8 +279,6 @@ async def batch_curate_works(data: BatchCurateRequest, db: AsyncSession = Depend
         commit = await svc.restore_works(data.ids, reason=data.reason, message=data.message)
     else:
         raise HTTPException(status_code=400, detail="action must be trash or restore")
-    await project_commit_safe(db, commit.id)
-    cache_delete_pattern("works:*")
     return await svc.commit_payload(commit.id)
 
 
@@ -274,6 +304,7 @@ async def batch_tag_works(data: dict, db: AsyncSession = Depends(get_db)):
         await db.flush()
 
     updated = 0
+    updated_work_ids: list[UUID] = []
     for wid in ids:
         try:
             if action == "add" and tag:
@@ -283,13 +314,21 @@ async def batch_tag_works(data: dict, db: AsyncSession = Depends(get_db)):
                 if not exists.scalar_one_or_none():
                     db.add(WorkTag(work_id=UUID(wid), tag_id=tag.id))
                     updated += 1
+                    updated_work_ids.append(UUID(wid))
             elif action == "remove" and tag:
                 await db.execute(
                     sql_delete(WorkTag).where(WorkTag.work_id == UUID(wid), WorkTag.tag_id == tag.id)
                 )
                 updated += 1
+                updated_work_ids.append(UUID(wid))
         except Exception:
             import logging
             logging.getLogger(__name__).warning("batch_tag_works failed for %s", wid, exc_info=True)
+    if updated_work_ids:
+        await request_search_projection(
+            db,
+            updated_work_ids,
+            tag_ids=[tag.id] if tag else (),
+        )
     await db.commit()
     return {"status": "ok", "updated": updated}

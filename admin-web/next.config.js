@@ -1,6 +1,13 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
+  // The bounded Docker build runs `tsc --noEmit` in a separate, mandatory
+  // stage after Next has generated its route types. Keeping the switch
+  // environment-scoped means ordinary `next build` calls still use Next's
+  // built-in checker and cannot accidentally weaken local type safety.
+  typescript: {
+    ignoreBuildErrors: process.env.NEXT_SKIP_INTERNAL_TYPECHECK === '1',
+  },
   // Playwright and LAN development use the loopback IP rather than localhost.
   // Next 16 blocks cross-origin development assets unless this is explicit.
   allowedDevOrigins: ['127.0.0.1'],

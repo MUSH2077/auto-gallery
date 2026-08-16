@@ -13,7 +13,6 @@ import logging
 import os
 import signal
 import threading
-import time
 from typing import Any
 
 from app.services.redis_client import get_redis
@@ -22,7 +21,29 @@ from app.services.redis_pubsub import TaskChannel, TaskEventPublisher
 logger = logging.getLogger(__name__)
 
 HEARTBEAT_INTERVAL = 10  # seconds
-CANCEL_GRACE_SECONDS = 3  # wait between SIGTERM and SIGKILL
+
+
+def signal_process_group(proc_pid: int, sig: int) -> bool:
+    """Signal a subprocess group without waiting or guessing that it exited.
+
+    The thread receiving Redis control messages must stay non-blocking.  The
+    owner of the ``Popen`` object is responsible for ``wait()`` and escalation,
+    because it is the only component that can reap the process conclusively.
+    """
+
+    try:
+        pgid = os.getpgid(proc_pid)
+    except ProcessLookupError:
+        # ``start_new_session=True`` makes pid == pgid.  The leader can have
+        # exited while a helper remains in that group, so retain this fallback.
+        pgid = proc_pid
+    except OSError:
+        return False
+    try:
+        os.killpg(pgid, sig)
+        return True
+    except (ProcessLookupError, OSError):
+        return False
 
 
 # ──────────────────────────────────────────────
@@ -137,23 +158,16 @@ class ControlListener:
 
     def _handle_cancel(self) -> None:
         if self.proc_pid is not None:
-            self._kill_process_group(signal.SIGTERM, grace=CANCEL_GRACE_SECONDS)
+            self._kill_process_group(signal.SIGTERM)
 
-    def _kill_process_group(self, sig: int, grace: int = 0) -> None:
-        try:
-            pgid = os.getpgid(self.proc_pid)
-            os.killpg(pgid, sig)
-            logger.info("Sent signal %d to process group %d (job %s)", sig, pgid, self.job_id)
-        except (ProcessLookupError, OSError):
-            return
-
-        if grace > 0:
-            time.sleep(grace)
-            try:
-                os.killpg(pgid, signal.SIGKILL)
-                logger.info("Sent SIGKILL to process group %d (job %s)", pgid, self.job_id)
-            except (ProcessLookupError, OSError):
-                pass
+    def _kill_process_group(self, sig: int) -> None:
+        if signal_process_group(self.proc_pid, sig):
+            logger.info(
+                "Sent signal %d to process group for pid %d (job %s)",
+                sig,
+                self.proc_pid,
+                self.job_id,
+            )
 
 
 # ──────────────────────────────────────────────

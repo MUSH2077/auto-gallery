@@ -1,7 +1,7 @@
 "use client";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys } from "@/lib/api";
+import { api, queryKeys, type ClearEntity } from "@/lib/api";
 import { PageHeader, ConfirmDialog, Modal, PageShell, StatusBadge, PermissionGuard } from "@/components";
 import ChartFrame from "@/components/charts/ChartFrame";
 import StorageColonnade, { type StorageColonnadeGroup } from "@/components/charts/StorageColonnade";
@@ -18,6 +18,7 @@ import { adminRoutes } from "@/lib/adminRoutes";
 type Severity = "error" | "warning" | "info";
 
 function formatSize(mb: number): string {
+  if (!Number.isFinite(mb)) return "-";
   if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
   if (mb >= 1) return `${mb.toFixed(1)} MB`;
   return `${(mb * 1024).toFixed(0)} KB`;
@@ -51,10 +52,9 @@ export default function DataManagementPage() {
   const toast = useToast();
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [resetLedger, setResetLedger] = useState(false);
-  const [confirmAction, setConfirmAction] = useState<string | null>(null);
-  const [activeAction, setActiveAction] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<ClearEntity | null>(null);
+  const [activeAction, setActiveAction] = useState<ClearEntity | null>(null);
   const [integrityItems, setIntegrityItems] = useState<{ type: string; description: string; count: number; items: any[] } | null>(null);
-  const [dangerConfirm, setDangerConfirm] = useState("");
 
   // ── Data queries ──
   const systemInfo = useQuery({
@@ -135,26 +135,25 @@ export default function DataManagementPage() {
   const runIntegrity = () => integrity.refetch();
 
   const dangerActions = [
-    { key: "works", title: t("datamgmt.danger_clear_works"), desc: t("datamgmt.danger_clear_works_desc"), color: "red" },
-    { key: "creators", title: t("datamgmt.danger_clear_creators"), desc: t("datamgmt.danger_clear_creators_desc"), color: "red" },
-    { key: "subs", title: t("datamgmt.danger_clear_subs"), desc: t("datamgmt.danger_clear_subs_desc"), color: "red" },
-    { key: "tags", title: t("datamgmt.danger_clear_tags"), desc: t("datamgmt.danger_clear_tags_desc"), color: "orange" },
-    { key: "jobs", title: t("datamgmt.danger_clear_jobs"), desc: t("datamgmt.danger_clear_jobs_desc"), color: "orange" },
     { key: "all", title: t("datamgmt.danger_clear_all"), desc: t("datamgmt.danger_clear_all_desc"), color: "red" },
-    { key: "settings", title: t("datamgmt.danger_reset_settings"), desc: t("datamgmt.danger_reset_settings_desc"), color: "blue" },
-  ];
+  ] satisfies { key: ClearEntity; title: string; desc: string; color: string }[];
 
-  const clearEntityForAction = (key: string) => key === "subs" ? "downloads" : key;
+  const clearPreview = useQuery({
+    queryKey: ["clear-impact-preview", confirmAction],
+    queryFn: () => api.previewClearEntity(confirmAction!),
+    enabled: !!confirmAction,
+    staleTime: 30_000,
+  });
 
   const clearOperationMutation = useMutation({
-    mutationFn: ({ entity }: { key: string; entity: string; title: string }) => api.startClearOperation(entity),
+    mutationFn: ({ entity, confirmation }: { entity: ClearEntity; confirmation: string; title: string }) => api.startClearOperation(entity, confirmation),
     onMutate: (vars) => {
-      setActiveAction(vars.key);
+      setActiveAction(vars.entity);
     },
     onSuccess: (data, vars) => {
       setResult({ ok: true, msg: t("datamgmt.action_queued", { action: vars.title }) });
       notify.startOperationJob(data.job_id, "admin-clear", vars.title, { entity: vars.entity });
-      if (vars.entity === "creators" || vars.entity === "all") {
+      if (vars.entity === "creators" || vars.entity === "subscriptions" || vars.entity === "all") {
         qc.setQueryData(queryKeys.creators.count, { count: 0 });
         qc.setQueryData(queryKeys.subscriptions.count, { count: 0 });
         qc.setQueriesData({ queryKey: ["creators", "list"] }, { items: [], total: 0 });
@@ -171,7 +170,6 @@ export default function DataManagementPage() {
     },
   });
 
-  const dangerUnlocked = dangerConfirm === t("datamgmt.danger_confirm_text");
   const clearOperation = notify.operationJob?.kind === "admin-clear" ? notify.operationJob : null;
 
   // Computed
@@ -593,22 +591,9 @@ export default function DataManagementPage() {
         </div>
         <p className="text-xs text-danger mb-4">{t("datamgmt.danger_warning")}</p>
 
-        {/* Confirmation input */}
-        <div className="mb-4">
-          <input
-            type="text"
-            value={dangerConfirm}
-            onChange={(e) => setDangerConfirm(e.target.value)}
-            placeholder={t("datamgmt.danger_confirm_text")}
-            className="input w-full max-w-sm border-danger dark:border-danger"
-          />
-          <p className="text-xs text-muted mt-1">{t("datamgmt.danger_confirm_hint")}</p>
-        </div>
-
         <div className="space-y-2">
           {dangerActions.map((a) => {
-            const actionEntity = clearEntityForAction(a.key);
-            const isCurrentOperation = clearOperation?.status === "running" && clearOperation.meta?.entity === actionEntity;
+            const isCurrentOperation = clearOperation?.status === "running" && clearOperation.meta?.entity === a.key;
             const isPending = (clearOperationMutation.isPending && activeAction === a.key) || isCurrentOperation;
             return (
               <div key={a.key} className={`flex min-w-0 flex-col items-stretch gap-3 rounded-md border-l-4 p-3 sm:flex-row sm:items-center sm:justify-between ${
@@ -622,11 +607,11 @@ export default function DataManagementPage() {
                 </div>
                 <button
                   onClick={() => setConfirmAction(a.key)}
-                  disabled={!dangerUnlocked || isPending}
-                  className={`min-h-11 w-full shrink-0 rounded-md px-4 py-1.5 text-xs font-semibold text-white transition-opacity disabled:opacity-30 sm:ml-3 sm:w-auto ${
-                    a.color === "red" ? "bg-danger hover:bg-danger/90" :
+                  disabled={isPending}
+                  className={`min-h-11 w-full shrink-0 rounded-md px-4 py-1.5 text-xs font-semibold transition-opacity disabled:opacity-30 sm:ml-3 sm:w-auto ${
+                    a.color === "red" ? "border border-danger/40 bg-danger-subtle text-danger hover:bg-danger/20" :
                     a.color === "orange" ? "bg-warning text-canvas hover:bg-warning/90" :
-                    "bg-accent hover:bg-accent/90"
+                    "bg-accent text-white hover:bg-accent/90"
                   }`}
                 >
                   {isPending ? "..." : a.title}
@@ -642,13 +627,14 @@ export default function DataManagementPage() {
         <ConfirmDialog
           open
           title={t("datamgmt.confirm_title").replace("{action}", dangerActions.find((a) => a.key === confirmAction)?.title || confirmAction)}
-          message={t("datamgmt.confirm_msg").replace("{action}", confirmAction)}
+          message={`${t("datamgmt.confirm_msg").replace("{action}", confirmAction)}${clearPreview.data ? ` ${Object.entries(clearPreview.data.counts).map(([name, count]) => `${name}: ${count}`).join(" · ")}` : ""}`}
+          confirmationPhrase={clearPreview.data?.confirmation_phrase}
           onConfirm={() => {
             const action = dangerActions.find((a) => a.key === confirmAction);
-            if (action) {
+            if (action && clearPreview.data) {
               clearOperationMutation.mutate({
-                key: action.key,
-                entity: clearEntityForAction(action.key),
+                entity: action.key,
+                confirmation: clearPreview.data.confirmation_phrase,
                 title: action.title,
               });
             }

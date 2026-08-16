@@ -2,15 +2,16 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import RequirePermission
-from sqlalchemy import select
+from sqlalchemy import delete as sql_delete, select, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.schemas.tag import TagRead, TagCreate, TagUpdate, TagDetail, CreatorRef
 from app.repositories.tag import TagRepository
-from app.services.search import SearchService
+from app.services.search_projection_outbox import request_search_projection
 from app.models.tag import Tag
 from app.models.work_tag import WorkTag
+from app.models.work_source import WorkSource
 from app.models.work_source_tag import WorkSourceTag
 
 router = APIRouter(dependencies=[RequirePermission("library")])
@@ -25,9 +26,15 @@ curation_router = APIRouter(dependencies=[RequirePermission("curation")])
 async def list_tags(offset: int = 0, limit: int = 100,
                     sort_by: str = "usage_count",
                     sort_order: str = "desc",
+                    include_all: bool = False,
                     db: AsyncSession = Depends(get_db)):
     repo = TagRepository(db)
-    return await repo.list_all(offset, limit, sort_by=sort_by, sort_order=sort_order)
+    return await repo.list_all(
+        0 if include_all else offset,
+        None if include_all else limit,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
 
 
 @router.get("/{tag_id}", response_model=TagDetail)
@@ -81,8 +88,8 @@ async def get_tag(tag_id: UUID, db: AsyncSession = Depends(get_db)):
 async def create_tag(data: TagCreate, db: AsyncSession = Depends(get_db)):
     repo = TagRepository(db)
     tag = await repo.create(data.model_dump())
+    await request_search_projection(db, tag_ids=[tag.id])
     await db.commit()
-    await SearchService(db).refresh_reference_indexes()
     return tag
 
 
@@ -92,9 +99,21 @@ async def update_tag(tag_id: UUID, data: TagUpdate, db: AsyncSession = Depends(g
     tag = await repo.get(tag_id)
     if not tag:
         raise HTTPException(status_code=404, detail="Tag not found")
+    affected_work_ids = set((await db.execute(
+        select(WorkTag.work_id).where(WorkTag.tag_id == tag_id)
+    )).scalars().all())
+    affected_work_ids.update((await db.execute(
+        select(WorkSource.work_id)
+        .join(WorkSourceTag, WorkSourceTag.work_source_id == WorkSource.id)
+        .where(WorkSourceTag.tag_id == tag_id)
+    )).scalars().all())
     tag = await repo.update(tag, data.model_dump(exclude_unset=True))
+    await request_search_projection(
+        db,
+        affected_work_ids,
+        tag_ids=[tag.id],
+    )
     await db.commit()
-    await SearchService(db).refresh_reference_indexes()
     return tag
 
 
@@ -115,36 +134,60 @@ async def merge_tags(data: dict, db: AsyncSession = Depends(get_db)):
     source_uuid = UUID(source_id)
     target_uuid = UUID(target_id)
 
-    # Move work_tags
-    wts = await db.execute(select(WorkTag).where(WorkTag.tag_id == source_uuid))
-    for wt in wts.scalars().all():
-        exists = await db.execute(
-            select(WorkTag).where(WorkTag.work_id == wt.work_id, WorkTag.tag_id == target_uuid)
-        )
-        if not exists.scalar_one_or_none():
-            wt.tag_id = target_uuid
-        else:
-            await db.delete(wt)
+    # Capture affected works once, then merge both relation tables with four
+    # set-based statements.  The previous ORM loop issued up to two queries per
+    # one of ~470k associations.
+    affected_work_ids = set((await db.execute(
+        select(WorkTag.work_id).where(WorkTag.tag_id == source_uuid)
+    )).scalars().all())
+    affected_work_ids.update((await db.execute(
+        select(WorkSource.work_id)
+        .join(WorkSourceTag, WorkSourceTag.work_source_id == WorkSource.id)
+        .where(WorkSourceTag.tag_id == source_uuid)
+    )).scalars().all())
 
-    # Move work_source_tags
-    wsts = await db.execute(select(WorkSourceTag).where(WorkSourceTag.tag_id == source_uuid))
-    for wst in wsts.scalars().all():
-        exists = await db.execute(
-            select(WorkSourceTag).where(WorkSourceTag.work_source_id == wst.work_source_id, WorkSourceTag.tag_id == target_uuid)
-        )
-        if not exists.scalar_one_or_none():
-            wst.tag_id = target_uuid
-        else:
-            await db.delete(wst)
+    duplicate_direct_ids = select(WorkTag.id).where(
+        WorkTag.tag_id == source_uuid,
+        WorkTag.work_id.in_(
+            select(WorkTag.work_id).where(WorkTag.tag_id == target_uuid)
+        ),
+    )
+    await db.execute(sql_delete(WorkTag).where(WorkTag.id.in_(duplicate_direct_ids)))
+    await db.execute(
+        sql_update(WorkTag)
+        .where(WorkTag.tag_id == source_uuid)
+        .values(tag_id=target_uuid)
+    )
+
+    duplicate_source_ids = select(WorkSourceTag.id).where(
+        WorkSourceTag.tag_id == source_uuid,
+        WorkSourceTag.work_source_id.in_(
+            select(WorkSourceTag.work_source_id).where(
+                WorkSourceTag.tag_id == target_uuid
+            )
+        ),
+    )
+    await db.execute(
+        sql_delete(WorkSourceTag).where(WorkSourceTag.id.in_(duplicate_source_ids))
+    )
+    await db.execute(
+        sql_update(WorkSourceTag)
+        .where(WorkSourceTag.tag_id == source_uuid)
+        .values(tag_id=target_uuid)
+    )
 
     # Delete source tag
     source_tag = await db.get(Tag, source_uuid)
     if source_tag:
         await db.delete(source_tag)
 
+    await request_search_projection(
+        db,
+        affected_work_ids,
+        tag_ids=[target_uuid],
+        deleted_tag_ids=[source_uuid],
+    )
     await db.commit()
-    await SearchService(db).delete_tag(str(source_uuid))
-    await SearchService(db).refresh_reference_indexes()
     return {"status": "ok", "message": "Tags merged"}
 
 
@@ -160,8 +203,19 @@ async def delete_tag(tag_id: UUID, db: AsyncSession = Depends(get_db)):
     tag = await repo.get(tag_id)
     if not tag:
         raise HTTPException(status_code=404, detail="Tag not found")
+    direct_work_ids = set((await db.execute(
+        select(WorkTag.work_id).where(WorkTag.tag_id == tag_id)
+    )).scalars().all())
+    source_work_ids = set((await db.execute(
+        select(WorkSource.work_id)
+        .join(WorkSourceTag, WorkSourceTag.work_source_id == WorkSource.id)
+        .where(WorkSourceTag.tag_id == tag_id)
+    )).scalars().all())
     await repo.delete(tag)
+    await request_search_projection(
+        db,
+        direct_work_ids | source_work_ids,
+        deleted_tag_ids=[tag_id],
+    )
     await db.commit()
-    await SearchService(db).delete_tag(str(tag_id))
-    await SearchService(db).refresh_reference_indexes()
     return {"status": "ok"}

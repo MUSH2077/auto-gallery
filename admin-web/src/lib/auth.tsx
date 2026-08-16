@@ -19,9 +19,7 @@ export interface AuthUser {
   username: string;
   display_name: string | null;
   must_change_password: boolean;
-  // Server-side preferences blob (whole-replace shape from `/me`), used e.g.
-  // to decide post-login landing (`preferences.showcase.landing`) without
-  // depending on localStorage, which can be empty on a fresh browser/device.
+  // Server-side preferences blob (whole-replace shape from `/me`).
   preferences?: Record<string, unknown> | null;
 }
 

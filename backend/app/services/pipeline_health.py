@@ -17,13 +17,13 @@ def _age_cutoff(stale_after_seconds: int) -> datetime:
     return datetime.now(timezone.utc) - timedelta(seconds=max(stale_after_seconds, 1))
 
 
-def _redis_exists(redis_client: Any | None, key: str) -> bool:
+def _redis_exists(redis_client: Any | None, key: str) -> bool | None:
     if redis_client is None:
-        return False
+        return None
     try:
         return bool(redis_client.exists(key))
     except Exception:
-        return False
+        return None
 
 
 async def collect_pipeline_health(
@@ -101,9 +101,12 @@ async def collect_pipeline_health(
         .order_by(ImportJob.created_at)
         .limit(sample_limit)
     )).scalars())
+    heartbeat_states = {
+        job.id: _redis_exists(redis_client, f"task:{job.id}:heartbeat_ts")
+        for job in running_imports
+    }
     importing_without_heartbeat = [
-        job for job in running_imports
-        if not _redis_exists(redis_client, f"task:{job.id}:heartbeat_ts")
+        job for job in running_imports if heartbeat_states[job.id] is False
     ]
 
     def job_summary(job: DownloadJob | ImportJob) -> dict[str, Any]:
@@ -123,6 +126,9 @@ async def collect_pipeline_health(
 
     return {
         "ok": not any(stuck.values()),
+        "heartbeat_state_available": all(
+            state is not None for state in heartbeat_states.values()
+        ),
         "stale_after_seconds": stale_after_seconds,
         "download_statuses": {status: int(count) for status, count in download_status_rows.all()},
         "import_statuses": {status: int(count) for status, count in import_status_rows.all()},

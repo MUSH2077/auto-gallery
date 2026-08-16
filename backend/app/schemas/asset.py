@@ -38,6 +38,7 @@ class WorkAssetRead(BaseModel):
     poster_url: str | None = None
     preview_url: str | None = None
     original_url: str | None = None
+    derivative_status: Literal["ready", "pending", "processing", "failed"] = "ready"
     created_at: datetime
 
 

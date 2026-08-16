@@ -54,7 +54,7 @@ Expected: Only matches in the `api/index.ts` definition itself (already removed)
 - [ ] **Step 1: Remove orphan containers**
 
 ```bash
-cd /volume3/docker/auto-gallery && docker compose down --remove-orphans
+cd /volume2/docker/auto-gallery && docker compose down --remove-orphans
 ```
 
 - [ ] **Step 2: Restart services**
@@ -270,7 +270,7 @@ Expected: No matches.
 - [ ] **Step 1: Rebuild admin-web image**
 
 ```bash
-cd /volume3/docker/auto-gallery && docker compose build admin-web
+cd /volume2/docker/auto-gallery && docker compose build admin-web
 ```
 
 - [ ] **Step 2: Recreate admin-web container**

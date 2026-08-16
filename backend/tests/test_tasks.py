@@ -157,7 +157,7 @@ async def test_retry_admin_disk_import_task_requeues_same_task(monkeypatch):
             self.connection = connection
 
         def enqueue(self, func, job_id, options, job_timeout=None, result_ttl=None):
-            assert self.name == "operations"
+            assert self.name == "maintenance"
             assert func == "app.jobs.admin_operations.run_disk_import_operation"
             assert options == {"source": "pixiv"}
             assert job_timeout == 14400
@@ -171,6 +171,12 @@ async def test_retry_admin_disk_import_task_requeues_same_task(monkeypatch):
     fake_redis = FakeRedis()
     statuses = []
     monkeypatch.setattr(tasks_api, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(tasks_api, "ensure_redis_enqueue_capacity", lambda _redis: None)
+    monkeypatch.setattr(
+        tasks_api,
+        "checked_enqueue",
+        lambda queue, *args, **kwargs: queue.enqueue(*args, **kwargs),
+    )
     monkeypatch.setattr(tasks_api, "get_operation_status", lambda job_id: None)
     monkeypatch.setattr(tasks_api, "set_operation_status", lambda *args, **kwargs: statuses.append((args, kwargs)))
     monkeypatch.setattr("rq.Queue", FakeQueue)
@@ -234,7 +240,7 @@ async def test_retry_admin_gitllery_sync_task_requeues_with_options(monkeypatch)
             self.connection = connection
 
         def enqueue(self, func, job_id, options, job_timeout=None, result_ttl=None):
-            assert self.name == "operations"
+            assert self.name == "maintenance"
             assert func == "app.jobs.admin_operations.run_gitllery_sync_operation"
             assert options == {"mode": "reconcile", "repository_id": None}
 
@@ -245,6 +251,12 @@ async def test_retry_admin_gitllery_sync_task_requeues_with_options(monkeypatch)
 
     fake_redis = FakeRedis()
     monkeypatch.setattr(tasks_api, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(tasks_api, "ensure_redis_enqueue_capacity", lambda _redis: None)
+    monkeypatch.setattr(
+        tasks_api,
+        "checked_enqueue",
+        lambda queue, *args, **kwargs: queue.enqueue(*args, **kwargs),
+    )
     monkeypatch.setattr(tasks_api, "get_operation_status", lambda job_id: None)
     monkeypatch.setattr(tasks_api, "set_operation_status", lambda *args, **kwargs: None)
     monkeypatch.setattr("rq.Queue", FakeQueue)

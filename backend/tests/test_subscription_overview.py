@@ -8,6 +8,7 @@ def test_subscription_source_read_exposes_sync_timestamps():
 
     assert "last_synced_at" in SubscriptionSourceRead.model_fields
     assert "last_attempted_at" in SubscriptionSourceRead.model_fields
+    assert "next_sync_at" in SubscriptionSourceRead.model_fields
     assert "auth_status" in SubscriptionSourceRead.model_fields
     assert "auth_error_reason" in SubscriptionSourceRead.model_fields
     assert "last_auth_checked_at" in SubscriptionSourceRead.model_fields

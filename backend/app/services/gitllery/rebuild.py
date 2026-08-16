@@ -8,6 +8,7 @@ from __future__ import annotations
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -225,8 +226,19 @@ class GitlleryRebuilder:
             commit.stats = mc.stats
             report["commits_restored"] += 1
 
-        report["states_applied"] = await self._apply_final_state(repos, maps, dry_run)
+        states_applied, changed_work_ids = await self._apply_final_state(
+            repos,
+            maps,
+            dry_run,
+        )
+        report["states_applied"] = states_applied
         if not dry_run:
+            if changed_work_ids:
+                from app.services.search_projection_outbox import (
+                    request_search_projection,
+                )
+
+                await request_search_projection(self.db, changed_work_ids)
             await self.db.commit()
             from app.services.gitllery.service import _invalidate_status_cache, _reset_checkpoint
             _invalidate_status_cache()
@@ -294,12 +306,13 @@ class GitlleryRebuilder:
             CurationChange.commit_id == commit_id))).scalar()
         return bool(n)
 
-    async def _apply_final_state(self, repos, maps, dry_run) -> int:
+    async def _apply_final_state(self, repos, maps, dry_run) -> tuple[int, set[UUID]]:
         from uuid import UUID
         from app.services.curation import CurationService, VISIBLE
         from app.models import Work
         cur = CurationService(self.db)
         applied = 0
+        changed_work_ids: set[UUID] = set()
         for repo, _cfg in repos:
             head = repo.head_commit()
             if not head:
@@ -330,6 +343,7 @@ class GitlleryRebuilder:
                     work = await self.db.get(Work, UUID(new_id))
                     if work is not None:
                         work.is_favorite = bool(state.get("is_favorite", False))
+                    changed_work_ids.add(UUID(new_id))
                     applied += 1
                 elif st == "creator":
                     new_id = maps["creator"].get(old_sid)
@@ -342,4 +356,4 @@ class GitlleryRebuilder:
                     cs.reason = state.get("reason")
                     applied += 1
                 # asset: best-effort skip (no natural key)
-        return applied
+        return applied, changed_work_ids

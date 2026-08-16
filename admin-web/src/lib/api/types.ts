@@ -6,11 +6,192 @@ export interface HealthResponse {
   status: string;
   version: string;
   services: Record<string, string>;
+  disk?: string;
+  resource_pressure?: ResourcePressureSnapshot;
   business?: {
     queues?: Record<string, number>;
-    jobs?: Record<string, number>;
+    jobs?: {
+      downloads?: Record<string, number>;
+      imports?: Record<string, number>;
+      auth_unhealthy_sources?: number;
+    };
     scheduler?: Record<string, string | null>;
     gallerydl?: Record<string, unknown>;
+    outboxes?: Record<string, OutboxHealthSnapshot>;
+  };
+}
+
+export interface OutboxHealthSnapshot {
+  waiting?: number | null;
+  processing?: number | null;
+  failed?: number | null;
+  oldest_age_seconds?: number | null;
+}
+
+export interface ResourceProfileBudget {
+  allowed?: boolean;
+  would_allow?: boolean;
+  enforced?: boolean;
+  reason?: string | null;
+  memory_reservation_bytes?: number | null;
+  slice_seconds?: number | null;
+  work_units?: number | null;
+  active_grants?: number | null;
+  hard_gate_enforced?: boolean;
+  soft_budget_enforced?: boolean;
+  token_scope?: string | null;
+  reservation_capacity_bytes?: number | null;
+}
+
+export interface ResourceBudgetSnapshot {
+  algorithm?: string;
+  governance_mode?: "shadow" | "enforce" | string;
+  enforced_profiles?: string[];
+  generation?: number | null;
+  valid_for_seconds?: number | null;
+  valid_until?: string | null;
+  valid_until_epoch?: number | null;
+  throughput_scale?: number | null;
+  computed_throughput_scale?: number | null;
+  effective_throughput_scale?: number | null;
+  rollout_max_scale?: number | null;
+  read_bytes_per_second?: number | null;
+  write_bytes_per_second?: number | null;
+  burst_seconds?: number | null;
+  profile_aliases?: Record<string, string>;
+  profile_grants?: Record<string, ResourceProfileBudget>;
+  profiles?: Record<string, ResourceProfileBudget>;
+  grants?: Record<string, number | ResourceProfileBudget>;
+  active_leases?: Record<string, unknown> | unknown[];
+  reservation?: {
+    mode?: string;
+    hard_memory_floor_bytes?: number | null;
+    capacity_bytes?: number | null;
+    active_leases?: Array<Record<string, unknown>>;
+    active_count?: number | null;
+    reserved_bytes?: number | null;
+    network_active?: number | boolean | null;
+    disk_active?: number | boolean | null;
+    maintenance_active?: number | boolean | null;
+    error?: string | null;
+  };
+}
+
+export interface ResourcePressureSnapshot {
+  status: "normal" | "warning" | "paused" | string;
+  controller_mode?: "normal" | "constrained" | "critical" | string;
+  controller?: {
+    mode?: "normal" | "constrained" | "critical" | string;
+    legacy_status?: "normal" | "warning" | "paused" | string;
+    governance_mode?: "shadow" | "enforce" | string;
+    enforced_profiles?: string[];
+    algorithm?: string;
+    generation?: number | null;
+    computed_throughput_scale?: number | null;
+    effective_throughput_scale?: number | null;
+    rollout_max_scale?: number | null;
+    hard_gate_active?: boolean;
+    psi_feedback_only?: boolean;
+    hard_limits?: Record<string, number | boolean | null>;
+    device_calibration?: {
+      memory_reserve_mode?: "auto" | "fixed" | string;
+      memory_total_bytes?: number | null;
+      memory_reserve_ratio?: number | null;
+      memory_reserve_min_bytes?: number | null;
+      memory_reserve_max_bytes?: number | null;
+      memory_reserve_bytes?: number | null;
+      grantable_memory_capacity_bytes?: number | null;
+      warning_available_bytes?: number | null;
+      resume_available_bytes?: number | null;
+      source?: string;
+    };
+    recovery_conditions?: Record<string, string | number | boolean | null>;
+  };
+  project_cgroup_contribution?: {
+    scope?: string;
+    backend?: Record<string, unknown>;
+    workers?: Record<string, unknown>;
+  };
+  reasons: string[];
+  hard_reasons?: string[];
+  soft_reasons?: string[];
+  sampled_at?: string | null;
+  memory?: {
+    available_bytes?: number | null;
+    total_bytes?: number | null;
+    available_ratio?: number | null;
+    available_change_bytes_per_second?: number | null;
+  };
+  swap?: {
+    free_bytes?: number | null;
+    total_bytes?: number | null;
+    free_ratio?: number | null;
+    in_bytes_per_second?: number | null;
+    out_bytes_per_second?: number | null;
+    activity_bytes_per_second?: number | null;
+  };
+  psi?: {
+    memory_full_avg10?: number | null;
+    io_full_avg10?: number | null;
+    memory_full_avg60?: number | null;
+    memory_full_avg300?: number | null;
+    io_full_avg60?: number | null;
+    io_full_avg300?: number | null;
+    memory_soft_trigger?: number | null;
+    io_soft_trigger?: number | null;
+    feedback_only?: boolean;
+  };
+  budget?: ResourceBudgetSnapshot;
+  grants?: Record<string, unknown>;
+  active_leases?: Record<string, unknown> | unknown[];
+  trends?: Record<string, unknown>;
+  baseline?: Record<string, unknown>;
+  foreground?: {
+    p95_ms?: number | null;
+    sample_count?: number | null;
+    window_seconds?: number | null;
+    soft_limit_ms?: number | null;
+    feedback_only?: boolean;
+  };
+  cgroups?: Record<string, Record<string, number | string | null>>;
+  cgroup?: Record<string, Record<string, number | string | null>>;
+  cgroup_memory_events?: {
+    max?: number | null;
+    oom?: number | null;
+    oom_kill?: number | null;
+    max_delta?: number | null;
+    oom_delta?: number | null;
+    oom_kill_delta?: number | null;
+    scope?: string;
+  };
+  redis?: {
+    used_memory_bytes?: number | null;
+    maxmemory_bytes?: number | null;
+    usage_ratio?: number | null;
+    writable?: boolean | null;
+    rejected_writes?: number | null;
+    oom_rejected_writes?: number | null;
+    application_rejected_enqueues?: number | null;
+  };
+  queues?: Record<string, number>;
+  queue_activity?: Record<string, {
+    queued?: number | null;
+    scheduled?: number | null;
+    deferred?: number | null;
+    waiting?: number | null;
+    running?: number | null;
+  }>;
+  workers?: {
+    cgroup_contribution?: Record<string, unknown>;
+    resource_leases?: Record<string, unknown>;
+    [key: string]: unknown;
+  };
+  download_concurrency?: {
+    configured: number;
+    cap: number;
+    effective: number;
+    desired_effective?: number;
+    restart_required?: boolean;
   };
 }
 
@@ -22,6 +203,13 @@ export interface TaskRun {
   subject_id?: string | null;
   parent_task_id?: string | null;
   status: string;
+  resource_state?: "running" | "waiting" | "yielded" | string | null;
+  resource_reason?: string | null;
+  attention_state?: "none" | "open" | "resolved" | "acknowledged" | string;
+  reason_code?: string | null;
+  acknowledged_at?: string | null;
+  resolved_at?: string | null;
+  compactable_at?: string | null;
   queue_name?: string | null;
   rq_job_id?: string | null;
   title?: string | null;
@@ -63,6 +251,47 @@ export interface TaskRunListResponse {
   items: TaskRun[];
 }
 
+export type OperationsView = "attention" | "active" | "resolved";
+export type ClearEntity = "works" | "creators" | "subscriptions" | "tags" | "jobs" | "settings" | "all";
+
+export interface ClearImpactPreview {
+  entity: ClearEntity;
+  confirmation_phrase: string;
+  counts: Record<string, number>;
+  preserves_repository_sync_receipts: boolean;
+  deletes_media_files: boolean;
+}
+
+export interface OperationAttentionItem {
+  id: string;
+  type: string;
+  severity: "critical" | "warning" | string;
+  status: string;
+  reason_code?: string | null;
+  title: string;
+  summary?: string | null;
+  repository_id?: string | null;
+  task_id?: string | null;
+  occurred_at: string;
+  source?: string | null;
+  available_actions: string[];
+  task?: TaskRun | null;
+}
+
+export interface OperationsOverviewResponse {
+  view: OperationsView;
+  total: number;
+  summary: {
+    attention: number;
+    critical: number;
+    warning: number;
+    resolved: number;
+    active: number;
+    resource_limited: number;
+  };
+  items: OperationAttentionItem[];
+}
+
 export interface ProviderInfo {
   source_name: string;
   display_name: string;
@@ -72,6 +301,7 @@ export interface ProviderInfo {
     supports_gallerydl: boolean;
     supports_tags: boolean;
     is_reference_only: boolean;
+    supports_download_cursor?: boolean;
   };
 }
 
@@ -132,7 +362,7 @@ export interface Subscription {
   is_active: boolean;
   sync_enabled: boolean;
   sync_interval_hours: number;
-  schedule_mode?: string | null;
+  schedule_mode?: "inherit" | "interval" | "fixed_time" | "manual" | null;
   scheduled_times?: string | null;
   last_synced_at?: string;
   source_count?: number;
@@ -143,6 +373,62 @@ export interface Subscription {
   latest_job_status?: string;
   latest_job_created_at?: string;
   created_at: string;
+  updated_at: string;
+  configured_mode?: string | null;
+  effective_mode?: string | null;
+  auto_enabled_source?: {
+    id: string;
+    source: string;
+    source_url?: string | null;
+    selection_reason: string;
+  } | null;
+  next_sync_at?: string | null;
+}
+
+export type SubscriptionLatestStateKind =
+  | "active"
+  | "attention"
+  | "success"
+  | "never_synced"
+  | "manual"
+  | "disabled";
+
+export interface SubscriptionLatestState {
+  state: SubscriptionLatestStateKind;
+  status?: string | null;
+  occurred_at?: string | null;
+  outcome_code?: string | null;
+  reason_code?: string | null;
+  repository_id?: string | null;
+  task_id?: string | null;
+}
+
+export interface SubscriptionScheduleSummary {
+  configured_mode: string;
+  effective_mode: string;
+  inherited: boolean;
+  timezone: string;
+  scheduled_times?: string | null;
+  sync_interval_hours: number;
+  next_due_at?: string | null;
+  oldest_due_at?: string | null;
+  due_sources: number;
+  overdue_sources: number;
+  blocked_sources: number;
+}
+
+export interface SubscriptionSummary {
+  subscription_id: string;
+  latest_state: SubscriptionLatestState;
+  active_count: number;
+  attention_count: number;
+  source_count: number;
+  enabled_source_count: number;
+  schedule: SubscriptionScheduleSummary;
+}
+
+export interface SubscriptionSummariesResponse {
+  items: SubscriptionSummary[];
   updated_at: string;
 }
 
@@ -209,6 +495,21 @@ export interface RepositoryRecentJob {
   outcome?: SyncOutcome | null;
   created_at?: string | null;
   updated_at?: string | null;
+  record_type?: "sync_receipt" | string;
+  original_task_id?: string | null;
+  download_job_id?: string | null;
+  import_job_id?: string | null;
+  outcome_code?: string | null;
+  attempts?: number;
+  metadata_count?: number;
+  media_count?: number;
+  works_imported?: number;
+  duration_ms?: number | null;
+  error_code?: string | null;
+  recovered?: boolean;
+  recovered_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
 }
 
 export interface RepositoryRecentWork {
@@ -254,6 +555,8 @@ export interface RepositoryDetailResponse {
     capabilities: ProviderInfo["capabilities"];
   };
   recent_jobs: RepositoryRecentJob[];
+  active_jobs: RepositoryRecentJob[];
+  sync_history: RepositoryRecentJob[];
   recent_works: RepositoryRecentWork[];
 }
 
@@ -438,6 +741,7 @@ export interface WorkbenchSummary {
     scheduled_times?: string | null;
     scan_interval_minutes: number;
     next_scan_at?: string | null;
+    loop?: SchedulerLoopState | null;
   };
   storage: {
     disk_total_bytes: number;
@@ -534,7 +838,19 @@ export interface QueueStatsResponse {
   scheduled_times?: string;
   scheduler_scan_interval_minutes?: number;
   next_sync_scan_at?: string | null;
+  scheduler_loop?: SchedulerLoopState | null;
   queues?: Record<"default" | "downloads" | "imports" | "scheduled", QueueBreakdown>;
+}
+
+export interface SchedulerLoopState {
+  status: "scheduled" | "running" | "recovering" | "stalled" | "unknown" | string;
+  last_started_at?: string | null;
+  last_finished_at?: string | null;
+  next_scan_at?: string | null;
+  watchdog_at?: string | null;
+  last_error?: string | null;
+  scan_interval_minutes?: number;
+  active?: { queued: number; scheduled: number; started: number };
 }
 
 export interface SchedulerDecisionItem {
@@ -565,12 +881,16 @@ export interface SchedulerDecisionItem {
   auth_healthy: boolean;
   url_valid: boolean;
   can_download: boolean;
+  is_overdue?: boolean;
+  is_attention?: boolean;
 }
 
 export interface SchedulerDecisionsResponse {
   updated_at: string;
   scheduler_enabled: boolean;
   timezone: string;
+  view?: "attention" | "all";
+  total?: number;
   items: SchedulerDecisionItem[];
 }
 
@@ -600,6 +920,15 @@ export interface DownloadJob {
   pipeline_stage?: string | null;
   progress_data?: JobProgress | null;
   outcome?: SyncOutcome | null;
+  reason_code?: string | null;
+  conflict_details?: Array<{
+    relative_path: string;
+    file_type: "metadata" | "media" | string;
+    classification: string;
+    staged_sha256?: string;
+    canonical_sha256?: string;
+  }>;
+  retryable?: boolean;
 }
 
 export interface JobProgress {
@@ -802,6 +1131,9 @@ export interface SearchSuggestion {
   kind: "qualifier" | "value" | "repair";
   label: string;
   description: string;
+  qualifier_key?: string;
+  help_id?: string;
+  example?: string;
   query: string;
 }
 
@@ -855,7 +1187,12 @@ export interface SubscriptionSearchHit {
 }
 
 export interface SearchGroups {
-  works?: { total: number; items: SearchWorkResult[] };
+  works?: {
+    total: number;
+    items: SearchWorkResult[];
+    next_cursor?: string | null;
+    previous_cursor?: string | null;
+  };
   creators?: { total: number; items: CreatorSearchHit[] };
   tags?: { total: number; items: (TagSearchHit & { usage_count?: number })[] };
   repositories?: { total: number; items: RepositorySearchHit[] };
@@ -870,11 +1207,21 @@ export interface SearchResponse {
   parsed: SearchParsedQuery;
   groups: SearchGroups;
   total: number;
+  next_cursor?: string | null;
+  previous_cursor?: string | null;
   results: SearchWorkResult[];
   creators: CreatorSearchHit[];
   tags: (TagSearchHit & { usage_count?: number })[];
   repositories: RepositorySearchHit[];
   subscriptions: SubscriptionSearchHit[];
+  execution: {
+    winner: "postgresql" | "meilisearch" | string;
+    hedged: boolean;
+    consistency: "authoritative" | "fulltext_index_required" | Record<string, unknown> | string;
+    index_status: string;
+    index_lag?: number | null;
+    elapsed_ms: number;
+  };
 }
 
 export interface SearchAssistResponse {
@@ -883,7 +1230,14 @@ export interface SearchAssistResponse {
   parsed?: SearchParsedQuery | null;
   diagnostics: SearchDiagnostic[];
   suggestions: SearchSuggestion[];
-  catalog: { key: string; negatable: boolean; values: string[] }[];
+  catalog: {
+    key: string;
+    negatable: boolean;
+    values: string[];
+    help_id: string;
+    example: string;
+    description: string;
+  }[];
 }
 
 export interface DedupSettings {
@@ -1196,6 +1550,12 @@ export interface GitlleryRepoStatus {
   object_integrity_ok: boolean;
   drift: string[];
   clean: boolean;
+  product_version: "v1";
+  format_id: "gitllery-segment";
+  format_revision: 1;
+  projection_mode?: "shadow" | "active" | null;
+  head_segment?: string | null;
+  last_complete_commit_id?: string | null;
 }
 
 export interface GitlleryStatus {
@@ -1204,12 +1564,60 @@ export interface GitlleryStatus {
   behind_total: number;
   // Checkpoint absent — pending counts unknown until the queued sync job runs.
   needs_reconcile?: boolean;
+  product_version: "v1";
+  format_id: "gitllery-segment";
+  format_revision: 1;
+  projection_mode: "shadow" | "active";
+}
+
+export interface GitlleryCapability {
+  enabled: boolean;
+  reason?: "gitllery_shadow_only" | "gitllery_transfer_not_implemented" | string | null;
+}
+
+export interface GitllerySettings {
+  product_name: "Gitllery";
+  product_version: "v1";
+  format_id: "gitllery-segment";
+  format_revision: 1;
+  projection_mode: "shadow" | "active";
+  build_generation: string;
+  managed_by: "deployment_environment";
+  read_only: true;
+  capabilities: {
+    automatic_projection: GitlleryCapability;
+    reconcile: GitlleryCapability;
+    backfill: GitlleryCapability;
+    rebuild: GitlleryCapability;
+    push: GitlleryCapability;
+    pull: GitlleryCapability;
+    verify: GitlleryCapability;
+    commit: GitlleryCapability;
+  };
+  cli: {
+    max_works_per_commit: 25;
+    max_operations_per_commit: 100;
+    token_storage: "client_only";
+    server_stores_cli_token: false;
+    examples: Record<"config" | "login" | "status" | "log" | "verify" | "commit", string>;
+  };
+  governance_scope: {
+    observation: "host_and_auto_gallery";
+    enforcement: "auto_gallery_only";
+    modifies_other_projects: false;
+    modifies_host_configuration: false;
+  };
+  status: GitlleryStatus;
 }
 
 // reconcile/backfill are queued operations now.
 export interface GitlleryReconcileResponse {
   status: string;
-  job_id: string;
+  ready: number;
+  enqueued: number;
+  deferred: number;
+  projection_scope?: "library";
+  repository_id?: string | null;
 }
 
 export interface GitlleryLogEntry {
@@ -1229,14 +1637,15 @@ export interface GitlleryLogResponse {
 }
 
 export interface GitlleryRebuildReport {
-  commits_restored: number;
-  commits_skipped_auto: number;
-  commits_deduped: number;
-  changes_unmapped: number;
-  states_applied: number;
-  dry_run: boolean;
-  job_id?: string | null;
-  status?: string | null;
+  status: string;
+  dry_run?: boolean;
+  repository_id?: string | null;
+  captured?: number;
+  ready?: number;
+  enqueued?: number;
+  deferred?: number;
+  projection_mode: "shadow" | "active";
+  legacy_layout_will_remain_read_only?: boolean;
 }
 
 // ── Users (multi-user management) ──
@@ -1285,22 +1694,3 @@ export type GeneratedWork = components["schemas"]["WorkRead"];
 export type GeneratedWorkList = components["schemas"]["WorkList"];
 export type GeneratedCreator = components["schemas"]["CreatorRead"];
 export type GeneratedSubscription = components["schemas"]["SubscriptionRead"];
-
-// ── Showcase ──
-
-export interface ShowcaseItem {
-  work_id: string;
-  title: string | null;
-  creator_name: string | null;
-  source: string | null;
-  asset_id: string;
-  thumb_url: string;
-  preview_url: string;
-  media_kind?: string;
-  width: number | null;
-  height: number | null;
-}
-
-export interface ShowcaseSampleResponse {
-  items: ShowcaseItem[];
-}

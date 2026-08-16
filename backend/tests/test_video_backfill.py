@@ -45,6 +45,7 @@ def _asset(file_path: str = "pixiv/creator/clip.mp4"):
 
 def _work_source():
     return SimpleNamespace(
+        work_id=uuid4(),
         source="pixiv",
         source_work_id="work-1",
         raw_metadata={},
@@ -82,6 +83,7 @@ async def test_video_backfill_dry_run_never_writes(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_video_backfill_apply_updates_metadata_posters_and_ledger(tmp_path, monkeypatch):
     from app.services import video_backfill
+    from app.services import search_projection_outbox
 
     download_root = tmp_path / "downloads"
     library_root = tmp_path / "library"
@@ -123,6 +125,10 @@ async def test_video_backfill_apply_updates_metadata_posters_and_ledger(tmp_path
             ledger_rows.extend(rows)
 
     monkeypatch.setattr(video_backfill, "ArtifactLedger", _Ledger)
+    async def fake_projection(_db, work_ids):
+        assert work_ids
+
+    monkeypatch.setattr(search_projection_outbox, "request_search_projection", fake_projection)
 
     report = await video_backfill.backfill_video_assets(db, apply=True)
 

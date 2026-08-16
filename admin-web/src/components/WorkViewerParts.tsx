@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { useT } from "@/lib/i18n";
 import { usePresence } from "@/lib/motion";
 import { isArchiveAsset } from "@/components";
-import type { MediaKind } from "@/lib/media";
+import type { DerivativeStatus, MediaKind } from "@/lib/media";
 
 export interface AssetData {
   id: string;
@@ -21,6 +21,7 @@ export interface AssetData {
   preview_url?: string;
   poster_url?: string;
   original_url?: string;
+  derivative_status?: DerivativeStatus;
   created_at: string;
 }
 

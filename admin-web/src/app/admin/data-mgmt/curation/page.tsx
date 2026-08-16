@@ -171,7 +171,15 @@ function CurationContent() {
   });
 
   const purge = useMutation({
-    mutationFn: () => api.purgeWorks(undefined, "Purge all currently eligible trashed works"),
+    mutationFn: async () => {
+      const ids = (purgePreview.data?.works ?? []).map((work) => work.id);
+      for (let start = 0; start < ids.length; start += 25) {
+        await api.purgeWorks(
+          ids.slice(start, start + 25),
+          "Purge currently eligible trashed works",
+        );
+      }
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.curation.all });
       qc.invalidateQueries({ queryKey: queryKeys.works.all });
@@ -181,7 +189,7 @@ function CurationContent() {
   const backfill = useMutation({
     mutationFn: api.runCurationBackfill,
     onSuccess: () => {
-      // Queued: the replay runs in worker-operations; progress in task center.
+      // Queued: the replay runs in the governed maintenance listener.
       qc.invalidateQueries({ queryKey: queryKeys.curation.all });
       qc.invalidateQueries({ queryKey: queryKeys.curation.backfillStatus });
       qc.invalidateQueries({ queryKey: ["repositories"] });

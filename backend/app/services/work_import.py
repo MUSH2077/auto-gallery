@@ -31,7 +31,13 @@ class WorkImportService:
         return creator_dir, Path(settings.library_root) / source / creator_dir / source_work_id
 
     @staticmethod
-    def write_library_metadata(lib_dir: Path, work, work_source, creator_name: str, asset_files: list[Path]) -> None:
+    def write_library_metadata(
+        lib_dir: Path,
+        work,
+        work_source,
+        creator_name: str,
+        asset_files: list[Path],
+    ) -> bool:
         from app.services.library_sync import RENDERER_VERSION
         values = [
             RENDERER_VERSION, str(work.id), work.title or "",
@@ -45,7 +51,7 @@ class WorkImportService:
             except OSError:
                 values.extend((fp.name, "missing", "0"))
         version = hashlib.sha256("\0".join(values).encode("utf-8")).hexdigest()
-        write_metadata_json(
+        return write_metadata_json(
             lib_dir, work, work_source, creator_name,
             [{"file_name": path.name} for path in asset_files],
             version=version,

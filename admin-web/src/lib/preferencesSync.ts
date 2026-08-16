@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Debounced write-through of user preferences (theme/lang/appearance)
+ * Debounced write-through of user preferences (theme/lang/appearance/slideshow)
  * to the server, shared by theme.tsx, i18n.tsx, and appearance.tsx.
  *
  * Deliberately does NOT import from theme.tsx / i18n.tsx / appearance.tsx —
@@ -15,7 +15,7 @@ import { api } from "@/lib/api";
 const THEME_KEY = "auto-gallery-theme";
 const LANG_KEY = "auto-gallery-lang";
 const APPEARANCE_KEY = "auto-gallery-appearance-v1";
-const SHOWCASE_KEY = "auto-gallery-showcase-v1";
+const SLIDESHOW_KEY = "auto-gallery-slideshow-v1";
 const TOKEN_KEY = "ag_token";
 
 const DEBOUNCE_MS = 800;
@@ -30,12 +30,12 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 function readFullPreferencesFromLocalStorage(): Record<string, unknown> {
   try {
     const appearanceRaw = localStorage.getItem(APPEARANCE_KEY);
-    const showcaseRaw = localStorage.getItem(SHOWCASE_KEY);
+    const slideshowRaw = localStorage.getItem(SLIDESHOW_KEY);
     return {
       theme: localStorage.getItem(THEME_KEY) || "system",
       lang: localStorage.getItem(LANG_KEY) || "zh",
       appearance: appearanceRaw ? JSON.parse(appearanceRaw) : {},
-      showcase: showcaseRaw ? JSON.parse(showcaseRaw) : {},
+      slideshow: slideshowRaw ? JSON.parse(slideshowRaw) : {},
     };
   } catch {
     return {};
@@ -43,7 +43,7 @@ function readFullPreferencesFromLocalStorage(): Record<string, unknown> {
 }
 
 /**
- * Schedule a debounced (800ms, shared/coalesced across all four setters)
+ * Schedule a debounced (800ms, shared/coalesced across all preference setters)
  * write-through to the server. `partial` documents what just changed for
  * callers/readability; the payload actually sent is always the full merged
  * object (see readFullPreferencesFromLocalStorage).

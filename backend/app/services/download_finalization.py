@@ -44,6 +44,11 @@ async def finalize_download_job(
     if status == "complete" and mark_synced and job.subscription_source_id:
         await mark_source_sync_success(db, job.subscription_source_id)
 
+    # Persist the repository-owned outcome before TaskRun/DownloadJob rows
+    # become eligible for asynchronous compaction.
+    from app.services.operation_attention import upsert_repository_sync_receipt
+    await upsert_repository_sync_receipt(db, job, status=status)
+
     await db.commit()
     publish_progress(str(job.id), "download", progress)
     return progress

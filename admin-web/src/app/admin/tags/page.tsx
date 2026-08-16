@@ -5,6 +5,7 @@ import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { PageHeader, PageShell, EmptyState, ErrorState, Modal, PermissionGuard, TagBubbleChart } from "@/components";
 import { usePermissions } from "@/lib/usePermissions";
+import DomainDangerZone from "@/components/DomainDangerZone";
 
 const CATEGORIES = ["general", "artist", "series", "character", "meta"];
 
@@ -13,15 +14,13 @@ export default function TagsPage() {
   const qc = useQueryClient();
   const { has } = usePermissions();
   const canCurate = has("curation");
-  const [page, setPage] = useState(0);
   const [showCreate, setShowCreate] = useState(false);
   const [formName, setFormName] = useState("");
   const [formCat, setFormCat] = useState("general");
-  const limit = 50;
 
   const tags = useQuery({
-    queryKey: [...queryKeys.tags.all, page],
-    queryFn: () => api.listTags(page * limit, limit),
+    queryKey: [...queryKeys.tags.all, "all"],
+    queryFn: () => api.listAllTags(),
   });
 
   const create = useMutation({
@@ -34,7 +33,7 @@ export default function TagsPage() {
     <PageShell>
       <PageHeader
         title={t("tags.title")}
-        description={tags.data?.length ? t("common.page").replace("{page}", String(page + 1)) : t("tags.desc")}
+        description={t("tags.desc")}
         primaryAction={canCurate ? (
           <button onClick={() => { setFormName(""); setFormCat("general"); setShowCreate(true); }}
             className="btn-primary">{t("tags.new")}</button>
@@ -83,16 +82,11 @@ export default function TagsPage() {
         </div>
       </Modal>
 
-      {/* Pagination */}
-      {tags.data && tags.data.length > 0 && (
-        <div className="flex gap-2 justify-center mt-4">
-          <button disabled={page === 0} onClick={() => setPage(page - 1)}
-            className="btn-ghost px-3 py-1 text-sm disabled:opacity-30">{t("common.prev")}</button>
-          <span className="px-3 py-1 text-sm text-muted">{t("common.page").replace("{page}", String(page + 1))}</span>
-          <button onClick={() => setPage(page + 1)} disabled={!tags.data || tags.data.length < limit}
-            className="btn-ghost px-3 py-1 text-sm disabled:opacity-30">{t("common.next")}</button>
-        </div>
-      )}
+      <DomainDangerZone
+        entity="tags"
+        title={t("datamgmt.danger_clear_tags")}
+        description={t("datamgmt.danger_clear_tags_desc")}
+      />
       </div>
     </PageShell>
     </PermissionGuard>

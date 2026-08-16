@@ -1,7 +1,7 @@
 import logging
 from uuid import UUID
 
-from sqlalchemy import select, delete as sql_delete
+from sqlalchemy import and_, func, or_, select, delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.creator import CreatorRepository
@@ -12,6 +12,7 @@ from app.models.tag import Tag
 from app.models.asset_source import AssetSource
 from app.models.storage_artifact import StorageArtifact
 from app.services.sync_outcome import download_job_outcome
+from app.services.search_projection_outbox import request_search_projection
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +22,95 @@ class CreatorService:
         self.db = db
         self.repo = CreatorRepository(db)
 
+    async def _projection_dependents(
+        self,
+        creator_id: UUID,
+    ) -> tuple[set[UUID], set[UUID], set[UUID]]:
+        """Return work/subscription/repository projections owned by a creator.
+
+        The work projection embeds both creator fields and repository IDs.  A
+        creator mutation therefore cannot safely update only the creator
+        document.  These are set-based reads and the resulting outbox writes
+        are chunked by ``request_search_projection``.
+        """
+
+        subscription_ids = set((await self.db.execute(
+            select(Subscription.id).where(Subscription.creator_id == creator_id)
+        )).scalars().all())
+        repository_ids = set((await self.db.execute(
+            select(SubscriptionSource.id)
+            .join(Subscription, Subscription.id == SubscriptionSource.subscription_id)
+            .where(Subscription.creator_id == creator_id)
+        )).scalars().all())
+
+        work_ids = set((await self.db.execute(
+            select(WorkSource.work_id)
+            .join(
+                SourceCreator,
+                and_(
+                    SourceCreator.source == WorkSource.source,
+                    SourceCreator.source_creator_id == WorkSource.source_creator_id,
+                ),
+            )
+            .where(SourceCreator.creator_id == creator_id)
+            .distinct()
+        )).scalars().all())
+
+        # A repository can be associated with a work by identity or by an
+        # exact normalized URL even when no SourceCreator row exists.
+        repository_work_ids = (await self.db.execute(
+            select(WorkSource.work_id)
+            .select_from(WorkSource)
+            .join(
+                SubscriptionSource,
+                or_(
+                    and_(
+                        SubscriptionSource.source == WorkSource.source,
+                        SubscriptionSource.source_creator_id.is_not(None),
+                        SubscriptionSource.source_creator_id == WorkSource.source_creator_id,
+                    ),
+                    and_(
+                        SubscriptionSource.source_url.is_not(None),
+                        WorkSource.source_url.is_not(None),
+                        func.lower(func.rtrim(func.btrim(SubscriptionSource.source_url), "/"))
+                        == func.lower(func.rtrim(func.btrim(WorkSource.source_url), "/")),
+                    ),
+                ),
+            )
+            .join(Subscription, Subscription.id == SubscriptionSource.subscription_id)
+            .where(Subscription.creator_id == creator_id)
+            .distinct()
+        )).scalars().all()
+        work_ids.update(repository_work_ids)
+        return work_ids, subscription_ids, repository_ids
+
+    async def _request_creator_projection(
+        self,
+        creator_id: UUID,
+        *,
+        deleting: bool = False,
+        dependents: tuple[set[UUID], set[UUID], set[UUID]] | None = None,
+    ) -> None:
+        work_ids, subscription_ids, repository_ids = (
+            dependents
+            if dependents is not None
+            else await self._projection_dependents(creator_id)
+        )
+        await request_search_projection(
+            self.db,
+            work_ids,
+            creator_ids=() if deleting else [creator_id],
+            deleted_creator_ids=[creator_id] if deleting else (),
+            repository_ids=() if deleting else repository_ids,
+            deleted_repository_ids=repository_ids if deleting else (),
+            subscription_ids=() if deleting else subscription_ids,
+            deleted_subscription_ids=subscription_ids if deleting else (),
+        )
+
     async def toggle_favorite(self, creator_id: UUID):
         creator = await self.get_creator(creator_id)
         creator.is_favorite = not creator.is_favorite
+        await self._request_creator_projection(creator_id)
         await self.db.commit()
         await self.db.refresh(creator)
         return creator
@@ -40,18 +127,21 @@ class CreatorService:
         # mapping. Never blocks creation — misses/outages come back as status.
         from app.services.creator_enrichment import enrich_creator_from_danbooru
         await enrich_creator_from_danbooru(self.db, creator)
+        await self._request_creator_projection(creator.id)
         await self.db.commit()
         return creator
 
     async def update_creator(self, creator_id: UUID, data: dict):
         creator = await self.get_creator(creator_id)
         creator = await self.repo.update(creator, data)
+        await self._request_creator_projection(creator_id)
         await self.db.commit()
         await self.db.refresh(creator)
         return creator
 
     async def delete_creator(self, creator_id: UUID):
         creator = await self.get_creator(creator_id)
+        dependents = await self._projection_dependents(creator_id)
 
         # 1. Find all subscriptions for this creator
         subs = await self.db.execute(
@@ -94,10 +184,26 @@ class CreatorService:
 
         # 4. Delete the creator
         await self.db.delete(creator)
+        await self._request_creator_projection(
+            creator_id,
+            deleting=True,
+            dependents=dependents,
+        )
         await self.db.commit()
 
     async def add_source_creator(self, data: dict):
         sc = await self.repo.add_source_creator(data)
+        work_ids = set((await self.db.execute(
+            select(WorkSource.work_id).where(
+                WorkSource.source == sc.source,
+                WorkSource.source_creator_id == sc.source_creator_id,
+            )
+        )).scalars().all())
+        await request_search_projection(
+            self.db,
+            work_ids,
+            creator_ids=[sc.creator_id] if sc.creator_id else (),
+        )
         await self.db.commit()
         return sc
 

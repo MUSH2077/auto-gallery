@@ -15,6 +15,12 @@ from datetime import datetime
 import re
 from typing import Iterable, Literal
 
+from app.services.source_search_identity import (
+    IDENTITY_SOURCES,
+    parse_source_identity,
+    parse_source_url,
+)
+
 
 SearchScope = Literal[
     "global",
@@ -84,9 +90,14 @@ QUALIFIER_KEYS = frozenset({
     "updated",
     "synced",
     "sort",
+    "uid",
+    "pid",
+    "url",
 })
 
-NEGATABLE_KEYS = frozenset({"repo", "creator", "tag", "source", "is", "has"})
+NEGATABLE_KEYS = frozenset({
+    "repo", "creator", "tag", "source", "is", "has", "uid", "pid", "url",
+})
 
 IS_TARGETS: dict[str, frozenset[SearchTarget]] = {
     "favorite": frozenset({"works", "creators"}),
@@ -136,6 +147,34 @@ QUALIFIER_TARGETS: dict[str, frozenset[SearchTarget]] = {
     "created": frozenset({"works", "creators", "tags", "repositories", "subscriptions", "tasks"}),
     "updated": frozenset({"works", "creators", "tags", "repositories", "subscriptions", "tasks"}),
     "synced": frozenset({"repositories", "subscriptions"}),
+    "uid": frozenset({"works", "creators", "repositories", "subscriptions"}),
+    "pid": frozenset({"works"}),
+    "url": frozenset({"works", "creators", "repositories", "subscriptions"}),
+}
+
+
+QUALIFIER_HELP: dict[str, tuple[str, str, str]] = {
+    "type": ("search.qualifier.type", "type:work", "Limit results to an object type."),
+    "repo": ("search.qualifier.repo", "repo:pixiv/123", "Filter by subscription repository."),
+    "creator": ("search.qualifier.creator", 'creator:\"name\"', "Filter by local creator name or ID."),
+    "tag": ("search.qualifier.tag", "tag:landscape", "Filter by an exact normalized tag."),
+    "source": ("search.qualifier.source", "source:pixiv", "Filter by source platform."),
+    "is": ("search.qualifier.is", "is:favorite", "Filter by object state."),
+    "has": ("search.qualifier.has", "has:video", "Filter by content, media, or related records."),
+    "status": ("search.qualifier.status", "status:failed", "Filter by task status."),
+    "kind": ("search.qualifier.kind", "kind:download", "Filter by task kind."),
+    "posted": ("search.qualifier.posted", "posted:>=2026-01-01", "Filter by work publication date."),
+    "created": ("search.qualifier.created", "created:>=2026-01-01", "Filter by local creation date."),
+    "updated": ("search.qualifier.updated", "updated:<2026-08-01", "Filter by local update date."),
+    "synced": ("search.qualifier.synced", "synced:>=2026-08-01", "Filter by most recent sync date."),
+    "sort": ("search.qualifier.sort", "sort:updated-desc", "Choose the result ordering."),
+    "uid": ("search.qualifier.uid", "uid:pixiv/123", "Find an exact source creator ID."),
+    "pid": ("search.qualifier.pid", "pid:pixiv/456", "Find an exact source work ID."),
+    "url": (
+        "search.qualifier.url",
+        'url:\"https://www.pixiv.net/artworks/456\"',
+        "Find a saved source profile or work URL.",
+    ),
 }
 
 SORT_TARGETS: dict[str, frozenset[SearchTarget]] = {
@@ -383,7 +422,10 @@ def _canonical_token(token: SearchToken) -> str:
     if isinstance(token, SearchTerm):
         return _canonical_value(token.value) if token.quoted or any(char.isspace() for char in token.value) else token.value
     prefix = "-" if token.negated else ""
-    return f"{prefix}{token.key}:{_canonical_value(token.value)}"
+    value = _canonical_value(token.value)
+    if token.key == "url" and not value.startswith('"'):
+        value = f'"{token.value}"'
+    return f"{prefix}{token.key}:{value}"
 
 
 def _parse_date(value: str, lexeme: _Lexeme) -> None:
@@ -432,6 +474,26 @@ def _validate_value(token: SearchQualifier, lexeme: _Lexeme) -> SearchQualifier:
         _parse_date(value, lexeme)
     elif token.key == "source":
         value = "x" if value.lower() == "twitter" else value.lower()
+    elif token.key in {"uid", "pid"}:
+        try:
+            source, identity = parse_source_identity(value)
+        except ValueError as exc:
+            raise _error(
+                "invalid_identity",
+                str(exc),
+                lexeme,
+                tuple(f"{source}/123" for source in sorted(IDENTITY_SOURCES) if source != "manual")[:5],
+            ) from exc
+        value = f"{source}/{identity}"
+    elif token.key == "url":
+        parsed_url = parse_source_url(value)
+        if parsed_url is None:
+            raise _error(
+                "unsupported_url",
+                "URL is not a supported creator or work URL.",
+                lexeme,
+            )
+        value = parsed_url.normalized_url
 
     return SearchQualifier(
         key=token.key,
@@ -452,6 +514,10 @@ def _targets_for_token(token: SearchQualifier) -> frozenset[SearchTarget] | None
         return HAS_TARGETS[token.value]
     if token.key == "sort":
         return SORT_TARGETS[token.value]
+    if token.key == "url":
+        parsed_url = parse_source_url(token.value)
+        if parsed_url and parsed_url.kind == "work":
+            return frozenset({"works"})
     return QUALIFIER_TARGETS.get(token.key)
 
 
@@ -553,6 +619,25 @@ def parse_search_query(query: str, scope: SearchScope = "global") -> SearchQuery
 
     tokens: list[SearchToken] = []
     for lexeme in _lex(query):
+        raw_url = lexeme.raw[1:] if lexeme.raw.startswith("-") else lexeme.raw
+        parsed_url = parse_source_url(raw_url)
+        if raw_url.lower().startswith(("http://", "https://")):
+            if parsed_url is None:
+                raise _error(
+                    "unsupported_url",
+                    "URL is not a supported creator or work URL.",
+                    lexeme,
+                )
+            token = SearchQualifier(
+                key="url",
+                value=parsed_url.normalized_url,
+                negated=lexeme.raw.startswith("-"),
+                quoted=True,
+                start=lexeme.start,
+                end=lexeme.end,
+            )
+            tokens.append(token)
+            continue
         colon_at = _find_colon(lexeme.raw)
         negated = lexeme.raw.startswith("-")
         key_start = 1 if negated else 0
@@ -701,6 +786,8 @@ def qualifier_catalog(scope: SearchScope) -> list[dict]:
             values = sorted(TASK_STATUSES)
         elif key == "kind" and "tasks" in targets:
             values = sorted(TASK_KINDS)
+        elif key in {"uid", "pid"}:
+            values = [f"{source}/" for source in sorted(IDENTITY_SOURCES)]
         else:
             supported = QUALIFIER_TARGETS.get(key)
             if supported is not None and not (targets & set(supported)):
@@ -709,5 +796,8 @@ def qualifier_catalog(scope: SearchScope) -> list[dict]:
             "key": key,
             "negatable": key in NEGATABLE_KEYS,
             "values": values,
+            "help_id": QUALIFIER_HELP[key][0],
+            "example": QUALIFIER_HELP[key][1],
+            "description": QUALIFIER_HELP[key][2],
         })
     return catalog

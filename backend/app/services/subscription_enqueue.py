@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from uuid import UUID
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update as sql_update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,11 +12,12 @@ from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.providers import registry
 from app.services.job_manifest import append_manifest_event, update_manifest
-from app.models.task_state import DOWNLOAD_RUNNING_STATUSES, transition_download_job
+from app.models.task_state import DOWNLOAD_RUNNING_STATUSES
 from app.services.job_progress import apply_download_progress
 from app.services.locks import redis_lock
 from app.services.redis_client import get_redis
-from app.services.settings import get_download_defaults
+from app.services.settings import get_download_defaults, get_scheduler_config
+from app.services.search_projection_outbox import request_search_projection
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,20 @@ def skip_result(source_id: UUID | str, code: str, message: str | None = None, **
     reason = {
         "code": code,
         "message": message or code.replace("_", " "),
-        "retryable": code in {"lock_busy", "already_running", "recent_failure_backoff"},
+        "retryable": code in {
+            "lock_busy",
+            "already_running",
+            "recent_failure_backoff",
+            "resource_pressure",
+            "queue_saturated",
+            "enqueue_busy",
+            "redis_capacity",
+            "redis_unwritable",
+            "disk_backpressure",
+            "import_backpressure",
+            "storage_unavailable",
+            "admission_check_failed",
+        },
         "details": details or {},
     }
     result = {
@@ -66,6 +80,17 @@ async def mark_source_sync_success(
         return
     ss.last_synced_at = when
     await refresh_subscription_last_synced_at(db, ss.subscription_id)
+    sub = await db.get(Subscription, ss.subscription_id)
+    # A success changes the interval base.  NULL invalidates the old due time;
+    # the next fair coverage pass recomputes interval/fixed/manual semantics in
+    # its short claim transaction.
+    ss.next_sync_at = None
+    await request_search_projection(
+        db,
+        creator_ids=[sub.creator_id] if sub else (),
+        repository_ids=[ss.id],
+        subscription_ids=[ss.subscription_id],
+    )
 
 
 async def _latest_job_for_source(db: AsyncSession, source_id: UUID) -> DownloadJob | None:
@@ -93,6 +118,7 @@ async def enqueue_subscription_source_sync(
     force: bool = False,
     parent_task_id: UUID | None = None,
     force_reason: str | None = None,
+    scheduler_config: dict | None = None,
 ) -> dict:
     now = datetime.now(timezone.utc)
     ss = await db.get(SubscriptionSource, subscription_source_id)
@@ -124,16 +150,29 @@ async def enqueue_subscription_source_sync(
     if not provider.capabilities.can_download:
         return skip_result(ss.id, "provider_not_downloadable", source=ss.source)
 
-    if not force:
-        try:
-            from app.services.backpressure import download_backpressure_reason
-            pressure = await download_backpressure_reason(db)
-            if pressure:
-                return skip_result(ss.id, pressure.pop("code"), **pressure)
-        except Exception:
-            # During a rolling migration the ledger table may not exist yet;
-            # availability checks must not prevent the migration from settling.
-            logger.warning("Unable to evaluate download backpressure", exc_info=True)
+    # ``force`` may bypass schedule-frequency checks, never hard capacity.
+    # Automatic scans stop producing under host pressure; manual requests may
+    # remain in the bounded queue and will wait at the worker heavy-I/O gate.
+    try:
+        from app.services.backpressure import download_backpressure_reason
+
+        pressure = await download_backpressure_reason(
+            db,
+            automatic=trigger == "scheduler",
+            include_queue=True,
+        )
+        if pressure:
+            code = str(pressure.get("code") or "download_unavailable")
+            details = {key: value for key, value in pressure.items() if key != "code"}
+            return skip_result(ss.id, code, **details)
+    except Exception as exc:
+        logger.warning("Unable to evaluate download admission", exc_info=True)
+        return skip_result(
+            ss.id,
+            "admission_check_failed",
+            message="Download admission checks are unavailable",
+            error_type=type(exc).__name__,
+        )
 
     normalized_url = provider.normalize_url(ss.source_url) or ss.source_url
     if not provider.validate_url(normalized_url):
@@ -193,12 +232,30 @@ async def enqueue_subscription_source_sync(
             source_url=normalized_url,
         )
         append_manifest_event(job, "created", trigger=trigger)
-        ss.last_attempted_at = now
-        db.add(job)
+        if scheduler_config is None:
+            scheduler_config = await get_scheduler_config(db)
+        from app.jobs.subscription_sync import next_subscription_check_at
+
+        next_sync_at = next_subscription_check_at(
+            sub,
+            scheduler_config,
+            ss.last_synced_at,
+            now,
+            now,
+        )
+        # Flush caller-owned state before opening the SAVEPOINT. SQLAlchemy
+        # flushes pending state when begin_nested() starts; doing it explicitly
+        # keeps unrelated outer-transaction errors out of the candidate-job
+        # IntegrityError handler below.
+        await db.flush()
         try:
-            await db.flush()
+            # A source-level unique/running race must not roll back the caller's
+            # parent batch TaskRun or progress updates.  Add/flush inside a
+            # SAVEPOINT so only this candidate DownloadJob is discarded.
+            async with db.begin_nested():
+                db.add(job)
+                await db.flush()
         except IntegrityError:
-            await db.rollback()
             running = await db.execute(
                 select(DownloadJob).where(
                     DownloadJob.subscription_source_id == ss.id,
@@ -210,41 +267,65 @@ async def enqueue_subscription_source_sync(
                 return skip_result(ss.id, "already_running", job_id=str(running_job.id))
             raise
 
-        try:
-            from rq import Queue
-            from app.services.tasks import TaskService
-            task = await TaskService(db).ensure_download_task(job, parent_task_id=parent_task_id)
+        await request_search_projection(
+            db,
+            subscription_ids=[sub.id],
+        )
 
-            queue_name = f"downloads:{job.source}"
-            Queue(name=queue_name, connection=get_redis()).enqueue(
-                "app.jobs.download.run_download_job",
-                str(job.id),
-                job_timeout=RQ_JOB_TIMEOUT,
-            )
-            apply_download_progress(
+        from app.services.download_dispatch import prepare_download_dispatch, publish_prepared_download
+
+        queue_name = f"downloads:{job.source}"
+        prepared = await prepare_download_dispatch(
+            db,
+            job,
+            queue_name=queue_name,
+            parent_task_id=parent_task_id,
+            job_timeout=RQ_JOB_TIMEOUT,
+            action=trigger,
+        )
+        try:
+            await publish_prepared_download(
+                db,
                 job,
-                "enqueued",
-                "Queued; waiting for download worker",
+                prepared,
+                job_timeout=RQ_JOB_TIMEOUT,
+                action=trigger,
             )
-            append_manifest_event(job, "enqueued", queue="downloads")
         except Exception as exc:
+            from app.services.backpressure import DownloadAdmissionError
+
             logger.error("Failed to enqueue download job %s: %s", job.id, exc)
-            transition_download_job(job, "failed", f"Enqueue failed: {exc}")
-            append_manifest_event(job, "enqueue_failed", error=str(exc))
-            await db.commit()
+            code = exc.code if isinstance(exc, DownloadAdmissionError) else "enqueue_failed"
+            details = dict(exc.details) if isinstance(exc, DownloadAdmissionError) else {}
             return {
                 "status": "error",
                 "source_id": str(ss.id),
                 "job_id": str(job.id),
                 "error": str(exc),
-                "reason": {"code": "enqueue_failed", "message": str(exc), "retryable": True, "details": {}},
+                "skip_reason": code,
+                "reason": {"code": code, "message": str(exc), "retryable": True, "details": details},
             }
 
+        # Publication is the scheduling boundary. A rejected Redis enqueue must
+        # leave the logical slot due; only an accepted deterministic RQ job may
+        # advance the source to its next interval/fixed-time slot.
+        await db.execute(
+            sql_update(SubscriptionSource)
+            .where(SubscriptionSource.id == ss.id)
+            .values(last_attempted_at=now, next_sync_at=next_sync_at)
+        )
         await db.commit()
+
+        try:
+            from app.services.job_progress import publish_progress
+
+            publish_progress(str(job.id), "download", job.progress_data)
+        except Exception:
+            logger.warning("Failed to publish queued progress for %s", job.id, exc_info=True)
         return {
             "status": "enqueued",
             "source_id": str(ss.id),
             "job_id": str(job.id),
-            "task_id": str(task.id),
+            "task_id": str(prepared.task.id),
             "source_url": normalized_url,
         }

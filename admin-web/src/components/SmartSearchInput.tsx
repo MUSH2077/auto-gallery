@@ -13,7 +13,13 @@ import {
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Search, X } from "lucide-react";
 
-import { api, type SearchAssistResponse, type SearchQualifierToken, type SearchScope } from "@/lib/api";
+import {
+  api,
+  type SearchAssistResponse,
+  type SearchQualifierToken,
+  type SearchScope,
+  type SearchSuggestion,
+} from "@/lib/api";
 import { useT } from "@/lib/i18n";
 
 type Translator = ReturnType<typeof useT>;
@@ -27,6 +33,10 @@ function diagnosticMessage(t: Translator, diagnostic: SearchAssistResponse["diag
       return t("search.error_missing_value", { token: diagnostic.token });
     case "invalid_date":
       return t("search.error_invalid_date", { token: diagnostic.token });
+    case "invalid_identity":
+      return t("search.error_identity", { token: diagnostic.token });
+    case "unsupported_url":
+      return t("search.error_url", { token: diagnostic.token });
     case "invalid_value":
     case "unknown_value":
     case "unknown_qualifier":
@@ -47,6 +57,16 @@ function diagnosticMessage(t: Translator, diagnostic: SearchAssistResponse["diag
     default:
       return t("search.error_generic", { token: diagnostic.token });
   }
+}
+
+function suggestionDescription(t: Translator, suggestion: SearchSuggestion) {
+  if (suggestion.kind === "qualifier" && suggestion.help_id) {
+    return t(suggestion.help_id, suggestion.description, {
+      example: suggestion.example || suggestion.label,
+    });
+  }
+  if (suggestion.kind === "repair") return t("search.suggestion_repair");
+  return t("search.suggestion_value");
 }
 
 type ComposeRequest = {
@@ -297,22 +317,24 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
               key={`${suggestion.kind}:${suggestion.query}:${index}`}
               type="button"
               role="option"
+              aria-labelledby={`${listId}-${index}-label ${listId}-${index}-description`}
               aria-selected={activeIndex === index}
               onMouseDown={(event) => event.preventDefault()}
               onMouseEnter={() => setActiveIndex(index)}
               onClick={() => selectSuggestion(index)}
-              className={`flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-left ${
+              className={`flex min-h-11 w-full items-center gap-3 rounded-md px-3 py-2 text-left ${
                 activeIndex === index ? "bg-accent-subtle text-fg" : "text-muted hover:bg-subtle hover:text-fg"
               }`}
             >
               <span className="min-w-0 flex-1">
-                <span className="block truncate font-mono text-xs font-medium">{suggestion.label}</span>
-                <span className="mt-0.5 block truncate text-[11px] text-muted">
-                  {suggestion.kind === "qualifier"
-                    ? t("search.suggestion_qualifier")
-                    : suggestion.kind === "repair"
-                      ? t("search.suggestion_repair")
-                      : t("search.suggestion_value")}
+                <span id={`${listId}-${index}-label`} className="block truncate font-mono text-xs font-medium">
+                  {suggestion.label}
+                </span>
+                <span
+                  id={`${listId}-${index}-description`}
+                  className="mt-0.5 block whitespace-normal break-words text-[11px] leading-4 text-muted"
+                >
+                  {suggestionDescription(t, suggestion)}
                 </span>
               </span>
             </button>

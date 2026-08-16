@@ -56,4 +56,31 @@ class DownloadJobRead(BaseModel):
         value = sync_outcome_from_manifest(self.manifest)
         return SyncOutcomeRead(**value) if value else None
 
+    @computed_field
+    @property
+    def reason_code(self) -> str | None:
+        lowered = (self.error_log or "").lower()
+        if "download staging conflict" in lowered:
+            return "download_staging_conflict"
+        if "download staging manifest" in lowered or "staging recovery manifest" in lowered:
+            return "download_staging_manifest_error"
+        return None
+
+    @computed_field
+    @property
+    def conflict_details(self) -> list[dict]:
+        events = (self.manifest or {}).get("events") or []
+        for event in reversed(events):
+            if isinstance(event, dict) and event.get("event") == "staging_conflict":
+                return list(event.get("conflict_details") or [])
+        return []
+
+    @computed_field
+    @property
+    def retryable(self) -> bool:
+        return not (
+            self.reason_code in {"download_staging_conflict", "download_staging_manifest_error"}
+            and bool(self.conflict_details)
+        )
+
     model_config = {"from_attributes": True}

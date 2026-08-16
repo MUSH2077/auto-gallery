@@ -6,10 +6,10 @@ from app.config import settings
 # Connection pool sized per Python process, configured via env so the backend
 # (concurrent HTTP) can run a larger pool than the workers (one job at a time).
 # Defaults are worker-sized; the backend service sets DB_POOL_SIZE/DB_MAX_OVERFLOW
-# higher in docker-compose. A too-small backend pool (was 2+2) caused
-# QueuePool timeouts under normal dashboard request fan-out.
+# higher in docker-compose. Workers keep the safe 1+1 default while the API
+# receives an explicit 8+4 budget for normal dashboard fan-out.
 # Worst-case connections = (pool_size + max_overflow) x processes; kept well
-# under postgres max_connections (100).
+# under postgres max_connections (40).
 _database_name = settings.database_url.rsplit("/", 1)[-1].split("?", 1)[0]
 _engine_options = {
     "echo": False,

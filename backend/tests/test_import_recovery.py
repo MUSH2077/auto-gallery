@@ -96,7 +96,7 @@ async def test_recover_import_pipeline_enqueues_downloaded_job_with_pending_arti
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_recover_import_pipeline_marks_running_import_without_heartbeat_stale():
+async def test_recover_import_pipeline_leaves_running_liveness_to_task_engine():
     from app.database import async_session, engine
     from app.models.creator import Creator
     from app.models.download_job import DownloadJob
@@ -138,11 +138,10 @@ async def test_recover_import_pipeline_marks_running_import_without_heartbeat_st
             await db.refresh(import_job)
             task = await TaskService(db).get_by_subject("import_job", import_job.id)
 
-            assert result["imports_marked_stale"] == 1
-            assert import_job.status == "stale"
+            assert "imports_marked_stale" not in result
+            assert import_job.status == "running"
             assert task is not None
-            assert task.status == "stale"
-            assert "lost import heartbeat" in (task.error_log or "")
+            assert task.status == "running"
     finally:
         async with async_session() as db:
             await _clear_recovery_tables(db)

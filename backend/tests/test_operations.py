@@ -3,6 +3,8 @@ import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 
 class FakeRedis:
     def __init__(self):
@@ -93,7 +95,10 @@ def test_clear_entity_data_invalidates_related_cache_domains(monkeypatch):
 
     monkeypatch.setattr(admin_data, "_clear_files", lambda _paths: None)
     monkeypatch.setattr(admin_data, "_clear_search_index", fake_clear_search)
-    monkeypatch.setattr(admin_data, "clear_failed_rq_jobs", lambda: 0)
+    async def fake_clear_failed_rq_jobs(_db):
+        return 0
+
+    monkeypatch.setattr(admin_data, "clear_failed_rq_jobs", fake_clear_failed_rq_jobs)
     monkeypatch.setattr(
         admin_data,
         "invalidate_api_caches",
@@ -116,6 +121,7 @@ def test_clear_entity_data_invalidates_related_cache_domains(monkeypatch):
 
 def test_danbooru_import_invalidates_creator_subscription_caches(monkeypatch):
     from app.services import danbooru_import
+    from app.services.creator import CreatorService
 
     class Result:
         def scalar_one_or_none(self):
@@ -150,6 +156,9 @@ def test_danbooru_import_invalidates_creator_subscription_caches(monkeypatch):
     async def fake_subscription_defaults(_db):
         return {"sync_interval_hours": 6, "sync_enabled": True, "is_active": True}
 
+    async def fake_creator_projection(_service, _creator_id):
+        return None
+
     monkeypatch.setattr(
         danbooru_import.danbooru_svc,
         "search_and_extract",
@@ -166,6 +175,7 @@ def test_danbooru_import_invalidates_creator_subscription_caches(monkeypatch):
     monkeypatch.setattr(danbooru_import.danbooru_svc, "_classify_url", lambda _url: "pixiv")
     monkeypatch.setattr(danbooru_import, "find_existing_creator", fake_find_existing_creator)
     monkeypatch.setattr(danbooru_import, "get_subscription_defaults", fake_subscription_defaults)
+    monkeypatch.setattr(CreatorService, "_request_creator_projection", fake_creator_projection)
     monkeypatch.setattr(
         danbooru_import,
         "invalidate_creator_subscription_caches",
@@ -180,3 +190,53 @@ def test_danbooru_import_invalidates_creator_subscription_caches(monkeypatch):
     assert result["links_imported"] == 1
     assert result["sources_created"] == 2
     assert calls == ["invalidated"]
+
+
+@pytest.mark.asyncio
+async def test_reference_mapping_refresh_uses_shared_single_flight_operation(monkeypatch):
+    from app.api import reference
+
+    seen = {}
+
+    async def _enqueue(**kwargs):
+        seen.update(kwargs)
+        return {"status": "enqueued", "job_id": "refresh-job"}
+
+    monkeypatch.setattr(reference, "enqueue_admin_operation", _enqueue)
+
+    response = await reference.refresh_all_danbooru_mappings()
+
+    assert response == {
+        "status": "enqueued",
+        "job_id": "refresh-job",
+        "operation_type": "danbooru-mapping-refresh",
+        "message": "Danbooru mapping refresh queued",
+    }
+    assert seen["lock_key"] == "library:creator-reenrich:active"
+    assert seen["operation_type"] == "danbooru-mapping-refresh"
+    assert seen["options"] == {"scope": "all"}
+    assert seen["queue_name"] == "maintenance"
+
+
+@pytest.mark.asyncio
+async def test_reference_mapping_refresh_status_is_operation_scoped(monkeypatch):
+    from fastapi import HTTPException
+    from app.api import reference
+
+    expected = {
+        "job_id": "refresh-job",
+        "status": "running",
+        "operation_type": "danbooru-mapping-refresh",
+        "progress": {"scanned": 2, "total": 10},
+    }
+    monkeypatch.setattr(reference, "get_operation_status", lambda _job_id: expected)
+    assert await reference.get_danbooru_mapping_refresh("refresh-job") == expected
+
+    monkeypatch.setattr(reference, "get_operation_status", lambda _job_id: {
+        "job_id": "other-job",
+        "status": "running",
+        "operation_type": "admin-clear",
+    })
+    with pytest.raises(HTTPException) as exc:
+        await reference.get_danbooru_mapping_refresh("other-job")
+    assert exc.value.status_code == 404

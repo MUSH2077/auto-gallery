@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+"""Gitllery v1 command-line entry point for source-overlay candidates."""
+
+from gitllery_cli.main import main
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

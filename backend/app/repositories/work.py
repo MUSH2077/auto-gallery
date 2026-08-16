@@ -5,6 +5,7 @@ from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Work, WorkSource, Asset, AssetSource, SourceCreator, Tag, WorkTag, WorkCurationState
+from app.services.search_projection_outbox import request_search_projection
 
 
 class WorkRepository:
@@ -191,6 +192,7 @@ class WorkRepository:
 
     async def toggle_favorite(self, work: Work) -> Work:
         work.is_favorite = not work.is_favorite
+        await request_search_projection(self.session, [work.id])
         await self.session.commit()
         await self.session.refresh(work)
         return work

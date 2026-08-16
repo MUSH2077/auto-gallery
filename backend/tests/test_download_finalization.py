@@ -40,12 +40,21 @@ def test_successful_finalization_commits_before_publish(monkeypatch):
     async def mark_synced(db, source_id):
         events.append(("synced", source_id))
 
+    async def write_receipt(db, target, *, status):
+        assert isinstance(db, FakeDB)
+        assert target is job
+        events.append(("receipt", status))
+
     def publish(task_id, task_type, progress):
         events.append(("publish", progress))
 
     monkeypatch.setattr(module, "DownloadJobRepository", Repo)
     monkeypatch.setattr(module, "mark_source_sync_success", mark_synced)
     monkeypatch.setattr(module, "publish_progress", publish)
+    monkeypatch.setattr(
+        "app.services.operation_attention.upsert_repository_sync_receipt",
+        write_receipt,
+    )
 
     progress = asyncio.run(
         module.finalize_download_job(
@@ -62,6 +71,7 @@ def test_successful_finalization_commits_before_publish(monkeypatch):
     assert job.error_log is None
     assert job.manifest["outcome"] == outcome
     assert progress == {"stage": "complete", "percent": 100, "assets": 0, "outcome_code": "no_changes"}
+    assert events.index(("receipt", "complete")) < events.index("commit")
     assert events.index("commit") < next(index for index, event in enumerate(events) if isinstance(event, tuple) and event[0] == "publish")
 
 
@@ -88,6 +98,10 @@ def test_failure_finalization_clears_stale_success_outcome(monkeypatch):
 
     monkeypatch.setattr(module, "DownloadJobRepository", Repo)
     monkeypatch.setattr(module, "publish_progress", lambda *_args: None)
+    monkeypatch.setattr(
+        "app.services.operation_attention.upsert_repository_sync_receipt",
+        lambda *_args, **_kwargs: asyncio.sleep(0),
+    )
 
     asyncio.run(
         module.finalize_download_job(

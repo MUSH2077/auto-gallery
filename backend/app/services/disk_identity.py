@@ -98,9 +98,9 @@ async def _ensure_subscription(db: AsyncSession, creator: Creator, identity: Met
         creator_id=creator.id,
         name=identity.display_name,
         is_active=True,
-        sync_enabled=False,
+        sync_enabled=True,
         sync_interval_hours=24,
-        schedule_mode="manual",
+        schedule_mode=None,
     )
     db.add(sub)
     await db.flush()
@@ -141,13 +141,31 @@ async def _ensure_subscription_source(
     if existing:
         existing.source_creator_id = existing.source_creator_id or identity.source_creator_id
         existing.source_url = existing.source_url or identity.source_url
+        enabled_exists = bool((await db.execute(
+            select(SubscriptionSource.id).where(
+                SubscriptionSource.subscription_id == subscription.id,
+                SubscriptionSource.is_enabled.is_(True),
+            ).limit(1)
+        )).scalar_one_or_none())
+        if not enabled_exists and subscription.sync_enabled and subscription.schedule_mode != "manual":
+            existing.is_enabled = True
         return existing, False
+    enabled_exists = bool((await db.execute(
+        select(SubscriptionSource.id).where(
+            SubscriptionSource.subscription_id == subscription.id,
+            SubscriptionSource.is_enabled.is_(True),
+        ).limit(1)
+    )).scalar_one_or_none())
     ss = SubscriptionSource(
         subscription_id=subscription.id,
         source=identity.source,
         source_creator_id=identity.source_creator_id,
         source_url=identity.source_url,
-        is_enabled=False,
+        is_enabled=(
+            not enabled_exists
+            and subscription.sync_enabled
+            and subscription.schedule_mode != "manual"
+        ),
         auth_healthy=True,
     )
     db.add(ss)

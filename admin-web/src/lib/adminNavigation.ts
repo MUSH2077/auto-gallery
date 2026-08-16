@@ -96,7 +96,10 @@ export const ADMIN_NAV_LINKS: AdminNavLink[] = [
     primary: true,
     keywords: ["tasks", "queue", "imports", "任务", "队列", "导入任务"],
   }),
-  link(adminRoutes.scheduler, "nav.scheduler", "calendar", "operations", { primary: true, keywords: ["schedule", "sync", "调度", "同步"] }),
+  link(adminRoutes.scheduler, "nav.scheduler", "calendar", "operations", {
+    primary: true,
+    keywords: ["schedule", "sync", "调度", "同步"],
+  }),
   link(adminRoutes.dataManagement, "nav.datamgmt", "database", "governance", { primary: true, keywords: ["storage", "governance", "数据", "存储"] }),
   link(adminRoutes.system, "nav.system", "pulse", "governance", {
     primary: true,

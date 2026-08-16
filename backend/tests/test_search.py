@@ -63,6 +63,17 @@ class TestSearchService:
         assert hasattr(SearchService, "reindex")
         assert inspect.iscoroutinefunction(SearchService.reindex)
 
+    def test_parallel_work_hydration_reserves_a_control_connection(self, monkeypatch):
+        from app.services import search
+
+        monkeypatch.setattr(search.settings, "db_pool_size", 1)
+        monkeypatch.setattr(search.settings, "db_max_overflow", 1)
+        assert search._parallel_work_hydration_supported() is False
+
+        monkeypatch.setattr(search.settings, "db_pool_size", 4)
+        monkeypatch.setattr(search.settings, "db_max_overflow", 1)
+        assert search._parallel_work_hydration_supported() is True
+
     def test_meili_filters_escape_values_and_preserve_or_semantics(self):
         from app.services.search import _compile_meili_filter
         from app.services.search_language import parse_search_query
@@ -71,6 +82,18 @@ class TestSearchService:
         filters = _compile_meili_filter(query, "works", {}, force_sfw=False)
         assert '(tags = "a\\"b" OR tags = "landscape")' in filters
         assert '(sources != "x" AND sources != "pixiv")' in filters
+
+    def test_source_identity_meili_filters_keep_source_and_id_paired(self):
+        from app.services.search import _compile_meili_filter
+        from app.services.search_language import parse_search_query
+
+        query = parse_search_query(
+            "uid:pixiv/123 uid:x/123 pid:pixiv/456",
+            "works",
+        )
+        filters = _compile_meili_filter(query, "works", {}, force_sfw=False)
+        assert '(source_creator_keys = "pixiv/123" OR source_creator_keys = "x/123")' in filters
+        assert '(source_work_keys = "pixiv/456")' in filters
 
     def test_global_targets_are_trimmed_by_permission(self):
         from app.services.search import SearchService
@@ -117,6 +140,27 @@ class TestSearchService:
         filters = _compile_meili_filter(query, "works", {}, force_sfw=True)
         assert "is_nsfw = true" in filters
         assert "is_nsfw = false" in filters
+
+    def test_structured_work_lists_use_database_projection(self):
+        from app.services.search import SearchService
+        from app.services.search_language import parse_search_query
+
+        for value in (
+            "",
+            "source:pixiv sort:posted-desc",
+            "is:favorite is:sfw sort:title-asc",
+            "is:trashed sort:updated-desc",
+            "has:multiple-assets",
+            "has:image has:video has:animation",
+            "repo:00000000-0000-0000-0000-000000000001",
+            "uid:pixiv/1980643",
+            "pid:pixiv/38362603",
+            'url:"https://www.pixiv.net/artworks/38362603"',
+        ):
+            assert SearchService._works_db_compatible(
+                parse_search_query(value, "works")
+            )
+
 
 
 @pytest.mark.integration

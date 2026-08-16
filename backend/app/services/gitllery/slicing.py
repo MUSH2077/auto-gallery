@@ -40,6 +40,12 @@ class RepoResolver:
         self._change_repos_cache: dict[tuple[str, str], list[RepoDescriptor]] = {}
         self._work_sources_by_work: dict[str, list[WorkSource]] | None = None
 
+    def clear_batch_cache(self) -> None:
+        """Release entity-sized caches between bounded projection batches."""
+
+        self._change_repos_cache.clear()
+        self._work_sources_by_work = None
+
     async def preload_work_sources(self, work_ids: list[str] | None = None) -> None:
         """Bulk-load WorkSource rows (one query) so per-change work resolution
         in bulk walks does zero extra DB round-trips.

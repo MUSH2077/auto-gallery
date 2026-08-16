@@ -553,7 +553,7 @@ git commit -m "feat: add periodic VACUUM of FileIndex in scheduler"
 - [ ] **Step 1: Rebuild and restart all containers**
 
 ```bash
-cd /volume3/docker/auto-gallery
+cd /volume2/docker/auto-gallery
 docker compose build backend
 docker compose up -d --force-recreate backend worker-download worker-import scheduler admin-web
 ```

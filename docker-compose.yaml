@@ -1,3 +1,9 @@
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
@@ -5,35 +11,85 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-autogallery}
       POSTGRES_USER: ${POSTGRES_USER:-autogallery}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=192MB
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - autovacuum_work_mem=32MB
+      - -c
+      - effective_cache_size=512MB
+      - -c
+      - max_connections=40
+      - -c
+      - max_worker_processes=4
+      - -c
+      - max_parallel_workers=2
+      - -c
+      - max_parallel_workers_per_gather=1
+      - -c
+      - idle_in_transaction_session_timeout=60s
+      - -c
+      - temp_file_limit=256MB
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.max=1000
+      - -c
+      - pg_stat_statements.track=top
+      - -c
+      - track_io_timing=on
     volumes:
       - ${HOST_POSTGRES:-./data/docker/postgres}:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-autogallery}"]
       interval: 5s
       timeout: 5s
-      retries: 5
-      start_period: 15s
+      retries: 12
+      start_period: 90s
     restart: unless-stopped
-    mem_limit: 384M
+    mem_limit: ${POSTGRES_MEM_LIMIT:-768M}
+    memswap_limit: ${POSTGRES_MEM_LIMIT:-768M}
+    cpus: ${POSTGRES_CPU_LIMIT:-0.45}
+    pids_limit: ${POSTGRES_PIDS_LIMIT:-64}
+    oom_score_adj: 0
+    logging: *default-logging
 
   redis:
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     # noeviction: this redis also backs RQ job queues — evicting keys under
     # memory pressure would silently drop queued jobs. Overflow must error
     # loudly instead. 96mb keeps headroom under the 128M container limit.
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD} --maxmemory 96mb --maxmemory-policy noeviction
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD} --maxmemory 192mb --maxmemory-policy noeviction
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
     volumes:
       - ${HOST_REDIS:-./data/docker/redis}:/data
     healthcheck:
-      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$${REDIS_PASSWORD}\" redis-cli ping"]
-      interval: 5s
+      # PING alone remains green when noeviction has made Redis read-only in
+      # practice. Exercise a short-lived write without risking queue data.
+      test:
+        - CMD-SHELL
+        - >-
+          key="auto-gallery:health:$${HOSTNAME}";
+          test "$$(REDISCLI_AUTH="$${REDIS_PASSWORD}" redis-cli --no-auth-warning SET "$${key}" ok EX 15)" = "OK" &&
+          REDISCLI_AUTH="$${REDIS_PASSWORD}" redis-cli --no-auth-warning DEL "$${key}" >/dev/null
+      interval: 30s
       timeout: 5s
-      retries: 5
+      retries: 3
       start_period: 10s
+      start_interval: 5s
     restart: unless-stopped
-    mem_limit: 128M
+    mem_limit: ${REDIS_MEM_LIMIT:-256M}
+    memswap_limit: ${REDIS_MEM_LIMIT:-256M}
+    cpus: ${REDIS_CPU_LIMIT:-0.15}
+    pids_limit: ${REDIS_PIDS_LIMIT:-32}
+    oom_score_adj: 0
+    logging: *default-logging
 
   meilisearch:
     image: getmeili/meilisearch:v1.12@sha256:c9fac23131cca4db95173d41cc50fd5639121ee381795528fdd7522d7978a7b8
@@ -41,10 +97,9 @@ services:
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
       MEILI_ENV: ${MEILI_ENV:-production}
       MEILI_HTTP_ADDR: ${MEILI_HTTP_ADDR:-meilisearch:7700}
-      # Self-throttle indexing instead of getting OOM-killed: bulk reindex
-      # at 256M container limit died with exit 137 (2026-07-07).
-      MEILI_MAX_INDEXING_MEMORY: ${MEILI_MAX_INDEXING_MEMORY:-256Mb}
-      MEILI_MAX_INDEXING_THREADS: ${MEILI_MAX_INDEXING_THREADS:-2}
+      # Leave room for the search process and LMDB page cache while indexing.
+      MEILI_MAX_INDEXING_MEMORY: ${MEILI_MAX_INDEXING_MEMORY:-320Mb}
+      MEILI_MAX_INDEXING_THREADS: ${MEILI_MAX_INDEXING_THREADS:-1}
     volumes:
       - ${HOST_MEILISEARCH:-./data/docker/meilisearch}:/meili_data
     healthcheck:
@@ -54,9 +109,34 @@ services:
       retries: 5
       start_period: 20s
     restart: unless-stopped
-    # 8GB-NAS cap. 256M OOM-killed bulk indexing (2026-07-07); 512M still ran
-    # at 76% RSS on a 711-doc library — raised for headroom as the library grows.
-    mem_limit: 768M
+    mem_limit: ${MEILI_MEM_LIMIT:-1G}
+    memswap_limit: ${MEILI_MEM_LIMIT:-1G}
+    cpus: ${MEILI_CPU_LIMIT:-0.40}
+    pids_limit: ${MEILI_PIDS_LIMIT:-64}
+    oom_score_adj: 300
+    logging: *default-logging
+
+  migrate:
+    image: ${BACKEND_IMAGE:-auto-gallery-backend:latest}
+    pull_policy: never
+    command: alembic upgrade head
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      MEILI_URL: http://meilisearch:7700
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      SECRET_KEY: ${SECRET_KEY}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    mem_limit: ${MIGRATE_MEM_LIMIT:-512M}
+    memswap_limit: ${MIGRATE_MEM_LIMIT:-512M}
+    cpus: ${MIGRATE_CPU_LIMIT:-0.25}
+    pids_limit: ${MIGRATE_PIDS_LIMIT:-64}
+    oom_score_adj: 100
+    logging: *default-logging
 
   backend:
     build:
@@ -64,8 +144,8 @@ services:
       dockerfile: Dockerfile
       args:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-}
-    image: auto-gallery-backend:latest
-    command: sh -c "mkdir -p /gallerydl-config/cookies && for site in pixiv twitter iwara danbooru pinterest lofter weibo bilibili; do touch /gallerydl-config/cookies/$${site}.txt; done && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    image: ${BACKEND_IMAGE:-auto-gallery-backend:latest}
+    command: sh -c "mkdir -p /gallerydl-config/cookies && for site in pixiv twitter iwara danbooru pinterest lofter weibo bilibili; do touch /gallerydl-config/cookies/$${site}.txt; done && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "${BACKEND_PORT:-8818}:8000"
     environment:
@@ -74,6 +154,7 @@ services:
       MEILI_URL: http://meilisearch:7700
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
       MEILI_INDEX_PREFIX: ${MEILI_INDEX_PREFIX:-}
+      MEILI_SEARCH_TIMEOUT_SECONDS: ${MEILI_SEARCH_TIMEOUT_SECONDS:-3}
       SECRET_KEY: ${SECRET_KEY}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
@@ -83,11 +164,24 @@ services:
       APP_CONFIG_ROOT: /app-config
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       TIMEZONE: ${TIMEZONE:-UTC}
+      RESOURCE_GOVERNANCE_MODE: ${RESOURCE_GOVERNANCE_MODE:-enforce}
+      RESOURCE_DEVICE_PROFILE: ${RESOURCE_DEVICE_PROFILE:-auto}
+      RESOURCE_GOVERNANCE_MAX_SCALE: ${RESOURCE_GOVERNANCE_MAX_SCALE:-1.0}
+      RESOURCE_GOVERNANCE_ENFORCED_PROFILES: ${RESOURCE_GOVERNANCE_ENFORCED_PROFILES:-download_network,import_db,image_derive,video_derive,search_index,maintenance}
+      RESOURCE_MEMORY_RESERVE_MODE: ${RESOURCE_MEMORY_RESERVE_MODE:-auto}
+      RESOURCE_MEMORY_RESERVE_RATIO: ${RESOURCE_MEMORY_RESERVE_RATIO:-0.15}
+      RESOURCE_MEMORY_RESERVE_MIN_MB: ${RESOURCE_MEMORY_RESERVE_MIN_MB:-384}
+      RESOURCE_MEMORY_RESERVE_MAX_MB: ${RESOURCE_MEMORY_RESERVE_MAX_MB:-1280}
+      GITLLERY_PROJECTION_MODE: ${GITLLERY_PROJECTION_MODE:-shadow}
+      GITLLERY_BUILD_GENERATION: ${GITLLERY_BUILD_GENERATION:-segment-r1}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:13000}
-      # Backend serves concurrent HTTP — larger pool than the worker default
-      # (2+3). 10+10 = 20 max; 7 processes stay well under pg max_connections 100.
-      DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
-      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
+      # Per-process connection budget: 8 steady + 4 temporary connections.
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-8}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-4}
+      DOWNLOAD_CONCURRENCY_CAP: ${DOWNLOAD_CONCURRENCY_CAP:-1}
+      DOWNLOAD_QUEUE_MAX_PENDING: ${DOWNLOAD_QUEUE_MAX_PENDING:-100}
+      DOWNLOAD_STAGING_ENABLED: ${DOWNLOAD_STAGING_ENABLED:-1}
+      MEMORY_WARN_MB: ${MEMORY_WARN_MB:-420}
     volumes:
       - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
       - ${HOST_LIBRARY:-./data/library}:/library
@@ -96,28 +190,31 @@ services:
       # alembic/versions are baked into the image via COPY . .
       # No bind mount needed — avoids WSL 2 filesystem access issues.
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
-        condition: service_healthy
-      meilisearch:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/api/v1/system/ready"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 90s
     restart: unless-stopped
-    # Never actually OOM-killed here (checked dmesg/RestartCount 2026-07-07),
-    # but 768M felt tight under load — 1G gives real headroom without
-    # blowing the 8GB-NAS budget (postgres/redis/OS still need ~3G).
-    mem_limit: 1g
+    mem_limit: ${BACKEND_MEM_LIMIT:-1G}
+    memswap_limit: ${BACKEND_MEM_LIMIT:-1G}
+    cpus: ${BACKEND_CPU_LIMIT:-0.55}
+    pids_limit: ${BACKEND_PIDS_LIMIT:-128}
+    oom_score_adj: 100
+    logging: *default-logging
 
   worker-download:
-    image: auto-gallery-backend:latest
+    image: ${BACKEND_IMAGE:-auto-gallery-backend:latest}
     pull_policy: never
-    command: python worker_entrypoint.py downloads,downloads:pixiv,downloads:danbooru,downloads:iwara,downloads:weibo,downloads:bilibili,downloads:pinterest,downloads:lofter,downloads:x 3 --with-scheduler
+    # RQ schedulers are queue-scoped. This worker must promote delayed download
+    # retries from the downloads:* scheduled registries; the dedicated
+    # scheduler service only owns the separate `scheduled` queue.
+    command: nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py downloads,downloads:pixiv,downloads:danbooru,downloads:iwara,downloads:weibo,downloads:bilibili,downloads:pinterest,downloads:lofter,downloads:x 1 --with-scheduler
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -132,6 +229,21 @@ services:
       APP_CONFIG_ROOT: /app-config
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       TIMEZONE: ${TIMEZONE:-UTC}
+      RESOURCE_GOVERNANCE_MODE: ${RESOURCE_GOVERNANCE_MODE:-enforce}
+      RESOURCE_DEVICE_PROFILE: ${RESOURCE_DEVICE_PROFILE:-auto}
+      RESOURCE_GOVERNANCE_MAX_SCALE: ${RESOURCE_GOVERNANCE_MAX_SCALE:-1.0}
+      RESOURCE_GOVERNANCE_ENFORCED_PROFILES: ${RESOURCE_GOVERNANCE_ENFORCED_PROFILES:-download_network,import_db,image_derive,video_derive,search_index,maintenance}
+      RESOURCE_MEMORY_RESERVE_MODE: ${RESOURCE_MEMORY_RESERVE_MODE:-auto}
+      RESOURCE_MEMORY_RESERVE_RATIO: ${RESOURCE_MEMORY_RESERVE_RATIO:-0.15}
+      RESOURCE_MEMORY_RESERVE_MIN_MB: ${RESOURCE_MEMORY_RESERVE_MIN_MB:-384}
+      RESOURCE_MEMORY_RESERVE_MAX_MB: ${RESOURCE_MEMORY_RESERVE_MAX_MB:-1280}
+      GITLLERY_PROJECTION_MODE: ${GITLLERY_PROJECTION_MODE:-shadow}
+      GITLLERY_BUILD_GENERATION: ${GITLLERY_BUILD_GENERATION:-segment-r1}
+      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-1}
+      DB_MAX_OVERFLOW: ${WORKER_DB_MAX_OVERFLOW:-1}
+      DOWNLOAD_CONCURRENCY_CAP: ${DOWNLOAD_CONCURRENCY_CAP:-1}
+      DOWNLOAD_QUEUE_MAX_PENDING: ${DOWNLOAD_QUEUE_MAX_PENDING:-100}
+      DOWNLOAD_STAGING_ENABLED: ${DOWNLOAD_STAGING_ENABLED:-1}
     volumes:
       - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
       - ${HOST_LIBRARY:-./data/library}:/library
@@ -140,25 +252,33 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD", "python3", "-c", "import os, shutil, redis; assert redis.from_url(os.environ['REDIS_URL']).ping(); assert shutil.which('gallery-dl')"]
+      test: ["CMD", "python3", "scripts/check_worker_health.py", "--require-gallery-dl"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 90s
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     restart: unless-stopped
-    mem_limit: 512M
+    init: true
+    stop_grace_period: 60s
+    mem_limit: ${DOWNLOAD_WORKER_MEM_LIMIT:-512M}
+    memswap_limit: ${DOWNLOAD_WORKER_MEM_LIMIT:-512M}
+    cpus: ${DOWNLOAD_WORKER_CPU_LIMIT:-0.35}
+    pids_limit: ${DOWNLOAD_WORKER_PIDS_LIMIT:-96}
+    oom_score_adj: 500
+    logging: *default-logging
 
   worker-import:
-    image: auto-gallery-backend:latest
+    image: ${BACKEND_IMAGE:-auto-gallery-backend:latest}
     pull_policy: never
     # Single import worker: pyvips thumbnail bursts are the biggest memory
     # spike — keep the ceiling NAS-safe (8GB box) at the cost of throughput.
-    command: python worker_entrypoint.py imports 1 --with-scheduler
+    # Promote delayed import retries from the imports scheduled registry.
+    command: nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py imports 1 --with-scheduler
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -173,6 +293,25 @@ services:
       APP_CONFIG_ROOT: /app-config
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       TIMEZONE: ${TIMEZONE:-UTC}
+      RESOURCE_GOVERNANCE_MODE: ${RESOURCE_GOVERNANCE_MODE:-enforce}
+      RESOURCE_DEVICE_PROFILE: ${RESOURCE_DEVICE_PROFILE:-auto}
+      RESOURCE_GOVERNANCE_MAX_SCALE: ${RESOURCE_GOVERNANCE_MAX_SCALE:-1.0}
+      RESOURCE_GOVERNANCE_ENFORCED_PROFILES: ${RESOURCE_GOVERNANCE_ENFORCED_PROFILES:-download_network,import_db,image_derive,video_derive,search_index,maintenance}
+      RESOURCE_MEMORY_RESERVE_MODE: ${RESOURCE_MEMORY_RESERVE_MODE:-auto}
+      RESOURCE_MEMORY_RESERVE_RATIO: ${RESOURCE_MEMORY_RESERVE_RATIO:-0.15}
+      RESOURCE_MEMORY_RESERVE_MIN_MB: ${RESOURCE_MEMORY_RESERVE_MIN_MB:-384}
+      RESOURCE_MEMORY_RESERVE_MAX_MB: ${RESOURCE_MEMORY_RESERVE_MAX_MB:-1280}
+      GITLLERY_PROJECTION_MODE: ${GITLLERY_PROJECTION_MODE:-shadow}
+      GITLLERY_BUILD_GENERATION: ${GITLLERY_BUILD_GENERATION:-segment-r1}
+      # A second RQ parent shares this container/cgroup but listens only for
+      # explicit whole-library coordinators. Adaptive disk tokens ensure it
+      # interleaves at slice boundaries instead of running heavy I/O alongside
+      # the normal import worker.
+      WORKER_EXTRA_QUEUES: maintenance
+      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-1}
+      DB_MAX_OVERFLOW: ${WORKER_DB_MAX_OVERFLOW:-1}
+      VIPS_CONCURRENCY: ${VIPS_CONCURRENCY:-1}
+      VIPS_CACHE_MAX_MEM_MB: ${VIPS_CACHE_MAX_MEM_MB:-64}
     volumes:
       - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
       - ${HOST_LIBRARY:-./data/library}:/library
@@ -181,23 +320,32 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD", "python3", "-c", "import os, redis; assert redis.from_url(os.environ['REDIS_URL']).ping()"]
+      test: ["CMD", "python3", "scripts/check_worker_health.py"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 90s
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     restart: unless-stopped
-    mem_limit: 1g
+    init: true
+    stop_grace_period: 60s
+    mem_limit: ${IMPORT_WORKER_MEM_LIMIT:-1G}
+    memswap_limit: ${IMPORT_WORKER_MEM_LIMIT:-1G}
+    cpus: ${IMPORT_WORKER_CPU_LIMIT:-0.65}
+    pids_limit: ${IMPORT_WORKER_PIDS_LIMIT:-64}
+    oom_score_adj: 500
+    logging: *default-logging
 
   worker-operations:
-    image: auto-gallery-backend:latest
+    image: ${BACKEND_IMAGE:-auto-gallery-backend:latest}
     pull_policy: never
-    command: python worker_entrypoint.py operations 1
+    # The late heavy-I/O race guard returns an interval Retry, so this worker
+    # also owns the queue-scoped scheduler for the operations registry.
+    command: nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py operations 1 --with-scheduler
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -212,29 +360,48 @@ services:
       APP_CONFIG_ROOT: /app-config
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       TIMEZONE: ${TIMEZONE:-UTC}
+      RESOURCE_GOVERNANCE_MODE: ${RESOURCE_GOVERNANCE_MODE:-enforce}
+      RESOURCE_DEVICE_PROFILE: ${RESOURCE_DEVICE_PROFILE:-auto}
+      RESOURCE_GOVERNANCE_MAX_SCALE: ${RESOURCE_GOVERNANCE_MAX_SCALE:-1.0}
+      RESOURCE_GOVERNANCE_ENFORCED_PROFILES: ${RESOURCE_GOVERNANCE_ENFORCED_PROFILES:-download_network,import_db,image_derive,video_derive,search_index,maintenance}
+      RESOURCE_MEMORY_RESERVE_MODE: ${RESOURCE_MEMORY_RESERVE_MODE:-auto}
+      RESOURCE_MEMORY_RESERVE_RATIO: ${RESOURCE_MEMORY_RESERVE_RATIO:-0.15}
+      RESOURCE_MEMORY_RESERVE_MIN_MB: ${RESOURCE_MEMORY_RESERVE_MIN_MB:-384}
+      RESOURCE_MEMORY_RESERVE_MAX_MB: ${RESOURCE_MEMORY_RESERVE_MAX_MB:-1280}
+      GITLLERY_PROJECTION_MODE: ${GITLLERY_PROJECTION_MODE:-shadow}
+      GITLLERY_BUILD_GENERATION: ${GITLLERY_BUILD_GENERATION:-segment-r1}
+      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-1}
+      DB_MAX_OVERFLOW: ${WORKER_DB_MAX_OVERFLOW:-1}
     volumes:
       - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
       - ${HOST_LIBRARY:-./data/library}:/library
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
     healthcheck:
-      test: ["CMD", "python3", "-c", "import os, redis; assert redis.from_url(os.environ['REDIS_URL']).ping()"]
+      test: ["CMD", "python3", "scripts/check_worker_health.py"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 90s
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     restart: unless-stopped
-    mem_limit: 512M
+    init: true
+    stop_grace_period: 60s
+    mem_limit: ${OPERATIONS_WORKER_MEM_LIMIT:-1G}
+    memswap_limit: ${OPERATIONS_WORKER_MEM_LIMIT:-1G}
+    cpus: ${OPERATIONS_WORKER_CPU_LIMIT:-0.25}
+    pids_limit: ${OPERATIONS_WORKER_PIDS_LIMIT:-64}
+    oom_score_adj: 500
+    logging: *default-logging
 
   scheduler:
-    image: auto-gallery-backend:latest
+    image: ${BACKEND_IMAGE:-auto-gallery-backend:latest}
     pull_policy: never
-    command: sh -c "python seed_sync.py && rq worker --with-scheduler --url redis://:${REDIS_PASSWORD}@redis:6379/0 scheduled"
+    command: sh -c "python seed_sync.py && exec nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py scheduled 1 --with-scheduler"
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -249,6 +416,19 @@ services:
       APP_CONFIG_ROOT: /app-config
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       TIMEZONE: ${TIMEZONE:-UTC}
+      RESOURCE_GOVERNANCE_MODE: ${RESOURCE_GOVERNANCE_MODE:-enforce}
+      RESOURCE_DEVICE_PROFILE: ${RESOURCE_DEVICE_PROFILE:-auto}
+      RESOURCE_GOVERNANCE_MAX_SCALE: ${RESOURCE_GOVERNANCE_MAX_SCALE:-1.0}
+      RESOURCE_GOVERNANCE_ENFORCED_PROFILES: ${RESOURCE_GOVERNANCE_ENFORCED_PROFILES:-download_network,import_db,image_derive,video_derive,search_index,maintenance}
+      RESOURCE_MEMORY_RESERVE_MODE: ${RESOURCE_MEMORY_RESERVE_MODE:-auto}
+      RESOURCE_MEMORY_RESERVE_RATIO: ${RESOURCE_MEMORY_RESERVE_RATIO:-0.15}
+      RESOURCE_MEMORY_RESERVE_MIN_MB: ${RESOURCE_MEMORY_RESERVE_MIN_MB:-384}
+      RESOURCE_MEMORY_RESERVE_MAX_MB: ${RESOURCE_MEMORY_RESERVE_MAX_MB:-1280}
+      GITLLERY_PROJECTION_MODE: ${GITLLERY_PROJECTION_MODE:-shadow}
+      GITLLERY_BUILD_GENERATION: ${GITLLERY_BUILD_GENERATION:-segment-r1}
+      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-1}
+      DB_MAX_OVERFLOW: ${WORKER_DB_MAX_OVERFLOW:-1}
+      DOWNLOAD_QUEUE_MAX_PENDING: ${DOWNLOAD_QUEUE_MAX_PENDING:-100}
     volumes:
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
       - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
@@ -257,44 +437,59 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD", "python3", "-c", "import os, redis; assert redis.from_url(os.environ['REDIS_URL']).ping()"]
+      test: ["CMD", "python3", "scripts/check_worker_health.py"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 90s
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     restart: unless-stopped
-    mem_limit: 256M
+    init: true
+    stop_grace_period: 60s
+    mem_limit: ${SCHEDULER_MEM_LIMIT:-512M}
+    memswap_limit: ${SCHEDULER_MEM_LIMIT:-512M}
+    cpus: ${SCHEDULER_CPU_LIMIT:-0.10}
+    pids_limit: ${SCHEDULER_PIDS_LIMIT:-32}
+    oom_score_adj: 500
+    logging: *default-logging
 
   admin-web:
     build:
-      context: ./admin-web
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: admin-web/Dockerfile
       args:
         NPM_REGISTRY: ${NPM_REGISTRY:-}
+        ADMIN_BUILD_NODE_HEAP_MB: ${ADMIN_BUILD_NODE_HEAP_MB:-640}
         NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-}
         NEXT_PUBLIC_SOURCE_CODE_URL: ${NEXT_PUBLIC_SOURCE_CODE_URL:-https://github.com/MUSH2077/auto-gallery}
+    image: ${ADMIN_IMAGE:-auto-gallery-admin-web:latest}
     ports:
       - "${ADMIN_WEB_PORT:-13000}:3000"
     environment:
       HOSTNAME: "0.0.0.0"
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8000}
-      NODE_OPTIONS: "--max-old-space-size=256"
+      # Leave headroom for native allocations inside the default 256M cgroup.
+      NODE_OPTIONS: "--max-old-space-size=${NODE_MAX_OLD_SPACE_MB:-160}"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/admin/login"]
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 90s
     depends_on:
       backend:
         condition: service_healthy
     restart: unless-stopped
-    mem_limit: 256M
+    mem_limit: ${ADMIN_WEB_MEM_LIMIT:-512M}
+    memswap_limit: ${ADMIN_WEB_MEM_LIMIT:-512M}
+    cpus: ${ADMIN_WEB_CPU_LIMIT:-0.15}
+    pids_limit: ${ADMIN_WEB_PIDS_LIMIT:-64}
+    oom_score_adj: 100
+    logging: *default-logging
 
 volumes:
   auto_gallery_ci_downloads:

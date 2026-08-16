@@ -18,6 +18,7 @@ class CurationChangeRead(BaseModel):
     subject_type: str
     subject_id: str
     action: str
+    sequence: int | None = None
     before_state: dict | None = None
     after_state: dict | None = None
     diff: dict | None = None
@@ -63,7 +64,7 @@ class CurationRevertResponse(BaseModel):
 
 
 class BatchCurateRequest(BaseModel):
-    ids: list[UUID]
+    ids: list[UUID] = Field(min_length=1, max_length=25)
     action: str = "trash"
     reason: str | None = None
     message: str | None = None
@@ -76,7 +77,7 @@ class CreatorCurationRequest(BaseModel):
 
 
 class PurgePreviewRequest(BaseModel):
-    work_ids: list[UUID] | None = None
+    work_ids: list[UUID] | None = Field(default=None, max_length=25)
 
 
 class PurgePreviewResponse(BaseModel):
@@ -88,7 +89,7 @@ class PurgePreviewResponse(BaseModel):
 
 
 class PurgeRequest(BaseModel):
-    work_ids: list[UUID] | None = None
+    work_ids: list[UUID] = Field(min_length=1, max_length=25)
     message: str | None = None
 
 

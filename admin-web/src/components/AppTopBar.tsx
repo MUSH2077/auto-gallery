@@ -2,7 +2,8 @@
 import { useCallback, useEffect, useId, useRef, useState, type RefObject } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu, Search, Upload } from "lucide-react";
+import { Activity, CircleCheck, Menu, Search, Upload } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
 import { ThemeToggle, LangToggle } from "@/lib/theme";
 import { useAuth } from "@/lib/auth";
@@ -12,6 +13,7 @@ import { findAdminNavEntry } from "@/lib/adminNavigation";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { NotificationBell } from "@/components/NotificationCenter";
 import CommandPalette from "@/components/CommandPalette";
+import { api, queryKeys } from "@/lib/api";
 
 function UserMenu() {
   const t = useT();
@@ -125,6 +127,15 @@ export default function AppTopBar({
   const crumb = findAdminNavEntry(pathname);
   const showSearch = has("library");
   const showUpload = has("upload");
+  const showOperations = has("tasks");
+  const operations = useQuery({
+    queryKey: queryKeys.tasks.operations("attention"),
+    queryFn: ({ signal }) => api.operationsOverview("attention", signal),
+    enabled: showOperations,
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+  });
   const [commandOpen, setCommandOpen] = useState(false);
   const closeCommand = useCallback(() => setCommandOpen(false), []);
 
@@ -166,6 +177,25 @@ export default function AppTopBar({
         </div>
 
         <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
+          {showOperations && (
+            <Link
+              href={adminRoutes.jobs}
+              className={`relative flex h-11 min-w-11 items-center justify-center rounded-md px-2 transition-colors hover:bg-subtle ${operations.data?.summary.attention ? "text-danger" : "text-success"}`}
+              aria-label={operations.data?.summary.attention
+                ? t("operations.topbar_attention", { count: operations.data.summary.attention })
+                : t("operations.topbar_healthy")}
+              title={operations.data?.summary.attention
+                ? t("operations.topbar_attention", { count: operations.data.summary.attention })
+                : t("operations.topbar_healthy")}
+            >
+              {operations.data?.summary.attention ? <Activity className="h-[18px] w-[18px]" aria-hidden /> : <CircleCheck className="h-[18px] w-[18px]" aria-hidden />}
+              {!!operations.data?.summary.attention && (
+                <span className="absolute right-0.5 top-0.5 min-w-4 rounded-full bg-danger px-1 text-center text-[10px] font-semibold leading-4 text-white">
+                  {operations.data.summary.attention > 99 ? "99+" : operations.data.summary.attention}
+                </span>
+              )}
+            </Link>
+          )}
           {showSearch && (
             <>
               <button

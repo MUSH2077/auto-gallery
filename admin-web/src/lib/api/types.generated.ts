@@ -238,6 +238,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/clear/preview/{entity}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview Clear Entity
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        get: operations["get_api_v1_admin_clear_preview_entity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/clear/{entity}": {
         parameters: {
             query?: never;
@@ -484,6 +504,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/gitllery/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Gitllery Settings
+         * @description Return Gitllery v1's deployment-managed, read-only control surface.
+         *
+         *     The parent admin router requires the ``system`` permission.  Keep this
+         *     response deliberately declarative: it exposes no environment values,
+         *     filesystem paths, credentials, or mutation controls.
+         */
+        get: operations["get_api_v1_admin_gitllery_settings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/import-progress": {
         parameters: {
             query?: never;
@@ -724,6 +768,8 @@ export interface paths {
          *     ``force_eligible`` means "sync everything the operator would reasonably
          *     expect to sync now": active/enabled/downloadable sources with healthy auth,
          *     valid URLs, and no running job.  It bypasses schedule windows only.
+         *     ``manual_all_enabled`` additionally includes subscriptions configured with
+         *     the explicit manual strategy while preserving every schedule setting.
          *     ``due_scan`` preserves the old behavior: run the scheduler's due-only scan.
          */
         post: operations["post_api_v1_admin_scheduler_sync_now"];
@@ -1366,9 +1412,117 @@ export interface paths {
         put?: never;
         /**
          * Gitllery Backfill
-         * @description Enqueue repo initialization + full projection (first-sync path).
+         * @description Capture missing historical intents, then wake bounded projection.
          */
         post: operations["post_api_v1_curation_gitllery_backfill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/curation/gitllery/build": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Gitllery Backfill
+         * @description Capture missing historical intents, then wake bounded projection.
+         */
+        post: operations["post_api_v1_curation_gitllery_build"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/curation/gitllery/commands/execute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Execute Gitllery Command
+         * @description Atomically apply one bounded, idempotent Gitllery domain command.
+         */
+        post: operations["post_api_v1_curation_gitllery_commands_execute"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/curation/gitllery/commands/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Gitllery Command
+         * @description Validate a Gitllery command without committing or touching disk.
+         */
+        post: operations["post_api_v1_curation_gitllery_commands_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/curation/gitllery/pull": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Gitllery Transfer Shadow Only
+         * @description Reserve the v1 transfer command surface without unsafe disk mutation.
+         *
+         *     The portable transfer protocol is deliberately disabled in this rollout;
+         *     CLI clients receive the same stable shadow-only error as projection
+         *     maintenance instead of a misleading 404 or an implicit full-history walk.
+         */
+        post: operations["post_api_v1_curation_gitllery_pull"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/curation/gitllery/push": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Gitllery Transfer Shadow Only
+         * @description Reserve the v1 transfer command surface without unsafe disk mutation.
+         *
+         *     The portable transfer protocol is deliberately disabled in this rollout;
+         *     CLI clients receive the same stable shadow-only error as projection
+         *     maintenance instead of a misleading 404 or an implicit full-history walk.
+         */
+        post: operations["post_api_v1_curation_gitllery_push"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1386,11 +1540,11 @@ export interface paths {
         put?: never;
         /**
          * Gitllery Rebuild
-         * @description Restore manual curation history from on-disk .gitllery repos into the DB.
+         * @description Compatibility alias for a side-by-side v1 projection build.
          *
-         *     dry_run (default) runs inline and reports what WOULD happen without writing.
-         *     dry_run=false enqueues the real rebuild as an operations job (mirrors
-         *     import_from_disk in admin.py) since it may touch a large history.
+         *     The historical endpoint used to read disk directly into the public
+         *     database. That unsafe behavior is intentionally retired; disaster restore
+         *     has a separate staged workflow.
          */
         post: operations["post_api_v1_curation_gitllery_rebuild"];
         delete?: never;
@@ -1410,9 +1564,11 @@ export interface paths {
         put?: never;
         /**
          * Gitllery Reconcile
-         * @description Enqueue projection of pending commits (and checkpoint rebuild when
-         *     library-wide). The walk is O(history) and runs in a worker by design —
-         *     status() has no inline full-history fallback anymore.
+         * @description Wake the bounded v1 projection coordinator.
+         *
+         *     The repository hint is informational because one authoritative commit can
+         *     fan out to several portable repositories. No full-history walk runs in the
+         *     request or in one long RQ job.
          */
         post: operations["post_api_v1_curation_gitllery_reconcile"];
         delete?: never;
@@ -1435,6 +1591,26 @@ export interface paths {
         get: operations["get_api_v1_curation_gitllery_status"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/curation/gitllery/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Gitllery Verify
+         * @description Queue bounded verification; never scan repository history in HTTP.
+         */
+        post: operations["post_api_v1_curation_gitllery_verify"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2017,6 +2193,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Operations Overview
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        get: operations["get_api_v1_operations_overview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/reference/danbooru/artist/batch-import": {
         parameters: {
             query?: never;
@@ -2182,6 +2378,46 @@ export interface paths {
          * @description Get Danbooru artist detail by ID (for alias chips on Creator Detail page).
          */
         get: operations["get_api_v1_reference_danbooru_artist_artist_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reference/danbooru/mappings/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh All Danbooru Mappings
+         * @description Incrementally refresh Danbooru mappings for every current creator.
+         */
+        post: operations["post_api_v1_reference_danbooru_mappings_refresh"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reference/danbooru/mappings/refresh/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Danbooru Mapping Refresh
+         * @description Return status only for the subscription-scoped mapping refresh job.
+         */
+        get: operations["get_api_v1_reference_danbooru_mappings_refresh_job_id"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2377,26 +2613,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/showcase/sample": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Sample
-         * @description See the request, response, permission, and risk metadata for this operation.
-         */
-        get: operations["get_api_v1_showcase_sample"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/sources": {
         parameters: {
             query?: never;
@@ -2493,6 +2709,26 @@ export interface paths {
          * @description Return total number of subscriptions.
          */
         get: operations["get_api_v1_subscriptions_count"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/subscriptions/summaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Subscription Summaries
+         * @description Return authoritative operational and schedule state for one list page.
+         */
+        get: operations["get_api_v1_subscriptions_summaries"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2697,6 +2933,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/reindex-works": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reindex Works
+         * @description Queue a full Meilisearch rebuild on the protected import worker.
+         *
+         *     This compatibility endpoint used to run the whole-library scan inside the
+         *     backend request process, bypassing the NAS pressure and heavy-I/O gates.
+         *     Route it through the same operation as the admin data-management endpoint
+         *     so the long coordinator cannot starve bounded operations outboxes.
+         */
+        post: operations["post_api_v1_system_reindex_works"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/system/scheduler-decisions": {
         parameters: {
             query?: never;
@@ -2873,6 +3134,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tasks/anomalies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Task Anomalies
+         * @description Compatibility endpoint for the unified attention view.
+         */
+        get: operations["get_api_v1_tasks_anomalies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/compact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compact Tasks
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_tasks_compact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile Tasks
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_tasks_reconcile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/reconcile-subscription-slot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile Subscription Slot
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_tasks_reconcile_subscription_slot"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tasks/{task_id}": {
         parameters: {
             query?: never;
@@ -2887,6 +3228,26 @@ export interface paths {
         get: operations["get_api_v1_tasks_task_id"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{task_id}/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge Task
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_tasks_task_id_acknowledge"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3376,6 +3737,20 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** ActivatedSubscriptionSource */
+        ActivatedSubscriptionSource: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Selection Reason */
+            selection_reason: string;
+            /** Source */
+            source: string;
+            /** Source Url */
+            source_url?: string | null;
+        };
         /** AdminSettingsUpdate */
         AdminSettingsUpdate: {
             dedup?: components["schemas"]["DedupSettings"] | null;
@@ -3663,6 +4038,29 @@ export interface components {
             /** New Password */
             new_password: string;
         };
+        /** ClearOperationRequest */
+        ClearOperationRequest: {
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Entity
+             * @enum {string}
+             */
+            entity: "works" | "creators" | "subscriptions" | "tags" | "jobs" | "settings" | "all";
+        };
+        /** CompactTasksRequest */
+        CompactTasksRequest: {
+            /**
+             * Dry Run
+             * @default true
+             */
+            dry_run: boolean;
+            /**
+             * Limit
+             * @default 200
+             */
+            limit: number;
+        };
         /** CreatorCreate */
         CreatorCreate: {
             /** Description */
@@ -3889,6 +4287,8 @@ export interface components {
             impact?: {
                 [key: string]: unknown;
             } | null;
+            /** Sequence */
+            sequence?: number | null;
             /** Subject Id */
             subject_id: string;
             /** Subject Type */
@@ -3995,6 +4395,51 @@ export interface components {
              * @default visible
              */
             visibility: string;
+        };
+        /** DanbooruMappingRefreshEnqueueResponse */
+        DanbooruMappingRefreshEnqueueResponse: {
+            /** Job Id */
+            job_id: string;
+            /** Message */
+            message: string;
+            /**
+             * Operation Type
+             * @constant
+             */
+            operation_type: "danbooru-mapping-refresh";
+            /**
+             * Status
+             * @constant
+             */
+            status: "enqueued";
+        };
+        /** DanbooruMappingRefreshStatusResponse */
+        DanbooruMappingRefreshStatusResponse: {
+            /** Error */
+            error?: string | null;
+            /** Job Id */
+            job_id: string;
+            /** Meta */
+            meta?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Operation Type
+             * @constant
+             */
+            operation_type: "danbooru-mapping-refresh";
+            /** Progress */
+            progress?: {
+                [key: string]: unknown;
+            } | null;
+            /** Result */
+            result?: {
+                [key: string]: unknown;
+            } | null;
+            /** Status */
+            status: string;
+            /** Updated At */
+            updated_at?: number | null;
         };
         /** DanbooruSourceConfig */
         DanbooruSourceConfig: {
@@ -4108,6 +4553,10 @@ export interface components {
         };
         /** DownloadJobRead */
         DownloadJobRead: {
+            /** Conflict Details */
+            readonly conflict_details: {
+                [key: string]: unknown;
+            }[];
             /**
              * Created At
              * Format: date-time
@@ -4150,8 +4599,12 @@ export interface components {
             progress_data?: {
                 [key: string]: unknown;
             } | null;
+            /** Reason Code */
+            readonly reason_code: string | null;
             /** Retry Count */
             retry_count: number;
+            /** Retryable */
+            readonly retryable: boolean;
             /** Source */
             source: string;
             /** Source Url */
@@ -4188,6 +4641,143 @@ export interface components {
             twitter?: components["schemas"]["TwitterSourceConfig"] | null;
             weibo?: components["schemas"]["WeiboSourceConfig"] | null;
         };
+        /** GitlleryCapabilities */
+        GitlleryCapabilities: {
+            automatic_projection: components["schemas"]["GitlleryCapability"];
+            backfill: components["schemas"]["GitlleryCapability"];
+            commit: components["schemas"]["GitlleryCapability"];
+            pull: components["schemas"]["GitlleryCapability"];
+            push: components["schemas"]["GitlleryCapability"];
+            rebuild: components["schemas"]["GitlleryCapability"];
+            reconcile: components["schemas"]["GitlleryCapability"];
+            verify: components["schemas"]["GitlleryCapability"];
+        };
+        /** GitlleryCapability */
+        GitlleryCapability: {
+            /** Enabled */
+            enabled: boolean;
+            /** Reason */
+            reason?: string | null;
+        };
+        /** GitlleryCliSettings */
+        GitlleryCliSettings: {
+            /** Examples */
+            examples: {
+                [key: string]: string;
+            };
+            /**
+             * Max Operations Per Commit
+             * @default 100
+             * @constant
+             */
+            max_operations_per_commit: 100;
+            /**
+             * Max Works Per Commit
+             * @default 25
+             * @constant
+             */
+            max_works_per_commit: 25;
+            /**
+             * Server Stores Cli Token
+             * @default false
+             * @constant
+             */
+            server_stores_cli_token: false;
+            /**
+             * Token Storage
+             * @default client_only
+             * @constant
+             */
+            token_storage: "client_only";
+        };
+        /** GitlleryCommandOperation */
+        GitlleryCommandOperation: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "trash" | "restore" | "favorite" | "tag-add" | "tag-remove";
+            /** Reason */
+            reason?: string | null;
+            /** Tag */
+            tag?: string | null;
+            /** Value */
+            value?: boolean | null;
+            /**
+             * Work Id
+             * Format: uuid
+             */
+            work_id: string;
+        };
+        /** GitlleryCommandRequest */
+        GitlleryCommandRequest: {
+            /** Expected Parent Commit Id */
+            expected_parent_commit_id?: string | null;
+            /**
+             * Idempotency Key
+             * Format: uuid
+             */
+            idempotency_key: string;
+            /** Message */
+            message: string;
+            /** Operations */
+            operations: components["schemas"]["GitlleryCommandOperation"][];
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version: 1;
+        };
+        /** GitlleryCommandResponse */
+        GitlleryCommandResponse: {
+            /** Changed */
+            changed: number;
+            /** Commit Id */
+            commit_id?: string | null;
+            /** Outbox State */
+            outbox_state: string;
+            /** Parent Commit Id */
+            parent_commit_id?: string | null;
+            /** Projected Lag Seconds */
+            projected_lag_seconds?: number | null;
+            /** Skipped */
+            skipped: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "committed" | "noop";
+        };
+        /** GitlleryGovernanceScope */
+        GitlleryGovernanceScope: {
+            /**
+             * Enforcement
+             * @default auto_gallery_only
+             * @constant
+             */
+            enforcement: "auto_gallery_only";
+            /**
+             * Modifies Host Configuration
+             * @default false
+             * @constant
+             */
+            modifies_host_configuration: false;
+            /**
+             * Modifies Other Projects
+             * @default false
+             * @constant
+             */
+            modifies_other_projects: false;
+            /**
+             * Observation
+             * @default host_and_auto_gallery
+             * @constant
+             */
+            observation: "host_and_auto_gallery";
+        };
         /** GitlleryLogEntry */
         GitlleryLogEntry: {
             /** Actor */
@@ -4217,43 +4807,6 @@ export interface components {
             /** Total */
             total: number;
         };
-        /** GitlleryRebuildResponse */
-        GitlleryRebuildResponse: {
-            /**
-             * Changes Unmapped
-             * @default 0
-             */
-            changes_unmapped: number;
-            /**
-             * Commits Deduped
-             * @default 0
-             */
-            commits_deduped: number;
-            /**
-             * Commits Restored
-             * @default 0
-             */
-            commits_restored: number;
-            /**
-             * Commits Skipped Auto
-             * @default 0
-             */
-            commits_skipped_auto: number;
-            /**
-             * Dry Run
-             * @default false
-             */
-            dry_run: boolean;
-            /** Job Id */
-            job_id?: string | null;
-            /**
-             * States Applied
-             * @default 0
-             */
-            states_applied: number;
-            /** Status */
-            status?: string | null;
-        };
         /** GitlleryRepoStatus */
         GitlleryRepoStatus: {
             /** Behind */
@@ -4266,12 +4819,83 @@ export interface components {
             drift?: string[];
             /** Exists */
             exists: boolean;
+            /**
+             * Format Id
+             * @default gitllery-segment
+             */
+            format_id: string;
+            /**
+             * Format Revision
+             * @default 1
+             */
+            format_revision: number;
+            /** Head Segment */
+            head_segment?: string | null;
+            /** Last Complete Commit Id */
+            last_complete_commit_id?: string | null;
             /** Object Integrity Ok */
             object_integrity_ok: boolean;
+            /**
+             * Product Version
+             * @default v1
+             */
+            product_version: string;
+            /** Projection Mode */
+            projection_mode?: string | null;
             /** Repository Id */
             repository_id: string;
             /** Source */
             source: string;
+        };
+        /** GitllerySettingsResponse */
+        GitllerySettingsResponse: {
+            /** Build Generation */
+            build_generation: string;
+            capabilities: components["schemas"]["GitlleryCapabilities"];
+            cli: components["schemas"]["GitlleryCliSettings"];
+            /**
+             * Format Id
+             * @default gitllery-segment
+             * @constant
+             */
+            format_id: "gitllery-segment";
+            /**
+             * Format Revision
+             * @default 1
+             * @constant
+             */
+            format_revision: 1;
+            governance_scope: components["schemas"]["GitlleryGovernanceScope"];
+            /**
+             * Managed By
+             * @default deployment_environment
+             * @constant
+             */
+            managed_by: "deployment_environment";
+            /**
+             * Product Name
+             * @default Gitllery
+             * @constant
+             */
+            product_name: "Gitllery";
+            /**
+             * Product Version
+             * @default v1
+             * @constant
+             */
+            product_version: "v1";
+            /**
+             * Projection Mode
+             * @enum {string}
+             */
+            projection_mode: "shadow" | "active";
+            /**
+             * Read Only
+             * @default true
+             * @constant
+             */
+            read_only: true;
+            status: components["schemas"]["GitlleryStatusResponse"];
         };
         /** GitlleryStatusResponse */
         GitlleryStatusResponse: {
@@ -4282,6 +4906,16 @@ export interface components {
              * @default false
              */
             deep: boolean;
+            /**
+             * Format Id
+             * @default gitllery-segment
+             */
+            format_id: string;
+            /**
+             * Format Revision
+             * @default 1
+             */
+            format_revision: number;
             /** Missing Repos */
             missing_repos: number;
             /**
@@ -4289,8 +4923,28 @@ export interface components {
              * @default false
              */
             needs_reconcile: boolean;
+            /**
+             * Product Version
+             * @default v1
+             */
+            product_version: string;
+            /**
+             * Projection Mode
+             * @default shadow
+             */
+            projection_mode: string;
             /** Repositories */
             repositories: components["schemas"]["GitlleryRepoStatus"][];
+        };
+        /** GitlleryVerifyRequest */
+        GitlleryVerifyRequest: {
+            /**
+             * Deep
+             * @default false
+             */
+            deep: boolean;
+            /** Repository Id */
+            repository_id: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -4593,7 +5247,7 @@ export interface components {
             /** Message */
             message?: string | null;
             /** Work Ids */
-            work_ids?: string[] | null;
+            work_ids: string[];
         };
         /** RebuildLibraryRequest */
         RebuildLibraryRequest: {
@@ -4614,6 +5268,19 @@ export interface components {
             source?: string | null;
             /** Work Id */
             work_id?: string | null;
+        };
+        /** ReconcileTasksRequest */
+        ReconcileTasksRequest: {
+            /**
+             * Dry Run
+             * @default true
+             */
+            dry_run: boolean;
+            /**
+             * Limit
+             * @default 500
+             */
+            limit: number;
         };
         /** RepositoryGraphEdge */
         RepositoryGraphEdge: {
@@ -4685,6 +5352,21 @@ export interface components {
             /** Password */
             password: string;
         };
+        /** RestoreSubscriptionSlotRequest */
+        RestoreSubscriptionSlotRequest: {
+            /**
+             * Dry Run
+             * @default true
+             */
+            dry_run: boolean;
+            /**
+             * Slot At
+             * Format: date-time
+             */
+            slot_at: string;
+            /** Source Ids */
+            source_ids: string[];
+        };
         /** RuleSuggestionRead */
         RuleSuggestionRead: {
             /** Confidence */
@@ -4707,7 +5389,7 @@ export interface components {
              * @default force_eligible
              * @enum {string}
              */
-            mode: "force_eligible" | "due_scan";
+            mode: "force_eligible" | "due_scan" | "manual_all_enabled";
         };
         /** SearchAssistRequest */
         SearchAssistRequest: {
@@ -4755,37 +5437,6 @@ export interface components {
             replace_values?: string[];
             /** Value */
             value?: string | null;
-        };
-        /** ShowcaseItem */
-        ShowcaseItem: {
-            /** Asset Id */
-            asset_id: string;
-            /** Creator Name */
-            creator_name?: string | null;
-            /** Height */
-            height?: number | null;
-            /**
-             * Media Kind
-             * @default image
-             */
-            media_kind: string;
-            /** Preview Url */
-            preview_url: string;
-            /** Source */
-            source?: string | null;
-            /** Thumb Url */
-            thumb_url: string;
-            /** Title */
-            title?: string | null;
-            /** Width */
-            width?: number | null;
-            /** Work Id */
-            work_id: string;
-        };
-        /** ShowcaseSampleResponse */
-        ShowcaseSampleResponse: {
-            /** Items */
-            items: components["schemas"]["ShowcaseItem"][];
         };
         /** SourceCreatorCreate */
         SourceCreatorCreate: {
@@ -4851,7 +5502,7 @@ export interface components {
             /** Name */
             name?: string | null;
             /** Schedule Mode */
-            schedule_mode?: string | null;
+            schedule_mode?: ("inherit" | "interval" | "fixed_time" | "manual") | null;
             /** Scheduled Times */
             scheduled_times?: string | null;
             /**
@@ -4903,8 +5554,28 @@ export interface components {
              */
             timezone: string;
         };
+        /** SubscriptionLatestState */
+        SubscriptionLatestState: {
+            /** Occurred At */
+            occurred_at?: string | null;
+            /** Outcome Code */
+            outcome_code?: string | null;
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Repository Id */
+            repository_id?: string | null;
+            /** State */
+            state: string;
+            /** Status */
+            status?: string | null;
+            /** Task Id */
+            task_id?: string | null;
+        };
         /** SubscriptionRead */
         SubscriptionRead: {
+            auto_enabled_source?: components["schemas"]["ActivatedSubscriptionSource"] | null;
+            /** Configured Mode */
+            configured_mode?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -4919,6 +5590,8 @@ export interface components {
             creator_id: string;
             /** Creator Name */
             creator_name?: string | null;
+            /** Effective Mode */
+            effective_mode?: string | null;
             /** Enabled Source Count */
             enabled_source_count?: number | null;
             /** Failed Job Count */
@@ -4940,6 +5613,8 @@ export interface components {
             latest_job_status?: string | null;
             /** Name */
             name?: string | null;
+            /** Next Sync At */
+            next_sync_at?: string | null;
             /** Running Job Count */
             running_job_count?: number | null;
             /** Schedule Mode */
@@ -4960,6 +5635,40 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** SubscriptionScheduleSummary */
+        SubscriptionScheduleSummary: {
+            /**
+             * Blocked Sources
+             * @default 0
+             */
+            blocked_sources: number;
+            /** Configured Mode */
+            configured_mode: string;
+            /**
+             * Due Sources
+             * @default 0
+             */
+            due_sources: number;
+            /** Effective Mode */
+            effective_mode: string;
+            /** Inherited */
+            inherited: boolean;
+            /** Next Due At */
+            next_due_at?: string | null;
+            /** Oldest Due At */
+            oldest_due_at?: string | null;
+            /**
+             * Overdue Sources
+             * @default 0
+             */
+            overdue_sources: number;
+            /** Scheduled Times */
+            scheduled_times?: string | null;
+            /** Sync Interval Hours */
+            sync_interval_hours: number;
+            /** Timezone */
+            timezone: string;
         };
         /** SubscriptionSourceCreate */
         SubscriptionSourceCreate: {
@@ -5005,6 +5714,8 @@ export interface components {
             last_successful_auth?: string | null;
             /** Last Synced At */
             last_synced_at?: string | null;
+            /** Next Sync At */
+            next_sync_at?: string | null;
             /** Source */
             source: string;
             /** Source Creator Id */
@@ -5031,6 +5742,46 @@ export interface components {
             /** Source Url */
             source_url?: string | null;
         };
+        /** SubscriptionSummariesResponse */
+        SubscriptionSummariesResponse: {
+            /** Items */
+            items: components["schemas"]["SubscriptionSummary"][];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** SubscriptionSummary */
+        SubscriptionSummary: {
+            /**
+             * Active Count
+             * @default 0
+             */
+            active_count: number;
+            /**
+             * Attention Count
+             * @default 0
+             */
+            attention_count: number;
+            /**
+             * Enabled Source Count
+             * @default 0
+             */
+            enabled_source_count: number;
+            latest_state: components["schemas"]["SubscriptionLatestState"];
+            schedule: components["schemas"]["SubscriptionScheduleSummary"];
+            /**
+             * Source Count
+             * @default 0
+             */
+            source_count: number;
+            /**
+             * Subscription Id
+             * Format: uuid
+             */
+            subscription_id: string;
+        };
         /** SubscriptionUpdate */
         SubscriptionUpdate: {
             /** Is Active */
@@ -5038,7 +5789,7 @@ export interface components {
             /** Name */
             name?: string | null;
             /** Schedule Mode */
-            schedule_mode?: string | null;
+            schedule_mode?: ("inherit" | "interval" | "fixed_time" | "manual") | null;
             /** Scheduled Times */
             scheduled_times?: string | null;
             /** Sync Enabled */
@@ -5340,6 +6091,12 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Derivative Status
+             * @default ready
+             * @enum {string}
+             */
+            derivative_status: "ready" | "pending" | "processing" | "failed";
             /** Duration */
             duration?: number | null;
             /** File Name */
@@ -6046,16 +6803,69 @@ export interface operations {
             };
         };
     };
+    get_api_v1_admin_clear_preview_entity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entity: "works" | "creators" | "subscriptions" | "tags" | "jobs" | "settings" | "all";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     post_api_v1_admin_clear_entity: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                entity: string;
+                entity: "works" | "creators" | "subscriptions" | "tags" | "jobs" | "settings" | "all";
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClearOperationRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -6692,6 +7502,53 @@ export interface operations {
             };
         };
     };
+    get_api_v1_admin_gitllery_settings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitllerySettingsResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
     get_api_v1_admin_import_progress: {
         parameters: {
             query?: never;
@@ -7040,9 +7897,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["ClearOperationRequest"];
             };
         };
         responses: {
@@ -9097,6 +9952,249 @@ export interface operations {
             };
         };
     };
+    post_api_v1_curation_gitllery_build: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_curation_gitllery_commands_execute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitlleryCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitlleryCommandResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_curation_gitllery_commands_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitlleryCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitlleryCommandResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_curation_gitllery_pull: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_curation_gitllery_push: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
     post_api_v1_curation_gitllery_rebuild: {
         parameters: {
             query?: {
@@ -9115,7 +10213,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GitlleryRebuildResponse"];
+                    "application/json": components["schemas"]["JsonValue"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -9214,6 +10312,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitlleryStatusResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_curation_gitllery_verify: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitlleryVerifyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -9504,6 +10653,7 @@ export interface operations {
                 subscription_id?: string | null;
                 subscription_source_id?: string | null;
                 q?: string | null;
+                visibility?: "actionable" | "all";
                 sort_by?: string;
                 sort_order?: string;
                 offset?: number;
@@ -10371,6 +11521,7 @@ export interface operations {
                 status?: string | null;
                 download_job_id?: string | null;
                 q?: string | null;
+                visibility?: "actionable" | "all";
                 offset?: number;
                 limit?: number;
             };
@@ -10782,6 +11933,57 @@ export interface operations {
             path: {
                 job_id: string;
             };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_operations_overview: {
+        parameters: {
+            query?: {
+                view?: string;
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -11240,6 +12442,102 @@ export interface operations {
             };
         };
     };
+    post_api_v1_reference_danbooru_mappings_refresh: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DanbooruMappingRefreshEnqueueResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_reference_danbooru_mappings_refresh_job_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DanbooruMappingRefreshStatusResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     post_api_v1_reference_danbooru_url_batch_import: {
         parameters: {
             query?: never;
@@ -11608,6 +12906,8 @@ export interface operations {
                 kind?: string | null;
                 offset?: number;
                 limit?: number;
+                /** @description Optional seek cursor for adjacent structured work pages */
+                cursor?: string | null;
             };
             header?: never;
             path?: never;
@@ -11673,59 +12973,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JsonValue"];
-                };
-            };
-            /** @description Missing, invalid, or expired JWT. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiError"];
-                };
-            };
-            /** @description Authenticated but not permitted. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiError"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_api_v1_showcase_sample: {
-        parameters: {
-            query?: {
-                count?: number;
-                scope?: string;
-                source?: string | null;
-                tag?: string | null;
-                include_nsfw?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ShowcaseSampleResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -12055,6 +13302,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_subscriptions_summaries: {
+        parameters: {
+            query: {
+                ids: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionSummariesResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -12664,7 +13960,7 @@ export interface operations {
             };
         };
     };
-    get_api_v1_system_scheduler_decisions: {
+    post_api_v1_system_reindex_works: {
         parameters: {
             query?: never;
             header?: never;
@@ -12707,6 +14003,58 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_system_scheduler_decisions: {
+        parameters: {
+            query?: {
+                view?: "attention" | "all";
+                subscription_ids?: string | null;
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -12814,6 +14162,7 @@ export interface operations {
                 limit?: number;
                 sort_by?: string;
                 sort_order?: string;
+                include_all?: boolean;
             };
             header?: never;
             path?: never;
@@ -13178,6 +14527,7 @@ export interface operations {
                 source?: string | null;
                 q?: string | null;
                 include_account?: boolean;
+                visibility?: "actionable" | "all";
                 offset?: number;
                 limit?: number;
             };
@@ -13225,7 +14575,259 @@ export interface operations {
             };
         };
     };
+    get_api_v1_tasks_anomalies: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_tasks_compact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompactTasksRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_tasks_reconcile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReconcileTasksRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_tasks_reconcile_subscription_slot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestoreSubscriptionSlotRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_api_v1_tasks_task_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_tasks_task_id_acknowledge: {
         parameters: {
             query?: never;
             header?: never;

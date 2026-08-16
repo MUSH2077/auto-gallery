@@ -4,9 +4,11 @@ import os
 import shutil
 import urllib.request
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Literal
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from app.auth import RequirePermission
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +27,7 @@ from app.models.subscription_source import SubscriptionSource
 from app.models.work import Work
 from app.models.work_source import WorkSource
 from app.providers import registry
-from app.services.settings import get_download_defaults, get_scheduler_config
+from app.services.settings import get_scheduler_config
 from app.services.sync_outcome import download_job_outcome
 
 try:
@@ -43,7 +45,7 @@ DOWNLOAD_RUNNING_STATUSES = {"enqueued", "downloading", "downloaded", "importing
 IMPORT_RUNNING_STATUSES = {"enqueued", "running"}
 FAILED_STATUSES = {"failed", "stale"}
 QUEUE_NAMES = (
-    "default", "downloads", "imports", "operations", "scheduled",
+    "default", "downloads", "imports", "operations", "maintenance", "scheduled",
     "downloads:pixiv", "downloads:danbooru", "downloads:iwara",
     "downloads:weibo", "downloads:bilibili", "downloads:pinterest", "downloads:lofter",
 )
@@ -135,23 +137,16 @@ async def _queue_stats_payload() -> dict:
                 "failed": failed_registry.count,
             }
 
-        scheduled_q = Queue(name="scheduled", connection=r)
-        scheduled_registry = ScheduledJobRegistry(queue=scheduled_q)
-        sync_jobs = []
-        for job_id in scheduled_registry.get_job_ids():
-            job = scheduled_q.fetch_job(job_id)
-            if job and "sync_subscriptions" in (job.func_name or ""):
-                sync_jobs.append((job, scheduled_registry.get_scheduled_time(job)))
-        next_sync_scan_at = None
-        if sync_jobs:
-            _job, next_sync_scan_at = min(sync_jobs, key=lambda item: item[1])
-            next_sync_scan_at = _iso(next_sync_scan_at)
+        from app.services.scheduler_loop import scheduler_loop_snapshot
+
+        scheduler_loop = scheduler_loop_snapshot(redis_client=r)
         return {
             "default_queue": queues["default"]["queued"],
             "scheduled_queue": queues["scheduled"]["queued"] + queues["scheduled"]["scheduled"],
             "failed_jobs": sum(item["failed"] for item in queues.values()),
             "started_jobs": sum(item["started"] for item in queues.values()),
-            "next_sync_scan_at": next_sync_scan_at,
+            "next_sync_scan_at": scheduler_loop.get("next_scan_at"),
+            "scheduler_loop": scheduler_loop,
             "queues": queues,
         }
     except Exception:
@@ -162,6 +157,14 @@ async def _queue_stats_payload() -> dict:
             "failed_jobs": -1,
             "started_jobs": -1,
             "next_sync_scan_at": None,
+            "scheduler_loop": {
+                "status": "unknown",
+                "last_started_at": None,
+                "last_finished_at": None,
+                "next_scan_at": None,
+                "watchdog_at": None,
+                "last_error": None,
+            },
             "queues": {},
         }
 
@@ -273,6 +276,7 @@ async def queue_stats():
             "scheduled_times": scheduler_config.get("scheduled_times", ""),
             "scheduler_scan_interval_minutes": int(scheduler_config.get("scheduler_scan_interval_minutes", 60)),
             "next_sync_scan_at": queue_payload["next_sync_scan_at"],
+            "scheduler_loop": queue_payload.get("scheduler_loop"),
             "queues": queue_payload["queues"],
         }
     except Exception:
@@ -353,24 +357,17 @@ async def workbench_summary(
         storage_risk = "critical" if free_pct < 5 else "warning" if free_pct < 15 else "ok"
     queue_payload = await _queue_stats_payload()
     scheduler_config = await get_scheduler_config(db)
-    download_defaults = await get_download_defaults(db)
-    stale_cutoff = now - timedelta(seconds=int(download_defaults.get("timeout_seconds", 600)) * 2)
-
     active_download_count = await _count_statuses(db, DownloadJob, DOWNLOAD_RUNNING_STATUSES)
     failed_download_count = await _count_statuses(db, DownloadJob, FAILED_STATUSES)
     stale_download_rows = await db.execute(
-        select(func.count(DownloadJob.id)).where(
-            and_(DownloadJob.status == "downloading", DownloadJob.created_at < stale_cutoff)
-        )
+        select(func.count(DownloadJob.id)).where(DownloadJob.status == "stale")
     )
     stale_download_count = int(stale_download_rows.scalar() or 0)
 
     active_import_count = await _count_statuses(db, ImportJob, IMPORT_RUNNING_STATUSES)
     failed_import_count = await _count_statuses(db, ImportJob, FAILED_STATUSES)
     stale_import_rows = await db.execute(
-        select(func.count(ImportJob.id)).where(
-            and_(ImportJob.status == "running", ImportJob.created_at < stale_cutoff)
-        )
+        select(func.count(ImportJob.id)).where(ImportJob.status == "stale")
     )
     stale_import_count = int(stale_import_rows.scalar() or 0)
 
@@ -472,6 +469,7 @@ async def workbench_summary(
             "scheduled_times": scheduler_config.get("scheduled_times", ""),
             "scan_interval_minutes": int(scheduler_config.get("scheduler_scan_interval_minutes", 60)),
             "next_scan_at": queue_payload["next_sync_scan_at"],
+            "loop": queue_payload.get("scheduler_loop"),
         },
         "proxy_health": await _get_proxy_health_summary(),
         "storage": {
@@ -553,7 +551,13 @@ async def workbench_summary(
 
 
 @tasks_ops_router.get("/system/scheduler-decisions")
-async def scheduler_decisions(db: AsyncSession = Depends(get_db)):
+async def scheduler_decisions(
+    view: Literal["attention", "all"] = "all",
+    subscription_ids: str | None = None,
+    offset: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+):
     """Explain current scheduler decisions at subscription-source granularity.
 
     This endpoint is deliberately read-only: it does not enqueue jobs or mutate
@@ -567,13 +571,31 @@ async def scheduler_decisions(db: AsyncSession = Depends(get_db)):
         tz = timezone.utc
     now = datetime.now(tz)
     scheduler_enabled = bool(config.get("scheduler_enabled", True))
+    scan_minutes = max(
+        5,
+        int(config.get("scheduler_scan_interval_minutes", 60)),
+    )
+    overdue_cutoff = now - timedelta(minutes=scan_minutes * 2)
 
-    rows = list((await db.execute(
+    statement = (
         select(SubscriptionSource, Subscription, Creator)
         .join(Subscription, SubscriptionSource.subscription_id == Subscription.id)
         .join(Creator, Subscription.creator_id == Creator.id)
         .order_by(Creator.display_name, Creator.name, SubscriptionSource.source, SubscriptionSource.created_at.desc())
-    )).all())
+    )
+    if subscription_ids:
+        try:
+            selected_ids = [
+                UUID(value.strip())
+                for value in subscription_ids.split(",")
+                if value.strip()
+            ]
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="subscription_ids contains an invalid UUID") from exc
+        if not selected_ids or len(selected_ids) > 50:
+            raise HTTPException(status_code=422, detail="subscription_ids must contain between 1 and 50 UUIDs")
+        statement = statement.where(Subscription.id.in_(selected_ids))
+    rows = list((await db.execute(statement)).all())
 
     items = []
     for ss, sub, creator in rows:
@@ -581,7 +603,15 @@ async def scheduler_decisions(db: AsyncSession = Depends(get_db)):
         can_download = bool(provider_state["can_download"])
         url_valid = bool(provider_state["url_valid"])
         auth_healthy = ss.auth_healthy is not False
-        decision = schedule_decision_snapshot(sub, config, ss.last_synced_at, ss.last_attempted_at, now, tz)
+        decision = schedule_decision_snapshot(
+            sub,
+            config,
+            ss.last_synced_at,
+            ss.last_attempted_at,
+            now,
+            tz,
+            ss.next_sync_at,
+        )
         due = bool(decision.get("due"))
         reason = str(decision.get("reason"))
 
@@ -607,6 +637,27 @@ async def scheduler_decisions(db: AsyncSession = Depends(get_db)):
             due = False
             reason = "url_invalid"
 
+        next_due_at = decision.get("next_due_at")
+        parsed_next_due_at = None
+        if next_due_at:
+            try:
+                parsed_next_due_at = datetime.fromisoformat(next_due_at)
+                if parsed_next_due_at.tzinfo is None:
+                    parsed_next_due_at = parsed_next_due_at.replace(tzinfo=tz)
+            except (TypeError, ValueError):
+                parsed_next_due_at = None
+        is_overdue = bool(
+            due
+            and parsed_next_due_at
+            and parsed_next_due_at <= overdue_cutoff
+        )
+        is_attention = reason in {
+            "scheduler_disabled",
+            "auth_unhealthy",
+            "url_invalid",
+            "provider_not_downloadable",
+        } or is_overdue
+
         items.append({
             "subscription_id": str(sub.id),
             "subscription_name": sub.name,
@@ -629,19 +680,26 @@ async def scheduler_decisions(db: AsyncSession = Depends(get_db)):
             "due": due,
             "decision": "due_now" if due else reason,
             "reason": reason,
-            "next_due_at": decision.get("next_due_at"),
+            "next_due_at": next_due_at,
             "window_start": decision.get("window_start"),
             "window_end": decision.get("window_end"),
             "auth_healthy": auth_healthy,
             "url_valid": url_valid,
             "can_download": can_download,
+            "is_overdue": is_overdue,
+            "is_attention": is_attention,
         })
 
+    visible_items = [item for item in items if item["is_attention"]] if view == "attention" else items
+    bounded_limit = max(1, min(int(limit), 500))
+    bounded_offset = max(0, int(offset))
     return {
         "updated_at": now.isoformat(),
         "scheduler_enabled": scheduler_enabled,
         "timezone": tz_name,
-        "items": items,
+        "view": view,
+        "total": len(visible_items),
+        "items": visible_items[bounded_offset : bounded_offset + bounded_limit],
     }
 
 
@@ -672,3 +730,25 @@ async def clear_failed_jobs():
             reg.remove(job_id, delete_job=True)
             total += 1
     return {"status": "ok", "message": f"Removed {total} failed jobs from Redis"}
+
+
+@tasks_ops_router.post("/system/reindex-works")
+async def reindex_works():
+    """Queue a full Meilisearch rebuild on the protected import worker.
+
+    This compatibility endpoint used to run the whole-library scan inside the
+    backend request process, bypassing the NAS pressure and heavy-I/O gates.
+    Route it through the same operation as the admin data-management endpoint
+    so the long coordinator cannot starve bounded operations outboxes.
+    """
+    from app.services.operations import enqueue_admin_operation
+
+    return await enqueue_admin_operation(
+        lock_key="library:search-reindex:active",
+        operation_type="admin-search-reindex",
+        title="Search reindex",
+        entity="search-reindex",
+        func="app.jobs.admin_operations.run_search_reindex_operation",
+        job_timeout=7 * 24 * 60 * 60,
+        queue_name="maintenance",
+    )

@@ -182,7 +182,7 @@ async function installDashboardRoutes(
   await context.addCookies([{
     name: "ag_token",
     value: "dashboard-test-token",
-    domain: "127.0.0.1",
+    domain: new URL(process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000").hostname,
     path: "/",
   }]);
   await context.addInitScript(() => {
@@ -252,6 +252,40 @@ async function expectNoPageOverflow(page: Page) {
     return root.scrollWidth <= root.clientWidth;
   })).toBe(true);
 }
+
+test("root route sends unauthenticated users to login and login lands on dashboard", async ({ context, page }) => {
+  await context.addInitScript(() => {
+    window.localStorage.removeItem("ag_token");
+    window.localStorage.setItem("auto-gallery-lang", "en");
+  });
+  await context.route("**/api/v1/**", async (route: Route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/v1/auth/login") {
+      return route.fulfill({ json: { access_token: "fresh-login-token", token_type: "bearer" } });
+    }
+    if (path === "/api/v1/auth/me") return route.fulfill({ json: ADMIN });
+    if (path === "/api/v1/system/workbench") return route.fulfill({ json: WORKBENCH });
+    if (path.includes("/notifications")) {
+      return route.fulfill({ json: { items: [], total: 0, unread_count: 0 } });
+    }
+    return route.fulfill({ json: {} });
+  });
+
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/admin\/login$/);
+  await page.getByLabel("Username").fill("admin");
+  await page.getByLabel("Password").fill("test-password");
+  await page.getByRole("button", { name: "Sign In" }).click();
+  await expect(page).toHaveURL(/\/admin$/);
+  await expect(page.getByRole("heading", { name: "Recently added works" })).toBeVisible();
+});
+
+test("root route redirects authenticated users to the dashboard", async ({ context, page }) => {
+  await installDashboardRoutes(context);
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/admin$/);
+  await expect(page.getByRole("heading", { name: "Recently added works" })).toBeVisible();
+});
 
 test("dashboard links, refresh, job navigation, and retry controls work", async ({ context, page }) => {
   const calls: string[] = [];

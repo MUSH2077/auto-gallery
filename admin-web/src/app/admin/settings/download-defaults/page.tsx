@@ -9,6 +9,11 @@ export default function DownloadDefaultsPage() {
   const t = useT();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
+  const health = useQuery({
+    queryKey: queryKeys.health,
+    queryFn: api.health,
+    staleTime: 15_000,
+  });
   const [local, setLocal] = useState<DownloadDefaults | null>(null);
 
   useEffect(() => {
@@ -19,10 +24,14 @@ export default function DownloadDefaultsPage() {
 
   const save = useMutation({
     mutationFn: (data: DownloadDefaults) => api.updateAdminSettings({ download_defaults: data }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.admin.settings }),
+    onSuccess: () => Promise.all([
+      qc.invalidateQueries({ queryKey: queryKeys.admin.settings }),
+      qc.invalidateQueries({ queryKey: queryKeys.health }),
+    ]),
   });
 
   const current = local || settings.data?.download_defaults;
+  const concurrency = health.data?.resource_pressure?.download_concurrency;
 
   if (settings.isError) {
     return (
@@ -157,6 +166,25 @@ export default function DownloadDefaultsPage() {
               <div>
                 <span className="font-medium">{t("dldefaults.concurrency")}</span>
                 <p className="text-xs text-muted mt-1">{t("dldefaults.concurrency.desc")}</p>
+                {concurrency ? (
+                  <>
+                    <p className="mt-1 text-xs text-muted">
+                      {t("dldefaults.concurrency.effective")
+                        .replace("{configured}", String(concurrency.configured))
+                        .replace("{effective}", String(concurrency.effective))
+                        .replace("{cap}", String(concurrency.cap))}
+                    </p>
+                    <p className={`mt-1 text-xs ${concurrency.restart_required ? "text-warning" : "text-success"}`}>
+                      {(concurrency.restart_required
+                        ? t("dldefaults.concurrency.restart_required")
+                        : t("dldefaults.concurrency.applied"))
+                        .replace(
+                          "{desired}",
+                          String(concurrency.desired_effective ?? concurrency.effective),
+                        )}
+                    </p>
+                  </>
+                ) : null}
               </div>
               <select
                 aria-label={t("dldefaults.concurrency")}

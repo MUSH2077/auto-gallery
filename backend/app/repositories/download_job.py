@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import DownloadJob, ImportJob
 from app.services.job_manifest import append_manifest_event
 from app.models.task_state import transition_download_job
+from app.services.search_projection_outbox import request_search_projection
 
 
 class DownloadJobRepository:
@@ -48,6 +49,11 @@ class DownloadJobRepository:
         job = DownloadJob(**data)
         self.session.add(job)
         await self.session.flush()
+        if job.subscription_id:
+            await request_search_projection(
+                self.session,
+                subscription_ids=[job.subscription_id],
+            )
         return job
 
     async def update_status(self, job: DownloadJob, status: str, error_log: str | None = None) -> DownloadJob:
@@ -64,27 +70,28 @@ class DownloadJobRepository:
         except Exception:
             pass
         await self.session.flush()
+        if job.subscription_id:
+            await request_search_projection(
+                self.session,
+                subscription_ids=[job.subscription_id],
+            )
         return job
 
     async def delete_by_status(self, statuses: list[str]) -> int:
+        subscription_ids = set((await self.session.execute(
+            select(DownloadJob.subscription_id)
+            .where(DownloadJob.status.in_(statuses))
+            .distinct()
+        )).scalars().all())
         result = await self.session.execute(
             sql_delete(DownloadJob).where(DownloadJob.status.in_(statuses))
         )
+        await request_search_projection(
+            self.session,
+            subscription_ids=subscription_ids,
+        )
         await self.session.flush()
         return result.rowcount
-
-    async def kill_stuck(self) -> int:
-        """Mark all 'downloading' jobs as 'stale' so they can be retried."""
-        result = await self.session.execute(
-            select(DownloadJob).where(DownloadJob.status == "downloading")
-        )
-        jobs = result.scalars().all()
-        for j in jobs:
-            error_log = f"{j.error_log or ''}\n[manual] Force-stale by user".strip()
-            transition_download_job(j, "stale", error_log)
-            append_manifest_event(j, "status_changed", from_status="downloading", to_status="stale", error_log=error_log)
-        await self.session.flush()
-        return len(jobs)
 
     async def list_imports(self, download_job_id: UUID) -> list[ImportJob]:
         result = await self.session.execute(

@@ -1,5 +1,6 @@
 import logging
 from uuid import UUID
+from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import RequirePermission, get_admin_key
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -123,6 +124,7 @@ async def list_import_jobs(
     status: str | None = None,
     download_job_id: UUID | None = None,
     q: str | None = None,
+    visibility: Literal["actionable", "all"] = "all",
     offset: int = 0,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
@@ -143,6 +145,7 @@ async def list_import_jobs(
             canonical,
             offset=offset,
             limit=limit,
+            visibility=visibility,
         )
     except SearchQueryError as exc:
         raise HTTPException(status_code=422, detail=exc.diagnostic.payload()) from exc

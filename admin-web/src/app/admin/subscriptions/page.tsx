@@ -1,16 +1,42 @@
 "use client";
 import { useMemo, useState, useEffect, Suspense } from "react";
 import { useToast } from "@/components/Toast";
-import { useT } from "@/lib/i18n";
+import { useT, type TFunction } from "@/lib/i18n";
 import { useStaggeredEntrance } from "@/lib/motion";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys, type SearchQualifierToken, type SubscriptionSearchHit } from "@/lib/api";
+import { api, queryKeys, type SearchQualifierToken, type SubscriptionSearchHit, type SubscriptionSummary } from "@/lib/api";
 import { PageHeader, PageSection, EmptyState, ErrorState, ConfirmDialog, Modal, StatusBadge, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityList, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
-import { scheduleModeLabel, useI18nFormat } from "@/lib/i18n-format";
+import { useI18nFormat } from "@/lib/i18n-format";
+import DomainDangerZone from "@/components/DomainDangerZone";
 
 type FilterMode = "all" | "active" | "inactive" | "sync_on" | "sync_off" | "never_synced";
+
+function subscriptionStatePresentation(t: TFunction, summary?: SubscriptionSummary) {
+  const state = summary?.latest_state;
+  if (!state) return { status: "unknown", label: t("subscriptions.state_loading") };
+  if (state.state === "attention") {
+    return { status: state.status || "failed", label: undefined };
+  }
+  if (state.state === "active") {
+    return { status: state.status || "running", label: t("subscriptions.state_active") };
+  }
+  if (state.state === "success") {
+    const outcome = state.outcome_code && ["no_changes", "new_content"].includes(state.outcome_code)
+      ? t(`sync_outcome.${state.outcome_code}`)
+      : null;
+    return {
+      status: "complete",
+      label: outcome
+        ? `${t("subscriptions.state_success")} · ${outcome}`
+        : t("subscriptions.state_success"),
+    };
+  }
+  if (state.state === "manual") return { status: "paused", label: t("subscriptions.manual") };
+  if (state.state === "disabled") return { status: "down", label: t("subscriptions.filter_inactive") };
+  return { status: "unknown", label: t("subscription_detail.never_synced") };
+}
 
 function CreateForm({ isPending, error, onSubmit, onClose }: {
   isPending: boolean; error: Error | null;
@@ -128,27 +154,20 @@ function SubscriptionsContent() {
     if (notify.batchJob?.status !== "completed") return;
     subs.refetch();
   }, [notify.batchJob?.jobId, notify.batchJob?.status]); // eslint-disable-line react-hooks/exhaustive-deps
-  const systemSettings = useQuery({
-    queryKey: queryKeys.admin.settings,
-    queryFn: api.getAdminSettings,
-  });
-  const decisions = useQuery({
-    queryKey: queryKeys.schedulerDecisions,
-    queryFn: api.schedulerDecisions,
+  const summaryIds = useMemo(
+    () => subscriptionItems.map((subscription) => subscription.id),
+    [subscriptionItems],
+  );
+  const summaries = useQuery({
+    queryKey: queryKeys.subscriptions.summaries(summaryIds),
+    queryFn: () => api.subscriptionSummaries(summaryIds),
+    enabled: summaryIds.length > 0,
     refetchInterval: 15000,
   });
-  const sysDefaults = systemSettings.data?.subscription_defaults;
-  const decisionBySub = useMemo(() => {
-    const grouped = new Map<string, { due: number; blocked: number; nextDueAt?: string | null }>();
-    for (const item of decisions.data?.items || []) {
-      const current = grouped.get(item.subscription_id) || { due: 0, blocked: 0, nextDueAt: null };
-      if (item.due) current.due += 1;
-      if (["auth_unhealthy", "url_invalid", "unknown_provider", "provider_not_downloadable"].includes(item.reason)) current.blocked += 1;
-      if (item.next_due_at && (!current.nextDueAt || item.next_due_at < current.nextDueAt)) current.nextDueAt = item.next_due_at;
-      grouped.set(item.subscription_id, current);
-    }
-    return grouped;
-  }, [decisions.data?.items]);
+  const summaryBySub = useMemo(
+    () => new Map((summaries.data?.items || []).map((item) => [item.subscription_id, item])),
+    [summaries.data?.items],
+  );
 
   const refreshSubscriptionViews = () => {
     qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
@@ -176,7 +195,6 @@ function SubscriptionsContent() {
       refreshSubscriptionViews();
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
       qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
-      qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
       if (data.status === "error" || data.status === "partial_error") {
         toast.warning({
           title: t("subscriptions.sync_partial_failed"),
@@ -296,7 +314,7 @@ function SubscriptionsContent() {
       {/* Select all */}
       {subs.data && subs.data.length > 0 && (
         <label className="mb-2 flex cursor-pointer items-center gap-2 text-xs text-muted">
-          <input type="checkbox" aria-label={t("subscriptions.select_all")} checked={selected.size === subs.data.length && subs.data.length > 0} onChange={selectAll} className="rounded" />
+          <input type="checkbox" aria-label={t("subscriptions.select_all")} checked={selected.size === subs.data.length && subs.data.length > 0} onChange={selectAll} className="h-6 w-6 rounded" />
           {t("subscriptions.select_all")}
         </label>
       )}
@@ -317,19 +335,19 @@ function SubscriptionsContent() {
           {subs.data.map((s: SubscriptionSearchHit, i: number) => {
             const name = s.name || s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8);
             const creatorName = s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8);
-            const decision = decisionBySub.get(s.id);
-            const blocked = decision?.blocked || 0;
-            const due = decision?.due || 0;
-            const scheduleMode = s.schedule_mode || sysDefaults?.schedule_mode || "interval";
-            const scheduleValue = s.schedule_mode === "fixed_time"
-              ? (s.scheduled_times || t("scheduler.fixed_time"))
-              : s.schedule_mode === "manual"
+            const summary = summaryBySub.get(s.id);
+            const blocked = summary?.schedule.blocked_sources || 0;
+            const due = summary?.schedule.due_sources || 0;
+            const schedule = summary?.schedule;
+            const scheduleValue = schedule?.effective_mode === "fixed_time"
+              ? t("subscriptions.schedule_daily", { time: schedule.scheduled_times || "—" })
+              : schedule?.effective_mode === "manual"
                 ? t("subscriptions.manual")
-                : s.schedule_mode === "interval"
-                  ? `${s.sync_interval_hours}h`
-                  : sysDefaults?.schedule_mode === "fixed_time"
-                    ? t("scheduler.fixed_time")
-                    : `${s.sync_interval_hours || sysDefaults?.default_sync_interval_hours}h`;
+                : t("subscriptions.schedule_interval", { hours: schedule?.sync_interval_hours || s.sync_interval_hours });
+            const scheduleLabel = schedule?.inherited
+              ? t("subscriptions.schedule_inherited", { schedule: scheduleValue })
+              : scheduleValue;
+            const statePresentation = subscriptionStatePresentation(t, summary);
             return (
               <EntityRow
                 key={s.id}
@@ -343,7 +361,7 @@ function SubscriptionsContent() {
                   aria-label={t("common.select_item", { name })}
                   checked={selected.has(s.id)}
                   onChange={() => toggleSelect(s.id)}
-                  className="shrink-0 rounded"
+                  className="h-6 w-6 shrink-0 rounded"
                   onClick={(event) => event.stopPropagation()}
                 />
                 <div className="entity-avatar">
@@ -357,14 +375,12 @@ function SubscriptionsContent() {
                       title={s.is_active ? t("subscriptions.filter_active") : t("subscriptions.filter_inactive")}
                     />
                     <StatusBadge
-                      status={s.latest_job_status || "unknown"}
-                      label={s.latest_job_status ? undefined : t("subscriptions.no_jobs")}
+                      status={statePresentation.status}
+                      label={statePresentation.label}
                       className="py-0 text-[10px]"
                     />
                     {due > 0 && <span className="rounded-full bg-accent-subtle px-2 py-0.5 text-[10px] font-medium text-accent">{t("subscriptions.due_sources", { count: due })}</span>}
                     {blocked > 0 && <span className="rounded-full bg-danger-subtle px-2 py-0.5 text-[10px] font-medium text-danger">{t("subscriptions.blocked_sources", { count: blocked })}</span>}
-                    {(s.running_job_count || 0) > 0 && <span className="rounded-full bg-accent-subtle px-2 py-0.5 text-[10px] font-medium text-accent">{t("subscriptions.running_jobs", { count: s.running_job_count || 0 })}</span>}
-                    {(s.failed_job_count || 0) > 0 && <span className="rounded-full bg-danger-subtle px-2 py-0.5 text-[10px] font-medium text-danger">{t("subscriptions.failed_jobs", { count: s.failed_job_count || 0 })}</span>}
                   </div>
                   <div className="entity-supporting">
                     {t("subscriptions.creator_prefix")}{" "}
@@ -380,11 +396,13 @@ function SubscriptionsContent() {
                     </button>
                   </div>
                   <div className="entity-meta">
-                    <span>{t("subscriptions.sources_summary", { enabled: s.enabled_source_count ?? 0, total: s.source_count ?? 0 })}</span>
-                    <span className={s.sync_enabled ? "text-success" : ""}>{s.sync_enabled ? t("subscriptions.auto_sync") : t("subscriptions.manual")}</span>
+                    <span>{t("subscriptions.sources_summary", { enabled: summary?.enabled_source_count ?? s.enabled_source_count ?? 0, total: summary?.source_count ?? s.source_count ?? 0 })}</span>
                     <span>{t("subscriptions.last_success", { time: fmt.relative(s.last_synced_at, "subscriptions.never") })}</span>
-                    <span>{scheduleModeLabel(t, scheduleMode)} · {scheduleValue}</span>
-                    <span>{t("subscriptions.next_due", { time: fmt.dateTime(decision?.nextDueAt) })}</span>
+                    <span>{scheduleLabel}</span>
+                    <span>{t("subscriptions.next_due", { time: fmt.dateTime(schedule?.next_due_at) })}</span>
+                    {s.sync_enabled && (summary?.enabled_source_count ?? s.enabled_source_count ?? 0) === 0 && (
+                      <span className="text-warning">{t("subscriptions.no_enabled_source")}</span>
+                    )}
                   </div>
                 </div>
                 <div className="entity-actions" onClick={(event) => event.stopPropagation()}>
@@ -424,6 +442,11 @@ function SubscriptionsContent() {
       </Modal>
       {deleteId && <ConfirmDialog open title={t("subscriptions.delete_title")} message={t("subscriptions.delete_msg")} onConfirm={() => del.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={del.isPending} error={(del.error as Error)?.message} />}
       {confirmBatchDel && <ConfirmDialog open title={t("subscriptions.batch_delete_title")} message={t("subscriptions.batch_delete_msg").replace("{count}", String(selected.size))} onConfirm={() => batchDel.mutate([...selected])} onCancel={() => setConfirmBatchDel(false)} isPending={batchDel.isPending} error={(batchDel.error as Error)?.message} />}
+      <DomainDangerZone
+        entity="subscriptions"
+        title={t("datamgmt.danger_clear_subs")}
+        description={t("datamgmt.danger_clear_subs_desc")}
+      />
     </PageShell>
   );
 }

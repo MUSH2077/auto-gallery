@@ -227,7 +227,12 @@ async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
                     ))
                     sources_count += 1
 
+                from app.services.creator import CreatorService
+                await CreatorService(db)._request_creator_projection(creator.id)
                 await db.commit()
+                # Release all ORM objects from the session so the identity
+                # map doesn't grow unboundedly across hundreds of iterations.
+                db.expunge_all()
 
                 imported.append({
                     "pixiv_id": pid, "creator_id": str(creator.id),
@@ -244,6 +249,9 @@ async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
                     await db.rollback()
                 except Exception:
                     pass
+                # Clean up any objects that may have been loaded before
+                # the error, so the session stays lean for the next iteration.
+                db.expunge_all()
                 errors.append({"pixiv_id": pid, "error": str(e)})
                 logger.exception("Batch import failed for pixiv_id=%s", pid)
 
@@ -412,7 +420,12 @@ async def _url_batch_import(urls: list[str], job_id: str) -> dict:
                     ))
                     sources_created += 1
 
+                from app.services.creator import CreatorService
+                await CreatorService(db)._request_creator_projection(creator.id)
                 await db.commit()
+                # Release all ORM objects from the session so the identity
+                # map doesn't grow unboundedly across hundreds of iterations.
+                db.expunge_all()
 
                 imported.append({
                     "url": url,
@@ -429,6 +442,9 @@ async def _url_batch_import(urls: list[str], job_id: str) -> dict:
                     await db.rollback()
                 except Exception:
                     pass
+                # Clean up any objects that may have been loaded before
+                # the error, so the session stays lean for the next iteration.
+                db.expunge_all()
                 errors.append({"url": url, "error": str(e)})
                 logger.exception("URL batch import failed for url=%s", url)
 

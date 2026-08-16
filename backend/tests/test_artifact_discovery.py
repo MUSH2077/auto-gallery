@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from app.providers.x import XProvider
 from app.services.artifact_discovery import group_metadata_by_work, media_files_for_group
@@ -57,6 +58,62 @@ def test_date_directory_matches_gallerydl_work_id_and_asset_index(tmp_path):
     assert invalid == []
     assert [path.name for path in media_files_for_group(groups["101"], "101")] == ["101_1.jpg"]
     assert [path.name for path in media_files_for_group(groups["202"], "202")] == ["202_1.jpg"]
+
+
+def test_shared_parent_is_inventoried_once_for_all_work_groups(tmp_path, monkeypatch):
+    work_dir = tmp_path / "twitter" / "fixture" / "2024-06-27"
+    work_dir.mkdir(parents=True)
+    metadata_paths = []
+    for tweet_id, stem in ((101, "media-a"), (202, "media-b")):
+        metadata_path = work_dir / f"{stem}.json"
+        metadata_path.write_text(json.dumps(_metadata(tweet_id, stem)), encoding="utf-8")
+        (work_dir / f"{stem}.jpg").write_bytes(stem.encode())
+        metadata_paths.append(metadata_path)
+
+    groups, invalid = group_metadata_by_work(XProvider(), metadata_paths)
+    original_iterdir = Path.iterdir
+    scans = 0
+
+    def counting_iterdir(path):
+        nonlocal scans
+        if path == work_dir:
+            scans += 1
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", counting_iterdir)
+    assert invalid == []
+    assert [path.name for path in media_files_for_group(groups["101"], "101")] == ["media-a.jpg"]
+    assert [path.name for path in media_files_for_group(groups["202"], "202")] == ["media-b.jpg"]
+    assert scans == 1
+
+
+def test_delta_filter_uses_only_increment_without_parent_scan(tmp_path, monkeypatch):
+    work_dir = tmp_path / "twitter" / "fixture" / "2024-06-27"
+    work_dir.mkdir(parents=True)
+    metadata_path = work_dir / "remote-media-a.json"
+    metadata_path.write_text(json.dumps({
+        **_metadata(101, "remote-media-a"),
+        "num": 1,
+        "extension": "jpg",
+    }), encoding="utf-8")
+    old_exact = work_dir / "remote-media-a.jpg"
+    old_exact.write_bytes(b"old")
+    new_indexed = work_dir / "101_1.jpg"
+    new_indexed.write_bytes(b"new")
+
+    groups, invalid = group_metadata_by_work(XProvider(), [metadata_path])
+
+    def unexpected_parent_scan(_path):
+        raise AssertionError("staging delta must not scan the canonical parent")
+
+    monkeypatch.setattr(Path, "iterdir", unexpected_parent_scan)
+
+    assert invalid == []
+    assert media_files_for_group(
+        groups["101"],
+        "101",
+        allowed_paths={metadata_path, new_indexed},
+    ) == [new_indexed]
 
 
 def test_artifact_row_accepts_canonical_source_and_parsed_work_id(tmp_path):

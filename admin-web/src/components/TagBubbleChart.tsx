@@ -2,10 +2,21 @@
 
 import { packSiblings } from "d3-hierarchy";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useRouter } from "next/navigation";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 
+import { useChartTheme } from "@/components/charts/useChartTheme";
 import type { Tag } from "@/lib/api";
-import { bubbleStaggerDelay, motionConfig, motionTokens, useEnterOnce } from "@/lib/motion";
+import { useT } from "@/lib/i18n";
 import { quoteSearchValue, searchUrl } from "@/lib/search-query";
 
 interface BubbleNode {
@@ -13,6 +24,51 @@ interface BubbleNode {
   r: number;
   x: number;
   y: number;
+}
+
+interface BubbleLayout {
+  nodes: BubbleNode[];
+  width: number;
+  height: number;
+  buckets: Map<string, BubbleNode[]>;
+}
+
+interface ViewState {
+  centerX: number;
+  centerY: number;
+  scale: number;
+}
+
+interface VisibleNode {
+  node: BubbleNode;
+  x: number;
+  y: number;
+  radius: number;
+}
+
+interface HoverState {
+  node: BubbleNode;
+  x: number;
+  y: number;
+}
+
+const LAYOUT_PADDING = 48;
+const SPATIAL_BUCKET_SIZE = 192;
+const MAX_LABEL_NODES = 1_600;
+const LABEL_RADIUS_THRESHOLD = 13;
+
+function bubblePalette(hue: number, dark: boolean, hovered = false) {
+  return {
+    fill: dark
+      ? `hsl(${hue} 34% 22%)`
+      : `hsl(${hue} 58% 91%)`,
+    border: dark
+      ? `hsl(${hue} ${hovered ? 48 : 36}% ${hovered ? 56 : 38}%)`
+      : `hsl(${hue} ${hovered ? 50 : 42}% ${hovered ? 62 : 78}%)`,
+    text: dark
+      ? `hsl(${hue} 55% 88%)`
+      : `hsl(${hue} 45% 23%)`,
+  };
 }
 
 function hashString(value: string): number {
@@ -24,12 +80,84 @@ function hashString(value: string): number {
   return Math.abs(hash);
 }
 
-function bubbleRadius(tag: Tag, minCount: number, maxCount: number, maxRadius: number): number {
-  if (maxCount <= minCount) return Math.min(maxRadius, 34);
+function bubbleRadius(tag: Tag, minCount: number, maxCount: number): number {
+  if (maxCount <= minCount) return 34;
   const minRoot = Math.sqrt(Math.max(0, minCount));
   const maxRoot = Math.sqrt(Math.max(1, maxCount));
   const ratio = (Math.sqrt(Math.max(0, tag.usage_count)) - minRoot) / (maxRoot - minRoot);
-  return 22 + Math.max(0, Math.min(1, ratio)) * (maxRadius - 22);
+  return 22 + Math.max(0, Math.min(1, ratio)) * 66;
+}
+
+function bucketKey(x: number, y: number): string {
+  return `${Math.floor(x / SPATIAL_BUCKET_SIZE)}:${Math.floor(y / SPATIAL_BUCKET_SIZE)}`;
+}
+
+function findNodeAt(layout: BubbleLayout, x: number, y: number): BubbleNode | null {
+  const bucketX = Math.floor(x / SPATIAL_BUCKET_SIZE);
+  const bucketY = Math.floor(y / SPATIAL_BUCKET_SIZE);
+  for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+    for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+      const nodes = layout.buckets.get(`${bucketX + offsetX}:${bucketY + offsetY}`) || [];
+      for (const node of nodes) {
+        const dx = x - node.x;
+        const dy = y - node.y;
+        if ((dx * dx) + (dy * dy) <= node.r * node.r) return node;
+      }
+    }
+  }
+  return null;
+}
+
+function buildLayout(tags: Tag[]): BubbleLayout {
+  if (!tags.length) {
+    return { nodes: [], width: 0, height: 0, buckets: new Map() };
+  }
+  let minCount = Number.POSITIVE_INFINITY;
+  let maxCount = 0;
+  for (const tag of tags) {
+    minCount = Math.min(minCount, tag.usage_count);
+    maxCount = Math.max(maxCount, tag.usage_count);
+  }
+  const nodes: BubbleNode[] = tags
+    .map((tag) => ({
+      data: tag,
+      r: bubbleRadius(tag, minCount, maxCount),
+      x: 0,
+      y: 0,
+    }))
+    .sort((left, right) => (
+      right.r - left.r
+      || right.data.usage_count - left.data.usage_count
+      || left.data.normalized_name.localeCompare(right.data.normalized_name)
+    ));
+
+  packSiblings(nodes);
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const node of nodes) {
+    minX = Math.min(minX, node.x - node.r);
+    maxX = Math.max(maxX, node.x + node.r);
+    minY = Math.min(minY, node.y - node.r);
+    maxY = Math.max(maxY, node.y + node.r);
+  }
+
+  const buckets = new Map<string, BubbleNode[]>();
+  for (const node of nodes) {
+    node.x += LAYOUT_PADDING - minX;
+    node.y += LAYOUT_PADDING - minY;
+    const key = bucketKey(node.x, node.y);
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(node);
+    else buckets.set(key, [node]);
+  }
+  return {
+    nodes,
+    width: Math.ceil(maxX - minX + LAYOUT_PADDING * 2),
+    height: Math.ceil(maxY - minY + LAYOUT_PADDING * 2),
+    buckets,
+  };
 }
 
 export default function TagBubbleChart({
@@ -39,110 +167,341 @@ export default function TagBubbleChart({
   tags: Tag[];
   ariaLabel: string;
 }) {
-  const wrapperRef = useRef<HTMLDivElement>(null);
-  const [availableWidth, setAvailableWidth] = useState(720);
-  const [motionEnabled, setMotionEnabled] = useState(true);
-  const tagKeys = useMemo(() => tags.map((tag) => tag.id), [tags]);
-  const isNew = useEnterOnce(tagKeys, motionTokens.stagger.bubbleCap);
+  const t = useT();
+  const router = useRouter();
+  const theme = useChartTheme();
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const dragRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  const [viewport, setViewport] = useState({ width: 960, height: 640 });
+  const [view, setView] = useState<ViewState>({ centerX: 0, centerY: 0, scale: 1 });
+  const [hovered, setHovered] = useState<HoverState | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const layout = useMemo(() => buildLayout(tags), [tags]);
 
   useEffect(() => {
-    const wrapper = wrapperRef.current;
-    if (!wrapper) return;
-    const update = () => setAvailableWidth(Math.max(280, wrapper.clientWidth));
+    const element = viewportRef.current;
+    if (!element) return;
+    const update = () => {
+      const width = Math.max(280, Math.round(element.clientWidth));
+      const height = Math.max(360, Math.round(element.clientHeight));
+      setViewport((current) => (
+        current.width === width && current.height === height
+          ? current
+          : { width, height }
+      ));
+    };
     update();
     const observer = new ResizeObserver(update);
-    observer.observe(wrapper);
+    observer.observe(element);
     return () => observer.disconnect();
   }, []);
 
+  const fitScale = useMemo(() => {
+    if (!layout.width || !layout.height) return 1;
+    return Math.min(
+      viewport.width / layout.width,
+      viewport.height / layout.height,
+    ) * 0.94;
+  }, [layout.height, layout.width, viewport.height, viewport.width]);
+
+  const clampView = useCallback((candidate: ViewState): ViewState => {
+    const minimumScale = Math.max(0.001, fitScale);
+    const maximumScale = Math.max(4, minimumScale * 12);
+    const scale = Math.max(minimumScale, Math.min(maximumScale, candidate.scale));
+    const halfWidth = viewport.width / (2 * scale);
+    const halfHeight = viewport.height / (2 * scale);
+    const centerX = layout.width <= halfWidth * 2
+      ? layout.width / 2
+      : Math.max(halfWidth, Math.min(layout.width - halfWidth, candidate.centerX));
+    const centerY = layout.height <= halfHeight * 2
+      ? layout.height / 2
+      : Math.max(halfHeight, Math.min(layout.height - halfHeight, candidate.centerY));
+    return { centerX, centerY, scale };
+  }, [fitScale, layout.height, layout.width, viewport.height, viewport.width]);
+
+  const resetView = useCallback(() => {
+    setView({
+      centerX: layout.width / 2,
+      centerY: layout.height / 2,
+      scale: fitScale,
+    });
+    setHovered(null);
+  }, [fitScale, layout.height, layout.width]);
+
   useEffect(() => {
-    setMotionEnabled(motionConfig.shouldAnimate());
-  }, []);
+    resetView();
+  }, [resetView]);
 
-  const layout = useMemo(() => {
-    if (!tags.length) return { nodes: [] as BubbleNode[], width: availableWidth, height: 0 };
-    const counts = tags.map((tag) => tag.usage_count);
-    const minCount = Math.min(...counts);
-    const maxCount = Math.max(...counts);
-    const maxRadius = Math.max(54, Math.min(88, availableWidth * 0.15));
-    const nodes: BubbleNode[] = tags
-      .map((tag) => ({
-        data: tag,
-        r: bubbleRadius(tag, minCount, maxCount, maxRadius),
-        x: 0,
-        y: 0,
-      }))
-      .sort((left, right) => (
-        right.r - left.r
-        || right.data.usage_count - left.data.usage_count
-        || left.data.normalized_name.localeCompare(right.data.normalized_name)
-      ));
+  const zoomAt = useCallback((factor: number, screenX: number, screenY: number) => {
+    setView((current) => {
+      const worldX = current.centerX + (screenX - viewport.width / 2) / current.scale;
+      const worldY = current.centerY + (screenY - viewport.height / 2) / current.scale;
+      const nextScale = current.scale * factor;
+      return clampView({
+        centerX: worldX - (screenX - viewport.width / 2) / nextScale,
+        centerY: worldY - (screenY - viewport.height / 2) / nextScale,
+        scale: nextScale,
+      });
+    });
+    setHovered(null);
+  }, [clampView, viewport.height, viewport.width]);
 
-    packSiblings(nodes);
-    const padding = 8;
-    const minX = Math.min(...nodes.map((node) => node.x - node.r));
-    const maxX = Math.max(...nodes.map((node) => node.x + node.r));
-    const minY = Math.min(...nodes.map((node) => node.y - node.r));
-    const maxY = Math.max(...nodes.map((node) => node.y + node.r));
-    const packedWidth = Math.ceil(maxX - minX + padding * 2);
-    const packedHeight = Math.ceil(maxY - minY + padding * 2);
-    const width = Math.max(availableWidth, packedWidth);
-    const offsetX = (width - packedWidth) / 2 + padding - minX;
-    const offsetY = padding - minY;
-    for (const node of nodes) {
-      node.x += offsetX;
-      node.y += offsetY;
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element) return;
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+      const rect = element.getBoundingClientRect();
+      const factor = Math.exp(-event.deltaY * 0.002);
+      zoomAt(factor, event.clientX - rect.left, event.clientY - rect.top);
+    };
+    element.addEventListener("wheel", handleWheel, { passive: false });
+    return () => element.removeEventListener("wheel", handleWheel);
+  }, [zoomAt]);
+
+  const visibleNodes = useMemo(() => {
+    const nodes: VisibleNode[] = [];
+    for (const node of layout.nodes) {
+      const x = (node.x - view.centerX) * view.scale + viewport.width / 2;
+      const y = (node.y - view.centerY) * view.scale + viewport.height / 2;
+      const radius = node.r * view.scale;
+      if (
+        radius >= LABEL_RADIUS_THRESHOLD
+        && x + radius >= 0
+        && y + radius >= 0
+        && x - radius <= viewport.width
+        && y - radius <= viewport.height
+      ) {
+        nodes.push({ node, x, y, radius });
+        if (nodes.length >= MAX_LABEL_NODES) break;
+      }
     }
-    return { nodes, width, height: packedHeight };
-  }, [availableWidth, tags]);
+    return nodes;
+  }, [layout.nodes, view, viewport.height, viewport.width]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !viewport.width || !viewport.height) return;
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    const pixelWidth = Math.round(viewport.width * pixelRatio);
+    const pixelHeight = Math.round(viewport.height * pixelRatio);
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+      canvas.width = pixelWidth;
+      canvas.height = pixelHeight;
+    }
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    context.clearRect(0, 0, viewport.width, viewport.height);
+    context.fillStyle = theme.surface;
+    context.fillRect(0, 0, viewport.width, viewport.height);
+    const dark = theme.isDark;
+
+    for (const node of layout.nodes) {
+      const x = (node.x - view.centerX) * view.scale + viewport.width / 2;
+      const y = (node.y - view.centerY) * view.scale + viewport.height / 2;
+      const radius = node.r * view.scale;
+      if (
+        radius < 0.35
+        || x + radius < 0
+        || y + radius < 0
+        || x - radius > viewport.width
+        || y - radius > viewport.height
+      ) continue;
+      const hue = hashString(node.data.category || node.data.normalized_name) % 360;
+      const isHovered = hovered?.node.data.id === node.data.id;
+      const palette = bubblePalette(hue, dark, isHovered);
+      context.beginPath();
+      context.arc(x, y, Math.max(0.7, radius), 0, Math.PI * 2);
+      context.fillStyle = palette.fill;
+      context.fill();
+      if (radius >= 3) {
+        context.strokeStyle = palette.border;
+        context.lineWidth = isHovered ? 2 : 1;
+        context.stroke();
+      }
+    }
+  }, [hovered?.node.data.id, layout.nodes, theme.isDark, theme.surface, view, viewport.height, viewport.width]);
+
+  const worldPoint = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const screenX = event.clientX - rect.left;
+    const screenY = event.clientY - rect.top;
+    return {
+      screenX,
+      screenY,
+      x: view.centerX + (screenX - viewport.width / 2) / view.scale,
+      y: view.centerY + (screenY - viewport.height / 2) / view.scale,
+    };
+  }, [view, viewport.height, viewport.width]);
+
+  const handlePointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = { x: event.clientX, y: event.clientY, moved: false };
+    setDragging(true);
+  };
+
+  const handlePointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const drag = dragRef.current;
+    if (drag) {
+      const deltaX = event.clientX - drag.x;
+      const deltaY = event.clientY - drag.y;
+      if (Math.abs(deltaX) + Math.abs(deltaY) > 2) drag.moved = true;
+      drag.x = event.clientX;
+      drag.y = event.clientY;
+      setView((current) => clampView({
+        ...current,
+        centerX: current.centerX - deltaX / current.scale,
+        centerY: current.centerY - deltaY / current.scale,
+      }));
+      setHovered(null);
+      return;
+    }
+    const point = worldPoint(event);
+    const node = findNodeAt(layout, point.x, point.y);
+    setHovered(node ? { node, x: point.screenX, y: point.screenY } : null);
+  };
+
+  const handlePointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    setDragging(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (!drag?.moved) {
+      const point = worldPoint(event);
+      const node = findNodeAt(layout, point.x, point.y);
+      if (node) {
+        router.push(searchUrl(
+          "/admin/works",
+          `type:work tag:${quoteSearchValue(node.data.normalized_name)}`,
+        ));
+      }
+    }
+  };
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
+    if (event.key === "+" || event.key === "=") {
+      event.preventDefault();
+      zoomAt(1.25, viewport.width / 2, viewport.height / 2);
+    } else if (event.key === "-") {
+      event.preventDefault();
+      zoomAt(0.8, viewport.width / 2, viewport.height / 2);
+    } else if (event.key === "0") {
+      event.preventDefault();
+      resetView();
+    }
+  };
+
+  const zoomRatio = fitScale > 0 ? view.scale / fitScale : 1;
 
   return (
-    <div ref={wrapperRef} className="overflow-x-auto py-2">
-      <div
-        role="list"
+    <div
+      ref={viewportRef}
+      className="relative h-[68vh] min-h-[360px] max-h-[820px] w-full overflow-hidden rounded-lg border border-border bg-surface sm:min-h-[520px]"
+      data-testid="tag-bubble-chart"
+      data-tag-count={tags.length}
+      data-zoom-level={zoomRatio.toFixed(3)}
+    >
+      <canvas
+        ref={canvasRef}
+        role="img"
         aria-label={ariaLabel}
-        className="relative mx-auto"
-        style={{ width: layout.width, height: layout.height }}
-      >
-        {layout.nodes.map((node, index) => {
-          const hue = hashString(node.data.category || node.data.normalized_name) % 360;
-          const enter = motionEnabled && isNew(node.data.id);
-          const diameter = node.r * 2;
-          const style = {
-            left: node.x - node.r,
-            top: node.y - node.r,
-            width: diameter,
-            height: diameter,
-            "--bubble-hue": hue,
-            "--bubble-delay": bubbleStaggerDelay(index),
-          } as CSSProperties;
-          const showCategory = node.r >= 58 && node.data.category;
-          return (
-            <div
-              role="listitem"
-              key={node.data.id}
-              className={`absolute rounded-full ${enter ? "tag-bubble-enter" : ""}`}
-              style={style}
-            >
-              <Link
-                href={searchUrl("/admin/works", `type:work tag:${quoteSearchValue(node.data.normalized_name)}`)}
-                title={`${node.data.normalized_name} · ${node.data.category || "tag"} · ${node.data.usage_count}`}
-                aria-label={`${node.data.normalized_name}, ${node.data.category || "tag"}, ${node.data.usage_count}`}
-                className="tag-bubble flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-full border text-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
-              >
-                <span
-                  className="max-w-[82%] truncate font-semibold leading-tight"
-                  style={{ fontSize: `${Math.max(11, Math.min(20, node.r * 0.25))}px` }}
-                >
-                  {node.data.normalized_name}
-                </span>
-                <span className="mt-0.5 text-[11px] font-medium opacity-70">{node.data.usage_count}</span>
-                {showCategory && <span className="mt-0.5 text-[10px] opacity-55">{node.data.category}</span>}
-              </Link>
-            </div>
-          );
-        })}
+        tabIndex={0}
+        className={`absolute inset-0 h-full w-full touch-none outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent ${dragging ? "cursor-grabbing" : hovered ? "cursor-pointer" : "cursor-grab"}`}
+        onKeyDown={handleKeyDown}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={() => { dragRef.current = null; setDragging(false); }}
+        onPointerLeave={() => { if (!dragRef.current) setHovered(null); }}
+      />
+
+      <div className="pointer-events-none absolute bottom-3 left-3 z-20 rounded-md border border-border/80 bg-surface/90 px-2.5 py-1.5 text-xs text-muted shadow-sm backdrop-blur-sm sm:bottom-auto sm:top-3">
+        {t("tags.zoom_hint")}
       </div>
+      <div className="absolute right-3 top-3 z-20 flex items-center gap-1 rounded-md border border-border/80 bg-surface/90 p-1 shadow-sm backdrop-blur-sm">
+        <button
+          type="button"
+          className="inline-flex h-9 w-9 items-center justify-center rounded text-lg text-fg hover:bg-subtle"
+          aria-label={t("tags.zoom_out")}
+          onClick={() => zoomAt(0.8, viewport.width / 2, viewport.height / 2)}
+        >
+          −
+        </button>
+        <button
+          type="button"
+          className="min-w-16 rounded px-2 py-1 text-xs font-medium text-muted hover:bg-subtle hover:text-fg"
+          aria-label={t("tags.zoom_reset")}
+          onClick={resetView}
+        >
+          {Math.round(zoomRatio * 100)}%
+        </button>
+        <button
+          type="button"
+          className="inline-flex h-9 w-9 items-center justify-center rounded text-lg text-fg hover:bg-subtle"
+          aria-label={t("tags.zoom_in")}
+          onClick={() => zoomAt(1.25, viewport.width / 2, viewport.height / 2)}
+        >
+          +
+        </button>
+      </div>
+
+      {visibleNodes.map(({ node, x, y, radius }) => {
+        const hue = hashString(node.data.category || node.data.normalized_name) % 360;
+        const palette = bubblePalette(hue, theme.isDark);
+        const style = {
+          left: x - radius,
+          top: y - radius,
+          width: radius * 2,
+          height: radius * 2,
+          fontSize: `${Math.max(10, Math.min(18, radius * 0.24))}px`,
+          color: palette.text,
+        } as CSSProperties;
+        return (
+          <Link
+            key={node.data.id}
+            href={searchUrl(
+              "/admin/works",
+              `type:work tag:${quoteSearchValue(node.data.normalized_name)}`,
+            )}
+            title={`${node.data.normalized_name} · ${node.data.category || "tag"} · ${node.data.usage_count}`}
+            aria-label={`${node.data.normalized_name}, ${node.data.category || "tag"}, ${node.data.usage_count}`}
+            data-bubble-fill={palette.fill}
+            data-bubble-border={palette.border}
+            data-bubble-text={palette.text}
+            className="absolute z-[1] flex flex-col items-center justify-center overflow-hidden rounded-full text-center outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            style={style}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <span className="max-w-[82%] truncate font-semibold leading-tight">
+              {node.data.normalized_name}
+            </span>
+            {radius >= 18 ? (
+              <span className="mt-0.5 text-[10px] font-medium opacity-70">{node.data.usage_count}</span>
+            ) : null}
+          </Link>
+        );
+      })}
+
+      {hovered ? (
+        <div
+          className="pointer-events-none absolute z-10 max-w-64 rounded-md border border-border bg-surface px-2.5 py-2 text-xs text-fg shadow-overlay"
+          style={{
+            left: Math.min(viewport.width - 220, hovered.x + 14),
+            top: Math.min(viewport.height - 72, hovered.y + 14),
+          }}
+        >
+          <p className="truncate font-semibold">{hovered.node.data.normalized_name}</p>
+          <p className="mt-0.5 text-muted">
+            {hovered.node.data.category || "tag"} · {hovered.node.data.usage_count}
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

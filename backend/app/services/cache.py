@@ -3,12 +3,15 @@
 import json
 import logging
 from typing import Any
+from uuid import uuid4
 
 from app.services.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
 
 CACHE_PREFIX = "cache:api:"
+GENERATION_PREFIX = "cache:generation:"
+LOCK_PREFIX = "cache:lock:"
 DEFAULT_TTL = 300  # 5 minutes
 INTERACTIVE_LIST_TTL = 30
 STATS_TTL = 60
@@ -62,6 +65,25 @@ def cache_get(key: str) -> Any | None:
         return None
 
 
+def cache_get_with_status(key: str) -> tuple[bool, Any | None]:
+    """Read a value while preserving cache-miss vs Redis-outage semantics.
+
+    Most callers can treat both outcomes as a miss and should keep using
+    :func:`cache_get`.  Cross-process single-flight code cannot: a contended
+    lease must wait for its winner, whereas an unavailable Redis must fall
+    back to the database under the process-local lock.
+    """
+
+    try:
+        raw = _client().get(key)
+        if raw is None:
+            return True, None
+        return True, json.loads(raw)
+    except Exception:
+        logger.debug("Cache status read failed for key %s", key, exc_info=True)
+        return False, None
+
+
 def cache_set(key: str, value: Any, ttl_seconds: int = DEFAULT_TTL) -> None:
     """Set a cache value with TTL. Best-effort.
 
@@ -76,17 +98,121 @@ def cache_set(key: str, value: Any, ttl_seconds: int = DEFAULT_TTL) -> None:
         logger.debug("Cache write failed for key %s", key, exc_info=True)
 
 
+def cache_generation(domain: str) -> int:
+    """Return the monotonic invalidation generation for one cache domain.
+
+    Generation keys let high-cardinality caches become unreachable in O(1)
+    without blocking Redis with ``KEYS``.  Missing Redis is deliberately
+    equivalent to generation zero; callers still retain database correctness.
+    """
+
+    try:
+        raw = _client().get(f"{GENERATION_PREFIX}{domain}")
+        return int(raw or 0)
+    except Exception:
+        logger.debug("Cache generation read failed for %s", domain, exc_info=True)
+        return 0
+
+
+def cache_bump_generation(domain: str) -> int:
+    """Invalidate a domain in O(1) and return its new generation."""
+
+    try:
+        return int(_client().incr(f"{GENERATION_PREFIX}{domain}"))
+    except Exception:
+        logger.debug("Cache generation bump failed for %s", domain, exc_info=True)
+        return 0
+
+
+def cache_try_lock(name: str, ttl_seconds: int = 30) -> str | None:
+    """Acquire a small Redis lease and return its ownership token.
+
+    The lease is an optimization, never a source of correctness.  A caller
+    receiving ``None`` may wait for the winner or safely fall back to its local
+    single-flight guard when Redis is unavailable.
+    """
+
+    token = uuid4().hex
+    try:
+        acquired = _client().set(
+            f"{LOCK_PREFIX}{name}",
+            token,
+            nx=True,
+            ex=max(1, int(ttl_seconds)),
+        )
+        return token if acquired else None
+    except Exception:
+        logger.debug("Cache lock acquisition failed for %s", name, exc_info=True)
+        return None
+
+
+def cache_refresh_lock(name: str, token: str, ttl_seconds: int = 30) -> bool:
+    """Renew a lease only when ``token`` still owns it."""
+
+    script = """
+    if redis.call('get', KEYS[1]) == ARGV[1] then
+      return redis.call('expire', KEYS[1], ARGV[2])
+    end
+    return 0
+    """
+    try:
+        return bool(_client().eval(
+            script,
+            1,
+            f"{LOCK_PREFIX}{name}",
+            token,
+            max(1, int(ttl_seconds)),
+        ))
+    except Exception:
+        logger.debug("Cache lock renewal failed for %s", name, exc_info=True)
+        return False
+
+
+def cache_release_lock(name: str, token: str) -> bool:
+    """Release a lease without deleting a newer owner's lock."""
+
+    script = """
+    if redis.call('get', KEYS[1]) == ARGV[1] then
+      return redis.call('del', KEYS[1])
+    end
+    return 0
+    """
+    try:
+        return bool(_client().eval(
+            script,
+            1,
+            f"{LOCK_PREFIX}{name}",
+            token,
+        ))
+    except Exception:
+        logger.debug("Cache lock release failed for %s", name, exc_info=True)
+        return False
+
+
 def cache_delete_pattern(pattern: str) -> int:
-    """Delete all keys matching a glob pattern. Best-effort."""
+    """Delete matching keys incrementally. Best-effort.
+
+    Exact ``<domain>:*`` invalidations also advance that domain's generation,
+    so latency-sensitive count caches do not depend on the scan completing.
+    ``scan_iter`` avoids the server-wide pause caused by Redis ``KEYS``.
+    """
     try:
         r = _client()
-        keys = r.keys(f"{CACHE_PREFIX}{pattern}")
-        if keys:
-            r.delete(*keys)
-            logger.debug("Cache invalidated %d keys matching %s", len(keys), pattern)
-            return len(keys)
-        logger.debug("Cache invalidated 0 keys matching %s", pattern)
-        return 0
+        domain, separator, suffix = pattern.partition(":")
+        if separator and suffix == "*" and domain:
+            r.incr(f"{GENERATION_PREFIX}{domain}")
+
+        deleted = 0
+        batch: list[Any] = []
+        for key in r.scan_iter(match=f"{CACHE_PREFIX}{pattern}", count=100):
+            batch.append(key)
+            if len(batch) >= 100:
+                deleted += int(r.delete(*batch) or 0)
+                batch.clear()
+        if batch:
+            deleted += int(r.delete(*batch) or 0)
+        logger.debug("Cache invalidated %d keys matching %s", deleted, pattern)
+        return deleted
     except Exception:
         logger.debug("Cache invalidation failed for pattern %s", pattern, exc_info=True)
         return 0

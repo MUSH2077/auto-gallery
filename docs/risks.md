@@ -81,12 +81,18 @@
 
 ### 5. Meilisearch index consistency
 
-**Risk**: Dual-writes to PostgreSQL and Meilisearch can drift. Periodic re-indexing means stale search results.
+**Risk**: PostgreSQL and the asynchronous Meilisearch projection can drift or
+the projection can lag while Meilisearch is unavailable.
 
 **Mitigation**:
-- v1: Admin-triggered full re-indexing (manual, but consistent)
-- v2: Application-level dual-writes with periodic reconciliation
-- Accept that search results may be up to N minutes stale in v1
+- PostgreSQL writes and a coalescing projection-outbox intent share one
+  transaction; ordinary imports never wait for Meilisearch.
+- A single bounded consumer applies at most one Meilisearch write task at a
+  time, with retry/backoff and observable lag.
+- Full rebuilds use versioned staging indexes and keyset batches, then replay
+  outbox changes made after the rebuild watermark before an atomic swap.
+- Structured work lists remain available from PostgreSQL while full-text search
+  returns an explicit `503 search_unavailable` during a search outage.
 
 ---
 
@@ -107,7 +113,10 @@
 **Risk**: One worker processes one job at a time. A creator with 1000+ works takes hours/days to fully sync.
 
 **Decision**: ACCEPTED for v1 (personal archive, not real-time service).
-Worker can be scaled: `docker compose up --scale worker=3`. Scaling works as long as each job uses a unique DOWNLOAD_ROOT subdirectory (`<job_id>`). Scheduler can stagger subscription syncs to avoid thundering herd.
+The 8 GiB NAS profile intentionally caps effective download concurrency at one.
+Do not scale workers by hand: resource-profile leases, per-source archive locks,
+staging manifests, and the fair scheduler are the supported way to add future
+parallelism after mixed-load validation.
 
 ---
 
@@ -259,7 +268,9 @@ Items below were risks that have been addressed by implementation.
 
 ### L1. Alembic migration execution
 
-Run via `docker compose run --rm backend alembic upgrade head` before starting the stack. Add a startup check that refuses to start if migrations are pending.
+Compose runs `alembic upgrade head` in the one-shot `migrate` service. Backend
+and workers wait for that service to complete successfully, so ordinary
+container restarts no longer rerun migrations in a crash loop.
 
 ### L2. File naming / reorganization
 
@@ -271,7 +282,10 @@ Creator identity (Phase 4) works without Danbooru (Phase 5). Danbooru enriches i
 
 ### L4. gallery-dl archive database
 
-gallery-dl's SQLite archive files track already-downloaded URLs. The scheduler performs periodic VACUUM on archive-*.sqlite3 files in DOWNLOAD_ROOT. If archives grow large, vacuum overhead could coincide with download I/O.
+gallery-dl's SQLite archive files track already-downloaded URLs. Maintenance
+runs at 03:30: a lightweight `PRAGMA optimize` daily and full `VACUUM` only on
+Sunday while queues are idle, pressure is normal, and the global heavy-I/O lock
+is held. This lowers, but does not eliminate, the maintenance-window I/O risk.
 
 ### L5. Provider count growth
 

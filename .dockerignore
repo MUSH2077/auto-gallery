@@ -5,7 +5,10 @@
 **/node_modules/
 **/.next/
 **/.pytest_cache/
+**/.ruff_cache/
 **/*.egg-info/
+**/venv/
+**/build/
 .env
 *.log
 data/

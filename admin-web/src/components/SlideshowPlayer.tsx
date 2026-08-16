@@ -35,7 +35,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { api } from "@/lib/api";
 import type { WorkAsset } from "@/lib/api/endpoints/works";
 import { usePresence, motionTokens } from "@/lib/motion";
-import { useShowcaseConfig } from "@/lib/showcase/config";
+import { useSlideshowConfig } from "@/lib/slideshow/config";
 import { useT } from "@/lib/i18n";
 import { ArrowIcon } from "@/components/WorkViewerParts";
 import { Pause, Play, X } from "lucide-react";
@@ -51,7 +51,7 @@ export interface SlideItem {
 
 // A signed preview URL that keeps failing (expired token, clock skew, the
 // asset itself is unreachable) must not turn into an unbounded refetch loop
-// hammering the backend. Mirrors ShowcaseCanvas's MAX_AUTO_REFETCH_STREAK
+// hammering the backend after repeated signed-preview expiry.
 // (Task 5) — bounded per slide, resets the moment that slide loads cleanly.
 const MAX_LOAD_RETRY_STREAK = 2;
 
@@ -193,7 +193,7 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
   onClose: () => void;
 }) {
   const t = useT();
-  const { config } = useShowcaseConfig();
+  const { config } = useSlideshowConfig();
   const { mounted, closing } = usePresence(open, motionTokens.duration.base);
 
   // State (not a plain ref) so the focus/keyboard effect below can depend on

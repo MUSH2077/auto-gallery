@@ -183,7 +183,7 @@ pass() { echo -e "${G}[PASS]${N} $1"; }
 fail() { echo -e "${R}[FAIL]${N} $1"; exit 1; }
 
 API="http://localhost:8818"
-FI="/volume3/docker/auto-gallery/data/downloads/.file-index.sqlite3"
+FI="/volume2/docker/auto-gallery/data/downloads/.file-index.sqlite3"
 
 echo "=== auto-gallery Smoke Test ==="
 
@@ -201,7 +201,7 @@ if [ -n "$WID" ]; then
   ROW=$(sqlite3 "$FI" "SELECT source,creator_dir FROM file_index WHERE work_id='$WID' LIMIT 1")
   SOURCE=$(echo "$ROW" | cut -d'|' -f1)
   CREATOR=$(echo "$ROW" | cut -d'|' -f2)
-  META="/volume3/docker/auto-gallery/data/library/$SOURCE/$CREATOR/$WID/metadata.json"
+  META="/volume2/docker/auto-gallery/data/library/$SOURCE/$CREATOR/$WID/metadata.json"
   [ -f "$META" ] && pass "metadata: $SOURCE/$CREATOR/$WID" || fail "metadata missing: $META"
 else
   echo "  (no imported works — skip file check)"
@@ -237,7 +237,7 @@ git commit -m "feat: add smoke test script validating full pipeline"
 - [ ] **Step 1: Build + restart**
 
 ```bash
-cd /volume3/docker/auto-gallery
+cd /volume2/docker/auto-gallery
 docker compose build backend admin-web
 docker compose up -d --force-recreate backend admin-web
 bash scripts/debug.sh quick

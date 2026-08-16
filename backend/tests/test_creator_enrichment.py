@@ -266,3 +266,223 @@ async def test_enrich_creator_by_id_missing_creator_raises():
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_refresh_all_creator_mappings_is_incremental_and_includes_inactive(monkeypatch):
+    from app.database import async_session, engine
+    from app.models import Creator, CreatorLink, SourceCreator, Subscription, SubscriptionSource
+    from app.services import creator_enrichment as ce
+
+    fallback_artist = {
+        **FAKE_ARTIST,
+        "id": 240356,
+        "name": "fallback_artist",
+        "urls": [{
+            "url": "https://www.pixiv.net/users/888",
+            "normalized_url": "https://www.pixiv.net/users/888",
+            "is_active": True,
+        }],
+    }
+    other_source_artist = {
+        **FAKE_ARTIST,
+        "id": 240357,
+        "name": "other_source_artist",
+        "urls": [{
+            "url": "https://x.com/multi_artist",
+            "normalized_url": "https://x.com/multi_artist",
+            "is_active": True,
+        }],
+    }
+    exact_ids = []
+    searches = []
+
+    def _get_artist(artist_id):
+        exact_ids.append(artist_id)
+        if artist_id == 240355:
+            return FAKE_ARTIST
+        if artist_id == 240356:
+            return fallback_artist
+        return other_source_artist
+
+    def _search(**kwargs):
+        searches.append(kwargs)
+        if kwargs.get("source_url") == "https://www.pixiv.net/users/111":
+            return None, []
+        if kwargs.get("source_url") == "https://x.com/multi_artist":
+            return other_source_artist, ce.danbooru_svc.extract_creator_links(other_source_artist)
+        return fallback_artist, ce.danbooru_svc.extract_creator_links(fallback_artist)
+
+    monkeypatch.setattr(ce.danbooru_svc, "get_artist", _get_artist)
+    monkeypatch.setattr(ce.danbooru_svc, "search_and_extract", _search)
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            mapped = Creator(
+                name="mapped_inactive",
+                display_name="Mapped inactive",
+                is_active=False,
+                danbooru_artist_id=240355,
+            )
+            fallback = Creator(name="fallback", display_name="Fallback display")
+            multi_identity = Creator(name="multi_identity", display_name="Multi identity")
+            db.add_all([mapped, fallback, multi_identity])
+            await db.flush()
+            db.add_all([
+                SourceCreator(
+                    creator_id=mapped.id,
+                    source="pixiv",
+                    source_creator_id="75220791",
+                    source_url="https://www.pixiv.net/users/75220791",
+                    display_name="Mapped inactive",
+                ),
+                SourceCreator(
+                    creator_id=multi_identity.id,
+                    source="pixiv",
+                    source_creator_id="111",
+                    source_url="https://www.pixiv.net/users/111",
+                    display_name="Multi identity",
+                ),
+                SourceCreator(
+                    creator_id=multi_identity.id,
+                    source="x",
+                    source_creator_id="multi_artist",
+                    source_url="https://x.com/multi_artist",
+                    display_name="Multi identity",
+                ),
+            ])
+            subscription = Subscription(
+                creator_id=mapped.id,
+                name="manual mapping",
+                is_active=True,
+                sync_enabled=False,
+                schedule_mode="manual",
+                sync_interval_hours=12,
+                scheduled_times="03:00",
+            )
+            db.add(subscription)
+            await db.flush()
+            db.add_all([
+                SubscriptionSource(
+                    subscription_id=subscription.id,
+                    source="x",
+                    source_url="https://x.com/mapped_inactive",
+                    source_creator_id="mapped_inactive",
+                    is_enabled=True,
+                ),
+                CreatorLink(
+                    creator_id=mapped.id,
+                    url="https://example.com/curated",
+                    link_type="website",
+                    source="manual",
+                    confidence=1.0,
+                    is_verified=True,
+                    notes="keep me",
+                ),
+            ])
+            await db.commit()
+
+            first = await ce.refresh_all_creator_mappings(db)
+            first_link_count = len((await db.execute(select(CreatorLink))).scalars().all())
+            first_source_creator_count = len(
+                (await db.execute(select(SourceCreator))).scalars().all()
+            )
+            first_subscription_source_count = len(
+                (await db.execute(select(SubscriptionSource))).scalars().all()
+            )
+            second = await ce.refresh_all_creator_mappings(db)
+            second_link_count = len((await db.execute(select(CreatorLink))).scalars().all())
+            second_source_creator_count = len(
+                (await db.execute(select(SourceCreator))).scalars().all()
+            )
+            second_subscription_source_count = len(
+                (await db.execute(select(SubscriptionSource))).scalars().all()
+            )
+
+            assert first["total"] == 3
+            assert first["found"] == 3
+            assert first["aborted"] is False
+            assert second["found"] == 3
+            assert exact_ids.count(240355) == 2
+            assert exact_ids.count(240356) == 1
+            assert exact_ids.count(240357) == 1
+            assert {item["artist_name"] for item in first["items"]} == {
+                "yosei_bin",
+                "fallback_artist",
+                "other_source_artist",
+            }
+            assert any(
+                item["artist_name"] == "Fallback display"
+                for item in searches
+            )
+            pixiv_attempt = next(
+                index
+                for index, item in enumerate(searches)
+                if item["source_url"] == "https://www.pixiv.net/users/111"
+            )
+            other_source_attempt = next(
+                index
+                for index, item in enumerate(searches)
+                if item["source_url"] == "https://x.com/multi_artist"
+            )
+            assert pixiv_attempt < other_source_attempt
+            assert first_link_count == second_link_count
+            assert first_source_creator_count == second_source_creator_count
+            assert first_subscription_source_count == second_subscription_source_count
+
+            await db.refresh(subscription)
+            assert subscription.schedule_mode == "manual"
+            assert subscription.sync_enabled is False
+            assert subscription.sync_interval_hours == 12
+            assert subscription.scheduled_times == "03:00"
+            curated = (await db.execute(select(CreatorLink).where(
+                CreatorLink.url == "https://example.com/curated",
+            ))).scalar_one()
+            assert curated.source == "manual"
+            assert curated.is_verified is True
+            assert curated.notes == "keep me"
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_refresh_all_creator_mappings_aborts_after_danbooru_outage(monkeypatch):
+    from app.database import async_session, engine
+    from app.models import Creator
+    from app.services import creator_enrichment as ce
+    from app.services.danbooru import DanbooruUnavailableError
+
+    calls = []
+
+    def _raise(artist_id):
+        calls.append(artist_id)
+        raise DanbooruUnavailableError("net down")
+
+    monkeypatch.setattr(ce.danbooru_svc, "get_artist", _raise)
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            db.add_all([
+                Creator(name="first", danbooru_artist_id=1),
+                Creator(name="second", danbooru_artist_id=2),
+            ])
+            await db.commit()
+
+            report = await ce.refresh_all_creator_mappings(db)
+
+            assert report["total"] == 2
+            assert report["scanned"] == 1
+            assert report["errors"] == 1
+            assert report["aborted"] is True
+            assert len(calls) == 1
+            assert calls[0] in {1, 2}
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()

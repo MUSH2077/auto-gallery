@@ -1,5 +1,7 @@
+import inspect
+
 import pytest
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 
 
 async def _clear_task_test_tables(db):
@@ -9,75 +11,24 @@ async def _clear_task_test_tables(db):
     await db.commit()
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_record_account_event_creates_terminal_listable_event():
-    from app.database import async_session, engine
+def test_auth_success_paths_do_not_depend_on_task_history():
+    from app.api import auth_api
     from app.services.tasks import TaskService
 
-    try:
-        async with async_session() as db:
-            await _clear_task_test_tables(db)
-            svc = TaskService(db)
-
-            task = await svc.record_account_event(
-                action="login", username="admin", user_id=1, ip="198.51.100.10"
-            )
-            await db.commit()
-
-            assert task.kind == "account"
-            assert task.operation_type == "account-login"
-            assert task.status == "complete"
-            assert task.subject_id is None
-            assert task.meta == {"username": "admin", "user_id": 1, "ip": "198.51.100.10"}
-            assert task.finished_at is not None
-
-            total, tasks = await svc.list_tasks(kind="account")
-            assert total == 1
-            assert tasks[0].operation_type == "account-login"
-    finally:
-        async with async_session() as db:
-            await _clear_task_test_tables(db)
-        await engine.dispose()
+    source = inspect.getsource(auth_api)
+    assert "TaskService" not in source
+    assert not hasattr(TaskService, "record_account_event")
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_record_account_event_password_change_distinct_rows():
-    from app.database import async_session, engine
-    from app.services.tasks import TaskService
-
-    try:
-        async with async_session() as db:
-            await _clear_task_test_tables(db)
-            svc = TaskService(db)
-
-            await svc.record_account_event(action="login", username="admin", user_id=1)
-            await svc.record_account_event(action="login", username="admin", user_id=1)
-            await svc.record_account_event(action="password-change", username="admin", user_id=1)
-            await db.commit()
-
-            total, _ = await svc.list_tasks(kind="account")
-            assert total == 3  # repeated logins are distinct rows, not upserted
-
-            total_pw, pw = await svc.list_tasks(kind="account", operation_type="account-password-change")
-            assert total_pw == 1
-            assert pw[0].title == "Password changed"
-    finally:
-        async with async_session() as db:
-            await _clear_task_test_tables(db)
-        await engine.dispose()
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_login_records_account_event_and_survives_recorder_failure(monkeypatch):
+async def test_login_updates_user_without_creating_account_task(monkeypatch):
     from app.api import auth_api
     from app.api.auth_api import LoginRequest, login
     from app.auth import hash_password
     from app.database import async_session, engine
     from app.models.user import User
-    from app.services.tasks import TaskService
+    from app.models.task_run import TaskRun
     from starlette.requests import Request
 
     def _req(ip: str = "198.51.100.10") -> Request:
@@ -103,18 +54,18 @@ async def test_login_records_account_event_and_survives_recorder_failure(monkeyp
             resp = await login(LoginRequest(username="acct_test", password="secret123"), _req(), db)
             assert resp.access_token
 
-            svc = TaskService(db)
-            total, tasks = await svc.list_tasks(kind="account", operation_type="account-login")
-            assert total == 1
-            assert tasks[0].meta.get("username") == "acct_test"
-            assert tasks[0].meta.get("ip") == "198.51.100.10"
-
-            # Recorder failure must not break login
-            async def _boom(**_kw):
-                raise RuntimeError("recorder down")
-            monkeypatch.setattr(TaskService, "record_account_event", _boom)
-            resp2 = await login(LoginRequest(username="acct_test", password="secret123"), _req(), db)
-            assert resp2.access_token  # login still succeeds
+            task_count = int(
+                (
+                    await db.execute(
+                        select(func.count(TaskRun.id)).where(TaskRun.kind == "account")
+                    )
+                ).scalar_one()
+            )
+            refreshed = (
+                await db.execute(select(User).where(User.username == "acct_test"))
+            ).scalar_one()
+            assert task_count == 0
+            assert refreshed.last_login_at is not None
     finally:
         async with async_session() as db:
             await db.execute(text("DELETE FROM users WHERE username = 'acct_test'"))

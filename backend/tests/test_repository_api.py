@@ -97,18 +97,30 @@ def test_repository_detail_returns_context_jobs_and_recent_works():
     sub_id = uuid4()
     creator_id = uuid4()
     job_id = uuid4()
+    receipt_id = uuid4()
     work_id = uuid4()
     ss, sub, creator = _source_context(source_id, sub_id, creator_id)
-    job = SimpleNamespace(
-        id=job_id,
-        subscription_id=sub_id,
-        subscription_source_id=source_id,
+    receipt = SimpleNamespace(
+        id=receipt_id,
+        repository_id=source_id,
+        source_task_id=None,
+        source_download_job_id=job_id,
+        source_import_job_id=None,
         source="pixiv",
-        source_url=ss.source_url,
         status="complete",
-        retry_count=0,
-        error_log=None,
-        created_at=_dt(),
+        outcome_code="new_content",
+        attempts=1,
+        metadata_count=2,
+        media_count=2,
+        works_imported=1,
+        duration_ms=2500,
+        error_code=None,
+        error_excerpt=None,
+        recovered=False,
+        recovered_at=None,
+        detail={"outcome": {"code": "new_content"}},
+        started_at=_dt(),
+        finished_at=_dt(),
         updated_at=_dt(),
     )
     work = SimpleNamespace(
@@ -124,18 +136,22 @@ def test_repository_detail_returns_context_jobs_and_recent_works():
     work_source = SimpleNamespace(source="pixiv", title="Source Title", posted_at="2026-06-01")
     db = _FakeDB([
         _Result(first=(ss, sub, creator)),
-        _Result(scalars=[job]),
+        _Result(scalars=[]),
+        _Result(scalars=[receipt]),
         _Result(rows=[(work, work_source, 2, True)]),
     ])
 
     payload = asyncio.run(get_repository(source_id, db=db))
 
     assert payload["repository"]["id"] == str(source_id)
-    assert payload["repository"]["latest_job"]["id"] == str(job_id)
+    assert payload["repository"]["latest_job"]["id"] == str(receipt_id)
     assert payload["creator"]["display_name"] == "ASK"
     assert payload["subscription"]["name"] == "Pixiv daily"
     assert payload["provider"]["url_valid"] is True
     assert payload["recent_jobs"][0]["subscription_source_id"] == str(source_id)
+    assert payload["recent_jobs"][0]["download_job_id"] == str(job_id)
+    assert payload["sync_history"] == payload["recent_jobs"]
+    assert payload["active_jobs"] == []
     assert payload["recent_works"][0]["id"] == str(work_id)
     assert payload["recent_works"][0]["asset_count"] == 2
     assert payload["recent_works"][0]["has_video"] is True
@@ -166,13 +182,17 @@ def test_repository_sync_now_delegates_to_existing_enqueue(monkeypatch):
         assert received_source_id == source_id
         assert trigger == "manual_repository"
         assert force is False
-        return {"status": "skipped", "reason": "source_disabled"}
+        return {
+            "status": "skipped",
+            "skip_reason": "source_disabled",
+            "reason": {"code": "source_disabled", "message": "source disabled"},
+        }
 
     monkeypatch.setattr(repositories, "enqueue_subscription_source_sync", fake_enqueue)
 
     payload = asyncio.run(repositories.sync_repository(source_id, db=db))
 
-    assert payload == {"status": "skipped", "reason": "source_disabled"}
+    assert payload["skip_reason"] == "source_disabled"
 
 
 def test_repository_tags_are_scoped_and_paginated():

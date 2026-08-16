@@ -126,16 +126,30 @@ export default function AppSidebar({
   const pathname = usePathname();
   const { has } = usePermissions();
   const canSeeStatus = has("system");
-  const workbenchBadge = useQuery({
-    queryKey: queryKeys.workbench,
-    queryFn: api.workbench,
-    enabled: canSeeStatus,
-    staleTime: 10000,
+  const canSeeTasks = has("tasks");
+  const operationBadge = useQuery({
+    queryKey: [...queryKeys.tasks.all, "attention-badge"],
+    queryFn: () => api.listTasks({
+      q: "status:failed status:stale",
+      visibility: "actionable",
+      offset: 0,
+      limit: 1,
+    }),
+    enabled: canSeeTasks,
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
   });
-  const activeJobs = canSeeStatus
-    ? (workbenchBadge.data?.queue.active_download_count || 0)
-      + (workbenchBadge.data?.queue.active_import_count || 0)
-    : 0;
+  const attentionCount = operationBadge.data?.total || 0;
+  const schedulerBadge = useQuery({
+    queryKey: [...queryKeys.schedulerDecisions, "attention", "badge"],
+    queryFn: () => api.schedulerDecisionsView("attention", 0, 1),
+    enabled: canSeeTasks,
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+  });
+  const schedulerAttentionCount = schedulerBadge.data?.total || 0;
 
   const groups = ADMIN_NAV_GROUPS
     .map((group) => ({
@@ -210,12 +224,20 @@ export default function AppSidebar({
                   >
                     <NavIcon name={icon} />
                     {!compact && <span className="truncate">{label}</span>}
-                    {href === "/admin/jobs" && activeJobs > 0 && (
+                    {href === "/admin/jobs" && attentionCount > 0 && (
                       <span className={compact
-                        ? "absolute right-0 top-0 h-2 w-2 rounded-full bg-accent ring-2 ring-surface"
-                        : "tabular ml-auto rounded-full bg-accent px-1.5 text-[11px] font-medium leading-[18px] text-white"}
+                        ? "absolute right-0 top-0 h-2 w-2 rounded-full bg-danger ring-2 ring-surface"
+                        : "tabular ml-auto rounded-full bg-danger px-1.5 text-[11px] font-medium leading-[18px] text-white"}
                       >
-                        {compact ? <span className="sr-only">{activeJobs}</span> : activeJobs}
+                        {compact ? <span className="sr-only">{attentionCount}</span> : attentionCount}
+                      </span>
+                    )}
+                    {href === "/admin/scheduler" && schedulerAttentionCount > 0 && (
+                      <span className={compact
+                        ? "absolute right-0 top-0 h-2 w-2 rounded-full bg-warning ring-2 ring-surface"
+                        : "tabular ml-auto rounded-full bg-warning px-1.5 text-[11px] font-medium leading-[18px] text-white"}
+                      >
+                        {compact ? <span className="sr-only">{schedulerAttentionCount}</span> : schedulerAttentionCount}
                       </span>
                     )}
                   </Link>

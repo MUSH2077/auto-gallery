@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import {
   formatMediaDuration,
+  derivativeIsPending,
   isBrowserPlayableVideo,
   resolveMediaKind,
   type MediaAssetData,
@@ -75,6 +76,8 @@ export function AssetPreviewMedia({
 }) {
   const t = useT();
   const kind = resolveMediaKind(asset);
+  const derivativePending = derivativeIsPending(asset.derivative_status);
+  const derivativeFailed = asset.derivative_status === "failed";
   if (kind === "archive" || kind === "unknown") {
     return (
       <span className={`${className} flex items-center justify-center bg-subtle font-mono text-xs font-semibold text-muted`}>
@@ -85,6 +88,11 @@ export function AssetPreviewMedia({
   const src = kind === "video"
     ? asset.poster_url || asset.thumb_url
     : asset.preview_url || asset.original_url || asset.thumb_url;
+  const derivativeLabel = derivativeFailed
+    ? t("media.derivative_failed")
+    : derivativePending
+      ? t("media.derivative_pending")
+      : null;
   return (
     <span className="relative block h-full w-full">
       <AssetImage
@@ -92,10 +100,15 @@ export function AssetPreviewMedia({
         assetId={src ? undefined : asset.id}
         alt={alt}
         className={className}
-        fallback={kind === "video" ? t("media.poster_unavailable") : t("works.original_unavailable")}
+        fallback={derivativeLabel || (kind === "video" ? t("media.poster_unavailable") : t("works.original_unavailable"))}
         onLoad={onLoad}
         onError={onError}
       />
+      {derivativeLabel ? (
+        <span className="pointer-events-none absolute left-2 top-2 rounded bg-black/75 px-2 py-1 text-[10px] font-medium text-white">
+          {derivativeLabel}
+        </span>
+      ) : null}
       {kind === "video" ? (
         <span className="pointer-events-none absolute bottom-2 right-2">
           <VideoBadge />
@@ -116,6 +129,8 @@ export function AssetViewer({
 }) {
   const t = useT();
   const kind = resolveMediaKind(asset);
+  const derivativePending = derivativeIsPending(asset.derivative_status);
+  const derivativeFailed = asset.derivative_status === "failed";
   if (kind === "video") {
     if (!isBrowserPlayableVideo(asset)) {
       return <UnsupportedVideoAsset asset={asset} />;
@@ -144,17 +159,23 @@ export function AssetViewer({
     <button
       type="button"
       onClick={onOpenImage}
-      className="group flex h-full min-h-[58vh] w-full items-center justify-center p-3"
+      className="group relative flex h-full min-h-[58vh] w-full items-center justify-center p-3"
       title={t("work_detail.view_full")}
     >
       <AssetImage
         key={asset.id}
-        src={asset.preview_url}
-        assetId={asset.id}
+        src={asset.preview_url || ((derivativePending || derivativeFailed) ? asset.original_url : undefined)}
+        assetId={asset.preview_url || ((derivativePending || derivativeFailed) && asset.original_url) ? undefined : asset.id}
         size="preview"
         alt={asset.file_name || ""}
         className="fade-in max-h-[72vh] max-w-full object-contain no-outline transition-transform duration-150 group-hover:scale-[1.005]"
+        fallback={derivativeFailed ? t("media.derivative_failed") : derivativePending ? t("media.derivative_pending") : undefined}
       />
+      {derivativePending || derivativeFailed ? (
+        <span className="pointer-events-none absolute left-4 top-4 rounded bg-black/75 px-2.5 py-1 text-xs font-medium text-white">
+          {derivativeFailed ? t("media.derivative_failed") : t("media.derivative_pending")}
+        </span>
+      ) : null}
     </button>
   );
 }

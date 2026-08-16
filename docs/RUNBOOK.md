@@ -7,16 +7,26 @@
 ### Quick Deploy (recommended)
 
 ```bash
-cd /volume3/docker/auto-gallery
+cd /volume2/docker/auto-gallery
 bash scripts/deploy.sh
 ```
 
 This single command:
-1. Detects source changes (backend, admin-web, docker-compose.yaml, scripts/)
-2. Builds only if sources changed (handles ECR timeouts gracefully)
-3. Force-recreates all app containers
-4. Waits up to 90s for all containers to report healthy
-5. Runs a quick health summary
+1. Builds immutable source-digest images serially without reading acceptance state
+2. Stops background writers and creates checksummed database/config backups
+3. Tags the live backend and web images for rollback
+4. Runs the one-shot migration and force-recreates the protected core stack
+5. Requires core services to become healthy before starting background workers
+6. Verifies project-local cgroup, migration, queue and health invariants
+
+Host memory, Swap and PSI are recorded in the rollback report but do not veto a
+deployment. If the device cannot start the core containers healthily, deployment
+still fails and preserves the rollback point. Use `--core-only` to deploy browsing
+without workers. A formal release instead uses an already accepted candidate:
+
+```bash
+bash scripts/deploy.sh --verified /path/to/acceptance.json
+```
 
 ### Manual Deploy
 
@@ -47,8 +57,8 @@ bash scripts/debug.sh quick
 
 | Endpoint | Auth | Purpose |
 |----------|------|---------|
-| `GET /api/v1/system/ready` | No | Container health check (PG + Redis + Meili liveness) |
-| `GET /api/v1/system/health` | No | Detailed health (services + disk) |
+| `GET /api/v1/system/ready` | No | Readiness: PostgreSQL + writable Redis required; Meilisearch is reported as degraded |
+| `GET /api/v1/system/health` | No | Detailed services, disk, resource pressure, Redis, queue and worker health |
 | `GET /api/v1/system/health/disk` | Admin | Disk usage breakdown |
 | `GET /api/v1/system/workbench` | Admin | Full dashboard: queue stats, storage, proxy health |
 | `GET /api/v1/system/queue-stats` | Admin | Pending/running/failed counts per queue |
@@ -74,14 +84,14 @@ docker compose run --rm backend python scripts/backfill_video_assets.py --apply
 | Container | Check | Interval | Timeout |
 |-----------|-------|----------|---------|
 | `postgres` | `pg_isready` | 5s | 5s |
-| `redis` | `redis-cli ping` | 5s | 5s |
+| `redis` | Redis `SET EX` + `DEL` write probe | 30s | 5s |
 | `meilisearch` | `wget /health` | 10s | 5s |
-| `backend` | `curl /api/v1/system/ready` | 30s | 15s |
-| `worker-download` | Redis ping + gallery-dl exists | 30s | 10s |
-| `worker-import` | Redis ping | 30s | 10s |
-| `worker-import` | Redis ping | 30s | 10s |
-| `scheduler` | Redis ping | 30s | 10s |
-| `admin-web` | `wget /` | 15s | 5s |
+| `backend` | `curl /api/v1/system/ready` | 30s | 10s |
+| `worker-download` | Supervisor heartbeat + gallery-dl exists | 30s | 10s |
+| `worker-import` | Supervisor heartbeat | 30s | 10s |
+| `worker-operations` | Supervisor heartbeat | 30s | 10s |
+| `scheduler` | Supervisor heartbeat | 30s | 10s |
+| `admin-web` | `wget /admin/login` | 15s | 5s |
 
 ## Monitoring
 
@@ -97,8 +107,15 @@ docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\
 # Queue lengths
 docker compose exec redis redis-cli -a "$REDIS_PASSWORD" LLEN rq:queue:downloads:pixiv
 docker compose exec redis redis-cli -a "$REDIS_PASSWORD" LLEN rq:queue:imports
-docker compose exec redis redis-cli -a "$REDIS_PASSWORD" LLEN rq:queue:imports
+docker compose exec redis redis-cli -a "$REDIS_PASSWORD" LLEN rq:queue:operations
 ```
+
+The system health snapshot is aggregated every 15 seconds. It includes the
+adaptive controller mode, hard/soft reasons, AIMD generation and profile
+grants, cgroup OOM evidence, queue activity, worker heartbeats and durable
+search/Git/media/dedup outbox lag. Non-Gitllery profiles default to adaptive
+`enforce`; Gitllery remains v1 shadow. Host PSI is soft AIMD feedback and all
+control actions remain inside this Compose project. See `deployment-profiles.md`.
 
 ### Log Tailing
 
@@ -136,7 +153,8 @@ docker stats --no-stream | grep backend
 docker compose up -d --force-recreate backend
 ```
 
-Current config: `mem_limit: 1024M` — if consistently near limit, increase in docker-compose.yaml.
+Current config: `mem_limit: 512M`. Do not increase it before the 24–48 hour
+mixed-load algorithm-governance soak identifies the responsible stage.
 
 ### Download jobs stalling (proxy)
 
@@ -163,7 +181,11 @@ docker compose exec worker-download python3 -c "import socket; print(socket.geta
 
 **Symptom:** `docker compose build` fails with `dial tcp 198.18.0.124:443: i/o timeout`.
 
-**Fix:** The base image is now `python:3.12.13-slim-bookworm` from Docker Hub (not ECR). If the issue recurs, use `bash scripts/deploy.sh` which handles build timeouts gracefully and falls back to the existing image.
+**Fix:** The base image is now `python:3.12.13-slim-bookworm` from Docker Hub
+(not ECR). `bash scripts/deploy.sh` builds serially in a bounded project
+BuildKit cgroup when buildx is available. A network or build failure is treated
+as a real failure; if it occurs before the freeze step, the live stack is left
+unchanged. The deploy command never substitutes an unverified old image.
 
 ### Stale download jobs not detected
 
@@ -182,7 +204,8 @@ curl -X POST -H "Authorization: Bearer <token>" http://localhost:8818/api/v1/dow
 
 **Symptom:** API returns 500, logs show "QueuePool limit … reached".
 
-**Fix:** Current pool is 2+2 per process (7 processes = max 28 connections). If exhausting:
+**Fix:** Backend uses an `8+4` pool; each worker/scheduler uses `1+1`, within the
+PostgreSQL `max_connections=40` budget. If exhausting:
 ```bash
 # Check active connections
 docker compose exec postgres psql -U autogallery -c "SELECT count(*) FROM pg_stat_activity WHERE datname='autogallery';"
@@ -224,14 +247,23 @@ bash scripts/deploy.sh
 
 ### Image-based rollback
 
-If a previous image tag is still available:
-```bash
-# Tag the previous image
-docker tag auto-gallery-backend:<previous-version> auto-gallery-backend:latest
+Every successful pre-deploy snapshot contains an executable `rollback.sh`. It
+downgrades the additive migration with the candidate image, restores the tagged
+backend/web images, and brings back only the foreground stack under the new
+resource ceilings. Heavy workers remain stopped until the failure is understood:
 
-# Recreate containers
-docker compose up -d --force-recreate backend worker-download worker-import worker-operations scheduler admin-web
+```bash
+/volume2/docker/auto-gallery-deployments/<deployment-id>/rollback.sh
 ```
+
+Use the checksummed `postgres.dump` only for verified data corruption. Ordinary
+code or migration rollback should not overwrite the database from a dump.
+
+Gitllery remains product v1. During the segment-format rollout, keep the legacy
+git-object layout read-only and leave `.gitllery.build-segment-r1` unpromoted.
+After an image rollback, stop Gitllery projection if the old image cannot read
+`format_id=gitllery-segment, format_revision=1`; restore the candidate image or
+rebuild the shadow projection from authoritative PostgreSQL before resuming.
 
 ### Configuration rollback
 

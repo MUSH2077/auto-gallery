@@ -4,7 +4,7 @@ import { useRef, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, DownloadJob, ImportJob, queryKeys } from "@/lib/api";
 import { ErrorState, StatusBadge, SourceBadge, SyncOutcomeNotice } from "@/components";
-import { useT } from "@/lib/i18n";
+import { useT, type TFunction } from "@/lib/i18n";
 import { usePresence, motionTokens } from "@/lib/motion";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { classifyError } from "@/lib/jobCategory";
@@ -31,6 +31,15 @@ function DetailRow({ label, value }: { label: string; value?: ReactNode }) {
       <dd className="min-w-0 break-all">{value || "—"}</dd>
     </div>
   );
+}
+
+function resourceReasonLabel(t: TFunction, reason?: string | null) {
+  if (!reason) return null;
+  const [code, detail] = reason.split(":", 2);
+  const key = `jobs.resource.reason.${code}`;
+  const translated = t(key);
+  if (translated === key) return reason;
+  return detail ? `${translated} (${detail})` : translated;
 }
 
 export function TaskDetailDrawer({
@@ -91,6 +100,22 @@ export function TaskDetailDrawer({
             </div>
             <dl className="rounded-md border border-border px-3 dark:border-border">
               <DetailRow label={t("jobs.status")} value={<StatusBadge status={item.status} />} />
+              {item.resource_state ? (
+                <DetailRow
+                  label={t("jobs.resource.label")}
+                  value={(
+                    <span className="flex flex-wrap items-center gap-2">
+                      <StatusBadge
+                        status={item.resource_state}
+                        label={t(`jobs.resource.${item.resource_state}`)}
+                      />
+                      {item.resource_reason ? (
+                        <span className="text-xs text-muted">{resourceReasonLabel(t, item.resource_reason)}</span>
+                      ) : null}
+                    </span>
+                  )}
+                />
+              ) : null}
               <DetailRow label={t("jobs.kind")} value={item.kind} />
               <DetailRow label={t("jobs.operation")} value={item.operation_type || item.kind} />
               <DetailRow label={t("jobs.queue")} value={item.queue_name} />
@@ -215,11 +240,16 @@ export function JobDetailDrawer({
         {kind === "download" && dl && (
           <div className="space-y-4">
             <div className="flex flex-wrap gap-2">
-              <button onClick={() => onRetryDownload(dl.id)} className="btn-primary text-xs">{t("jobs.retry")}</button>
+              {dl.retryable !== false && <button onClick={() => onRetryDownload(dl.id)} className="btn-primary text-xs">{t("jobs.retry")}</button>}
               {["enqueued","downloading","downloaded","importing","failed","stale"].includes(dl.status) && <button onClick={() => onPauseDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.pause")}</button>}
               {dl.status === "paused" && <button onClick={() => onResumeDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.resume")}</button>}
               <button onClick={() => onDeleteDownload(dl.id)} className="btn-danger text-xs">{t("jobs.del")}</button>
             </div>
+            {dl.retryable === false && dl.reason_code && (
+              <div className="rounded-md border border-warning/40 bg-warning-subtle px-3 py-2 text-sm text-warning" role="alert">
+                {t("jobs.staging_conflict_manual")}
+              </div>
+            )}
             <dl className="rounded-md border border-border px-3 dark:border-border">
               <DetailRow label={t("jobs.status")} value={statusLabel(t, dl.status)} />
               <DetailRow label={t("jobs.source")} value={<span className="inline-flex items-center gap-2"><SourceBadge source={dl.source} />{dl.source}</span>} />
@@ -282,6 +312,12 @@ export function JobDetailDrawer({
               </section>
               );
             })()}
+            {dl.conflict_details && dl.conflict_details.length > 0 && (
+              <section>
+                <h3 className="mb-2 text-sm font-semibold">{t("jobs.conflict_details")}</h3>
+                <JsonBlock value={dl.conflict_details} />
+              </section>
+            )}
             {dl.manifest && (
               <section>
                 <h3 className="mb-2 text-sm font-semibold">{t("jobs.manifest")}</h3>

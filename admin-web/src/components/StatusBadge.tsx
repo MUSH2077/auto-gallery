@@ -16,6 +16,9 @@ const toneClasses: Record<Tone, string> = {
 
 const statusTone: Record<string, Tone> = {
   up: "success",
+  normal: "success",
+  constrained: "warning",
+  critical: "danger",
   complete: "success",
   completed: "success",
   downloaded: "active",
@@ -23,17 +26,21 @@ const statusTone: Record<string, Tone> = {
   failed: "danger",
   error: "danger",
   stale: "stale",
+  warning: "warning",
   paused: "warning",
   pending: "warning",
+  waiting: "warning",
   enqueued: "warning",
   configuring: "active",
   downloading: "active",
   importing: "active",
   running: "active",
+  processing: "active",
   post_download: "active",
   enqueuing_import: "active",
   import_indexing: "active",
   cancelled: "muted",
+  yielded: "muted",
   unknown: "muted",
 };
 

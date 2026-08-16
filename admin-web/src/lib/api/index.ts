@@ -53,6 +53,18 @@ export const api = {
   refreshWorkbench: () => request<T.WorkbenchSummary>("/api/v1/system/workbench?refresh=true"),
 
   schedulerDecisions: () => request<T.SchedulerDecisionsResponse>("/api/v1/system/scheduler-decisions"),
+  schedulerDecisionsView: (view: "attention" | "all", offset = 0, limit = 100) =>
+    request<T.SchedulerDecisionsResponse>(
+      `/api/v1/system/scheduler-decisions?view=${view}&offset=${offset}&limit=${limit}`,
+    ),
+  schedulerDecisionsForSubscriptions: (ids: string[]) => {
+    const params = new URLSearchParams({
+      view: "all",
+      subscription_ids: ids.join(","),
+      limit: "500",
+    });
+    return request<T.SchedulerDecisionsResponse>(`/api/v1/system/scheduler-decisions?${params.toString()}`);
+  },
 
   systemLogs: (limit?: number, level?: string, nameFilter?: string) => {
     const params = new URLSearchParams();
@@ -71,7 +83,7 @@ export const api = {
   queueStats: () => request<T.QueueStatsResponse>("/api/v1/system/queue-stats"),
 
   // Unified task runs
-  listTasks: (params?: { kind?: string; status?: string; operation_type?: string; source?: string; q?: string; include_account?: boolean; offset?: number; limit?: number }) => {
+  listTasks: (params?: { kind?: string; status?: string; operation_type?: string; source?: string; q?: string; include_account?: boolean; visibility?: "actionable" | "all"; offset?: number; limit?: number }) => {
     const q = new URLSearchParams();
     if (params?.kind) q.set("kind", params.kind);
     if (params?.status) q.set("status", params.status);
@@ -79,6 +91,7 @@ export const api = {
     if (params?.source) q.set("source", params.source);
     if (params?.q) q.set("q", params.q);
     if (params?.include_account) q.set("include_account", "true");
+    if (params?.visibility) q.set("visibility", params.visibility);
     q.set("offset", String(params?.offset || 0));
     q.set("limit", String(params?.limit || 50));
     return request<T.TaskRunListResponse>(`/api/v1/tasks?${q.toString()}`);
@@ -97,6 +110,17 @@ export const api = {
       body: note ? JSON.stringify({ note }) : undefined,
     }),
   resumeTask: (id: string) => request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/resume`, { method: "POST" }),
+  acknowledgeTask: (id: string) => request<T.TaskRun>(`/api/v1/tasks/${id}/acknowledge`, { method: "POST" }),
+  compactTasks: (dryRun = true, limit = 1000) =>
+    request<{ dry_run: boolean; matched: number; deleted_tasks: number; deleted_download_jobs: number; deleted_import_jobs: number; skipped_without_receipt: number }>(
+      "/api/v1/tasks/compact",
+      { method: "POST", body: JSON.stringify({ dry_run: dryRun, limit }) },
+    ),
+  operationsOverview: (view: T.OperationsView, signal?: AbortSignal) =>
+    request<T.OperationsOverviewResponse>(
+      `/api/v1/operations/overview?view=${encodeURIComponent(view)}&limit=100`,
+      { signal },
+    ),
 
   // Sources
   sources: () => request<{ sources: T.ProviderInfo[] }>("/api/v1/sources"),
@@ -188,10 +212,22 @@ export const api = {
 
   getSubscription: (id: string) => request<T.Subscription>(`/api/v1/subscriptions/${id}`),
 
+  subscriptionSummaries: (ids: string[]) => {
+    const params = new URLSearchParams({ ids: ids.join(",") });
+    return request<T.SubscriptionSummariesResponse>(`/api/v1/subscriptions/summaries?${params.toString()}`);
+  },
+
   createSubscription: (data: { creator_id: string; name?: string; is_active?: boolean; sync_enabled?: boolean }) =>
     request<T.Subscription>("/api/v1/subscriptions", { method: "POST", body: JSON.stringify(data) }),
 
-  updateSubscription: (id: string, data: Record<string, unknown>) =>
+  updateSubscription: (id: string, data: {
+    name?: string;
+    is_active?: boolean;
+    schedule_mode?: "inherit" | "interval" | "fixed_time" | "manual" | null;
+    sync_interval_hours?: number;
+    scheduled_times?: string | null;
+    sync_enabled?: boolean;
+  }) =>
     request<T.Subscription>(`/api/v1/subscriptions/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
 
   deleteSubscription: (id: string) =>
@@ -225,13 +261,14 @@ export const api = {
     request<void>(`/api/v1/subscriptions/${subId}/sources/${ssId}`, { method: "DELETE" }),
 
   // Download Jobs
-  listDownloadJobs: (params?: { status?: string; source?: string; subscription_id?: string; subscription_source_id?: string; q?: string; sort_by?: string; sort_order?: string; offset?: number; limit?: number }) => {
+  listDownloadJobs: (params?: { status?: string; source?: string; subscription_id?: string; subscription_source_id?: string; q?: string; visibility?: "actionable" | "all"; sort_by?: string; sort_order?: string; offset?: number; limit?: number }) => {
       const q = new URLSearchParams();
       if (params?.status) q.set("status", params.status);
       if (params?.source) q.set("source", params.source);
       if (params?.subscription_id) q.set("subscription_id", params.subscription_id);
       if (params?.subscription_source_id) q.set("subscription_source_id", params.subscription_source_id);
       if (params?.q) q.set("q", params.q);
+      if (params?.visibility) q.set("visibility", params.visibility);
       if (params?.sort_by) q.set("sort_by", params.sort_by);
       if (params?.sort_order) q.set("sort_order", params.sort_order);
       q.set("offset", String(params?.offset || 0));
@@ -328,7 +365,7 @@ export const api = {
   previewPurge: (workIds?: string[]) =>
     request<T.PurgePreviewResponse>("/api/v1/curation/purge/preview", { method: "POST", body: JSON.stringify({ work_ids: workIds }) }),
 
-  purgeWorks: (workIds?: string[], message?: string) =>
+  purgeWorks: (workIds: string[], message?: string) =>
     request<T.CurationCommit>("/api/v1/curation/purge", { method: "POST", body: JSON.stringify({ work_ids: workIds, message }) }),
 
   curationRuleSuggestions: () =>
@@ -341,8 +378,17 @@ export const api = {
     request<{ status: string; job_id: string }>("/api/v1/curation/backfill", { method: "POST" }),
 
   // Gitllery (on-disk curation history projection)
+  getGitllerySettings: () =>
+    request<T.GitllerySettings>("/api/v1/admin/gitllery/settings"),
+
   gitlleryStatus: () =>
     request<T.GitlleryStatus>("/api/v1/curation/gitllery/status"),
+
+  gitlleryVerify: (repositoryId: string, deep = false) =>
+    request<{ status: string; job_id: string }>("/api/v1/curation/gitllery/verify", {
+      method: "POST",
+      body: JSON.stringify({ repository_id: repositoryId, deep }),
+    }),
 
   gitlleryReconcile: (repositoryId?: string) =>
     request<T.GitlleryReconcileResponse>(
@@ -359,25 +405,15 @@ export const api = {
       { method: "POST" },
     ),
 
-  // Showcase
-  showcaseSample: (params: {
-    count?: number; scope?: string; source?: string | null; tag?: string | null; include_nsfw?: boolean;
-  } = {}) => {
-    const q = new URLSearchParams();
-    if (params.count) q.set("count", String(params.count));
-    if (params.scope) q.set("scope", params.scope);
-    if (params.source) q.set("source", params.source);
-    if (params.tag) q.set("tag", params.tag);
-    if (params.include_nsfw) q.set("include_nsfw", "true");
-    return request<T.ShowcaseSampleResponse>(`/api/v1/showcase/sample?${q.toString()}`);
-  },
-
   // Works
   ...worksApi,
 
   // Tags
   listTags: (offset = 0, limit = 100, sortBy = "usage_count", sortOrder = "desc") =>
     request<T.Tag[]>(`/api/v1/tags?offset=${offset}&limit=${limit}&sort_by=${sortBy}&sort_order=${sortOrder}`),
+
+  listAllTags: (sortBy = "usage_count", sortOrder = "desc") =>
+    request<T.Tag[]>(`/api/v1/tags?include_all=true&sort_by=${sortBy}&sort_order=${sortOrder}`),
 
   createTag: (data: { normalized_name: string; category?: string }) =>
     request<T.Tag>("/api/v1/tags", { method: "POST", body: JSON.stringify(data) }),
@@ -389,9 +425,17 @@ export const api = {
     request<{ status: string }>(`/api/v1/tags/${id}`, { method: "DELETE" }),
 
   // Search
-  search: (q: string, offset = 0, limit = 20, scope: T.SearchScope = "global") => {
+  search: (
+    q: string,
+    offset = 0,
+    limit = 20,
+    scope: T.SearchScope = "global",
+    signal?: AbortSignal,
+    cursor?: string | null,
+  ) => {
     const params = new URLSearchParams({ q, offset: String(offset), limit: String(limit), scope });
-    return request<T.SearchResponse>(`/api/v1/search?${params.toString()}`);
+    if (cursor) params.set("cursor", cursor);
+    return request<T.SearchResponse>(`/api/v1/search?${params.toString()}`, { signal });
   },
 
   assistSearch: (data: {
@@ -421,7 +465,7 @@ export const api = {
   getTagDetail: (id: string) => request<T.TagDetail>(`/api/v1/tags/${id}`),
 
   // Import Jobs
-  listImportJobs: (statusOrParams?: string | { status?: string; download_job_id?: string; q?: string; offset?: number; limit?: number }, offset = 0, limit = 50) => {
+  listImportJobs: (statusOrParams?: string | { status?: string; download_job_id?: string; q?: string; visibility?: "actionable" | "all"; offset?: number; limit?: number }, offset = 0, limit = 50) => {
     const params = typeof statusOrParams === "string" ? { status: statusOrParams, offset, limit } : (statusOrParams || { offset, limit });
     const q = new URLSearchParams();
     q.set("offset", String(params.offset ?? offset));
@@ -429,6 +473,7 @@ export const api = {
     if (params.status) q.set("status", params.status);
     if (params.download_job_id) q.set("download_job_id", params.download_job_id);
     if (params.q) q.set("q", params.q);
+    if (params.visibility) q.set("visibility", params.visibility);
     return request<{ total: number; items: T.ImportJob[] }>(`/api/v1/import-jobs?${q.toString()}`);
   },
 
@@ -520,8 +565,13 @@ export const api = {
     db_stats: Record<string, number>;
     checked_at: string;
   }>("/api/v1/admin/integrity-check"),
-  clearEntity: (entity: string) =>
-    request<{ status: string; message: string; deleted?: Record<string, number> }>(`/api/v1/admin/clear/${entity}`, { method: "POST" }),
+  clearEntity: (entity: T.ClearEntity, confirmation: string) =>
+    request<{ status: string; message: string; deleted?: Record<string, number> }>(`/api/v1/admin/clear/${entity}`, {
+      method: "POST",
+      body: JSON.stringify({ entity, confirmation }),
+    }),
+  previewClearEntity: (entity: T.ClearEntity) =>
+    request<T.ClearImpactPreview>(`/api/v1/admin/clear/preview/${entity}`),
 
   rebuildLibrary: (options: { mode?: "repair" | "full"; source?: string; creator_id?: string; work_id?: string; resume?: boolean } = {}) =>
     request<{ job_id: string; status: string; message: string }>("/api/v1/admin/library/rebuild", {
@@ -548,10 +598,10 @@ export const api = {
   listAdminOperations: () =>
     request<{ operations: { job_id: string; status: string; operation_type: string; progress?: { phase: string; label: string }; error?: string; updated_at: number }[] }>("/api/v1/admin/operations"),
 
-  startClearOperation: (entity: string) =>
+  startClearOperation: (entity: T.ClearEntity, confirmation: string) =>
     request<{ job_id: string; status: "queued" | "enqueued" }>("/api/v1/admin/operations/clear", {
       method: "POST",
-      body: JSON.stringify({ entity }),
+      body: JSON.stringify({ entity, confirmation }),
     }),
 
   getAdminOperationStatus: (jobId: string) =>
@@ -569,9 +619,10 @@ export const api = {
   resetSettings: () =>
     request<{ status: string; message: string }>("/api/v1/admin/reset-settings", { method: "POST" }),
 
-  triggerSyncNow: (mode: "force_eligible" | "due_scan" = "force_eligible") =>
+  triggerSyncNow: (mode: "force_eligible" | "due_scan" | "manual_all_enabled" = "force_eligible") =>
     request<{
-      status: string; message: string; task_id: string; mode: "force_eligible" | "due_scan";
+      status: string; message: string; task_id: string; mode: "force_eligible" | "due_scan" | "manual_all_enabled";
+      candidate_count?: number;
       enqueued_count: number; skipped_count: number; error_count?: number;
       skipped_reasons?: Record<string, number>; job_ids: string[]; task_ids?: string[];
     }>("/api/v1/admin/scheduler/sync-now", { method: "POST", body: JSON.stringify({ mode }) }),
@@ -617,6 +668,29 @@ export const api = {
     }>(`/api/v1/admin/dedup/scans/${id}`),
 
   // Danbooru Reference
+  refreshAllDanbooruMappings: () =>
+    request<{
+      status: "enqueued";
+      job_id: string;
+      operation_type: "danbooru-mapping-refresh";
+      message: string;
+    }>("/api/v1/reference/danbooru/mappings/refresh", { method: "POST" }),
+
+  getDanbooruMappingRefreshStatus: (jobId: string) =>
+    request<{
+      job_id: string;
+      status: "queued" | "enqueued" | "running" | "complete" | "failed";
+      operation_type: "danbooru-mapping-refresh";
+      progress?: { phase?: string; label?: string; current?: number; scanned?: number; total?: number };
+      result?: {
+        scanned: number; total: number; found: number; not_found: number;
+        errors: number; skipped: number; aborted: boolean;
+      };
+      error?: string;
+      meta?: Record<string, any>;
+      updated_at?: number;
+    }>(`/api/v1/reference/danbooru/mappings/refresh/${jobId}`),
+
   getDanbooruArtist: (artistId: number) =>
     request<{
       artist: { id: number; name: string; other_names: string[]; pixiv_display_name?: string | null };
@@ -742,6 +816,7 @@ export const queryKeys = {
   tasks: {
     all: ["tasks"] as const,
     detail: (id: string) => ["tasks", id] as const,
+    operations: (view: T.OperationsView) => ["tasks", "operations", view] as const,
   },
   creators: {
     all: ["creators"] as const,
@@ -757,6 +832,7 @@ export const queryKeys = {
     list: (page = 0, limit = 50, filters?: unknown) => ["subscriptions", "list", page, limit, filters || {}] as const,
     detail: (id: string) => ["subscriptions", id] as const,
     sources: (id: string) => ["subscriptions", id, "sources"] as const,
+    summaries: (ids: string[]) => ["subscriptions", "summaries", ids.join(",")] as const,
   },
   repositories: {
     detail: (id: string) => ["repositories", id] as const,
@@ -772,11 +848,9 @@ export const queryKeys = {
   },
   gitllery: {
     all: ["gitllery"] as const,
+    settings: ["gitllery", "settings"] as const,
     status: ["gitllery", "status"] as const,
     log: (repositoryId: string) => ["gitllery", "log", repositoryId] as const,
-  },
-  showcase: {
-    sample: (params: Record<string, unknown>) => ["showcase", "sample", params] as const,
   },
   downloadJobs: {
     all: ["download-jobs"] as const,

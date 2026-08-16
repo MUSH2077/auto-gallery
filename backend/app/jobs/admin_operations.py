@@ -7,14 +7,16 @@ import logging
 
 from app.database import async_session
 from app.services.admin_data import clear_entity_data
-from app.services.operations import set_operation_status
+from app.services.operations import release_owned_operation_lock, set_operation_status
+from app.services.heavy_io import run_heavy_io_operation
 
 logger = logging.getLogger(__name__)
 
 
 def run_clear_operation(entity: str, job_id: str) -> dict:
     """Entry point for RQ workers."""
-    return asyncio.run(_run_clear_operation(entity, job_id))
+    return asyncio.run(run_heavy_io_operation(
+        "operation:clear", job_id, lambda: _run_clear_operation(entity, job_id)))
 
 
 async def _run_clear_operation(entity: str, job_id: str) -> dict:
@@ -81,7 +83,9 @@ async def _run_clear_operation(entity: str, job_id: str) -> dict:
 
 def run_library_rebuild_operation(job_id: str, options: dict | None = None) -> dict:
     """Entry point for RQ workers — rebuild /library/ from DB."""
-    return asyncio.run(_run_library_rebuild_operation(job_id, options or {}))
+    return asyncio.run(run_heavy_io_operation(
+        "operation:library-rebuild", job_id,
+        lambda: _run_library_rebuild_operation(job_id, options or {})))
 
 
 async def _run_library_rebuild_operation(job_id: str, options: dict) -> dict:
@@ -138,16 +142,14 @@ async def _run_library_rebuild_operation(job_id: str, options: dict) -> dict:
     finally:
         from app.services.redis_client import get_redis
         redis = get_redis()
-        current = redis.get("library:rebuild:active")
-        if isinstance(current, bytes):
-            current = current.decode()
-        if current == job_id:
-            redis.delete("library:rebuild:active")
+        release_owned_operation_lock(redis, "library:rebuild:active", job_id)
 
 
 def run_disk_import_operation(job_id: str, options: dict | None = None) -> dict:
     """Entry point for RQ workers — import on-disk download files into the DB."""
-    return asyncio.run(_run_disk_import_operation(job_id, options or {}))
+    return asyncio.run(run_heavy_io_operation(
+        "operation:disk-import", job_id,
+        lambda: _run_disk_import_operation(job_id, options or {})))
 
 
 async def _run_disk_import_operation(job_id: str, options: dict) -> dict:
@@ -206,84 +208,44 @@ async def _run_disk_import_operation(job_id: str, options: dict) -> dict:
     finally:
         from app.services.redis_client import get_redis
         redis = get_redis()
-        current = redis.get("library:disk-import:active")
-        if isinstance(current, bytes):
-            current = current.decode()
-        if current == job_id:
-            redis.delete("library:disk-import:active")
+        release_owned_operation_lock(redis, "library:disk-import:active", job_id)
 
 
 def run_gitllery_rebuild_operation(job_id: str, options: dict | None = None) -> dict:
-    """Entry point for RQ workers — restore manual curation from .gitllery into the DB."""
-    return asyncio.run(_run_gitllery_rebuild_operation(job_id, options or {}))
+    """Rolling-upgrade safety: never restore disk directly into public DB."""
 
-
-async def _run_gitllery_rebuild_operation(job_id: str, options: dict) -> dict:
-    from app.services.gitllery import GitlleryService
-    from uuid import UUID
-    from app.services.tasks import TaskService
-    async with async_session() as task_db:
-        svc = TaskService(task_db)
-        task = await svc.get(UUID(job_id))
-        if task:
-            await svc.update_task(
-                task,
-                status="running",
-                progress={"phase": "running", "label": "Restoring curation from disk..."},
-            )
-            await task_db.commit()
-    set_operation_status(job_id, "running", "admin-gitllery-rebuild",
-        progress={"phase": "running", "label": "Restoring curation from disk..."},
-        meta={"entity": "gitllery-rebuild", **options})
-    try:
-        async with async_session() as db:
-            result = await GitlleryService(db).rebuild_db_from_disk(options.get("repository_id"), dry_run=False)
-        label = f"Restored {result['commits_restored']} commits, {result['states_applied']} states"
-        async with async_session() as task_db:
-            svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if task:
-                await svc.update_task(
-                    task,
-                    status="complete",
-                    progress={"phase": "complete", "label": label},
-                    result=result,
-                )
-                await task_db.commit()
-        set_operation_status(job_id, "complete", "admin-gitllery-rebuild",
-            progress={"phase": "complete", "label": label},
-            result=result, meta={"entity": "gitllery-rebuild", **options})
-        return result
-    except Exception as exc:
-        logger.exception("Gitllery rebuild failed: job_id=%s", job_id)
-        async with async_session() as task_db:
-            svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if task:
-                await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
-                await task_db.commit()
-        set_operation_status(job_id, "failed", "admin-gitllery-rebuild",
-            progress={"phase": "failed"}, error=str(exc), meta={"entity": "gitllery-rebuild", **options})
-        raise
-    finally:
-        from app.services.redis_client import get_redis
-        redis = get_redis()
-        current = redis.get("library:gitllery-rebuild:active")
-        if isinstance(current, bytes):
-            current = current.decode()
-        if current == job_id:
-            redis.delete("library:gitllery-rebuild:active")
+    raise RuntimeError(
+        "legacy Gitllery rebuild is retired; use v1 staged restore"
+    )
 
 
 def run_creator_reenrich_operation(job_id: str, options: dict | None = None) -> dict:
-    """Entry point for RQ workers — retry Danbooru mapping for flagged creators."""
-    return asyncio.run(_run_creator_reenrich_operation(job_id, options or {}))
+    """Entry point for RQ workers — refresh Danbooru creator mappings."""
+    return asyncio.run(run_heavy_io_operation(
+        "operation:creator-reenrich", job_id,
+        lambda: _run_creator_reenrich_operation(job_id, options or {})))
 
 
 async def _run_creator_reenrich_operation(job_id: str, options: dict) -> dict:
     from uuid import UUID
-    from app.services.creator_enrichment import reenrich_pending
+    from app.services.creator_enrichment import (
+        reenrich_pending,
+        refresh_all_creator_mappings,
+    )
     from app.services.tasks import TaskService
+
+    refresh_all = options.get("scope") == "all"
+    operation_type = (
+        "danbooru-mapping-refresh"
+        if refresh_all
+        else "admin-creator-reenrich"
+    )
+    entity = "creators" if refresh_all else "creator-reenrich"
+    running_label = (
+        "Refreshing all Danbooru mappings..."
+        if refresh_all
+        else "Searching Danbooru..."
+    )
 
     async with async_session() as task_db:
         svc = TaskService(task_db)
@@ -292,39 +254,51 @@ async def _run_creator_reenrich_operation(job_id: str, options: dict) -> dict:
             await svc.update_task(
                 task,
                 status="running",
-                progress={"phase": "running", "label": "Searching Danbooru..."},
+                progress={"phase": "running", "label": running_label},
             )
             await task_db.commit()
-    set_operation_status(job_id, "running", "admin-creator-reenrich",
-        progress={"phase": "running", "label": "Searching Danbooru..."},
-        meta={"entity": "creator-reenrich", **options})
+    set_operation_status(job_id, "running", operation_type,
+        progress={"phase": "running", "label": running_label},
+        meta={"entity": entity, **options})
     try:
         def update_progress(progress: dict):
-            set_operation_status(job_id, "running", "admin-creator-reenrich",
+            set_operation_status(job_id, "running", operation_type,
                 progress={**progress,
                           "label": f"Mapped {progress.get('found', 0)} of {progress.get('scanned', 0)} scanned"},
-                meta={"entity": "creator-reenrich", **options})
+                meta={"entity": entity, **options})
 
         async with async_session() as db:
-            result = await reenrich_pending(db, progress_cb=update_progress)
+            if refresh_all:
+                result = await refresh_all_creator_mappings(
+                    db,
+                    progress_cb=update_progress,
+                )
+            else:
+                result = await reenrich_pending(db, progress_cb=update_progress)
 
         label = f"Mapped {result['found']} creators ({result['not_found']} not on Danbooru)"
+        terminal_status = "complete"
+        terminal_error = None
         if result.get("aborted"):
             label += " — aborted: Danbooru unreachable"
+            terminal_status = "failed"
+            terminal_error = "Danbooru became unavailable; partial results were retained"
         async with async_session() as task_db:
             svc = TaskService(task_db)
             task = await svc.get(UUID(job_id))
             if task:
                 await svc.update_task(
                     task,
-                    status="complete",
-                    progress={"phase": "complete", "label": label},
+                    status=terminal_status,
+                    progress={"phase": terminal_status, "label": label},
                     result=result,
+                    error=terminal_error,
                 )
                 await task_db.commit()
-        set_operation_status(job_id, "complete", "admin-creator-reenrich",
-            progress={"phase": "complete", "label": label},
-            result=result, meta={"entity": "creator-reenrich", **options})
+        set_operation_status(job_id, terminal_status, operation_type,
+            progress={"phase": terminal_status, "label": label},
+            result=result, error=terminal_error,
+            meta={"entity": entity, **options})
         if result.get("found"):
             from app.services.cache import invalidate_api_caches, invalidate_creator_subscription_caches
             invalidate_api_caches("creators")
@@ -338,29 +312,122 @@ async def _run_creator_reenrich_operation(job_id: str, options: dict) -> dict:
             if task:
                 await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
                 await task_db.commit()
-        set_operation_status(job_id, "failed", "admin-creator-reenrich",
-            progress={"phase": "failed"}, error=str(exc), meta={"entity": "creator-reenrich", **options})
+        set_operation_status(job_id, "failed", operation_type,
+            progress={"phase": "failed"}, error=str(exc), meta={"entity": entity, **options})
         raise
     finally:
         from app.services.redis_client import get_redis
         redis = get_redis()
-        current = redis.get("library:creator-reenrich:active")
-        if isinstance(current, bytes):
-            current = current.decode()
-        if current == job_id:
-            redis.delete("library:creator-reenrich:active")
+        release_owned_operation_lock(
+            redis,
+            "library:creator-reenrich:active",
+            job_id,
+        )
 
 
 def run_gitllery_sync_operation(job_id: str, options: dict | None = None) -> dict:
-    """Entry point for RQ workers — project pending curation commits to disk
-    (reconcile), optionally ensuring every repo exists first (backfill)."""
-    return asyncio.run(_run_gitllery_sync_operation(job_id, options or {}))
+    """Rolling-upgrade bridge to one bounded v1 segment projection slice."""
+
+    from app.jobs.gitllery_projection import run_gitllery_projection_outbox
+    from app.services.redis_client import get_redis
+
+    try:
+        return run_gitllery_projection_outbox(limit=25, max_seconds=20.0)
+    finally:
+        release_owned_operation_lock(
+            get_redis(),
+            "library:gitllery-sync:active",
+            job_id,
+        )
+
+
+def run_gitllery_verify_operation(job_id: str, options: dict | None = None) -> dict:
+    return asyncio.run(_run_gitllery_verify_operation(job_id, options or {}))
+
+
+async def _run_gitllery_verify_operation(job_id: str, options: dict) -> dict:
+    from uuid import UUID
+    from app.services.gitllery import GitlleryService
+    from app.services.tasks import TaskService
+
+    repository_id = str(options.get("repository_id") or "")
+    deep = bool(options.get("deep"))
+    async with async_session() as db:
+        task_service = TaskService(db)
+        task = await task_service.get(UUID(job_id))
+        if task:
+            await task_service.update_task(
+                task,
+                status="running",
+                progress={"phase": "running", "label": "Verifying Gitllery repository"},
+            )
+            await db.commit()
+    set_operation_status(
+        job_id,
+        "running",
+        "admin-gitllery-verify",
+        progress={"phase": "running", "label": "Verifying Gitllery repository"},
+        meta={"entity": "gitllery-verify", **options},
+    )
+    try:
+        async with async_session() as db:
+            result = await GitlleryService(db).verify_segment_repository(
+                repository_id,
+                deep=deep,
+            )
+        status = "complete" if result["ok"] else "failed"
+        async with async_session() as db:
+            task_service = TaskService(db)
+            task = await task_service.get(UUID(job_id))
+            if task:
+                await task_service.update_task(
+                    task,
+                    status=status,
+                    progress={"phase": status, "label": "Gitllery verification finished"},
+                    result=result,
+                    error=None if result["ok"] else "; ".join(result["errors"]),
+                )
+                await db.commit()
+        set_operation_status(
+            job_id,
+            status,
+            "admin-gitllery-verify",
+            progress={"phase": status, "label": "Gitllery verification finished"},
+            result=result,
+            error=None if result["ok"] else "; ".join(result["errors"]),
+            meta={"entity": "gitllery-verify", **options},
+        )
+        if not result["ok"]:
+            raise RuntimeError("Gitllery verification failed")
+        return result
+    except Exception as exc:
+        logger.exception("Gitllery verification failed: job_id=%s", job_id)
+        set_operation_status(
+            job_id,
+            "failed",
+            "admin-gitllery-verify",
+            progress={"phase": "failed"},
+            error=str(exc),
+            meta={"entity": "gitllery-verify", **options},
+        )
+        raise
+    finally:
+        from app.services.redis_client import get_redis
+
+        release_owned_operation_lock(
+            get_redis(),
+            f"gitllery:verify:{repository_id}",
+            job_id,
+        )
 
 
 async def _run_gitllery_sync_operation(job_id: str, options: dict) -> dict:
     from uuid import UUID
     from app.services.gitllery import GitlleryService
-    from app.services.gitllery.service import rebuild_checkpoint
+    from app.services.gitllery.service import (
+        gitllery_projection_lock,
+        rebuild_checkpoint,
+    )
     from app.services.tasks import TaskService
 
     mode = options.get("mode") or "reconcile"
@@ -380,22 +447,34 @@ async def _run_gitllery_sync_operation(job_id: str, options: dict) -> dict:
         progress={"phase": "running", "label": "Projecting curation history..."},
         meta={"entity": "gitllery-sync", **options})
     try:
-        async with async_session() as db:
-            svc = GitlleryService(db)
-            if mode == "backfill":
-                projected = await svc.backfill()
-            else:
-                projected = await svc.project_pending(repository_id)
-            # A completed LIBRARY-WIDE sync means every commit is projected —
-            # re-establish the status checkpoint so the API's tail fast path
-            # works again (status has no full-history fallback by design).
-            checkpoint_set = False
-            if repository_id is None:
-                checkpoint_set = await rebuild_checkpoint(db)
+        ordering_lock = gitllery_projection_lock()
+        if not ordering_lock.try_acquire():
+            raise RuntimeError("Another Gitllery projection coordinator is active")
+        try:
+            async with async_session() as db:
+                svc = GitlleryService(db)
+                if mode == "backfill":
+                    projected = await svc.backfill(resource_owner=job_id)
+                else:
+                    projected = await svc.project_pending(
+                        repository_id,
+                        resource_owner=job_id,
+                    )
+                # Scoped requests are promoted by project_pending() to one
+                # globally ordered pass, because a commit outbox row can span
+                # multiple repositories. Re-establish the library checkpoint
+                # after either entry point.
+                checkpoint_set = await rebuild_checkpoint(
+                    db,
+                    svc.last_projection_high_water,
+                )
+        finally:
+            ordering_lock.release()
 
         result = {
             "mode": mode,
             "repository_id": repository_id,
+            "projection_scope": "library",
             "projected_repos": len(projected),
             "projected_commits": sum(projected.values()),
             "checkpoint_rebuilt": checkpoint_set,
@@ -430,15 +509,18 @@ async def _run_gitllery_sync_operation(job_id: str, options: dict) -> dict:
     finally:
         from app.services.redis_client import get_redis
         redis = get_redis()
-        current = redis.get("library:gitllery-sync:active")
-        if isinstance(current, bytes):
-            current = current.decode()
-        if current == job_id:
-            redis.delete("library:gitllery-sync:active")
+        release_owned_operation_lock(
+            redis,
+            "library:gitllery-sync:active",
+            job_id,
+        )
 
 
 def run_search_reindex_operation(job_id: str, options: dict | None = None) -> dict:
     """Entry point for RQ workers — full Meilisearch reindex (works/creators/tags)."""
+    # SearchService owns bounded search_index slices and takes maintenance only
+    # for the atomic swap.  Wrapping the coordinator in the legacy operation
+    # lock would otherwise serialize all 67k documents behind one long lease.
     return asyncio.run(_run_search_reindex_operation(job_id, options or {}))
 
 
@@ -462,21 +544,24 @@ async def _run_search_reindex_operation(job_id: str, options: dict) -> dict:
         meta={"entity": "search-reindex", **options})
     try:
         async with async_session() as db:
-            result = await SearchService(db).reindex()
+            result = await SearchService(db).reindex(resource_owner=job_id)
         label = result.get("message") or "Search reindex complete"
+        operation_status = (
+            "complete" if result.get("status") == "ok" else "failed"
+        )
         async with async_session() as task_db:
             svc = TaskService(task_db)
             task = await svc.get(UUID(job_id))
             if task:
                 await svc.update_task(
                     task,
-                    status="complete" if result.get("status") == "ok" else "failed",
-                    progress={"phase": "complete", "label": label},
+                    status=operation_status,
+                    progress={"phase": operation_status, "label": label},
                     result=result,
                 )
                 await task_db.commit()
-        set_operation_status(job_id, "complete", "admin-search-reindex",
-            progress={"phase": "complete", "label": label},
+        set_operation_status(job_id, operation_status, "admin-search-reindex",
+            progress={"phase": operation_status, "label": label},
             result=result, meta={"entity": "search-reindex", **options})
         return result
     except Exception as exc:
@@ -493,11 +578,11 @@ async def _run_search_reindex_operation(job_id: str, options: dict) -> dict:
     finally:
         from app.services.redis_client import get_redis
         redis = get_redis()
-        current = redis.get("library:search-reindex:active")
-        if isinstance(current, bytes):
-            current = current.decode()
-        if current == job_id:
-            redis.delete("library:search-reindex:active")
+        release_owned_operation_lock(
+            redis,
+            "library:search-reindex:active",
+            job_id,
+        )
 
 
 def run_curation_backfill_operation(job_id: str, options: dict | None = None) -> dict:
@@ -525,7 +610,9 @@ async def _run_curation_backfill_operation(job_id: str, options: dict) -> dict:
         meta={"entity": "curation-backfill", **options})
     try:
         async with async_session() as db:
-            result = await CurationService(db).run_backfill()
+            result = await CurationService(db).run_backfill(
+                resource_owner=job_id,
+            )
         created = result.get("created", {})
         label = (f"Baseline: {created.get('creators', 0)} creators, "
                  f"{created.get('repositories', 0)} repos, {created.get('work_groups', 0)} work groups")
@@ -558,8 +645,8 @@ async def _run_curation_backfill_operation(job_id: str, options: dict) -> dict:
     finally:
         from app.services.redis_client import get_redis
         redis = get_redis()
-        current = redis.get("library:curation-backfill:active")
-        if isinstance(current, bytes):
-            current = current.decode()
-        if current == job_id:
-            redis.delete("library:curation-backfill:active")
+        release_owned_operation_lock(
+            redis,
+            "library:curation-backfill:active",
+            job_id,
+        )

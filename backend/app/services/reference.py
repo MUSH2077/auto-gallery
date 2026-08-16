@@ -14,6 +14,7 @@ from app.models.creator_link import CreatorLink
 from app.models.source_creator import SourceCreator
 from app.services import danbooru as danbooru_svc
 from app.services.redis_client import get_redis
+from app.services.queue_admission import checked_enqueue, ensure_redis_enqueue_capacity
 from app.services.operations import set_operation_status
 
 logger = logging.getLogger(__name__)
@@ -145,13 +146,38 @@ class ReferenceService:
         if not source_url and not pixiv_id and not artist_name:
             raise ValueError("At least one of url, pixiv_id, or name is required")
 
+        redis = get_redis()
+        ensure_redis_enqueue_capacity(redis)
         job_id = str(uuid.uuid4())
-        set_operation_status(job_id, "queued", "danbooru-import-all",
-                             progress={"phase": "queued", "label": "Queued Danbooru import"},
-                             meta={"name": artist_name, "pixiv_id": pixiv_id})
-        queue = Queue(name="imports", connection=get_redis())
-        rq_job = queue.enqueue("app.jobs.danbooru_import.run_import_all_danbooru", data, job_id,
-                               job_timeout=3600, result_ttl=7200)
+        queue = Queue(name="imports", connection=redis)
+        try:
+            set_operation_status(job_id, "queued", "danbooru-import-all",
+                                 progress={"phase": "queued", "label": "Queued Danbooru import"},
+                                 meta={"name": artist_name, "pixiv_id": pixiv_id})
+            rq_job = checked_enqueue(
+                queue,
+                "app.jobs.danbooru_import.run_import_all_danbooru",
+                data,
+                job_id,
+                job_timeout=3600,
+                result_ttl=7200,
+            )
+        except Exception as exc:
+            try:
+                set_operation_status(
+                    job_id,
+                    "failed",
+                    "danbooru-import-all",
+                    progress={"phase": "failed", "label": "Queue publication failed"},
+                    error=str(exc),
+                )
+            except Exception:
+                logger.warning(
+                    "Unable to compensate Danbooru import queue failure job=%s",
+                    job_id,
+                    exc_info=True,
+                )
+            raise
         logger.info("Enqueued Danbooru import-all operation job_id=%s rq_job=%s", job_id, rq_job.id)
         return {"job_id": job_id, "status": "queued"}
 

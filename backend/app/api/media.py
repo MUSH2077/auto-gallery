@@ -10,6 +10,7 @@ from app.models.asset import Asset
 from app.models.asset_dedup import VisualAssetGroup, VisualAssetMember
 from app.models.curation import AssetStorageState
 from app.services.media_signing import verify_media_token
+from app.services.media_derivatives import request_media_derivatives
 
 router = APIRouter()
 
@@ -76,9 +77,39 @@ async def _serve(asset_id: str, size: str):
                 full = _safe_path(_RESOLVED_LIBRARY_ROOT, relative_path)
                 if full.exists():
                     return FileResponse(full, media_type="image/webp")
+            try:
+                source = _safe_path(_RESOLVED_DOWNLOAD_ROOT, asset.file_path)
+                stat = source.stat()
+            except (OSError, HTTPException):
+                stat = None
+            if stat is not None:
+                await request_media_derivatives(
+                    db,
+                    [
+                        {
+                            "asset_id": asset.id,
+                            "requested": {
+                                "thumbnail": True,
+                                "dimensions": True,
+                                "video": size == "poster",
+                            },
+                            "source_size": stat.st_size,
+                            "source_mtime_ns": stat.st_mtime_ns,
+                        }
+                    ],
+                )
+                await db.commit()
             raise HTTPException(
                 status_code=404,
-                detail="Thumbnail not found" if size == "thumb" else "Poster not found",
+                detail={
+                    "code": "derivative_pending" if stat is not None else "derivative_missing",
+                    "message": (
+                        "Thumbnail is being generated"
+                        if size == "thumb"
+                        else "Poster is being generated"
+                    ),
+                    "derivative_status": "pending" if stat is not None else "failed",
+                },
             )
         else:
             full = _safe_path(_RESOLVED_DOWNLOAD_ROOT, asset.file_path)

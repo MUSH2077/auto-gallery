@@ -57,7 +57,7 @@ def _clear_gitllery_status_cache():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_status_and_reconcile_endpoints(tmp_path, monkeypatch):
+async def test_status_and_reconcile_endpoints_are_shadow_safe(tmp_path, monkeypatch):
     from app.database import async_session, engine
     from app.main import app
     from app.services.curation import CurationService
@@ -83,31 +83,25 @@ async def test_status_and_reconcile_endpoints(tmp_path, monkeypatch):
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            # No checkpoint → pending unknown; the API must not full-walk inline.
-            r = await client.get("/api/v1/curation/gitllery/status", headers=headers)
-            assert r.status_code == 200
-            assert r.json()["needs_reconcile"] is True
-
-            # reconcile is queued work now.
-            r = await client.post("/api/v1/curation/gitllery/reconcile", headers=headers)
-            assert r.status_code == 200
-            body = r.json()
-            assert body["status"] == "enqueued" and body["job_id"]
-
-        # Run the queued job inline (what worker-operations would do) and
-        # verify it projects + re-establishes the checkpoint.
-        monkeypatch.setattr(gsvc, "_CHECKPOINT_CLAMP_SECONDS", 0)
-        from app.jobs.admin_operations import _run_gitllery_sync_operation
-        result = await _run_gitllery_sync_operation(
-            body["job_id"], {"mode": "reconcile", "repository_id": None})
-        assert result["projected_commits"] >= 1
-        assert result["checkpoint_rebuilt"] is True
-
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Shadow mode reports the bounded v1 segment projection without a
+            # legacy full-history checkpoint walk.
             r = await client.get("/api/v1/curation/gitllery/status", headers=headers)
             assert r.status_code == 200
             assert r.json()["needs_reconcile"] is False
-            assert r.json()["behind_total"] == 0
+
+            # Production rollout keeps Gitllery v1 visible but refuses every
+            # full-history/projection maintenance mutation in shadow mode.
+            r = await client.post("/api/v1/curation/gitllery/reconcile", headers=headers)
+            assert r.status_code == 409
+            assert r.json()["detail"]["code"] == "gitllery_shadow_only"
+            for command in ("push", "pull"):
+                r = await client.post(
+                    f"/api/v1/curation/gitllery/{command}",
+                    headers=headers,
+                    json={"repository_id": "fixture", "product_version": "v1"},
+                )
+                assert r.status_code == 409
+                assert r.json()["detail"]["code"] == "gitllery_shadow_only"
     finally:
         async with async_session() as db:
             await _clear(db)
@@ -172,7 +166,8 @@ async def test_rebuild_endpoint_dry_run(tmp_path, monkeypatch):
             assert r.status_code == 200
             body = r.json()
             assert body["dry_run"] is True
-            assert body["commits_restored"] >= 1
+            assert body["projection_mode"] == "shadow"
+            assert body["legacy_layout_will_remain_read_only"] is True
     finally:
         async with async_session() as db:
             await _clear(db)

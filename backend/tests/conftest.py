@@ -85,6 +85,12 @@ def _provision_main_test_database() -> None:
             )
             if not exists:
                 await conn.execute(f'CREATE DATABASE "{db_name}"')
+            # Test databases are disposable and recreated from authoritative
+            # metadata. Avoid NAS fsync latency on every fixture COMMIT while
+            # preserving production PostgreSQL durability settings.
+            await conn.execute(
+                f'ALTER DATABASE "{db_name}" SET synchronous_commit TO off'
+            )
         finally:
             await conn.close()
 
@@ -174,6 +180,9 @@ async def test_database(test_database_url, test_db_base_url):
     try:
         await conn.execute(f"DROP DATABASE IF EXISTS {db_name}")
         await conn.execute(f"CREATE DATABASE {db_name}")
+        await conn.execute(
+            f'ALTER DATABASE "{db_name}" SET synchronous_commit TO off'
+        )
     finally:
         await conn.close()
 

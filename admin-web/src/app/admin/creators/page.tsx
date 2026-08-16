@@ -11,6 +11,7 @@ import { useI18nFormat } from "@/lib/i18n-format";
 import { useToast } from "@/components/Toast";
 import { usePermissions } from "@/lib/usePermissions";
 import { Star } from "lucide-react";
+import DomainDangerZone from "@/components/DomainDangerZone";
 
 type FilterMode = "all" | "active" | "inactive" | "has_danbooru" | "has_subscription" | "no_subscription" | "favorites";
 
@@ -393,6 +394,11 @@ function CreatorsContent() {
       </Modal>
       {deleteId && <ConfirmDialog open title={t("creators.delete_title")} message={t("creators.delete_msg")} onConfirm={() => del.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={del.isPending} error={(del.error as Error)?.message} />}
       {confirmBatchDel && <ConfirmDialog open title={t("creators.batch_delete_title")} message={t("creators.batch_delete_msg").replace("{count}", String(selected.size))} onConfirm={() => batchDel.mutate([...selected])} onCancel={() => setConfirmBatchDel(false)} isPending={batchDel.isPending} error={(batchDel.error as Error)?.message} />}
+      <DomainDangerZone
+        entity="creators"
+        title={t("datamgmt.danger_clear_creators")}
+        description={t("datamgmt.danger_clear_creators_desc")}
+      />
     </PageShell>
   );
 }

@@ -13,10 +13,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  backend:
-    name: Backend checks
+  backend-static:
+    name: Backend static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+      - name: Install Python dependencies
+        working-directory: backend
+        run: pip install --require-hashes -r requirements.txt
+      - name: Audit Python dependencies
+        uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
+        with:
+          inputs: backend/requirements.txt
+          require-hashes: true
+      - name: Lint backend
+        working-directory: backend
+        run: ruff check app tests
+      - name: Check generated API contracts
+        working-directory: backend
+        env:
+          SECRET_KEY: ci-secret-key-32chars-minimum-value
+          ADMIN_PASSWORD: ci-admin-password
+          DATABASE_URL: postgresql+asyncpg://autogallery:test-db@localhost:5432/autogallery
+          REDIS_URL: redis://localhost:6379/0
+          MEILI_MASTER_KEY: ci-meilisearch-master-key-32chars
+        run: python scripts/export_api_contracts.py --check
+
+  backend-tests:
+    name: Backend tests (${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [a-f, gitllery, imports-c-l, imports-m-r, jobs, large-library, manual-upload-validation, manual-upload-linking, manual-upload-import-images, manual-upload-import-video, media-migrations, n-z]
     services:
       postgres:
         image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
@@ -48,33 +84,71 @@ jobs:
           cache: "pip"
           cache-dependency-path: backend/requirements.txt
       - name: Install system dependencies
+        if: >-
+          ${{ matrix.shard == 'media-migrations' }}
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvips-dev ffmpeg
       - name: Install Python dependencies
         working-directory: backend
         run: pip install --require-hashes -r requirements.txt
-      - name: Audit Python dependencies
-        uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
-        with:
-          inputs: backend/requirements.txt
-          require-hashes: true
-      - name: Lint backend
-        working-directory: backend
-        run: ruff check app tests
-      - name: Run tests
+      - name: Run test shard
         working-directory: backend
         env:
           DATABASE_URL: postgresql+asyncpg://autogallery:test-db@localhost:5432/autogallery
           REDIS_URL: redis://localhost:6379/0
-        run: python -m pytest
-      - name: Check generated API contracts
-        working-directory: backend
+        run: |
+          shopt -s nullglob
+          case "${{ matrix.shard }}" in
+            a-f) test_files=(tests/test_{a,b,c,d,e,f}*.py) ;;
+            gitllery) test_files=(tests/test_g*.py) ;;
+            imports-c-l) test_files=(tests/test_import_{c,d,e,f,g,h,i,j,k,l}*.py) ;;
+            imports-m-r) test_files=(tests/test_import_{m,n,o,p,q,r}*.py) ;;
+            jobs) test_files=(tests/test_j*.py) ;;
+            large-library) test_files=(tests/test_l*.py) ;;
+            manual-upload-validation)
+              test_files=(
+                tests/test_manual_upload.py::test_save_upload_happy_path
+                tests/test_manual_upload.py::test_save_upload_rejects_bad_magic_bytes
+                tests/test_manual_upload.py::test_save_upload_rejects_disallowed_extension
+                tests/test_manual_upload.py::test_save_upload_quota_exceeded
+                tests/test_manual_upload.py::test_save_upload_creator_id_without_curation_is_forbidden
+              )
+              ;;
+            manual-upload-linking)
+              test_files=(
+                tests/test_manual_upload.py::test_save_upload_creator_id_with_curation_links_target_creator
+                tests/test_manual_upload.py::test_save_upload_personal_space_reused_across_two_uploads
+              )
+              ;;
+            manual-upload-import-images)
+              test_files=(
+                tests/test_manual_upload.py::test_save_upload_runs_through_real_import_runner
+                tests/test_manual_upload.py::test_save_upload_honors_manual_is_nsfw_flag
+              )
+              ;;
+            manual-upload-import-video)
+              test_files=(
+                tests/test_manual_upload.py::test_save_upload_video_asset_imports_through_real_import_runner
+              )
+              ;;
+            media-migrations) test_files=(tests/test_media*.py tests/test_migrations*.py) ;;
+            n-z) test_files=(tests/test_{n,o,p,q,r,s,t,u,v,w,x,y,z}*.py) ;;
+          esac
+          python -m pytest "${test_files[@]}"
+
+  backend:
+    name: Backend checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [backend-static, backend-tests]
+    if: ${{ always() }}
+    steps:
+      - name: Verify backend checks
         env:
-          SECRET_KEY: ci-secret-key-32chars-minimum-value
-          ADMIN_PASSWORD: ci-admin-password
-          DATABASE_URL: postgresql+asyncpg://autogallery:test-db@localhost:5432/autogallery
-          REDIS_URL: redis://localhost:6379/0
-          MEILI_MASTER_KEY: ci-meilisearch-master-key-32chars
-        run: python scripts/export_api_contracts.py --check
+          STATIC_RESULT: ${{ needs.backend-static.result }}
+          TEST_RESULT: ${{ needs.backend-tests.result }}
+        run: |
+          test "$STATIC_RESULT" = success
+          test "$TEST_RESULT" = success
 
   admin-web:
     name: Admin checks
@@ -192,6 +266,8 @@ jobs:
         run: scripts/privacy-scan.sh
       - name: Validate Docker Compose config
         run: docker compose --env-file .env.ci config --quiet
+      - name: Validate queue, governance, and Gitllery v1 contracts
+        run: python3 scripts/check-governance-contracts.py
       - name: Build release package dry run
         run: |
           archive="$(scripts/package-release.sh ci)"

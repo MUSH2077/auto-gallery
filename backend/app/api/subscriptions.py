@@ -1,7 +1,7 @@
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from app.auth import RequirePermission
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,9 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
-from app.schemas.subscription import SubscriptionCreate, SubscriptionRead, SubscriptionUpdate
+from app.schemas.subscription import (
+    SubscriptionCreate,
+    SubscriptionRead,
+    SubscriptionSummariesResponse,
+    SubscriptionUpdate,
+)
 from app.schemas.subscription_source import SubscriptionSourceCreate, SubscriptionSourceRead, SubscriptionSourceUpdate
-from app.services.subscription import SubscriptionService
+from app.services.subscription import SubscriptionService, SubscriptionValidationError
 from app.services.search import SearchBackendUnavailable, SearchService
 from app.services.search_language import SearchQueryError
 from app.services.cache import (
@@ -65,7 +70,6 @@ async def batch_delete_subscriptions(data: dict, db: AsyncSession = Depends(get_
     ids = data.get("ids", [])
     svc = SubscriptionService(db)
     results = []
-    changed = False
     for sid in ids:
         try:
             subscription_id = UUID(sid)
@@ -74,17 +78,13 @@ async def batch_delete_subscriptions(data: dict, db: AsyncSession = Depends(get_
             continue
         try:
             await svc.delete_subscription(subscription_id)
-            await SearchService(db).delete_subscription(str(subscription_id))
             results.append({"id": sid, "status": "deleted"})
-            changed = True
         except ValueError:
             results.append({"id": sid, "status": "error", "error": "not_found"})
         except Exception:
             logger.warning("batch subscription delete failed for %s", sid, exc_info=True)
             results.append({"id": sid, "status": "error", "error": "internal_error"})
     invalidate_creator_subscription_caches()
-    if changed:
-        await SearchService(db).refresh_reference_indexes()
     return {"status": "ok", "results": results}
 
 
@@ -95,7 +95,6 @@ async def batch_toggle_sync(data: dict, db: AsyncSession = Depends(get_db)):
     enabled = data.get("sync_enabled", True)
     svc = SubscriptionService(db)
     results = []
-    changed = False
     for sid in ids:
         try:
             subscription_id = UUID(sid)
@@ -105,16 +104,32 @@ async def batch_toggle_sync(data: dict, db: AsyncSession = Depends(get_db)):
         try:
             await svc.update_subscription(subscription_id, {"sync_enabled": enabled})
             results.append({"id": sid, "status": "updated", "sync_enabled": enabled})
-            changed = True
         except ValueError:
             results.append({"id": sid, "status": "error", "error": "not_found"})
         except Exception:
             logger.warning("batch subscription update failed for %s", sid, exc_info=True)
             results.append({"id": sid, "status": "error", "error": "internal_error"})
     invalidate_api_caches("subscriptions", "creators")
-    if changed:
-        await SearchService(db).refresh_reference_indexes()
     return {"status": "ok", "results": results}
+
+
+@router.get("/summaries", response_model=SubscriptionSummariesResponse)
+async def get_subscription_summaries(
+    ids: str = Query(..., min_length=36, max_length=1900),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return authoritative operational and schedule state for one list page."""
+
+    raw_ids = [value.strip() for value in ids.split(",") if value.strip()]
+    if not raw_ids or len(raw_ids) > 50:
+        raise HTTPException(status_code=422, detail="ids must contain between 1 and 50 UUIDs")
+    try:
+        subscription_ids = [UUID(value) for value in raw_ids]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="ids contains an invalid UUID") from exc
+    from app.services.subscription_summary import subscription_summaries
+
+    return await subscription_summaries(db, subscription_ids)
 
 
 @router.post("/{subscription_id}/sync-now")
@@ -141,7 +156,6 @@ async def create_subscription(data: SubscriptionCreate, db: AsyncSession = Depen
     svc = SubscriptionService(db)
     result = await svc.create_subscription(data.model_dump())
     invalidate_creator_subscription_caches()
-    await SearchService(db).refresh_reference_indexes()
     return result
 
 
@@ -151,8 +165,9 @@ async def update_subscription(subscription_id: UUID, data: SubscriptionUpdate, d
     try:
         result = await svc.update_subscription(subscription_id, data.model_dump(exclude_unset=True))
         invalidate_creator_subscription_caches()
-        await SearchService(db).refresh_reference_indexes()
         return result
+    except SubscriptionValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -163,8 +178,6 @@ async def delete_subscription(subscription_id: UUID, db: AsyncSession = Depends(
     try:
         await svc.delete_subscription(subscription_id)
         invalidate_creator_subscription_caches()
-        await SearchService(db).delete_subscription(str(subscription_id))
-        await SearchService(db).refresh_reference_indexes()
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -185,7 +198,6 @@ async def add_subscription_source(
     try:
         result = await svc.add_source(d)
         invalidate_creator_subscription_caches(include_works=True)
-        await SearchService(db).refresh_reference_indexes()
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -199,7 +211,6 @@ async def update_subscription_source(
     try:
         result = await svc.update_source(ss_id, data.model_dump(exclude_none=True))
         invalidate_creator_subscription_caches(include_works=True)
-        await SearchService(db).refresh_reference_indexes()
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -211,7 +222,5 @@ async def delete_subscription_source(subscription_id: UUID, ss_id: UUID, db: Asy
     try:
         await svc.delete_source(ss_id)
         invalidate_creator_subscription_caches(include_works=True)
-        await SearchService(db).delete_repository(str(ss_id))
-        await SearchService(db).refresh_reference_indexes()
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

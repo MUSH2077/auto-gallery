@@ -1,32 +1,112 @@
 import logging
-import os
-import sqlite3
 import asyncio
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 
-from sqlalchemy import select, and_
-
-from app.config import settings
+from sqlalchemy import or_, select
 
 try:
     from zoneinfo import ZoneInfo
 except ImportError:
     from backports.zoneinfo import ZoneInfo  # Python < 3.9
 from app.database import async_session
+from app.config import settings
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
-from app.models.download_job import DownloadJob
-from app.repositories.download_job import DownloadJobRepository
 from app.services.locks import redis_lock
 from app.services.redis_client import get_redis
-from app.services.settings import get_download_defaults, get_scheduler_config
+from app.services.queue_admission import (
+    QueueAdmissionError,
+    ensure_redis_enqueue_capacity,
+)
+from app.services.scheduler_loop import (
+    ensure_next_subscription_scan,
+    mark_scheduler_scan_error,
+    mark_scheduler_scan_finished,
+    mark_scheduler_scan_started,
+)
+from app.services.settings import get_scheduler_config
 from app.services.subscription_enqueue import enqueue_subscription_source_sync
 
 logger = logging.getLogger(__name__)
 
 FALLBACK_INTERVAL_HOURS = 6
 FALLBACK_SCAN_MINUTES = 60
+SCHEDULER_COVERAGE_BATCH_SIZE = 100
+SCHEDULER_RECONCILE_KEY = "scheduler:subscription-source:reconcile"
+
+
+def _automatic_scan_batch_limit(
+    configured_limit: int,
+    remaining_slots: int,
+    throughput_scale: float,
+) -> int:
+    """Apply the soft AIMD rate while preserving constrained forward progress."""
+
+    if int(remaining_slots) <= 0:
+        return 0
+    base_limit = min(max(1, int(configured_limit)), int(remaining_slots))
+    try:
+        scale = max(0.0, min(1.0, float(throughput_scale)))
+    except (TypeError, ValueError):
+        scale = 1.0
+    # A hard/critical controller never reaches this function because admission
+    # already carries a reason.  Constrained mode is allowed at least one fair
+    # keyset item so the queue cannot starve indefinitely under mild pressure.
+    return max(1, int(base_limit * scale))
+
+
+def _automatic_mode_predicate(system_config: dict):
+    """Exclude effective manual schedules without losing inherited modes."""
+
+    inherited_mode = system_config.get("schedule_mode", "interval") or "interval"
+    if inherited_mode == "manual":
+        return (
+            Subscription.schedule_mode.is_not(None)
+            & (Subscription.schedule_mode != "manual")
+        )
+    return or_(
+        Subscription.schedule_mode.is_(None),
+        Subscription.schedule_mode != "manual",
+    )
+
+
+async def _load_subscription_source_batch(
+    db,
+    *,
+    now: datetime,
+    system_config: dict,
+    limit: int = SCHEDULER_COVERAGE_BATCH_SIZE,
+):
+    """Claim one durable, fair due page and eagerly join its subscription.
+
+    NULL rows are invalidated/unseen schedule metadata.  Once evaluated, a due
+    row receives the claim timestamp and remains due.  It therefore moves
+    behind still-NULL rows and lets 194 fresh sources receive coverage in two
+    100-row passes even if the AIMD enqueue budget is only one.
+    """
+
+    statement = (
+        select(SubscriptionSource, Subscription)
+        .join(Subscription, Subscription.id == SubscriptionSource.subscription_id)
+        .where(
+            Subscription.is_active.is_(True),
+            Subscription.sync_enabled.is_(True),
+            SubscriptionSource.is_enabled.is_(True),
+            or_(
+                SubscriptionSource.next_sync_at.is_(None),
+                SubscriptionSource.next_sync_at <= now,
+            ),
+            _automatic_mode_predicate(system_config),
+        )
+        .order_by(
+            SubscriptionSource.next_sync_at.asc().nullsfirst(),
+            SubscriptionSource.id.asc(),
+        )
+        .limit(min(max(1, int(limit)), SCHEDULER_COVERAGE_BATCH_SIZE))
+        .with_for_update(skip_locked=True, of=SubscriptionSource)
+    )
+    result = await db.execute(statement)
+    return [(row[0], row[1]) for row in result.all()]
 
 
 def _as_tz(value: datetime | None, tz) -> datetime | None:
@@ -52,7 +132,7 @@ def _parse_scheduled_times(times_str: str | None) -> list[tuple[int, int, int]]:
                 scheduled.append((h, m, sec))
         except (ValueError, IndexError):
             continue
-    return scheduled
+    return sorted(set(scheduled))
 
 
 def _schedule_decision(
@@ -62,12 +142,26 @@ def _schedule_decision(
     last_attempted_at,
     now: datetime,
     tz,
+    persisted_next_sync_at: datetime | None = None,
 ) -> dict:
     """Return a scheduler decision with a reason and optional fixed-time window."""
     mode = sub.schedule_mode or system_config.get("schedule_mode", "interval")
 
     if mode == "manual":
         return {"due": False, "mode": mode, "reason": "manual_mode"}
+
+    persisted_due = _as_tz(persisted_next_sync_at, tz)
+    if persisted_due is not None and persisted_due <= now:
+        return {
+            "due": True,
+            "mode": mode,
+            "reason": (
+                "fixed_time_backlog_due"
+                if mode == "fixed_time"
+                else "interval_backlog_due"
+            ),
+            "scheduled_for": persisted_due.isoformat(),
+        }
 
     if mode == "interval":
         if not last_synced_at:
@@ -98,31 +192,51 @@ def _schedule_decision(
                 "reason": "interval_fallback_due" if last_synced and last_synced < cutoff else "interval_fallback_not_due",
             }
 
-        scan_minutes = int(system_config.get("scheduler_scan_interval_minutes", FALLBACK_SCAN_MINUTES))
-        window = timedelta(minutes=max(scan_minutes, 5) + 5)
         last_synced = _as_tz(last_synced_at, tz)
         last_attempted = _as_tz(last_attempted_at, tz)
-
-        for day_offset in (0, -1):
-            day = now.date() + timedelta(days=day_offset)
-            for h, m, s_val in scheduled:
-                st = datetime(day.year, day.month, day.day, h, m, s_val, tzinfo=tz)
-                window_end = st + window
-                if not (st <= now <= window_end):
-                    continue
-                payload = {
-                    "mode": mode,
-                    "window_start": st.isoformat(),
-                    "window_end": window_end.isoformat(),
-                    "scheduled_time": st.time().isoformat(),
-                }
-                if last_synced and last_synced >= st:
-                    return {**payload, "due": False, "reason": "already_synced_in_window"}
-                if last_attempted and last_attempted >= st:
-                    return {**payload, "due": False, "reason": "already_attempted_in_window"}
-                return {**payload, "due": True, "reason": "fixed_time_window_due"}
-
-        return {"due": False, "mode": mode, "reason": "outside_fixed_time_window"}
+        created_at = _as_tz(getattr(sub, "created_at", None), tz)
+        latest_slot = max(
+            (
+                datetime(day.year, day.month, day.day, hour, minute, second, tzinfo=tz)
+                for day_offset in (-1, 0)
+                for day in (now.date() + timedelta(days=day_offset),)
+                for hour, minute, second in scheduled
+                if datetime(
+                    day.year,
+                    day.month,
+                    day.day,
+                    hour,
+                    minute,
+                    second,
+                    tzinfo=tz,
+                ) <= now
+                and (
+                    created_at is None
+                    or datetime(
+                        day.year,
+                        day.month,
+                        day.day,
+                        hour,
+                        minute,
+                        second,
+                        tzinfo=tz,
+                    ) >= created_at
+                )
+            ),
+            default=None,
+        )
+        if latest_slot is None:
+            return {"due": False, "mode": mode, "reason": "fixed_time_not_reached"}
+        payload = {
+            "mode": mode,
+            "scheduled_for": latest_slot.isoformat(),
+            "scheduled_time": latest_slot.time().isoformat(),
+        }
+        if last_synced and last_synced >= latest_slot:
+            return {**payload, "due": False, "reason": "already_synced_in_slot"}
+        if last_attempted and last_attempted >= latest_slot:
+            return {**payload, "due": False, "reason": "already_attempted_in_slot"}
+        return {**payload, "due": True, "reason": "fixed_time_backlog_due"}
 
     if not last_synced_at:
         return {"due": True, "mode": mode, "reason": "never_synced_interval_fallback"}
@@ -137,7 +251,15 @@ def _schedule_decision(
     }
 
 
-def _should_sync_now(sub, system_config: dict, last_synced_at, now: datetime, tz, last_attempted_at=None) -> bool:
+def _should_sync_now(
+    sub,
+    system_config: dict,
+    last_synced_at,
+    now: datetime,
+    tz,
+    last_attempted_at=None,
+    persisted_next_sync_at=None,
+) -> bool:
     """Check whether a sync is due, respecting per-subscription schedule strategy.
 
     Priority: subscription value > system default > hardcoded fallback.
@@ -145,7 +267,15 @@ def _should_sync_now(sub, system_config: dict, last_synced_at, now: datetime, tz
 
     Modes: 'manual'=never, 'interval'=every N hours, 'fixed_time'=at scheduled times.
     """
-    return bool(_schedule_decision(sub, system_config, last_synced_at, last_attempted_at, now, tz)["due"])
+    return bool(_schedule_decision(
+        sub,
+        system_config,
+        last_synced_at,
+        last_attempted_at,
+        now,
+        tz,
+        persisted_next_sync_at,
+    )["due"])
 
 
 def _next_fixed_time_window(
@@ -178,6 +308,184 @@ def _next_fixed_time_window(
     }
 
 
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _next_interval_check_at(
+    sub,
+    system_config: dict,
+    last_synced_at: datetime | None,
+    last_attempted_at: datetime | None,
+    now: datetime,
+    tz,
+) -> datetime:
+    interval_hours = sub.sync_interval_hours or int(
+        system_config.get("default_sync_interval_hours", FALLBACK_INTERVAL_HOURS)
+    )
+    interval = timedelta(hours=max(1, int(interval_hours)))
+    scan_delay = timedelta(minutes=max(
+        int(system_config.get("scheduler_scan_interval_minutes", FALLBACK_SCAN_MINUTES)),
+        5,
+    ))
+    synced = _as_tz(last_synced_at, tz)
+    attempted = _as_tz(last_attempted_at, tz)
+    due_at = synced + interval if synced else now
+
+    # A just-published/running attempt must not be reconsidered on every scan.
+    # Once the short retry horizon passes, a failed attempt is eligible again;
+    # a successful attempt will have moved the base via last_synced_at.
+    if due_at <= now and attempted and (synced is None or attempted > synced):
+        retry_at = attempted + scan_delay
+        if retry_at > now:
+            return _utc(retry_at)
+    return _utc(max(due_at, now))
+
+
+def _next_fixed_check_at(
+    sub,
+    system_config: dict,
+    last_synced_at: datetime | None,
+    last_attempted_at: datetime | None,
+    now: datetime,
+    tz,
+) -> datetime:
+    scheduled = _parse_scheduled_times(
+        sub.scheduled_times or system_config.get("scheduled_times", "")
+    )
+    if not scheduled:
+        return _next_interval_check_at(
+            sub,
+            system_config,
+            last_synced_at,
+            last_attempted_at,
+            now,
+            tz,
+        )
+
+    synced = _as_tz(last_synced_at, tz)
+    attempted = _as_tz(last_attempted_at, tz)
+    created_at = _as_tz(getattr(sub, "created_at", None), tz)
+    candidates: list[datetime] = []
+    for day_offset in (-1, 0, 1):
+        day = now.date() + timedelta(days=day_offset)
+        for hour, minute, second in scheduled:
+            start = datetime(
+                day.year,
+                day.month,
+                day.day,
+                hour,
+                minute,
+                second,
+                tzinfo=tz,
+            )
+            if created_at is None or start >= created_at:
+                candidates.append(start)
+
+    elapsed = sorted((candidate for candidate in candidates if candidate <= now), reverse=True)
+    if elapsed:
+        latest_slot = elapsed[0]
+        published = bool(
+            (synced and synced >= latest_slot)
+            or (attempted and attempted >= latest_slot)
+        )
+        if not published:
+            # Persist the logical slot itself, rather than the scan time. This
+            # makes backlog age and ordering truthful after downtime/pressure.
+            return _utc(latest_slot)
+
+    future = sorted(candidate for candidate in candidates if candidate > now)
+    if future:
+        return _utc(future[0])
+
+    return _utc(now + timedelta(days=1))
+
+
+def next_subscription_check_at(
+    sub,
+    system_config: dict,
+    last_synced_at: datetime | None,
+    last_attempted_at: datetime | None,
+    now: datetime,
+    tz=None,
+) -> datetime | None:
+    """Calculate the durable next scheduler check for one source.
+
+    Manual schedules intentionally return NULL because the joined due query
+    excludes their effective mode.  A settings change invalidates affected
+    rows back to NULL so they are promptly re-evaluated under the new mode.
+    """
+
+    if tz is None:
+        try:
+            tz = ZoneInfo(system_config.get("timezone", "UTC"))
+        except Exception:
+            tz = timezone.utc
+    local_now = _as_tz(now, tz) or datetime.now(tz)
+    mode = sub.schedule_mode or system_config.get("schedule_mode", "interval")
+    if mode == "manual":
+        return None
+    if mode == "fixed_time":
+        return _next_fixed_check_at(
+            sub,
+            system_config,
+            last_synced_at,
+            last_attempted_at,
+            local_now,
+            tz,
+        )
+    return _next_interval_check_at(
+        sub,
+        system_config,
+        last_synced_at,
+        last_attempted_at,
+        local_now,
+        tz,
+    )
+
+
+def next_future_subscription_check_at(
+    sub,
+    system_config: dict,
+    now: datetime,
+    tz=None,
+) -> datetime | None:
+    """Return the first future slot when a manual subscription becomes automatic."""
+
+    if tz is None:
+        try:
+            tz = ZoneInfo(system_config.get("timezone", "UTC"))
+        except Exception:
+            tz = timezone.utc
+    local_now = _as_tz(now, tz) or datetime.now(tz)
+    mode = sub.schedule_mode or system_config.get("schedule_mode", "interval")
+    if mode == "manual":
+        return None
+    if mode != "fixed_time":
+        interval_hours = sub.sync_interval_hours or int(
+            system_config.get("default_sync_interval_hours", FALLBACK_INTERVAL_HOURS)
+        )
+        return _utc(local_now + timedelta(hours=max(1, int(interval_hours))))
+    scheduled = _parse_scheduled_times(
+        sub.scheduled_times or system_config.get("scheduled_times", "")
+    )
+    if not scheduled:
+        interval_hours = sub.sync_interval_hours or int(
+            system_config.get("default_sync_interval_hours", FALLBACK_INTERVAL_HOURS)
+        )
+        return _utc(local_now + timedelta(hours=max(1, int(interval_hours))))
+    candidates = [
+        datetime(day.year, day.month, day.day, hour, minute, second, tzinfo=tz)
+        for day_offset in (0, 1, 2)
+        for day in (local_now.date() + timedelta(days=day_offset),)
+        for hour, minute, second in scheduled
+        if datetime(day.year, day.month, day.day, hour, minute, second, tzinfo=tz) > local_now
+    ]
+    return _utc(min(candidates)) if candidates else _utc(local_now + timedelta(days=1))
+
+
 def schedule_decision_snapshot(
     sub,
     system_config: dict,
@@ -185,20 +493,34 @@ def schedule_decision_snapshot(
     last_attempted_at,
     now: datetime,
     tz,
+    persisted_next_sync_at: datetime | None = None,
 ) -> dict:
     """Read-only schedule explanation used by APIs and tests.
 
     This mirrors the enqueue scanner decision without mutating any source state.
     """
-    decision = _schedule_decision(sub, system_config, last_synced_at, last_attempted_at, now, tz)
+    decision = _schedule_decision(
+        sub,
+        system_config,
+        last_synced_at,
+        last_attempted_at,
+        now,
+        tz,
+        persisted_next_sync_at,
+    )
     mode = decision.get("mode") or sub.schedule_mode or system_config.get("schedule_mode", "interval")
     scan_minutes = int(system_config.get("scheduler_scan_interval_minutes", FALLBACK_SCAN_MINUTES))
 
-    next_due_at = None
+    persisted_due = _as_tz(persisted_next_sync_at, tz)
+    next_due_at = persisted_due.isoformat() if persisted_due is not None else None
     window_start = decision.get("window_start")
     window_end = decision.get("window_end")
 
-    if mode == "interval":
+    if persisted_due is not None:
+        pass
+    elif decision.get("due") and decision.get("scheduled_for"):
+        next_due_at = str(decision["scheduled_for"])
+    elif mode == "interval":
         if last_synced_at:
             interval_hours = sub.sync_interval_hours or int(
                 system_config.get("default_sync_interval_hours", FALLBACK_INTERVAL_HOURS))
@@ -235,7 +557,60 @@ def schedule_decision_snapshot(
 
 
 def sync_subscriptions():
-    return asyncio.run(sync_subscriptions_async())
+    scan_interval_minutes = FALLBACK_SCAN_MINUTES
+    current_job_id = None
+    try:
+        from rq import get_current_job
+
+        current_job = get_current_job()
+        current_job_id = current_job.id if current_job else None
+        mark_scheduler_scan_started(scan_interval_minutes=scan_interval_minutes)
+        # Do not run an automatic scan that cannot durably publish its work or
+        # its successor.  The same RQ job is retained below until recovery.
+        ensure_redis_enqueue_capacity(get_redis())
+        result = asyncio.run(sync_subscriptions_async())
+        scan_interval_minutes = int(
+            result.pop("_scan_interval_minutes", scan_interval_minutes)
+        )
+        ensured = ensure_next_subscription_scan(
+            scan_interval_minutes,
+            exclude_job_id=current_job_id,
+        )
+        result["rescheduled_at"] = ensured.get("next_scan_at")
+        mark_scheduler_scan_finished(
+            scan_interval_minutes=scan_interval_minutes,
+            next_scan_at=(
+                datetime.fromisoformat(ensured["next_scan_at"])
+                if ensured.get("next_scan_at")
+                else None
+            ),
+        )
+        return result
+    except QueueAdmissionError as exc:
+        # Preserve this same scheduler job until Redis falls below the hard
+        # admission line.  Creating a new scan is exactly what the guard blocks;
+        # RQ's interval Retry keeps the existing job recoverable instead.
+        from rq import Retry
+
+        logger.warning(
+            "Subscription scan reschedule deferred by Redis admission code=%s",
+            exc.code,
+        )
+        mark_scheduler_scan_error(exc, scan_interval_minutes=scan_interval_minutes)
+        return Retry(max=1_000_000, interval=60)
+    except Exception as exc:
+        # A provider/DB/business failure must not sever the scheduling chain.
+        # Best effort is sufficient here because the supervisor watchdog runs
+        # independently every minute and repeats this idempotent ensure.
+        try:
+            ensure_next_subscription_scan(
+                scan_interval_minutes,
+                exclude_job_id=current_job_id,
+            )
+        except Exception:
+            logger.exception("Failed to preserve subscription scan after error")
+        mark_scheduler_scan_error(exc, scan_interval_minutes=scan_interval_minutes)
+        raise
 
 
 async def sync_subscriptions_async(parent_task_id=None):
@@ -251,6 +626,11 @@ async def _sync_subscriptions_locked(parent_task_id=None):
     jobs_created = 0
     skipped_count = 0
     error_count = 0
+    pressure_paused = False
+    pressure_snapshot = None
+    coverage_count = 0
+    due_count = 0
+    budget_deferred_count = 0
 
     async with async_session() as db:
         config = await get_scheduler_config(db)
@@ -267,47 +647,113 @@ async def _sync_subscriptions_locked(parent_task_id=None):
         scan_minutes = int(config.get("scheduler_scan_interval_minutes", FALLBACK_SCAN_MINUTES))
         scheduler_enabled = bool(config.get("scheduler_enabled", True))
 
-        # Find active, sync-enabled subscriptions (batched: max 100 per scan)
-        subs = await db.execute(
-            select(Subscription).where(
-                and_(Subscription.is_active == True, Subscription.sync_enabled == True)
-            ).order_by(Subscription.last_synced_at.asc().nullsfirst()).limit(100)
-        )
-        subscriptions = subs.scalars().all()
+        from app.services.backpressure import download_admission_batch
 
-        for sub in subscriptions:
-            # Get enabled sources
-            sources = await db.execute(
-                select(SubscriptionSource).where(
-                    and_(
-                        SubscriptionSource.subscription_id == sub.id,
-                        SubscriptionSource.is_enabled == True,
-                    )
+        # Disk, artifact backlog, pressure profile and Redis/queue capacity are
+        # sampled once for the producer cycle.  Each actual publish retains the
+        # serialized hard recount in enqueue_download_rq.
+        async with download_admission_batch(db, automatic=True) as admission:
+            if admission.reason:
+                pressure_paused = admission.reason.get("code") == "resource_pressure"
+                pressure_snapshot = admission.reason if pressure_paused else None
+                logger.warning(
+                    "Automatic subscription scan admission constrained code=%s details=%s",
+                    admission.reason.get("code"),
+                    admission.reason,
+                )
+            from app.services.device_profile import current_device_profile
+
+            device_profile = current_device_profile()
+            enqueue_budget = (
+                0
+                if admission.reason or not scheduler_enabled
+                else _automatic_scan_batch_limit(
+                    min(
+                        settings.scheduler_scan_batch_size,
+                        device_profile.scheduler_publish_limit,
+                    ),
+                    admission.remaining_slots,
+                    admission.throughput_scale,
                 )
             )
-            sub_sources = sources.scalars().all()
 
-            for ss in sub_sources:
+            source_rows = []
+            decisions: list[dict] = []
+            if scheduler_enabled:
+                source_rows = await _load_subscription_source_batch(
+                    db,
+                    now=_utc(now),
+                    system_config=config,
+                    limit=SCHEDULER_COVERAGE_BATCH_SIZE,
+                )
+                coverage_count = len(source_rows)
+
+                # This short transaction is the only row-locking phase.  Due
+                # rows retain an expired timestamp as a persistent backlog;
+                # non-due rows move directly to their computed next check.
+                # Commit before any provider/Redis enqueue I/O.
+                for ss, sub in source_rows:
+                    decision = _schedule_decision(
+                        sub,
+                        config,
+                        ss.last_synced_at,
+                        ss.last_attempted_at,
+                        now,
+                        tz,
+                        ss.next_sync_at,
+                    )
+                    decisions.append(decision)
+                    if decision["due"]:
+                        due_count += 1
+                        # Preserve an expired persisted timestamp: it is the
+                        # durable proof that this source still owes work from a
+                        # previous fixed-time slot. NULL rows use now only as a
+                        # fair initial claim cursor.
+                        if ss.next_sync_at is None:
+                            ss.next_sync_at = _utc(now)
+                    else:
+                        ss.next_sync_at = next_subscription_check_at(
+                            sub,
+                            config,
+                            ss.last_synced_at,
+                            ss.last_attempted_at,
+                            now,
+                            tz,
+                        )
+                if source_rows:
+                    await db.commit()
+
+            for (ss, sub), decision in zip(source_rows, decisions):
                 log_context = {"source_id": str(ss.id), "source": ss.source, "timezone": tz_name}
-                if not scheduler_enabled:
-                    skipped_count += 1
-                    logger.debug("Auto-sync skipped source: scheduler disabled", extra={**log_context, "decision": "scheduler_disabled"})
-                    continue
-
-                # Skip if auth is known to be unhealthy
-                if ss.auth_healthy is False:
-                    skipped_count += 1
-                    logger.debug("Auto-sync skipped source: auth unhealthy", extra={**log_context, "decision": "auth_unhealthy"})
-                    continue
-
-                # Check if sync is due (per-subscription strategy)
-                decision = _schedule_decision(sub, config, ss.last_synced_at, ss.last_attempted_at, now, tz)
                 if not decision["due"]:
                     skipped_count += 1
                     logger.debug("Auto-sync skipped source: not due", extra={**log_context, **decision})
                     continue
 
-                result = await enqueue_subscription_source_sync(db, ss.id, trigger="scheduler", parent_task_id=parent_task_id)
+                if ss.auth_healthy is False:
+                    skipped_count += 1
+                    logger.debug("Auto-sync skipped source: auth unhealthy", extra={**log_context, "decision": "auth_unhealthy"})
+                    continue
+
+                if jobs_created >= enqueue_budget:
+                    # Do not advance this timestamp into the future.  Its due
+                    # intent stays durable, while the claim time places it
+                    # behind unseen NULL rows and older due claims.
+                    skipped_count += 1
+                    budget_deferred_count += 1
+                    logger.debug(
+                        "Auto-sync retained due source for a later AIMD slot",
+                        extra={**log_context, **decision, "enqueue_budget": enqueue_budget},
+                    )
+                    continue
+
+                result = await enqueue_subscription_source_sync(
+                    db,
+                    ss.id,
+                    trigger="scheduler",
+                    parent_task_id=parent_task_id,
+                    scheduler_config=config,
+                )
                 if result["status"] == "enqueued":
                     jobs_created += 1
                     logger.info("Auto-sync created download job",
@@ -319,78 +765,6 @@ async def _sync_subscriptions_locked(parent_task_id=None):
                     logger.debug("Auto-sync skipped source after enqueue check",
                                  extra={**log_context, **decision, "skip_reason": result.get("skip_reason") or result})
 
-    # Stale job detection: check Redis heartbeat keys set by HeartbeatPublisher.
-    # The heartbeat thread publishes to Redis pub/sub AND sets a TTL key
-    # ``task:{job_id}:heartbeat_ts`` (90s TTL). If the key exists the worker
-    # is alive; if missing, the worker has died or stalled.
-    try:
-        async with async_session() as stale_db:
-            dl_defaults = await get_download_defaults(stale_db)
-            dl_timeout = int(dl_defaults.get("timeout_seconds", 600))
-            now = datetime.now(timezone.utc)
-            created_at_fallback_cutoff = now - timedelta(seconds=dl_timeout * 2)
-
-            # Find all jobs currently "downloading"
-            result = await stale_db.execute(
-                select(DownloadJob).where(DownloadJob.status == "downloading")
-            )
-            candidates = result.scalars().all()
-
-            # Check Redis heartbeat keys for each candidate
-            r = get_redis()
-            stale_jobs = []
-            if candidates:
-                for job in candidates:
-                    hb_key = f"task:{str(job.id)}:heartbeat_ts"
-                    try:
-                        if r.exists(hb_key):
-                            continue  # heartbeat key exists → worker is alive
-                    except Exception:
-                        pass  # Redis error → fall through to created_at check
-
-                    # No heartbeat key → check created_at fallback
-                    created = job.created_at
-                    if created is not None and created < created_at_fallback_cutoff:
-                        stale_jobs.append(job)
-
-            if stale_jobs:
-                stale_repo = DownloadJobRepository(stale_db)
-                for sj in stale_jobs:
-                    if sj.error_log:
-                        error_log = sj.error_log + "\n[auto] Marked stale: lost heartbeat (stuck downloading)"
-                    else:
-                        error_log = "[auto] Marked stale: lost heartbeat (stuck downloading)"
-                    await stale_repo.update_status(sj, "stale", error_log)
-                    logger.warning("Marked download job %s as stale (no heartbeat key in Redis)",
-                                  sj.id)
-                await stale_db.commit()
-    except Exception:
-        logger.debug("Stale job detection skipped", exc_info=True)
-
-    # Periodic archive maintenance: VACUUM download archive SQLite files
-    try:
-        dl_root = Path(str(settings.download_root))
-        for archive_file in dl_root.glob("archive-*.sqlite3"):
-            try:
-                conn = sqlite3.connect(str(archive_file))
-                conn.execute("VACUUM")
-                conn.close()
-                logger.debug("VACUUMed download archive: %s", archive_file.name)
-            except Exception:
-                logger.debug("Failed to VACUUM archive %s", archive_file.name, exc_info=True)
-    except Exception:
-        logger.debug("Archive maintenance skipped", exc_info=True)
-
-    # Vacuum file index alongside download archives
-    try:
-        from app.services.file_index import FileIndex, get_file_index
-        fi_path = os.path.join(str(settings.download_root), ".file-index.sqlite3")
-        if os.path.exists(fi_path):
-            FileIndex(fi_path).vacuum()
-            logger.debug("VACUUMed file index")
-    except Exception:
-        logger.debug("File index VACUUM skipped", exc_info=True)
-
     mode = config.get("schedule_mode", "interval")
     logger.info("Auto-sync scan complete: %d jobs created, %d skipped (enabled=%s, mode=%s, timezone=%s, scan_every=%dm, default_interval=%dh)",
                 jobs_created, skipped_count, config.get("scheduler_enabled", True), mode, config.get("timezone", "UTC"), scan_minutes, default_interval)
@@ -398,33 +772,46 @@ async def _sync_subscriptions_locked(parent_task_id=None):
     # Self-heal: link any orphaned source_creators to their creator so imported
     # works always surface on the creator page (cheap; usually 0 rows).
     try:
-        from app.services.creator_reconcile import reconcile_unlinked_source_creators
-        async with async_session() as relink_db:
-            res = await reconcile_unlinked_source_creators(relink_db)
-            if res["linked"]:
-                await relink_db.commit()
-                logger.info("Auto-sync relinked %d orphaned source_creators", res["linked"])
+        should_reconcile = not pressure_paused and bool(
+            await asyncio.to_thread(
+                get_redis().set,
+                SCHEDULER_RECONCILE_KEY,
+                "1",
+                nx=True,
+                ex=3600,
+            )
+        )
+        if should_reconcile:
+            from app.services.creator_reconcile import reconcile_unlinked_source_creators
+            async with async_session() as relink_db:
+                res = await reconcile_unlinked_source_creators(relink_db)
+                if res["linked"]:
+                    await relink_db.commit()
+                    logger.info("Auto-sync relinked %d orphaned source_creators", res["linked"])
     except Exception:
         logger.debug("source_creator reconcile skipped", exc_info=True)
 
-    # Re-schedule for next scan
+    # SQLite maintenance owns a separate exact-time schedule.  Subscription
+    # scans only ensure that schedule exists; they never VACUUM inline.
     try:
-        from rq import Queue
-        next_scan_at = datetime.now(timezone.utc) + timedelta(minutes=max(scan_minutes, 5))
-        Queue(name="scheduled", connection=get_redis()).enqueue_in(
-            timedelta(minutes=max(scan_minutes, 5)),
-            sync_subscriptions,
-        )
-        rescheduled_at = next_scan_at.isoformat()
-    except Exception as e:
-        logger.error("Failed to re-schedule auto-sync: %s", e)
-        error_count += 1
-        rescheduled_at = None
+        from app.jobs.sqlite_maintenance import ensure_sqlite_maintenance_scheduled
+
+        await asyncio.to_thread(ensure_sqlite_maintenance_scheduled)
+    except Exception:
+        logger.warning("Failed to ensure SQLite maintenance schedule", exc_info=True)
 
     return {
         "created": jobs_created,
         "skipped": skipped_count,
         "errors": error_count,
-        "rescheduled_at": rescheduled_at,
+        "covered": coverage_count,
+        "due": due_count,
+        "enqueue_budget": enqueue_budget,
+        "due_backlog_deferred": budget_deferred_count,
+        "device_profile": device_profile.name,
+        # The synchronous RQ wrapper fills the durable successor timestamp.
+        "rescheduled_at": None,
+        "_scan_interval_minutes": max(scan_minutes, 5),
         "status": "ok" if error_count == 0 else "partial_error",
+        "resource_pressure": pressure_snapshot if pressure_paused else None,
     }

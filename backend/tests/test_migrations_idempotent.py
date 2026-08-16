@@ -168,20 +168,21 @@ class TestMigrationIdempotency:
         )
 
     def test_downgrade_upgrade_cycle(self):
-        """Downgrade -1 then upgrade head for each revision — must succeed."""
-        revisions = _parse_migration_revisions()
-        ordered = _build_revision_chain(revisions)
+        """Downgrade and re-upgrade the complete migration chain."""
+        initial_upgrade = self._run_alembic("upgrade", "head", timeout=120)
+        assert initial_upgrade.returncode == 0, (
+            "Initial alembic upgrade head failed:\n"
+            f"STDOUT:\n{initial_upgrade.stdout}\nSTDERR:\n{initial_upgrade.stderr}"
+        )
 
-        # First, apply all migrations
-        self._run_alembic("upgrade", "head", timeout=120)
+        downgrade = self._run_alembic("downgrade", "base", timeout=120)
+        assert downgrade.returncode == 0, (
+            "Alembic downgrade to base failed:\n"
+            f"STDOUT:\n{downgrade.stdout}\nSTDERR:\n{downgrade.stderr}"
+        )
 
-        # Test each revision individually from head back to root
-        for rev_id in reversed(ordered):
-            downgrade = self._run_alembic("downgrade", "-1", timeout=60)
-            upgrade = self._run_alembic("upgrade", "head", timeout=60)
-            assert upgrade.returncode == 0, (
-                f"alembic upgrade head failed after downgrading from {rev_id}:\n"
-                f"  Downgrade STDERR: {downgrade.stderr.strip()}\n"
-                f"  Upgrade STDOUT: {upgrade.stdout.strip()}\n"
-                f"  Upgrade STDERR: {upgrade.stderr.strip()}"
-            )
+        upgrade = self._run_alembic("upgrade", "head", timeout=120)
+        assert upgrade.returncode == 0, (
+            "Alembic upgrade head after full downgrade failed:\n"
+            f"STDOUT:\n{upgrade.stdout}\nSTDERR:\n{upgrade.stderr}"
+        )

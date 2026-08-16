@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, exists, func, or_, select, text
+from sqlalchemy import and_, delete, exists, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -125,6 +125,23 @@ def phash_distance(left: str | None, right: str | None) -> int | None:
         return (int(left, 16) ^ int(right, 16)).bit_count()
     except ValueError:
         return None
+
+
+def versioned_phash_distance(
+    left: str | None,
+    right: str | None,
+    left_version: str | None,
+    right_version: str | None,
+) -> int | None:
+    """Compare pHashes only when both were produced by the same algorithm.
+
+    ``None`` is the legacy algorithm version.  Two legacy hashes remain
+    comparable, while a legacy hash is never compared with a versioned one.
+    """
+
+    if left_version != right_version:
+        return None
+    return phash_distance(left, right)
 
 
 def aspect_ratio_delta(left: Asset, right: Asset) -> float | None:
@@ -303,6 +320,11 @@ class AssetReconciliation:
             scope = await self.scope.pair(asset.id, candidate.id)
             if not scope.eligible:
                 continue
+            # Candidate and scope reads start an implicit PostgreSQL
+            # transaction.  Release it before SSIM opens and decodes files;
+            # the pair is locked and its scope is checked again below before
+            # any evidence/case mutation is committed.
+            await self.db.commit()
             evidence_facts = await self._evaluate_pair(asset, candidate)
             if not evidence_facts["sha256_equal"] and not evidence_facts["hard_gate_passed"]:
                 continue
@@ -589,10 +611,18 @@ class AssetReconciliation:
         if asset.sha256:
             conditions.append(Asset.sha256 == asset.sha256)
         if asset.phash:
+            phash_version_matches = (
+                Asset.phash_version.is_(None)
+                if asset.phash_version is None
+                else Asset.phash_version == asset.phash_version
+            )
             for start, length in ((1, 3), (4, 3), (7, 3), (10, 3), (13, 4)):
                 conditions.append(
-                    func.substr(Asset.phash, start, length)
-                    == asset.phash[start - 1 : start - 1 + length]
+                    and_(
+                        phash_version_matches,
+                        func.substr(Asset.phash, start, length)
+                        == asset.phash[start - 1 : start - 1 + length],
+                    )
                 )
         if not conditions:
             return []
@@ -667,7 +697,12 @@ class AssetReconciliation:
             left, right = right, left
 
         sha_equal = bool(left.sha256 and left.sha256 == right.sha256)
-        distance = phash_distance(left.phash, right.phash)
+        distance = versioned_phash_distance(
+            left.phash,
+            right.phash,
+            left.phash_version,
+            right.phash_version,
+        )
         ratio_delta = aspect_ratio_delta(left, right)
         hard_compatible = (
             distance is not None
@@ -1232,6 +1267,7 @@ class AssetReconciliation:
             "height": asset.height,
             "sha256": asset.sha256,
             "phash": asset.phash,
+            "phash_version": asset.phash_version,
             "source": row.source if row else None,
             "source_work_id": row.source_work_id if row else None,
             "source_url": row.source_url if row else None,

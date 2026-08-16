@@ -32,6 +32,10 @@ RUN TWITTER_PY=$(python3 -c "import gallery_dl.extractor.twitter; print(gallery_
 ARG CACHEBUST=1
 COPY . .
 
+# Install the standalone Gitllery v1 CLI into /usr/local/bin. Runtime
+# dependencies are already hash-pinned in requirements.txt.
+RUN pip install --no-cache-dir --no-deps .
+
 RUN mkdir -p /downloads /library /gallerydl-config /app-config
 
 # Memory-conserving Python flags for NAS (7.5 GB RAM):

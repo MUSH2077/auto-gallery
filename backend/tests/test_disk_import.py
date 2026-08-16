@@ -178,13 +178,13 @@ async def test_reconcile_downloads_to_db_provisions_metadata_creator_without_pla
 
             sub = (await db.execute(select(Subscription))).scalar_one()
             assert sub.creator_id == creator.id
-            assert sub.schedule_mode == "manual"
-            assert sub.sync_enabled is False
+            assert sub.schedule_mode is None
+            assert sub.sync_enabled is True
 
             source = (await db.execute(select(SubscriptionSource))).scalar_one()
             assert source.subscription_id == sub.id
             assert source.source == "pixiv"
-            assert source.is_enabled is False
+            assert source.is_enabled is True
 
             sc = (await db.execute(select(SourceCreator))).scalar_one()
             assert sc.creator_id == creator.id
@@ -254,8 +254,9 @@ async def test_reconcile_downloads_to_db_applies_danbooru_enrichment(tmp_path, m
             source_creators = (await db.execute(select(SourceCreator))).scalars().all()
             assert any(sc.source == "pixiv" and sc.source_creator_id == "1980643" for sc in source_creators)
             sources = (await db.execute(select(SubscriptionSource))).scalars().all()
-            assert any(ss.source == "pixiv" and ss.is_enabled is False for ss in sources)
+            assert any(ss.source == "pixiv" and ss.is_enabled is True for ss in sources)
             assert any(ss.source == "danbooru" and ss.is_enabled is False for ss in sources)
+            assert sum(1 for ss in sources if ss.is_enabled) == 1
             assert sum(1 for ss in sources if ss.source == "weibo") == 1
     finally:
         async with async_session() as db:

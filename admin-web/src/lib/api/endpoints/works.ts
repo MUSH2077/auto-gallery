@@ -1,11 +1,12 @@
 import { request } from "../client";
 import type { CurationCommit, Work } from "../types";
-import type { MediaAssetData } from "../../media";
+import type { DerivativeStatus, MediaAssetData } from "../../media";
 
 export interface WorkAsset extends MediaAssetData {
   file_name: string;
   file_path: string;
   created_at: string;
+  derivative_status?: DerivativeStatus;
 }
 
 export const worksApi = {

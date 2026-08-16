@@ -42,6 +42,7 @@ from app.services.asset_reconciliation import (
     StaleDedupCase,
 )
 from app.services.redis_client import get_redis
+from app.services.queue_admission import checked_enqueue
 from app.services.operations import (
     enqueue_admin_operation,
     get_operation_status,
@@ -112,17 +113,15 @@ async def decide_asset_dedup_case(
         await db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    try:
-        from rq import Queue
+    from rq import Queue
 
-        Queue(name="operations", connection=get_redis()).enqueue(
-            "app.jobs.asset_dedup.run_asset_dedup_outbox",
-            100,
-            job_timeout=3600,
-            result_ttl=86400,
-        )
-    except Exception:
-        logger.warning("Failed to enqueue asset dedup storage drain", exc_info=True)
+    checked_enqueue(
+        Queue(name="operations", connection=get_redis()),
+        "app.jobs.asset_dedup.run_asset_dedup_outbox",
+        100,
+        job_timeout=3600,
+        result_ttl=86400,
+    )
     return result
 
 
@@ -149,7 +148,14 @@ async def start_asset_dedup_scan(
             entity="assets",
             func="app.jobs.asset_dedup.run_asset_dedup_scan",
             options={"scan_id": str(scan.id)},
-            job_timeout=14400,
+            # One RQ job owns only one adaptive asset slice.  It persists the
+            # keyset cursor and publishes a delayed successor, so a normal
+            # one-hour workhorse timeout is ample even when the full scan takes
+            # days at the minimum budget.
+            job_timeout=3600,
+            # A dedicated coordinator parent shares the import cgroup. Every
+            # successor yields after one bounded adaptive slice.
+            queue_name="maintenance",
         )
     except Exception:
         scan.status = "failed"

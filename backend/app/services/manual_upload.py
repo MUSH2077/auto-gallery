@@ -234,6 +234,10 @@ class ManualUploadService:
             db_user = await db.get(User, user.id)
             db_user.upload_used_bytes = (db_user.upload_used_bytes or 0) + total_size
 
+            from app.services.creator import CreatorService
+            await CreatorService(db)._request_creator_projection(
+                provisioned.creator.id,
+            )
             await db.commit()
         except Exception:
             shutil.rmtree(work_dir, ignore_errors=True)
