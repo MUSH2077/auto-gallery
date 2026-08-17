@@ -155,6 +155,31 @@ async def _artifact_counts(download_job_id: UUID) -> tuple[int, int, list[str]]:
         return await ArtifactLedger(db).counts(download_job_id)
 
 
+async def _successful_repository_import_plan(
+    db,
+    job,
+    *,
+    metadata_count: int,
+    metadata_paths: list[str] | set[str],
+):
+    """Return the import queue payload after a successful download only."""
+
+    if not job.subscription_source_id:
+        return metadata_count, set(metadata_paths), None
+    from app.services.repository_artifact_reconciliation import (
+        reconcile_repository_artifacts,
+    )
+
+    reconciliation = await reconcile_repository_artifacts(db, job)
+    if reconciliation is None:
+        return metadata_count, set(metadata_paths), None
+    return (
+        reconciliation.pending_work_count,
+        set(reconciliation.metadata_paths),
+        reconciliation,
+    )
+
+
 async def _download_source_identity(job_id: str) -> str | None:
     """Serialize writers of the same gallery-dl archive by source key."""
 
@@ -1414,35 +1439,61 @@ async def run_download_job(job_id: str):
         # Full success — but only enqueue import if there are new metadata JSONs.
         # gallery-dl exits 0 even when all files were skipped (already in archive),
         # or when the source has no content at all.
+        reconciliation = None
+        pending_work_count = 0
         async with async_session() as _manifest_db:
             _manifest_job = await DownloadJobRepository(_manifest_db).get(job_uuid)
             if _manifest_job:
                 with stage_timer(_manifest_job, "scan"):
                     metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
+                (
+                    pending_work_count,
+                    new_json_paths,
+                    reconciliation,
+                ) = await _successful_repository_import_plan(
+                    _manifest_db,
+                    _manifest_job,
+                    metadata_count=metadata_count,
+                    metadata_paths=new_json_paths,
+                )
+                if reconciliation is not None:
+                    update_manifest(
+                        _manifest_job,
+                        repository_artifact_reconciliation=reconciliation.outcome_detail,
+                    )
                 update_manifest(_manifest_job, metadata_json_count=metadata_count, image_count=image_count)
-                append_manifest_event(_manifest_job, "artifacts_counted", metadata_json_count=metadata_count, image_count=image_count)
+                append_manifest_event(
+                    _manifest_job,
+                    "artifacts_counted",
+                    metadata_json_count=metadata_count,
+                    image_count=image_count,
+                    reconciliation=(
+                        reconciliation.outcome_detail if reconciliation else None
+                    ),
+                )
                 apply_download_progress(
                     _manifest_job,
                     "post_download",
                     None,
-                    current=metadata_count,
-                    total=metadata_count or None,
+                    current=pending_work_count,
+                    total=pending_work_count or None,
                     percent=90,
                     assets=image_count,
                 )
                 await _manifest_db.commit()
             else:
                 metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
-        if metadata_count > 0:
+                pending_work_count = metadata_count
+        if pending_work_count > 0:
             async with async_session() as _progress_db:
                 _progress_job = await DownloadJobRepository(_progress_db).get(job_uuid)
                 if _progress_job:
                     apply_download_progress(
                         _progress_job,
                         "enqueuing_import",
-                        f"Found {metadata_count} works; queuing import",
+                        f"Found {pending_work_count} works; queuing import",
                         current=0,
-                        total=metadata_count,
+                        total=pending_work_count,
                         assets=image_count,
                     )
                     await _progress_db.commit()
@@ -1483,6 +1534,11 @@ async def run_download_job(job_id: str):
                             decision.outcome_code,
                             metadata_count=metadata_count,
                             media_count=image_count,
+                            recovery_detail=(
+                                reconciliation.outcome_detail
+                                if reconciliation is not None
+                                else None
+                            ),
                         )
                         if decision.outcome_code
                         else None

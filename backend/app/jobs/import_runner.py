@@ -2599,11 +2599,21 @@ async def run_import_job(import_job_id: str):
                 append_manifest_event(dj, "stage_timing", stage="parse", ms=_parse_ms)
                 append_manifest_event(dj, "stage_timing", stage="process", ms=_process_ms)
                 manifest = dj.manifest or {}
+                recovery_detail = manifest.get("repository_artifact_reconciliation")
                 outcome = (
                     build_sync_outcome(
                         "new_content" if stats["works"] > 0 else "no_changes",
-                        metadata_count=int(manifest.get("metadata_json_count") or total_groups),
+                        metadata_count=(
+                            int(manifest["metadata_json_count"])
+                            if manifest.get("metadata_json_count") is not None
+                            else total_groups
+                        ),
                         media_count=int(manifest.get("image_count") or stats["assets"]),
+                        recovery_detail=(
+                            recovery_detail
+                            if isinstance(recovery_detail, dict)
+                            else None
+                        ),
                     )
                     if status == "complete"
                     else None
