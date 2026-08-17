@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
 import { GitlleryPanel, HierarchyDeletionDialog, Modal, MotionNumber, PageShell, RepositoryCard, SourceBadge, StatusBadge, SmartSearchInput, WorkMediaThumbnail, type SlideItem } from "@/components";
 import ActivityDotMatrix, { type ActivityDay } from "@/components/charts/ActivityDotMatrix";
@@ -240,6 +240,7 @@ export default function CreatorDetailPage() {
       `${Number(activityYear) + 1}-01-01`,
     ),
     enabled: activityYear !== null,
+    placeholderData: keepPreviousData,
     refetchInterval: POLL_IDLE_MS,
     staleTime: POLL_IDLE_MS,
   });

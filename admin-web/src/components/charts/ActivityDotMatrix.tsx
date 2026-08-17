@@ -4,6 +4,7 @@ import Link from "next/link";
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type KeyboardEvent,
@@ -51,7 +52,7 @@ function utcDateKey(date: Date): string {
 function buildCalendar(year: number, entries: Map<string, ActivityDay>): {
   days: CalendarDay[];
   weeks: number;
-  months: { key: string; labelDate: Date; week: number; index: number }[];
+  months: { key: string; labelDate: Date; week: number; weekSpan: number; index: number }[];
 } {
   const first = new Date(Date.UTC(year, 0, 1));
   const last = new Date(Date.UTC(year, 11, 31));
@@ -59,7 +60,7 @@ function buildCalendar(year: number, entries: Map<string, ActivityDay>): {
   const gridStart = new Date(first);
   gridStart.setUTCDate(gridStart.getUTCDate() - mondayOffset);
   const days: CalendarDay[] = [];
-  const months: { key: string; labelDate: Date; week: number; index: number }[] = [];
+  const months: { key: string; labelDate: Date; week: number; weekSpan: number; index: number }[] = [];
   const cursor = new Date(first);
   while (cursor <= last) {
     const sinceStart = Math.round((cursor.getTime() - gridStart.getTime()) / 86_400_000);
@@ -71,6 +72,7 @@ function buildCalendar(year: number, entries: Map<string, ActivityDay>): {
         key: `${year}-${cursor.getUTCMonth()}`,
         labelDate: new Date(cursor),
         week,
+        weekSpan: 1,
         index: cursor.getUTCMonth(),
       });
     }
@@ -84,10 +86,14 @@ function buildCalendar(year: number, entries: Map<string, ActivityDay>): {
     });
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
+  const weeks = Math.max(...days.map((day) => day.week)) + 1;
   return {
     days,
-    weeks: Math.max(...days.map((day) => day.week)) + 1,
-    months,
+    weeks,
+    months: months.map((month, index) => ({
+      ...month,
+      weekSpan: Math.max(1, (months[index + 1]?.week ?? weeks) - month.week),
+    })),
   };
 }
 
@@ -247,17 +253,45 @@ export default function ActivityDotMatrix({
   );
   const [activeIndex, setActiveIndex] = useState(firstActiveIndex);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-  const [selectedMonth, setSelectedMonth] = useState(() => (
-    calendar.days[firstActiveIndex]?.month ?? new Date().getUTCMonth()
-  ));
+  const [isYearListboxOpen, setIsYearListboxOpen] = useState(false);
+  const [activeYearIndex, setActiveYearIndex] = useState(() => Math.max(0, availableYears.indexOf(year)));
+  const yearPickerContainerRef = useRef<HTMLDivElement>(null);
+  const yearPickerRef = useRef<HTMLButtonElement>(null);
+  const yearListboxRef = useRef<HTMLDivElement>(null);
+  const shouldReturnYearFocusRef = useRef(false);
   const reveal = useViewportReveal<HTMLDivElement>(year);
   const animate = reveal.revealed && motionConfig.shouldAnimate();
 
   useEffect(() => {
     setActiveIndex(firstActiveIndex);
     setSelectedIndex(null);
-    setSelectedMonth(calendar.days[firstActiveIndex]?.month ?? 0);
   }, [calendar.days, firstActiveIndex, year]);
+
+  useEffect(() => {
+    setActiveYearIndex(Math.max(0, availableYears.indexOf(year)));
+  }, [availableYears, year]);
+
+  useEffect(() => {
+    if (!isYearListboxOpen) return;
+    const frame = window.requestAnimationFrame(() => yearListboxRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [isYearListboxOpen]);
+
+  useEffect(() => {
+    if (!isYearListboxOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (yearPickerContainerRef.current?.contains(event.target as Node)) return;
+      closeYearListbox(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [isYearListboxOpen]);
+
+  useEffect(() => {
+    if (isYearListboxOpen || !shouldReturnYearFocusRef.current) return;
+    shouldReturnYearFocusRef.current = false;
+    yearPickerRef.current?.focus();
+  }, [isYearListboxOpen]);
 
   const weekdayLabels = useMemo(
     () => Array.from({ length: 7 }, (_, index) => {
@@ -273,9 +307,38 @@ export default function ActivityDotMatrix({
     : null;
   const activeDay = calendar.days[activeIndex];
   const selectedDay = selectedIndex === null ? null : calendar.days[selectedIndex];
-  const activeMonthDays = calendar.days.filter(
-    (day) => day.month === selectedMonth && Boolean(day.entry?.total),
-  );
+
+  const closeYearListbox = (returnFocus = true) => {
+    shouldReturnYearFocusRef.current = returnFocus;
+    setIsYearListboxOpen(false);
+  };
+
+  const selectYear = (nextYear: number) => {
+    onYearChange(nextYear);
+    closeYearListbox();
+  };
+
+  const onYearListboxKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!availableYears.length) return;
+    let nextIndex = activeYearIndex;
+    if (event.key === "ArrowUp") nextIndex -= 1;
+    else if (event.key === "ArrowDown") nextIndex += 1;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = availableYears.length - 1;
+    else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      selectYear(availableYears[activeYearIndex]);
+      return;
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeYearListbox();
+      return;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    setActiveYearIndex(Math.max(0, Math.min(availableYears.length - 1, nextIndex)));
+  };
 
   const labelForDay = (day: CalendarDay) => {
     const sourceSummary = pointsForDay(day.entry, data.sources)
@@ -319,7 +382,7 @@ export default function ActivityDotMatrix({
   return (
     <div ref={reveal.ref} data-chart-kind="activity-dot-matrix">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex items-center gap-1 rounded-md border border-border bg-subtle p-1">
+        <div ref={yearPickerContainerRef} className="relative inline-flex items-center gap-1 rounded-md border border-border bg-subtle p-1">
           <button
             type="button"
             className="btn-icon"
@@ -329,15 +392,48 @@ export default function ActivityDotMatrix({
           >
             ←
           </button>
-          <label className="sr-only" htmlFor="activity-year">{t("charts.year")}</label>
-          <select
-            id="activity-year"
-            value={year}
-            onChange={(event) => onYearChange(Number(event.target.value))}
-            className="min-h-11 rounded-md border-0 bg-transparent px-2 text-sm font-semibold text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          <button
+            ref={yearPickerRef}
+            type="button"
+            aria-label={t("charts.year")}
+            aria-haspopup="listbox"
+            aria-expanded={isYearListboxOpen}
+            aria-controls="activity-year-listbox"
+            className="inline-flex min-h-11 items-center gap-1 rounded-md px-2 text-sm font-semibold text-fg hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+            onClick={() => setIsYearListboxOpen((open) => !open)}
           >
-            {availableYears.map((option) => <option key={option} value={option}>{option}</option>)}
-          </select>
+            {year}
+            <span aria-hidden>▾</span>
+          </button>
+          {isYearListboxOpen ? (
+            <div
+              ref={yearListboxRef}
+              id="activity-year-listbox"
+              role="listbox"
+              tabIndex={-1}
+              aria-label={t("charts.year")}
+              aria-activedescendant={`activity-year-option-${availableYears[activeYearIndex]}`}
+              className="absolute left-0 top-full z-20 mt-1 min-w-full overflow-hidden rounded-md border border-border bg-surface p-1 shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              onKeyDown={onYearListboxKeyDown}
+            >
+              {availableYears.map((option, index) => (
+                <button
+                  key={option}
+                  id={`activity-year-option-${option}`}
+                  type="button"
+                  role="option"
+                  aria-selected={option === year}
+                  className={`flex min-h-11 w-full items-center rounded px-2 text-left text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus ${
+                    index === activeYearIndex ? "bg-accent-subtle text-accent" : "text-fg hover:bg-subtle"
+                  }`}
+                  onMouseMove={() => setActiveYearIndex(index)}
+                  onClick={() => selectYear(option)}
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <button
             type="button"
             className="btn-icon"
@@ -353,163 +449,85 @@ export default function ActivityDotMatrix({
         </span>
       </div>
 
-      <div className="activity-desktop">
-        <div className="flex min-w-0 gap-2">
-          <div className="mt-6 grid w-4 shrink-0 grid-rows-7 gap-1" aria-hidden>
-            {weekdayLabels.map((label, index) => (
-              <span key={`${label}:${index}`} className="flex items-center text-[10px] font-medium text-muted">
-                {index % 2 === 0 ? label : ""}
-              </span>
-            ))}
-          </div>
-          <div className="min-w-0 flex-1">
-            <div
-              className="mb-1 grid h-5 gap-1"
-              style={{ gridTemplateColumns: `repeat(${calendar.weeks}, minmax(0, 1fr))` }}
+      <div data-calendar-scroll className="max-w-full overflow-x-auto pb-2">
+        <div
+          role="grid"
+          tabIndex={0}
+          data-calendar-grid="shared"
+          aria-label={t("creator_detail.works_timeline")}
+          aria-activedescendant={activeDay ? `activity-day-${activeDay.key}` : undefined}
+          aria-describedby="activity-grid-instructions"
+          className="grid w-max gap-1 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          style={{
+            gridTemplateColumns: `1rem repeat(${calendar.weeks}, 14px)`,
+            gridTemplateRows: "1.25rem repeat(7, 14px)",
+          }}
+          onKeyDown={onGridKeyDown}
+        >
+          <span aria-hidden style={{ gridColumn: 1, gridRow: 1 }} />
+          {calendar.months.map((month) => (
+            <span
+              key={month.key}
+              data-calendar-month={month.index}
+              className="truncate text-[10px] font-semibold uppercase tracking-wide text-muted"
+              style={{ gridColumn: `${month.week + 2} / span ${month.weekSpan}`, gridRow: 1 }}
+            >
+              {new Intl.DateTimeFormat(fmt.locale, { month: "short", timeZone: "UTC" }).format(month.labelDate)}
+            </span>
+          ))}
+          {weekdayLabels.map((label, weekday) => (
+            <span
+              key={`${label}:${weekday}`}
+              data-calendar-weekday={weekday}
+              className="flex items-center text-[10px] font-medium text-muted"
+              style={{ gridColumn: 1, gridRow: weekday + 2 }}
               aria-hidden
             >
-              {calendar.months.map((month) => (
-                <span
-                  key={month.key}
-                  className="truncate text-[10px] font-semibold uppercase tracking-wide text-muted"
-                  style={{ gridColumn: `${month.week + 1} / span 4` }}
-                >
-                  {new Intl.DateTimeFormat(fmt.locale, { month: "short", timeZone: "UTC" }).format(month.labelDate)}
-                </span>
-              ))}
-            </div>
-            <div
-              role="grid"
-              tabIndex={0}
-              aria-label={t("creator_detail.works_timeline")}
-              aria-activedescendant={activeDay ? `activity-day-${activeDay.key}` : undefined}
-              aria-describedby="activity-grid-instructions"
-              className="grid min-w-0 grid-rows-7 gap-1 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-              style={{
-                gridTemplateColumns: `repeat(${calendar.weeks}, minmax(0, 1fr))`,
-                gridAutoFlow: "column",
-              }}
-              onKeyDown={onGridKeyDown}
-            >
-              {weekdayLabels.map((_, weekday) => (
-                <div key={`row:${weekday}`} role="row" className="contents">
-                  {calendar.days.map((day, index) => {
-                    if (day.weekday !== weekday) return null;
-                    const points = pointsForDay(day.entry, data.sources);
-                    return (
-                      <div
-                        key={day.key}
-                        id={`activity-day-${day.key}`}
-                        role="gridcell"
-                        aria-label={labelForDay(day)}
-                        aria-selected={selectedIndex === index}
-                        className={`activity-calendar-cell relative aspect-square min-w-0 cursor-pointer rounded-sm ${
-                          activeIndex === index ? "bg-accent-subtle ring-1 ring-accent" : "hover:bg-subtle"
-                        }`}
-                        style={{ gridColumn: day.week + 1, gridRow: day.weekday + 1 }}
-                        onClick={() => {
-                          setActiveIndex(index);
-                          setSelectedIndex(index);
-                        }}
-                      >
-                        <SourceCircleCluster
-                          points={points}
-                          maximum={maximumSourceCount}
-                          colorFor={(source) => theme.colorFor(`source:${source}`)}
-                          entering={animate}
-                          delay={day.week * 11 + day.weekday * 3}
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>
-            <p id="activity-grid-instructions" className="sr-only">
-              {t("charts.activity_keyboard_hint")}
-            </p>
-          </div>
-        </div>
-        {selectedDay ? (
-          <div className="mt-3" aria-live="polite">
-            <SourceDetails
-              day={selectedDay}
-              sources={data.sources}
-              colorFor={(source) => theme.colorFor(`source:${source}`)}
-            />
-          </div>
-        ) : null}
-      </div>
-
-      <div className="activity-mobile">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {calendar.months.map((month) => {
-            const monthDays = calendar.days.filter((day) => day.month === month.index);
-            const monthTotal = monthDays.reduce((sum, day) => sum + (day.entry?.total || 0), 0);
-            const firstWeekday = monthDays[0]?.weekday || 0;
+              {label}
+            </span>
+          ))}
+          {calendar.days.map((day, index) => {
+            const points = pointsForDay(day.entry, data.sources);
             return (
-              <button
-                key={month.key}
-                type="button"
-                aria-pressed={selectedMonth === month.index}
-                aria-label={t("charts.activity_month_label", {
-                  month: new Intl.DateTimeFormat(fmt.locale, { month: "long", timeZone: "UTC" }).format(month.labelDate),
-                  count: monthTotal,
-                })}
-                className={`min-h-11 rounded-md border p-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus ${
-                  selectedMonth === month.index
-                    ? "border-accent bg-accent-subtle"
-                    : "border-border bg-surface hover:bg-subtle"
+              <div
+                key={day.key}
+                id={`activity-day-${day.key}`}
+                role="gridcell"
+                aria-label={labelForDay(day)}
+                aria-selected={selectedIndex === index}
+                className={`activity-calendar-cell relative h-3.5 w-3.5 cursor-pointer rounded-sm ${
+                  activeIndex === index ? "bg-accent-subtle ring-1 ring-accent" : "hover:bg-subtle"
                 }`}
-                onClick={() => setSelectedMonth(month.index)}
+                style={{ gridColumn: day.week + 2, gridRow: day.weekday + 2 }}
+                onClick={() => {
+                  setActiveIndex(index);
+                  setSelectedIndex(index);
+                }}
               >
-                <span className="flex items-center justify-between gap-2 text-xs font-semibold text-fg">
-                  {new Intl.DateTimeFormat(fmt.locale, { month: "short", timeZone: "UTC" }).format(month.labelDate)}
-                  <span className="font-mono text-muted">{fmt.number(monthTotal)}</span>
-                </span>
-                <span className="mt-2 grid grid-cols-7 gap-0.5" aria-hidden>
-                  {Array.from({ length: firstWeekday }).map((_, index) => (
-                    <span key={`blank:${index}`} className="aspect-square" />
-                  ))}
-                  {monthDays.map((day) => (
-                    <span key={day.key} className="flex aspect-square items-center justify-center rounded-sm bg-subtle">
-                      <span className="flex h-full w-full items-center justify-center">
-                        {pointsForDay(day.entry, data.sources).slice(0, 4).map((point) => (
-                          <span
-                            key={point.source}
-                            className="h-1 w-1 rounded-full"
-                            style={{ backgroundColor: theme.colorFor(`source:${point.source}`) }}
-                          />
-                        ))}
-                      </span>
-                    </span>
-                  ))}
-                </span>
-              </button>
+                <SourceCircleCluster
+                  points={points}
+                  maximum={maximumSourceCount}
+                  colorFor={(source) => theme.colorFor(`source:${source}`)}
+                  entering={animate}
+                  delay={day.week * 11 + day.weekday * 3}
+                />
+              </div>
             );
           })}
         </div>
-        <div className="mt-3 space-y-2" aria-live="polite">
-          <h3 className="text-sm font-semibold text-fg">
-            {t("charts.activity_month_details", {
-              month: new Intl.DateTimeFormat(fmt.locale, { month: "long", timeZone: "UTC" })
-                .format(new Date(Date.UTC(year, selectedMonth, 1))),
-            })}
-          </h3>
-          {activeMonthDays.length ? activeMonthDays.map((day) => (
-            <SourceDetails
-              key={day.key}
-              day={day}
-              sources={data.sources}
-              colorFor={(source) => theme.colorFor(`source:${source}`)}
-            />
-          )) : (
-            <div className="rounded-md border border-border bg-subtle p-3 text-sm text-muted">
-              {t("charts.activity_month_empty")}
-            </div>
-          )}
-        </div>
       </div>
+      <p id="activity-grid-instructions" className="sr-only">
+        {t("charts.activity_keyboard_hint")}
+      </p>
+      {selectedDay ? (
+        <div className="mt-3" aria-live="polite">
+          <SourceDetails
+            day={selectedDay}
+            sources={data.sources}
+            colorFor={(source) => theme.colorFor(`source:${source}`)}
+          />
+        </div>
+      ) : null}
 
       <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted">
         {data.sources.map((source) => (

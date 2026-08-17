@@ -260,7 +260,11 @@ async function installFixtureRoutes(context: BrowserContext) {
       await route.fulfill({ json: [] });
     } else if (path === "/api/v1/creators/fixture-creator/timeline") {
       const year = Number((url.searchParams.get("from_date") || "2026").slice(0, 4));
-      const days = year === 2025
+      const days = year === 2024
+        ? [
+            { date: "2024-02-29", total: 1, pixiv: 1, pixiv_ids: ["work-2024-1"] },
+          ]
+        : year === 2025
         ? [
             { date: "2025-02-04", total: 2, pixiv: 2, pixiv_ids: ["work-2025-1", "work-2025-2"] },
             { date: "2025-09-18", total: 1, x: 1, x_ids: ["work-2025-3"] },
@@ -299,6 +303,7 @@ async function installFixtureRoutes(context: BrowserContext) {
             { tag: "seventh-is-not-charted", count: 8 },
           ],
           monthly_frequency: [
+            { month: "2024-02", count: 1 },
             { month: "2025-01", count: 1 },
             { month: "2025-02", count: 3 },
             { month: "2025-09", count: 2 },
@@ -1148,7 +1153,7 @@ for (const viewport of [
   });
 }
 
-test("creator charts share the data contract and year selection reloads the requested range", async ({ page }) => {
+test("creator activity calendar aligns real month spans and its year listbox supports keyboard selection", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto("/admin/creators/fixture-creator");
 
@@ -1161,13 +1166,20 @@ test("creator charts share the data contract and year selection reloads the requ
   await page.screenshot({ path: "/tmp/auto-gallery-creator-charts-desktop.png", fullPage: true });
 
   const activityGrid = page.locator('[data-chart-kind="activity-dot-matrix"] [role="grid"]');
+  await expect(activityGrid).toHaveAttribute("data-calendar-grid", "shared");
+  await expect(activityGrid.locator('[data-calendar-month="0"]')).toHaveCSS("grid-column", "2 / span 4");
+  await expect(activityGrid.locator('[data-calendar-month="11"]')).toHaveCSS("grid-column", "50 / span 5");
+  await expect(activityGrid.locator("[data-calendar-weekday]")).toHaveCount(7);
+  await expect(activityGrid.locator('[data-calendar-weekday="1"]')).not.toBeEmpty();
+  await expect(activityGrid.locator("#activity-day-2026-01-01")).toHaveCSS("grid-column", "2");
+  await expect(activityGrid.locator("#activity-day-2026-01-01")).toHaveCSS("grid-row", "5");
   await activityGrid.focus();
   const firstActiveDay = await activityGrid.getAttribute("aria-activedescendant");
   await page.keyboard.press("ArrowRight");
   const nextActiveDay = await activityGrid.getAttribute("aria-activedescendant");
   expect(nextActiveDay).not.toBe(firstActiveDay);
   await page.keyboard.press("Enter");
-  await expect(page.locator('.activity-desktop [aria-live="polite"]')).toBeVisible();
+  await expect(page.locator('[data-chart-kind="activity-dot-matrix"] [aria-live="polite"]')).toBeVisible();
   await page.keyboard.press("Escape");
 
   const multiSourceDay = page.locator("#activity-day-2026-04-12");
@@ -1182,11 +1194,42 @@ test("creator charts share the data contract and year selection reloads the requ
     return url.pathname === "/api/v1/creators/fixture-creator/timeline"
       && url.searchParams.get("from_date") === "2025-01-01";
   });
-  await page.getByLabel("Year", { exact: true }).selectOption("2025");
+  const yearPicker = page.getByRole("button", { name: "Year", exact: true });
+  await yearPicker.click();
+  const yearListbox = page.getByRole("listbox", { name: "Year", exact: true });
+  await expect(yearListbox).toBeFocused();
+  await expect(yearListbox).toHaveAttribute("aria-activedescendant", "activity-year-option-2026");
+  await expect(page.getByRole("option", { name: "2026", exact: true })).toHaveAttribute("aria-selected", "true");
+  await yearListbox.press("ArrowUp");
+  await expect(yearListbox).toHaveAttribute("aria-activedescendant", "activity-year-option-2025");
+  await yearListbox.press("Home");
+  await yearListbox.press("End");
+  await yearListbox.press("ArrowUp");
+  await yearListbox.press("Enter");
+  await expect(yearListbox).toBeHidden();
+  await expect(yearPicker).toBeFocused();
   const request = await request2025;
   const requestUrl = new URL(request.url());
   expect(requestUrl.searchParams.get("to_date")).toBe("2026-01-01");
   await expect(page.getByTestId("creator-activity-chart")).toContainText("Activity peaked on");
+  await expect(activityGrid.getByRole("gridcell")).toHaveCount(365);
+
+  await yearPicker.click();
+  await yearListbox.press("Escape");
+  await expect(yearPicker).toBeFocused();
+  await yearPicker.click();
+  await page.getByRole("heading", { name: "Fixture Creator" }).click();
+  await expect(yearListbox).toBeHidden();
+
+  const request2024 = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v1/creators/fixture-creator/timeline"
+      && url.searchParams.get("from_date") === "2024-01-01";
+  });
+  await page.getByRole("button", { name: "Previous year", exact: true }).click();
+  await request2024;
+  await expect(activityGrid.locator("#activity-day-2024-02-29")).toBeVisible();
+  await expect(activityGrid.getByRole("gridcell")).toHaveCount(366);
 
   await expect(page.locator("[data-chart-frame] details")).toHaveCount(0);
   await expect(page.locator("[data-chart-frame] table")).toHaveCount(0);
@@ -1209,10 +1252,11 @@ test("creator charts share the data contract and year selection reloads the requ
     ));
     expect(overflowingCharts).toEqual([]);
   }
-  await expect(page.locator(".activity-mobile button")).toHaveCount(12);
-  await page.locator(".activity-mobile button").nth(1).click();
-  await expect(page.locator(".activity-mobile")).toContainText("February publishing details");
-  await expect(page.locator(".activity-mobile")).toContainText("pixiv: 2 works");
+  const calendarScrollMetrics = await page.locator('[data-calendar-scroll]').evaluate((node) => ({
+    scrollWidth: node.scrollWidth,
+    clientWidth: node.clientWidth,
+  }));
+  expect(calendarScrollMetrics.scrollWidth).toBeGreaterThan(calendarScrollMetrics.clientWidth);
   await page.screenshot({ path: "/tmp/auto-gallery-creator-charts-mobile.png", fullPage: true });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.reload();
