@@ -12,6 +12,7 @@ from uuid import UUID
 from sqlalchemy import and_, case, delete, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
@@ -19,6 +20,7 @@ from app.models.repository_sync_receipt import RepositorySyncReceipt
 from app.models.repository_sync_receipt import MaintenanceAuditEvent, SearchIndexState
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
+from app.models.storage_artifact import StorageArtifact
 from app.models.task_run import TaskRun
 from app.services.sync_outcome import download_job_outcome
 from app.services.tasks import TaskService, task_payload
@@ -217,6 +219,70 @@ async def upsert_repository_sync_receipt(
     return receipt
 
 
+async def _repository_has_recoverable_backlog(
+    db: AsyncSession,
+    repository_id: UUID,
+) -> bool:
+    """Fail closed when repository-scoped importable ledger work remains."""
+
+    repository = await db.get(SubscriptionSource, repository_id)
+    if repository is None:
+        return True
+    subscription = await db.get(Subscription, repository.subscription_id)
+    if subscription is None:
+        return True
+
+    # Reuse Task 5's exact provider/creator mapping rather than treating every
+    # same-source directory as belonging to this repository.
+    from app.services.repository_artifact_reconciliation import _repository_creator_dirs
+
+    creator_dirs = await _repository_creator_dirs(
+        db,
+        repository,
+        subscription.creator_id,
+    )
+    if not creator_dirs:
+        return True
+    return (
+        await db.execute(
+            select(StorageArtifact.id)
+            .where(
+                StorageArtifact.source == repository.source,
+                StorageArtifact.creator_dir.in_(creator_dirs),
+                StorageArtifact.artifact_type == "metadata_json",
+                StorageArtifact.state.in_(("new", "importing", "failed")),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none() is not None
+
+
+async def _orphan_has_recoverable_repository_state(
+    db: AsyncSession,
+    task: TaskRun,
+) -> bool:
+    """Keep compacted/removed failed repository work visible to operators."""
+
+    if task.subject_type != "download_job" or task.subject_id is None:
+        return False
+    receipt = (
+        await db.execute(
+            select(RepositorySyncReceipt).where(
+                RepositorySyncReceipt.source_download_job_id == task.subject_id
+            )
+        )
+    ).scalar_one_or_none()
+    if receipt is not None and receipt.status in {"failed", "stale"}:
+        return True
+    repository_id = receipt.repository_id if receipt is not None else None
+    if repository_id is None:
+        try:
+            repository_id = UUID(str((task.meta or {}).get("subscription_source_id")))
+        except (TypeError, ValueError):
+            return False
+    return await _repository_has_recoverable_backlog(db, repository_id)
+
+
 async def reconcile_task_truth(
     db: AsyncSession,
     *,
@@ -369,6 +435,17 @@ async def reconcile_task_truth(
                 .limit(1)
             )
         ).scalar_one_or_none()
+        if (
+            later_receipt is not None
+            and later_receipt.outcome_code == "no_changes"
+            and await _repository_has_recoverable_backlog(
+                db,
+                parent.subscription_source_id,
+            )
+        ):
+            # A later empty scan only says that scan found nothing.  It is not
+            # evidence that this repository's previous import backlog drained.
+            return current_receipt, None
         return current_receipt, later_receipt
 
     for task in tasks:
@@ -387,6 +464,7 @@ async def reconcile_task_truth(
                 task.reason_code == "orphaned_subject"
                 and domain_job is None
                 and not _rq_reference_is_active(task)
+                and not await _orphan_has_recoverable_repository_state(db, task)
             ):
                 await resolve_open_attention(
                     task,
@@ -539,9 +617,22 @@ async def compact_terminal_tasks(
             )
         ).scalar_one()
     )
+    # A receipt is durable history, but it must never turn recoverable ledger
+    # state into disposable operational state.  Keep its DownloadJob (and its
+    # TaskRun) while any owned artifact can still be imported or retried.
+    recoverable_artifacts = exists().where(
+        StorageArtifact.download_job_id == DownloadJob.id,
+        StorageArtifact.state.in_(("new", "importing", "failed")),
+    )
+    child_task = aliased(TaskRun)
+    open_child_attention = exists().where(
+        child_task.parent_task_id == TaskRun.id,
+        child_task.attention_state == "open",
+    )
     downloadable = exists().where(
         DownloadJob.id == TaskRun.subject_id,
         DownloadJob.status.in_(COMPACTABLE_DOWNLOAD_STATUSES),
+        ~recoverable_artifacts,
         or_(
             DownloadJob.subscription_source_id.is_(None),
             exists().where(
@@ -557,6 +648,8 @@ async def compact_terminal_tasks(
                 .where(
                     TaskRun.compactable_at.is_not(None),
                     TaskRun.compactable_at <= now,
+                    TaskRun.attention_state != "open",
+                    ~open_child_attention,
                     or_(TaskRun.subject_type.is_(None), TaskRun.subject_type != "import_job"),
                     or_(
                         TaskRun.subject_type.is_(None),
@@ -595,6 +688,7 @@ async def compact_terminal_tasks(
                     select(DownloadJob.id).where(
                         DownloadJob.id.in_(candidate_download_ids),
                         DownloadJob.status.in_(COMPACTABLE_DOWNLOAD_STATUSES),
+                        ~recoverable_artifacts,
                         or_(
                             DownloadJob.subscription_source_id.is_(None),
                             exists().where(
@@ -621,6 +715,7 @@ async def compact_terminal_tasks(
             (
                 await db.execute(
                     select(TaskRun.id).where(
+                        TaskRun.attention_state != "open",
                         or_(
                             TaskRun.parent_task_id.in_(selected_task_ids)
                             if selected_task_ids

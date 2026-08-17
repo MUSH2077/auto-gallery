@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
+from inspect import isawaitable
 from pathlib import Path
+from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.download_job import DownloadJob
 from app.models.storage_artifact import StorageArtifact
+from app.models.subscription import Subscription
+from app.models.subscription_source import SubscriptionSource
 from app.providers import registry
 from app.services.artifact_ledger import ArtifactLedger, artifact_row
 from app.services.artifact_discovery import group_metadata_by_work, media_files_for_group
@@ -33,6 +37,37 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
     root = Path(str(settings.download_root))
     requested_source = options.get("source")
     source_filter = source_key_for_extractor(requested_source) if requested_source else None
+    repository: SubscriptionSource | None = None
+    repository_dirs: set[str] | None = None
+    raw_repository_id = options.get("repository_id")
+    if raw_repository_id:
+        try:
+            repository_id = UUID(str(raw_repository_id))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("repository_id must be a valid repository UUID") from exc
+        repository = await db.get(SubscriptionSource, repository_id)
+        if repository is None:
+            raise ValueError("repository_id does not reference a repository")
+        repository_source = source_key_for_extractor(repository.source)
+        if source_filter and source_filter != repository_source:
+            raise ValueError("source does not match repository source")
+        source_filter = repository_source
+        subscription = await db.get(Subscription, repository.subscription_id)
+        if subscription is None:
+            raise ValueError("repository has no subscription owner")
+        # Task 5 owns the exact source-creator/provider identity resolution.
+        # Reusing it prevents a global source scan from draining a sibling
+        # repository with a lookalike directory.
+        from app.services.repository_artifact_reconciliation import _repository_creator_dirs
+
+        repository_dirs = await _repository_creator_dirs(
+            db,
+            repository,
+            subscription.creator_id,
+        )
+        if not repository_dirs:
+            raise ValueError("repository has no resolvable creator directory")
+
     sources: list[tuple[str, str]] = []
     if root.exists():
         for d in sorted(root.iterdir()):
@@ -57,6 +92,14 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
         "metadata_fallback": 0,
         "subscription_sources_created": 0,
         "import_job_ids": [],
+        # Stable operation counters are deliberately independent of the old
+        # display-oriented names above, so a paused/retried drain can report
+        # truthful resumable progress without changing older callers.
+        "scanned": 0,
+        "existing": 0,
+        "imported": 0,
+        "skipped": 0,
+        "failed": 0,
     }
     parent_task_id = options.get("parent_task_id")
     # Recovery hammer: when the DB was cleared (e.g. creators deleted) but the
@@ -65,6 +108,24 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
     # and reprocesses everything (idempotent: import-side claim_work dedups).
     reset_ledger = bool(options.get("reset_ledger") or options.get("force"))
     stats["reset_ledger"] = reset_ledger
+
+    async def report_progress(source: str, total: int) -> None:
+        if not progress_callback:
+            return
+        payload = {
+            "phase": "running",
+            "scanned": stats["scanned"],
+            "total": total,
+            "source": source,
+            **{
+                key: stats[key]
+                for key in ("existing", "imported", "skipped", "failed")
+            },
+        }
+        outcome = progress_callback(payload)
+        if isawaitable(outcome):
+            await outcome
+
     for disk_source, source in sources:
         stats["sources"] += 1
         scan_root = root / disk_source
@@ -86,11 +147,15 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
                 continue
             if str(rel) in done_paths:
                 stats["skipped_done"] += 1
+                stats["existing"] += 1
+                continue
+            if repository_dirs is not None and rel.parts[1] not in repository_dirs:
                 continue
             groups[rel.parts[1]].append(jf)
 
         total = len(groups)
         for i, (creator_dir, jsons) in enumerate(sorted(groups.items())):
+            stats["scanned"] += 1
             provisioned = None
             identity = None
             try:
@@ -102,8 +167,18 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
                 logger.warning("disk_import: could not provision identity for %s/%s", source, creator_dir, exc_info=True)
                 await db.rollback()
                 stats["skipped_invalid_metadata"] += 1
-                if progress_callback:
-                    progress_callback({"phase": "running", "scanned": i + 1, "total": total, "source": source})
+                stats["skipped"] += 1
+                stats["failed"] += 1
+                await report_progress(source, total)
+                continue
+
+            if repository is not None and provisioned.subscription_source.id != repository.id:
+                # The directory matched a provider identity but did not resolve
+                # to this exact repository.  Never create a duplicate source as
+                # a side effect of a scoped backlog drain.
+                await db.rollback()
+                stats["skipped"] += 1
+                await report_progress(source, total)
                 continue
 
             if provisioned.enrichment_status == "danbooru_found":
@@ -150,13 +225,8 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
                         active_job.status,
                     )
                     await db.rollback()
-                    if progress_callback:
-                        progress_callback({
-                            "phase": "running",
-                            "scanned": i + 1,
-                            "total": total,
-                            "source": source,
-                        })
+                    stats["skipped"] += 1
+                    await report_progress(source, total)
                     continue
 
             job = DownloadJob(
@@ -205,6 +275,7 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
             if not new_paths:
                 await db.rollback()
                 stats["skipped_invalid_metadata"] += len(jsons) - len(invalid_paths)
+                stats["skipped"] += 1
                 continue
             await ArtifactLedger(db).upsert_many(rows)
             # Identity provisioning and the synthetic DownloadJob both change
@@ -217,12 +288,33 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
             )
             await db.commit()
 
-            import_job_id = await _enqueue_import(str(job.id), new_json_paths=new_paths)
+            try:
+                import_job_id = await _enqueue_import(
+                    str(job.id),
+                    new_json_paths=new_paths,
+                )
+            except Exception as exc:
+                # The artifact ledger was committed before publication.  Keep
+                # those rows ``new`` and terminalize only this synthetic owner,
+                # so a later scoped/global drain can safely recover it instead
+                # of treating a temporary queue outage as lost work.
+                logger.warning(
+                    "disk_import: import publication failed for %s/%s",
+                    source,
+                    creator_dir,
+                    exc_info=True,
+                )
+                job.status = "failed"
+                job.error_log = str(exc)[:4000]
+                await db.commit()
+                stats["failed"] += 1
+                await report_progress(source, total)
+                continue
             if import_job_id:
                 stats["import_job_ids"].append(import_job_id)
+                stats["imported"] += 1
                 if parent_task_id:
                     try:
-                        from uuid import UUID
                         from app.services.tasks import TaskService
                         task = await TaskService(db).get_by_subject("import_job", UUID(import_job_id))
                         if task:
@@ -232,7 +324,6 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
                         logger.warning("disk_import: could not link child import task %s to %s", import_job_id, parent_task_id, exc_info=True)
             stats["creators"] += 1
             stats["jobs"] += 1
-            if progress_callback:
-                progress_callback({"phase": "running", "scanned": i + 1, "total": total, "source": source})
+            await report_progress(source, total)
 
     return stats

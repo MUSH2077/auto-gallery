@@ -14,6 +14,19 @@ def test_reconcile_downloads_to_db_is_importable():
     assert list(sig.parameters)[:2] == ["db", "options"]
 
 
+def test_import_from_disk_request_preserves_optional_repository_scope():
+    """The enqueue request carries a typed repository scope to the worker."""
+    from uuid import uuid4
+
+    from app.api.admin.data import ImportFromDiskRequest
+
+    repository_id = uuid4()
+    request = ImportFromDiskRequest(source="pixiv", repository_id=repository_id)
+
+    assert request.repository_id == repository_id
+    assert request.model_dump(mode="json")["repository_id"] == str(repository_id)
+
+
 async def _clear_pipeline_tables(db):
     await db.execute(text("""
         TRUNCATE
@@ -126,6 +139,172 @@ async def test_reconcile_downloads_to_db_registers_and_enqueues_idempotently(tmp
             assert third["creators"] == 1
             assert third["jobs"] == 1
             assert len(enqueued) == 2
+    finally:
+        async with async_session() as db:
+            await _clear_pipeline_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_disk_import_repository_scope_uses_exact_creator_directory_and_progress(tmp_path, monkeypatch):
+    """A repository drain must never absorb another same-provider creator."""
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models.creator import Creator
+    from app.models.subscription import Subscription
+    from app.models.subscription_source import SubscriptionSource
+    from app.services.disk_import import reconcile_downloads_to_db
+
+    download_root = tmp_path / "downloads"
+    selected_dir = download_root / "pixiv" / "1980643" / "38362603"
+    other_dir = download_root / "pixiv" / "999999" / "38362604"
+    selected_dir.mkdir(parents=True)
+    other_dir.mkdir(parents=True)
+    (selected_dir / "metadata.json").write_text(json.dumps(_pixiv_metadata()), encoding="utf-8")
+    (selected_dir / "p0.jpg").write_bytes(b"fixture")
+    (other_dir / "metadata.json").write_text(
+        json.dumps(_pixiv_metadata(work_id=38362604, creator_id=999999)),
+        encoding="utf-8",
+    )
+    (other_dir / "p0.jpg").write_bytes(b"fixture")
+    monkeypatch.setattr(settings, "download_root", str(download_root))
+    monkeypatch.setattr("app.services.disk_identity.danbooru_svc.search_and_extract", lambda **_: (None, []))
+
+    enqueued: list[set[str]] = []
+
+    async def fake_enqueue(_download_job_id, import_error=None, new_json_paths=None):
+        enqueued.append(set(new_json_paths or []))
+        return f"import-{len(enqueued)}"
+
+    monkeypatch.setattr("app.jobs.download._enqueue_import", fake_enqueue)
+    progress_reports: list[dict] = []
+
+    async def record_progress(progress: dict):
+        progress_reports.append(progress)
+
+    try:
+        async with async_session() as db:
+            await _clear_pipeline_tables(db)
+            creator = Creator(name="selected")
+            db.add(creator)
+            await db.flush()
+            subscription = Subscription(creator_id=creator.id, name="Selected")
+            db.add(subscription)
+            await db.flush()
+            repository = SubscriptionSource(
+                subscription_id=subscription.id,
+                source="pixiv",
+                source_creator_id="1980643",
+                source_url="https://www.pixiv.net/users/1980643",
+            )
+            db.add(repository)
+            await db.commit()
+
+            result = await reconcile_downloads_to_db(
+                db,
+                {"source": "pixiv", "repository_id": str(repository.id)},
+                progress_callback=record_progress,
+            )
+
+            assert result["scanned"] == 1
+            assert result["imported"] == 1
+            assert result["existing"] == 0
+            assert result["skipped"] == 0
+            assert result["failed"] == 0
+            assert result["jobs"] == 1
+            assert enqueued == [{str(selected_dir / "metadata.json")}]
+            assert progress_reports[-1] == {
+                "phase": "running",
+                "scanned": 1,
+                "total": 1,
+                "source": "pixiv",
+                "existing": 0,
+                "imported": 1,
+                "skipped": 0,
+                "failed": 0,
+            }
+    finally:
+        async with async_session() as db:
+            await _clear_pipeline_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_disk_import_rejects_repository_source_mismatch(tmp_path, monkeypatch):
+    """The scope token is only valid for the repository's canonical source."""
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models.creator import Creator
+    from app.models.subscription import Subscription
+    from app.models.subscription_source import SubscriptionSource
+    from app.services.disk_import import reconcile_downloads_to_db
+
+    monkeypatch.setattr(settings, "download_root", str(tmp_path / "downloads"))
+    try:
+        async with async_session() as db:
+            await _clear_pipeline_tables(db)
+            creator = Creator(name="source-mismatch")
+            db.add(creator)
+            await db.flush()
+            subscription = Subscription(creator_id=creator.id, name="Source mismatch")
+            db.add(subscription)
+            await db.flush()
+            repository = SubscriptionSource(
+                subscription_id=subscription.id,
+                source="pixiv",
+                source_creator_id="1980643",
+                source_url="https://www.pixiv.net/users/1980643",
+            )
+            db.add(repository)
+            await db.commit()
+
+            with pytest.raises(ValueError, match="does not match repository source"):
+                await reconcile_downloads_to_db(
+                    db,
+                    {"source": "x", "repository_id": str(repository.id)},
+                )
+    finally:
+        async with async_session() as db:
+            await _clear_pipeline_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_disk_import_records_enqueue_failure_and_leaves_ledger_resumable(tmp_path, monkeypatch):
+    """One creator failure must not erase the durable ledger or abort the drain."""
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models.storage_artifact import StorageArtifact
+    from app.services.disk_import import reconcile_downloads_to_db
+
+    download_root = tmp_path / "downloads"
+    work_dir = download_root / "pixiv" / "1980643" / "38362603"
+    work_dir.mkdir(parents=True)
+    (work_dir / "metadata.json").write_text(json.dumps(_pixiv_metadata()), encoding="utf-8")
+    (work_dir / "p0.jpg").write_bytes(b"fixture")
+    monkeypatch.setattr(settings, "download_root", str(download_root))
+    monkeypatch.setattr("app.services.disk_identity.danbooru_svc.search_and_extract", lambda **_: (None, []))
+
+    async def failing_enqueue(*_args, **_kwargs):
+        raise RuntimeError("queue unavailable")
+
+    monkeypatch.setattr("app.jobs.download._enqueue_import", failing_enqueue)
+
+    try:
+        async with async_session() as db:
+            await _clear_pipeline_tables(db)
+            result = await reconcile_downloads_to_db(db, {"source": "pixiv"})
+
+            assert result["scanned"] == 1
+            assert result["imported"] == 0
+            assert result["failed"] == 1
+            assert result["jobs"] == 0
+            assert int((await db.execute(select(func.count(StorageArtifact.id)))).scalar_one()) == 2
+            states = set((await db.execute(select(StorageArtifact.state))).scalars())
+            assert states == {"new"}
     finally:
         async with async_session() as db:
             await _clear_pipeline_tables(db)

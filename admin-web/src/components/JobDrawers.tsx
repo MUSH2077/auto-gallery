@@ -10,6 +10,7 @@ import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { classifyError } from "@/lib/jobCategory";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { parseSyncOutcome } from "@/lib/syncOutcome";
+import { canPauseDownload } from "@/lib/task-actions";
 
 export function shortId(id?: string | null) {
   return id ? id.slice(0, 8) : "-";
@@ -253,7 +254,7 @@ export function JobDetailDrawer({
           <div className="space-y-4">
             <div className="flex flex-wrap gap-2">
               {dl.retryable !== false && <button onClick={() => onRetryDownload(dl.id)} className="btn-primary text-xs">{t("jobs.retry")}</button>}
-              {["enqueued","downloading","downloaded","importing","failed","stale"].includes(dl.status) && <button onClick={() => onPauseDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.pause")}</button>}
+              {canPauseDownload(dl.status) && <button onClick={() => onPauseDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.pause")}</button>}
               {dl.status === "paused" && <button onClick={() => onResumeDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.resume")}</button>}
               <button onClick={() => onDeleteDownload(dl.id)} className="btn-danger text-xs">{t("jobs.del")}</button>
             </div>

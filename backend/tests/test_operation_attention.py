@@ -11,6 +11,7 @@ async def _clear(db):
             search_index_states,
             task_events,
             task_runs,
+            storage_artifacts,
             import_jobs,
             download_jobs,
             subscription_sources,
@@ -111,6 +112,82 @@ async def test_compaction_never_deletes_repository_job_without_receipt():
 
             report = await compact_terminal_tasks(db, dry_run=False)
             assert report["skipped_without_receipt"] == 1
+            assert await db.get(TaskRun, task.id) is not None
+            assert await db.get(DownloadJob, download.id) is not None
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_compaction_keeps_open_attention_even_after_repository_receipt_exists():
+    """An operator-visible failure must survive its normal retention window."""
+    from app.database import async_session, engine
+    from app.models import DownloadJob, TaskRun
+    from app.services.operation_attention import (
+        compact_terminal_tasks,
+        upsert_repository_sync_receipt,
+    )
+    from app.services.tasks import TaskService
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            _repository, download = await _repository_fixture(db, download_status="failed")
+            task = await TaskService(db).ensure_download_task(download)
+            task.attention_state = "open"
+            task.compactable_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            await upsert_repository_sync_receipt(db, download, status="failed")
+            await db.commit()
+
+            report = await compact_terminal_tasks(db, dry_run=False)
+
+            assert report["deleted_tasks"] == 0
+            assert await db.get(TaskRun, task.id) is not None
+            assert await db.get(DownloadJob, download.id) is not None
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_compaction_keeps_download_that_owns_recoverable_artifacts():
+    """The receipt is history, not permission to drop retryable ledger rows."""
+    from app.database import async_session, engine
+    from app.models import DownloadJob, StorageArtifact, TaskRun
+    from app.services.operation_attention import (
+        compact_terminal_tasks,
+        upsert_repository_sync_receipt,
+    )
+    from app.services.tasks import TaskService
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            _repository, download = await _repository_fixture(db)
+            task = await TaskService(db).ensure_download_task(download)
+            task.compactable_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            db.add(StorageArtifact(
+                storage_root="downloads",
+                file_path="pixiv/123/unfinished.json",
+                source="pixiv",
+                creator_dir="123",
+                source_work_id="unfinished",
+                file_name="unfinished.json",
+                artifact_type="metadata_json",
+                download_job_id=download.id,
+                state="failed",
+            ))
+            await upsert_repository_sync_receipt(db, download)
+            await db.commit()
+
+            report = await compact_terminal_tasks(db, dry_run=False)
+
+            assert report["deleted_download_jobs"] == 0
             assert await db.get(TaskRun, task.id) is not None
             assert await db.get(DownloadJob, download.id) is not None
     finally:
@@ -257,6 +334,116 @@ async def test_later_success_resolves_historical_stale_and_marks_receipt_recover
             assert stale_receipt.recovered is True
             assert stale_receipt.recovered_at is not None
             assert int((await db.execute(select(func.count(RepositorySyncReceipt.id)))).scalar_one()) == 2
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_no_changes_receipt_does_not_resolve_failed_task_while_repository_backlog_remains():
+    """A clean later scan cannot hide importable work left by an earlier failure."""
+    from app.database import async_session, engine
+    from app.models import DownloadJob, StorageArtifact
+    from app.services.operation_attention import (
+        reconcile_task_truth,
+        upsert_repository_sync_receipt,
+    )
+    from app.services.tasks import TaskService
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            repository, failed_download = await _repository_fixture(
+                db,
+                download_status="failed",
+            )
+            failed_task = await TaskService(db).ensure_download_task(failed_download)
+            failed_task.finished_at = datetime.now(timezone.utc) - timedelta(hours=2)
+            failed_task.updated_at = failed_task.finished_at
+            await upsert_repository_sync_receipt(db, failed_download, status="failed")
+            db.add(StorageArtifact(
+                storage_root="downloads",
+                file_path="pixiv/123/pending.json",
+                source="pixiv",
+                creator_dir="123",
+                source_work_id="pending",
+                file_name="pending.json",
+                artifact_type="metadata_json",
+                state="new",
+            ))
+            later = DownloadJob(
+                subscription_id=failed_download.subscription_id,
+                subscription_source_id=repository.id,
+                source="pixiv",
+                source_url=repository.source_url,
+                status="complete",
+                manifest={"outcome": {"code": "no_changes"}},
+            )
+            db.add(later)
+            await db.flush()
+            later_task = await TaskService(db).ensure_download_task(later)
+            later_task.finished_at = datetime.now(timezone.utc)
+            later_task.updated_at = later_task.finished_at
+            later_receipt = await upsert_repository_sync_receipt(
+                db,
+                later,
+                status="complete",
+            )
+            later_receipt.outcome_code = "no_changes"
+            await db.commit()
+
+            report = await reconcile_task_truth(db, dry_run=False)
+            await db.refresh(failed_task)
+
+            assert report["recovered"] == 0
+            assert failed_task.attention_state == "open"
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_orphan_with_failed_repository_receipt_remains_actionable():
+    """Do not auto-resolve a retryable orphan merely because its row was compacted."""
+    from uuid import uuid4
+
+    from app.database import async_session, engine
+    from app.models import RepositorySyncReceipt, TaskRun
+    from app.services.operation_attention import reconcile_task_truth
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            repository, _download = await _repository_fixture(db)
+            missing_download_id = uuid4()
+            task = TaskRun(
+                kind="download",
+                subject_type="download_job",
+                subject_id=missing_download_id,
+                status="failed",
+                attention_state="open",
+                reason_code="orphaned_subject",
+                meta={"subscription_source_id": str(repository.id)},
+            )
+            db.add(task)
+            db.add(RepositorySyncReceipt(
+                repository_id=repository.id,
+                source_download_job_id=missing_download_id,
+                source="pixiv",
+                status="failed",
+                finished_at=datetime.now(timezone.utc),
+            ))
+            await db.commit()
+
+            report = await reconcile_task_truth(db, dry_run=False)
+            await db.refresh(task)
+
+            assert report["recovered"] == 0
+            assert task.attention_state == "open"
     finally:
         async with async_session() as db:
             await _clear(db)

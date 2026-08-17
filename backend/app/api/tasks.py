@@ -295,10 +295,24 @@ async def _control_task(
         raise HTTPException(status_code=404, detail="Task not found")
     if task.kind == "admin":
         if action != "retry":
-            raise HTTPException(status_code=400, detail="This admin task only supports retry")
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "invalid_task_action",
+                    "action": action,
+                    "message": "This admin task only supports retry",
+                },
+            )
         return await _retry_admin_task(task, svc)
     if not task.subject_id or task.subject_type not in {"download_job", "import_job"}:
-        raise HTTPException(status_code=400, detail="This task type does not support direct control yet")
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "invalid_task_action",
+                "action": action,
+                "message": "This task type does not support direct control yet",
+            },
+        )
 
     engine = TaskEngine(db)
     try:
@@ -331,7 +345,14 @@ async def _control_task(
     except DownloadAdmissionError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.payload()) from exc
     except TaskEngineError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "invalid_task_action",
+                "action": action,
+                "message": str(exc),
+            },
+        ) from exc
 
 
 # operation_type → (lock_key, func, entity, label). Retry re-enqueues the same

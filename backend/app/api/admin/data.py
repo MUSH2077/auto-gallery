@@ -39,6 +39,7 @@ from app.services.operations import (
     release_owned_operation_lock,
     set_operation_status,
 )
+from app.services.settings import source_key_for_extractor
 from app.services import admin_data
 from app.services.admin_data import (
     CONFIRMATION_PHRASES,
@@ -383,6 +384,7 @@ async def rebuild_library(data: RebuildLibraryRequest | None = None):
 
 class ImportFromDiskRequest(BaseModel):
     source: str | None = None
+    repository_id: UUID | None = None
     # Reprocess every on-disk file even if the ledger marks it 'done'. Use this
     # to recover creators/works after they were deleted from the DB (the ledger
     # is not reset by deletion, so a normal disk-import skips them as 'done').
@@ -390,14 +392,36 @@ class ImportFromDiskRequest(BaseModel):
 
 
 @router.post("/library/import-from-disk")
-async def import_from_disk(data: ImportFromDiskRequest | None = None):
+async def import_from_disk(
+    data: ImportFromDiskRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+):
     """Enqueue an idempotent import of on-disk download files into the DB."""
     from rq import Queue
     import uuid
     from app.services.redis_client import get_redis
     from app.services.operations import set_operation_status
 
-    options = (data or ImportFromDiskRequest()).model_dump(mode="json")
+    request = data or ImportFromDiskRequest()
+    if request.repository_id is not None:
+        from app.models.subscription_source import SubscriptionSource
+
+        repository = await db.get(SubscriptionSource, request.repository_id)
+        if repository is None:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "invalid_repository_id", "message": "repository_id does not reference a repository"},
+            )
+        if (
+            request.source
+            and source_key_for_extractor(request.source)
+            != source_key_for_extractor(repository.source)
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "repository_source_mismatch", "message": "source does not match repository source"},
+            )
+    options = request.model_dump(mode="json")
     redis = get_redis()
     ensure_redis_enqueue_capacity(redis)
     job_id = str(uuid.uuid4())

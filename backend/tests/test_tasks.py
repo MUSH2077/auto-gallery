@@ -130,6 +130,57 @@ async def test_download_and_import_jobs_sync_to_parent_child_task_runs():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_pause_failed_task_is_rejected_as_a_structured_conflict(monkeypatch):
+    """Terminal failures are retryable, but no longer present a fake pause action."""
+    from fastapi import HTTPException
+
+    from app.api import tasks as tasks_api
+    from app.database import async_session, engine
+    from app.models.creator import Creator
+    from app.models.download_job import DownloadJob
+    from app.models.subscription import Subscription
+    from app.services.redis_pubsub import TaskEventPublisher
+    from app.services.tasks import TaskService
+
+    monkeypatch.setattr(TaskEventPublisher, "send_control", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(TaskEventPublisher, "publish_status_change", lambda *_args, **_kwargs: None)
+
+    try:
+        async with async_session() as db:
+            await _clear_task_test_tables(db)
+            creator = Creator(name="pause-failed")
+            db.add(creator)
+            await db.flush()
+            subscription = Subscription(creator_id=creator.id, name="Pause failed")
+            db.add(subscription)
+            await db.flush()
+            download = DownloadJob(
+                subscription_id=subscription.id,
+                source="pixiv",
+                source_url="https://www.pixiv.net/users/123",
+                status="failed",
+            )
+            db.add(download)
+            await db.flush()
+            task = await TaskService(db).ensure_download_task(download)
+            await db.commit()
+
+            with pytest.raises(HTTPException) as error:
+                await tasks_api._control_task(task.id, "pause", db, "operator")
+
+            assert error.value.status_code == 409
+            assert error.value.detail["code"] == "invalid_task_action"
+            assert error.value.detail["action"] == "pause"
+            await db.refresh(download)
+            assert download.status == "failed"
+    finally:
+        async with async_session() as db:
+            await _clear_task_test_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_retry_admin_disk_import_task_requeues_same_task(monkeypatch):
     from app.api import tasks as tasks_api
     from app.database import async_session, engine

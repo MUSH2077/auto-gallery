@@ -170,10 +170,28 @@ async def _run_disk_import_operation(job_id: str, options: dict) -> dict:
         progress={"phase": "running", "label": "Scanning download root..."},
         meta={"entity": "disk-import", **options})
     try:
-        def update_progress(progress: dict):
+        async def update_progress(progress: dict):
+            task_progress = {
+                **progress,
+                "label": (
+                    f"Imported {progress.get('imported', 0)}; "
+                    f"scanned {progress.get('scanned', 0)} of {progress.get('total', 0)}"
+                ),
+            }
             set_operation_status(job_id, "running", "admin-disk-import",
-                progress={**progress, "label": f"Imported {progress.get('scanned', 0)} of {progress.get('total', 0)} creators"},
+                progress=task_progress,
                 meta={"entity": "disk-import", **options})
+            # The operations cache is transient; the TaskRun is the durable UI
+            # projection and must retain the same resumable counters.
+            async with async_session() as progress_db:
+                progress_task = await TaskService(progress_db).get(UUID(job_id))
+                if progress_task:
+                    await TaskService(progress_db).update_task(
+                        progress_task,
+                        status="running",
+                        progress=task_progress,
+                    )
+                    await progress_db.commit()
 
         async with async_session() as db:
             result = await reconcile_downloads_to_db(db, {**options, "parent_task_id": job_id}, update_progress)
