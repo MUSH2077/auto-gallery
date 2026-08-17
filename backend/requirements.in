@@ -6,7 +6,7 @@ asyncpg==0.31.0
 alembic==1.19.1
 pydantic==2.13.4
 pydantic-settings==2.15.0
-redis==5.2.1
+redis==8.1.0
 rq==2.10.0
 httpx==0.28.1
 gallery-dl==1.32.9
