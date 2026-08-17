@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
-import { GitlleryPanel, HierarchyDeletionDialog, Modal, MotionNumber, PageShell, RepositoryCard, SourceBadge, StatusBadge, SmartSearchInput, WorkMediaThumbnail, type SlideItem } from "@/components";
+import { HierarchyDeletionDialog, Modal, MotionNumber, PageShell, RepositoryCard, SourceBadge, StatusBadge, SmartSearchInput, WorkMediaThumbnail, type SlideItem } from "@/components";
 import ActivityDotMatrix, { type ActivityDay, type ActivityTimeline } from "@/components/charts/ActivityDotMatrix";
 import BallotTally from "@/components/charts/BallotTally";
 import ChartFrame from "@/components/charts/ChartFrame";
@@ -276,10 +276,6 @@ export default function CreatorDetailPage() {
       const hasDue = query.state.data?.items.some((item) => item.creator_id === id && item.due);
       return hasRunning || hasDue ? 5000 : 15000;
     },
-  });
-  const curationHistory = useQuery({
-    queryKey: queryKeys.curation.subject("creator", id),
-    queryFn: () => api.listCurationCommits({ subject_type: "creator", subject_id: id, limit: 6 }),
   });
   const deletionPreview = useQuery({
     queryKey: ["deletion-preview", "creator", id],
@@ -561,25 +557,6 @@ export default function CreatorDetailPage() {
               <div className="flex justify-between gap-3"><dt className="text-muted">{t("creator_detail.created")}</dt><dd>{fmt.date(c.created_at)}</dd></div>
             </dl>
           </section>
-
-          <section className="card p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold">{t("curation.title")}</h2>
-              <Link href={`${adminRoutes.curation}?subject_type=creator&subject_id=${id}`} className="text-sm text-accent hover:underline dark:text-accent">{t("common.open")}</Link>
-            </div>
-            {curationHistory.data?.items.length ? (
-              <div className="space-y-3">
-                {curationHistory.data.items.map((commit) => (
-                  <div key={commit.id} className="border-l-2 border-accent pl-3 text-xs dark:border-accent">
-                    <div className="font-medium text-fg">{commit.message}</div>
-                    <div className="mt-0.5 text-muted">{commit.trigger} · {fmt.date(commit.occurred_at)}</div>
-                  </div>
-                ))}
-              </div>
-            ) : <p className="text-sm text-muted">{t("curation.empty_title")}</p>}
-          </section>
-
-          <GitlleryPanel creatorId={id} />
 
           <section className="card p-4">
             <div className="mb-3 flex items-center justify-between">

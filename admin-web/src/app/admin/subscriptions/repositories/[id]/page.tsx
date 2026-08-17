@@ -260,6 +260,61 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
   );
 }
 
+function GitlleryRepositoryHistory({ repositoryId }: { repositoryId: string }) {
+  const t = useT();
+  const fmt = useI18nFormat();
+  const status = useQuery({
+    queryKey: queryKeys.gitllery.repositoryStatus(repositoryId),
+    queryFn: () => api.gitlleryRepositoryStatus(repositoryId),
+  });
+  const log = useQuery({
+    queryKey: queryKeys.gitllery.log(repositoryId),
+    queryFn: () => api.gitlleryLog(repositoryId),
+  });
+  const repositoryStatus = status.data?.repositories.find((item) => item.repository_id === repositoryId);
+
+  return (
+    <div className="space-y-4">
+      <section>
+        <h2 className="mb-3 text-base font-semibold">{t("repo_detail.gitllery_status")}</h2>
+        {status.isLoading ? (
+          <div className="h-20 animate-pulse rounded-md border border-border bg-white dark:border-border dark:bg-surface" />
+        ) : status.error ? (
+          <ErrorState message={(status.error as Error).message} onRetry={() => status.refetch()} />
+        ) : repositoryStatus ? (
+          <div className="grid grid-cols-2 gap-3 rounded-md border border-border bg-white p-4 text-sm dark:border-border dark:bg-surface md:grid-cols-4">
+            <StatCard label={t("repo_detail.gitllery_repository")} value={repositoryStatus.creator_dir} />
+            <StatCard label={t("repo_detail.gitllery_projection")} value={repositoryStatus.projection_mode || "—"} />
+            <StatCard label={t("repo_detail.gitllery_integrity")} value={repositoryStatus.object_integrity_ok ? t("repo_detail.gitllery_ok") : t("repo_detail.gitllery_attention")} />
+            <StatCard label={t("repo_detail.gitllery_pending")} value={repositoryStatus.behind} />
+          </div>
+        ) : (
+          <EmptyState title={t("repo_detail.gitllery_status_empty")} description={t("repo_detail.gitllery_status_empty_desc")} />
+        )}
+      </section>
+      <section>
+        <h2 className="mb-3 text-base font-semibold">{t("repo_detail.gitllery_log")}</h2>
+        {log.isLoading ? (
+          <div className="h-20 animate-pulse rounded-md border border-border bg-white dark:border-border dark:bg-surface" />
+        ) : log.error ? (
+          <ErrorState message={(log.error as Error).message} onRetry={() => log.refetch()} />
+        ) : log.data?.entries.length ? (
+          <div className="divide-y divide-border rounded-md border border-border bg-white dark:divide-border dark:border-border dark:bg-surface">
+            {log.data.entries.map((entry) => (
+              <div key={entry.commit} className="p-4 text-sm">
+                <div className="font-medium text-fg">{entry.message}</div>
+                <div className="mt-1 text-xs text-muted"><span className="font-mono">{entry.commit}</span>{entry.trigger && <> · {entry.trigger}</>}{entry.occurred_at && <> · {fmt.dateTime(entry.occurred_at)}</>}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyState title={t("repo_detail.gitllery_log_empty")} description={t("repo_detail.gitllery_log_empty_desc")} />
+        )}
+      </section>
+    </div>
+  );
+}
+
 function ConfigRows({ detail, decision }: { detail: RepositoryDetailResponse; decision?: SchedulerDecisionItem }) {
   const t = useT();
   const fmt = useI18nFormat();
@@ -380,14 +435,14 @@ export default function RepositoryDetailPage() {
   }
   if (!detail.data || !repo) return null;
 
-  const { creator, subscription, provider, recent_works } = detail.data;
+  const { creator, subscription, provider, recent_works, work_total } = detail.data;
   const syncHistory = detail.data.sync_history || detail.data.recent_jobs || [];
   const running = !!repo.latest_job && ["pending", "downloading", "downloaded", "importing"].includes(repo.latest_job.status);
   const canSync = repo.is_repository && repo.is_enabled && !running;
   const hint = nextActionHint(detail.data, decision);
   const tabs: { key: TabKey; label: string; count?: number }[] = [
     { key: "overview", label: t("repo_detail.tab_overview") },
-    { key: "content", label: t("repo_detail.tab_content"), count: recent_works.length },
+    { key: "content", label: t("repo_detail.tab_content"), count: work_total },
     { key: "history", label: t("repo_detail.tab_sync_history"), count: syncHistory.length },
     { key: "settings", label: t("repo_detail.tab_settings") },
   ];
@@ -491,18 +546,33 @@ export default function RepositoryDetailPage() {
           </div>
         )}
         {tab === "history" && (
-          <div className="space-y-3">
+          <div className="space-y-6">
+            <section>
+              <h2 className="mb-3 text-base font-semibold">{t("repo_detail.sync_history_heading")}</h2>
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm text-muted">{t("repo_detail.jobs_filtered_desc")}</p>
               <Link href={`${adminRoutes.jobs}?view=attention&q=${encodeURIComponent(id)}`} className="btn-ghost text-sm">{t("repo_detail.open_in_jobs")}</Link>
             </div>
-            <JobsList jobs={syncHistory} />
-            <RepositoryGraph repositoryId={id} />
+              <div className="mt-3"><JobsList jobs={syncHistory} /></div>
+            </section>
+            <section>
+              <h2 className="mb-3 text-base font-semibold">{t("repo_detail.curation_graph")}</h2>
+              <RepositoryGraph repositoryId={id} />
+            </section>
+            <GitlleryRepositoryHistory repositoryId={id} />
           </div>
         )}
         {tab === "content" && (
           <div className="space-y-4">
             <WorksGrid works={recent_works} />
+            {work_total > 12 && (
+              <Link
+                href={`/admin/works?q=${encodeURIComponent(`repo:${id} sort:posted-desc`)}`}
+                className="inline-flex text-sm text-accent hover:underline dark:text-accent"
+              >
+                {t("repo_detail.view_all_works", { count: work_total })}
+              </Link>
+            )}
             <h2 className="pt-3 text-base font-semibold">{t("repo_detail.tab_tags")}</h2>
             {repositoryTags.isLoading && (
               <div className="flex min-h-72 flex-wrap items-center justify-center gap-3">

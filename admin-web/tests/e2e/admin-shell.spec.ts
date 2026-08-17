@@ -397,6 +397,8 @@ async function installFixtureRoutes(context: BrowserContext) {
             },
           },
           recent_jobs: [],
+          sync_history: [],
+          work_total: 13,
           recent_works: [],
         },
       });
@@ -2826,12 +2828,63 @@ test("Gitllery v1 settings expose safe shadow controls, CLI copy, verify, and cr
   await expect(page.getByText("Bounded Gitllery v1 verify task queued")).toBeVisible();
 
   await page.goto("/admin/creators/fixture-creator");
-  await expect(page.getByRole("link", { name: "Open Gitllery log" })).toHaveAttribute(
+  await expect(page.getByRole("link", { name: "Open Gitllery log" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Open Gitllery settings" })).toHaveCount(0);
+});
+
+test("repository detail scopes history and opens the full work search", async ({ page }) => {
+  await page.route("**/api/v1/curation/repositories/fixture-repository/gitllery/status", (route) => route.fulfill({
+    json: {
+      repositories: [{
+        repository_id: "fixture-repository",
+        source: "pixiv",
+        creator_dir: "fixture-source",
+        exists: true,
+        behind: 0,
+        object_integrity_ok: true,
+        drift: [],
+        clean: true,
+        product_version: "v1",
+        format_id: "gitllery-segment",
+        format_revision: 1,
+        projection_mode: "shadow",
+      }],
+      missing_repos: 0,
+      behind_total: 0,
+      product_version: "v1",
+      format_id: "gitllery-segment",
+      format_revision: 1,
+      projection_mode: "shadow",
+    },
+  }));
+  await page.route("**/api/v1/curation/repositories/fixture-repository/gitllery/log", (route) => route.fulfill({
+    json: {
+      repository_id: "fixture-repository",
+      total: 1,
+      entries: [{
+        commit: "segment-123",
+        message: "Repository-only projection",
+        trigger: "source_synced",
+        occurred_at: "2026-07-28T10:00:00Z",
+        change_count: 2,
+      }],
+    },
+  }));
+
+  await page.goto("/admin/subscriptions/repositories/fixture-repository");
+  await expect(page.getByRole("button", { name: /Content\s*13/ })).toBeVisible();
+  await page.getByRole("button", { name: /Content\s*13/ }).click();
+  await expect(page.getByRole("link", { name: "View all 13 works" })).toHaveAttribute(
     "href",
-    "/admin/data-mgmt/curation?subject_type=creator&subject_id=fixture-creator",
+    "/admin/works?q=repo%3Afixture-repository%20sort%3Aposted-desc",
   );
-  const creatorSettingsLink = page.getByRole("link", { name: "Open Gitllery settings" });
-  await expect(creatorSettingsLink).toHaveAttribute("href", "/admin/settings/gitllery");
+
+  await page.getByRole("button", { name: /Sync history/ }).click();
+  await expect(page.getByRole("heading", { name: "Synchronization history" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Repository curation graph" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Gitllery status" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Gitllery log" })).toBeVisible();
+  await expect(page.getByText("Repository-only projection")).toBeVisible();
 });
 
 test("mobile drawer is discoverable, dismissible, and the task page stays in bounds", async ({ page }) => {

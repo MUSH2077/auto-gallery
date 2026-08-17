@@ -433,6 +433,9 @@ export const api = {
   gitlleryStatus: () =>
     request<T.GitlleryStatus>("/api/v1/curation/gitllery/status"),
 
+  gitlleryRepositoryStatus: (repositoryId: string) =>
+    request<T.GitlleryStatus>(`/api/v1/curation/repositories/${encodeURIComponent(repositoryId)}/gitllery/status`),
+
   gitlleryVerify: (repositoryId: string, deep = false) =>
     request<{ status: string; job_id: string }>("/api/v1/curation/gitllery/verify", {
       method: "POST",
@@ -899,6 +902,7 @@ export const queryKeys = {
     all: ["gitllery"] as const,
     settings: ["gitllery", "settings"] as const,
     status: ["gitllery", "status"] as const,
+    repositoryStatus: (repositoryId: string) => ["gitllery", "status", repositoryId] as const,
     log: (repositoryId: string) => ["gitllery", "log", repositoryId] as const,
   },
   downloadJobs: {

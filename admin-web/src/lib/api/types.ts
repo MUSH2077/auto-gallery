@@ -635,6 +635,7 @@ export interface RepositoryDetailResponse {
   recent_jobs: RepositoryRecentJob[];
   active_jobs: RepositoryRecentJob[];
   sync_history: RepositoryRecentJob[];
+  work_total: number;
   recent_works: RepositoryRecentWork[];
 }
 

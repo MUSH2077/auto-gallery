@@ -139,6 +139,10 @@ def test_repository_detail_returns_context_jobs_and_recent_works():
         _Result(first=(ss, sub, creator)),
         _Result(scalars=[]),
         _Result(scalars=[receipt]),
+        # Before work_total exists the detail query consumes this result as
+        # its recent-work rows; after the count query is added, it consumes
+        # the scalar and the following result remains the capped preview.
+        _Result(rows=[(work, work_source, 2, True)], scalar=13),
         _Result(rows=[(work, work_source, 2, True)]),
     ])
 
@@ -153,6 +157,7 @@ def test_repository_detail_returns_context_jobs_and_recent_works():
     assert payload["recent_jobs"][0]["download_job_id"] == str(job_id)
     assert payload["sync_history"] == payload["recent_jobs"]
     assert payload["active_jobs"] == []
+    assert payload["work_total"] == 13
     assert payload["recent_works"][0]["id"] == str(work_id)
     assert payload["recent_works"][0]["asset_count"] == 2
     assert payload["recent_works"][0]["has_video"] is True
