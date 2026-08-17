@@ -22,8 +22,10 @@ class _Result:
 class _FakeDB:
     def __init__(self, results):
         self.results = list(results)
+        self.statements = []
 
-    async def execute(self, _statement):
+    async def execute(self, statement):
+        self.statements.append(statement)
         return self.results.pop(0)
 
 
@@ -67,16 +69,27 @@ def test_tag_list_batches_source_usage_for_all_returned_tags():
     """Fails if source composition is omitted or queried once per tag."""
     from app.repositories.tag import TagRepository
 
-    tag_id = uuid4()
-    tag = SimpleNamespace(
-        id=tag_id,
+    first_tag_id = uuid4()
+    second_tag_id = uuid4()
+    first_tag = SimpleNamespace(
+        id=first_tag_id,
         normalized_name="arknights",
         category="general",
         created_at=datetime(2026, 7, 26, tzinfo=timezone.utc),
     )
+    second_tag = SimpleNamespace(
+        id=second_tag_id,
+        normalized_name="amiya",
+        category="character",
+        created_at=datetime(2026, 7, 26, tzinfo=timezone.utc),
+    )
     db = _FakeDB([
-        _Result(rows=[(tag, 4)]),
-        _Result(rows=[(tag_id, "pixiv", 3), (tag_id, "iwara", 1)]),
+        _Result(rows=[(first_tag, 4), (second_tag, 2)]),
+        _Result(rows=[
+            (first_tag_id, "pixiv", 3),
+            (first_tag_id, "iwara", 1),
+            (second_tag_id, "danbooru", 2),
+        ]),
     ])
 
     tags = asyncio.run(TagRepository(db).list_all())
@@ -85,6 +98,8 @@ def test_tag_list_batches_source_usage_for_all_returned_tags():
         {"source": "pixiv", "work_count": 3},
         {"source": "iwara", "work_count": 1},
     ]
+    assert tags[1].source_usage == [{"source": "danbooru", "work_count": 2}]
+    assert len(db.statements) == 2
     assert db.results == []
 
 

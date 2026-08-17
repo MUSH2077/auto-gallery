@@ -2344,6 +2344,36 @@ test("tag map loads every tag and supports ctrl-wheel zoom without pagination", 
     }
   });
   page.on("pageerror", (error) => consoleIssues.push(error.message));
+  await page.addInitScript(() => {
+    const prototype = CanvasRenderingContext2D.prototype as unknown as {
+      arc: (this: CanvasRenderingContext2D, x: number, y: number, radius: number, start: number, end: number, ...rest: unknown[]) => void;
+      stroke: (this: CanvasRenderingContext2D, ...args: unknown[]) => void;
+    };
+    const originalArc = prototype.arc;
+    const originalStroke = prototype.stroke;
+    const lastArc = new WeakMap<CanvasRenderingContext2D, [number, number, number, number, number]>();
+    const strokes: Array<{ x: number; y: number; radius: number; start: number; end: number; color: string; lineWidth: number }> = [];
+    Object.assign(window, { __tagBubbleRingStrokes: strokes });
+    prototype.arc = function(this: CanvasRenderingContext2D, x, y, radius, start, end, ...rest) {
+      lastArc.set(this, [x, y, radius, start, end]);
+      return originalArc.call(this, x, y, radius, start, end, ...rest);
+    };
+    prototype.stroke = function(...args) {
+      const arc = lastArc.get(this);
+      if (arc) {
+        strokes.push({
+          x: arc[0],
+          y: arc[1],
+          radius: arc[2],
+          start: arc[3],
+          end: arc[4],
+          color: String(this.strokeStyle),
+          lineWidth: this.lineWidth,
+        });
+      }
+      return originalStroke.apply(this, args);
+    };
+  });
   const fixtureCount = Number(process.env.TAG_MAP_FIXTURE_COUNT || 240);
   const categoryFixtures = ["meta", "general", "artist", "character", "copyright", "unknown"];
   const tagFixtures = Array.from({ length: fixtureCount }, (_, index) => ({
@@ -2385,6 +2415,40 @@ test("tag map loads every tag and supports ctrl-wheel zoom without pagination", 
       await expect(page.getByRole("link", { name: new RegExp(`map_tag_${String(index).padStart(3, "0")}`) }))
         .toHaveAttribute("data-bubble-fill", `hsl(${hue} 34% 22%)`);
     }
+
+    const readRenderedRing = async () => {
+      const bubble = await metaBubble.boundingBox();
+      expect(bubble).not.toBeNull();
+      return page.evaluate((bubbleBox) => {
+        const canvas = document.querySelector<HTMLCanvasElement>("[data-testid='tag-bubble-chart'] canvas");
+        if (!canvas || !bubbleBox) throw new Error("tag bubble canvas is unavailable");
+        const canvasBox = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / canvasBox.width;
+        const scaleY = canvas.height / canvasBox.height;
+        const centerX = (bubbleBox.x - canvasBox.x + bubbleBox.width / 2) * scaleX;
+        const centerY = (bubbleBox.y - canvasBox.y + bubbleBox.height / 2) * scaleY;
+        return (window as typeof window & {
+          __tagBubbleRingStrokes: Array<{ x: number; y: number; radius: number; start: number; end: number; color: string; lineWidth: number }>;
+        }).__tagBubbleRingStrokes.filter((stroke) => (
+          Math.abs(stroke.x - centerX) < 1
+          && Math.abs(stroke.y - centerY) < 1
+          && Math.abs(stroke.radius - bubbleBox.width * scaleX / 2) < 1
+          && ["#0066ff", "rgb(0, 102, 255)", "#ec4899", "rgb(236, 72, 153)"].includes(stroke.color.toLowerCase())
+        )).slice(-2);
+      }, bubble);
+    };
+
+    const initialRing = await readRenderedRing();
+    expect(initialRing).toHaveLength(2);
+    expect(initialRing.find((stroke) => stroke.color.toLowerCase() === "#0066ff" || stroke.color === "rgb(0, 102, 255)")?.end).toBeCloseTo(Math.PI * 1.5);
+    expect(initialRing.find((stroke) => stroke.color.toLowerCase() === "#ec4899" || stroke.color === "rgb(236, 72, 153)")?.end).toBeCloseTo(Math.PI * 2);
+    expect(initialRing.reduce((total, stroke) => total + (stroke.end - stroke.start), 0)).toBeCloseTo(Math.PI * 2);
+    expect(initialRing.map((stroke) => stroke.lineWidth)).toEqual([1.5, 1.5]);
+
+    await metaBubble.hover();
+    await expect(page.getByText("pixiv 3, iwara 1")).toBeVisible();
+    await expect.poll(async () => (await readRenderedRing()).map((stroke) => stroke.lineWidth))
+      .toEqual([3, 3]);
   }
 
   const initialZoom = Number(await chart.getAttribute("data-zoom-level"));

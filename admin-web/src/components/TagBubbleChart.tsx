@@ -408,6 +408,19 @@ export default function TagBubbleChart({
     };
   }, [view, viewport.height, viewport.width]);
 
+  const updateHoveredAt = useCallback((clientX: number, clientY: number) => {
+    const rect = viewportRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const screenX = clientX - rect.left;
+    const screenY = clientY - rect.top;
+    const node = findNodeAt(
+      layout,
+      view.centerX + (screenX - viewport.width / 2) / view.scale,
+      view.centerY + (screenY - viewport.height / 2) / view.scale,
+    );
+    setHovered(node ? { node, x: screenX, y: screenY } : null);
+  }, [layout, view, viewport.height, viewport.width]);
+
   const handlePointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (event.button !== 0) return;
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -431,9 +444,7 @@ export default function TagBubbleChart({
       setHovered(null);
       return;
     }
-    const point = worldPoint(event);
-    const node = findNodeAt(layout, point.x, point.y);
-    setHovered(node ? { node, x: point.screenX, y: point.screenY } : null);
+    updateHoveredAt(event.clientX, event.clientY);
   };
 
   const handlePointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -547,6 +558,9 @@ export default function TagBubbleChart({
             className="absolute z-[1] flex flex-col items-center justify-center overflow-hidden rounded-full text-center outline-none focus-visible:ring-2 focus-visible:ring-accent"
             style={style}
             onPointerDown={(event) => event.stopPropagation()}
+            onPointerEnter={(event) => updateHoveredAt(event.clientX, event.clientY)}
+            onPointerMove={(event) => updateHoveredAt(event.clientX, event.clientY)}
+            onPointerLeave={() => { if (!dragRef.current) setHovered(null); }}
           >
             <span className="max-w-[82%] truncate font-semibold leading-tight">
               {node.data.normalized_name}

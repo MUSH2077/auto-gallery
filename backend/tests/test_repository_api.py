@@ -203,6 +203,7 @@ def test_repository_tags_are_scoped_and_paginated():
     sub_id = uuid4()
     creator_id = uuid4()
     tag_id = uuid4()
+    second_tag_id = uuid4()
     ss, sub, creator = _source_context(source_id, sub_id, creator_id)
     tag = SimpleNamespace(
         id=tag_id,
@@ -210,24 +211,41 @@ def test_repository_tags_are_scoped_and_paginated():
         category="general",
         created_at=_dt(),
     )
+    second_tag = SimpleNamespace(
+        id=second_tag_id,
+        normalized_name="second-fixture",
+        category="character",
+        created_at=_dt(),
+    )
     db = _FakeDB([
         _Result(first=(ss, sub, creator)),
-        _Result(scalar=1),
-        _Result(rows=[(tag, 3)]),
-        _Result(rows=[(tag_id, "pixiv", 3)]),
+        _Result(scalar=2),
+        _Result(rows=[(tag, 3), (second_tag, 2)]),
+        _Result(rows=[(tag_id, "pixiv", 3), (second_tag_id, "pixiv", 2)]),
     ])
 
     payload = asyncio.run(get_repository_tags(source_id, offset=0, limit=50, db=db))
 
-    assert payload["total"] == 1
-    assert payload["items"] == [{
-        "id": str(tag_id),
-        "normalized_name": "fixture",
-        "category": "general",
-        "usage_count": 3,
-        "source_usage": [{"source": "pixiv", "work_count": 3}],
-        "created_at": _dt().isoformat(),
-    }]
+    assert payload["total"] == 2
+    assert payload["items"] == [
+        {
+            "id": str(tag_id),
+            "normalized_name": "fixture",
+            "category": "general",
+            "usage_count": 3,
+            "source_usage": [{"source": "pixiv", "work_count": 3}],
+            "created_at": _dt().isoformat(),
+        },
+        {
+            "id": str(second_tag_id),
+            "normalized_name": "second-fixture",
+            "category": "character",
+            "usage_count": 2,
+            "source_usage": [{"source": "pixiv", "work_count": 2}],
+            "created_at": _dt().isoformat(),
+        },
+    ]
+    assert len(db.statements) == 4
 
 
 def test_repository_tags_fall_back_to_normalized_source_creator_url():
