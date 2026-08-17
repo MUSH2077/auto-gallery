@@ -310,7 +310,17 @@ export default function ActivityDotMatrix({
 
   const closeYearListbox = (returnFocus = true) => {
     shouldReturnYearFocusRef.current = returnFocus;
+    setActiveYearIndex(Math.max(0, availableYears.indexOf(year)));
     setIsYearListboxOpen(false);
+  };
+
+  const toggleYearListbox = () => {
+    if (isYearListboxOpen) {
+      closeYearListbox(false);
+      return;
+    }
+    setActiveYearIndex(Math.max(0, availableYears.indexOf(year)));
+    setIsYearListboxOpen(true);
   };
 
   const selectYear = (nextYear: number) => {
@@ -400,7 +410,7 @@ export default function ActivityDotMatrix({
             aria-expanded={isYearListboxOpen}
             aria-controls="activity-year-listbox"
             className="inline-flex min-h-11 items-center gap-1 rounded-md px-2 text-sm font-semibold text-fg hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-            onClick={() => setIsYearListboxOpen((open) => !open)}
+            onClick={toggleYearListbox}
           >
             {year}
             <span aria-hidden>▾</span>
@@ -486,34 +496,39 @@ export default function ActivityDotMatrix({
               {label}
             </span>
           ))}
-          {calendar.days.map((day, index) => {
-            const points = pointsForDay(day.entry, data.sources);
-            return (
-              <div
-                key={day.key}
-                id={`activity-day-${day.key}`}
-                role="gridcell"
-                aria-label={labelForDay(day)}
-                aria-selected={selectedIndex === index}
-                className={`activity-calendar-cell relative h-3.5 w-3.5 cursor-pointer rounded-sm ${
-                  activeIndex === index ? "bg-accent-subtle ring-1 ring-accent" : "hover:bg-subtle"
-                }`}
-                style={{ gridColumn: day.week + 2, gridRow: day.weekday + 2 }}
-                onClick={() => {
-                  setActiveIndex(index);
-                  setSelectedIndex(index);
-                }}
-              >
-                <SourceCircleCluster
-                  points={points}
-                  maximum={maximumSourceCount}
-                  colorFor={(source) => theme.colorFor(`source:${source}`)}
-                  entering={animate}
-                  delay={day.week * 11 + day.weekday * 3}
-                />
-              </div>
-            );
-          })}
+          {weekdayLabels.map((_, weekday) => (
+            <div key={`activity-row-${weekday}`} role="row" className="contents">
+              {calendar.days.map((day, index) => {
+                if (day.weekday !== weekday) return null;
+                const points = pointsForDay(day.entry, data.sources);
+                return (
+                  <div
+                    key={day.key}
+                    id={`activity-day-${day.key}`}
+                    role="gridcell"
+                    aria-label={labelForDay(day)}
+                    aria-selected={selectedIndex === index}
+                    className={`activity-calendar-cell relative h-3.5 w-3.5 cursor-pointer rounded-sm ${
+                      activeIndex === index ? "bg-accent-subtle ring-1 ring-accent" : "hover:bg-subtle"
+                    }`}
+                    style={{ gridColumn: day.week + 2, gridRow: day.weekday + 2 }}
+                    onClick={() => {
+                      setActiveIndex(index);
+                      setSelectedIndex(index);
+                    }}
+                  >
+                    <SourceCircleCluster
+                      points={points}
+                      maximum={maximumSourceCount}
+                      colorFor={(source) => theme.colorFor(`source:${source}`)}
+                      entering={animate}
+                      delay={day.week * 11 + day.weekday * 3}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          ))}
         </div>
       </div>
       <p id="activity-grid-instructions" className="sr-only">

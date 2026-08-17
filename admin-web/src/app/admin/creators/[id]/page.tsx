@@ -6,7 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
 import { GitlleryPanel, HierarchyDeletionDialog, Modal, MotionNumber, PageShell, RepositoryCard, SourceBadge, StatusBadge, SmartSearchInput, WorkMediaThumbnail, type SlideItem } from "@/components";
-import ActivityDotMatrix, { type ActivityDay } from "@/components/charts/ActivityDotMatrix";
+import ActivityDotMatrix, { type ActivityDay, type ActivityTimeline } from "@/components/charts/ActivityDotMatrix";
 import BallotTally from "@/components/charts/BallotTally";
 import ChartFrame from "@/components/charts/ChartFrame";
 import HairlineSeries from "@/components/charts/HairlineSeries";
@@ -402,7 +402,15 @@ export default function CreatorDetailPage() {
     (current, point) => current === null || point.value > current.value ? point : current,
     null,
   );
-  const activityPeak = (timeline.data?.days || []).reduce<ActivityDay | null>(
+  const selectedTimelineData = timeline.data
+    && !timeline.isPlaceholderData
+    && activityYear !== null
+    && timeline.data.days.every((day) => day.date.startsWith(`${activityYear}-`))
+    ? timeline.data
+    : null;
+  const activityCalendarData: ActivityTimeline | null = selectedTimelineData
+    || (timeline.data ? { ...timeline.data, days: [], total: 0 } : null);
+  const activityPeak = (selectedTimelineData?.days || []).reduce<ActivityDay | null>(
     (current, day) => current === null || day.total > current.total ? day : current,
     null,
   );
@@ -600,7 +608,7 @@ export default function CreatorDetailPage() {
             <div className="space-y-5">
               <ChartFrame
                 title={t("creator_detail.works_timeline")}
-                insight={activityYear && timeline.data
+                insight={activityYear && selectedTimelineData
                   ? activityPeak
                     ? t("charts.activity_insight", {
                       year: activityYear,
@@ -618,9 +626,9 @@ export default function CreatorDetailPage() {
                 footer={t("charts.creator_activity_footer")}
                 testId="creator-activity-chart"
               >
-                {timeline.isPending || activityYear === null ? (
+                {activityYear === null || (timeline.isPending && !timeline.data) ? (
                   <div className="h-44 animate-pulse rounded-md bg-subtle" aria-label={t("common.loading")} />
-                ) : timeline.error && !timeline.data ? (
+                ) : timeline.error && !activityCalendarData ? (
                   <div className="rounded-md border border-danger/30 bg-danger-subtle p-4" role="alert">
                     <p className="font-semibold text-danger">{t("charts.activity_error")}</p>
                     <p className="mt-1 break-words text-xs text-muted">{(timeline.error as Error).message}</p>
@@ -628,15 +636,22 @@ export default function CreatorDetailPage() {
                       {t("common.retry")}
                     </button>
                   </div>
-                ) : timeline.data ? (
+                ) : activityCalendarData ? (
                   <>
-                    {timeline.isRefetchError ? (
+                    {timeline.error ? (
                       <div className="mb-3 rounded-md border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning" role="status">
-                        {t("charts.activity_refresh_error")}
+                        {t("charts.activity_error")}
+                        <button type="button" className="btn-ghost ml-2" onClick={() => timeline.refetch()}>
+                          {t("common.retry")}
+                        </button>
+                      </div>
+                    ) : timeline.isPlaceholderData ? (
+                      <div className="mb-3 rounded-md border border-border bg-subtle px-3 py-2 text-xs text-muted" role="status">
+                        {t("common.loading")}
                       </div>
                     ) : null}
                     <ActivityDotMatrix
-                      data={timeline.data}
+                      data={activityCalendarData}
                       year={activityYear}
                       availableYears={availableActivityYears}
                       onYearChange={setActivityYear}

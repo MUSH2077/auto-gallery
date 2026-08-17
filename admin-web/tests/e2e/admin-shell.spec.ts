@@ -1167,6 +1167,14 @@ test("creator activity calendar aligns real month spans and its year listbox sup
 
   const activityGrid = page.locator('[data-chart-kind="activity-dot-matrix"] [role="grid"]');
   await expect(activityGrid).toHaveAttribute("data-calendar-grid", "shared");
+  await expect(activityGrid.getByRole("row")).toHaveCount(7);
+  await expect(activityGrid.getByRole("row").first().getByRole("gridcell")).not.toHaveCount(0);
+  const activityGridAxe = await new AxeBuilder({ page })
+    .include('[data-chart-kind="activity-dot-matrix"]')
+    .analyze();
+  expect(activityGridAxe.violations.filter((violation) => (
+    violation.id === "aria-required-children" || violation.id === "aria-required-parent"
+  ))).toEqual([]);
   await expect(activityGrid.locator('[data-calendar-month="0"]')).toHaveCSS("grid-column", "2 / span 4");
   await expect(activityGrid.locator('[data-calendar-month="11"]')).toHaveCSS("grid-column", "50 / span 5");
   await expect(activityGrid.locator("[data-calendar-weekday]")).toHaveCount(7);
@@ -1202,10 +1210,19 @@ test("creator activity calendar aligns real month spans and its year listbox sup
   await expect(page.getByRole("option", { name: "2026", exact: true })).toHaveAttribute("aria-selected", "true");
   await yearListbox.press("ArrowUp");
   await expect(yearListbox).toHaveAttribute("aria-activedescendant", "activity-year-option-2025");
+  await yearListbox.press("Escape");
+  await expect(yearPicker).toBeFocused();
+  await yearPicker.click();
+  await expect(yearListbox).toHaveAttribute("aria-activedescendant", "activity-year-option-2026");
+  await yearListbox.press("ArrowUp");
+  await page.getByRole("heading", { name: "Fixture Creator" }).click();
+  await expect(yearListbox).toBeHidden();
+  await yearPicker.click();
+  await expect(yearListbox).toHaveAttribute("aria-activedescendant", "activity-year-option-2026");
   await yearListbox.press("Home");
   await yearListbox.press("End");
   await yearListbox.press("ArrowUp");
-  await yearListbox.press("Enter");
+  await yearListbox.press(" ");
   await expect(yearListbox).toBeHidden();
   await expect(yearPicker).toBeFocused();
   const request = await request2025;
@@ -1213,13 +1230,6 @@ test("creator activity calendar aligns real month spans and its year listbox sup
   expect(requestUrl.searchParams.get("to_date")).toBe("2026-01-01");
   await expect(page.getByTestId("creator-activity-chart")).toContainText("Activity peaked on");
   await expect(activityGrid.getByRole("gridcell")).toHaveCount(365);
-
-  await yearPicker.click();
-  await yearListbox.press("Escape");
-  await expect(yearPicker).toBeFocused();
-  await yearPicker.click();
-  await page.getByRole("heading", { name: "Fixture Creator" }).click();
-  await expect(yearListbox).toBeHidden();
 
   const request2024 = page.waitForRequest((request) => {
     const url = new URL(request.url());
@@ -1276,6 +1286,42 @@ test("creator activity distinguishes a failed request from a genuinely empty yea
   await expect(activity.getByRole("alert")).toContainText("Publishing activity could not be loaded");
   await expect(activity).not.toContainText("No publishing activity was recorded");
   await expect(activity.getByRole("button", { name: "Retry" })).toBeVisible();
+});
+
+test("creator activity hides stale data while a selected year request loads or fails", async ({ page }) => {
+  await page.goto("/admin/creators/fixture-creator");
+
+  const activity = page.getByTestId("creator-activity-chart");
+  await expect(activity.locator("#activity-day-2026-04-12")).toBeVisible();
+
+  let releaseSelectedYear: (() => void) | undefined;
+  let selectedYearRequestCount = 0;
+  await page.route("**/api/v1/creators/fixture-creator/timeline?*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("from_date") !== "2025-01-01") {
+      await route.fallback();
+      return;
+    }
+    selectedYearRequestCount += 1;
+    if (selectedYearRequestCount === 1) {
+      await new Promise<void>((resolve) => {
+        releaseSelectedYear = resolve;
+      });
+    }
+    await route.fulfill({ status: 500, json: { detail: "selected-year fixture failure" } });
+  });
+
+  await page.getByRole("button", { name: "Year", exact: true }).click();
+  const listbox = page.getByRole("listbox", { name: "Year", exact: true });
+  await listbox.press("ArrowUp");
+  await listbox.press("Enter");
+
+  await expect(activity.locator("#activity-day-2026-04-12")).toHaveCount(0);
+  await expect(activity).not.toContainText("Activity peaked on");
+  if (!releaseSelectedYear) throw new Error("Expected the selected-year request to be intercepted");
+  releaseSelectedYear();
+  await expect(activity.getByRole("alert")).toContainText("Publishing activity could not be loaded");
+  await expect(activity.locator("#activity-day-2026-04-12")).toHaveCount(0);
 });
 
 test("data management charts preserve 100 ticks, exact values, hierarchy, and diagnostics", async ({ page }) => {
