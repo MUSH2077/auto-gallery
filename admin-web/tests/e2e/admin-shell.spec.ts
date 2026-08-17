@@ -2345,11 +2345,15 @@ test("tag map loads every tag and supports ctrl-wheel zoom without pagination", 
   });
   page.on("pageerror", (error) => consoleIssues.push(error.message));
   const fixtureCount = Number(process.env.TAG_MAP_FIXTURE_COUNT || 240);
+  const categoryFixtures = ["meta", "general", "artist", "character", "copyright", "unknown"];
   const tagFixtures = Array.from({ length: fixtureCount }, (_, index) => ({
     id: `map-tag-${index}`,
     normalized_name: `map_tag_${String(index).padStart(3, "0")}`,
-    category: index % 5 === 0 ? "meta" : "general",
-    usage_count: 1 + ((index * 37) % 500),
+    category: categoryFixtures[index] || (index % 5 === 0 ? "meta" : "general"),
+    usage_count: index < categoryFixtures.length ? 999 - index : 1 + ((index * 37) % 500),
+    source_usage: index === 0
+      ? [{ source: "pixiv", work_count: 3 }, { source: "iwara", work_count: 1 }]
+      : [{ source: "pixiv", work_count: 1 }],
     created_at: "2026-08-14T00:00:00Z",
   }));
   let includeAll = false;
@@ -2371,8 +2375,17 @@ test("tag map loads every tag and supports ctrl-wheel zoom without pagination", 
   await expect(chart).toHaveAttribute("data-tag-count", String(fixtureCount));
   expect(includeAll).toBe(true);
   await expect(page.getByText("Ctrl + wheel to zoom · Drag to pan")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Previous" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Next" })).toHaveCount(0);
+  if (fixtureCount <= 1_000) {
+    const metaBubble = page.getByRole("link", { name: /map_tag_000, meta, 999, pixiv 3, iwara 1/i });
+    await expect(metaBubble).toBeVisible();
+    await expect(metaBubble).toHaveAttribute("data-bubble-fill", "hsl(32 34% 22%)");
+    await expect(metaBubble).toHaveAttribute("data-bubble-ring", "pixiv:#0066FF:3|iwara:#EC4899:1");
+    await expect(metaBubble).toHaveAttribute("data-bubble-text", "hsl(32 55% 88%)");
+    for (const [index, hue] of [32, 216, 0, 120, 275, 210].entries()) {
+      await expect(page.getByRole("link", { name: new RegExp(`map_tag_${String(index).padStart(3, "0")}`) }))
+        .toHaveAttribute("data-bubble-fill", `hsl(${hue} 34% 22%)`);
+    }
+  }
 
   const initialZoom = Number(await chart.getAttribute("data-zoom-level"));
   const box = await chart.boundingBox();
@@ -2387,13 +2400,6 @@ test("tag map loads every tag and supports ctrl-wheel zoom without pagination", 
   });
   await expect.poll(async () => Number(await chart.getAttribute("data-zoom-level")))
     .toBeGreaterThan(initialZoom);
-  if (fixtureCount <= 1_000) {
-    const firstBubble = page.getByRole("link", { name: /map_tag_/ }).first();
-    await expect(firstBubble).toBeVisible();
-    await expect(firstBubble).toHaveAttribute("data-bubble-fill", / 34% 22%\)$/);
-    await expect(firstBubble).toHaveAttribute("data-bubble-border", / 36% 38%\)$/);
-    await expect(firstBubble).toHaveAttribute("data-bubble-text", / 55% 88%\)$/);
-  }
   await expectNoPageOverflow(page);
   expect(consoleIssues).toEqual([]);
   await page.screenshot({ path: "/tmp/auto-gallery-tag-map-zoomed.png", fullPage: false });

@@ -6,8 +6,8 @@ from sqlalchemy import delete as sql_delete, select, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.tag import TagRead, TagCreate, TagUpdate, TagDetail, CreatorRef
-from app.repositories.tag import TagRepository
+from app.schemas.tag import TagRead, TagCreate, TagUpdate, TagDetail, CreatorRef, TagSourceUsage
+from app.repositories.tag import TagRepository, source_usage_by_tag
 from app.services.search_projection_outbox import request_search_projection
 from app.models.tag import Tag
 from app.models.work_tag import WorkTag
@@ -73,6 +73,7 @@ async def get_tag(tag_id: UUID, db: AsyncSession = Depends(get_db)):
         CreatorRef(creator_id=r[0], creator_name=str(r[1]), work_count=r[2])
         for r in top_creators_rows.all()
     ]
+    source_usage = await source_usage_by_tag(db, [tag_id])
 
     return TagDetail(
         id=tag.id,
@@ -81,6 +82,7 @@ async def get_tag(tag_id: UUID, db: AsyncSession = Depends(get_db)):
         usage_count=usage_count,
         created_at=tag.created_at,
         top_creators=top_creators,
+        source_usage=[TagSourceUsage(**usage) for usage in source_usage.get(tag_id, [])],
     )
 
 

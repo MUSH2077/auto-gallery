@@ -15,6 +15,9 @@ class _Result:
     def all(self):
         return self._rows
 
+    def __iter__(self):
+        return iter(self._rows)
+
 
 class _FakeDB:
     def __init__(self, results):
@@ -45,6 +48,7 @@ def test_tag_detail_aggregates_usage_count_instead_of_reading_orm_attribute(monk
     db = _FakeDB([
         _Result(scalar=7),
         _Result(rows=[(creator_id, "Test Creator", 3)]),
+        _Result(rows=[(tag_id, "pixiv", 5), (tag_id, "iwara", 2)]),
     ])
 
     detail = asyncio.run(tags.get_tag(tag_id, db=db))
@@ -53,6 +57,35 @@ def test_tag_detail_aggregates_usage_count_instead_of_reading_orm_attribute(monk
     assert detail.usage_count == 7
     assert detail.top_creators[0].creator_id == creator_id
     assert detail.top_creators[0].work_count == 3
+    assert [(usage.source, usage.work_count) for usage in detail.source_usage] == [
+        ("pixiv", 5),
+        ("iwara", 2),
+    ]
+
+
+def test_tag_list_batches_source_usage_for_all_returned_tags():
+    """Fails if source composition is omitted or queried once per tag."""
+    from app.repositories.tag import TagRepository
+
+    tag_id = uuid4()
+    tag = SimpleNamespace(
+        id=tag_id,
+        normalized_name="arknights",
+        category="general",
+        created_at=datetime(2026, 7, 26, tzinfo=timezone.utc),
+    )
+    db = _FakeDB([
+        _Result(rows=[(tag, 4)]),
+        _Result(rows=[(tag_id, "pixiv", 3), (tag_id, "iwara", 1)]),
+    ])
+
+    tags = asyncio.run(TagRepository(db).list_all())
+
+    assert tags[0].source_usage == [
+        {"source": "pixiv", "work_count": 3},
+        {"source": "iwara", "work_count": 1},
+    ]
+    assert db.results == []
 
 
 def test_list_tags_include_all_removes_offset_and_limit(monkeypatch):

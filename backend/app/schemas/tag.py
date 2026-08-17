@@ -14,11 +14,17 @@ class TagUpdate(BaseModel):
     category: str | None = None
 
 
+class TagSourceUsage(BaseModel):
+    source: str
+    work_count: int
+
+
 class TagRead(BaseModel):
     id: UUID
     normalized_name: str
     category: str | None = None
     usage_count: int = 0
+    source_usage: list[TagSourceUsage] = []
     created_at: datetime
 
     model_config = {"from_attributes": True}

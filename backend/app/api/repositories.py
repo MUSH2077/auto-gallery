@@ -20,6 +20,7 @@ from app.models.work_source_tag import WorkSourceTag
 from app.models.tag import Tag
 from app.providers import registry
 from app.schemas.curation import RepositoryGraphResponse
+from app.repositories.tag import source_usage_by_tag
 from app.schemas.deletion import (
     BatchDeletionRequest,
     DeletionPreviewResponse,
@@ -420,12 +421,18 @@ async def get_repository_tags(
         .offset(offset)
         .limit(limit)
     )).all()
+    source_usage = await source_usage_by_tag(
+        db,
+        [tag.id for tag, _ in rows],
+        *filters,
+    )
     return {
         "items": [{
             "id": str(tag.id),
             "normalized_name": tag.normalized_name,
             "category": tag.category,
             "usage_count": int(usage_count or 0),
+            "source_usage": source_usage.get(tag.id, []),
             "created_at": tag.created_at.isoformat() if tag.created_at else None,
         } for tag, usage_count in rows],
         "total": total,

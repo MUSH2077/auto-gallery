@@ -214,6 +214,7 @@ def test_repository_tags_are_scoped_and_paginated():
         _Result(first=(ss, sub, creator)),
         _Result(scalar=1),
         _Result(rows=[(tag, 3)]),
+        _Result(rows=[(tag_id, "pixiv", 3)]),
     ])
 
     payload = asyncio.run(get_repository_tags(source_id, offset=0, limit=50, db=db))
@@ -224,6 +225,7 @@ def test_repository_tags_are_scoped_and_paginated():
         "normalized_name": "fixture",
         "category": "general",
         "usage_count": 3,
+        "source_usage": [{"source": "pixiv", "work_count": 3}],
         "created_at": _dt().isoformat(),
     }]
 
@@ -256,6 +258,7 @@ def test_repository_tags_fall_back_to_normalized_source_creator_url():
         _Result(scalars=[source_creator]),
         _Result(scalar=1),
         _Result(rows=[(tag, 2)]),
+        _Result(rows=[(tag_id, "pixiv", 2)]),
     ])
 
     payload = asyncio.run(get_repository_tags(source_id, offset=0, limit=50, db=db))

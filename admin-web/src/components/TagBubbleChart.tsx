@@ -18,12 +18,25 @@ import { useChartTheme } from "@/components/charts/useChartTheme";
 import type { Tag } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { quoteSearchValue, searchUrl } from "@/lib/search-query";
+import { getSourceColor } from "@/lib/sourceColors";
+
+interface SourceRingSegment {
+  source: string;
+  color: string;
+  workCount: number;
+  startAngle: number;
+  endAngle: number;
+}
 
 interface BubbleNode {
   data: Tag;
   r: number;
   x: number;
   y: number;
+  hue: number;
+  ringSegments: SourceRingSegment[];
+  ringDescription: string;
+  sourceUsageLabel: string;
 }
 
 interface BubbleLayout {
@@ -56,28 +69,81 @@ const LAYOUT_PADDING = 48;
 const SPATIAL_BUCKET_SIZE = 192;
 const MAX_LABEL_NODES = 1_600;
 const LABEL_RADIUS_THRESHOLD = 13;
+const TAU = Math.PI * 2;
+const CATEGORY_HUES: Record<string, number> = {
+  general: 216,
+  artist: 0,
+  character: 120,
+  copyright: 275,
+  meta: 32,
+  unknown: 210,
+};
+const PALETTES = new Map<string, { fill: string; text: string }>();
 
-function bubblePalette(hue: number, dark: boolean, hovered = false) {
-  return {
+function categoryHue(category?: string): number {
+  return CATEGORY_HUES[category?.toLowerCase() || "unknown"] ?? CATEGORY_HUES.unknown;
+}
+
+function bubblePalette(hue: number, dark: boolean) {
+  const key = `${hue}:${dark ? "dark" : "light"}`;
+  const cached = PALETTES.get(key);
+  if (cached) return cached;
+  const palette = {
     fill: dark
       ? `hsl(${hue} 34% 22%)`
       : `hsl(${hue} 58% 91%)`,
-    border: dark
-      ? `hsl(${hue} ${hovered ? 48 : 36}% ${hovered ? 56 : 38}%)`
-      : `hsl(${hue} ${hovered ? 50 : 42}% ${hovered ? 62 : 78}%)`,
     text: dark
       ? `hsl(${hue} 55% 88%)`
       : `hsl(${hue} 45% 23%)`,
   };
+  PALETTES.set(key, palette);
+  return palette;
 }
 
-function hashString(value: string): number {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = ((hash << 5) - hash) + value.charCodeAt(index);
-    hash |= 0;
+function sourceRing(tag: Tag): Pick<BubbleNode, "ringSegments" | "ringDescription" | "sourceUsageLabel"> {
+  const sourceUsage = tag.source_usage || [];
+  let total = 0;
+  for (const usage of sourceUsage) {
+    if (usage.work_count > 0) total += usage.work_count;
   }
-  return Math.abs(hash);
+  if (!total) {
+    const color = getSourceColor("unknown");
+    return {
+      ringSegments: [{
+        source: "unknown",
+        color,
+        workCount: 0,
+        startAngle: 0,
+        endAngle: TAU,
+      }],
+      ringDescription: `unknown:${color}:0`,
+      sourceUsageLabel: "no source composition",
+    };
+  }
+  const ringSegments: SourceRingSegment[] = [];
+  let angle = 0;
+  const descriptions: string[] = [];
+  const labels: string[] = [];
+  for (const usage of sourceUsage) {
+    if (usage.work_count <= 0) continue;
+    const color = getSourceColor(usage.source);
+    const endAngle = angle + TAU * (usage.work_count / total);
+    ringSegments.push({
+      source: usage.source,
+      color,
+      workCount: usage.work_count,
+      startAngle: angle,
+      endAngle,
+    });
+    descriptions.push(`${usage.source}:${color}:${usage.work_count}`);
+    labels.push(`${usage.source} ${usage.work_count}`);
+    angle = endAngle;
+  }
+  return {
+    ringSegments,
+    ringDescription: descriptions.join("|"),
+    sourceUsageLabel: labels.join(", "),
+  };
 }
 
 function bubbleRadius(tag: Tag, minCount: number, maxCount: number): number {
@@ -124,6 +190,8 @@ function buildLayout(tags: Tag[]): BubbleLayout {
       r: bubbleRadius(tag, minCount, maxCount),
       x: 0,
       y: 0,
+      hue: categoryHue(tag.category),
+      ...sourceRing(tag),
     }))
     .sort((left, right) => (
       right.r - left.r
@@ -310,17 +378,20 @@ export default function TagBubbleChart({
         || x - radius > viewport.width
         || y - radius > viewport.height
       ) continue;
-      const hue = hashString(node.data.category || node.data.normalized_name) % 360;
       const isHovered = hovered?.node.data.id === node.data.id;
-      const palette = bubblePalette(hue, dark, isHovered);
+      const palette = bubblePalette(node.hue, dark);
       context.beginPath();
       context.arc(x, y, Math.max(0.7, radius), 0, Math.PI * 2);
       context.fillStyle = palette.fill;
       context.fill();
       if (radius >= 3) {
-        context.strokeStyle = palette.border;
-        context.lineWidth = isHovered ? 2 : 1;
-        context.stroke();
+        context.lineWidth = isHovered ? 3 : 1.5;
+        for (const segment of node.ringSegments) {
+          context.beginPath();
+          context.arc(x, y, Math.max(0.7, radius), segment.startAngle, segment.endAngle);
+          context.strokeStyle = segment.color;
+          context.stroke();
+        }
       }
     }
   }, [hovered?.node.data.id, layout.nodes, theme.isDark, theme.surface, view, viewport.height, viewport.width]);
@@ -452,8 +523,7 @@ export default function TagBubbleChart({
       </div>
 
       {visibleNodes.map(({ node, x, y, radius }) => {
-        const hue = hashString(node.data.category || node.data.normalized_name) % 360;
-        const palette = bubblePalette(hue, theme.isDark);
+        const palette = bubblePalette(node.hue, theme.isDark);
         const style = {
           left: x - radius,
           top: y - radius,
@@ -469,10 +539,10 @@ export default function TagBubbleChart({
               "/admin/works",
               `type:work tag:${quoteSearchValue(node.data.normalized_name)}`,
             )}
-            title={`${node.data.normalized_name} · ${node.data.category || "tag"} · ${node.data.usage_count}`}
-            aria-label={`${node.data.normalized_name}, ${node.data.category || "tag"}, ${node.data.usage_count}`}
+            title={`${node.data.normalized_name} · ${node.data.category || "tag"} · ${node.data.usage_count} · ${node.sourceUsageLabel}`}
+            aria-label={`${node.data.normalized_name}, ${node.data.category || "tag"}, ${node.data.usage_count}, ${node.sourceUsageLabel}`}
             data-bubble-fill={palette.fill}
-            data-bubble-border={palette.border}
+            data-bubble-ring={node.ringDescription}
             data-bubble-text={palette.text}
             className="absolute z-[1] flex flex-col items-center justify-center overflow-hidden rounded-full text-center outline-none focus-visible:ring-2 focus-visible:ring-accent"
             style={style}
@@ -500,6 +570,7 @@ export default function TagBubbleChart({
           <p className="mt-0.5 text-muted">
             {hovered.node.data.category || "tag"} · {hovered.node.data.usage_count}
           </p>
+          <p className="mt-0.5 text-muted">{hovered.node.sourceUsageLabel}</p>
         </div>
       ) : null}
     </div>

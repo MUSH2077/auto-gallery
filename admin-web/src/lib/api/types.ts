@@ -1069,7 +1069,13 @@ export interface Tag {
   normalized_name: string;
   category?: string;
   usage_count: number;
+  source_usage: TagSourceUsage[];
   created_at: string;
+}
+
+export interface TagSourceUsage {
+  source: string;
+  work_count: number;
 }
 
 export interface RepositoryTagsResponse {
@@ -1154,6 +1160,7 @@ export interface TagDetail {
   normalized_name: string;
   category?: string;
   usage_count: number;
+  source_usage: TagSourceUsage[];
   top_creators: CreatorRef[];
   created_at: string;
 }
