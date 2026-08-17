@@ -242,3 +242,158 @@ async def test_system_info_reports_ledger_sizes_and_constant_time_disk_capacity(
         async with async_session() as db:
             await _clear_identity_tables(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_storage_breakdown_links_provider_url_directory_to_source_creator_without_repository():
+    from app.api.admin import settings as settings_api
+    from app.database import async_session, engine
+    from app.models.creator import Creator
+    from app.models.source_creator import SourceCreator
+    from app.models.storage_artifact import StorageArtifact
+
+    settings_api.invalidate_storage_breakdown_cache()
+    try:
+        async with async_session() as db:
+            await _clear_identity_tables(db)
+            creator = Creator(name="url-owner", display_name="URL Owner")
+            db.add(creator)
+            await db.flush()
+            db.add(SourceCreator(
+                creator_id=creator.id,
+                source="x",
+                source_creator_id="opaque-202",
+                source_url="https://x.com/url_owner",
+                display_name="URL Owner",
+            ))
+            db.add(StorageArtifact(
+                storage_root="downloads",
+                file_path="twitter/url_owner/900_1.jpg",
+                source="x",
+                creator_dir="url_owner",
+                source_work_id="900",
+                file_name="900_1.jpg",
+                artifact_type="image",
+                file_size=1024,
+                state="done",
+            ))
+            await db.commit()
+
+            payload = await settings_api.storage_breakdown(db=db)
+
+            assert payload["unlinked_repositories"] == []
+            assert payload["creator_tree"] == [{
+                "creator_id": str(creator.id),
+                "display_name": "URL Owner",
+                "size_mb": 0.0,
+                "work_count": 1,
+                "repository_count": 1,
+                "repositories": [{
+                    "repository_id": None,
+                    "source": "x",
+                    "source_display_name": "X / Twitter",
+                    "disk_source": "twitter",
+                    "directory_name": "url_owner",
+                    "size_mb": 0.0,
+                    "logical_size_mb": 0.0,
+                    "work_count": 1,
+                }],
+            }]
+    finally:
+        settings_api.invalidate_storage_breakdown_cache()
+        async with async_session() as db:
+            await _clear_identity_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_storage_breakdown_only_assigns_repository_for_exact_source_identity_match():
+    from app.api.admin import settings as settings_api
+    from app.database import async_session, engine
+    from app.models.creator import Creator
+    from app.models.source_creator import SourceCreator
+    from app.models.storage_artifact import StorageArtifact
+    from app.models.subscription import Subscription
+    from app.models.subscription_source import SubscriptionSource
+
+    settings_api.invalidate_storage_breakdown_cache()
+    try:
+        async with async_session() as db:
+            await _clear_identity_tables(db)
+            creator = Creator(name="multi-repository", display_name="Multi Repository")
+            db.add(creator)
+            await db.flush()
+            subscription = Subscription(creator_id=creator.id, name="Multi Repository")
+            db.add(subscription)
+            await db.flush()
+            unmatched = SubscriptionSource(
+                subscription_id=subscription.id,
+                source="x",
+                source_url="https://x.com/another_repository",
+            )
+            matched = SubscriptionSource(
+                subscription_id=subscription.id,
+                source="x",
+                source_url="https://x.com/matching_repository",
+            )
+            db.add_all([unmatched, matched])
+            db.add_all([
+                SourceCreator(
+                    creator_id=creator.id,
+                    source="x",
+                    source_creator_id="opaque-101",
+                    source_url="https://x.com/matching_repository",
+                    display_name="Multi Repository",
+                ),
+                SourceCreator(
+                    creator_id=creator.id,
+                    source="x",
+                    source_creator_id="opaque-202",
+                    source_url="https://x.com/no_repository_match",
+                    display_name="Multi Repository",
+                ),
+            ])
+            await db.flush()
+            db.add_all([
+                StorageArtifact(
+                    storage_root="downloads",
+                    file_path="twitter/matching_repository/101_1.jpg",
+                    source="x",
+                    creator_dir="matching_repository",
+                    source_work_id="101",
+                    file_name="101_1.jpg",
+                    artifact_type="image",
+                    file_size=1024,
+                    state="done",
+                ),
+                StorageArtifact(
+                    storage_root="downloads",
+                    file_path="twitter/no_repository_match/202_1.jpg",
+                    source="x",
+                    creator_dir="no_repository_match",
+                    source_work_id="202",
+                    file_name="202_1.jpg",
+                    artifact_type="image",
+                    file_size=1024,
+                    state="done",
+                ),
+            ])
+            await db.commit()
+
+            payload = await settings_api.storage_breakdown(db=db)
+
+            assert payload["unlinked_repositories"] == []
+            repositories = {
+                row["directory_name"]: row
+                for row in payload["creator_tree"][0]["repositories"]
+            }
+            assert repositories["matching_repository"]["repository_id"] == str(matched.id)
+            assert repositories["no_repository_match"]["repository_id"] is None
+            assert repositories["no_repository_match"]["source"] == "x"
+    finally:
+        settings_api.invalidate_storage_breakdown_cache()
+        async with async_session() as db:
+            await _clear_identity_tables(db)
+        await engine.dispose()

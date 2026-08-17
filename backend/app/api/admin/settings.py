@@ -461,26 +461,32 @@ async def _ledger_storage_breakdown(db: AsyncSession) -> dict:
         contexts_by_source.setdefault(repository.source, []).append((repository, creator))
         creators_by_id[str(creator.id)] = creator
 
-    owner_by_directory: dict[tuple[str, str], str] = {}
-    for source_creator, creator in source_creators:
-        if source_creator.creator_id:
-            owner_by_directory[(source_creator.source, source_creator.source_creator_id)] = str(source_creator.creator_id)
-            if creator:
-                creators_by_id[str(creator.id)] = creator
-
     def source_display_name(source: str) -> str:
         try:
             return registry.get(source).display_name
         except KeyError:
             return source
 
-    def repository_directory(repository: SubscriptionSource) -> str | None:
-        if not repository.source_url:
+    def provider_directory(source: str, source_url: str | None) -> str | None:
+        if not source_url:
             return None
         try:
-            return registry.get(repository.source).get_creator_dir_from_url(repository.source_url)
+            provider = registry.get(source)
+            normalized_url = provider.normalize_url(source_url) or source_url
+            return provider.get_creator_dir_from_url(normalized_url)
         except KeyError:
             return None
+
+    owner_by_directory: dict[tuple[str, str], str] = {}
+    for source_creator, creator in source_creators:
+        if source_creator.creator_id:
+            owner_id = str(source_creator.creator_id)
+            owner_by_directory[(source_creator.source, source_creator.source_creator_id)] = owner_id
+            url_directory = provider_directory(source_creator.source, source_creator.source_url)
+            if url_directory:
+                owner_by_directory[(source_creator.source, url_directory)] = owner_id
+            if creator:
+                creators_by_id[str(creator.id)] = creator
 
     source_totals: dict[str, dict] = {}
     creator_nodes: dict[str, dict] = {}
@@ -508,10 +514,8 @@ async def _ledger_storage_breakdown(db: AsyncSession) -> dict:
             score = 0
             if repository.source_creator_id == directory_name:
                 score = 100
-            if repository_directory(repository) == directory_name:
+            if provider_directory(repository.source, repository.source_url) == directory_name:
                 score = max(score, 90)
-            if owner_id and str(creator.id) == owner_id:
-                score = max(score, 80)
             if score > best_score:
                 best_score = score
                 best_context = (repository, creator)
