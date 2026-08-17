@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from io import StringIO
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select, text
@@ -31,7 +33,15 @@ async def _clear_reconciliation_tables(db) -> None:
     await db.commit()
 
 
-async def _repository_fixture(db):
+async def _repository_fixture(
+    db,
+    *,
+    source: str = "x",
+    source_creator_id: str | None = "opaque-target-id",
+    source_url: str = "https://x.com/target_handle",
+    other_source_creator_id: str | None = "opaque-other-id",
+    other_source_url: str = "https://x.com/other_handle",
+):
     from app.models import Creator, DownloadJob, Subscription, SubscriptionSource
 
     creator = Creator(name="reconcile-creator", display_name="Reconcile Creator")
@@ -42,36 +52,36 @@ async def _repository_fixture(db):
     await db.flush()
     repository = SubscriptionSource(
         subscription_id=subscription.id,
-        source="x",
-        source_creator_id="opaque-target-id",
-        source_url="https://x.com/target_handle",
+        source=source,
+        source_creator_id=source_creator_id,
+        source_url=source_url,
     )
     other_repository = SubscriptionSource(
         subscription_id=subscription.id,
-        source="x",
-        source_creator_id="opaque-other-id",
-        source_url="https://x.com/other_handle",
+        source=source,
+        source_creator_id=other_source_creator_id,
+        source_url=other_source_url,
     )
     db.add_all([repository, other_repository])
     await db.flush()
     current = DownloadJob(
         subscription_id=subscription.id,
         subscription_source_id=repository.id,
-        source="x",
+        source=source,
         source_url=repository.source_url,
         status="downloaded",
     )
     historical = DownloadJob(
         subscription_id=subscription.id,
         subscription_source_id=repository.id,
-        source="x",
+        source=source,
         source_url=repository.source_url,
         status="complete",
     )
     manual = DownloadJob(
         subscription_id=subscription.id,
-        source="x",
-        source_url="https://x.com/manual_handle",
+        source=source,
+        source_url=source_url,
         status="downloaded",
     )
     db.add_all([current, historical, manual])
@@ -79,13 +89,22 @@ async def _repository_fixture(db):
     return subscription, repository, other_repository, current, historical, manual
 
 
-def _artifact(*, path: str, work_id: str, creator_dir: str, job_id, state: str = "new", **extra):
+def _artifact(
+    *,
+    path: str,
+    work_id: str,
+    creator_dir: str,
+    job_id,
+    source: str = "x",
+    state: str = "new",
+    **extra,
+):
     from app.models import StorageArtifact
 
     return StorageArtifact(
         storage_root="downloads",
         file_path=path,
-        source="x",
+        source=source,
         creator_dir=creator_dir,
         source_work_id=work_id,
         file_name=path.rsplit("/", 1)[-1],
@@ -310,6 +329,270 @@ async def test_successful_repository_sync_enqueues_recovered_backlog_when_networ
                 "recovered_metadata_count": 1,
                 "pending_work_count": 1,
             }
+    finally:
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_missing_repository_identity_does_not_adopt_a_single_mismatched_source_creator():
+    from app.database import async_session, engine
+    from app.models import SourceCreator
+    from app.services.repository_artifact_reconciliation import (
+        reconcile_repository_artifacts,
+    )
+    from app.services.repository_identity import resolve_repository_source_creator_ids
+
+    try:
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+            subscription, repository, _other, current, historical, _manual = await _repository_fixture(
+                db,
+                source_creator_id=None,
+            )
+            db.add(SourceCreator(
+                creator_id=subscription.creator_id,
+                source="x",
+                source_creator_id="other-numeric-id",
+                source_url="https://x.com/other_handle",
+            ))
+            db.add(_artifact(
+                path="twitter/other_handle/unrelated-301.json",
+                work_id="unrelated-301",
+                creator_dir="other_handle",
+                job_id=historical.id,
+            ))
+            await db.commit()
+
+            assert await resolve_repository_source_creator_ids(
+                db, repository, subscription.creator_id,
+            ) == []
+            result = await reconcile_repository_artifacts(db, current)
+
+            assert result.recovered_metadata_count == 0
+            assert result.pending_work_count == 0
+    finally:
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source", "source_creator_id", "source_url", "directory"),
+    [
+        ("x", "123456", "https://x.com/target_handle", "target_handle"),
+        ("iwara", "opaque-user-id", "https://www.iwara.tv/profile/target-name", "target-name"),
+    ],
+)
+async def test_repository_reconciliation_uses_provider_directory_not_opaque_source_identity(
+    source,
+    source_creator_id,
+    source_url,
+    directory,
+):
+    from app.database import async_session, engine
+    from app.services.repository_artifact_reconciliation import (
+        _repository_creator_dirs,
+        reconcile_repository_artifacts,
+    )
+
+    try:
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+            subscription, repository, _other, current, historical, _manual = await _repository_fixture(
+                db,
+                source=source,
+                source_creator_id=source_creator_id,
+                source_url=source_url,
+            )
+            db.add_all([
+                _artifact(
+                    path=f"{source}/{source_creator_id}/opaque-401.json",
+                    work_id="opaque-401",
+                    creator_dir=source_creator_id,
+                    job_id=historical.id,
+                    source=source,
+                ),
+                _artifact(
+                    path=f"{source}/{directory}/supported-402.json",
+                    work_id="supported-402",
+                    creator_dir=directory,
+                    job_id=historical.id,
+                    source=source,
+                ),
+            ])
+            await db.commit()
+
+            assert await _repository_creator_dirs(
+                db, repository, subscription.creator_id,
+            ) == {directory}
+            result = await reconcile_repository_artifacts(db, current)
+            await db.commit()
+
+            assert set(result.recovered_metadata_paths) == {
+                f"{source}/{directory}/supported-402.json",
+            }
+            assert result.recovered_metadata_count == 1
+    finally:
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_active_sibling_download_job_keeps_new_artifacts_after_adoption():
+    from app.database import async_session, engine
+    from app.models import DownloadJob, StorageArtifact
+    from app.services.repository_artifact_reconciliation import (
+        reconcile_repository_artifacts,
+    )
+
+    try:
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+            subscription, repository, _other, first, historical, _manual = await _repository_fixture(db)
+            second = DownloadJob(
+                subscription_id=subscription.id,
+                subscription_source_id=repository.id,
+                source="x",
+                source_url=repository.source_url,
+                status="downloaded",
+            )
+            db.add(second)
+            db.add(_artifact(
+                path="twitter/target_handle/competing-501.json",
+                work_id="competing-501",
+                creator_dir="target_handle",
+                job_id=historical.id,
+            ))
+            await db.commit()
+
+            first_result = await reconcile_repository_artifacts(db, first)
+            await db.commit()
+            second_result = await reconcile_repository_artifacts(db, second)
+            await db.commit()
+            artifact = (await db.execute(
+                select(StorageArtifact).where(
+                    StorageArtifact.source_work_id == "competing-501",
+                )
+            )).scalar_one()
+
+            assert first_result.recovered_metadata_count == 1
+            assert second_result.recovered_metadata_count == 0
+            assert artifact.download_job_id == first.id
+            assert artifact.state == "new"
+    finally:
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_successful_download_boundary_retries_durable_recovered_backlog_after_enqueue_crash(
+    tmp_path,
+    monkeypatch,
+):
+    """A crash after ledger adoption leaves the next successful run importable."""
+    from app.database import async_session, engine
+    from app.jobs import download as download_module
+
+    class FakeProcess:
+        pid = 987654
+        returncode = 0
+
+        def __init__(self, *_args, **_kwargs):
+            self.stdout = StringIO("")
+            self.stderr = StringIO("")
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, _timeout=None):
+            return self.returncode
+
+    class FakeControlListener:
+        command = None
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    class FakeHeartbeat(FakeControlListener):
+        pass
+
+    attempts: list[set[str]] = []
+
+    async def fake_defaults():
+        return {"max_posts": 1, "timeout_seconds": 1, "stall_timeout_seconds": 1}
+
+    async def fake_enqueue(_job_id, import_error=None, new_json_paths=None):
+        assert import_error is None
+        attempts.append(set(new_json_paths or []))
+        if len(attempts) == 1:
+            raise RuntimeError("simulated crash after durable reconciliation")
+        return "durable-import-id"
+
+    raw_runner = download_module.run_download_job
+    while hasattr(raw_runner, "__wrapped__"):
+        raw_runner = raw_runner.__wrapped__
+    monkeypatch.setattr(download_module, "_read_download_defaults", fake_defaults)
+    monkeypatch.setattr(download_module, "_enqueue_import", fake_enqueue)
+    monkeypatch.setattr(download_module, "build_effective_gallerydl_config", lambda *_args: {})
+    monkeypatch.setattr(download_module, "staging_enabled", lambda: False)
+    monkeypatch.setattr(download_module, "ControlListener", FakeControlListener)
+    monkeypatch.setattr(download_module, "HeartbeatPublisher", FakeHeartbeat)
+    monkeypatch.setattr(download_module.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(download_module, "_process_group_exists", lambda _pid: False)
+    monkeypatch.setattr(download_module.settings, "download_root", str(tmp_path))
+    monkeypatch.setattr(download_module, "get_redis", lambda: SimpleNamespace(
+        hset=lambda *_args, **_kwargs: None,
+        expire=lambda *_args, **_kwargs: None,
+    ))
+
+    try:
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+            _subscription, _repository, _other, current, historical, _manual = await _repository_fixture(db)
+            current.status = "enqueued"
+            db.add(_artifact(
+                path="twitter/target_handle/retry-601.json",
+                work_id="retry-601",
+                creator_dir="target_handle",
+                job_id=historical.id,
+            ))
+            await db.commit()
+
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            await raw_runner(str(current.id))
+
+        async with async_session() as db:
+            refreshed = await db.get(type(current), current.id)
+            assert refreshed is not None
+            assert refreshed.manifest["repository_artifact_reconciliation"] == {
+                "downloaded_metadata_count": 0,
+                "recovered_metadata_count": 1,
+                "pending_work_count": 1,
+            }
+            refreshed.status = "enqueued"
+            await db.commit()
+
+        await raw_runner(str(current.id))
+
+        assert attempts == [
+            {"twitter/target_handle/retry-601.json"},
+            {"twitter/target_handle/retry-601.json"},
+        ]
     finally:
         async with async_session() as db:
             await _clear_reconciliation_tables(db)

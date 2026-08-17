@@ -10,12 +10,24 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.source_creator import SourceCreator
+from app.models.download_job import DownloadJob
 from app.models.storage_artifact import StorageArtifact
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.models.work_source import WorkSource
 from app.providers import registry
 from app.services.repository_identity import resolve_repository_source_creator_ids
+
+
+ACTIVE_DOWNLOAD_OWNERS = frozenset({
+    "pending",
+    "enqueued",
+    "downloading",
+    "downloaded",
+    "importing",
+    "paused",
+    "recovering",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +75,7 @@ async def _repository_creator_dirs(
     if repository.source_creator_id:
         identities.add(repository.source_creator_id)
 
-    directories = {identity for identity in identities if identity}
+    directories: set[str] = set()
     repository_dir = _provider_creator_dir(repository.source, repository.source_url)
     if repository_dir:
         directories.add(repository_dir)
@@ -97,6 +109,20 @@ def _eligible_artifact(now: datetime):
                 StorageArtifact.lease_expires_at <= now,
             ),
         ),
+    )
+
+
+def _recoverable_download_owner():
+    """Allow only orphaned or terminal DownloadJob ownership to be adopted."""
+
+    return or_(
+        StorageArtifact.download_job_id.is_(None),
+        ~select(DownloadJob.id)
+        .where(
+            DownloadJob.id == StorageArtifact.download_job_id,
+            DownloadJob.status.in_(ACTIVE_DOWNLOAD_OWNERS),
+        )
+        .exists(),
     )
 
 
@@ -206,6 +232,7 @@ async def reconcile_repository_artifacts(
         StorageArtifact.source == source,
         StorageArtifact.creator_dir.in_(creator_dirs),
         eligible,
+        _recoverable_download_owner(),
     )
 
     existing_ids = await _existing_work_ids(
@@ -240,6 +267,7 @@ async def reconcile_repository_artifacts(
                 StorageArtifact.source_work_id.in_(recovered_ids),
                 StorageArtifact.download_job_id.is_distinct_from(current_job.id),
                 _eligible_artifact(now),
+                _recoverable_download_owner(),
             )
             .values(
                 download_job_id=current_job.id,
