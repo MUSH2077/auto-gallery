@@ -367,6 +367,7 @@ async def get_repository(source_id: UUID, db: AsyncSession = Depends(get_db)):
             "sync_enabled": sub.sync_enabled,
             "sync_interval_hours": sub.sync_interval_hours,
             "schedule_mode": sub.schedule_mode,
+            "schedule_rule": sub.schedule_rule,
             "scheduled_times": sub.scheduled_times,
             "last_synced_at": sub.last_synced_at.isoformat() if sub.last_synced_at else None,
         },

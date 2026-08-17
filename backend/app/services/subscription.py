@@ -22,6 +22,7 @@ from app.services.subscription_source_selection import (
     lock_subscription_sources,
     select_primary_subscription_source,
 )
+from app.services.subscription_replan import replan_subscription_sources
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ SCHEDULE_FIELDS = {
     "sync_enabled",
     "sync_interval_hours",
     "schedule_mode",
+    "schedule_rule",
     "scheduled_times",
 }
 
@@ -111,6 +113,8 @@ class SubscriptionService:
             merged["sync_enabled"] = False
         else:
             merged["sync_enabled"] = True
+        if merged.get("schedule_mode") != "calendar":
+            merged["schedule_rule"] = None
         sub = await self.repo.create(merged)
         await request_search_projection(
             self.db,
@@ -141,6 +145,8 @@ class SubscriptionService:
                 data["schedule_mode"] = "manual"
             elif sub.schedule_mode == "manual":
                 data["schedule_mode"] = None
+        if "schedule_mode" in data and data.get("schedule_mode") != "calendar":
+            data["schedule_rule"] = None
         automatic_transition = (
             data.get("schedule_mode", sub.schedule_mode) != "manual"
             and data.get("sync_enabled", sub.sync_enabled) is True
@@ -175,26 +181,14 @@ class SubscriptionService:
             await self._projection_context(sub_id)
         )
 
+        scheduler_config = await get_scheduler_config(self.db)
         sub = await self.repo.update(sub, data)
         if SCHEDULE_FIELDS.intersection(data):
-            await self.db.execute(
-                sql_update(SubscriptionSource)
-                .where(SubscriptionSource.subscription_id == sub_id)
-                .values(next_sync_at=None)
-            )
-        scheduler_config = await get_scheduler_config(self.db)
-        if automatic_transition and auto_enabled_source is not None:
-            from app.jobs.subscription_sync import next_future_subscription_check_at
-
-            selected = next(
-                source
-                for source in locked_sources
-                if source.id == auto_enabled_source["id"]
-            )
-            selected.next_sync_at = next_future_subscription_check_at(
+            await replan_subscription_sources(
+                self.db,
                 sub,
                 scheduler_config,
-                datetime.now(timezone.utc),
+                sources=locked_sources or None,
             )
 
         # When creator_id changes, propagate to SourceCreators that were

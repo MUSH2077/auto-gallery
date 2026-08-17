@@ -12,7 +12,7 @@ class SubscriptionRepository(BaseRepository[Subscription]):
     async def update(self, obj: Subscription, data: dict) -> Subscription:
         """Allow explicit NULL for the two fields whose NULL means inherit."""
 
-        nullable_fields = {"schedule_mode", "scheduled_times"}
+        nullable_fields = {"schedule_mode", "schedule_rule", "scheduled_times"}
         for key, value in data.items():
             if value is not None or key in nullable_fields:
                 setattr(obj, key, value)

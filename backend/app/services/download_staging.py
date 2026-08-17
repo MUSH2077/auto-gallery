@@ -14,7 +14,7 @@ import os
 import stat
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -70,6 +70,15 @@ class StagePromotion:
     paths: tuple[Path, ...]
     conflicts: tuple[str, ...] = ()
     metadata_updates: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class StageConflictResolution:
+    """A complete winner selection with a recoverable quarantined loser."""
+
+    resolution_id: str
+    entries: tuple[dict[str, Any], ...]
+    expires_at: str
 
 
 def staging_enabled() -> bool:
@@ -369,6 +378,252 @@ class DownloadStage:
             if isinstance(update, dict) and update.get("state") == "applied"
         )
         return StagePromotion(tuple(canonical_paths), metadata_updates=applied_updates)
+
+    def resolve_conflicts(
+        self,
+        decisions: dict[str, str],
+        *,
+        resolution_id: str,
+        retention_days: int = 30,
+    ) -> StageConflictResolution:
+        """Apply one decision for every conflict and preserve every loser.
+
+        This is deliberately separate from :meth:`promote`: ordinary retries
+        remain fail-closed until an explicit or evidence-backed resolution has
+        made the canonical identity durable in the stage manifest.
+        """
+
+        if not resolution_id or any(
+            char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
+            for char in resolution_id
+        ):
+            raise DownloadStageManifestError("invalid conflict resolution id")
+        if any(value not in {"canonical", "staged"} for value in decisions.values()):
+            raise DownloadStageManifestError("conflict winner must be canonical or staged")
+
+        existing = self._manifest.get("resolution")
+        if isinstance(existing, dict) and existing.get("state") in {"prepared", "applied"}:
+            prepared = [dict(entry) for entry in existing.get("entries") or ()]
+            recorded_decisions = {
+                str(entry.get("relative_path")): str(entry.get("winner"))
+                for entry in prepared
+            }
+            if decisions != recorded_decisions:
+                raise DownloadStageManifestError(
+                    "conflict resolution decisions do not match the prepared batch"
+                )
+            resolution_id = str(existing["resolution_id"])
+            expires_at = str(existing["expires_at"])
+            if existing.get("state") == "applied":
+                return StageConflictResolution(
+                    resolution_id=resolution_id,
+                    entries=tuple(prepared),
+                    expires_at=expires_at,
+                )
+        else:
+            conflicts = tuple(
+                str(value) for value in self._manifest.get("conflicts") or []
+            )
+            if not conflicts:
+                raise DownloadStageManifestError("stage has no unresolved conflicts")
+            if set(decisions) != set(conflicts):
+                raise DownloadStageManifestError(
+                    "conflict resolution requires exactly one decision per conflict"
+                )
+
+            details = {
+                str(item.get("relative_path")): item
+                for item in self._manifest.get("conflict_details") or []
+                if isinstance(item, dict) and item.get("relative_path")
+            }
+            prepared = []
+            for relative in conflicts:
+                staged = self.root / Path(PurePosixPath(relative))
+                target = self._canonical_target(relative)
+                staged_sha = self._conflict_file_hash(
+                    staged,
+                    label="staged conflict",
+                )
+                canonical_sha = self._conflict_file_hash(
+                    target,
+                    label="canonical conflict",
+                )
+                detail = details.get(relative) or {}
+                if detail.get("staged_sha256") not in {None, staged_sha}:
+                    raise DownloadStageManifestError(
+                        f"staged conflict changed before resolution: {relative}"
+                    )
+                if detail.get("canonical_sha256") not in {None, canonical_sha}:
+                    raise DownloadStageManifestError(
+                        f"canonical conflict changed before resolution: {relative}"
+                    )
+                loser = "canonical" if decisions[relative] == "staged" else "staged"
+                quarantine_relative = (
+                    Path(".conflict-quarantine")
+                    / resolution_id
+                    / loser
+                    / Path(PurePosixPath(relative))
+                )
+                self._canonical_target(quarantine_relative.as_posix())
+                prepared.append({
+                    "relative_path": relative,
+                    "winner": decisions[relative],
+                    "staged_sha256": staged_sha,
+                    "canonical_sha256": canonical_sha,
+                    "winner_sha256": (
+                        staged_sha
+                        if decisions[relative] == "staged"
+                        else canonical_sha
+                    ),
+                    "loser_sha256": (
+                        canonical_sha
+                        if decisions[relative] == "staged"
+                        else staged_sha
+                    ),
+                    "quarantine_path": quarantine_relative.as_posix(),
+                    "state": "pending",
+                })
+
+            expires_at = (
+                datetime.now(timezone.utc) + timedelta(days=max(1, int(retention_days)))
+            ).isoformat()
+            self._manifest["resolution"] = {
+                "resolution_id": resolution_id,
+                "state": "prepared",
+                "entries": prepared,
+                "expires_at": expires_at,
+            }
+            self._write_manifest()
+
+        for entry in prepared:
+            self._resume_conflict_resolution_entry(entry)
+            entry["state"] = "applied"
+            target = self._canonical_target(str(entry["relative_path"]))
+            target_identity = _file_identity(target)
+            self._manifest.setdefault("planned", {})[
+                str(entry["relative_path"])
+            ] = target_identity
+            self._manifest.setdefault("promoted", {})[
+                str(entry["relative_path"])
+            ] = target_identity
+            self._manifest["resolution"]["entries"] = prepared
+            self._write_manifest()
+
+        self._manifest["state"] = "resolved"
+        self._manifest["conflicts"] = []
+        self._manifest["conflict_details"] = []
+        self._manifest["resolution"]["state"] = "applied"
+        self._write_manifest()
+        return StageConflictResolution(
+            resolution_id=resolution_id,
+            entries=tuple(dict(entry) for entry in prepared),
+            expires_at=expires_at,
+        )
+
+    @staticmethod
+    def _conflict_file_hash(
+        path: Path,
+        *,
+        label: str,
+        allow_missing: bool = False,
+    ) -> str | None:
+        if path.is_symlink():
+            raise DownloadStageManifestError(f"{label} path cannot be a symlink")
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            if allow_missing:
+                return None
+            raise DownloadStageManifestError(f"{label} file is missing") from None
+        if not stat.S_ISREG(info.st_mode):
+            raise DownloadStageManifestError(f"{label} path is not a regular file")
+        return _sha256(path)
+
+    def _resume_conflict_resolution_entry(self, entry: dict[str, Any]) -> None:
+        """Reach the prepared file state without discarding either version."""
+
+        relative = str(entry["relative_path"])
+        staged = self.root / Path(PurePosixPath(relative))
+        target = self._canonical_target(relative)
+        quarantine = self._canonical_target(str(entry["quarantine_path"]))
+        staged_sha = self._conflict_file_hash(
+            staged,
+            label="staged conflict",
+            allow_missing=True,
+        )
+        target_sha = self._conflict_file_hash(
+            target,
+            label="canonical conflict",
+        )
+        quarantine_sha = self._conflict_file_hash(
+            quarantine,
+            label="conflict quarantine",
+            allow_missing=True,
+        )
+        winner_sha = str(entry["winner_sha256"])
+        loser_sha = str(entry["loser_sha256"])
+
+        if (
+            target_sha == winner_sha
+            and quarantine_sha == loser_sha
+            and staged_sha is None
+        ):
+            _fsync_directory(target.parent)
+            _fsync_directory(quarantine.parent)
+            return
+
+        if entry["winner"] == "staged":
+            if target_sha != loser_sha or staged_sha != winner_sha:
+                raise DownloadStageManifestError(
+                    f"conflict files changed while resuming resolution: {relative}"
+                )
+            if quarantine_sha is None:
+                try:
+                    os.link(target, quarantine, follow_symlinks=False)
+                except FileExistsError:
+                    quarantine_sha = self._conflict_file_hash(
+                        quarantine,
+                        label="conflict quarantine",
+                    )
+                else:
+                    quarantine_sha = loser_sha
+                    _fsync_directory(quarantine.parent)
+            if quarantine_sha != loser_sha:
+                raise DownloadStageManifestError(
+                    f"conflict quarantine changed: {relative}"
+                )
+            os.replace(staged, target)
+            _fsync_directory(target.parent)
+        else:
+            if (
+                target_sha != winner_sha
+                or staged_sha != loser_sha
+                or quarantine_sha is not None
+            ):
+                raise DownloadStageManifestError(
+                    f"conflict files changed while resuming resolution: {relative}"
+                )
+            os.replace(staged, quarantine)
+            _fsync_directory(quarantine.parent)
+
+        if (
+            self._conflict_file_hash(target, label="resolved canonical conflict")
+            != winner_sha
+            or self._conflict_file_hash(
+                quarantine,
+                label="resolved conflict quarantine",
+            )
+            != loser_sha
+            or self._conflict_file_hash(
+                staged,
+                label="resolved staged conflict",
+                allow_missing=True,
+            )
+            is not None
+        ):
+            raise DownloadStageManifestError(
+                f"conflict resolution did not reach a durable state: {relative}"
+            )
 
     def mark_registered(self) -> None:
         """Persist ledger completion, then remove an empty completed stage."""

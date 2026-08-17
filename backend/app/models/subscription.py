@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from uuid import UUID
 
@@ -12,7 +13,7 @@ class Subscription(TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("creator_id", name="uq_subscriptions_creator"),
         CheckConstraint(
-            "schedule_mode IS NULL OR schedule_mode IN ('interval', 'fixed_time', 'manual')",
+            "schedule_mode IS NULL OR schedule_mode IN ('interval', 'calendar', 'manual')",
             name="ck_subscriptions_schedule_mode",
         ),
         CheckConstraint(
@@ -28,7 +29,10 @@ class Subscription(TimestampMixin, Base):
     sync_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     sync_interval_hours: Mapped[int] = mapped_column(Integer, default=6)
     schedule_mode: Mapped[str | None] = mapped_column(String(20), nullable=True,
-        comment="NULL=inherit system default, 'interval', 'fixed_time', 'manual'")
+        comment="NULL=inherit system default, 'interval', 'calendar', 'manual'")
+    schedule_rule: Mapped[dict | None] = mapped_column(
+        JSONB, nullable=True, comment="Structured daily/weekly/monthly calendar recurrence"
+    )
     scheduled_times: Mapped[str | None] = mapped_column(String(100), nullable=True,
         comment="NULL=inherit system default, e.g. '03:00,21:00'")
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

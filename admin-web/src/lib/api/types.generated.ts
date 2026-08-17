@@ -3418,6 +3418,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tasks/{task_id}/conflicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Download Conflicts
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        get: operations["get_api_v1_tasks_task_id_conflicts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{task_id}/conflicts/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Download Conflict Media
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        get: operations["get_api_v1_tasks_task_id_conflicts_media"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{task_id}/conflicts/resolutions/{resolution_id}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rollback Download Conflict Resolution
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_tasks_task_id_conflicts_resolutions_resolution_id_rollback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{task_id}/conflicts/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Download Conflicts
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_tasks_task_id_conflicts_resolve"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tasks/{task_id}/pause": {
         parameters: {
             query?: never;
@@ -4212,6 +4292,16 @@ export interface components {
              */
             limit: number;
         };
+        /** ConflictDecision */
+        ConflictDecision: {
+            /** Relative Path */
+            relative_path: string;
+            /**
+             * Winner
+             * @enum {string}
+             */
+            winner: "canonical" | "staged";
+        };
         /** CreatorCreate */
         CreatorCreate: {
             /** Description */
@@ -4547,6 +4637,16 @@ export interface components {
              */
             visibility: string;
         };
+        /** DailyScheduleRule */
+        DailyScheduleRule: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            frequency: "daily";
+            /** Times */
+            times: string[];
+        };
         /** DanbooruMappingRefreshEnqueueResponse */
         DanbooruMappingRefreshEnqueueResponse: {
             /** Job Id */
@@ -4733,6 +4833,11 @@ export interface components {
         };
         /** DownloadDefaults */
         DownloadDefaults: {
+            /**
+             * Auto Resolve Upstream Conflicts
+             * @default true
+             */
+            auto_resolve_upstream_conflicts: boolean;
             /**
              * Download Concurrency
              * @default 3
@@ -5328,6 +5433,24 @@ export interface components {
             /** Username */
             username: string;
         };
+        /** MonthlyScheduleRule */
+        MonthlyScheduleRule: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            frequency: "monthly";
+            /** Month Days */
+            month_days: number[];
+            /**
+             * Overflow
+             * @default last_day
+             * @constant
+             */
+            overflow: "last_day";
+            /** Times */
+            times: string[];
+        };
         /** PinterestSourceConfig */
         PinterestSourceConfig: {
             /** Auto Enable On Import */
@@ -5581,6 +5704,13 @@ export interface components {
             /** Password */
             password: string;
         };
+        /** ResolveDownloadConflictRequest */
+        ResolveDownloadConflictRequest: {
+            /** Decisions */
+            decisions: components["schemas"]["ConflictDecision"][];
+            /** Resolution Id */
+            resolution_id?: string | null;
+        };
         /** RestoreSubscriptionSlotRequest */
         RestoreSubscriptionSlotRequest: {
             /**
@@ -5731,7 +5861,9 @@ export interface components {
             /** Name */
             name?: string | null;
             /** Schedule Mode */
-            schedule_mode?: ("inherit" | "interval" | "fixed_time" | "manual") | null;
+            schedule_mode?: ("inherit" | "interval" | "calendar" | "manual") | null;
+            /** Schedule Rule */
+            schedule_rule?: (components["schemas"]["DailyScheduleRule"] | components["schemas"]["WeeklyScheduleRule"] | components["schemas"]["MonthlyScheduleRule"]) | null;
             /** Scheduled Times */
             scheduled_times?: string | null;
             /**
@@ -5760,8 +5892,11 @@ export interface components {
             /**
              * Schedule Mode
              * @default interval
+             * @enum {string}
              */
-            schedule_mode: string;
+            schedule_mode: "interval" | "calendar";
+            /** Schedule Rule */
+            schedule_rule?: (components["schemas"]["DailyScheduleRule"] | components["schemas"]["WeeklyScheduleRule"] | components["schemas"]["MonthlyScheduleRule"]) | null;
             /**
              * Scheduled Times
              * @default
@@ -5848,6 +5983,10 @@ export interface components {
             running_job_count?: number | null;
             /** Schedule Mode */
             schedule_mode?: string | null;
+            /** Schedule Rule */
+            schedule_rule?: {
+                [key: string]: unknown;
+            } | null;
             /** Scheduled Times */
             scheduled_times?: string | null;
             /** Source Count */
@@ -5892,6 +6031,10 @@ export interface components {
              * @default 0
              */
             overdue_sources: number;
+            /** Schedule Rule */
+            schedule_rule?: {
+                [key: string]: unknown;
+            } | null;
             /** Scheduled Times */
             scheduled_times?: string | null;
             /** Sync Interval Hours */
@@ -6018,7 +6161,9 @@ export interface components {
             /** Name */
             name?: string | null;
             /** Schedule Mode */
-            schedule_mode?: ("inherit" | "interval" | "fixed_time" | "manual") | null;
+            schedule_mode?: ("inherit" | "interval" | "calendar" | "manual") | null;
+            /** Schedule Rule */
+            schedule_rule?: (components["schemas"]["DailyScheduleRule"] | components["schemas"]["WeeklyScheduleRule"] | components["schemas"]["MonthlyScheduleRule"]) | null;
             /** Scheduled Times */
             scheduled_times?: string | null;
             /** Sync Enabled */
@@ -6285,6 +6430,18 @@ export interface components {
             expires_in: number;
             /** Ticket */
             ticket: string;
+        };
+        /** WeeklyScheduleRule */
+        WeeklyScheduleRule: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            frequency: "weekly";
+            /** Times */
+            times: string[];
+            /** Weekdays */
+            weekdays: number[];
         };
         /** WeiboSourceConfig */
         WeiboSourceConfig: {
@@ -15592,6 +15749,210 @@ export interface operations {
                 "application/json": {
                     [key: string]: unknown;
                 } | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_tasks_task_id_conflicts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_tasks_task_id_conflicts_media: {
+        parameters: {
+            query: {
+                relative_path: string;
+                side: "canonical" | "staged";
+            };
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_tasks_task_id_conflicts_resolutions_resolution_id_rollback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+                resolution_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_tasks_task_id_conflicts_resolve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveDownloadConflictRequest"];
             };
         };
         responses: {

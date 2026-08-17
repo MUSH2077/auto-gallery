@@ -29,6 +29,8 @@ export { CardSkeleton, TableSkeleton } from "./LoadingSkeleton";
 export { default as Modal } from "./Modal";
 export { default as ErrorBoundary } from "./ErrorBoundary";
 export { default as RepositoryCard } from "./RepositoryCard";
+export { default as CalendarScheduleEditor, defaultCalendarRule, ScheduleTimePicker } from "./CalendarScheduleEditor";
+export { default as DownloadConflictDialog } from "./DownloadConflictDialog";
 export { default as GitlleryPanel } from "./GitlleryPanel";
 export { Breadcrumb, type Crumb } from "./Breadcrumb";
 export { ToastProvider, useToast } from "./Toast";

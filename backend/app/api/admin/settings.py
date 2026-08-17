@@ -18,7 +18,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import and_, select, update as sql_update
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -29,14 +29,20 @@ from app.auth import RequirePermission
 from app.database import async_session, get_db
 from app.models.system_setting import SystemSetting
 from app.models.subscription_source import SubscriptionSource
+from app.schemas.schedule import CalendarScheduleRule, normalize_legacy_schedule_payload
 from app.schemas.gitllery import GitllerySettingsResponse
 from app.services.redis_client import get_redis
 from app.services.queue_admission import (
     QueueAdmissionError,
+    checked_enqueue,
     checked_enqueue_in,
 )
 from app.services import admin_data
 from app.services.admin_data import ENTITIES, clear_entity_data
+from app.services.subscription_replan import (
+    replan_inherited_subscription_sources,
+    subscription_schedule_changed,
+)
 
 from ._routers import router
 
@@ -88,6 +94,19 @@ def _reschedule_subscription_sync_scan(config: dict) -> dict:
     return {"removed": removed, "job_id": job.id, "interval_minutes": interval}
 
 
+def _enqueue_download_conflict_reconciliation() -> dict:
+    from rq import Queue
+
+    job = checked_enqueue(
+        Queue(name="maintenance", connection=get_redis()),
+        "app.jobs.download_conflicts.reconcile_historical_download_conflicts",
+        500,
+        job_timeout=3600,
+        result_ttl=86400,
+    )
+    return {"job_id": job.id, "status": "enqueued"}
+
+
 DEFAULT_DEDUP = {
     "auto_group_enabled": True,
     "phash_threshold": 4,
@@ -97,7 +116,7 @@ DEFAULT_DEDUP = {
     "review_score": 70,
     "quarantine_days": 30,
 }
-DEFAULT_DL = {"timeout_seconds": 600, "max_retries": 3, "retry_backoff_base_seconds": 60, "max_posts": 200, "skip_ai_generated": False}
+DEFAULT_DL = {"timeout_seconds": 600, "max_retries": 3, "retry_backoff_base_seconds": 60, "max_posts": 200, "skip_ai_generated": False, "auto_resolve_upstream_conflicts": True}
 
 _system_info_cache: dict | None = None
 _system_info_cache_ts: float = 0.0
@@ -123,10 +142,22 @@ class SubscriptionDefaults(BaseModel):
     default_sync_interval_hours: int = 6
     scheduler_scan_interval_minutes: int = 60
     scheduler_enabled: bool = True
-    schedule_mode: str = "interval"
+    schedule_mode: Literal["interval", "calendar"] = "interval"
+    schedule_rule: CalendarScheduleRule | None = None
     scheduled_times: str = ""
     timezone: str = "UTC"
     auto_enable_sources: str = "pixiv"
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_schedule(cls, value):
+        return normalize_legacy_schedule_payload(value)
+
+    @model_validator(mode="after")
+    def require_calendar_rule(self):
+        if self.schedule_mode == "calendar" and self.schedule_rule is None:
+            raise ValueError("calendar schedule_mode requires schedule_rule")
+        return self
 
 DEFAULT_SUB = {"default_sync_interval_hours": 6, "scheduler_scan_interval_minutes": 60, "scheduler_enabled": True, "schedule_mode": "interval", "scheduled_times": "", "timezone": "UTC", "auto_enable_sources": "pixiv"}
 
@@ -141,6 +172,7 @@ class DownloadDefaults(BaseModel):
     max_posts: int = 200
     skip_ai_generated: bool = False
     download_concurrency: int = 3  # parallel download jobs, clamped to 1-5 on read
+    auto_resolve_upstream_conflicts: bool = True
 
 class ProxySettings(BaseModel):
     http_proxy: str = ""
@@ -167,17 +199,18 @@ async def _get_setting(db: AsyncSession, key: str, default: dict = None) -> dict
 async def _put_setting(db: AsyncSession, key: str, value: dict):
     result = await db.execute(select(SystemSetting).where(SystemSetting.key == key))
     row = result.scalar_one_or_none()
-    changed = row is None or row.value != value
+    previous = dict(row.value) if row and isinstance(row.value, dict) else {}
+    changed = row is None or previous != value
     if row:
         row.value = value
     else:
         db.add(SystemSetting(key=key, value=value))
-    if key == "subscription_defaults" and changed:
-        # Inherited schedules can change for every source.  NULL is the durable
-        # invalidation marker consumed fairly by the next 100-row coverage pass.
-        await db.execute(
-            sql_update(SubscriptionSource).values(next_sync_at=None)
-        )
+    if (
+        key == "subscription_defaults"
+        and changed
+        and subscription_schedule_changed(previous, value)
+    ):
+        await replan_inherited_subscription_sources(db, value)
     await db.commit()
 
     # Invalidate caches when relevant settings change
@@ -967,6 +1000,7 @@ async def get_gitllery_settings(db: AsyncSession = Depends(get_db)):
 @router.put("/settings")
 async def update_settings(data: AdminSettingsUpdate, db: AsyncSession = Depends(get_db)):
     sync_scan_reschedule = None
+    conflict_reconciliation = None
     if data.dedup is not None:
         await _put_setting(db, "dedup", data.dedup.model_dump())
     if data.subscription_defaults is not None:
@@ -979,10 +1013,21 @@ async def update_settings(data: AdminSettingsUpdate, db: AsyncSession = Depends(
         except Exception:
             logger.warning("Failed to reschedule subscription sync scan after settings update", exc_info=True)
     if data.download_defaults is not None:
-        await _put_setting(db, "download_defaults", data.download_defaults.model_dump())
+        download_defaults = data.download_defaults.model_dump()
+        await _put_setting(db, "download_defaults", download_defaults)
+        if download_defaults.get("auto_resolve_upstream_conflicts", True):
+            try:
+                conflict_reconciliation = _enqueue_download_conflict_reconciliation()
+            except Exception:
+                logger.warning("Failed to enqueue historical conflict reconciliation", exc_info=True)
     if data.proxy is not None:
         await _put_setting(db, "proxy", data.proxy.model_dump())
-    return {"status": "ok", "message": "Settings saved to database", "sync_scan_reschedule": sync_scan_reschedule}
+    return {
+        "status": "ok",
+        "message": "Settings saved to database",
+        "sync_scan_reschedule": sync_scan_reschedule,
+        "conflict_reconciliation": conflict_reconciliation,
+    }
 
 
 # ── Proxy Test ──

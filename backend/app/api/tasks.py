@@ -2,12 +2,13 @@ from datetime import datetime
 from uuid import UUID
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import RequirePermission, get_admin_key
+from app.auth import RequireAdminUser, RequirePermission, get_admin_key
 from app.database import get_db
 from app.services.operations import (
     get_operation_status,
@@ -45,6 +46,16 @@ class RestoreSubscriptionSlotRequest(BaseModel):
     slot_at: datetime
     source_ids: list[UUID] = Field(min_length=1, max_length=500)
     dry_run: bool = True
+
+
+class ConflictDecision(BaseModel):
+    relative_path: str = Field(min_length=1, max_length=2000)
+    winner: Literal["canonical", "staged"]
+
+
+class ResolveDownloadConflictRequest(BaseModel):
+    decisions: list[ConflictDecision] = Field(min_length=1, max_length=500)
+    resolution_id: str | None = Field(default=None, max_length=128)
 
 
 @router.get("")
@@ -150,6 +161,101 @@ async def get_task(task_id: UUID, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Task not found")
     events = await svc.task_events(task_id)
     return task_payload(task, events)
+
+
+@router.get("/{task_id}/conflicts")
+async def get_download_conflicts(
+    task_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.download_conflicts import DownloadConflictError, DownloadConflictService
+
+    try:
+        return await DownloadConflictService(db).inspect(task_id)
+    except DownloadConflictError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.get("/{task_id}/conflicts/media")
+async def get_download_conflict_media(
+    task_id: UUID,
+    relative_path: str = Query(min_length=1, max_length=2000),
+    side: Literal["canonical", "staged"] = Query(),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.download_conflicts import DownloadConflictError, DownloadConflictService
+
+    try:
+        path = await DownloadConflictService(db).media_path(task_id, relative_path, side)
+    except DownloadConflictError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return FileResponse(path)
+
+
+@router.post("/{task_id}/conflicts/resolve")
+async def resolve_download_conflicts(
+    task_id: UUID,
+    data: ResolveDownloadConflictRequest,
+    _admin=RequireAdminUser,
+    db: AsyncSession = Depends(get_db),
+    operator: str = Depends(get_admin_key),
+):
+    from app.services.download_conflicts import DownloadConflictError, DownloadConflictService
+
+    decisions = {item.relative_path: item.winner for item in data.decisions}
+    if len(decisions) != len(data.decisions):
+        raise HTTPException(status_code=422, detail="Each conflict path must appear exactly once")
+    try:
+        result = await DownloadConflictService(db).resolve(
+            task_id,
+            decisions,
+            operator=operator,
+            resolution_id=data.resolution_id,
+        )
+        await db.commit()
+        if result.get("idempotent_replay"):
+            result["retry"] = {"status": "already_resolved"}
+            return result
+        try:
+            retry = await TaskEngine(db).retry_download(
+                UUID(str(result["download_job_id"])),
+                operator=operator,
+            )
+            await db.commit()
+            result["retry"] = retry
+        except Exception as retry_exc:
+            await db.rollback()
+            result["retry"] = {
+                "status": "needs_retry",
+                "message": str(retry_exc),
+            }
+        return result
+    except DownloadConflictError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.post("/{task_id}/conflicts/resolutions/{resolution_id}/rollback")
+async def rollback_download_conflict_resolution(
+    task_id: UUID,
+    resolution_id: str,
+    _admin=RequireAdminUser,
+    db: AsyncSession = Depends(get_db),
+    operator: str = Depends(get_admin_key),
+):
+    from app.services.download_conflicts import DownloadConflictError, DownloadConflictService
+
+    try:
+        result = await DownloadConflictService(db).rollback(
+            task_id,
+            resolution_id,
+            operator=operator,
+        )
+        await db.commit()
+        return result
+    except DownloadConflictError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 @router.post("/{task_id}/acknowledge")

@@ -33,6 +33,11 @@ async def _manual_fixture(db, suffix: str = "one"):
         creator_id=creator.id,
         name=f"Legacy {suffix}",
         schedule_mode="manual",
+        schedule_rule={
+            "frequency": "weekly",
+            "weekdays": [1],
+            "times": ["01:00:00"],
+        },
         sync_enabled=False,
     )
     db.add(subscription)
@@ -78,12 +83,14 @@ async def test_explicit_inherit_clears_manual_and_activates_one_primary_source()
             )
 
             assert updated.schedule_mode is None
+            assert updated.schedule_rule is None
             assert updated.sync_enabled is True
             assert updated.configured_mode == "inherit"
             assert updated.auto_enabled_source["id"] == pixiv_id
             assert updated.next_sync_at is not None
             persisted = await db.get(Subscription, subscription_id)
             assert persisted.schedule_mode is None
+            assert persisted.schedule_rule is None
             sources = {
                 source.id: source
                 for source in (await db.execute(

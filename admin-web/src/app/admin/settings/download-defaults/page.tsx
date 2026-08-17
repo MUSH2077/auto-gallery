@@ -64,6 +64,26 @@ export default function DownloadDefaultsPage() {
       {!current ? null : (
         <>
           <div className="card p-6 space-y-5 text-sm">
+            <div className="flex items-center justify-between gap-4 border-b border-border py-3">
+              <div>
+                <span className="font-medium">{t("dldefaults.auto_resolve_conflicts")}</span>
+                <p className="mt-1 text-xs text-muted">{t("dldefaults.auto_resolve_conflicts.desc")}</p>
+                <p className="mt-1 text-xs text-muted">{t("dldefaults.auto_resolve_conflicts.safety")}</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={current.auto_resolve_upstream_conflicts ?? true}
+                aria-label={t("dldefaults.auto_resolve_conflicts")}
+                onClick={() => setLocal({ ...current, auto_resolve_upstream_conflicts: !(current.auto_resolve_upstream_conflicts ?? true) })}
+                className="relative inline-flex h-11 w-12 shrink-0 items-center justify-center rounded-md"
+              >
+                <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${(current.auto_resolve_upstream_conflicts ?? true) ? "bg-success" : "bg-subtle"}`}>
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${(current.auto_resolve_upstream_conflicts ?? true) ? "translate-x-6" : "translate-x-1"}`} />
+                </span>
+              </button>
+            </div>
+
             <div className="flex items-center justify-between py-3 border-b border-border">
               <div>
                 <span className="font-medium">{t("dldefaults.timeout")}</span>

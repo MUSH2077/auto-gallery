@@ -4,6 +4,7 @@ Chain integrity tests run without a database.
 Idempotency tests require a real PostgreSQL (marked ``@pytest.mark.integration``).
 """
 
+import asyncio
 import re
 import subprocess
 import sys
@@ -186,3 +187,80 @@ class TestMigrationIdempotency:
             "Alembic upgrade head after full downgrade failed:\n"
             f"STDOUT:\n{upgrade.stdout}\nSTDERR:\n{upgrade.stderr}"
         )
+
+    def test_calendar_migration_converts_live_fixed_time_rows_before_constraint(self):
+        import asyncpg
+
+        initial_up = self._run_alembic("upgrade", "head")
+        assert initial_up.returncode == 0, initial_up.stderr
+
+        down = self._run_alembic("downgrade", "f4c6d8e0a2b3")
+        assert down.returncode == 0, down.stderr
+
+        async def execute_sql(sql: str):
+            conn = await asyncpg.connect(
+                self.test_database_url.replace("postgresql+asyncpg://", "postgresql://")
+            )
+            try:
+                await conn.execute(sql)
+            finally:
+                await conn.close()
+
+        async def fetch_row(sql: str):
+            conn = await asyncpg.connect(
+                self.test_database_url.replace("postgresql+asyncpg://", "postgresql://")
+            )
+            try:
+                return await conn.fetchrow(sql)
+            finally:
+                await conn.close()
+
+        asyncio.run(execute_sql("""
+            DELETE FROM system_settings WHERE key = 'subscription_defaults';
+            INSERT INTO creators (id, name, is_active)
+            VALUES ('11111111-1111-1111-1111-111111111111', 'calendar-migration', TRUE)
+            ON CONFLICT (id) DO NOTHING;
+            DELETE FROM subscriptions WHERE id = '22222222-2222-2222-2222-222222222222';
+            INSERT INTO subscriptions (
+                id, creator_id, is_active, sync_enabled, sync_interval_hours,
+                schedule_mode, scheduled_times
+            ) VALUES (
+                '22222222-2222-2222-2222-222222222222',
+                '11111111-1111-1111-1111-111111111111',
+                TRUE, TRUE, 6, 'fixed_time', '03:00, 21:30'
+            );
+            INSERT INTO system_settings (key, value)
+            VALUES (
+                'subscription_defaults',
+                '{"schedule_mode":"fixed_time","scheduled_times":"03:00,21:30"}'::jsonb
+            );
+        """))
+
+        up = self._run_alembic("upgrade", "head")
+        assert up.returncode == 0, up.stderr
+        converted = asyncio.run(fetch_row("""
+            SELECT
+                schedule_mode,
+                schedule_rule->>'frequency' AS frequency,
+                ARRAY(
+                    SELECT jsonb_array_elements_text(schedule_rule->'times')
+                ) AS times
+            FROM subscriptions
+            WHERE id = '22222222-2222-2222-2222-222222222222'
+        """))
+        assert converted["schedule_mode"] == "calendar"
+        assert converted["frequency"] == "daily"
+        assert converted["times"] == ["03:00", "21:30"]
+
+        down_again = self._run_alembic("downgrade", "f4c6d8e0a2b3")
+        assert down_again.returncode == 0, down_again.stderr
+        restored = asyncio.run(fetch_row("""
+            SELECT schedule_mode, scheduled_times
+            FROM subscriptions
+            WHERE id = '22222222-2222-2222-2222-222222222222'
+        """))
+        assert restored["schedule_mode"] == "fixed_time"
+        assert restored["scheduled_times"] == "03:00,21:30"
+
+        final_up = self._run_alembic("upgrade", "head")
+        assert final_up.returncode == 0, final_up.stderr

@@ -213,6 +213,16 @@ async def subscription_summaries(
                 or str(config.get("scheduled_times") or "")
                 or None
             ),
+            "schedule_rule": (
+                subscription.schedule_rule
+                if subscription.schedule_mode == "calendar"
+                else (
+                    config.get("schedule_rule")
+                    if subscription.schedule_mode in {None, "inherit"}
+                    and effective_mode == "calendar"
+                    else None
+                )
+            ),
             "sync_interval_hours": int(
                 subscription.sync_interval_hours
                 or config.get("default_sync_interval_hours", 6)

@@ -77,6 +77,7 @@ def _source_context(source_id, sub_id, creator_id):
         sync_enabled=True,
         sync_interval_hours=6,
         schedule_mode="interval",
+        schedule_rule=None,
         scheduled_times=None,
         last_synced_at=_dt(),
     )

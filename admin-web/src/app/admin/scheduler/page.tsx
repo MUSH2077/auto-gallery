@@ -50,7 +50,7 @@ function AttentionRow({ item }: { item: SchedulerDecisionItem }) {
         <p className="mt-1 truncate font-mono text-xs text-muted" title={item.source_url || undefined}>{item.source_url || "—"}</p>
       </div>
       <div className="min-w-0 text-xs">
-        <p className="font-medium text-danger">{schedulerDecisionLabel(t, item.reason, item.due)}</p>
+        <p className="font-medium text-danger">{schedulerDecisionLabel(t, item.suppression_reason || item.reason, item.due)}</p>
         <p className="mt-1 text-muted">
           {item.next_due_at ? t("scheduler.next_at", { time: fmt.dateTime(item.next_due_at) }) : t("scheduler.no_scan")}
         </p>
@@ -80,7 +80,7 @@ function PlanRow({ item }: { item: SchedulerDecisionItem }) {
       </div>
       <span className="text-muted">{scheduleModeLabel(t, item.effective_mode)}</span>
       <span className="text-muted">{item.next_due_at ? fmt.dateTime(item.next_due_at) : "—"}</span>
-      <span className="text-muted">{schedulerDecisionLabel(t, item.reason, item.due)}</span>
+      <span className="text-muted">{schedulerDecisionLabel(t, item.suppression_reason || item.reason, item.due)}</span>
     </div>
   );
 }
@@ -167,9 +167,7 @@ export default function SchedulerPage() {
     .filter((item) => item.is_overdue && item.next_due_at)
     .map((item) => item.next_due_at as string)
     .sort()[0] || null;
-  const visibleAttention = !queue.data?.scheduler_enabled && attentionItems.length > 0
-    ? [attentionItems[0]]
-    : attentionItems;
+  const visibleAttention = attentionItems;
 
   const filteredPlans = useMemo(() => {
     const normalized = search.trim().toLowerCase();
@@ -193,6 +191,13 @@ export default function SchedulerPage() {
     <PermissionGuard anyOf={["tasks", "system"]}>
       <PageShell>
         <PageHeader title={t("scheduler.title")} description={t("scheduler.compact_desc")} />
+
+        {queue.data?.scheduler_enabled === false && (
+          <div className="mb-4 rounded-md border border-warning/30 bg-warning-subtle px-3 py-3 text-sm text-warning" role="status">
+            <strong>{t("scheduler.paused_title")}</strong>
+            <p className="mt-1 text-xs">{t("scheduler.paused_desc", { count: attention.data?.suppressed_count || 0 })}</p>
+          </div>
+        )}
 
         <section data-page-primary-content className="mb-4 rounded-md border border-border bg-surface">
           <div className="flex flex-col gap-3 p-3 lg:flex-row lg:items-center lg:justify-between">

@@ -251,6 +251,55 @@ export interface TaskRunListResponse {
   items: TaskRun[];
 }
 
+export type DownloadConflictWinner = "canonical" | "staged";
+
+export interface DownloadConflictEvidence {
+  auto_eligible: boolean;
+  recommended_winner: DownloadConflictWinner;
+  checks: Record<"source" | "repository" | "work" | "creator" | "page" | "source_asset", boolean>;
+  database_identity?: Record<string, unknown> | null;
+  canonical_identity?: Record<string, unknown> | null;
+  staged_identity?: Record<string, unknown> | null;
+}
+
+export interface DownloadConflictItem {
+  relative_path: string;
+  file_type: "metadata" | "media" | string;
+  mime_type: string;
+  canonical_size?: number | null;
+  staged_size?: number | null;
+  canonical_sha256?: string | null;
+  staged_sha256?: string | null;
+  evidence: DownloadConflictEvidence;
+}
+
+export interface DownloadConflictCase {
+  task_id: string;
+  download_job_id: string;
+  source: string;
+  source_url: string;
+  status: string;
+  reason_code?: string | null;
+  resolution?: {
+    resolution_id: string;
+    state: string;
+    expires_at: string;
+  } | null;
+  all_auto_eligible: boolean;
+  items: DownloadConflictItem[];
+}
+
+export interface DownloadConflictResolution {
+  resolution_id: string;
+  task_id: string;
+  download_job_id: string;
+  state: string;
+  automatic: boolean;
+  resolved_at: string;
+  expires_at: string;
+  retry?: { status: string; message?: string };
+}
+
 export type OperationsView = "attention" | "active" | "resolved";
 export type ClearEntity = "works" | "creators" | "subscriptions" | "tags" | "jobs" | "settings" | "all";
 
@@ -388,7 +437,8 @@ export interface Subscription {
   is_active: boolean;
   sync_enabled: boolean;
   sync_interval_hours: number;
-  schedule_mode?: "inherit" | "interval" | "fixed_time" | "manual" | null;
+  schedule_mode?: "inherit" | "interval" | "calendar" | "manual" | null;
+  schedule_rule?: CalendarScheduleRule | null;
   scheduled_times?: string | null;
   last_synced_at?: string;
   source_count?: number;
@@ -435,6 +485,7 @@ export interface SubscriptionScheduleSummary {
   inherited: boolean;
   timezone: string;
   scheduled_times?: string | null;
+  schedule_rule?: CalendarScheduleRule | null;
   sync_interval_hours: number;
   next_due_at?: string | null;
   oldest_due_at?: string | null;
@@ -570,6 +621,7 @@ export interface RepositoryDetailResponse {
     sync_enabled: boolean;
     sync_interval_hours: number;
     schedule_mode?: string | null;
+    schedule_rule?: CalendarScheduleRule | null;
     scheduled_times?: string | null;
     last_synced_at?: string | null;
   };
@@ -862,6 +914,7 @@ export interface QueueStatsResponse {
   scheduler_mode?: string;
   scheduler_timezone?: string;
   scheduled_times?: string;
+  schedule_rule?: CalendarScheduleRule | null;
   scheduler_scan_interval_minutes?: number;
   next_sync_scan_at?: string | null;
   scheduler_loop?: SchedulerLoopState | null;
@@ -895,12 +948,14 @@ export interface SchedulerDecisionItem {
   effective_mode: string;
   timezone: string;
   scheduled_times?: string | null;
+  schedule_rule?: CalendarScheduleRule | null;
   sync_interval_hours: number;
   last_synced_at?: string | null;
   last_attempted_at?: string | null;
   due: boolean;
   decision: string;
   reason: string;
+  suppression_reason?: string | null;
   next_due_at?: string | null;
   window_start?: string | null;
   window_end?: string | null;
@@ -914,6 +969,7 @@ export interface SchedulerDecisionItem {
 export interface SchedulerDecisionsResponse {
   updated_at: string;
   scheduler_enabled: boolean;
+  suppressed_count?: number;
   timezone: string;
   view?: "attention" | "all";
   total?: number;
@@ -1199,6 +1255,7 @@ export interface SubscriptionSearchHit {
   sync_enabled: boolean;
   sync_interval_hours: number;
   schedule_mode?: string | null;
+  schedule_rule?: CalendarScheduleRule | null;
   scheduled_times?: string | null;
   last_synced_at?: string | null;
   source_count: number;
@@ -1369,11 +1426,17 @@ export interface AssetDedupDecision {
   curation_commit_id?: string | null;
 }
 
+export type CalendarScheduleRule =
+  | { frequency: "daily"; times: string[] }
+  | { frequency: "weekly"; weekdays: number[]; times: string[] }
+  | { frequency: "monthly"; month_days: number[]; times: string[]; overflow?: "last_day" };
+
 export interface SubscriptionDefaults {
   default_sync_interval_hours: number;
   scheduler_scan_interval_minutes: number;
   scheduler_enabled: boolean;
-  schedule_mode: "interval" | "fixed_time";
+  schedule_mode: "interval" | "calendar";
+  schedule_rule?: CalendarScheduleRule | null;
   scheduled_times: string;
   timezone: string;
 }
@@ -1389,6 +1452,7 @@ export interface DownloadDefaults {
   gallerydl_timeout: number;
   gallerydl_abort: number;
   download_concurrency: number;
+  auto_resolve_upstream_conflicts: boolean;
 }
 
 // Gallery-dl multi-source config types

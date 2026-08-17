@@ -977,6 +977,30 @@
         "title": "CompactTasksRequest",
         "type": "object"
       },
+      "ConflictDecision": {
+        "properties": {
+          "relative_path": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Relative Path",
+            "type": "string"
+          },
+          "winner": {
+            "enum": [
+              "canonical",
+              "staged"
+            ],
+            "title": "Winner",
+            "type": "string"
+          }
+        },
+        "required": [
+          "relative_path",
+          "winner"
+        ],
+        "title": "ConflictDecision",
+        "type": "object"
+      },
       "CreatorCreate": {
         "properties": {
           "description": {
@@ -1901,6 +1925,28 @@
         "title": "CurationStateRead",
         "type": "object"
       },
+      "DailyScheduleRule": {
+        "properties": {
+          "frequency": {
+            "const": "daily",
+            "default": "daily",
+            "title": "Frequency",
+            "type": "string"
+          },
+          "times": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Times",
+            "type": "array"
+          }
+        },
+        "required": [
+          "times"
+        ],
+        "title": "DailyScheduleRule",
+        "type": "object"
+      },
       "DanbooruMappingRefreshEnqueueResponse": {
         "properties": {
           "job_id": {
@@ -2337,6 +2383,11 @@
       "DownloadDefaults": {
         "additionalProperties": true,
         "properties": {
+          "auto_resolve_upstream_conflicts": {
+            "default": true,
+            "title": "Auto Resolve Upstream Conflicts",
+            "type": "boolean"
+          },
           "download_concurrency": {
             "default": 3,
             "title": "Download Concurrency",
@@ -3919,6 +3970,43 @@
         "title": "MeOut",
         "type": "object"
       },
+      "MonthlyScheduleRule": {
+        "properties": {
+          "frequency": {
+            "const": "monthly",
+            "default": "monthly",
+            "title": "Frequency",
+            "type": "string"
+          },
+          "month_days": {
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 1,
+            "title": "Month Days",
+            "type": "array"
+          },
+          "overflow": {
+            "const": "last_day",
+            "default": "last_day",
+            "title": "Overflow",
+            "type": "string"
+          },
+          "times": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Times",
+            "type": "array"
+          }
+        },
+        "required": [
+          "times",
+          "month_days"
+        ],
+        "title": "MonthlyScheduleRule",
+        "type": "object"
+      },
       "PinterestSourceConfig": {
         "properties": {
           "auto_enable_on_import": {
@@ -4594,6 +4682,36 @@
         "title": "ResetPasswordOut",
         "type": "object"
       },
+      "ResolveDownloadConflictRequest": {
+        "properties": {
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/ConflictDecision"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Decisions",
+            "type": "array"
+          },
+          "resolution_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution Id"
+          }
+        },
+        "required": [
+          "decisions"
+        ],
+        "title": "ResolveDownloadConflictRequest",
+        "type": "object"
+      },
       "RestoreSubscriptionSlotRequest": {
         "properties": {
           "dry_run": {
@@ -4953,7 +5071,7 @@
                 "enum": [
                   "inherit",
                   "interval",
-                  "fixed_time",
+                  "calendar",
                   "manual"
                 ],
                 "type": "string"
@@ -4963,6 +5081,35 @@
               }
             ],
             "title": "Schedule Mode"
+          },
+          "schedule_rule": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "daily": "#/components/schemas/DailyScheduleRule",
+                    "monthly": "#/components/schemas/MonthlyScheduleRule",
+                    "weekly": "#/components/schemas/WeeklyScheduleRule"
+                  },
+                  "propertyName": "frequency"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/DailyScheduleRule"
+                  },
+                  {
+                    "$ref": "#/components/schemas/WeeklyScheduleRule"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MonthlyScheduleRule"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Rule"
           },
           "scheduled_times": {
             "anyOf": [
@@ -5006,8 +5153,41 @@
           },
           "schedule_mode": {
             "default": "interval",
+            "enum": [
+              "interval",
+              "calendar"
+            ],
             "title": "Schedule Mode",
             "type": "string"
+          },
+          "schedule_rule": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "daily": "#/components/schemas/DailyScheduleRule",
+                    "monthly": "#/components/schemas/MonthlyScheduleRule",
+                    "weekly": "#/components/schemas/WeeklyScheduleRule"
+                  },
+                  "propertyName": "frequency"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/DailyScheduleRule"
+                  },
+                  {
+                    "$ref": "#/components/schemas/WeeklyScheduleRule"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MonthlyScheduleRule"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Rule"
           },
           "scheduled_times": {
             "default": "",
@@ -5304,6 +5484,18 @@
             ],
             "title": "Schedule Mode"
           },
+          "schedule_rule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Rule"
+          },
           "scheduled_times": {
             "anyOf": [
               {
@@ -5404,6 +5596,18 @@
             "default": 0,
             "title": "Overdue Sources",
             "type": "integer"
+          },
+          "schedule_rule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Rule"
           },
           "scheduled_times": {
             "anyOf": [
@@ -5771,7 +5975,7 @@
                 "enum": [
                   "inherit",
                   "interval",
-                  "fixed_time",
+                  "calendar",
                   "manual"
                 ],
                 "type": "string"
@@ -5781,6 +5985,35 @@
               }
             ],
             "title": "Schedule Mode"
+          },
+          "schedule_rule": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "daily": "#/components/schemas/DailyScheduleRule",
+                    "monthly": "#/components/schemas/MonthlyScheduleRule",
+                    "weekly": "#/components/schemas/WeeklyScheduleRule"
+                  },
+                  "propertyName": "frequency"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/DailyScheduleRule"
+                  },
+                  {
+                    "$ref": "#/components/schemas/WeeklyScheduleRule"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MonthlyScheduleRule"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Rule"
           },
           "scheduled_times": {
             "anyOf": [
@@ -6570,6 +6803,37 @@
           "expires_in"
         ],
         "title": "WebSocketTicketResponse",
+        "type": "object"
+      },
+      "WeeklyScheduleRule": {
+        "properties": {
+          "frequency": {
+            "const": "weekly",
+            "default": "weekly",
+            "title": "Frequency",
+            "type": "string"
+          },
+          "times": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Times",
+            "type": "array"
+          },
+          "weekdays": {
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 1,
+            "title": "Weekdays",
+            "type": "array"
+          }
+        },
+        "required": [
+          "times",
+          "weekdays"
+        ],
+        "title": "WeeklyScheduleRule",
         "type": "object"
       },
       "WeiboSourceConfig": {
@@ -21927,6 +22191,361 @@
           "tasks"
         ],
         "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "tasks"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/tasks/{task_id}/conflicts": {
+      "get": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "get_api_v1_tasks_task_id_conflicts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Download Conflicts",
+        "tags": [
+          "tasks"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "tasks"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/tasks/{task_id}/conflicts/media": {
+      "get": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "get_api_v1_tasks_task_id_conflicts_media",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "relative_path",
+            "required": true,
+            "schema": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Relative Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "side",
+            "required": true,
+            "schema": {
+              "enum": [
+                "canonical",
+                "staged"
+              ],
+              "title": "Side",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Download Conflict Media",
+        "tags": [
+          "tasks"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "tasks"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/tasks/{task_id}/conflicts/resolutions/{resolution_id}/rollback": {
+      "post": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "post_api_v1_tasks_task_id_conflicts_resolutions_resolution_id_rollback",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "resolution_id",
+            "required": true,
+            "schema": {
+              "title": "Resolution Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rollback Download Conflict Resolution",
+        "tags": [
+          "tasks"
+        ],
+        "x-admin-only": true,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "tasks"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/tasks/{task_id}/conflicts/resolve": {
+      "post": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "post_api_v1_tasks_task_id_conflicts_resolve",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveDownloadConflictRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Resolve Download Conflicts",
+        "tags": [
+          "tasks"
+        ],
+        "x-admin-only": true,
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": false,

@@ -27,6 +27,37 @@ export function VideoBadge({ compact = false }: { compact?: boolean }) {
   );
 }
 
+export function DirectVideoPlayer({
+  src,
+  label,
+  className = "",
+}: {
+  src: string;
+  label: string;
+  className?: string;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  useEffect(() => () => {
+    const video = videoRef.current;
+    if (video) {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    }
+  }, []);
+  return (
+    <video
+      ref={videoRef}
+      src={src}
+      controls
+      playsInline
+      preload="metadata"
+      aria-label={label}
+      className={className}
+    />
+  );
+}
+
 export function WorkMediaThumbnail({
   assetId,
   hasVideo = false,

@@ -104,7 +104,49 @@ async def _read_download_defaults():
             return await get_download_defaults(db)
     except Exception:
         logger.warning("Failed to read download_defaults, using fallbacks", exc_info=True)
-    return {}
+        return {}
+
+
+async def _try_auto_resolve_staging_conflict(job_id: UUID) -> bool:
+    """Requeue one conflict only when every persisted identity agrees."""
+
+    from app.services.download_conflicts import DownloadConflictService
+    from app.services.task_engine import TaskEngine
+    from app.services.tasks import TaskService
+
+    async with async_session() as db:
+        task = await TaskService(db).get_by_subject("download_job", job_id)
+        if task is None:
+            return False
+        service = DownloadConflictService(db)
+        case = await service.inspect(task.id)
+        if not case.get("all_auto_eligible"):
+            return False
+        decisions = {
+            item["relative_path"]: item["evidence"]["recommended_winner"]
+            for item in case["items"]
+        }
+        await service.resolve(
+            task.id,
+            decisions,
+            operator="automatic-upstream-correction",
+            automatic=True,
+        )
+        await db.commit()
+        try:
+            await TaskEngine(db).retry_download(
+                job_id,
+                operator="automatic-upstream-correction",
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.warning(
+                "Conflict %s was resolved but could not be requeued automatically",
+                job_id,
+                exc_info=True,
+            )
+        return True
 
 
 async def _artifact_counts(download_job_id: UUID) -> tuple[int, int, list[str]]:
@@ -1181,6 +1223,24 @@ async def run_download_job(job_id: str):
                     subscription_ids=[j.subscription_id] if j.subscription_id else (),
                 )
                 await db2.commit()
+
+        if stage_conflict and bool(
+            dl_defaults.get("auto_resolve_upstream_conflicts", True)
+        ):
+            try:
+                if await _try_auto_resolve_staging_conflict(job_uuid):
+                    logger.info(
+                        "Automatically resolved evidence-backed upstream conflict for %s",
+                        job_id,
+                    )
+            except Exception:
+                # The original fail-closed task remains actionable with both
+                # files intact whenever proof collection or correction fails.
+                logger.warning(
+                    "Automatic upstream conflict correction declined for %s",
+                    job_id,
+                    exc_info=True,
+                )
 
         if unexpected_retry_count is not None:
             retry_delay = backoff_base * (2 ** (unexpected_retry_count - 1))

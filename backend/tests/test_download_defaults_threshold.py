@@ -37,6 +37,55 @@ async def test_download_defaults_concurrency_default_is_3(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_upstream_conflict_auto_resolution_defaults_on(monkeypatch):
+    async def fake_get_system_setting(db, key):
+        return {}
+    monkeypatch.setattr(settings_mod, "get_system_setting", fake_get_system_setting)
+
+    result = await settings_mod.get_download_defaults(None)
+
+    assert result["auto_resolve_upstream_conflicts"] is True
+
+
+@pytest.mark.asyncio
+async def test_saving_enabled_auto_resolution_enqueues_historical_reconciliation(
+    monkeypatch,
+):
+    from app.api.admin import settings as admin_settings
+
+    stored = []
+    enqueued = {"count": 0}
+
+    async def fake_put_setting(db, key, value):
+        stored.append((db, key, value))
+
+    def fake_enqueue():
+        enqueued["count"] += 1
+        return {"job_id": "reconcile-1", "status": "enqueued"}
+
+    monkeypatch.setattr(admin_settings, "_put_setting", fake_put_setting)
+    monkeypatch.setattr(
+        admin_settings,
+        "_enqueue_download_conflict_reconciliation",
+        fake_enqueue,
+    )
+
+    result = await admin_settings.update_settings(
+        admin_settings.AdminSettingsUpdate(
+            download_defaults=admin_settings.DownloadDefaults(
+                auto_resolve_upstream_conflicts=True
+            )
+        ),
+        db=None,
+    )
+
+    assert stored[0][1] == "download_defaults"
+    assert stored[0][2]["auto_resolve_upstream_conflicts"] is True
+    assert enqueued["count"] == 1
+    assert result["conflict_reconciliation"]["job_id"] == "reconcile-1"
+
+
+@pytest.mark.asyncio
 async def test_download_defaults_concurrency_clamped_to_5(monkeypatch):
     async def fake_get_system_setting(db, key):
         return {"download_concurrency": 9}

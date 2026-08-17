@@ -12,11 +12,13 @@ const SCHEDULER_REASON_KEYS = new Set([
   "already_attempted_in_window", "already_synced_in_window", "auth_unhealthy",
   "fixed_time_window_due", "interval_due", "interval_not_due", "manual_mode",
   "fixed_time_backlog_due", "interval_backlog_due",
+  "calendar_due", "calendar_not_reached", "calendar_missed_skipped",
+  "already_attempted_in_slot", "already_synced_in_slot",
   "never_synced_interval", "no_decision", "outside_fixed_time_window",
   "provider_not_downloadable", "scheduler_disabled", "source_disabled",
   "subscription_inactive", "subscription_sync_disabled", "unknown_provider", "url_invalid",
 ]);
-const SCHEDULE_MODE_KEYS = new Set(["fixed_time", "interval", "manual"]);
+const SCHEDULE_MODE_KEYS = new Set(["fixed_time", "calendar", "interval", "manual"]);
 const USER_MODULE_KEYS = new Set(["library", "curation", "upload", "subscriptions", "tasks", "system"]);
 
 export function useI18nFormat() {

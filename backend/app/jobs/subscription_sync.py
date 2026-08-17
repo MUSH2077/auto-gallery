@@ -26,6 +26,11 @@ from app.services.scheduler_loop import (
 )
 from app.services.settings import get_scheduler_config
 from app.services.subscription_enqueue import enqueue_subscription_source_sync
+from app.services.subscription_calendar import (
+    calendar_decision,
+    effective_calendar_rule,
+    next_calendar_occurrence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -150,16 +155,32 @@ def _schedule_decision(
     if mode == "manual":
         return {"due": False, "mode": mode, "reason": "manual_mode"}
 
+    if mode in {"fixed_time", "calendar"}:
+        rule = effective_calendar_rule(sub, system_config)
+        if rule:
+            return {
+                "mode": "calendar" if mode == "calendar" else mode,
+                **calendar_decision(
+                    rule,
+                    now=now,
+                    tz=tz,
+                    scan_minutes=int(system_config.get(
+                        "scheduler_scan_interval_minutes", FALLBACK_SCAN_MINUTES
+                    )),
+                    persisted_next_sync_at=persisted_next_sync_at,
+                    last_synced_at=last_synced_at,
+                    last_attempted_at=last_attempted_at,
+                    created_at=getattr(sub, "created_at", None),
+                    legacy_fixed_time=mode == "fixed_time",
+                ),
+            }
+
     persisted_due = _as_tz(persisted_next_sync_at, tz)
     if persisted_due is not None and persisted_due <= now:
         return {
             "due": True,
             "mode": mode,
-            "reason": (
-                "fixed_time_backlog_due"
-                if mode == "fixed_time"
-                else "interval_backlog_due"
-            ),
+            "reason": "interval_backlog_due",
             "scheduled_for": persisted_due.isoformat(),
         }
 
@@ -427,14 +448,24 @@ def next_subscription_check_at(
     mode = sub.schedule_mode or system_config.get("schedule_mode", "interval")
     if mode == "manual":
         return None
-    if mode == "fixed_time":
+    if mode in {"fixed_time", "calendar"}:
+        rule = effective_calendar_rule(sub, system_config)
+        if rule:
+            decision = calendar_decision(
+                rule,
+                now=local_now,
+                tz=tz,
+                scan_minutes=int(system_config.get(
+                    "scheduler_scan_interval_minutes", FALLBACK_SCAN_MINUTES
+                )),
+                last_synced_at=last_synced_at,
+                last_attempted_at=last_attempted_at,
+                created_at=getattr(sub, "created_at", None),
+            )
+            next_due = decision.get("next_due_at")
+            return _utc(datetime.fromisoformat(next_due)) if next_due else None
         return _next_fixed_check_at(
-            sub,
-            system_config,
-            last_synced_at,
-            last_attempted_at,
-            local_now,
-            tz,
+            sub, system_config, last_synced_at, last_attempted_at, local_now, tz
         )
     return _next_interval_check_at(
         sub,
@@ -463,27 +494,19 @@ def next_future_subscription_check_at(
     mode = sub.schedule_mode or system_config.get("schedule_mode", "interval")
     if mode == "manual":
         return None
-    if mode != "fixed_time":
+    if mode not in {"fixed_time", "calendar"}:
         interval_hours = sub.sync_interval_hours or int(
             system_config.get("default_sync_interval_hours", FALLBACK_INTERVAL_HOURS)
         )
         return _utc(local_now + timedelta(hours=max(1, int(interval_hours))))
-    scheduled = _parse_scheduled_times(
-        sub.scheduled_times or system_config.get("scheduled_times", "")
-    )
-    if not scheduled:
+    rule = effective_calendar_rule(sub, system_config)
+    if not rule:
         interval_hours = sub.sync_interval_hours or int(
             system_config.get("default_sync_interval_hours", FALLBACK_INTERVAL_HOURS)
         )
         return _utc(local_now + timedelta(hours=max(1, int(interval_hours))))
-    candidates = [
-        datetime(day.year, day.month, day.day, hour, minute, second, tzinfo=tz)
-        for day_offset in (0, 1, 2)
-        for day in (local_now.date() + timedelta(days=day_offset),)
-        for hour, minute, second in scheduled
-        if datetime(day.year, day.month, day.day, hour, minute, second, tzinfo=tz) > local_now
-    ]
-    return _utc(min(candidates)) if candidates else _utc(local_now + timedelta(days=1))
+    occurrence = next_calendar_occurrence(rule, local_now, tz)
+    return _utc(occurrence) if occurrence else None
 
 
 def schedule_decision_snapshot(
@@ -516,8 +539,8 @@ def schedule_decision_snapshot(
     window_start = decision.get("window_start")
     window_end = decision.get("window_end")
 
-    if persisted_due is not None:
-        pass
+    if decision.get("next_due_at"):
+        next_due_at = str(decision["next_due_at"])
     elif decision.get("due") and decision.get("scheduled_for"):
         next_due_at = str(decision["scheduled_for"])
     elif mode == "interval":
@@ -528,16 +551,21 @@ def schedule_decision_snapshot(
             next_due_at = next_due.isoformat()
         else:
             next_due_at = now.isoformat()
-    elif mode == "fixed_time":
-        fixed = _next_fixed_time_window(
-            sub.scheduled_times or system_config.get("scheduled_times", ""),
-            now,
-            tz,
-            scan_minutes,
-        )
-        next_due_at = fixed["next_due_at"]
-        window_start = window_start or fixed["window_start"]
-        window_end = window_end or fixed["window_end"]
+    elif mode in {"fixed_time", "calendar"}:
+        if decision.get("next_due_at"):
+            next_due_at = decision["next_due_at"]
+            window_start = window_start or decision.get("window_start")
+            window_end = window_end or decision.get("window_end")
+        else:
+            fixed = _next_fixed_time_window(
+                sub.scheduled_times or system_config.get("scheduled_times", ""),
+                now,
+                tz,
+                scan_minutes,
+            )
+            next_due_at = fixed["next_due_at"]
+            window_start = window_start or fixed["window_start"]
+            window_end = window_end or fixed["window_end"]
     elif mode == "manual":
         next_due_at = None
     else:

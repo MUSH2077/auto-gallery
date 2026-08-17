@@ -98,6 +98,21 @@ export const api = {
   },
 
   getTask: (id: string) => request<T.TaskRun>(`/api/v1/tasks/${id}`),
+  getDownloadConflicts: (id: string) =>
+    request<T.DownloadConflictCase>(`/api/v1/tasks/${id}/conflicts`),
+  downloadConflictMediaUrl: (id: string, relativePath: string, side: "canonical" | "staged") =>
+    `/api/v1/tasks/${id}/conflicts/media?relative_path=${encodeURIComponent(relativePath)}&side=${side}`,
+  resolveDownloadConflicts: (
+    id: string,
+    decisions: Array<{ relative_path: string; winner: T.DownloadConflictWinner }>,
+  ) => request<T.DownloadConflictResolution>(`/api/v1/tasks/${id}/conflicts/resolve`, {
+    method: "POST",
+    body: JSON.stringify({ decisions }),
+  }),
+  rollbackDownloadConflictResolution: (id: string, resolutionId: string) =>
+    request<T.DownloadConflictResolution>(`/api/v1/tasks/${id}/conflicts/resolutions/${encodeURIComponent(resolutionId)}/rollback`, {
+      method: "POST",
+    }),
   retryTask: (id: string) => request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/retry`, { method: "POST" }),
   cancelTask: (id: string, note?: string) =>
     request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/cancel`, {
@@ -231,7 +246,8 @@ export const api = {
   updateSubscription: (id: string, data: {
     name?: string;
     is_active?: boolean;
-    schedule_mode?: "inherit" | "interval" | "fixed_time" | "manual" | null;
+    schedule_mode?: "inherit" | "interval" | "calendar" | "manual" | null;
+    schedule_rule?: T.CalendarScheduleRule | null;
     sync_interval_hours?: number;
     scheduled_times?: string | null;
     sync_enabled?: boolean;

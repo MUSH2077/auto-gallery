@@ -4,8 +4,8 @@ import { useMemo, useState } from "react";
 import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, CreatorRepository, queryKeys, SubscriptionSource as SS, ProviderInfo } from "@/lib/api";
-import { PageHeader, PageShell, StatusBadge, Modal, ConfirmDialog, ErrorState, EmptyState, HierarchyDeletionDialog, RepositoryCard } from "@/components";
+import { api, CalendarScheduleRule, CreatorRepository, queryKeys, SubscriptionSource as SS, ProviderInfo } from "@/lib/api";
+import { CalendarScheduleEditor, defaultCalendarRule, PageHeader, PageShell, StatusBadge, Modal, ConfirmDialog, ErrorState, EmptyState, HierarchyDeletionDialog, RepositoryCard } from "@/components";
 import { useToast } from "@/components/Toast";
 import { scheduleModeLabel, useI18nFormat } from "@/lib/i18n-format";
 import { usePermissions } from "@/lib/usePermissions";
@@ -95,8 +95,8 @@ export default function SubscriptionDetailPage() {
   const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
   const [showAddSource, setShowAddSource] = useState(false);
   const [editing, setEditing] = useState(false); const [editName, setEditName] = useState("");
-  const [editMode, setEditMode] = useState<"inherit" | "interval" | "fixed_time" | "manual">("inherit"); const [editInterval, setEditInterval] = useState(0);
-  const [editTimes, setEditTimes] = useState("");
+  const [editMode, setEditMode] = useState<"inherit" | "interval" | "calendar" | "manual">("inherit"); const [editInterval, setEditInterval] = useState(0);
+  const [editRule, setEditRule] = useState<CalendarScheduleRule>(defaultCalendarRule());
   const [deleteSsId, setDeleteSsId] = useState<string | null>(null);
   const [toggleId, setToggleId] = useState<string | null>(null);
   const [showDeleteSubscription, setShowDeleteSubscription] = useState(false);
@@ -215,8 +215,8 @@ export default function SubscriptionDetailPage() {
   if (!sub.data) return null;
   const s = sub.data;
   const schedule = summaries.data?.items[0]?.schedule;
-  const effectiveScheduleText = schedule?.effective_mode === "fixed_time"
-    ? `${scheduleModeLabel(t, "fixed_time")} · ${t("subscriptions.schedule_daily", { time: schedule.scheduled_times || "—" })}`
+  const effectiveScheduleText = schedule?.effective_mode === "calendar"
+    ? `${scheduleModeLabel(t, "calendar")} · ${t(`subdefaults.${schedule.schedule_rule?.frequency || "daily"}`)}`
     : schedule?.effective_mode === "manual"
       ? t("subscriptions.manual")
       : `${scheduleModeLabel(t, "interval")} · ${t("subscriptions.schedule_interval", { hours: schedule?.sync_interval_hours || s.sync_interval_hours })}`;
@@ -255,7 +255,7 @@ export default function SubscriptionDetailPage() {
               {isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
             </button>
           )}
-          <button onClick={() => { setEditName(s.name || ""); setEditMode(s.schedule_mode || "inherit"); setEditInterval(s.sync_interval_hours || 24); setEditTimes(s.scheduled_times || ""); setEditing(true); }} className="btn-primary">{t("subscription_detail.edit")}</button>
+          <button onClick={() => { setEditName(s.name || ""); setEditMode(s.schedule_mode || "inherit"); setEditInterval(s.sync_interval_hours || 24); setEditRule(s.schedule_rule || defaultCalendarRule()); setEditing(true); }} className="btn-primary">{t("subscription_detail.edit")}</button>
         </div>
       </PageHeader>
 
@@ -288,8 +288,8 @@ export default function SubscriptionDetailPage() {
                   <span className="text-muted">{t("subscriptions.schedule_inherited", { schedule: effectiveScheduleText })}</span>
                 ) : s.schedule_mode === "manual" ? (
                   <span className="text-orange-600">{t("subscription_detail.strategy_manual")}</span>
-                ) : s.schedule_mode === "fixed_time" ? (
-                  <span className="text-purple-600">{t("subscription_detail.strategy_fixed_time")}{s.scheduled_times ? " · " + s.scheduled_times : ""}</span>
+                ) : s.schedule_mode === "calendar" ? (
+                  <span className="text-purple-600">{t("subscription_detail.strategy_calendar")} · {t(`subdefaults.${s.schedule_rule?.frequency || "daily"}`)}</span>
                 ) : (
                   <span className="text-blue-600">{t("subscription_detail.strategy_interval")} · {s.sync_interval_hours}h</span>
                 )}
@@ -349,7 +349,7 @@ export default function SubscriptionDetailPage() {
               className="select w-full">
               <option value="inherit">{t("subscriptions.schedule_inherited", { schedule: effectiveScheduleText })}</option>
               <option value="interval">{t("subscription_detail.strategy_interval")}</option>
-              <option value="fixed_time">{t("subscription_detail.strategy_fixed_time")}</option>
+              <option value="calendar">{t("subscription_detail.strategy_calendar")}</option>
               <option value="manual">{t("subscription_detail.strategy_manual")}</option>
             </select>
             <p className="mt-1 text-xs text-muted">{t("subscription_detail.strategy_desc")}</p>
@@ -365,22 +365,14 @@ export default function SubscriptionDetailPage() {
               </div>
             </div>
           )}
-          {editMode === "fixed_time" && (
-            <div>
-              <label className="block text-sm font-medium mb-1">{t("subdefaults.scheduled_times")}</label>
-              <input value={editTimes} onChange={(e) => setEditTimes(e.target.value)}
-                placeholder="03:00, 21:00"
-                className="input w-full font-mono" />
-              <p className="mt-1 text-xs text-muted">{t("subdefaults.scheduled_times.example")}</p>
-            </div>
-          )}
+          {editMode === "calendar" && <CalendarScheduleEditor value={editRule} onChange={setEditRule} />}
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setEditing(false)} className="btn-ghost">{t("subscription_detail.cancel")}</button>
             <button onClick={() => update.mutate({
               name: editName || undefined,
               schedule_mode: editMode,
               sync_interval_hours: editMode === "interval" ? editInterval : undefined,
-              scheduled_times: editMode === "fixed_time" ? (editTimes || null) : undefined,
+              schedule_rule: editMode === "calendar" ? editRule : null,
             })} disabled={update.isPending} className="btn-primary">{t("subscription_detail.save")}</button>
           </div>
           {update.error && <p className="text-sm text-danger dark:text-danger">{(update.error as Error).message}</p>}
