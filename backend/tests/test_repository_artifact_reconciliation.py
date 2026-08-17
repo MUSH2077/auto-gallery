@@ -494,13 +494,68 @@ async def test_active_sibling_download_job_keeps_new_artifacts_after_adoption():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("owner_status", "owner_is_orphan", "expect_recovered"),
+    [
+        ("complete", False, True),
+        ("cancelled", False, True),
+        ("failed", False, True),
+        ("stale", False, True),
+        ("future_state", False, False),
+        ("complete", True, True),
+    ],
+)
+async def test_repository_reconciliation_only_recovers_orphan_or_explicitly_recoverable_owners(
+    owner_status,
+    owner_is_orphan,
+    expect_recovered,
+):
+    """Unknown DownloadJob statuses must fail closed rather than lose ownership."""
+    from app.database import async_session, engine
+    from app.models import StorageArtifact
+    from app.services.repository_artifact_reconciliation import (
+        reconcile_repository_artifacts,
+    )
+
+    try:
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+            _subscription, _repository, _other, current, historical, _manual = await _repository_fixture(db)
+            historical.status = owner_status
+            db.add(_artifact(
+                path="twitter/target_handle/owner-guard-701.json",
+                work_id="owner-guard-701",
+                creator_dir="target_handle",
+                job_id=None if owner_is_orphan else historical.id,
+            ))
+            await db.commit()
+
+            result = await reconcile_repository_artifacts(db, current)
+            await db.commit()
+            artifact = (await db.execute(
+                select(StorageArtifact).where(
+                    StorageArtifact.source_work_id == "owner-guard-701",
+                )
+            )).scalar_one()
+
+            assert result.recovered_metadata_count == int(expect_recovered)
+            assert artifact.download_job_id == (current.id if expect_recovered else historical.id)
+    finally:
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_successful_download_boundary_retries_durable_recovered_backlog_after_enqueue_crash(
     tmp_path,
     monkeypatch,
 ):
-    """A crash after ledger adoption leaves the next successful run importable."""
+    """A crash after ledger adoption is re-enqueued by import recovery."""
     from app.database import async_session, engine
     from app.jobs import download as download_module
+    from app.services.import_recovery import recover_import_pipeline
 
     class FakeProcess:
         pid = 987654
@@ -531,14 +586,13 @@ async def test_successful_download_boundary_retries_durable_recovered_backlog_af
     class FakeHeartbeat(FakeControlListener):
         pass
 
-    attempts: list[set[str]] = []
+    attempts: list[tuple[str | None, set[str]]] = []
 
     async def fake_defaults():
         return {"max_posts": 1, "timeout_seconds": 1, "stall_timeout_seconds": 1}
 
     async def fake_enqueue(_job_id, import_error=None, new_json_paths=None):
-        assert import_error is None
-        attempts.append(set(new_json_paths or []))
+        attempts.append((import_error, set(new_json_paths or [])))
         if len(attempts) == 1:
             raise RuntimeError("simulated crash after durable reconciliation")
         return "durable-import-id"
@@ -579,20 +633,33 @@ async def test_successful_download_boundary_retries_durable_recovered_backlog_af
         async with async_session() as db:
             refreshed = await db.get(type(current), current.id)
             assert refreshed is not None
+            assert refreshed.status == "downloaded"
             assert refreshed.manifest["repository_artifact_reconciliation"] == {
                 "downloaded_metadata_count": 0,
                 "recovered_metadata_count": 1,
                 "pending_work_count": 1,
             }
-            refreshed.status = "enqueued"
+            # The recovery service deliberately waits for a grace period before
+            # it fills a missing import publication.  Simulate that elapsed
+            # interval without altering the durable downloaded state.
+            refreshed.updated_at = datetime.now(timezone.utc) - timedelta(minutes=2)
             await db.commit()
 
-        await raw_runner(str(current.id))
+        async with async_session() as db:
+            recovery = await recover_import_pipeline(
+                db,
+                stale_after_seconds=1,
+            )
 
         assert attempts == [
-            {"twitter/target_handle/retry-601.json"},
-            {"twitter/target_handle/retry-601.json"},
+            (None, {"twitter/target_handle/retry-601.json"}),
+            (
+                "auto recovery after downloaded state gap (1 metadata files)",
+                {"twitter/target_handle/retry-601.json"},
+            ),
         ]
+        assert recovery["imports_enqueued"] == 1
+        assert recovery["download_job_ids"] == [str(current.id)]
     finally:
         async with async_session() as db:
             await _clear_reconciliation_tables(db)

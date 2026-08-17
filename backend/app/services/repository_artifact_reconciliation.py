@@ -14,20 +14,20 @@ from app.models.download_job import DownloadJob
 from app.models.storage_artifact import StorageArtifact
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
+from app.models.task_state import DOWNLOAD_STALE, DOWNLOAD_TERMINAL_STATUSES
 from app.models.work_source import WorkSource
 from app.providers import registry
 from app.services.repository_identity import resolve_repository_source_creator_ids
 
 
-ACTIVE_DOWNLOAD_OWNERS = frozenset({
-    "pending",
-    "enqueued",
-    "downloading",
-    "downloaded",
-    "importing",
-    "paused",
-    "recovering",
-})
+# ``stale`` is not terminal in the task-state transition graph: a retry may
+# requeue it.  It nevertheless represents a worker declared dead by the
+# heartbeat owner, so its unleased ledger rows are safe historical recovery
+# candidates.  Every other non-terminal, unknown, or future state fails
+# closed and retains ownership.
+RECOVERABLE_DOWNLOAD_OWNER_STATUSES = (
+    DOWNLOAD_TERMINAL_STATUSES | frozenset({DOWNLOAD_STALE})
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,14 +113,14 @@ def _eligible_artifact(now: datetime):
 
 
 def _recoverable_download_owner():
-    """Allow only orphaned or terminal DownloadJob ownership to be adopted."""
+    """Allow only orphaned or explicitly recoverable ownership to be adopted."""
 
     return or_(
         StorageArtifact.download_job_id.is_(None),
-        ~select(DownloadJob.id)
+        select(DownloadJob.id)
         .where(
             DownloadJob.id == StorageArtifact.download_job_id,
-            DownloadJob.status.in_(ACTIVE_DOWNLOAD_OWNERS),
+            DownloadJob.status.in_(RECOVERABLE_DOWNLOAD_OWNER_STATUSES),
         )
         .exists(),
     )
