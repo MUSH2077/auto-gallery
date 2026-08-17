@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 from types import SimpleNamespace
@@ -548,6 +549,66 @@ async def test_repository_reconciliation_only_recovers_orphan_or_explicitly_reco
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_reconciliation_serializes_owner_activation_before_backlog_adoption():
+    """A terminal owner becoming active cannot race a repository adoption."""
+    from app.database import async_session, engine
+    from app.models import DownloadJob, StorageArtifact
+    from app.services.repository_artifact_reconciliation import (
+        reconcile_repository_artifacts,
+    )
+
+    try:
+        async with async_session() as setup_db:
+            await _clear_reconciliation_tables(setup_db)
+            _subscription, _repository, _other, current, historical, _manual = await _repository_fixture(setup_db)
+            db_current_id = current.id
+            db_historical_id = historical.id
+            artifact = _artifact(
+                path="twitter/target_handle/owner-race-801.json",
+                work_id="owner-race-801",
+                creator_dir="target_handle",
+                job_id=historical.id,
+            )
+            setup_db.add(artifact)
+            await setup_db.commit()
+            db_artifact_id = artifact.id
+
+        async with async_session() as owner_db:
+            owner = (await owner_db.execute(
+                select(DownloadJob)
+                .where(DownloadJob.id == db_historical_id)
+                .with_for_update()
+            )).scalar_one()
+            assert owner.status == "complete"
+            owner.status = "enqueued"
+            await owner_db.flush()
+
+            async def reconcile_in_second_session():
+                async with async_session() as reconcile_db:
+                    current_job = await reconcile_db.get(DownloadJob, db_current_id)
+                    result = await reconcile_repository_artifacts(reconcile_db, current_job)
+                    await reconcile_db.commit()
+                    return result
+
+            reconciliation_task = asyncio.create_task(reconcile_in_second_session())
+            await asyncio.sleep(0.15)
+            await owner_db.commit()
+            result = await asyncio.wait_for(reconciliation_task, timeout=5)
+
+        async with async_session() as verify_db:
+            artifact = await verify_db.get(StorageArtifact, db_artifact_id)
+            owner = await verify_db.get(DownloadJob, db_historical_id)
+            assert owner.status == "enqueued"
+            assert result.recovered_metadata_count == 0
+            assert artifact.download_job_id == db_historical_id
+    finally:
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_successful_download_boundary_retries_durable_recovered_backlog_after_enqueue_crash(
     tmp_path,
     monkeypatch,
@@ -586,15 +647,21 @@ async def test_successful_download_boundary_retries_durable_recovered_backlog_af
     class FakeHeartbeat(FakeControlListener):
         pass
 
-    attempts: list[tuple[str | None, set[str]]] = []
+    initial_publications: list[set[str]] = []
+    recovery_publications: list[set[str]] = []
 
     async def fake_defaults():
         return {"max_posts": 1, "timeout_seconds": 1, "stall_timeout_seconds": 1}
 
     async def fake_enqueue(_job_id, import_error=None, new_json_paths=None):
-        attempts.append((import_error, set(new_json_paths or [])))
-        if len(attempts) == 1:
+        paths = set(new_json_paths or [])
+        if import_error is None:
+            assert initial_publications == []
+            initial_publications.append(paths)
             raise RuntimeError("simulated crash after durable reconciliation")
+        assert import_error == "auto recovery after downloaded state gap (1 metadata files)"
+        assert recovery_publications == []
+        recovery_publications.append(paths)
         return "durable-import-id"
 
     raw_runner = download_module.run_download_job
@@ -651,13 +718,8 @@ async def test_successful_download_boundary_retries_durable_recovered_backlog_af
                 stale_after_seconds=1,
             )
 
-        assert attempts == [
-            (None, {"twitter/target_handle/retry-601.json"}),
-            (
-                "auto recovery after downloaded state gap (1 metadata files)",
-                {"twitter/target_handle/retry-601.json"},
-            ),
-        ]
+        assert initial_publications == [{"twitter/target_handle/retry-601.json"}]
+        assert recovery_publications == [{"twitter/target_handle/retry-601.json"}]
         assert recovery["imports_enqueued"] == 1
         assert recovery["download_job_ids"] == [str(current.id)]
     finally:

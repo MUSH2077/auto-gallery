@@ -112,18 +112,33 @@ def _eligible_artifact(now: datetime):
     )
 
 
-def _recoverable_download_owner():
-    """Allow only orphaned or explicitly recoverable ownership to be adopted."""
+async def _locked_recoverable_download_owner_ids(
+    db: AsyncSession,
+    owner_ids: set[UUID],
+) -> set[UUID]:
+    """Lock candidate owners and return only their explicit safe statuses.
 
-    return or_(
-        StorageArtifact.download_job_id.is_(None),
-        select(DownloadJob.id)
-        .where(
-            DownloadJob.id == StorageArtifact.download_job_id,
-            DownloadJob.status.in_(RECOVERABLE_DOWNLOAD_OWNER_STATUSES),
+    Locks live until the caller commits reconciliation.  Thus an owner-status
+    transition that wins first is observed before adoption, while a transition
+    that follows adoption serializes behind this lock and cannot steal the
+    already-adopted artifact back.
+    """
+
+    if not owner_ids:
+        return set()
+    owners = (
+        await db.execute(
+            select(DownloadJob)
+            .where(DownloadJob.id.in_(owner_ids))
+            .order_by(DownloadJob.id)
+            .with_for_update(of=DownloadJob)
         )
-        .exists(),
-    )
+    ).scalars()
+    return {
+        owner.id
+        for owner in owners
+        if owner.status in RECOVERABLE_DOWNLOAD_OWNER_STATUSES
+    }
 
 
 async def _locked_metadata_rows(db: AsyncSession, *conditions) -> list[StorageArtifact]:
@@ -226,14 +241,26 @@ async def reconcile_repository_artifacts(
         StorageArtifact.source == source,
         eligible,
     )
-    backlog_rows = await _locked_metadata_rows(
+    backlog_candidates = await _locked_metadata_rows(
         db,
         StorageArtifact.download_job_id.is_distinct_from(current_job.id),
         StorageArtifact.source == source,
         StorageArtifact.creator_dir.in_(creator_dirs),
         eligible,
-        _recoverable_download_owner(),
     )
+    recoverable_owner_ids = await _locked_recoverable_download_owner_ids(
+        db,
+        {
+            row.download_job_id
+            for row in backlog_candidates
+            if row.download_job_id is not None
+        },
+    )
+    backlog_rows = [
+        row
+        for row in backlog_candidates
+        if row.download_job_id is None or row.download_job_id in recoverable_owner_ids
+    ]
 
     existing_ids = await _existing_work_ids(
         db,
@@ -267,7 +294,10 @@ async def reconcile_repository_artifacts(
                 StorageArtifact.source_work_id.in_(recovered_ids),
                 StorageArtifact.download_job_id.is_distinct_from(current_job.id),
                 _eligible_artifact(now),
-                _recoverable_download_owner(),
+                or_(
+                    StorageArtifact.download_job_id.is_(None),
+                    StorageArtifact.download_job_id.in_(recoverable_owner_ids),
+                ),
             )
             .values(
                 download_job_id=current_job.id,
