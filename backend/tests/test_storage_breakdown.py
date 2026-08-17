@@ -1,6 +1,3 @@
-import json
-import os
-
 import pytest
 from sqlalchemy import text
 
@@ -21,73 +18,25 @@ async def _clear_identity_tables(db):
             source_creators,
             subscription_sources,
             subscriptions,
-            creators
+            creators,
+            tags
         RESTART IDENTITY CASCADE
     """))
     await db.commit()
 
 
-def _pixiv_metadata() -> dict:
-    return {
-        "id": 12345,
-        "title": "Pixiv fixture",
-        "date": "2026-01-01 12:00:00",
-        "user": {"id": 101, "name": "Tree Fixture", "account": "tree_fixture"},
-        "tags": [{"name": "tree"}],
-    }
-
-
-def _x_metadata(tweet_id: int, user_id: int, name: str) -> dict:
-    return {
-        "tweet_id": tweet_id,
-        "content": "X fixture #tree",
-        "date": "2026-01-02 12:00:00",
-        "hashtags": ["tree"],
-        "user": {"id": user_id, "name": name, "nick": name},
-    }
-
-
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_storage_breakdown_aggregates_creator_repositories_and_keeps_unlinked(
-    tmp_path,
-    monkeypatch,
-):
+async def test_storage_breakdown_uses_ledger_rows_for_storage_identity_and_backlog():
     from app.api.admin import settings as settings_api
-    from app.config import settings
     from app.database import async_session, engine
     from app.models.creator import Creator
+    from app.models.download_job import DownloadJob
     from app.models.source_creator import SourceCreator
+    from app.models.storage_artifact import StorageArtifact
     from app.models.subscription import Subscription
     from app.models.subscription_source import SubscriptionSource
 
-    download_root = tmp_path / "downloads"
-    library_root = tmp_path / "library"
-    app_config_root = tmp_path / "config"
-    library_root.mkdir()
-    app_config_root.mkdir()
-
-    pixiv_dir = download_root / "pixiv" / "101" / "12345"
-    x_dir = download_root / "twitter" / "tree_fixture" / "2026-01-02"
-    orphan_dir = download_root / "twitter" / "orphan_fixture" / "2026-01-03"
-    for directory in (pixiv_dir, x_dir, orphan_dir):
-        directory.mkdir(parents=True)
-    (pixiv_dir / "12345.json").write_text(json.dumps(_pixiv_metadata()), encoding="utf-8")
-    (x_dir / "777_1.json").write_text(
-        json.dumps(_x_metadata(777, 202, "tree_fixture")),
-        encoding="utf-8",
-    )
-    (orphan_dir / "888_1.json").write_text(
-        json.dumps(_x_metadata(888, 303, "orphan_fixture")),
-        encoding="utf-8",
-    )
-    pixiv_media = pixiv_dir / "12345_1.jpg"
-    pixiv_media.write_bytes(b"x" * (1024 * 1024))
-    os.link(pixiv_media, x_dir / "777_1.jpg")
-
-    monkeypatch.setattr(settings, "download_root", str(download_root))
-    monkeypatch.setattr(settings, "library_root", str(library_root))
-    monkeypatch.setattr(settings, "app_config_root", str(app_config_root))
     settings_api.invalidate_storage_breakdown_cache()
 
     try:
@@ -135,11 +84,87 @@ async def test_storage_breakdown_aggregates_creator_repositories_and_keeps_unlin
                     display_name="Tree Fixture",
                 ),
             ])
+            await db.flush()
+            x_job = DownloadJob(
+                subscription_id=subscription.id,
+                subscription_source_id=x_repo.id,
+                source="x",
+                source_url="https://x.com/tree_fixture",
+                status="downloaded",
+            )
+            db.add(x_job)
+            await db.flush()
+            db.add_all([
+                StorageArtifact(
+                    storage_root="downloads",
+                    file_path="pixiv/101/12345/12345.json",
+                    source="pixiv",
+                    creator_dir="101",
+                    source_work_id="12345",
+                    file_name="12345.json",
+                    artifact_type="metadata_json",
+                    file_size=256 * 1024,
+                    state="done",
+                ),
+                StorageArtifact(
+                    storage_root="downloads",
+                    file_path="pixiv/101/12345/12345_1.jpg",
+                    source="pixiv",
+                    creator_dir="101",
+                    source_work_id="12345",
+                    file_name="12345_1.jpg",
+                    artifact_type="image",
+                    file_size=1024 * 1024,
+                    state="done",
+                ),
+                StorageArtifact(
+                    storage_root="downloads",
+                    file_path="twitter/tree_fixture/777_1.json",
+                    source="x",
+                    creator_dir="tree_fixture",
+                    source_work_id="777",
+                    file_name="777_1.json",
+                    artifact_type="metadata_json",
+                    file_size=512 * 1024,
+                    download_job_id=x_job.id,
+                    state="new",
+                ),
+                StorageArtifact(
+                    storage_root="downloads",
+                    file_path="twitter/orphan_fixture/888_1.json",
+                    source="x",
+                    creator_dir="orphan_fixture",
+                    source_work_id="888",
+                    file_name="888_1.json",
+                    artifact_type="metadata_json",
+                    file_size=256 * 1024,
+                    state="new",
+                ),
+                StorageArtifact(
+                    storage_root="library",
+                    file_path="pixiv/101/12345/index.json",
+                    source="pixiv",
+                    creator_dir="101",
+                    source_work_id="12345",
+                    file_name="index.json",
+                    artifact_type="metadata_json",
+                    file_size=128 * 1024,
+                    state="failed",
+                ),
+            ])
             await db.commit()
 
             payload = await settings_api.storage_breakdown(db=db)
 
             assert payload["sources"]["x"]["work_count"] == 2
+            assert payload["sources"]["pixiv"]["size_mb"] == 1.2
+            assert payload["inventory_source"] == "storage_artifacts"
+            assert payload["inventory_updated_at"] is not None
+            assert payload["pipeline_stats"] == {
+                "pending_import_works": 2,
+                "orphan_pending_artifacts": 1,
+                "failed_artifacts": 1,
+            }
             assert len(payload["creator_tree"]) == 1
             parent = payload["creator_tree"][0]
             assert parent["creator_id"] == str(creator.id)
@@ -151,15 +176,69 @@ async def test_storage_breakdown_aggregates_creator_repositories_and_keeps_unlin
             assert [row["directory_name"] for row in payload["unlinked_repositories"]] == [
                 "orphan_fixture",
             ]
-            physical_source_mb = sum(
-                source["size_mb"] for source in payload["sources"].values()
-            )
-            logical_source_mb = sum(
-                source["logical_size_mb"] for source in payload["sources"].values()
-            )
-            assert logical_source_mb > physical_source_mb
+            assert payload["layers"]["original_media_store"]["size_mb"] == 2.0
+            assert payload["layers"]["library_index"]["size_mb"] == 0.1
+            assert set(payload["db_stats"]) == {
+                "works", "assets", "creators", "subscriptions", "tags",
+            }
     finally:
         settings_api.invalidate_storage_breakdown_cache()
+        async with async_session() as db:
+            await _clear_identity_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_system_info_reports_ledger_sizes_and_constant_time_disk_capacity():
+    from app.api.admin import settings as settings_api
+    from app.database import async_session, engine
+    from app.models.storage_artifact import StorageArtifact
+
+    settings_api._system_info_cache = None
+    settings_api._system_info_cache_ts = 0.0
+    try:
+        async with async_session() as db:
+            await _clear_identity_tables(db)
+            db.add_all([
+                StorageArtifact(
+                    storage_root="downloads",
+                    file_path="pixiv/ledger/1/image.jpg",
+                    source="pixiv",
+                    creator_dir="ledger",
+                    source_work_id="1",
+                    file_name="image.jpg",
+                    artifact_type="image",
+                    file_size=1024 * 1024,
+                    state="done",
+                ),
+                StorageArtifact(
+                    storage_root="library",
+                    file_path="pixiv/ledger/1/index.json",
+                    source="pixiv",
+                    creator_dir="ledger",
+                    source_work_id="1",
+                    file_name="index.json",
+                    artifact_type="metadata_json",
+                    file_size=256 * 1024,
+                    state="done",
+                ),
+            ])
+            await db.commit()
+
+            payload = await settings_api.system_info(db=db)
+
+            assert payload["downloads_size_mb"] == 1.0
+            assert payload["library_size_mb"] == 0.2
+            assert payload["inventory_source"] == "storage_artifacts"
+            assert payload["inventory_updated_at"] is not None
+            assert payload["downloads_free_gb"] >= 0
+            assert set(payload["db_stats"]) == {
+                "works", "assets", "creators", "subscriptions", "tags",
+            }
+    finally:
+        settings_api._system_info_cache = None
+        settings_api._system_info_cache_ts = 0.0
         async with async_session() as db:
             await _clear_identity_tables(db)
         await engine.dispose()

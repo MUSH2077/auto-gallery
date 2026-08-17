@@ -1355,6 +1355,36 @@ test("data management charts preserve 100 ticks, exact values, hierarchy, and di
   await expectNoPageOverflow(page);
 });
 
+test("data center overview shows a retryable error instead of permanent placeholders", async ({ page }) => {
+  await page.route("**/api/v1/admin/system-info", (route) => route.fulfill({
+    status: 500,
+    json: { detail: "ledger unavailable" },
+  }));
+  await page.route("**/api/v1/admin/storage-breakdown", (route) => route.fulfill({
+    json: {
+      sources: {},
+      creators: [],
+      creator_tree: [],
+      unlinked_repositories: [],
+      db_stats: { works: 0, assets: 0, creators: 0, subscriptions: 0, tags: 0 },
+      inventory_source: "storage_artifacts",
+      inventory_updated_at: null,
+      pipeline_stats: {
+        pending_import_works: 0,
+        orphan_pending_artifacts: 0,
+        failed_artifacts: 0,
+      },
+    },
+  }));
+
+  await page.goto("/admin/data-mgmt");
+
+  const overview = page.locator('[data-page-primary-content]');
+  await expect(overview.getByRole("alert")).toContainText("Data Center overview could not be loaded");
+  await expect(overview.getByRole("button", { name: "Retry" })).toBeVisible();
+  await expect(overview).not.toContainText("Original Media -");
+});
+
 for (const route of QUALITY_ROUTES) {
   test(`route quality: ${route}`, async ({ page }) => {
     const pageErrors: string[] = [];

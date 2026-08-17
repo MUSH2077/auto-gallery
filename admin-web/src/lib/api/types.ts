@@ -1097,6 +1097,24 @@ export interface CreatorStorageNode {
   repositories: StorageRepositoryNode[];
 }
 
+export interface DataCenterPipelineStats {
+  pending_import_works: number;
+  orphan_pending_artifacts: number;
+  failed_artifacts: number;
+}
+
+export interface SystemInfoResponse {
+  version: string;
+  downloads_size_mb: number;
+  library_size_mb: number;
+  downloads_free_gb: number;
+  archives_kb: Record<string, number>;
+  db_stats: Record<string, number>;
+  inventory_updated_at: string | null;
+  inventory_source: "storage_artifacts";
+  pipeline_stats: DataCenterPipelineStats;
+}
+
 export interface StorageBreakdownResponse {
   sources: Record<
     string,
@@ -1118,7 +1136,10 @@ export interface StorageBreakdownResponse {
   }[];
   creator_tree: CreatorStorageNode[];
   unlinked_repositories: StorageRepositoryNode[];
-  db_stats?: Record<string, number>;
+  db_stats: Record<string, number>;
+  inventory_updated_at: string | null;
+  inventory_source: "storage_artifacts";
+  pipeline_stats: DataCenterPipelineStats;
   layers?: Record<string, { path: string; size_mb: number; description: string }>;
 }
 
