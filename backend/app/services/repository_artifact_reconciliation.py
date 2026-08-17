@@ -179,20 +179,16 @@ async def _existing_work_ids(
 async def _mark_existing_rows_done(
     db: AsyncSession,
     *,
-    source: str,
-    work_ids: set[str],
-    conditions: tuple,
+    artifact_ids: set[UUID],
     now: datetime,
 ) -> None:
-    if not work_ids:
+    if not artifact_ids:
         return
     await db.execute(
         update(StorageArtifact)
         .where(
-            StorageArtifact.source == source,
-            StorageArtifact.source_work_id.in_(work_ids),
+            StorageArtifact.id.in_(artifact_ids),
             _eligible_artifact(now),
-            *conditions,
         )
         .values(
             state="done",
@@ -269,30 +265,22 @@ async def reconcile_repository_artifacts(
     )
     await _mark_existing_rows_done(
         db,
-        source=source,
-        work_ids={row.source_work_id for row in current_rows if row.source_work_id in existing_ids},
-        conditions=(StorageArtifact.download_job_id == current_job.id,),
-        now=now,
-    )
-    await _mark_existing_rows_done(
-        db,
-        source=source,
-        work_ids={row.source_work_id for row in backlog_rows if row.source_work_id in existing_ids},
-        conditions=(StorageArtifact.creator_dir.in_(creator_dirs),),
+        artifact_ids={
+            row.id
+            for row in current_rows + backlog_rows
+            if row.source_work_id in existing_ids
+        },
         now=now,
     )
 
     current_pending = [row for row in current_rows if row.source_work_id not in existing_ids]
     recovered = [row for row in backlog_rows if row.source_work_id not in existing_ids]
-    recovered_ids = {row.source_work_id for row in recovered}
-    if recovered_ids:
+    recovered_artifact_ids = {row.id for row in recovered}
+    if recovered_artifact_ids:
         await db.execute(
             update(StorageArtifact)
             .where(
-                StorageArtifact.source == source,
-                StorageArtifact.creator_dir.in_(creator_dirs),
-                StorageArtifact.source_work_id.in_(recovered_ids),
-                StorageArtifact.download_job_id.is_distinct_from(current_job.id),
+                StorageArtifact.id.in_(recovered_artifact_ids),
                 _eligible_artifact(now),
                 or_(
                     StorageArtifact.download_job_id.is_(None),

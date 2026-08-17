@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 from sqlalchemy import select, text
@@ -609,6 +610,105 @@ async def test_reconciliation_serializes_owner_activation_before_backlog_adoptio
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_reconciliation_mutates_only_the_exact_unlocked_duplicate_artifacts():
+    """SKIP LOCKED rows with duplicate identities remain outside this run."""
+    from app.database import async_session, engine
+    from app.models import DownloadJob, StorageArtifact, Work, WorkSource
+    from app.services.repository_artifact_reconciliation import (
+        reconcile_repository_artifacts,
+    )
+
+    try:
+        async with async_session() as setup_db:
+            await _clear_reconciliation_tables(setup_db)
+            _subscription, _repository, _other, current, historical, _manual = await _repository_fixture(setup_db)
+            current_id = current.id
+            historical_id = historical.id
+            existing_work = Work(title="already imported duplicate")
+            setup_db.add(existing_work)
+            await setup_db.flush()
+            setup_db.add(WorkSource(
+                work_id=existing_work.id,
+                source="x",
+                source_work_id="existing-902",
+            ))
+            selected_new = _artifact(
+                path="twitter/target_handle/new-selected-901.json",
+                work_id="new-901",
+                creator_dir="target_handle",
+                job_id=historical.id,
+            )
+            selected_existing = _artifact(
+                path="twitter/target_handle/existing-selected-902.json",
+                work_id="existing-902",
+                creator_dir="target_handle",
+                job_id=historical.id,
+            )
+            locked_new = _artifact(
+                path="twitter/target_handle/new-locked-901.json",
+                work_id="new-901",
+                creator_dir="target_handle",
+                job_id=historical.id,
+            )
+            locked_existing = _artifact(
+                path="twitter/target_handle/existing-locked-902.json",
+                work_id="existing-902",
+                creator_dir="target_handle",
+                job_id=historical.id,
+            )
+            setup_db.add_all([selected_new, selected_existing, locked_new, locked_existing])
+            await setup_db.commit()
+            selected_new_id = selected_new.id
+            selected_existing_id = selected_existing.id
+            locked_ids = {locked_new.id, locked_existing.id}
+
+        async with async_session() as lock_db:
+            locked_rows = list((await lock_db.execute(
+                select(StorageArtifact)
+                .where(StorageArtifact.id.in_(locked_ids))
+                .order_by(StorageArtifact.id)
+                .with_for_update()
+            )).scalars())
+            assert {row.id for row in locked_rows} == locked_ids
+
+            async def reconcile_in_second_session():
+                async with async_session() as reconcile_db:
+                    current_job = await reconcile_db.get(DownloadJob, current_id)
+                    result = await reconcile_repository_artifacts(reconcile_db, current_job)
+                    await reconcile_db.commit()
+                    return result
+
+            reconciliation_task = asyncio.create_task(reconcile_in_second_session())
+            try:
+                result = await asyncio.wait_for(reconciliation_task, timeout=2)
+            finally:
+                await lock_db.commit()
+
+        async with async_session() as verify_db:
+            rows = {
+                row.id: row
+                for row in (await verify_db.execute(select(StorageArtifact))).scalars()
+            }
+            assert result.recovered_metadata_paths == (
+                "twitter/target_handle/new-selected-901.json",
+            )
+            assert result.recovered_metadata_count == 1
+            assert result.pending_work_count == 1
+            assert rows[selected_new_id].download_job_id == current_id
+            assert rows[selected_new_id].state == "new"
+            assert rows[selected_existing_id].download_job_id == historical_id
+            assert rows[selected_existing_id].state == "done"
+            for locked_id in locked_ids:
+                assert rows[locked_id].download_job_id == historical_id
+                assert rows[locked_id].state == "new"
+    finally:
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_successful_download_boundary_retries_durable_recovered_backlog_after_enqueue_crash(
     tmp_path,
     monkeypatch,
@@ -616,7 +716,9 @@ async def test_successful_download_boundary_retries_durable_recovered_backlog_af
     """A crash after ledger adoption is re-enqueued by import recovery."""
     from app.database import async_session, engine
     from app.jobs import download as download_module
+    from app.models import DownloadJob, ImportJob
     from app.services.import_recovery import recover_import_pipeline
+    from app.services import job_progress
 
     class FakeProcess:
         pid = 987654
@@ -662,6 +764,15 @@ async def test_successful_download_boundary_retries_durable_recovered_backlog_af
         assert import_error == "auto recovery after downloaded state gap (1 metadata files)"
         assert recovery_publications == []
         recovery_publications.append(paths)
+        async with async_session() as enqueue_db:
+            recovery_job = await enqueue_db.get(DownloadJob, UUID(_job_id))
+            assert recovery_job is not None
+            recovery_job.status = "importing"
+            enqueue_db.add(ImportJob(
+                download_job_id=recovery_job.id,
+                status="enqueued",
+            ))
+            await enqueue_db.commit()
         return "durable-import-id"
 
     raw_runner = download_module.run_download_job
@@ -676,6 +787,12 @@ async def test_successful_download_boundary_retries_durable_recovered_backlog_af
     monkeypatch.setattr(download_module.subprocess, "Popen", FakeProcess)
     monkeypatch.setattr(download_module, "_process_group_exists", lambda _pid: False)
     monkeypatch.setattr(download_module.settings, "download_root", str(tmp_path))
+    monkeypatch.setattr(job_progress.ProgressTracker, "set", staticmethod(lambda *_args: None))
+    monkeypatch.setattr(
+        job_progress.TaskEventPublisher,
+        "publish_progress",
+        staticmethod(lambda *_args: None),
+    )
     monkeypatch.setattr(download_module, "get_redis", lambda: SimpleNamespace(
         hset=lambda *_args, **_kwargs: None,
         expire=lambda *_args, **_kwargs: None,
@@ -717,11 +834,18 @@ async def test_successful_download_boundary_retries_durable_recovered_backlog_af
                 db,
                 stale_after_seconds=1,
             )
+        async with async_session() as db:
+            repeated_recovery = await recover_import_pipeline(
+                db,
+                stale_after_seconds=1,
+            )
 
         assert initial_publications == [{"twitter/target_handle/retry-601.json"}]
         assert recovery_publications == [{"twitter/target_handle/retry-601.json"}]
         assert recovery["imports_enqueued"] == 1
         assert recovery["download_job_ids"] == [str(current.id)]
+        assert repeated_recovery["imports_enqueued"] == 0
+        assert repeated_recovery["download_job_ids"] == []
     finally:
         async with async_session() as db:
             await _clear_reconciliation_tables(db)
