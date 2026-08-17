@@ -1325,6 +1325,17 @@ test("creator activity hides stale data while a selected year request loads or f
   releaseSelectedYear();
   await expect(activity.getByRole("alert")).toContainText("Publishing activity could not be loaded");
   await expect(activity.locator("#activity-day-2026-04-12")).toHaveCount(0);
+  const picker = page.getByRole("button", { name: "Year", exact: true });
+  await expect(picker).toBeVisible();
+  await picker.focus();
+  await expect(picker).toBeFocused();
+  await picker.click();
+  const recoveryListbox = page.getByRole("listbox", { name: "Year", exact: true });
+  await recoveryListbox.press("ArrowDown");
+  await recoveryListbox.press("Enter");
+  await expect(picker).toBeFocused();
+  await expect(activity.locator("#activity-day-2026-04-12")).toBeVisible();
+  await expect(activity).toContainText("Activity peaked on");
 });
 
 test("creator activity accepts an empty response only for its requested year", async ({ page }) => {

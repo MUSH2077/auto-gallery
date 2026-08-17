@@ -200,6 +200,7 @@ export default function CreatorDetailPage() {
   const [editing, setEditing] = useState(false);
   const [worksTag, setWorksTag] = useState("");
   const [activityYear, setActivityYear] = useState<number | null>(null);
+  const [hasLoadedActivityTimeline, setHasLoadedActivityTimeline] = useState(false);
   const [editName, setEditName] = useState("");
   const [editDisplay, setEditDisplay] = useState("");
   const [editDesc, setEditDesc] = useState("");
@@ -413,8 +414,13 @@ export default function CreatorDetailPage() {
     && timeline.data.requestYear === activityYear
     ? timeline.data.timeline
     : null;
+  useEffect(() => {
+    if (selectedTimelineData) setHasLoadedActivityTimeline(true);
+  }, [selectedTimelineData]);
   const activityCalendarData: ActivityTimeline | null = selectedTimelineData
-    || (timeline.data ? { creator_id: id, sources: [], days: [], total: 0 } : null);
+    || (hasLoadedActivityTimeline && activityYear !== null
+      ? { creator_id: id, sources: [], days: [], total: 0 }
+      : null);
   const activityPeak = (selectedTimelineData?.days || []).reduce<ActivityDay | null>(
     (current, day) => current === null || day.total > current.total ? day : current,
     null,
@@ -644,9 +650,10 @@ export default function CreatorDetailPage() {
                 ) : activityCalendarData ? (
                   <>
                     {timeline.error ? (
-                      <div className="mb-3 rounded-md border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning" role="status">
-                        {t("charts.activity_error")}
-                        <button type="button" className="btn-ghost ml-2" onClick={() => timeline.refetch()}>
+                      <div className="mb-3 rounded-md border border-danger/30 bg-danger-subtle px-3 py-2 text-xs text-danger" role="alert">
+                        <p className="font-semibold">{t("charts.activity_error")}</p>
+                        <p className="mt-1 break-words text-muted">{(timeline.error as Error).message}</p>
+                        <button type="button" className="btn-ghost mt-2" onClick={() => timeline.refetch()}>
                           {t("common.retry")}
                         </button>
                       </div>
