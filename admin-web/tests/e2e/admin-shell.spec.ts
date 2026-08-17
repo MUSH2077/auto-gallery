@@ -260,7 +260,9 @@ async function installFixtureRoutes(context: BrowserContext) {
       await route.fulfill({ json: [] });
     } else if (path === "/api/v1/creators/fixture-creator/timeline") {
       const year = Number((url.searchParams.get("from_date") || "2026").slice(0, 4));
-      const days = year === 2024
+      const days = year === 2023
+        ? []
+        : year === 2024
         ? [
             { date: "2024-02-29", total: 1, pixiv: 1, pixiv_ids: ["work-2024-1"] },
           ]
@@ -277,7 +279,7 @@ async function installFixtureRoutes(context: BrowserContext) {
       await route.fulfill({
         json: {
           creator_id: "fixture-creator",
-          sources: ["pixiv", "x"],
+          sources: year === 2023 ? ["pixiv"] : ["pixiv", "x"],
           days,
           total: days.reduce((sum, day) => sum + day.total, 0),
         },
@@ -303,6 +305,7 @@ async function installFixtureRoutes(context: BrowserContext) {
             { tag: "seventh-is-not-charted", count: 8 },
           ],
           monthly_frequency: [
+            { month: "2023-01", count: 0 },
             { month: "2024-02", count: 1 },
             { month: "2025-01", count: 1 },
             { month: "2025-02", count: 3 },
@@ -1322,6 +1325,46 @@ test("creator activity hides stale data while a selected year request loads or f
   releaseSelectedYear();
   await expect(activity.getByRole("alert")).toContainText("Publishing activity could not be loaded");
   await expect(activity.locator("#activity-day-2026-04-12")).toHaveCount(0);
+});
+
+test("creator activity accepts an empty response only for its requested year", async ({ page }) => {
+  await page.goto("/admin/creators/fixture-creator");
+
+  const activity = page.getByTestId("creator-activity-chart");
+  const picker = page.getByRole("button", { name: "Year", exact: true });
+  await picker.click();
+  const listbox = page.getByRole("listbox", { name: "Year", exact: true });
+  await listbox.press("Home");
+  await listbox.press("Enter");
+  await expect(picker).toHaveText(/2023/);
+  await expect(activity).toContainText("pixiv");
+
+  let releaseSelectedYear: (() => void) | undefined;
+  await page.route("**/api/v1/creators/fixture-creator/timeline?*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("from_date") !== "2024-01-01") {
+      await route.fallback();
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      releaseSelectedYear = resolve;
+    });
+    await route.fulfill({
+      json: { creator_id: "fixture-creator", sources: ["x"], days: [], total: 0 },
+    });
+  });
+
+  await picker.click();
+  await listbox.press("ArrowDown");
+  await listbox.press("Enter");
+  await expect(picker).toBeFocused();
+  await expect(activity.getByRole("status")).toContainText("Loading...");
+  await expect(activity).not.toContainText("pixiv");
+  if (!releaseSelectedYear) throw new Error("Expected the empty selected-year request to be intercepted");
+  releaseSelectedYear();
+  await expect(activity.getByRole("status")).toHaveCount(0);
+  await expect(activity).toContainText("x");
+  await expect(activity).not.toContainText("Activity peaked on");
 });
 
 test("data management charts preserve 100 ticks, exact values, hierarchy, and diagnostics", async ({ page }) => {

@@ -234,11 +234,17 @@ export default function CreatorDetailPage() {
   }, [availableActivityYears]);
   const timeline = useQuery({
     queryKey: ["creator-timeline", id, activityYear],
-    queryFn: () => api.getCreatorTimeline(
-      id,
-      `${activityYear}-01-01`,
-      `${Number(activityYear) + 1}-01-01`,
-    ),
+    queryFn: async () => {
+      if (activityYear === null) throw new Error("Activity year is required");
+      return {
+        requestYear: activityYear,
+        timeline: await api.getCreatorTimeline(
+          id,
+          `${activityYear}-01-01`,
+          `${activityYear + 1}-01-01`,
+        ),
+      };
+    },
     enabled: activityYear !== null,
     placeholderData: keepPreviousData,
     refetchInterval: POLL_IDLE_MS,
@@ -404,12 +410,11 @@ export default function CreatorDetailPage() {
   );
   const selectedTimelineData = timeline.data
     && !timeline.isPlaceholderData
-    && activityYear !== null
-    && timeline.data.days.every((day) => day.date.startsWith(`${activityYear}-`))
-    ? timeline.data
+    && timeline.data.requestYear === activityYear
+    ? timeline.data.timeline
     : null;
   const activityCalendarData: ActivityTimeline | null = selectedTimelineData
-    || (timeline.data ? { ...timeline.data, days: [], total: 0 } : null);
+    || (timeline.data ? { creator_id: id, sources: [], days: [], total: 0 } : null);
   const activityPeak = (selectedTimelineData?.days || []).reduce<ActivityDay | null>(
     (current, day) => current === null || day.total > current.total ? day : current,
     null,
