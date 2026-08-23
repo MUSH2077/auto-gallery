@@ -288,3 +288,11 @@ No known code correctness concern remains. Environmental-only notices were the
 existing Next.js module-type performance warning and best-effort Meilisearch
 test cleanup skipping because the optional SOCKS transport is absent; neither
 affected a test or build result.
+
+## Commit record
+
+- Implementation, regressions, verification record, and initial report:
+  `fdeb11ac2c82e5ea961724203a495adf5a213e95`
+- This appended commit record is committed separately as the final report-only
+  commit; its SHA is returned to the controller alongside the implementation
+  SHA to avoid rewriting the completed implementation commit.
