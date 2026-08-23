@@ -3490,6 +3490,18 @@
       },
       "ImportFromDiskRequest": {
         "properties": {
+          "repository_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Id"
+          },
           "reset_ledger": {
             "default": false,
             "title": "Reset Ledger",
@@ -6137,6 +6149,14 @@
             "title": "Normalized Name",
             "type": "string"
           },
+          "source_usage": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/TagSourceUsage"
+            },
+            "title": "Source Usage",
+            "type": "array"
+          },
           "top_creators": {
             "default": [],
             "items": {
@@ -6186,6 +6206,14 @@
             "title": "Normalized Name",
             "type": "string"
           },
+          "source_usage": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/TagSourceUsage"
+            },
+            "title": "Source Usage",
+            "type": "array"
+          },
           "usage_count": {
             "default": 0,
             "title": "Usage Count",
@@ -6198,6 +6226,24 @@
           "created_at"
         ],
         "title": "TagRead",
+        "type": "object"
+      },
+      "TagSourceUsage": {
+        "properties": {
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "work_count": {
+            "title": "Work Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source",
+          "work_count"
+        ],
+        "title": "TagSourceUsage",
         "type": "object"
       },
       "TagUpdate": {
@@ -10571,7 +10617,7 @@
     },
     "/api/v1/admin/storage-breakdown": {
       "get": {
-        "description": "Return per-source and per-creator storage breakdown.",
+        "description": "Return a bounded, ledger-backed storage breakdown.",
         "operationId": "get_api_v1_admin_storage_breakdown",
         "responses": {
           "200": {
@@ -10637,7 +10683,7 @@
     },
     "/api/v1/admin/system-info": {
       "get": {
-        "description": "Return system-level info: disk usage, archive sizes, version.\n\nCached (this endpoint is polled by the dashboard) and computed off the\nevent loop — the directory-size walk is O(files) over the whole library.\nA single in-flight walk is serialized by a lock so a burst of polls can't\nspawn concurrent multi-GB walks; stale cache is served meanwhile.",
+        "description": "Return ledger-backed storage facts and constant-time mount capacity.",
         "operationId": "get_api_v1_admin_system_info",
         "responses": {
           "200": {

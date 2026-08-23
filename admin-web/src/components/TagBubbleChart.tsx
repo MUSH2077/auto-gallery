@@ -190,7 +190,7 @@ function buildLayout(tags: Tag[]): BubbleLayout {
       r: bubbleRadius(tag, minCount, maxCount),
       x: 0,
       y: 0,
-      hue: categoryHue(tag.category),
+      hue: categoryHue(tag.category ?? undefined),
       ...sourceRing(tag),
     }))
     .sort((left, right) => (

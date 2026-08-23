@@ -631,7 +631,7 @@ export const api = {
       body: JSON.stringify(options),
     }),
 
-  importFromDisk: (options: { source?: string; reset_ledger?: boolean } = {}) =>
+  importFromDisk: (options: T.ImportFromDiskRequest = {}) =>
     request<{ job_id: string; status: string; message: string }>("/api/v1/admin/library/import-from-disk", {
       method: "POST",
       body: JSON.stringify(options),

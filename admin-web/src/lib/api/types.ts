@@ -1065,19 +1065,9 @@ export interface Work {
   updated_at: string;
 }
 
-export interface Tag {
-  id: string;
-  normalized_name: string;
-  category?: string;
-  usage_count: number;
-  source_usage: TagSourceUsage[];
-  created_at: string;
-}
+export type Tag = components["schemas"]["TagRead"];
 
-export interface TagSourceUsage {
-  source: string;
-  work_count: number;
-}
+export type TagSourceUsage = components["schemas"]["TagSourceUsage"];
 
 export interface RepositoryTagsResponse {
   items: Tag[];
@@ -1156,15 +1146,7 @@ export interface CreatorRef {
   work_count: number;
 }
 
-export interface TagDetail {
-  id: string;
-  normalized_name: string;
-  category?: string;
-  usage_count: number;
-  source_usage: TagSourceUsage[];
-  top_creators: CreatorRef[];
-  created_at: string;
-}
+export type TagDetail = components["schemas"]["TagDetail"];
 
 export interface CreatorSearchHit {
   id: string;
@@ -1813,3 +1795,11 @@ export type GeneratedWork = components["schemas"]["WorkRead"];
 export type GeneratedWorkList = components["schemas"]["WorkList"];
 export type GeneratedCreator = components["schemas"]["CreatorRead"];
 export type GeneratedSubscription = components["schemas"]["SubscriptionRead"];
+export type ImportFromDiskRequest = Omit<
+  components["schemas"]["ImportFromDiskRequest"],
+  "reset_ledger"
+> & {
+  // FastAPI accepts an omitted field and applies its Pydantic default, while
+  // openapi-typescript currently marks a defaulted boolean as required.
+  reset_ledger?: components["schemas"]["ImportFromDiskRequest"]["reset_ledger"];
+};

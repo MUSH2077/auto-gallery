@@ -833,7 +833,7 @@ export interface paths {
         };
         /**
          * Storage Breakdown
-         * @description Return per-source and per-creator storage breakdown.
+         * @description Return a bounded, ledger-backed storage breakdown.
          */
         get: operations["get_api_v1_admin_storage_breakdown"];
         put?: never;
@@ -853,12 +853,7 @@ export interface paths {
         };
         /**
          * System Info
-         * @description Return system-level info: disk usage, archive sizes, version.
-         *
-         *     Cached (this endpoint is polled by the dashboard) and computed off the
-         *     event loop — the directory-size walk is O(files) over the whole library.
-         *     A single in-flight walk is serialized by a lock so a burst of polls can't
-         *     spawn concurrent multi-GB walks; stale cache is served meanwhile.
+         * @description Return ledger-backed storage facts and constant-time mount capacity.
          */
         get: operations["get_api_v1_admin_system_info"];
         put?: never;
@@ -5287,6 +5282,8 @@ export interface components {
         };
         /** ImportFromDiskRequest */
         ImportFromDiskRequest: {
+            /** Repository Id */
+            repository_id?: string | null;
             /**
              * Reset Ledger
              * @default false
@@ -6212,6 +6209,11 @@ export interface components {
             /** Normalized Name */
             normalized_name: string;
             /**
+             * Source Usage
+             * @default []
+             */
+            source_usage: components["schemas"]["TagSourceUsage"][];
+            /**
              * Top Creators
              * @default []
              */
@@ -6239,10 +6241,22 @@ export interface components {
             /** Normalized Name */
             normalized_name: string;
             /**
+             * Source Usage
+             * @default []
+             */
+            source_usage: components["schemas"]["TagSourceUsage"][];
+            /**
              * Usage Count
              * @default 0
              */
             usage_count: number;
+        };
+        /** TagSourceUsage */
+        TagSourceUsage: {
+            /** Source */
+            source: string;
+            /** Work Count */
+            work_count: number;
         };
         /** TagUpdate */
         TagUpdate: {
