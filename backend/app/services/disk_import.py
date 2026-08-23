@@ -14,7 +14,7 @@ from inspect import isawaitable
 from pathlib import Path
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -276,8 +276,31 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
                 await db.rollback()
                 stats["skipped_invalid_metadata"] += len(jsons) - len(invalid_paths)
                 stats["skipped"] += 1
+                await report_progress(source, total)
                 continue
             await ArtifactLedger(db).upsert_many(rows)
+            if reset_ledger:
+                # ``upsert_many`` deliberately preserves an unchanged ``done``
+                # row.  Force recovery is the exceptional opt-in that makes the
+                # exact discovered scope claimable again, under this new
+                # synthetic owner; it must clear an old import lease/error too.
+                await db.execute(
+                    update(StorageArtifact)
+                    .where(
+                        StorageArtifact.source == source,
+                        StorageArtifact.file_path.in_(
+                            [row["file_path"] for row in rows]
+                        ),
+                    )
+                    .values(
+                        download_job_id=job.id,
+                        import_job_id=None,
+                        lease_token=None,
+                        lease_expires_at=None,
+                        state="new",
+                        last_error=None,
+                    )
+                )
             # Identity provisioning and the synthetic DownloadJob both change
             # creator/subscription/repository search documents.  Persist their
             # projection request in this same transaction; the asynchronous

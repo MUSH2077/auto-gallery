@@ -14,6 +14,29 @@ def test_normalize_task_status_maps_legacy_queued_states():
     assert normalize_task_status("complete") == "complete"
 
 
+def test_disk_import_completion_progress_keeps_durable_counters():
+    from app.jobs.admin_operations import disk_import_completion_progress
+
+    progress = disk_import_completion_progress({
+        "jobs": 2,
+        "scanned": 5,
+        "existing": 1,
+        "imported": 2,
+        "skipped": 1,
+        "failed": 1,
+    })
+
+    assert progress == {
+        "phase": "complete",
+        "label": "Queued 2 import jobs",
+        "scanned": 5,
+        "existing": 1,
+        "imported": 2,
+        "skipped": 1,
+        "failed": 1,
+    }
+
+
 async def _clear_task_test_tables(db):
     await db.execute(text("""
         TRUNCATE
@@ -173,6 +196,43 @@ async def test_pause_failed_task_is_rejected_as_a_structured_conflict(monkeypatc
             assert error.value.detail["action"] == "pause"
             await db.refresh(download)
             assert download.status == "failed"
+    finally:
+        async with async_session() as db:
+            await _clear_task_test_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_invalid_admin_retry_state_has_structured_conflict_detail():
+    from fastapi import HTTPException
+
+    from app.api import tasks as tasks_api
+    from app.database import async_session, engine
+    from app.services.tasks import TaskService
+
+    try:
+        async with async_session() as db:
+            await _clear_task_test_tables(db)
+            svc = TaskService(db)
+            task = await svc.create_task(
+                kind="admin",
+                operation_type="admin-disk-import",
+                title="Import from disk",
+                status="enqueued",
+            )
+            await db.commit()
+
+            with pytest.raises(HTTPException) as error:
+                await tasks_api._retry_admin_task(task, svc)
+
+            assert error.value.status_code == 409
+            assert error.value.detail == {
+                "code": "invalid_task_action",
+                "action": "retry",
+                "status": "enqueued",
+                "message": "Task is enqueued; retry is only available after failure",
+            }
     finally:
         async with async_session() as db:
             await _clear_task_test_tables(db)

@@ -423,7 +423,15 @@ async def _retry_admin_task(task, svc: TaskService):
     if spec is None:
         raise HTTPException(status_code=400, detail="This admin operation cannot be retried")
     if task.status not in {"failed", "stale", "cancelled"}:
-        raise HTTPException(status_code=409, detail=f"Task is {task.status}; retry is only available after failure")
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "invalid_task_action",
+                "action": "retry",
+                "status": task.status,
+                "message": f"Task is {task.status}; retry is only available after failure",
+            },
+        )
 
     redis = get_redis()
     ensure_redis_enqueue_capacity(redis)

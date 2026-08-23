@@ -1,4 +1,6 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select, text
@@ -191,6 +193,86 @@ async def test_compaction_keeps_download_that_owns_recoverable_artifacts():
             assert await db.get(TaskRun, task.id) is not None
             assert await db.get(DownloadJob, download.id) is not None
     finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_compaction_rechecks_artifacts_after_competing_claim_commits():
+    """A force-reset claim racing compaction must retain its DownloadJob."""
+    from app.database import async_session, engine
+    from app.models import DownloadJob, ImportJob, StorageArtifact
+    from app.services.artifact_ledger import ArtifactLedger
+    from app.services.operation_attention import (
+        compact_terminal_tasks,
+        upsert_repository_sync_receipt,
+    )
+    from app.services.tasks import TaskService
+
+    worker_db = None
+    try:
+        async with async_session() as setup_db:
+            await _clear(setup_db)
+            _repository, download = await _repository_fixture(setup_db)
+            task = await TaskService(setup_db).ensure_download_task(download)
+            task.compactable_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            artifact = StorageArtifact(
+                storage_root="downloads",
+                file_path="pixiv/123/race.json",
+                source="pixiv",
+                creator_dir="123",
+                source_work_id="race",
+                file_name="race.json",
+                artifact_type="metadata_json",
+                download_job_id=download.id,
+                state="done",
+            )
+            setup_db.add(artifact)
+            await upsert_repository_sync_receipt(setup_db, download)
+            await setup_db.commit()
+
+            worker_db = async_session()
+            await worker_db.get(DownloadJob, download.id, with_for_update=True)
+            locked_artifact = await worker_db.get(StorageArtifact, artifact.id, with_for_update=True)
+            # ``reset_ledger`` makes a previously done row claimable.  Use the
+            # production claim primitive so this covers the same transition a
+            # resumed import worker performs, not merely a hand-written state.
+            locked_artifact.state = "new"
+            claimant = ImportJob(
+                download_job_id=download.id,
+                status="running",
+                execution_token=uuid4(),
+            )
+            worker_db.add(claimant)
+            await worker_db.flush()
+            claim = await ArtifactLedger(worker_db).claim_work_batch(
+                download.id,
+                claimant.id,
+                lease_token=claimant.execution_token,
+                limit=25,
+            )
+            assert claim.claimed == ("race",)
+
+            async with async_session() as compactor_db:
+                compacting = asyncio.create_task(
+                    compact_terminal_tasks(compactor_db, dry_run=False),
+                )
+                await asyncio.sleep(0.05)
+                assert not compacting.done()
+                await worker_db.commit()
+                report = await compacting
+
+            assert report["deleted_download_jobs"] == 0
+            async with async_session() as check_db:
+                assert await check_db.get(DownloadJob, download.id) is not None
+                current_artifact = await check_db.get(StorageArtifact, artifact.id)
+                assert current_artifact.download_job_id == download.id
+                assert current_artifact.state == "importing"
+    finally:
+        if worker_db is not None:
+            await worker_db.close()
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()

@@ -13,6 +13,19 @@ from app.services.heavy_io import run_heavy_io_operation
 logger = logging.getLogger(__name__)
 
 
+def disk_import_completion_progress(result: dict) -> dict:
+    """Keep the resumable drain counters visible after terminal transition."""
+
+    return {
+        "phase": "complete",
+        "label": f"Queued {result['jobs']} import jobs",
+        **{
+            key: result.get(key, 0)
+            for key in ("scanned", "existing", "imported", "skipped", "failed")
+        },
+    }
+
+
 def run_clear_operation(entity: str, job_id: str) -> dict:
     """Entry point for RQ workers."""
     return asyncio.run(run_heavy_io_operation(
@@ -201,15 +214,16 @@ async def _run_disk_import_operation(job_id: str, options: dict) -> dict:
             svc = TaskService(task_db)
             task = await svc.get(UUID(job_id))
             if task:
+                completion_progress = disk_import_completion_progress(result)
                 await svc.update_task(
                     task,
                     status="complete",
-                    progress={"phase": "complete", "label": f"Queued {result['jobs']} import jobs"},
+                    progress=completion_progress,
                     result=result,
                 )
                 await task_db.commit()
         set_operation_status(job_id, "complete", "admin-disk-import",
-            progress={"phase": "complete", "label": f"Queued {result['jobs']} import jobs"},
+            progress=disk_import_completion_progress(result),
             result=result, meta={"entity": "disk-import", **options})
         return result
     except Exception as exc:

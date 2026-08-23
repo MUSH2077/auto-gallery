@@ -674,19 +674,47 @@ async def compact_terminal_tasks(
         "skipped_without_receipt": guarded_without_receipt,
     }
 
-    selected_task_ids = {task.id for task in tasks}
     candidate_download_ids = {
         task.subject_id
         for task in tasks
         if task.subject_type == "download_job" and task.subject_id is not None
     }
-    download_ids: set[UUID] = set()
+    # Compaction and artifact claims must serialize on the same ownership rows.
+    # Take DownloadJobs first, then every owned artifact, in a deterministic
+    # order.  The eligibility query below runs *after* those locks are held;
+    # therefore it cannot make a stale ``done`` decision while reset/retry work
+    # is turning an artifact back into claimable ``new``/``importing`` state.
+    locked_download_ids: set[UUID] = set()
     if candidate_download_ids:
+        locked_download_ids.update(
+            (
+                await db.execute(
+                    select(DownloadJob.id)
+                    .where(DownloadJob.id.in_(candidate_download_ids))
+                    .order_by(DownloadJob.id.asc())
+                    .with_for_update()
+                )
+            ).scalars()
+        )
+    if locked_download_ids:
+        await db.execute(
+            select(StorageArtifact.id)
+            .where(StorageArtifact.download_job_id.in_(locked_download_ids))
+            .order_by(
+                StorageArtifact.download_job_id.asc(),
+                StorageArtifact.created_at.asc(),
+                StorageArtifact.id.asc(),
+            )
+            .with_for_update()
+        )
+
+    download_ids: set[UUID] = set()
+    if locked_download_ids:
         download_ids.update(
             (
                 await db.execute(
                     select(DownloadJob.id).where(
-                        DownloadJob.id.in_(candidate_download_ids),
+                        DownloadJob.id.in_(locked_download_ids),
                         DownloadJob.status.in_(COMPACTABLE_DOWNLOAD_STATUSES),
                         ~recoverable_artifacts,
                         or_(
@@ -700,6 +728,18 @@ async def compact_terminal_tasks(
                 )
             ).scalars()
         )
+    # A DownloadJob that became non-compactable after the task-row selection
+    # keeps its parent TaskRun.  A genuinely missing job is still safe to
+    # compact as an orphan projection.
+    selected_task_ids = {
+        task.id
+        for task in tasks
+        if not (
+            task.subject_type == "download_job"
+            and task.subject_id in locked_download_ids
+            and task.subject_id not in download_ids
+        )
+    }
     import_ids: set[UUID] = set()
     if download_ids:
         import_ids.update(

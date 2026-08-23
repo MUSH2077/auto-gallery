@@ -139,6 +139,33 @@ async def test_reconcile_downloads_to_db_registers_and_enqueues_idempotently(tmp
             assert third["creators"] == 1
             assert third["jobs"] == 1
             assert len(enqueued) == 2
+
+            recovered_job = (
+                await db.execute(
+                    select(DownloadJob).order_by(
+                        DownloadJob.created_at.desc(),
+                        DownloadJob.id.desc(),
+                    ).limit(1)
+                )
+            ).scalar_one()
+            from uuid import uuid4
+            from app.models.import_job import ImportJob
+            from app.services.artifact_ledger import ArtifactLedger
+
+            claimant = ImportJob(
+                download_job_id=recovered_job.id,
+                status="running",
+                execution_token=uuid4(),
+            )
+            db.add(claimant)
+            await db.flush()
+            claimed = await ArtifactLedger(db).claim_work_batch(
+                recovered_job.id,
+                claimant.id,
+                lease_token=claimant.execution_token,
+                limit=25,
+            )
+            assert claimed.claimed == ("38362603",)
     finally:
         async with async_session() as db:
             await _clear_pipeline_tables(db)
