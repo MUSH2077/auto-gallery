@@ -37,7 +37,10 @@ from app.repositories.download_job import DownloadJobRepository
 from app.services.job_progress import apply_download_progress, apply_import_progress
 from app.services.job_manifest import append_manifest_event, update_manifest
 from app.services.download_finalization import finalize_download_job
-from app.services.import_lifecycle import project_import_pipeline_state
+from app.services.import_lifecycle import (
+    coordinate_import_parent_completion,
+    project_import_pipeline_state,
+)
 from app.models.task_state import transition_import_job
 from app.services.settings import get_download_defaults
 from app.services.import_dispatch import prepare_import_dispatch, publish_prepared_import
@@ -1829,7 +1832,10 @@ async def run_import_job(import_job_id: str):
         # a compatibility fallback for jobs created before the ledger migration.
         from app.services.artifact_ledger import ArtifactLedger, managed_artifact_row
         async with async_session() as ledger_db:
-            json_rel_paths = await ArtifactLedger(ledger_db).new_metadata_paths(dj.id)
+            json_rel_paths = await ArtifactLedger(ledger_db).new_metadata_paths(
+                dj.id,
+                import_job_id=job_uuid,
+            )
 
         all_json_files = sorted(
             Path(settings.download_root) / p for p in json_rel_paths
@@ -2591,13 +2597,32 @@ async def run_import_job(import_job_id: str):
             if status == "failed":
                 logger.warning("Import %s classified failed: %s", import_job_id, message)
 
-            dj_repo = DownloadJobRepository(db)
-            dj = await dj_repo.get(ij.download_job_id)
+            completion = await coordinate_import_parent_completion(
+                db,
+                ij,
+                status=status,
+                stats=stats,
+                total_groups=total_groups,
+                message=message,
+            )
+            dj = completion.parent
             if dj:
+                status = completion.status
+                message = completion.message
+                stats = completion.stats
+                total_groups = completion.total_groups
                 update_manifest(dj, import_stats=stats)
                 append_manifest_event(dj, "import_complete", status=status, **stats)
                 append_manifest_event(dj, "stage_timing", stage="parse", ms=_parse_ms)
                 append_manifest_event(dj, "stage_timing", stage="process", ms=_process_ms)
+                if not completion.should_finalize:
+                    await db.commit()
+                    logger.info(
+                        "Import batch %s finished; shared parent %s still has active batches",
+                        import_job_id,
+                        dj.id,
+                    )
+                    return
                 manifest = dj.manifest or {}
                 recovery_detail = manifest.get("repository_artifact_reconciliation")
                 outcome = (
@@ -2627,9 +2652,6 @@ async def run_import_job(import_job_id: str):
                     message=message,
                     assets=stats["assets"],
                 )
-            else:
-                await db.commit()
-
         logger.info("Import finished: %d works, %d assets, %d skipped, %d multi-page (batched)",
                      stats["works"], stats["assets"], stats.get("skipped", 0), stats["multi_page"])
 

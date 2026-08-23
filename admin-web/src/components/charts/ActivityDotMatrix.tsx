@@ -331,7 +331,10 @@ export default function ActivityDotMatrix({
   const onYearListboxKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!availableYears.length) return;
     let nextIndex = activeYearIndex;
-    if (event.key === "ArrowUp") nextIndex -= 1;
+    if (event.key === "Tab") {
+      closeYearListbox(false);
+      return;
+    } else if (event.key === "ArrowUp") nextIndex -= 1;
     else if (event.key === "ArrowDown") nextIndex += 1;
     else if (event.key === "Home") nextIndex = 0;
     else if (event.key === "End") nextIndex = availableYears.length - 1;
@@ -432,6 +435,7 @@ export default function ActivityDotMatrix({
                   id={`activity-year-option-${option}`}
                   type="button"
                   role="option"
+                  tabIndex={-1}
                   aria-selected={option === year}
                   className={`flex min-h-11 w-full items-center rounded px-2 text-left text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus ${
                     index === activeYearIndex ? "bg-accent-subtle text-accent" : "text-fg hover:bg-subtle"

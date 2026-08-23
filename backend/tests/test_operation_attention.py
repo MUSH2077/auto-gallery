@@ -200,6 +200,38 @@ async def test_compaction_keeps_download_that_owns_recoverable_artifacts():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_repository_backlog_guard_ignores_library_metadata_projection():
+    """Only DOWNLOAD_ROOT artifacts may keep a repository failure actionable."""
+    from app.database import async_session, engine
+    from app.models import StorageArtifact
+    from app.services.operation_attention import _repository_has_recoverable_backlog
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            repository, download = await _repository_fixture(db)
+            db.add(StorageArtifact(
+                storage_root="library",
+                file_path="pixiv/123/same.json",
+                source="pixiv",
+                creator_dir="123",
+                source_work_id="library-only",
+                file_name="same.json",
+                artifact_type="metadata_json",
+                download_job_id=download.id,
+                state="new",
+            ))
+            await db.commit()
+
+            assert await _repository_has_recoverable_backlog(db, repository.id) is False
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_compaction_rechecks_artifacts_after_competing_claim_commits():
     """A force-reset claim racing compaction must retain its DownloadJob."""
     from app.database import async_session, engine

@@ -18,6 +18,7 @@ from app.models.task_state import DOWNLOAD_STALE, DOWNLOAD_TERMINAL_STATUSES
 from app.models.work_source import WorkSource
 from app.providers import registry
 from app.services.repository_identity import resolve_repository_source_creator_ids
+from app.services.artifact_ledger import downloads_artifact_predicate
 
 
 # ``stale`` is not terminal in the task-state transition graph: a retry may
@@ -161,6 +162,7 @@ async def _locked_repository_metadata_rows(
             await db.execute(
                 select(StorageArtifact)
                 .where(
+                    downloads_artifact_predicate(),
                     StorageArtifact.artifact_type == "metadata_json",
                     StorageArtifact.source == source,
                     eligible,

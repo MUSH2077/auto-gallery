@@ -222,6 +222,54 @@ async def test_repository_reconciliation_recovers_zero_delta_backlog_without_ste
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_repository_reconciliation_never_adopts_same_path_library_projection():
+    """A library projection is not importable even when its relative path matches."""
+    from app.database import async_session, engine
+    from app.services.repository_artifact_reconciliation import (
+        reconcile_repository_artifacts,
+    )
+
+    try:
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+            _subscription, _repository, _other, current, historical, _manual = (
+                await _repository_fixture(db)
+            )
+            relative_path = "twitter/target_handle/shared-identity.json"
+            download_artifact = _artifact(
+                path=relative_path,
+                work_id="download-work",
+                creator_dir="target_handle",
+                job_id=historical.id,
+            )
+            library_projection = _artifact(
+                path=relative_path,
+                work_id="library-work",
+                creator_dir="target_handle",
+                job_id=historical.id,
+            )
+            library_projection.storage_root = "library"
+            db.add_all([download_artifact, library_projection])
+            await db.commit()
+
+            result = await reconcile_repository_artifacts(db, current)
+            await db.commit()
+
+            assert result.recovered_metadata_paths == (relative_path,)
+            assert result.pending_work_count == 1
+            await db.refresh(download_artifact)
+            await db.refresh(library_projection)
+            assert download_artifact.download_job_id == current.id
+            assert library_projection.download_job_id == historical.id
+            assert library_projection.state == "new"
+    finally:
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_repository_reconciliation_leaves_standalone_jobs_job_scoped():
     from app.database import async_session, engine
     from app.models import StorageArtifact

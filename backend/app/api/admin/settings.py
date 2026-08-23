@@ -242,6 +242,7 @@ async def _ledger_inventory(db: AsyncSession) -> dict:
     from app.models.subscription import Subscription
     from app.models.tag import Tag
     from app.models.work import Work
+    from app.services.artifact_ledger import downloads_artifact_predicate
 
     bytes_expr = func.coalesce(StorageArtifact.file_size, 0)
     roots_result = await db.execute(
@@ -295,7 +296,11 @@ async def _ledger_inventory(db: AsyncSession) -> dict:
     pending_states = ("new", "importing")
     pending_works = (
         select(StorageArtifact.source, StorageArtifact.source_work_id)
-        .where(StorageArtifact.state.in_(pending_states))
+        .where(
+            downloads_artifact_predicate(),
+            StorageArtifact.artifact_type == "metadata_json",
+            StorageArtifact.state.in_(pending_states),
+        )
         .group_by(StorageArtifact.source, StorageArtifact.source_work_id)
         .subquery()
     )
@@ -303,13 +308,17 @@ async def _ledger_inventory(db: AsyncSession) -> dict:
         select(func.count()).select_from(pending_works).scalar_subquery().label("pending_import_works"),
         select(func.count(StorageArtifact.id))
         .where(
+            downloads_artifact_predicate(),
             StorageArtifact.state.in_(pending_states),
             StorageArtifact.download_job_id.is_(None),
         )
         .scalar_subquery()
         .label("orphan_pending_artifacts"),
         select(func.count(StorageArtifact.id))
-        .where(StorageArtifact.state == "failed")
+        .where(
+            downloads_artifact_predicate(),
+            StorageArtifact.state == "failed",
+        )
         .scalar_subquery()
         .label("failed_artifacts"),
     ))).one()
@@ -456,10 +465,8 @@ async def _ledger_storage_breakdown(db: AsyncSession) -> dict:
         .outerjoin(Creator, Creator.id == SourceCreator.creator_id)
     )).all())
 
-    contexts_by_source: dict[str, list[tuple[SubscriptionSource, Creator]]] = {}
     creators_by_id: dict[str, Creator] = {}
     for repository, creator in repository_contexts:
-        contexts_by_source.setdefault(repository.source, []).append((repository, creator))
         creators_by_id[str(creator.id)] = creator
 
     def source_display_name(source: str) -> str:
@@ -478,16 +485,74 @@ async def _ledger_storage_breakdown(db: AsyncSession) -> dict:
         except KeyError:
             return None
 
-    owner_by_directory: dict[tuple[str, str], str] = {}
+    missing = object()
+    ambiguous = object()
+
+    def add_unique(mapping: dict, key: tuple[str, str] | None, value, identity) -> None:
+        if key is None:
+            return
+        existing = mapping.get(key, missing)
+        if existing is missing:
+            mapping[key] = (identity, value)
+        elif existing is not ambiguous and existing[0] != identity:
+            mapping[key] = ambiguous
+
+    owner_by_directory: dict[tuple[str, str], object] = {}
     for source_creator, creator in source_creators:
         if source_creator.creator_id:
             owner_id = str(source_creator.creator_id)
-            owner_by_directory[(source_creator.source, source_creator.source_creator_id)] = owner_id
+            add_unique(
+                owner_by_directory,
+                (source_creator.source, source_creator.source_creator_id),
+                owner_id,
+                owner_id,
+            )
             url_directory = provider_directory(source_creator.source, source_creator.source_url)
             if url_directory:
-                owner_by_directory[(source_creator.source, url_directory)] = owner_id
+                add_unique(
+                    owner_by_directory,
+                    (source_creator.source, url_directory),
+                    owner_id,
+                    owner_id,
+                )
             if creator:
                 creators_by_id[str(creator.id)] = creator
+
+    repositories_by_source_creator: dict[tuple[str, str], object] = {}
+    repositories_by_provider_directory: dict[tuple[str, str], object] = {}
+    for repository, creator in repository_contexts:
+        context = (repository, creator)
+        if repository.source_creator_id:
+            add_unique(
+                repositories_by_source_creator,
+                (repository.source, repository.source_creator_id),
+                context,
+                repository.id,
+            )
+        repository_directory = provider_directory(repository.source, repository.source_url)
+        if repository_directory:
+            add_unique(
+                repositories_by_provider_directory,
+                (repository.source, repository_directory),
+                context,
+                repository.id,
+            )
+
+    def unique_repository_context(source: str, directory: str):
+        key = (source, directory)
+        exact = repositories_by_source_creator.get(key, missing)
+        provider_match = repositories_by_provider_directory.get(key, missing)
+        if exact is ambiguous or provider_match is ambiguous:
+            return None
+        matches = [
+            value
+            for value in (exact, provider_match)
+            if value is not missing
+        ]
+        if not matches:
+            return None
+        repository_ids = {value[0] for value in matches}
+        return matches[0][1] if len(repository_ids) == 1 else None
 
     source_totals: dict[str, dict] = {}
     creator_nodes: dict[str, dict] = {}
@@ -508,18 +573,13 @@ async def _ledger_storage_breakdown(db: AsyncSession) -> dict:
         source_total["creator_count"] += 1
         source_total["work_count"] += work_count
 
-        owner_id = owner_by_directory.get((source, directory_name))
-        best_context: tuple[SubscriptionSource, Creator] | None = None
-        best_score = 0
-        for repository, creator in contexts_by_source.get(source, []):
-            score = 0
-            if repository.source_creator_id == directory_name:
-                score = 100
-            if provider_directory(repository.source, repository.source_url) == directory_name:
-                score = max(score, 90)
-            if score > best_score:
-                best_score = score
-                best_context = (repository, creator)
+        owner_match = owner_by_directory.get((source, directory_name), missing)
+        owner_id = (
+            owner_match[1]
+            if owner_match is not missing and owner_match is not ambiguous
+            else None
+        )
+        best_context = unique_repository_context(source, directory_name)
 
         creator_id = owner_id
         repository_id: str | None = None

@@ -235,6 +235,7 @@ async def _repository_has_recoverable_backlog(
     # Reuse Task 5's exact provider/creator mapping rather than treating every
     # same-source directory as belonging to this repository.
     from app.services.repository_artifact_reconciliation import _repository_creator_dirs
+    from app.services.artifact_ledger import downloads_artifact_predicate
 
     creator_dirs = await _repository_creator_dirs(
         db,
@@ -247,6 +248,7 @@ async def _repository_has_recoverable_backlog(
         await db.execute(
             select(StorageArtifact.id)
             .where(
+                downloads_artifact_predicate(),
                 StorageArtifact.source == repository.source,
                 StorageArtifact.creator_dir.in_(creator_dirs),
                 StorageArtifact.artifact_type == "metadata_json",

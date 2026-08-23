@@ -30,6 +30,8 @@ def test_import_from_disk_request_preserves_optional_repository_scope():
 async def _clear_pipeline_tables(db):
     await db.execute(text("""
         TRUNCATE
+            task_events,
+            task_runs,
             storage_artifacts,
             import_jobs,
             download_jobs,
@@ -107,7 +109,10 @@ async def test_reconcile_downloads_to_db_registers_and_enqueues_idempotently(tmp
             ))
             await db.commit()
 
-            result = await reconcile_downloads_to_db(db, {"source": "pixiv"})
+            result = await reconcile_downloads_to_db(
+                db,
+                {"source": "pixiv", "reset_ledger": True},
+            )
 
             assert {k: result[k] for k in ("sources", "creators", "jobs", "skipped_done")} == {"sources": 1, "creators": 1, "jobs": 1, "skipped_done": 0}
             assert result["import_job_ids"] == ["fake-import-job"]
@@ -139,7 +144,7 @@ async def test_reconcile_downloads_to_db_registers_and_enqueues_idempotently(tmp
 
             second = await reconcile_downloads_to_db(db, {"source": "pixiv"})
 
-            assert {k: second[k] for k in ("sources", "creators", "jobs", "skipped_done")} == {"sources": 1, "creators": 0, "jobs": 0, "skipped_done": 1}
+            assert {k: second[k] for k in ("sources", "creators", "jobs", "skipped_done")} == {"sources": 0, "creators": 0, "jobs": 0, "skipped_done": 0}
             assert second["import_job_ids"] == []
             assert len(enqueued) == 1
             assert (await db.execute(select(func.count(DownloadJob.id)))).scalar_one() == 1
@@ -247,7 +252,11 @@ async def test_disk_import_repository_scope_uses_exact_creator_directory_and_pro
 
             result = await reconcile_downloads_to_db(
                 db,
-                {"source": "pixiv", "repository_id": str(repository.id)},
+                {
+                    "source": "pixiv",
+                    "repository_id": str(repository.id),
+                    "reset_ledger": True,
+                },
                 progress_callback=record_progress,
             )
 
@@ -268,6 +277,392 @@ async def test_disk_import_repository_scope_uses_exact_creator_directory_and_pro
                 "skipped": 0,
                 "failed": 0,
             }
+    finally:
+        async with async_session() as db:
+            await _clear_pipeline_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ordinary_repository_drain_never_walks_sibling_directories(tmp_path, monkeypatch):
+    """A scoped ledger drain must not discover any sibling creator on disk."""
+    from pathlib import Path
+
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models.creator import Creator
+    from app.models.download_job import DownloadJob
+    from app.models.storage_artifact import StorageArtifact
+    from app.models.subscription import Subscription
+    from app.models.subscription_source import SubscriptionSource
+    from app.services.disk_import import reconcile_downloads_to_db
+
+    download_root = tmp_path / "downloads"
+    selected_dir = download_root / "pixiv" / "1980643" / "38362603"
+    sibling_dir = download_root / "pixiv" / "999999" / "38362604"
+    selected_dir.mkdir(parents=True)
+    sibling_dir.mkdir(parents=True)
+    selected_json = selected_dir / "metadata.json"
+    selected_json.write_text(json.dumps(_pixiv_metadata()), encoding="utf-8")
+    (sibling_dir / "metadata.json").write_text("not selected", encoding="utf-8")
+    monkeypatch.setattr(settings, "download_root", str(download_root))
+
+    original_rglob = Path.rglob
+
+    def reject_source_tree_walk(path, pattern):
+        if path == download_root / "pixiv":
+            raise AssertionError("ordinary repository drain walked the source tree")
+        return original_rglob(path, pattern)
+
+    monkeypatch.setattr(Path, "rglob", reject_source_tree_walk)
+    enqueued = []
+
+    async def fake_enqueue(_download_job_id, import_error=None, new_json_paths=None):
+        enqueued.append(set(new_json_paths or []))
+        return "scoped-ledger-import"
+
+    monkeypatch.setattr("app.jobs.download._enqueue_import", fake_enqueue)
+
+    try:
+        async with async_session() as db:
+            await _clear_pipeline_tables(db)
+            creator = Creator(name="selected")
+            db.add(creator)
+            await db.flush()
+            subscription = Subscription(creator_id=creator.id, name="Selected")
+            db.add(subscription)
+            await db.flush()
+            repository = SubscriptionSource(
+                subscription_id=subscription.id,
+                source="pixiv",
+                source_creator_id="1980643",
+                source_url="https://www.pixiv.net/users/1980643",
+            )
+            db.add(repository)
+            await db.flush()
+            historical = DownloadJob(
+                subscription_id=subscription.id,
+                subscription_source_id=repository.id,
+                source="pixiv",
+                source_url=repository.source_url,
+                status="complete",
+            )
+            db.add(historical)
+            await db.flush()
+            other_creator = Creator(name="other-owner")
+            db.add(other_creator)
+            await db.flush()
+            other_subscription = Subscription(
+                creator_id=other_creator.id,
+                name="Other owner",
+            )
+            db.add(other_subscription)
+            await db.flush()
+            other_repository = SubscriptionSource(
+                subscription_id=other_subscription.id,
+                source="pixiv",
+                source_creator_id="1980643",
+                source_url="https://www.pixiv.net/users/999999",
+            )
+            db.add(other_repository)
+            await db.flush()
+            other_historical = DownloadJob(
+                subscription_id=other_subscription.id,
+                subscription_source_id=other_repository.id,
+                source="pixiv",
+                source_url=other_repository.source_url,
+                status="complete",
+            )
+            db.add(other_historical)
+            await db.flush()
+            db.add(StorageArtifact(
+                storage_root="downloads",
+                file_path="pixiv/1980643/38362603/metadata.json",
+                source="pixiv",
+                creator_dir="1980643",
+                source_work_id="38362603",
+                file_name="metadata.json",
+                artifact_type="metadata_json",
+                download_job_id=historical.id,
+                state="new",
+            ))
+            db.add(StorageArtifact(
+                storage_root="downloads",
+                file_path="pixiv/1980643/38362699/metadata.json",
+                source="pixiv",
+                creator_dir="1980643",
+                source_work_id="38362699",
+                file_name="metadata.json",
+                artifact_type="metadata_json",
+                download_job_id=other_historical.id,
+                state="new",
+            ))
+            other_work_dir = download_root / "pixiv" / "1980643" / "38362699"
+            other_work_dir.mkdir()
+            (other_work_dir / "metadata.json").write_text(
+                json.dumps(_pixiv_metadata(work_id=38362699)),
+                encoding="utf-8",
+            )
+            await db.commit()
+
+            result = await reconcile_downloads_to_db(
+                db,
+                {"source": "pixiv", "repository_id": str(repository.id)},
+            )
+
+            assert result["imported"] == 1
+            assert enqueued == [{str(selected_json)}]
+    finally:
+        async with async_session() as db:
+            await _clear_pipeline_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ordinary_disk_drain_keyset_feeds_25_work_batches_with_backpressure(tmp_path, monkeypatch):
+    """A large ledger scope advances 25/25/1 without touching library twins."""
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models.creator import Creator
+    from app.models.download_job import DownloadJob
+    from app.models.storage_artifact import StorageArtifact
+    from app.models.subscription import Subscription
+    from app.models.subscription_source import SubscriptionSource
+    from app.services import disk_import as disk_import_service
+
+    download_root = tmp_path / "downloads"
+    creator_root = download_root / "pixiv" / "1980643"
+    creator_root.mkdir(parents=True)
+    monkeypatch.setattr(settings, "download_root", str(download_root))
+
+    enqueued: list[list[str]] = []
+    capacity_checks: list[str | None] = []
+
+    async def fake_enqueue(_download_job_id, import_error=None, new_json_paths=None):
+        enqueued.append(sorted(str(path) for path in (new_json_paths or [])))
+        return f"batch-import-{len(enqueued)}"
+
+    async def record_capacity(parent_task_id):
+        capacity_checks.append(parent_task_id)
+
+    monkeypatch.setattr("app.jobs.download._enqueue_import", fake_enqueue)
+    monkeypatch.setattr(
+        disk_import_service,
+        "_wait_for_batch_capacity",
+        record_capacity,
+        raising=False,
+    )
+
+    try:
+        async with async_session() as db:
+            await _clear_pipeline_tables(db)
+            creator = Creator(name="batch-owner")
+            db.add(creator)
+            await db.flush()
+            subscription = Subscription(creator_id=creator.id, name="Batch owner")
+            db.add(subscription)
+            await db.flush()
+            repository = SubscriptionSource(
+                subscription_id=subscription.id,
+                source="pixiv",
+                source_creator_id="1980643",
+                source_url="https://www.pixiv.net/users/1980643",
+            )
+            db.add(repository)
+            await db.flush()
+            historical = DownloadJob(
+                subscription_id=subscription.id,
+                subscription_source_id=repository.id,
+                source="pixiv",
+                source_url=repository.source_url,
+                status="complete",
+            )
+            db.add(historical)
+            await db.flush()
+
+            artifacts = []
+            for index in range(1, 52):
+                work_id = f"{index:03d}"
+                work_dir = creator_root / work_id
+                work_dir.mkdir()
+                metadata_path = work_dir / "metadata.json"
+                metadata_path.write_text(
+                    json.dumps(_pixiv_metadata(work_id=index)),
+                    encoding="utf-8",
+                )
+                artifacts.append(StorageArtifact(
+                    storage_root="downloads",
+                    file_path=f"pixiv/1980643/{work_id}/metadata.json",
+                    source="pixiv",
+                    creator_dir="1980643",
+                    source_work_id=work_id,
+                    file_name="metadata.json",
+                    artifact_type="metadata_json",
+                    download_job_id=historical.id,
+                    state="new",
+                ))
+            library_twin = StorageArtifact(
+                storage_root="library",
+                file_path="pixiv/1980643/001/metadata.json",
+                source="pixiv",
+                creator_dir="1980643",
+                source_work_id="library-only",
+                file_name="metadata.json",
+                artifact_type="metadata_json",
+                download_job_id=historical.id,
+                state="done",
+            )
+            db.add_all([*artifacts, library_twin])
+            await db.commit()
+
+            result = await disk_import_service.reconcile_downloads_to_db(
+                db,
+                {
+                    "source": "pixiv",
+                    "parent_task_id": "parent-drain",
+                },
+            )
+
+            assert [len(batch) for batch in enqueued] == [25, 25, 1]
+            assert len({path for batch in enqueued for path in batch}) == 51
+            assert capacity_checks == ["parent-drain"] * 3
+            assert result["imported"] == 3
+            assert result["scanned"] == 51
+            await db.refresh(library_twin)
+            assert library_twin.download_job_id == historical.id
+            assert library_twin.state == "done"
+    finally:
+        async with async_session() as db:
+            await _clear_pipeline_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_import_publication_assigns_only_its_bounded_metadata_feed(tmp_path, monkeypatch):
+    """Concurrent child imports must each read only their durable path assignment."""
+    from uuid import UUID, uuid4
+
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.jobs.download import _enqueue_import
+    from app.models.creator import Creator
+    from app.models.download_job import DownloadJob
+    from app.models.import_job import ImportJob
+    from app.models.storage_artifact import StorageArtifact
+    from app.models.subscription import Subscription
+    from app.services.artifact_ledger import ArtifactLedger
+
+    download_root = tmp_path / "downloads"
+    first_path = download_root / "pixiv" / "bounded" / "001" / "metadata.json"
+    second_path = download_root / "pixiv" / "bounded" / "002" / "metadata.json"
+    first_path.parent.mkdir(parents=True)
+    second_path.parent.mkdir(parents=True)
+    first_path.write_text(json.dumps(_pixiv_metadata(work_id=1)), encoding="utf-8")
+    second_path.write_text(json.dumps(_pixiv_metadata(work_id=2)), encoding="utf-8")
+    monkeypatch.setattr(settings, "download_root", str(download_root))
+
+    class FakeRedis:
+        def setex(self, *_args, **_kwargs):
+            return True
+
+    async def fake_publish(*_args, **_kwargs):
+        return "published"
+
+    monkeypatch.setattr("app.jobs.download.get_redis", lambda: FakeRedis())
+    monkeypatch.setattr("app.jobs.download.publish_prepared_import", fake_publish)
+    monkeypatch.setattr("app.jobs.download.publish_progress", lambda *_args, **_kwargs: None)
+
+    try:
+        async with async_session() as db:
+            await _clear_pipeline_tables(db)
+            creator = Creator(name="bounded-publication")
+            db.add(creator)
+            await db.flush()
+            subscription = Subscription(creator_id=creator.id, name="Bounded publication")
+            db.add(subscription)
+            await db.flush()
+            download = DownloadJob(
+                subscription_id=subscription.id,
+                source="pixiv",
+                source_url="https://www.pixiv.net/users/1980643",
+                status="downloaded",
+            )
+            db.add(download)
+            await db.flush()
+            first = StorageArtifact(
+                storage_root="downloads",
+                file_path="pixiv/bounded/001/metadata.json",
+                source="pixiv",
+                creator_dir="bounded",
+                source_work_id="001",
+                file_name="metadata.json",
+                artifact_type="metadata_json",
+                download_job_id=download.id,
+                state="new",
+            )
+            second = StorageArtifact(
+                storage_root="downloads",
+                file_path="pixiv/bounded/002/metadata.json",
+                source="pixiv",
+                creator_dir="bounded",
+                source_work_id="002",
+                file_name="metadata.json",
+                artifact_type="metadata_json",
+                download_job_id=download.id,
+                state="new",
+            )
+            library_projection = StorageArtifact(
+                storage_root="library",
+                file_path="pixiv/bounded/001/metadata.json",
+                source="pixiv",
+                creator_dir="bounded",
+                source_work_id="001",
+                file_name="metadata.json",
+                artifact_type="metadata_json",
+                download_job_id=download.id,
+                state="new",
+            )
+            db.add_all([first, second, library_projection])
+            await db.commit()
+            download_id = download.id
+            first_id = first.id
+            second_id = second.id
+            library_projection_id = library_projection.id
+
+        import_job_id = UUID(await _enqueue_import(
+            str(download_id),
+            new_json_paths={str(first_path)},
+        ))
+
+        async with async_session() as db:
+            first_row = await db.get(StorageArtifact, first_id)
+            second_row = await db.get(StorageArtifact, second_id)
+            assert first_row.import_job_id == import_job_id
+            assert second_row.import_job_id is None
+            assert await ArtifactLedger(db).new_metadata_paths(
+                download_id,
+                import_job_id=import_job_id,
+            ) == ["pixiv/bounded/001/metadata.json"]
+            import_job = await db.get(ImportJob, import_job_id)
+            import_job.status = "running"
+            import_job.execution_token = uuid4()
+            await db.flush()
+            claim = await ArtifactLedger(db).claim_work_batch(
+                download_id,
+                import_job_id,
+                lease_token=import_job.execution_token,
+                source="pixiv",
+                source_work_ids=["001"],
+            )
+            await db.commit()
+            assert claim.claimed == ("001",)
+            library_row = await db.get(StorageArtifact, library_projection_id)
+            assert library_row.state == "new"
+            assert library_row.import_job_id is None
+            assert library_row.lease_token is None
     finally:
         async with async_session() as db:
             await _clear_pipeline_tables(db)
@@ -340,7 +735,10 @@ async def test_disk_import_records_enqueue_failure_and_leaves_ledger_resumable(t
     try:
         async with async_session() as db:
             await _clear_pipeline_tables(db)
-            result = await reconcile_downloads_to_db(db, {"source": "pixiv"})
+            result = await reconcile_downloads_to_db(
+                db,
+                {"source": "pixiv", "reset_ledger": True},
+            )
 
             assert result["scanned"] == 1
             assert result["imported"] == 0
@@ -384,7 +782,10 @@ async def test_reconcile_downloads_to_db_provisions_metadata_creator_without_pla
         async with async_session() as db:
             await _clear_pipeline_tables(db)
 
-            result = await reconcile_downloads_to_db(db, {"source": "pixiv"})
+            result = await reconcile_downloads_to_db(
+                db,
+                {"source": "pixiv", "reset_ledger": True},
+            )
 
             assert result["jobs"] == 1
             assert result["metadata_fallback"] == 1
@@ -467,7 +868,10 @@ async def test_reconcile_downloads_to_db_applies_danbooru_enrichment(tmp_path, m
         async with async_session() as db:
             await _clear_pipeline_tables(db)
 
-            result = await reconcile_downloads_to_db(db, {"source": "pixiv"})
+            result = await reconcile_downloads_to_db(
+                db,
+                {"source": "pixiv", "reset_ledger": True},
+            )
 
             assert result["jobs"] == 1
             assert result["danbooru_enriched"] == 1

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.config import settings
@@ -332,6 +332,35 @@ async def _enqueue_import(download_job_id: str, import_error: str | None = None,
                 "status": "enqueued",
                 **extra,
             })
+            if new_json_paths:
+                from app.models.storage_artifact import StorageArtifact
+                from app.services.artifact_ledger import downloads_artifact_predicate
+
+                download_root = Path(settings.download_root)
+                relative_paths: set[str] = set()
+                for raw_path in new_json_paths:
+                    path = Path(raw_path)
+                    try:
+                        relative = (
+                            path.relative_to(download_root)
+                            if path.is_absolute()
+                            else path
+                        )
+                    except ValueError:
+                        continue
+                    relative_paths.add(str(relative))
+                if relative_paths:
+                    await db.execute(
+                        update(StorageArtifact)
+                        .where(
+                            downloads_artifact_predicate(),
+                            StorageArtifact.download_job_id == UUID(download_job_id),
+                            StorageArtifact.artifact_type == "metadata_json",
+                            StorageArtifact.file_path.in_(relative_paths),
+                            StorageArtifact.state == "new",
+                        )
+                        .values(import_job_id=import_job.id)
+                    )
             apply_import_progress(
                 import_job,
                 "enqueued",

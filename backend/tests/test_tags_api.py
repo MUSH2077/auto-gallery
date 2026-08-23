@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 
 class _Result:
     def __init__(self, *, scalar=None, rows=None):
@@ -101,6 +103,37 @@ def test_tag_list_batches_source_usage_for_all_returned_tags():
     assert tags[1].source_usage == [{"source": "danbooru", "work_count": 2}]
     assert len(db.statements) == 2
     assert db.results == []
+
+
+@pytest.mark.asyncio
+async def test_source_usage_high_cardinality_uses_one_postgresql_array_parameter():
+    """An include-all tag map must not expand one asyncpg bind per UUID."""
+    from uuid import UUID
+
+    from sqlalchemy.dialects import postgresql
+
+    from app.repositories.tag import source_usage_by_tag
+
+    class EmptyResult:
+        def all(self):
+            return []
+
+    class CompilingSession:
+        parameter_count = 0
+
+        async def execute(self, statement):
+            compiled = statement.compile(
+                dialect=postgresql.dialect(paramstyle="numeric"),
+                compile_kwargs={"render_postcompile": True},
+            )
+            self.parameter_count = len(compiled.params)
+            return EmptyResult()
+
+    session = CompilingSession()
+    tag_ids = [UUID(int=index + 1) for index in range(70_000)]
+
+    assert await source_usage_by_tag(session, tag_ids) == {}
+    assert session.parameter_count <= 4
 
 
 def test_list_tags_include_all_removes_offset_and_limit(monkeypatch):

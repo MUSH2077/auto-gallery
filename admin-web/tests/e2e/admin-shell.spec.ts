@@ -1236,6 +1236,15 @@ test("creator activity calendar aligns real month spans and its year listbox sup
   await expect(page.getByTestId("creator-activity-chart")).toContainText("Activity peaked on");
   await expect(activityGrid.getByRole("gridcell")).toHaveCount(365);
 
+  await yearPicker.click();
+  await yearListbox.press("Tab");
+  await expect(yearListbox).toBeHidden();
+  await expect(page.getByRole("button", { name: "Next year", exact: true })).toBeFocused();
+  await yearPicker.click();
+  await yearListbox.press("Shift+Tab");
+  await expect(yearListbox).toBeHidden();
+  await expect(yearPicker).toBeFocused();
+
   const request2024 = page.waitForRequest((request) => {
     const url = new URL(request.url());
     return url.pathname === "/api/v1/creators/fixture-creator/timeline"

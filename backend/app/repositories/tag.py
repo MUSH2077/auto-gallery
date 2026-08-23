@@ -1,6 +1,7 @@
 from uuid import UUID
 
-from sqlalchemy import select, func
+from sqlalchemy import any_, bindparam, select, func
+from sqlalchemy.dialects.postgresql import ARRAY, UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Tag, WorkSource, WorkSourceTag, WorkTag
@@ -16,6 +17,12 @@ async def source_usage_by_tag(
     if not tag_ids:
         return {}
 
+    tag_id_array = bindparam(
+        "source_usage_tag_ids",
+        value=tag_ids,
+        type_=ARRAY(PG_UUID(as_uuid=True)),
+    )
+
     result = await session.execute(
         select(
             WorkSourceTag.tag_id,
@@ -23,7 +30,7 @@ async def source_usage_by_tag(
             func.count(func.distinct(WorkSource.work_id)).label("work_count"),
         )
         .join(WorkSource, WorkSource.id == WorkSourceTag.work_source_id)
-        .where(WorkSourceTag.tag_id.in_(tag_ids), *filters)
+        .where(WorkSourceTag.tag_id == any_(tag_id_array), *filters)
         .group_by(WorkSourceTag.tag_id, WorkSource.source)
         .order_by(
             WorkSourceTag.tag_id,
