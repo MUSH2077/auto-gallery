@@ -287,6 +287,7 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
                 await db.execute(
                     update(StorageArtifact)
                     .where(
+                        StorageArtifact.storage_root == "downloads",
                         StorageArtifact.source == source,
                         StorageArtifact.file_path.in_(
                             [row["file_path"] for row in rows]

@@ -120,6 +120,20 @@ async def test_reconcile_downloads_to_db_registers_and_enqueues_idempotently(tmp
             assert ss.is_enabled is True
             assert (await db.execute(select(func.count(StorageArtifact.id)))).scalar_one() == 2
 
+            original_job_id = (await db.execute(select(DownloadJob.id))).scalar_one()
+            library_artifact = StorageArtifact(
+                storage_root="library",
+                file_path="pixiv/1980643/38362603/metadata.json",
+                source="pixiv",
+                creator_dir="1980643",
+                source_work_id="38362603",
+                file_name="metadata.json",
+                artifact_type="metadata_json",
+                download_job_id=original_job_id,
+                state="done",
+            )
+            db.add(library_artifact)
+
             await db.execute(update(StorageArtifact).values(state="done"))
             await db.commit()
 
@@ -148,6 +162,9 @@ async def test_reconcile_downloads_to_db_registers_and_enqueues_idempotently(tmp
                     ).limit(1)
                 )
             ).scalar_one()
+            await db.refresh(library_artifact)
+            assert library_artifact.download_job_id == original_job_id
+            assert library_artifact.state == "done"
             from uuid import uuid4
             from app.models.import_job import ImportJob
             from app.services.artifact_ledger import ArtifactLedger

@@ -610,6 +610,96 @@ async def test_reconciliation_serializes_owner_activation_before_backlog_adoptio
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_compaction_and_reconciliation_share_artifact_then_owner_lock_order(monkeypatch):
+    """A reset-to-new handoff cannot deadlock compaction against adoption."""
+    from app.database import async_session, engine
+    from app.models import DownloadJob, StorageArtifact
+    from app.services import repository_artifact_reconciliation as reconciliation_service
+    from app.services.operation_attention import (
+        compact_terminal_tasks,
+        upsert_repository_sync_receipt,
+    )
+    from app.services.tasks import TaskService
+
+    artifact_rows_locked = asyncio.Event()
+    allow_owner_lock = asyncio.Event()
+    original_locked_owners = reconciliation_service._locked_recoverable_download_owner_ids
+
+    async def gate_owner_lock(db, owner_ids):
+        artifact_rows_locked.set()
+        await asyncio.wait_for(allow_owner_lock.wait(), timeout=2)
+        return await original_locked_owners(db, owner_ids)
+
+    monkeypatch.setattr(
+        reconciliation_service,
+        "_locked_recoverable_download_owner_ids",
+        gate_owner_lock,
+    )
+    try:
+        async with async_session() as setup_db:
+            await _clear_reconciliation_tables(setup_db)
+            _subscription, _repository, _other, current, historical, _manual = await _repository_fixture(setup_db)
+            task = await TaskService(setup_db).ensure_download_task(historical)
+            task.compactable_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            artifact = _artifact(
+                path="x/target_handle/lock-order-1001.json",
+                work_id="lock-order-1001",
+                creator_dir="target_handle",
+                job_id=historical.id,
+                state="done",
+            )
+            setup_db.add(artifact)
+            await upsert_repository_sync_receipt(setup_db, historical)
+            await setup_db.commit()
+            current_id = current.id
+            historical_id = historical.id
+            artifact_id = artifact.id
+
+        async def reconcile_in_first_session():
+            async with async_session() as reconcile_db:
+                current_job = await reconcile_db.get(DownloadJob, current_id)
+                row = await reconcile_db.get(StorageArtifact, artifact_id, with_for_update=True)
+                row.state = "new"
+                await reconcile_db.flush()
+                result = await reconciliation_service.reconcile_repository_artifacts(
+                    reconcile_db,
+                    current_job,
+                )
+                await reconcile_db.commit()
+                return result
+
+        reconciliation_task = asyncio.create_task(reconcile_in_first_session())
+        await asyncio.wait_for(artifact_rows_locked.wait(), timeout=2)
+
+        async def compact_in_second_session():
+            async with async_session() as compactor_db:
+                return await compact_terminal_tasks(compactor_db, dry_run=False)
+
+        compaction_task = asyncio.create_task(compact_in_second_session())
+        await asyncio.sleep(0.15)
+        assert not compaction_task.done()
+        allow_owner_lock.set()
+        reconciliation, compaction = await asyncio.wait_for(
+            asyncio.gather(reconciliation_task, compaction_task),
+            timeout=3,
+        )
+
+        async with async_session() as verify_db:
+            artifact = await verify_db.get(StorageArtifact, artifact_id)
+            assert reconciliation.recovered_metadata_count == 1
+            assert artifact.download_job_id == current_id
+            assert artifact.state == "new"
+            assert await verify_db.get(DownloadJob, historical_id) is None
+            assert compaction["deleted_download_jobs"] == 1
+    finally:
+        allow_owner_lock.set()
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_reconciliation_mutates_only_the_exact_unlocked_duplicate_artifacts():
     """SKIP LOCKED rows with duplicate identities remain outside this run."""
     from app.database import async_session, engine

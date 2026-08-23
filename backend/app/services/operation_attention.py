@@ -679,11 +679,23 @@ async def compact_terminal_tasks(
         for task in tasks
         if task.subject_type == "download_job" and task.subject_id is not None
     }
-    # Compaction and artifact claims must serialize on the same ownership rows.
-    # Take DownloadJobs first, then every owned artifact, in a deterministic
-    # order.  The eligibility query below runs *after* those locks are held;
-    # therefore it cannot make a stale ``done`` decision while reset/retry work
-    # is turning an artifact back into claimable ``new``/``importing`` state.
+    # Compaction, claims, and repository reconciliation share artifact rows.
+    # Every path locks artifacts first (owner/id order) and then DownloadJobs,
+    # so neither can hold an owner while waiting for a claimed artifact.  TaskRun
+    # locks happen only in this compactor path and never participate in the
+    # repository reconciliation transaction.
+    if candidate_download_ids:
+        await db.execute(
+            select(StorageArtifact.id)
+            .where(StorageArtifact.download_job_id.in_(candidate_download_ids))
+            .order_by(
+                StorageArtifact.download_job_id.asc(),
+                StorageArtifact.created_at.asc(),
+                StorageArtifact.id.asc(),
+            )
+            .with_for_update()
+        )
+
     locked_download_ids: set[UUID] = set()
     if candidate_download_ids:
         locked_download_ids.update(
@@ -696,18 +708,6 @@ async def compact_terminal_tasks(
                 )
             ).scalars()
         )
-    if locked_download_ids:
-        await db.execute(
-            select(StorageArtifact.id)
-            .where(StorageArtifact.download_job_id.in_(locked_download_ids))
-            .order_by(
-                StorageArtifact.download_job_id.asc(),
-                StorageArtifact.created_at.asc(),
-                StorageArtifact.id.asc(),
-            )
-            .with_for_update()
-        )
-
     download_ids: set[UUID] = set()
     if locked_download_ids:
         download_ids.update(

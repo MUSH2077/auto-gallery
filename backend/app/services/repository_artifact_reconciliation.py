@@ -141,19 +141,49 @@ async def _locked_recoverable_download_owner_ids(
     }
 
 
-async def _locked_metadata_rows(db: AsyncSession, *conditions) -> list[StorageArtifact]:
-    return list(
+async def _locked_repository_metadata_rows(
+    db: AsyncSession,
+    *,
+    current_job_id: UUID,
+    source: str,
+    creator_dirs: set[str],
+    eligible,
+) -> tuple[list[StorageArtifact], list[StorageArtifact]]:
+    """Lock exact current/backlog rows before any DownloadJob owner.
+
+    This is intentionally one query: repository reconciliation and terminal
+    compaction both acquire artifact rows in owner/creation/id order, followed
+    by DownloadJobs in id order.  Splitting current and backlog rows would let
+    two reconciliation runs invert the same global order.
+    """
+    rows = list(
         (
             await db.execute(
                 select(StorageArtifact)
                 .where(
                     StorageArtifact.artifact_type == "metadata_json",
-                    *conditions,
+                    StorageArtifact.source == source,
+                    eligible,
+                    or_(
+                        StorageArtifact.download_job_id == current_job_id,
+                        and_(
+                            StorageArtifact.download_job_id.is_distinct_from(current_job_id),
+                            StorageArtifact.creator_dir.in_(creator_dirs),
+                        ),
+                    ),
                 )
-                .order_by(StorageArtifact.created_at, StorageArtifact.id)
+                .order_by(
+                    StorageArtifact.download_job_id.asc(),
+                    StorageArtifact.created_at.asc(),
+                    StorageArtifact.id.asc(),
+                )
                 .with_for_update(of=StorageArtifact, skip_locked=True)
             )
         ).scalars()
+    )
+    return (
+        [row for row in rows if row.download_job_id == current_job_id],
+        [row for row in rows if row.download_job_id != current_job_id],
     )
 
 
@@ -231,18 +261,12 @@ async def reconcile_repository_artifacts(
     now = datetime.now(timezone.utc)
     source = repository.source
     eligible = _eligible_artifact(now)
-    current_rows = await _locked_metadata_rows(
+    current_rows, backlog_candidates = await _locked_repository_metadata_rows(
         db,
-        StorageArtifact.download_job_id == current_job.id,
-        StorageArtifact.source == source,
-        eligible,
-    )
-    backlog_candidates = await _locked_metadata_rows(
-        db,
-        StorageArtifact.download_job_id.is_distinct_from(current_job.id),
-        StorageArtifact.source == source,
-        StorageArtifact.creator_dir.in_(creator_dirs),
-        eligible,
+        current_job_id=current_job.id,
+        source=source,
+        creator_dirs=creator_dirs,
+        eligible=eligible,
     )
     recoverable_owner_ids = await _locked_recoverable_download_owner_ids(
         db,
