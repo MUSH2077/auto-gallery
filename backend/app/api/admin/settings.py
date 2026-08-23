@@ -30,6 +30,7 @@ from app.models.system_setting import SystemSetting
 from app.models.subscription_source import SubscriptionSource
 from app.schemas.schedule import CalendarScheduleRule, normalize_legacy_schedule_payload
 from app.schemas.gitllery import GitllerySettingsResponse
+from app.schemas.data_center import StorageBreakdownResponse, SystemInfoResponse
 from app.services.redis_client import get_redis
 from app.services.queue_admission import (
     QueueAdmissionError,
@@ -338,7 +339,7 @@ async def _ledger_inventory(db: AsyncSession) -> dict:
     }
 
 
-@router.get("/system-info")
+@router.get("/system-info", response_model=SystemInfoResponse)
 async def system_info(db: AsyncSession = Depends(get_db)):
     """Return ledger-backed storage facts and constant-time mount capacity."""
     global _system_info_cache, _system_info_cache_ts
@@ -629,7 +630,7 @@ async def _ledger_storage_breakdown(db: AsyncSession) -> dict:
     }
 
 
-@router.get("/storage-breakdown")
+@router.get("/storage-breakdown", response_model=StorageBreakdownResponse, response_model_exclude_unset=True)
 async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     """Return a bounded, ledger-backed storage breakdown."""
     global _storage_breakdown_cache, _storage_breakdown_cache_ts

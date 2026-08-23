@@ -3,13 +3,15 @@
 import type { SyncOutcome } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 
-const toneClasses: Record<SyncOutcome["code"], string> = {
+type SyncOutcomeDisplay = Pick<SyncOutcome, "code">;
+
+const toneClasses: Record<SyncOutcomeDisplay["code"], string> = {
   new_content: "border-success/30 bg-success-subtle text-success",
   no_changes: "border-accent/25 bg-accent-subtle text-accent",
   no_content: "border-border bg-subtle text-muted",
 };
 
-export function SyncOutcomeBadge({ outcome }: { outcome: SyncOutcome }) {
+export function SyncOutcomeBadge({ outcome }: { outcome: SyncOutcomeDisplay }) {
   const t = useT();
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium ${toneClasses[outcome.code]}`}>
@@ -23,7 +25,7 @@ export function SyncOutcomeNotice({
   outcome,
   compact = false,
 }: {
-  outcome: SyncOutcome;
+  outcome: SyncOutcomeDisplay;
   compact?: boolean;
 }) {
   const t = useT();

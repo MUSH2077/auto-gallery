@@ -20,6 +20,7 @@ from app.models.work_source_tag import WorkSourceTag
 from app.models.tag import Tag
 from app.providers import registry
 from app.schemas.curation import RepositoryGraphResponse
+from app.schemas.repository import RepositoryDetailResponse
 from app.repositories.tag import source_usage_by_tag
 from app.schemas.deletion import (
     BatchDeletionRequest,
@@ -266,7 +267,7 @@ async def delete_repository(
     return result
 
 
-@router.get("/{source_id}")
+@router.get("/{source_id}", response_model=RepositoryDetailResponse, response_model_exclude_unset=True)
 async def get_repository(source_id: UUID, db: AsyncSession = Depends(get_db)):
     ss, sub, creator = await _get_source_context(db, source_id)
     provider = _provider_payload(ss)

@@ -527,117 +527,12 @@ export interface SubscriptionSource {
   updated_at: string;
 }
 
-export interface RepositoryLatestJob {
-  id: string;
-  status: string;
-  created_at?: string | null;
-  updated_at?: string | null;
-  error_log_excerpt?: string | null;
-  outcome?: SyncOutcome | null;
-}
+export type RepositoryLatestJob = components["schemas"]["RepositoryRecentJob"];
+export type CreatorRepository = components["schemas"]["RepositoryRead"];
+export type RepositoryRecentJob = components["schemas"]["RepositoryRecentJob"];
+export type RepositoryRecentWork = components["schemas"]["RepositoryRecentWork"];
 
-export interface CreatorRepository {
-  id: string;
-  subscription_id: string;
-  source: string;
-  source_display_name?: string;
-  source_creator_id?: string;
-  source_url?: string;
-  is_enabled: boolean;
-  auth_healthy: boolean;
-  last_successful_auth?: string | null;
-  last_synced_at?: string | null;
-  last_attempted_at?: string | null;
-  auth_status?: string | null;
-  auth_error_reason?: string | null;
-  last_auth_checked_at?: string | null;
-  can_download: boolean;
-  supports_gallerydl: boolean;
-  url_valid: boolean;
-  is_repository: boolean;
-  latest_job?: RepositoryLatestJob | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface RepositoryRecentJob {
-  id: string;
-  subscription_id: string;
-  subscription_source_id?: string | null;
-  source: string;
-  source_url: string;
-  status: string;
-  retry_count: number;
-  error_log_excerpt?: string | null;
-  outcome?: SyncOutcome | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-  record_type?: "sync_receipt" | string;
-  original_task_id?: string | null;
-  download_job_id?: string | null;
-  import_job_id?: string | null;
-  outcome_code?: string | null;
-  attempts?: number;
-  metadata_count?: number;
-  media_count?: number;
-  works_imported?: number;
-  duration_ms?: number | null;
-  error_code?: string | null;
-  recovered?: boolean;
-  recovered_at?: string | null;
-  started_at?: string | null;
-  finished_at?: string | null;
-}
-
-export interface RepositoryRecentWork {
-  id: string;
-  title?: string | null;
-  posted_at?: string | null;
-  thumbnail_asset_id?: string | null;
-  asset_count: number;
-  has_video?: boolean;
-  is_nsfw: boolean;
-  is_ai_generated: boolean;
-  is_favorite: boolean;
-  created_at?: string | null;
-  source?: string | null;
-  creator_name?: string | null;
-  creator_id?: string | null;
-}
-
-export interface RepositoryDetailResponse {
-  repository: CreatorRepository;
-  creator: {
-    id: string;
-    name: string;
-    display_name?: string | null;
-    thumbnail_url?: string | null;
-    is_favorite: boolean;
-  };
-  subscription: {
-    id: string;
-    name?: string | null;
-    is_active: boolean;
-    sync_enabled: boolean;
-    sync_interval_hours: number;
-    schedule_mode?: string | null;
-    schedule_rule?: CalendarScheduleRule | null;
-    scheduled_times?: string | null;
-    last_synced_at?: string | null;
-  };
-  provider: {
-    source: string;
-    display_name: string;
-    normalized_url?: string | null;
-    url_valid: boolean;
-    capabilities: ProviderInfo["capabilities"];
-  };
-  recent_jobs: RepositoryRecentJob[];
-  active_jobs: RepositoryRecentJob[];
-  sync_history: RepositoryRecentJob[];
-  work_total: number;
-  recent_works: RepositoryRecentWork[];
-}
+export type RepositoryDetailResponse = components["schemas"]["RepositoryDetailResponse"];
 
 export interface CurationState {
   visibility: "visible" | "trashed" | "purged" | "archived" | string;
@@ -1074,71 +969,11 @@ export interface RepositoryTagsResponse {
   total: number;
 }
 
-export interface StorageRepositoryNode {
-  repository_id?: string | null;
-  source: string;
-  source_display_name: string;
-  disk_source: string;
-  directory_name: string;
-  size_mb: number;
-  logical_size_mb?: number;
-  work_count: number;
-}
-
-export interface CreatorStorageNode {
-  creator_id: string;
-  display_name: string;
-  size_mb: number;
-  work_count: number;
-  repository_count: number;
-  repositories: StorageRepositoryNode[];
-}
-
-export interface DataCenterPipelineStats {
-  pending_import_works: number;
-  orphan_pending_artifacts: number;
-  failed_artifacts: number;
-}
-
-export interface SystemInfoResponse {
-  version: string;
-  downloads_size_mb: number;
-  library_size_mb: number;
-  downloads_free_gb: number;
-  archives_kb: Record<string, number>;
-  db_stats: Record<string, number>;
-  inventory_updated_at: string | null;
-  inventory_source: "storage_artifacts";
-  pipeline_stats: DataCenterPipelineStats;
-}
-
-export interface StorageBreakdownResponse {
-  sources: Record<
-    string,
-    {
-      size_mb: number;
-      logical_size_mb?: number;
-      creator_count: number;
-      work_count: number;
-    }
-  >;
-  creators: {
-    name: string;
-    display_name: string;
-    source: string;
-    size_mb: number;
-    work_count: number;
-    creator_id?: string;
-    repository_id?: string;
-  }[];
-  creator_tree: CreatorStorageNode[];
-  unlinked_repositories: StorageRepositoryNode[];
-  db_stats: Record<string, number>;
-  inventory_updated_at: string | null;
-  inventory_source: "storage_artifacts";
-  pipeline_stats: DataCenterPipelineStats;
-  layers?: Record<string, { path: string; size_mb: number; description: string }>;
-}
+export type StorageRepositoryNode = components["schemas"]["StorageRepositoryNode"];
+export type CreatorStorageNode = components["schemas"]["CreatorStorageNode"];
+export type DataCenterPipelineStats = components["schemas"]["DataCenterPipelineStats"];
+export type SystemInfoResponse = components["schemas"]["SystemInfoResponse"];
+export type StorageBreakdownResponse = components["schemas"]["StorageBreakdownResponse"];
 
 export interface CreatorRef {
   creator_id: string;

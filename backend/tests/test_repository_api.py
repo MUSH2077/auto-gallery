@@ -93,6 +93,7 @@ def _source_context(source_id, sub_id, creator_id):
 
 def test_repository_detail_returns_context_jobs_and_recent_works():
     from app.api.repositories import get_repository
+    from app.schemas.repository import RepositoryDetailResponse
 
     source_id = uuid4()
     sub_id = uuid4()
@@ -161,6 +162,7 @@ def test_repository_detail_returns_context_jobs_and_recent_works():
     assert payload["recent_works"][0]["id"] == str(work_id)
     assert payload["recent_works"][0]["asset_count"] == 2
     assert payload["recent_works"][0]["has_video"] is True
+    assert RepositoryDetailResponse.model_validate(payload).work_total == 13
 
 
 def test_repository_detail_returns_404_for_missing_source():

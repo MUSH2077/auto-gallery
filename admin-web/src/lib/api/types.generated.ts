@@ -4456,6 +4456,21 @@ export interface components {
             /** Work Count */
             work_count: number;
         };
+        /** CreatorStorageNode */
+        CreatorStorageNode: {
+            /** Creator Id */
+            creator_id: string;
+            /** Display Name */
+            display_name: string;
+            /** Repositories */
+            repositories: components["schemas"]["StorageRepositoryNode"][];
+            /** Repository Count */
+            repository_count: number;
+            /** Size Mb */
+            size_mb: number;
+            /** Work Count */
+            work_count: number;
+        };
         /** CreatorUpdate */
         CreatorUpdate: {
             /** Description */
@@ -4709,6 +4724,15 @@ export interface components {
             password?: string | null;
             /** Username */
             username?: string | null;
+        };
+        /** DataCenterPipelineStats */
+        DataCenterPipelineStats: {
+            /** Failed Artifacts */
+            failed_artifacts: number;
+            /** Orphan Pending Artifacts */
+            orphan_pending_artifacts: number;
+            /** Pending Import Works */
+            pending_import_works: number;
         };
         /** DedupSettings */
         DedupSettings: {
@@ -5631,6 +5655,52 @@ export interface components {
              */
             limit: number;
         };
+        /** RepositoryCapabilities */
+        RepositoryCapabilities: {
+            /** Can Download */
+            can_download: boolean;
+            /** Can Import Local */
+            can_import_local: boolean;
+            /** Is Reference Only */
+            is_reference_only: boolean;
+            /** Supports Gallerydl */
+            supports_gallerydl: boolean;
+            /** Supports Tags */
+            supports_tags: boolean;
+        };
+        /** RepositoryCreator */
+        RepositoryCreator: {
+            /** Display Name */
+            display_name?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Is Favorite */
+            is_favorite: boolean;
+            /** Name */
+            name: string;
+            /** Thumbnail Url */
+            thumbnail_url?: string | null;
+        };
+        /** RepositoryDetailResponse */
+        RepositoryDetailResponse: {
+            /** Active Jobs */
+            active_jobs: components["schemas"]["RepositoryRecentJob"][];
+            creator: components["schemas"]["RepositoryCreator"];
+            provider: components["schemas"]["RepositoryProvider"];
+            /** Recent Jobs */
+            recent_jobs: components["schemas"]["RepositoryRecentJob"][];
+            /** Recent Works */
+            recent_works: components["schemas"]["RepositoryRecentWork"][];
+            repository: components["schemas"]["RepositoryRead"];
+            subscription: components["schemas"]["RepositorySubscription"];
+            /** Sync History */
+            sync_history: components["schemas"]["RepositoryRecentJob"][];
+            /** Work Total */
+            work_total: number;
+        };
         /** RepositoryGraphEdge */
         RepositoryGraphEdge: {
             /**
@@ -5695,6 +5765,201 @@ export interface components {
             repository_id: string;
             /** Total */
             total: number;
+        };
+        /** RepositoryProvider */
+        RepositoryProvider: {
+            capabilities: components["schemas"]["RepositoryCapabilities"];
+            /** Display Name */
+            display_name: string;
+            /** Normalized Url */
+            normalized_url?: string | null;
+            /** Source */
+            source: string;
+            /** Url Valid */
+            url_valid: boolean;
+        };
+        /** RepositoryRead */
+        RepositoryRead: {
+            /** Auth Error Reason */
+            auth_error_reason?: string | null;
+            /** Auth Healthy */
+            auth_healthy: boolean;
+            /** Auth Status */
+            auth_status?: string | null;
+            /** Can Download */
+            can_download: boolean;
+            /** Created At */
+            created_at?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Is Enabled */
+            is_enabled: boolean;
+            /** Is Repository */
+            is_repository: boolean;
+            /** Last Attempted At */
+            last_attempted_at?: string | null;
+            /** Last Auth Checked At */
+            last_auth_checked_at?: string | null;
+            /** Last Successful Auth */
+            last_successful_auth?: string | null;
+            /** Last Synced At */
+            last_synced_at?: string | null;
+            latest_job?: components["schemas"]["RepositoryRecentJob"] | null;
+            /** Source */
+            source: string;
+            /** Source Creator Id */
+            source_creator_id?: string | null;
+            /** Source Display Name */
+            source_display_name: string;
+            /** Source Url */
+            source_url?: string | null;
+            /**
+             * Subscription Id
+             * Format: uuid
+             */
+            subscription_id: string;
+            /** Supports Gallerydl */
+            supports_gallerydl: boolean;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Url Valid */
+            url_valid: boolean;
+        };
+        /** RepositoryRecentJob */
+        RepositoryRecentJob: {
+            /** Attempts */
+            attempts?: number | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Download Job Id */
+            download_job_id?: string | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Error Code */
+            error_code?: string | null;
+            /** Error Log Excerpt */
+            error_log_excerpt?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Id */
+            id: string;
+            /** Import Job Id */
+            import_job_id?: string | null;
+            /** Media Count */
+            media_count?: number | null;
+            /** Metadata Count */
+            metadata_count?: number | null;
+            /** Original Task Id */
+            original_task_id?: string | null;
+            outcome?: components["schemas"]["RepositorySyncOutcome"] | null;
+            /** Outcome Code */
+            outcome_code?: string | null;
+            /** Receipt Id */
+            receipt_id?: string | null;
+            /** Record Type */
+            record_type?: string | null;
+            /** Recovered */
+            recovered?: boolean | null;
+            /** Recovered At */
+            recovered_at?: string | null;
+            /** Retry Count */
+            retry_count: number;
+            /** Source */
+            source: string;
+            /** Source Url */
+            source_url?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Status */
+            status: string;
+            /** Subscription Id */
+            subscription_id: string;
+            /** Subscription Source Id */
+            subscription_source_id?: string | null;
+            /** Task Id */
+            task_id?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Works Imported */
+            works_imported?: number | null;
+        };
+        /** RepositoryRecentWork */
+        RepositoryRecentWork: {
+            /** Asset Count */
+            asset_count: number;
+            /** Created At */
+            created_at?: string | null;
+            /** Creator Id */
+            creator_id: string;
+            /** Creator Name */
+            creator_name: string;
+            /** Has Video */
+            has_video: boolean;
+            /** Id */
+            id: string;
+            /** Is Ai Generated */
+            is_ai_generated: boolean;
+            /** Is Favorite */
+            is_favorite: boolean;
+            /** Is Nsfw */
+            is_nsfw: boolean;
+            /** Posted At */
+            posted_at?: string | null;
+            /** Source */
+            source: string;
+            /** Thumbnail Asset Id */
+            thumbnail_asset_id?: string | null;
+            /** Title */
+            title?: string | null;
+        };
+        /** RepositorySubscription */
+        RepositorySubscription: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Is Active */
+            is_active: boolean;
+            /** Last Synced At */
+            last_synced_at?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Schedule Mode */
+            schedule_mode?: string | null;
+            /** Schedule Rule */
+            schedule_rule?: {
+                [key: string]: unknown;
+            } | null;
+            /** Scheduled Times */
+            scheduled_times?: string | null;
+            /** Sync Enabled */
+            sync_enabled: boolean;
+            /** Sync Interval Hours */
+            sync_interval_hours: number;
+        };
+        /** RepositorySyncOutcome */
+        RepositorySyncOutcome: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "new_content" | "no_changes" | "no_content";
+            /** Completed At */
+            completed_at?: string | null;
+            /** Downloaded Metadata Count */
+            downloaded_metadata_count?: number | null;
+            /** Media Count */
+            media_count?: number | null;
+            /** Metadata Count */
+            metadata_count?: number | null;
+            /** Pending Work Count */
+            pending_work_count?: number | null;
+            /** Recovered Metadata Count */
+            recovered_metadata_count?: number | null;
         };
         /** ResetPasswordOut */
         ResetPasswordOut: {
@@ -5842,6 +6107,91 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** StorageBreakdownResponse */
+        StorageBreakdownResponse: {
+            /** Creator Tree */
+            creator_tree: components["schemas"]["CreatorStorageNode"][];
+            /** Creators */
+            creators: components["schemas"]["StorageCreatorEntry"][];
+            /** Db Stats */
+            db_stats: {
+                [key: string]: number;
+            };
+            /**
+             * Inventory Source
+             * @constant
+             */
+            inventory_source: "storage_artifacts";
+            /** Inventory Updated At */
+            inventory_updated_at?: string | null;
+            /** Layers */
+            layers: {
+                [key: string]: components["schemas"]["StorageLayer"];
+            };
+            pipeline_stats: components["schemas"]["DataCenterPipelineStats"];
+            /** Sources */
+            sources: {
+                [key: string]: components["schemas"]["StorageSourceStats"];
+            };
+            /** Unlinked Repositories */
+            unlinked_repositories: components["schemas"]["StorageRepositoryNode"][];
+        };
+        /** StorageCreatorEntry */
+        StorageCreatorEntry: {
+            /** Creator Id */
+            creator_id?: string | null;
+            /** Display Name */
+            display_name: string;
+            /** Name */
+            name: string;
+            /** Repository Id */
+            repository_id?: string | null;
+            /** Size Mb */
+            size_mb: number;
+            /** Source */
+            source: string;
+            /** Work Count */
+            work_count: number;
+        };
+        /** StorageLayer */
+        StorageLayer: {
+            /** Description */
+            description: string;
+            /** Path */
+            path: string;
+            /** Size Mb */
+            size_mb: number;
+        };
+        /** StorageRepositoryNode */
+        StorageRepositoryNode: {
+            /** Directory Name */
+            directory_name: string;
+            /** Disk Source */
+            disk_source: string;
+            /** Logical Size Mb */
+            logical_size_mb: number;
+            /** Repository Id */
+            repository_id?: string | null;
+            /** Size Mb */
+            size_mb: number;
+            /** Source */
+            source: string;
+            /** Source Display Name */
+            source_display_name: string;
+            /** Work Count */
+            work_count: number;
+        };
+        /** StorageSourceStats */
+        StorageSourceStats: {
+            /** Creator Count */
+            creator_count: number;
+            /** Logical Size Mb */
+            logical_size_mb: number;
+            /** Size Mb */
+            size_mb: number;
+            /** Work Count */
+            work_count: number;
         };
         /** SubscriptionCreate */
         SubscriptionCreate: {
@@ -6184,6 +6534,45 @@ export interface components {
             media_count: number;
             /** Metadata Count */
             metadata_count: number;
+        };
+        /** SystemInfoResponse */
+        SystemInfoResponse: {
+            /** Archives Kb */
+            archives_kb: {
+                [key: string]: number;
+            };
+            /** Db Stats */
+            db_stats: {
+                [key: string]: number;
+            };
+            /** Downloads Free Gb */
+            downloads_free_gb: number;
+            /** Downloads Size Mb */
+            downloads_size_mb: number;
+            /** Downloads Total Gb */
+            downloads_total_gb: number;
+            /** Downloads Used Gb */
+            downloads_used_gb: number;
+            /**
+             * Inventory Source
+             * @constant
+             */
+            inventory_source: "storage_artifacts";
+            /** Inventory Updated At */
+            inventory_updated_at?: string | null;
+            /** Library Free Gb */
+            library_free_gb: number;
+            /** Library Size Mb */
+            library_size_mb: number;
+            /** Library Total Gb */
+            library_total_gb: number;
+            /** Library Used Gb */
+            library_used_gb: number;
+            pipeline_stats: components["schemas"]["DataCenterPipelineStats"];
+            /** Python */
+            python: string;
+            /** Version */
+            version: string;
         };
         /** TagCreate */
         TagCreate: {
@@ -8693,7 +9082,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["StorageBreakdownResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -8740,7 +9129,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["SystemInfoResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -13339,7 +13728,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["RepositoryDetailResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */

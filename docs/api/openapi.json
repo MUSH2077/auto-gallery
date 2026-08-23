@@ -1463,6 +1463,47 @@
         "title": "CreatorRef",
         "type": "object"
       },
+      "CreatorStorageNode": {
+        "properties": {
+          "creator_id": {
+            "title": "Creator Id",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "repositories": {
+            "items": {
+              "$ref": "#/components/schemas/StorageRepositoryNode"
+            },
+            "title": "Repositories",
+            "type": "array"
+          },
+          "repository_count": {
+            "title": "Repository Count",
+            "type": "integer"
+          },
+          "size_mb": {
+            "title": "Size Mb",
+            "type": "number"
+          },
+          "work_count": {
+            "title": "Work Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "creator_id",
+          "display_name",
+          "size_mb",
+          "work_count",
+          "repository_count",
+          "repositories"
+        ],
+        "title": "CreatorStorageNode",
+        "type": "object"
+      },
       "CreatorUpdate": {
         "properties": {
           "description": {
@@ -2173,6 +2214,29 @@
           }
         },
         "title": "DanbooruSourceConfig",
+        "type": "object"
+      },
+      "DataCenterPipelineStats": {
+        "properties": {
+          "failed_artifacts": {
+            "title": "Failed Artifacts",
+            "type": "integer"
+          },
+          "orphan_pending_artifacts": {
+            "title": "Orphan Pending Artifacts",
+            "type": "integer"
+          },
+          "pending_import_works": {
+            "title": "Pending Import Works",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pending_import_works",
+          "orphan_pending_artifacts",
+          "failed_artifacts"
+        ],
+        "title": "DataCenterPipelineStats",
         "type": "object"
       },
       "DedupSettings": {
@@ -4549,6 +4613,146 @@
         "title": "ReconcileTasksRequest",
         "type": "object"
       },
+      "RepositoryCapabilities": {
+        "properties": {
+          "can_download": {
+            "title": "Can Download",
+            "type": "boolean"
+          },
+          "can_import_local": {
+            "title": "Can Import Local",
+            "type": "boolean"
+          },
+          "is_reference_only": {
+            "title": "Is Reference Only",
+            "type": "boolean"
+          },
+          "supports_gallerydl": {
+            "title": "Supports Gallerydl",
+            "type": "boolean"
+          },
+          "supports_tags": {
+            "title": "Supports Tags",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_download",
+          "can_import_local",
+          "supports_gallerydl",
+          "supports_tags",
+          "is_reference_only"
+        ],
+        "title": "RepositoryCapabilities",
+        "type": "object"
+      },
+      "RepositoryCreator": {
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_favorite": {
+            "title": "Is Favorite",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "thumbnail_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Url"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "is_favorite"
+        ],
+        "title": "RepositoryCreator",
+        "type": "object"
+      },
+      "RepositoryDetailResponse": {
+        "properties": {
+          "active_jobs": {
+            "items": {
+              "$ref": "#/components/schemas/RepositoryRecentJob"
+            },
+            "title": "Active Jobs",
+            "type": "array"
+          },
+          "creator": {
+            "$ref": "#/components/schemas/RepositoryCreator"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/RepositoryProvider"
+          },
+          "recent_jobs": {
+            "items": {
+              "$ref": "#/components/schemas/RepositoryRecentJob"
+            },
+            "title": "Recent Jobs",
+            "type": "array"
+          },
+          "recent_works": {
+            "items": {
+              "$ref": "#/components/schemas/RepositoryRecentWork"
+            },
+            "title": "Recent Works",
+            "type": "array"
+          },
+          "repository": {
+            "$ref": "#/components/schemas/RepositoryRead"
+          },
+          "subscription": {
+            "$ref": "#/components/schemas/RepositorySubscription"
+          },
+          "sync_history": {
+            "items": {
+              "$ref": "#/components/schemas/RepositoryRecentJob"
+            },
+            "title": "Sync History",
+            "type": "array"
+          },
+          "work_total": {
+            "title": "Work Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "repository",
+          "creator",
+          "subscription",
+          "provider",
+          "recent_jobs",
+          "active_jobs",
+          "sync_history",
+          "work_total",
+          "recent_works"
+        ],
+        "title": "RepositoryDetailResponse",
+        "type": "object"
+      },
       "RepositoryGraphEdge": {
         "properties": {
           "from_id": {
@@ -4679,6 +4883,775 @@
           "limit"
         ],
         "title": "RepositoryGraphResponse",
+        "type": "object"
+      },
+      "RepositoryProvider": {
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/RepositoryCapabilities"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "normalized_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized Url"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "url_valid": {
+            "title": "Url Valid",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "source",
+          "display_name",
+          "url_valid",
+          "capabilities"
+        ],
+        "title": "RepositoryProvider",
+        "type": "object"
+      },
+      "RepositoryRead": {
+        "properties": {
+          "auth_error_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Error Reason"
+          },
+          "auth_healthy": {
+            "title": "Auth Healthy",
+            "type": "boolean"
+          },
+          "auth_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Status"
+          },
+          "can_download": {
+            "title": "Can Download",
+            "type": "boolean"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_enabled": {
+            "title": "Is Enabled",
+            "type": "boolean"
+          },
+          "is_repository": {
+            "title": "Is Repository",
+            "type": "boolean"
+          },
+          "last_attempted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Attempted At"
+          },
+          "last_auth_checked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Auth Checked At"
+          },
+          "last_successful_auth": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Successful Auth"
+          },
+          "last_synced_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Synced At"
+          },
+          "latest_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RepositoryRecentJob"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_creator_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Creator Id"
+          },
+          "source_display_name": {
+            "title": "Source Display Name",
+            "type": "string"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "subscription_id": {
+            "format": "uuid",
+            "title": "Subscription Id",
+            "type": "string"
+          },
+          "supports_gallerydl": {
+            "title": "Supports Gallerydl",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "url_valid": {
+            "title": "Url Valid",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "subscription_id",
+          "source",
+          "source_display_name",
+          "is_enabled",
+          "auth_healthy",
+          "can_download",
+          "supports_gallerydl",
+          "url_valid",
+          "is_repository"
+        ],
+        "title": "RepositoryRead",
+        "type": "object"
+      },
+      "RepositoryRecentJob": {
+        "properties": {
+          "attempts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempts"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "download_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Job Id"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "error_log_excerpt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Log Excerpt"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "import_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Import Job Id"
+          },
+          "media_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Count"
+          },
+          "metadata_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata Count"
+          },
+          "original_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Task Id"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RepositorySyncOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outcome_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome Code"
+          },
+          "receipt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt Id"
+          },
+          "record_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Record Type"
+          },
+          "recovered": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovered"
+          },
+          "recovered_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovered At"
+          },
+          "retry_count": {
+            "title": "Retry Count",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "subscription_id": {
+            "title": "Subscription Id",
+            "type": "string"
+          },
+          "subscription_source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Source Id"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "works_imported": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Works Imported"
+          }
+        },
+        "required": [
+          "id",
+          "subscription_id",
+          "source",
+          "status",
+          "retry_count"
+        ],
+        "title": "RepositoryRecentJob",
+        "type": "object"
+      },
+      "RepositoryRecentWork": {
+        "properties": {
+          "asset_count": {
+            "title": "Asset Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "creator_id": {
+            "title": "Creator Id",
+            "type": "string"
+          },
+          "creator_name": {
+            "title": "Creator Name",
+            "type": "string"
+          },
+          "has_video": {
+            "title": "Has Video",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_ai_generated": {
+            "title": "Is Ai Generated",
+            "type": "boolean"
+          },
+          "is_favorite": {
+            "title": "Is Favorite",
+            "type": "boolean"
+          },
+          "is_nsfw": {
+            "title": "Is Nsfw",
+            "type": "boolean"
+          },
+          "posted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Posted At"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "thumbnail_asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Asset Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "id",
+          "asset_count",
+          "has_video",
+          "is_nsfw",
+          "is_ai_generated",
+          "is_favorite",
+          "source",
+          "creator_name",
+          "creator_id"
+        ],
+        "title": "RepositoryRecentWork",
+        "type": "object"
+      },
+      "RepositorySubscription": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "last_synced_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Synced At"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "schedule_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Mode"
+          },
+          "schedule_rule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Rule"
+          },
+          "scheduled_times": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled Times"
+          },
+          "sync_enabled": {
+            "title": "Sync Enabled",
+            "type": "boolean"
+          },
+          "sync_interval_hours": {
+            "title": "Sync Interval Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "is_active",
+          "sync_enabled",
+          "sync_interval_hours"
+        ],
+        "title": "RepositorySubscription",
+        "type": "object"
+      },
+      "RepositorySyncOutcome": {
+        "properties": {
+          "code": {
+            "enum": [
+              "new_content",
+              "no_changes",
+              "no_content"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "downloaded_metadata_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Downloaded Metadata Count"
+          },
+          "media_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Count"
+          },
+          "metadata_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata Count"
+          },
+          "pending_work_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Work Count"
+          },
+          "recovered_metadata_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovered Metadata Count"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "RepositorySyncOutcome",
         "type": "object"
       },
       "ResetPasswordOut": {
@@ -5052,6 +6025,243 @@
           "updated_at"
         ],
         "title": "SourceCreatorRead",
+        "type": "object"
+      },
+      "StorageBreakdownResponse": {
+        "properties": {
+          "creator_tree": {
+            "items": {
+              "$ref": "#/components/schemas/CreatorStorageNode"
+            },
+            "title": "Creator Tree",
+            "type": "array"
+          },
+          "creators": {
+            "items": {
+              "$ref": "#/components/schemas/StorageCreatorEntry"
+            },
+            "title": "Creators",
+            "type": "array"
+          },
+          "db_stats": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Db Stats",
+            "type": "object"
+          },
+          "inventory_source": {
+            "const": "storage_artifacts",
+            "title": "Inventory Source",
+            "type": "string"
+          },
+          "inventory_updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inventory Updated At"
+          },
+          "layers": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/StorageLayer"
+            },
+            "title": "Layers",
+            "type": "object"
+          },
+          "pipeline_stats": {
+            "$ref": "#/components/schemas/DataCenterPipelineStats"
+          },
+          "sources": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/StorageSourceStats"
+            },
+            "title": "Sources",
+            "type": "object"
+          },
+          "unlinked_repositories": {
+            "items": {
+              "$ref": "#/components/schemas/StorageRepositoryNode"
+            },
+            "title": "Unlinked Repositories",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sources",
+          "creators",
+          "creator_tree",
+          "unlinked_repositories",
+          "db_stats",
+          "inventory_source",
+          "pipeline_stats",
+          "layers"
+        ],
+        "title": "StorageBreakdownResponse",
+        "type": "object"
+      },
+      "StorageCreatorEntry": {
+        "properties": {
+          "creator_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creator Id"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "repository_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Id"
+          },
+          "size_mb": {
+            "title": "Size Mb",
+            "type": "number"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "work_count": {
+            "title": "Work Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "display_name",
+          "source",
+          "size_mb",
+          "work_count"
+        ],
+        "title": "StorageCreatorEntry",
+        "type": "object"
+      },
+      "StorageLayer": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "size_mb": {
+            "title": "Size Mb",
+            "type": "number"
+          }
+        },
+        "required": [
+          "path",
+          "size_mb",
+          "description"
+        ],
+        "title": "StorageLayer",
+        "type": "object"
+      },
+      "StorageRepositoryNode": {
+        "properties": {
+          "directory_name": {
+            "title": "Directory Name",
+            "type": "string"
+          },
+          "disk_source": {
+            "title": "Disk Source",
+            "type": "string"
+          },
+          "logical_size_mb": {
+            "title": "Logical Size Mb",
+            "type": "number"
+          },
+          "repository_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Id"
+          },
+          "size_mb": {
+            "title": "Size Mb",
+            "type": "number"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_display_name": {
+            "title": "Source Display Name",
+            "type": "string"
+          },
+          "work_count": {
+            "title": "Work Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source",
+          "source_display_name",
+          "disk_source",
+          "directory_name",
+          "size_mb",
+          "logical_size_mb",
+          "work_count"
+        ],
+        "title": "StorageRepositoryNode",
+        "type": "object"
+      },
+      "StorageSourceStats": {
+        "properties": {
+          "creator_count": {
+            "title": "Creator Count",
+            "type": "integer"
+          },
+          "logical_size_mb": {
+            "title": "Logical Size Mb",
+            "type": "number"
+          },
+          "size_mb": {
+            "title": "Size Mb",
+            "type": "number"
+          },
+          "work_count": {
+            "title": "Work Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "size_mb",
+          "logical_size_mb",
+          "creator_count",
+          "work_count"
+        ],
+        "title": "StorageSourceStats",
         "type": "object"
       },
       "SubscriptionCreate": {
@@ -6096,6 +7306,101 @@
           "completed_at"
         ],
         "title": "SyncOutcomeRead",
+        "type": "object"
+      },
+      "SystemInfoResponse": {
+        "properties": {
+          "archives_kb": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Archives Kb",
+            "type": "object"
+          },
+          "db_stats": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Db Stats",
+            "type": "object"
+          },
+          "downloads_free_gb": {
+            "title": "Downloads Free Gb",
+            "type": "number"
+          },
+          "downloads_size_mb": {
+            "title": "Downloads Size Mb",
+            "type": "number"
+          },
+          "downloads_total_gb": {
+            "title": "Downloads Total Gb",
+            "type": "number"
+          },
+          "downloads_used_gb": {
+            "title": "Downloads Used Gb",
+            "type": "number"
+          },
+          "inventory_source": {
+            "const": "storage_artifacts",
+            "title": "Inventory Source",
+            "type": "string"
+          },
+          "inventory_updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inventory Updated At"
+          },
+          "library_free_gb": {
+            "title": "Library Free Gb",
+            "type": "number"
+          },
+          "library_size_mb": {
+            "title": "Library Size Mb",
+            "type": "number"
+          },
+          "library_total_gb": {
+            "title": "Library Total Gb",
+            "type": "number"
+          },
+          "library_used_gb": {
+            "title": "Library Used Gb",
+            "type": "number"
+          },
+          "pipeline_stats": {
+            "$ref": "#/components/schemas/DataCenterPipelineStats"
+          },
+          "python": {
+            "title": "Python",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "python",
+          "downloads_size_mb",
+          "library_size_mb",
+          "downloads_total_gb",
+          "downloads_used_gb",
+          "downloads_free_gb",
+          "library_total_gb",
+          "library_used_gb",
+          "library_free_gb",
+          "archives_kb",
+          "db_stats",
+          "inventory_source",
+          "pipeline_stats"
+        ],
+        "title": "SystemInfoResponse",
         "type": "object"
       },
       "TagCreate": {
@@ -10624,7 +11929,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/StorageBreakdownResponse"
                 }
               }
             },
@@ -10677,8 +11982,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/admin/system-info": {
@@ -10690,7 +11994,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/SystemInfoResponse"
                 }
               }
             },
@@ -10743,8 +12047,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/auth/change-password": {
@@ -18154,7 +19457,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/RepositoryDetailResponse"
                 }
               }
             },
@@ -18207,8 +19510,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "library"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/repositories/{source_id}/curation-graph": {

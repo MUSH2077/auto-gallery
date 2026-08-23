@@ -74,6 +74,30 @@ def test_contract_describes_search_enums_and_pagination_limit():
     assert validation_schema.endswith(("/HTTPValidationError", "/ValidationError"))
 
 
+def test_contract_exposes_structured_data_center_and_repository_detail_responses():
+    from app.main import app
+
+    app.openapi_schema = None
+    schema = app.openapi()
+
+    def response_schema(path: str) -> dict:
+        payload = schema["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+        assert "$ref" in payload, f"{path} must not expose a generic JSON response"
+        return schema["components"]["schemas"][payload["$ref"].rpartition("/")[2]]
+
+    system_info = response_schema("/api/v1/admin/system-info")
+    assert {"inventory_updated_at", "inventory_source", "pipeline_stats"} <= set(system_info["properties"])
+    assert system_info["properties"]["pipeline_stats"]["$ref"].endswith("/DataCenterPipelineStats")
+
+    storage = response_schema("/api/v1/admin/storage-breakdown")
+    assert {"inventory_updated_at", "inventory_source", "pipeline_stats", "creator_tree"} <= set(storage["properties"])
+    assert storage["properties"]["pipeline_stats"]["$ref"].endswith("/DataCenterPipelineStats")
+
+    repository = response_schema("/api/v1/repositories/{source_id}")
+    assert "work_total" in repository["properties"]
+    assert repository["properties"]["work_total"]["type"] == "integer"
+
+
 def test_contract_uses_real_upload_and_binary_content_types():
     from app.main import app
 
