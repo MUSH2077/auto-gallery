@@ -33,6 +33,9 @@ MAX_MANIFEST_SIZE = 4 * 1024 * 1024
 MANIFEST_VERSION = "0.3.0"
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _ARCHIVE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}\.tar\.gz")
+_CHUNK_FILE_RE = re.compile(r"(?P<index>[0-9]{8})\.part(?P<temporary>\.tmp)?")
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _COMPONENTS = frozenset(
     {
         "database",
@@ -78,7 +81,7 @@ def _token_hash(token: str) -> str:
 
 def _atomic_json(path: Path, value: dict[str, Any], *, mode: int = 0o600) -> None:
     temp = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW
     fd = os.open(temp, flags, mode)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -88,13 +91,13 @@ def _atomic_json(path: Path, value: dict[str, Any], *, mode: int = 0o600) -> Non
             os.fsync(handle.fileno())
         os.replace(temp, path)
         os.chmod(path, mode)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
+        directory_fd = os.open(path.parent, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
         try:
             os.fsync(directory_fd)
         finally:
             os.close(directory_fd)
     finally:
-        if temp.exists():
+        if os.path.lexists(temp):
             temp.unlink()
 
 
@@ -164,6 +167,65 @@ def _public_session(metadata: dict[str, Any]) -> dict[str, Any]:
         "created_at": metadata["created_at"],
         "updated_at": metadata["updated_at"],
     }
+
+
+def _reconcile_durable_chunks(session: Path, metadata: dict[str, Any]) -> None:
+    """Verify metadata-backed chunks and remove crash-orphan chunk files."""
+
+    chunks_dir = session / "chunks"
+    try:
+        chunks_stat = chunks_dir.lstat()
+    except FileNotFoundError as exc:
+        raise RestoreConflict("Restore chunks directory is missing") from exc
+    if stat.S_ISLNK(chunks_stat.st_mode) or not stat.S_ISDIR(chunks_stat.st_mode):
+        raise RestoreConflict("Restore chunks directory is unsafe")
+    chunks_fd = os.open(chunks_dir, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
+    changed = False
+    try:
+        declared = list(metadata.get("chunks") or [])
+        tracked: dict[str, dict[str, Any]] = {}
+        for expected_index, chunk in enumerate(declared):
+            if int(chunk.get("index", -1)) != expected_index:
+                raise RestoreConflict("Restore chunk metadata order is invalid")
+            tracked[f"{expected_index:08d}.part"] = chunk
+
+        for name in os.listdir(chunks_fd):
+            match = _CHUNK_FILE_RE.fullmatch(name)
+            if match is None:
+                raise RestoreConflict("Unexpected restore chunk entry exists")
+            entry_stat = os.stat(name, dir_fd=chunks_fd, follow_symlinks=False)
+            if match.group("temporary") or name not in tracked:
+                if stat.S_ISDIR(entry_stat.st_mode):
+                    raise RestoreConflict("Unexpected restore chunk directory exists")
+                os.unlink(name, dir_fd=chunks_fd)
+                changed = True
+
+        if changed:
+            os.fsync(chunks_fd)
+
+        for name, expected in tracked.items():
+            try:
+                fd = os.open(name, os.O_RDONLY | _NOFOLLOW, dir_fd=chunks_fd)
+            except OSError as exc:
+                raise RestoreConflict("A durable chunk is missing or unsafe") from exc
+            digest = hashlib.sha256()
+            size = 0
+            try:
+                file_stat = os.fstat(fd)
+                if not stat.S_ISREG(file_stat.st_mode):
+                    raise RestoreConflict("A durable chunk is not a regular file")
+                with os.fdopen(fd, "rb") as handle:
+                    fd = -1
+                    while block := handle.read(1024 * 1024):
+                        digest.update(block)
+                        size += len(block)
+            finally:
+                if fd >= 0:
+                    os.close(fd)
+            if size != int(expected.get("size", -1)) or not hmac.compare_digest(digest.hexdigest(), str(expected.get("sha256") or "")):
+                raise RestoreConflict("A durable chunk differs from its metadata")
+    finally:
+        os.close(chunks_fd)
 
 
 def _free_bytes(path: Path) -> int:
@@ -241,6 +303,7 @@ def get_upload_session(*, root: Path, upload_id: str, token: str) -> dict[str, A
     with _session_lock(session):
         metadata = _read_metadata(session)
         _authorize(metadata, token)
+        _reconcile_durable_chunks(session, metadata)
         return _public_session(metadata)
 
 
@@ -263,6 +326,7 @@ def put_upload_chunk(
     with _session_lock(session):
         metadata = _read_metadata(session)
         _authorize(metadata, token)
+        _reconcile_durable_chunks(session, metadata)
         if metadata["state"] not in {"uploading", "uploaded"}:
             raise RestoreConflict("Restore upload is sealed for validation")
         chunks = list(metadata.get("chunks") or [])
@@ -281,20 +345,41 @@ def put_upload_chunk(
             expected_size = int(metadata["size_bytes"]) - (int(metadata["chunk_size"]) * index)
         if len(data) != expected_size:
             raise RestoreValidationError(f"Restore chunk size is {len(data)}; expected {expected_size}")
-        chunk_path = session / "chunks" / f"{index:08d}.part"
-        if chunk_path.exists() or chunk_path.is_symlink():
-            raise RestoreConflict("Unexpected restore chunk file already exists")
-        temporary = chunk_path.with_suffix(".part.tmp")
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        chunks_dir = session / "chunks"
+        chunk_name = f"{index:08d}.part"
+        temporary_name = f"{chunk_name}.tmp"
+        chunks_fd = os.open(chunks_dir, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
         try:
+            try:
+                os.stat(chunk_name, dir_fd=chunks_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise RestoreConflict("Unexpected restore chunk file already exists")
+            fd = os.open(
+                temporary_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW,
+                0o600,
+                dir_fd=chunks_fd,
+            )
             with os.fdopen(fd, "wb") as handle:
                 handle.write(data)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, chunk_path)
+            os.replace(
+                temporary_name,
+                chunk_name,
+                src_dir_fd=chunks_fd,
+                dst_dir_fd=chunks_fd,
+            )
+            os.fsync(chunks_fd)
         finally:
-            if temporary.exists():
-                temporary.unlink()
+            try:
+                os.unlink(temporary_name, dir_fd=chunks_fd)
+                os.fsync(chunks_fd)
+            except FileNotFoundError:
+                pass
+            os.close(chunks_fd)
         chunks.append({"index": index, "size": len(data), "sha256": actual_hash})
         metadata["chunks"] = chunks
         metadata["state"] = "uploaded" if len(chunks) == int(metadata["total_chunks"]) else "uploading"
@@ -310,6 +395,7 @@ def seal_upload_for_validation(*, root: Path, upload_id: str, token: str, task_i
     with _session_lock(session):
         metadata = _read_metadata(session)
         _authorize(metadata, token)
+        _reconcile_durable_chunks(session, metadata)
         current_task = metadata.get("validation_task_id")
         if current_task and current_task != task_id:
             raise RestoreConflict("Restore validation has already started")
@@ -398,6 +484,7 @@ def validate_upload(*, root: Path, upload_id: str, task_id: str) -> dict[str, An
     session = _session_dir(root, upload_id)
     with _session_lock(session):
         metadata = _read_metadata(session)
+        _reconcile_durable_chunks(session, metadata)
         if metadata["state"] == "ready" and (session / "ready-request.json").is_file():
             ready = json.loads((session / "ready-request.json").read_text())
             return {
@@ -586,6 +673,7 @@ def read_restore_receipt(*, staging: Path, receipts: Path, request_id: str, toke
         "completed_at",
         "rollback_performed",
         "rollback_status",
+        "rollback_components",
         "diagnostic",
         "error",
         "rollback_command",

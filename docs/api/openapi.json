@@ -5998,6 +5998,23 @@
             ],
             "title": "Rollback Command"
           },
+          "rollback_components": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rollback Components"
+          },
           "rollback_performed": {
             "anyOf": [
               {

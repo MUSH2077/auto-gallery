@@ -112,12 +112,22 @@ function RestoreValidationFlow({ flow }: { flow: RestoreFlow }) {
           {receipt.data?.status === "success" ? (
             <p className="mt-1 text-xs text-success">{t("backup.restore_receipt_success")}</p>
           ) : null}
-          {receipt.data?.status === "rolled_back" ? (
+          {receipt.data?.status === "rolled_back" || receipt.data?.status === "recovery_failed" ? (
             <div role="alert" className="mt-2 rounded border border-danger/30 bg-danger-subtle p-3 text-danger">
               <p className="font-medium">{rollbackComplete ? t("backup.restore_rollback_complete") : t("backup.restore_rollback_failed")}</p>
               {receipt.data.error ? <p className="mt-1 text-xs">{receipt.data.error}</p> : null}
               {receipt.data.diagnostic ? <p className="mt-1 text-xs">{receipt.data.diagnostic}</p> : null}
               <code className="mt-2 block text-[11px]">{receipt.data.phase}</code>
+              {receipt.data.rollback_components ? (
+                <ul className="mt-2 space-y-1 text-[11px]">
+                  {Object.entries(receipt.data.rollback_components).map(([component, outcome]) => (
+                    <li key={component}>
+                      <code>{component}: {outcome.status}</code>
+                      {outcome.error ? <span className="ml-1">— {outcome.error}</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
           ) : null}
         </div>

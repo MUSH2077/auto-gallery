@@ -141,6 +141,97 @@ def test_chunks_are_ordered_idempotent_and_resumable(tmp_path):
     assert get_upload_session(root=tmp_path, upload_id=upload_id, token=token)["state"] == "uploaded"
 
 
+def test_chunk_resume_removes_a_crash_orphan_without_following_its_symlink(tmp_path):
+    """A deterministic temp left by a crash must be safely reconciled on retry."""
+    from app.services.offline_restore import put_upload_chunk
+
+    archive = _archive_bytes({"database.sql": b"select 1;"})
+    created = _new_session(tmp_path, archive, chunk_size=len(archive))
+    session = tmp_path / created["upload_id"]
+    outside = tmp_path / "outside-chunk"
+    outside.write_bytes(b"outside")
+    orphan = session / "chunks/00000000.part.tmp"
+    orphan.symlink_to(outside)
+
+    result = put_upload_chunk(
+        root=tmp_path,
+        upload_id=created["upload_id"],
+        token=created["upload_token"],
+        index=0,
+        data=archive,
+        sha256=_sha256(archive),
+    )
+
+    assert result["state"] == "uploaded"
+    assert outside.read_bytes() == b"outside"
+    assert not orphan.exists()
+
+
+def test_idempotent_retry_rejects_corrupt_durable_chunk_bytes(tmp_path):
+    """Metadata alone must never authorize a corrupted committed chunk."""
+    from app.services.offline_restore import RestoreConflict, put_upload_chunk
+
+    archive = _archive_bytes({"database.sql": b"select 1;"})
+    created = _new_session(tmp_path, archive, chunk_size=len(archive))
+    put_upload_chunk(
+        root=tmp_path,
+        upload_id=created["upload_id"],
+        token=created["upload_token"],
+        index=0,
+        data=archive,
+        sha256=_sha256(archive),
+    )
+    durable = tmp_path / created["upload_id"] / "chunks/00000000.part"
+    durable.write_bytes(b"x" * len(archive))
+
+    with pytest.raises(RestoreConflict, match="durable chunk"):
+        put_upload_chunk(
+            root=tmp_path,
+            upload_id=created["upload_id"],
+            token=created["upload_token"],
+            index=0,
+            data=archive,
+            sha256=_sha256(archive),
+        )
+
+
+def test_chunk_and_chunks_directory_are_fsynced_before_metadata_advance(tmp_path, monkeypatch):
+    """A durable cursor may advance only after file and rename directory fsyncs."""
+    from app.services import offline_restore
+
+    archive = _archive_bytes({"database.sql": b"select 1;"})
+    created = _new_session(tmp_path, archive, chunk_size=len(archive))
+    events: list[str] = []
+    real_fsync = offline_restore.os.fsync
+    real_atomic_json = offline_restore._atomic_json
+
+    def observed_fsync(fd: int) -> None:
+        events.append(f"fsync:{os.readlink(f'/proc/self/fd/{fd}')}")
+        real_fsync(fd)
+
+    def observed_atomic_json(path: Path, value: dict, *, mode: int = 0o600) -> None:
+        if path.name == "metadata.json":
+            events.append("metadata")
+        real_atomic_json(path, value, mode=mode)
+
+    monkeypatch.setattr(offline_restore.os, "fsync", observed_fsync)
+    monkeypatch.setattr(offline_restore, "_atomic_json", observed_atomic_json)
+
+    offline_restore.put_upload_chunk(
+        root=tmp_path,
+        upload_id=created["upload_id"],
+        token=created["upload_token"],
+        index=0,
+        data=archive,
+        sha256=_sha256(archive),
+    )
+
+    chunk_fsync = next(index for index, event in enumerate(events) if event.endswith("00000000.part.tmp"))
+    directory_fsync = next(index for index, event in enumerate(events) if event.endswith(f"{created['upload_id']}/chunks"))
+    metadata = events.index("metadata")
+    assert chunk_fsync < directory_fsync < metadata
+
+
 def test_session_rejects_wrong_token_invalid_shape_and_insufficient_space(tmp_path, monkeypatch):
     """A guessed UUID, oversized declaration, or low disk must fail before writes."""
     from app.services import offline_restore

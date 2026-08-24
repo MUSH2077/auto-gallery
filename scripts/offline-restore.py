@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -19,6 +20,7 @@ import shutil
 import stat
 import subprocess
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -27,6 +29,7 @@ from uuid import UUID
 PHASES = (
     "validate_request",
     "stop_writers",
+    "freeze_inputs",
     "snapshot",
     "temp_database",
     "migrate",
@@ -49,6 +52,8 @@ FOREGROUND = ("postgres", "redis", "meilisearch", "migrate", "backend", "admin-w
 BACKGROUND = ("worker-download", "worker-import", "worker-operations", "scheduler")
 PG_NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
+NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 
 
 class RestoreHostError(RuntimeError):
@@ -70,7 +75,7 @@ def sha256_file(path: Path) -> str:
 def atomic_json(path: Path, value: dict[str, Any], *, immutable: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW
     fd = os.open(temp, flags, 0o600)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as output:
@@ -131,6 +136,61 @@ def safe_relative(value: str, name: str) -> PurePosixPath:
     if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
         raise RestoreHostError(f"{name} is unsafe")
     return path
+
+
+def _entry_exists(directory_fd: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+@contextmanager
+def safe_directory_fd(
+    root: Path,
+    relative_parts: tuple[str, ...] = (),
+    *,
+    create: bool = False,
+):
+    """Traverse a directory tree without ever following a symlink parent."""
+
+    root = Path(root)
+    root_stat = root.lstat()
+    if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
+        raise RestoreHostError(f"Unsafe restore directory: {root}")
+    descriptor = os.open(root, os.O_RDONLY | DIRECTORY | NOFOLLOW)
+    current = root
+    try:
+        for part in relative_parts:
+            if part in {"", ".", ".."} or "/" in part:
+                raise RestoreHostError("Unsafe restore parent component")
+            try:
+                child = os.open(
+                    part,
+                    os.O_RDONLY | DIRECTORY | NOFOLLOW,
+                    dir_fd=descriptor,
+                )
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(part, 0o700, dir_fd=descriptor)
+                os.fsync(descriptor)
+                child = os.open(
+                    part,
+                    os.O_RDONLY | DIRECTORY | NOFOLLOW,
+                    dir_fd=descriptor,
+                )
+            except OSError as exc:
+                raise RestoreHostError(
+                    f"Restore parent is a symlink or non-directory: {current / part}"
+                ) from exc
+            os.close(descriptor)
+            descriptor = child
+            current /= part
+        yield current, descriptor
+    finally:
+        os.close(descriptor)
 
 
 class RestoreRunner:
@@ -200,6 +260,7 @@ class RestoreRunner:
             raise RestoreHostError("RESTORE_COMPOSE_COMMAND is empty")
         self.payload = self.session
         self.archive = self.session
+        self.manifest: dict[str, Any] = {}
         self.journal: dict[str, Any] = {
             "version": 1,
             "request_id": self.request_id,
@@ -228,7 +289,11 @@ class RestoreRunner:
                 str(self.rollback_dir),
             )
         )
-        fd = os.open(rollback, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)
+        fd = os.open(
+            rollback,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW,
+            0o700,
+        )
         with os.fdopen(fd, "w", encoding="utf-8") as output:
             output.write("#!/usr/bin/env bash\nset -euo pipefail\n")
             output.write(f"exec {command}\n")
@@ -354,6 +419,7 @@ class RestoreRunner:
             total += size
         if total != int(manifest.get("total_uncompressed_bytes", -1)):
             raise RestoreHostError("validated manifest total changed")
+        self.manifest = manifest
 
         live_paths = self._live_paths()
         for name, path in live_paths.items():
@@ -405,6 +471,130 @@ class RestoreRunner:
         self.enter("stop_writers")
         self.compose("stop", "-t", "120", *WRITERS)
 
+    def freeze_inputs(self) -> None:
+        """Copy post-stop, revalidated bytes into host-owned restore storage."""
+
+        self.enter("freeze_inputs")
+        frozen = self.rollback_dir / "frozen-inputs"
+        os.mkdir(frozen, 0o700)
+        frozen_payload = frozen / "payload"
+        os.mkdir(frozen_payload, 0o700)
+        frozen_archive = frozen / "archive.tar.gz"
+
+        archive_expected_size = int(self.request.get("archive_size", -1))
+        archive_expected_hash = str(self.request.get("archive_sha256") or "")
+        archive_size, archive_hash = self._copy_regular_file(
+            self.archive.parent,
+            (),
+            self.archive.name,
+            frozen,
+            (),
+            frozen_archive.name,
+        )
+        if archive_size != archive_expected_size or not hmac.compare_digest(
+            archive_hash, archive_expected_hash
+        ):
+            raise RestoreHostError("validated archive changed after writer stop")
+
+        entries = self.manifest["entries"]
+        actual_files: set[str] = set()
+        for directory, names, filenames in os.walk(self.payload, followlinks=False):
+            directory_path = Path(directory)
+            for name in names:
+                if (directory_path / name).is_symlink():
+                    raise RestoreHostError("validated payload contains a symlink")
+            for name in filenames:
+                source = directory_path / name
+                if source.is_symlink() or not source.is_file():
+                    raise RestoreHostError("validated payload contains an unsafe entry")
+                actual_files.add(source.relative_to(self.payload).as_posix())
+        if actual_files != set(entries):
+            raise RestoreHostError(
+                "validated payload entries changed after writer stop"
+            )
+
+        total = 0
+        for name, expected in entries.items():
+            relative = safe_relative(name, "manifest entry")
+            if not isinstance(expected, dict):
+                raise RestoreHostError("validated manifest entry is invalid")
+            size, digest = self._copy_regular_file(
+                self.payload,
+                relative.parent.parts,
+                relative.name,
+                frozen_payload,
+                relative.parent.parts,
+                relative.name,
+            )
+            expected_size = int(expected.get("size", -1))
+            expected_hash = str(expected.get("sha256") or "")
+            if size != expected_size or not hmac.compare_digest(digest, expected_hash):
+                raise RestoreHostError("validated payload changed after writer stop")
+            total += size
+        if total != int(self.manifest.get("total_uncompressed_bytes", -1)):
+            raise RestoreHostError("validated manifest total changed after writer stop")
+
+        for directory, names, filenames in os.walk(frozen_payload, topdown=False):
+            directory_path = Path(directory)
+            for name in filenames:
+                os.chmod(directory_path / name, 0o400)
+            for name in names:
+                os.chmod(directory_path / name, 0o500)
+        os.chmod(frozen_payload, 0o500)
+        os.chmod(frozen_archive, 0o400)
+        os.chmod(frozen, 0o500)
+        directory_fd = os.open(self.rollback_dir, os.O_RDONLY | DIRECTORY | NOFOLLOW)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        self.archive = frozen_archive
+        self.payload = frozen_payload
+        self.journal["frozen_inputs"] = str(frozen)
+        self._save_journal()
+
+    @staticmethod
+    def _copy_regular_file(
+        source_root: Path,
+        source_parents: tuple[str, ...],
+        source_name: str,
+        destination_root: Path,
+        destination_parents: tuple[str, ...],
+        destination_name: str,
+    ) -> tuple[int, str]:
+        with safe_directory_fd(source_root, source_parents) as (_, source_parent_fd):
+            source_stat = os.stat(
+                source_name, dir_fd=source_parent_fd, follow_symlinks=False
+            )
+            if not stat.S_ISREG(source_stat.st_mode):
+                raise RestoreHostError("Restore input is not a regular file")
+            source_fd = os.open(
+                source_name, os.O_RDONLY | NOFOLLOW, dir_fd=source_parent_fd
+            )
+            with safe_directory_fd(
+                destination_root, destination_parents, create=True
+            ) as (_, destination_parent_fd):
+                destination_fd = os.open(
+                    destination_name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW,
+                    0o600,
+                    dir_fd=destination_parent_fd,
+                )
+                digest = hashlib.sha256()
+                size = 0
+                with (
+                    os.fdopen(source_fd, "rb") as source,
+                    os.fdopen(destination_fd, "wb") as destination,
+                ):
+                    while block := source.read(1024 * 1024):
+                        destination.write(block)
+                        digest.update(block)
+                        size += len(block)
+                    destination.flush()
+                    os.fsync(destination.fileno())
+                os.fsync(destination_parent_fd)
+        return size, digest.hexdigest()
+
     def snapshot(self) -> None:
         self.enter("snapshot")
         postgres_dump = self.rollback_dir / "postgres.dump"
@@ -453,11 +643,41 @@ class RestoreRunner:
             if not source.is_file() or source.is_symlink():
                 continue
             relative = source.relative_to(source_root)
-            current = live_root / relative
-            if current.exists():
-                target = destination_root / relative
-                target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                shutil.copy2(current, target, follow_symlinks=False)
+            try:
+                with safe_directory_fd(
+                    live_root, relative.parent.parts, create=False
+                ) as (_, current_parent_fd):
+                    try:
+                        current_stat = os.stat(
+                            relative.name,
+                            dir_fd=current_parent_fd,
+                            follow_symlinks=False,
+                        )
+                    except FileNotFoundError:
+                        continue
+                    if not stat.S_ISREG(current_stat.st_mode):
+                        continue
+                    target = destination_root / relative
+                    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    source_fd = os.open(
+                        relative.name,
+                        os.O_RDONLY | NOFOLLOW,
+                        dir_fd=current_parent_fd,
+                    )
+                    destination_fd = os.open(
+                        target,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW,
+                        stat.S_IMODE(current_stat.st_mode) & 0o600 or 0o600,
+                    )
+                    with (
+                        os.fdopen(source_fd, "rb") as current_file,
+                        os.fdopen(destination_fd, "wb") as snapshot_file,
+                    ):
+                        shutil.copyfileobj(current_file, snapshot_file)
+                        snapshot_file.flush()
+                        os.fsync(snapshot_file.fileno())
+            except FileNotFoundError:
+                continue
 
     def temp_database_restore(self) -> None:
         self.enter("temp_database")
@@ -588,22 +808,45 @@ class RestoreRunner:
     def _atomic_directory_swap(
         self, source: Path, target: Path, component: str
     ) -> None:
-        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         new_path = target.with_name(f".{target.name}.restore-new-{self.request_id}")
         old_path = target.with_name(f".{target.name}.restore-old-{self.request_id}")
-        if new_path.exists() or old_path.exists():
-            raise RestoreHostError("Restore directory swap paths already exist")
-        shutil.copytree(source, new_path, symlinks=False)
-        existed = target.exists()
-        if existed:
-            os.replace(target, old_path)
-        os.replace(new_path, target)
+        with safe_directory_fd(target.parent) as (_, parent_fd):
+            if _entry_exists(parent_fd, new_path.name) or _entry_exists(
+                parent_fd, old_path.name
+            ):
+                raise RestoreHostError("Restore directory swap paths already exist")
+            os.mkdir(new_path.name, 0o700, dir_fd=parent_fd)
+            shutil.copytree(source, new_path, symlinks=False, dirs_exist_ok=True)
+            for copied_directory, names, filenames in os.walk(new_path):
+                copied_path = Path(copied_directory)
+                os.chmod(copied_path, 0o700)
+                for name in names:
+                    os.chmod(copied_path / name, 0o700)
+                for name in filenames:
+                    os.chmod(copied_path / name, 0o600)
+            existed = _entry_exists(parent_fd, target.name)
+            if existed:
+                os.rename(
+                    target.name,
+                    old_path.name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
+            os.rename(
+                new_path.name,
+                target.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
+            os.fsync(parent_fd)
         self.journal["file_swaps"].append(
             {
                 "kind": "directory",
                 "component": component,
                 "target": str(target),
                 "old": str(old_path),
+                "root": str(target.parent),
+                "relative": target.name,
                 "existed": existed,
             }
         )
@@ -619,22 +862,53 @@ class RestoreRunner:
                 continue
             relative = source.relative_to(source_root)
             target = target_root / relative
-            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             new_path = target.with_name(f".{target.name}.restore-new-{self.request_id}")
             old_path = target.with_name(f".{target.name}.restore-old-{self.request_id}")
-            if new_path.exists() or old_path.exists():
-                raise RestoreHostError("Restore file swap paths already exist")
-            shutil.copy2(source, new_path, follow_symlinks=False)
-            existed = target.exists()
-            if existed:
-                os.replace(target, old_path)
-            os.replace(new_path, target)
+            with safe_directory_fd(target_root, relative.parent.parts, create=True) as (
+                _,
+                parent_fd,
+            ):
+                if _entry_exists(parent_fd, new_path.name) or _entry_exists(
+                    parent_fd, old_path.name
+                ):
+                    raise RestoreHostError("Restore file swap paths already exist")
+                source_fd = os.open(source, os.O_RDONLY | NOFOLLOW)
+                new_fd = os.open(
+                    new_path.name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW,
+                    stat.S_IMODE(source.stat().st_mode) & 0o600 or 0o600,
+                    dir_fd=parent_fd,
+                )
+                with (
+                    os.fdopen(source_fd, "rb") as source_file,
+                    os.fdopen(new_fd, "wb") as new_file,
+                ):
+                    shutil.copyfileobj(source_file, new_file)
+                    new_file.flush()
+                    os.fsync(new_file.fileno())
+                existed = _entry_exists(parent_fd, target.name)
+                if existed:
+                    os.rename(
+                        target.name,
+                        old_path.name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                    )
+                os.rename(
+                    new_path.name,
+                    target.name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
+                os.fsync(parent_fd)
             self.journal["file_swaps"].append(
                 {
                     "kind": "file",
                     "component": component,
                     "target": str(target),
                     "old": str(old_path),
+                    "root": str(target_root),
+                    "relative": relative.as_posix(),
                     "existed": existed,
                 }
             )
@@ -662,6 +936,7 @@ class RestoreRunner:
     def run(self) -> None:
         self.validate_request()
         self.stop_writers()
+        self.freeze_inputs()
         self.snapshot()
         self.temp_database_restore()
         self.migrate()
@@ -689,6 +964,7 @@ class RestoreRunner:
         rollback_status: str,
         diagnostic: str,
         error: str | None = None,
+        rollback_components: dict[str, dict[str, str]] | None = None,
     ) -> None:
         receipt = {
             "version": 1,
@@ -704,38 +980,89 @@ class RestoreRunner:
         }
         if error:
             receipt["error"] = error
+        if rollback_components is not None:
+            receipt["rollback_components"] = rollback_components
         atomic_json(self.receipt_path, receipt, immutable=True)
 
-    def rollback(self) -> None:
-        self.compose("stop", "-t", "120", *WRITERS, "admin-web", check=False)
-        self._rollback_files()
+    def rollback(self) -> dict[str, dict[str, str]]:
+        outcomes: dict[str, dict[str, str]] = {}
+
+        def attempt(name: str, action) -> None:
+            try:
+                action()
+            except Exception as exc:  # noqa: BLE001 - independent recovery components
+                outcomes[name] = {
+                    "status": "failed",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            else:
+                outcomes[name] = {"status": "complete"}
+
+        attempt(
+            "stop_writers",
+            lambda: self.compose("stop", "-t", "120", *WRITERS, "admin-web"),
+        )
+        attempt("files", self._rollback_files)
         if self.journal.get("switch_attempted"):
-            self._rollback_database()
+            attempt("database", self._rollback_database)
+        else:
+            outcomes["database"] = {"status": "not_required"}
         if self.journal.get("redis_snapshot"):
-            redis_data = self.rollback_dir / "redis-data"
-            self.compose("stop", "-t", "30", "redis", check=False)
-            self.compose("cp", f"{redis_data}/.", "redis:/data")
-        self.compose("up", "-d", "--wait", "--wait-timeout", "180", *FOREGROUND)
+            attempt("redis", self._rollback_redis)
+        else:
+            outcomes["redis"] = {"status": "not_required"}
+        # Always reach a diagnostic foreground-only state, even when every
+        # preceding recovery component failed independently.
+        attempt(
+            "foreground",
+            lambda: self.compose(
+                "up", "-d", "--wait", "--wait-timeout", "180", *FOREGROUND
+            ),
+        )
+        return outcomes
+
+    def _rollback_redis(self) -> None:
+        redis_data = self.rollback_dir / "redis-data"
+        self.compose("stop", "-t", "30", "redis")
+        self.compose("cp", f"{redis_data}/.", "redis:/data")
 
     def _rollback_database(self) -> None:
         identity_query = (
             "SELECT datname FROM pg_database "
             f"WHERE datname IN ('{self.live_database}','{self.rollback_database}');"
         )
-        identity_result = self.compose(
-            "exec",
-            "-T",
-            "postgres",
-            "psql",
-            "-d",
-            "postgres",
-            "-At",
-            "--set=offline_restore_phase=rollback-identities",
-            "-c",
-            identity_query,
-            check=False,
-        )
-        identities = set((identity_result.stdout or b"").decode("utf-8").splitlines())
+
+        def probe() -> set[str]:
+            identity_result = self.compose(
+                "exec",
+                "-T",
+                "postgres",
+                "psql",
+                "-d",
+                "postgres",
+                "-At",
+                "--set=offline_restore_phase=rollback-identities",
+                "-c",
+                identity_query,
+            )
+            identities = set(
+                (identity_result.stdout or b"").decode("utf-8").splitlines()
+            )
+            allowed = {self.live_database, self.rollback_database}
+            if not identities or not identities.issubset(allowed):
+                raise RestoreHostError("PostgreSQL database identity output is invalid")
+            return identities
+
+        try:
+            identities = probe()
+        except Exception:  # noqa: BLE001 - retry after ensuring PostgreSQL is available
+            self.compose("up", "-d", "--wait", "--wait-timeout", "180", "postgres")
+            identities = probe()
+        if (
+            self.journal.get("database_switched")
+            and self.rollback_database not in identities
+        ):
+            raise RestoreHostError("Post-switch rollback database identity is unproven")
         if self.rollback_database not in identities:
             # A failed atomic switch leaves only the original live database.
             # Never rename that sole healthy database away during recovery.
@@ -752,7 +1079,6 @@ class RestoreRunner:
             "ON_ERROR_STOP=1",
             "-c",
             terminate,
-            check=False,
         )
         if self.live_database in identities:
             rollback_sql = (
@@ -776,27 +1102,53 @@ class RestoreRunner:
 
     def _rollback_files(self) -> None:
         for swap in reversed(list(self.journal.get("file_swaps") or [])):
-            target = Path(swap["target"])
-            old = Path(swap["old"])
-            if bool(swap.get("existed")) and old.exists():
-                failed = target.with_name(
-                    f".{target.name}.restore-failed-{self.request_id}"
-                )
-                if target.exists():
-                    os.replace(target, failed)
-                os.replace(old, target)
-                self._remove_explicit(failed, swap["kind"])
-            elif not bool(swap.get("existed")) and target.exists():
-                self._remove_explicit(target, swap["kind"])
+            root = explicit_root(str(Path(swap["root"])), "rollback file root")
+            relative = safe_relative(str(swap["relative"]), "rollback relative path")
+            target = root.joinpath(*relative.parts)
+            old = target.with_name(f".{target.name}.restore-old-{self.request_id}")
+            if target != Path(swap["target"]) or old != Path(swap["old"]):
+                raise RestoreHostError("Rollback file journal paths are inconsistent")
+            with safe_directory_fd(root, relative.parent.parts) as (_, parent_fd):
+                old_exists = _entry_exists(parent_fd, old.name)
+                target_exists = _entry_exists(parent_fd, target.name)
+                if bool(swap.get("existed")) and not old_exists:
+                    raise RestoreHostError(f"Rollback original is missing: {old.name}")
+                if bool(swap.get("existed")):
+                    failed_name = f".{target.name}.restore-failed-{self.request_id}"
+                    if _entry_exists(parent_fd, failed_name):
+                        raise RestoreHostError("Rollback failed path already exists")
+                    if target_exists:
+                        os.rename(
+                            target.name,
+                            failed_name,
+                            src_dir_fd=parent_fd,
+                            dst_dir_fd=parent_fd,
+                        )
+                    os.rename(
+                        old.name,
+                        target.name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                    )
+                    os.fsync(parent_fd)
+                    if target_exists:
+                        self._remove_explicit_at(
+                            parent_fd, failed_name, str(swap["kind"])
+                        )
+                elif target_exists:
+                    self._remove_explicit_at(parent_fd, target.name, str(swap["kind"]))
+                os.fsync(parent_fd)
 
     @staticmethod
-    def _remove_explicit(path: Path, kind: str) -> None:
-        if len(path.parts) < 3 or path == Path("/"):
-            raise RestoreHostError("Refusing broad rollback cleanup target")
+    def _remove_explicit_at(parent_fd: int, name: str, kind: str) -> None:
+        if name in {"", ".", ".."} or "/" in name:
+            raise RestoreHostError("Refusing unsafe rollback cleanup target")
         if kind == "directory":
-            shutil.rmtree(path)
+            shutil.rmtree(name, dir_fd=parent_fd)
+        elif kind == "file":
+            os.unlink(name, dir_fd=parent_fd)
         else:
-            path.unlink()
+            raise RestoreHostError("Unknown rollback cleanup kind")
 
 
 def load_rollback_runner(rollback_dir: Path) -> RestoreRunner:
@@ -881,8 +1233,15 @@ def main() -> int:
     try:
         if args.rollback_dir:
             runner = load_rollback_runner(args.rollback_dir)
-            runner.rollback()
-            return 0
+            outcomes = runner.rollback()
+            return (
+                0
+                if all(
+                    outcome["status"] in {"complete", "not_required"}
+                    for outcome in outcomes.values()
+                )
+                else 1
+            )
         try:
             runner = RestoreRunner(args.request)
         except Exception as exc:  # noqa: BLE001 - fail closed on every request parser error
@@ -893,19 +1252,35 @@ def main() -> int:
             return 0
         except Exception as exc:  # noqa: BLE001 - every phase failure enters rollback
             failed_phase = runner.phase
-            rollback_status = "complete"
-            try:
-                runner.rollback()
-            except Exception:  # noqa: BLE001 - receipt must record rollback failure
-                rollback_status = "failed"
+            outcomes = runner.rollback()
+            rollback_status = (
+                "complete"
+                if all(
+                    outcome["status"] in {"complete", "not_required"}
+                    for outcome in outcomes.values()
+                )
+                else "failed"
+            )
+            foreground_running = (
+                outcomes.get("foreground", {}).get("status") == "complete"
+            )
             try:
                 runner._write_receipt(
-                    status="rolled_back",
+                    status=(
+                        "rolled_back"
+                        if rollback_status == "complete"
+                        else "recovery_failed"
+                    ),
                     phase=failed_phase,
                     rollback_performed=True,
                     rollback_status=rollback_status,
-                    diagnostic="Foreground services only; background writers remain stopped.",
+                    diagnostic=(
+                        "Foreground services only; background writers remain stopped."
+                        if foreground_running
+                        else "Foreground recovery failed; background writers remain stopped."
+                    ),
                     error=f"Restore failed during {failed_phase}: {type(exc).__name__}",
+                    rollback_components=outcomes,
                 )
             except Exception as receipt_exc:  # noqa: BLE001 - original phase error wins
                 print(

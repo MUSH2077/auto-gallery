@@ -6285,6 +6285,12 @@ export interface components {
             request_id: string;
             /** Rollback Command */
             rollback_command?: string | null;
+            /** Rollback Components */
+            rollback_components?: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            } | null;
             /** Rollback Performed */
             rollback_performed?: boolean | null;
             /** Rollback Status */

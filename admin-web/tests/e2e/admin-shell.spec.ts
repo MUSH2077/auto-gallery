@@ -2740,12 +2740,18 @@ test("restore stages ordered chunks, validates once, and surfaces external rollb
       ? { request_id: uploadId, status: "pending", phase: "handoff" }
       : {
           request_id: uploadId,
-          status: "rolled_back",
+          status: "recovery_failed",
           phase: "integrity",
           rollback_performed: true,
-          rollback_status: "complete",
+          rollback_status: "failed",
           diagnostic: "Foreground services only; background writers remain stopped.",
           error: "Restore failed during integrity: RestoreHostError",
+          rollback_components: {
+            files: { status: "complete" },
+            database: { status: "failed", error: "RestoreHostError: identity unproven" },
+            redis: { status: "complete" },
+            foreground: { status: "complete" },
+          },
         },
     });
   });
@@ -2762,7 +2768,9 @@ test("restore stages ordered chunks, validates once, and surfaces external rollb
   await expect(page.getByText("Ready for offline host execution")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText(uploadId, { exact: true })).toBeVisible();
   await expect(page.getByText("Foreground services only; background writers remain stopped.")).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByText("Rollback complete")).toBeVisible();
+  await expect(page.getByText("Rollback needs manual diagnosis")).toBeVisible();
+  await expect(page.getByText("database: failed")).toBeVisible();
+  await expect(page.getByText("RestoreHostError: identity unproven")).toBeVisible();
   expect(chunkIndexes).toEqual([0, 1, 2]);
   expect(validationStarts).toBe(1);
   expect(latestPolls).toBe(0);

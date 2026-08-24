@@ -338,6 +338,7 @@ export interface RestoreReceipt {
   completed_at?: string;
   rollback_performed?: boolean;
   rollback_status?: string;
+  rollback_components?: Record<string, { status: string; error?: string }>;
   diagnostic?: string;
   error?: string;
   rollback_command?: string;

@@ -82,6 +82,7 @@ class RestoreReceiptResponse(BaseModel):
     completed_at: str | None = None
     rollback_performed: bool | None = None
     rollback_status: str | None = None
+    rollback_components: dict[str, dict[str, str]] | None = None
     diagnostic: str | None = None
     error: str | None = None
     rollback_command: str | None = None

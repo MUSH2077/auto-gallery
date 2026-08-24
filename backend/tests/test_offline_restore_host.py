@@ -17,6 +17,7 @@ import pytest
 PHASES = [
     "validate_request",
     "stop_writers",
+    "freeze_inputs",
     "snapshot",
     "temp_database",
     "migrate",
@@ -33,13 +34,26 @@ PHASES = [
 def _write_fake_compose(path: Path) -> None:
     path.write_text(
         """#!/usr/bin/env python3
-import json, os, pathlib, sys, time
+import json, os, pathlib, shutil, sys, time
 log = pathlib.Path(os.environ["FAKE_COMPOSE_LOG"])
 args = sys.argv[1:]
 with log.open("a", encoding="utf-8") as output:
     output.write(json.dumps(args) + "\\n")
 if os.environ.get("FAKE_COMPOSE_SLEEP") and "stop" in args:
     time.sleep(float(os.environ["FAKE_COMPOSE_SLEEP"]))
+joined = " ".join(args)
+mutate_on = os.environ.get("FAKE_MUTATE_PATH_ON")
+if mutate_on and mutate_on in joined:
+    pathlib.Path(os.environ["FAKE_MUTATE_PATH"]).write_bytes(
+        os.environ.get("FAKE_MUTATE_CONTENT", "mutated!!").encode()
+    )
+sabotage_on = os.environ.get("FAKE_REMOVE_PATH_ON")
+if sabotage_on and sabotage_on in joined:
+    sabotage = pathlib.Path(os.environ["FAKE_REMOVE_PATH"])
+    if sabotage.is_dir() and not sabotage.is_symlink():
+        shutil.rmtree(sabotage)
+    else:
+        sabotage.unlink(missing_ok=True)
 if "--set=offline_restore_phase=rollback-identities" in args:
     sys.stdout.write(os.environ.get("FAKE_DATABASE_IDENTITIES", ""))
 elif any("pg_dump" in arg for arg in args):
@@ -65,7 +79,11 @@ def _fixture(tmp_path: Path):
     live_gallery = project / "data/config/gallery-dl"
     downloads = project / "data/downloads"
     library = project / "data/library"
-    for directory in (payload / "app-config", payload / "gallerydl-config"):
+    for directory in (
+        payload / "app-config",
+        payload / "gallerydl-config",
+        payload / "library-metadata/creator",
+    ):
         directory.mkdir(parents=True)
     for directory in (live_app, live_gallery, downloads, library, receipts):
         directory.mkdir(parents=True)
@@ -73,6 +91,7 @@ def _fixture(tmp_path: Path):
     (live_gallery / "value.txt").write_text("old-gallery", encoding="utf-8")
     (payload / "app-config/value.txt").write_text("new-app", encoding="utf-8")
     (payload / "gallerydl-config/value.txt").write_text("new-gallery", encoding="utf-8")
+    (payload / "library-metadata/creator/metadata.json").write_text('{"name":"new"}', encoding="utf-8")
     (payload / "database.dump").write_text("select 1;", encoding="utf-8")
     archive = session / "archive.tar.gz"
     archive.write_bytes(b"validated-archive")
@@ -89,6 +108,10 @@ def _fixture(tmp_path: Path):
             "size": 11,
             "sha256": hashlib.sha256(b"new-gallery").hexdigest(),
         },
+        "library-metadata/creator/metadata.json": {
+            "size": 14,
+            "sha256": hashlib.sha256(b'{"name":"new"}').hexdigest(),
+        },
     }
     request = {
         "version": 1,
@@ -101,7 +124,12 @@ def _fixture(tmp_path: Path):
         "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
         "manifest": {
             "version": "0.3.0",
-            "contents": ["database", "app-config", "gallerydl-config"],
+            "contents": [
+                "database",
+                "app-config",
+                "gallerydl-config",
+                "library-metadata",
+            ],
             "entries": entries,
             "total_uncompressed_bytes": sum(item["size"] for item in entries.values()),
         },
@@ -135,6 +163,7 @@ def _fixture(tmp_path: Path):
         "receipts": receipts,
         "live_app": live_app,
         "live_gallery": live_gallery,
+        "library": library,
         "log": log,
         "env": env,
     }
@@ -339,6 +368,85 @@ def test_rollback_receipt_reports_a_failed_redis_restore(tmp_path):
     assert result.returncode != 0
     receipt = json.loads((fixture["receipts"] / f"{fixture['request_id']}.json").read_text())
     assert receipt["rollback_status"] == "failed"
+    assert receipt["rollback_components"]["redis"]["status"] == "failed"
+    assert receipt["rollback_components"]["files"]["status"] == "complete"
+    assert receipt["rollback_components"]["database"]["status"] == "complete"
+    assert receipt["rollback_components"]["foreground"]["status"] == "complete"
+    commands = _commands(fixture)
+    assert any("up" in command and "backend" in command for command in commands)
+    assert not any("up" in command and "scheduler" in command for command in commands)
+
+
+def test_file_rollback_failure_still_attempts_database_redis_and_foreground(tmp_path):
+    """One damaged file rollback must not abort independent service recovery."""
+    fixture = _fixture(tmp_path)
+    old_app = fixture["live_app"].with_name(f".{fixture['live_app'].name}.restore-old-{fixture['request_id']}")
+    fixture["env"].update(
+        {
+            "FAKE_REMOVE_PATH_ON": "admin-web",
+            "FAKE_REMOVE_PATH": str(old_app),
+        }
+    )
+
+    result = _run(fixture, fail_phase="clear_redis")
+
+    assert result.returncode != 0
+    receipt = json.loads((fixture["receipts"] / f"{fixture['request_id']}.json").read_text())
+    assert receipt["rollback_status"] == "failed"
+    components = receipt["rollback_components"]
+    assert components["files"]["status"] == "failed"
+    assert components["database"]["status"] == "complete"
+    assert components["redis"]["status"] == "complete"
+    assert components["foreground"]["status"] == "complete"
+    commands = [" ".join(command) for command in _commands(fixture)]
+    assert any("ag_rollback_000000000000 RENAME TO autogallery" in command for command in commands)
+    assert any("redis:/data" in command for command in commands)
+    recovery = [command for command in _commands(fixture) if "up" in command and "backend" in command]
+    assert recovery
+    assert "scheduler" not in recovery[-1]
+    assert not any(part.startswith("worker-") for part in recovery[-1])
+
+
+def test_unproven_post_switch_database_identity_marks_recovery_failed(tmp_path):
+    """A failed identity probe after switching can never count as DB recovery."""
+    fixture = _fixture(tmp_path)
+    fixture["env"]["FAKE_COMPOSE_FAIL_CONTAINS"] = "rollback-identities"
+
+    result = _run(fixture, fail_phase="clear_redis")
+
+    assert result.returncode != 0
+    receipt = json.loads((fixture["receipts"] / f"{fixture['request_id']}.json").read_text())
+    assert receipt["status"] == "recovery_failed"
+    assert receipt["rollback_status"] == "failed"
+    assert receipt["rollback_components"]["database"]["status"] == "failed"
+    assert receipt["rollback_components"]["foreground"]["status"] == "complete"
+    commands = _commands(fixture)
+    probes = [command for command in commands if "--set=offline_restore_phase=rollback-identities" in command]
+    assert len(probes) == 2
+    assert any("up" in command and "postgres" in command for command in commands)
+    assert not any("up" in command and "scheduler" in command for command in commands)
+
+
+def test_staging_mutation_after_writer_stop_fails_before_snapshot(tmp_path):
+    """Post-stop bytes, not a racy preflight hash, define the frozen restore input."""
+    fixture = _fixture(tmp_path)
+    staged = fixture["request"].parent / "payload/app-config/value.txt"
+    fixture["env"].update(
+        {
+            "FAKE_MUTATE_PATH_ON": "worker-import",
+            "FAKE_MUTATE_PATH": str(staged),
+            "FAKE_MUTATE_CONTENT": "tampered",
+        }
+    )
+
+    result = _run(fixture)
+
+    assert result.returncode != 0
+    assert (fixture["live_app"] / "value.txt").read_text() == "old-app"
+    commands = [" ".join(command) for command in _commands(fixture)]
+    assert not any("pg_dump" in command for command in commands)
+    receipt = json.loads((fixture["receipts"] / f"{fixture['request_id']}.json").read_text())
+    assert receipt["phase"] == "freeze_inputs"
 
 
 def test_snapshot_does_not_follow_live_symlinks_outside_explicit_targets(tmp_path):
@@ -354,3 +462,33 @@ def test_snapshot_does_not_follow_live_symlinks_outside_explicit_targets(tmp_pat
     rollback_link = fixture["receipts"] / "rollbacks" / fixture["request_id"] / "app-config" / "outside-link"
     assert rollback_link.is_symlink()
     assert rollback_link.readlink() == outside
+
+
+def test_nested_live_parent_symlink_cannot_redirect_a_restore_write(tmp_path):
+    """A relative payload parent must not traverse a live symlink outside its root."""
+    fixture = _fixture(tmp_path)
+    outside = tmp_path / "outside-library"
+    outside.mkdir()
+    outside_metadata = outside / "metadata.json"
+    outside_metadata.write_text('{"name":"outside"}', encoding="utf-8")
+    (fixture["library"] / "creator").symlink_to(outside, target_is_directory=True)
+
+    result = _run(fixture)
+
+    assert result.returncode != 0
+    assert outside_metadata.read_text(encoding="utf-8") == '{"name":"outside"}'
+
+
+def test_dangling_restore_temp_symlink_is_rejected_without_following_it(tmp_path):
+    """A dangling deterministic restore-new path must never become a write target."""
+    fixture = _fixture(tmp_path)
+    creator = fixture["library"] / "creator"
+    creator.mkdir()
+    outside = tmp_path / "outside-created.json"
+    temp_name = f".metadata.json.restore-new-{fixture['request_id']}"
+    (creator / temp_name).symlink_to(outside)
+
+    result = _run(fixture)
+
+    assert result.returncode != 0
+    assert not outside.exists()
