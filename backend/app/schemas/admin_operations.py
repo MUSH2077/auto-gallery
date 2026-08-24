@@ -25,5 +25,14 @@ class AdminOperationSnapshot(BaseModel):
     completed_at: datetime
 
 
+class AdminOperationCurrent(BaseModel):
+    task_id: str
+    job_id: str | None = None
+    status: Literal["enqueued", "running", "recovering", "paused"]
+    operation_type: str
+    progress: dict[str, Any] | None = None
+
+
 class AdminOperationSnapshotResponse(BaseModel):
     snapshot: AdminOperationSnapshot | None = None
+    current: AdminOperationCurrent | None = None

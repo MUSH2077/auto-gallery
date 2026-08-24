@@ -2685,6 +2685,171 @@ test("gallery-dl connectivity saves then starts one asynchronous source test", a
   expect(results.violations).toEqual([]);
 });
 
+test("proxy operation discovery starts with settings and reattaches across reload", async ({ page }) => {
+  let latestRequestedAt = 0;
+  let settingsFulfilledAt = 0;
+  let starts = 0;
+  let operationState: "running" | "failed" | "complete" = "running";
+
+  await page.context().unroute("**/api/v1/**");
+  await page.route("**/api/v1/auth/me", (route) => route.fulfill({ json: me }));
+  await page.route("**/api/v1/system/workbench", (route) => route.fulfill({ json: workbench }));
+  await page.route("**/api/v1/operations/overview**", (route) => route.fulfill({ json: {
+    view: "attention", total: 0,
+    summary: { attention: 0, critical: 0, warning: 0, resolved: 0, active: 0, resource_limited: 0 },
+    items: [],
+  } }));
+
+  await page.route("**/api/v1/admin/settings**", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fallback();
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    settingsFulfilledAt = Date.now();
+    await route.fulfill({ json: {
+      proxy: { enabled: true, http_proxy: "http://proxy.example:7890", https_proxy: "", no_proxy: "", ssl_verify: true },
+    } });
+  });
+  await page.route("**/api/v1/admin/proxy/test/latest", async (route) => {
+    latestRequestedAt ||= Date.now();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await route.fulfill({ json: operationState === "complete" ? {
+      current: null,
+      snapshot: {
+        task_id: "reattached-proxy-task", job_id: "admin-reattached-proxy-task-attempt-1",
+        status: "complete", operation_type: "admin-proxy-test",
+        progress: { phase: "complete", label: "Proxy connectivity test complete" },
+        result: {
+          proxy_enabled: true, proxy_reachable: true, proxy_reachable_error: "",
+          proxy_config: { http: "http://proxy.example:7890", https: "not set" }, results: [],
+        },
+        completed_at: "2026-08-24T12:00:00Z",
+      },
+    } : operationState === "running" ? {
+      snapshot: null,
+      current: {
+        task_id: "reattached-proxy-task", job_id: "admin-reattached-proxy-task-attempt-1",
+        status: "running", operation_type: "admin-proxy-test",
+        progress: { phase: "testing", label: "Testing proxy connectivity" },
+      },
+    } : { snapshot: null, current: null } });
+  });
+  await page.route("**/api/v1/admin/proxy/test", async (route) => {
+    if (route.request().method() === "POST") starts += 1;
+    await route.fulfill({ status: 409, json: { detail: "duplicate start" } });
+  });
+  await page.route("**/api/v1/admin/operations/reattached-proxy-task", async (route) => {
+    await route.fulfill({ json: operationState === "complete" ? {
+      task_id: "reattached-proxy-task", job_id: "reattached-proxy-task", status: "complete",
+      operation_type: "admin-proxy-test", progress: { phase: "complete", label: "Proxy connectivity test complete" },
+      result: {
+        proxy_enabled: true, proxy_reachable: true, proxy_reachable_error: "",
+        proxy_config: { http: "http://proxy.example:7890", https: "not set" }, results: [],
+      }, error: null,
+    } : operationState === "failed" ? {
+      task_id: "reattached-proxy-task", job_id: "reattached-proxy-task", status: "failed",
+      operation_type: "admin-proxy-test", progress: { phase: "failed", label: "Proxy test failed" },
+      result: {}, error: "Proxy endpoint unavailable", reason_code: "task_failed",
+    } : {
+      task_id: "reattached-proxy-task", job_id: "reattached-proxy-task", status: "running",
+      operation_type: "admin-proxy-test", progress: { phase: "testing", label: "Testing proxy connectivity" },
+      result: {}, error: null,
+    } });
+  });
+  await page.route("**/api/v1/admin/operations/reattached-proxy-task/retry", async (route) => {
+    operationState = "complete";
+    await route.fulfill({ status: 202, json: {
+      task_id: "reattached-proxy-task", job_id: "admin-reattached-proxy-task-attempt-2",
+      status: "enqueued", operation_type: "admin-proxy-test",
+    } });
+  });
+
+  await page.goto("/admin/settings/proxy");
+  await expect.poll(() => latestRequestedAt).toBeGreaterThan(0);
+  await expect.poll(() => settingsFulfilledAt).toBeGreaterThan(0);
+  expect(latestRequestedAt).toBeLessThan(settingsFulfilledAt);
+  const start = page.getByRole("button", { name: /Test Now|Testing/ });
+  await expect(start).toBeDisabled();
+  await expect(page.getByText("Testing proxy connectivity")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Task detail" }))
+    .toHaveAttribute("href", "/admin/jobs?tab=admin&task=reattached-proxy-task");
+
+  await page.reload();
+  await expect(start).toBeDisabled();
+  await expect(page.getByText("Testing proxy connectivity")).toBeVisible();
+  expect(starts).toBe(0);
+
+  operationState = "failed";
+  const operation = page.locator("[data-admin-operation='admin-proxy-test']");
+  await expect(operation.getByRole("alert")).toContainText("Proxy endpoint unavailable", { timeout: 10_000 });
+  await page.waitForTimeout(1_500);
+  await expect(operation.getByRole("button", { name: "Retry" })).toBeVisible();
+  await operation.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByText("Proxy is reachable")).toBeVisible({ timeout: 10_000 });
+  await expect(start).toBeEnabled();
+  expect(starts).toBe(0);
+});
+
+test("gallery-dl operation discovery is concurrent with its config request", async ({ page }) => {
+  let latestRequestedAt = 0;
+  let configFulfilledAt = 0;
+  await page.context().unroute("**/api/v1/**");
+  await page.route("**/api/v1/auth/me", (route) => route.fulfill({ json: me }));
+  await page.route("**/api/v1/system/workbench", (route) => route.fulfill({ json: workbench }));
+  await page.route("**/api/v1/operations/overview**", (route) => route.fulfill({ json: {
+    view: "attention", total: 0,
+    summary: { attention: 0, critical: 0, warning: 0, resolved: 0, active: 0, resource_limited: 0 },
+    items: [],
+  } }));
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection/latest?source=pixiv", async (route) => {
+    latestRequestedAt = Date.now();
+    await route.fulfill({ json: { snapshot: null, current: null } });
+  });
+  await page.route("**/api/v1/admin/gallerydl-config", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fallback();
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    configFulfilledAt = Date.now();
+    await route.fulfill({ json: {
+      pixiv: {}, twitter: {}, iwara: {}, danbooru: {}, pinterest: {}, lofter: {}, weibo: {}, bilibili: {},
+      sources: { pixiv: { name: "Pixiv", supported: true, description: "Pixiv source" } },
+    } });
+  });
+
+  await page.goto("/admin/settings/gallerydl");
+  await expect(page.getByRole("button", { name: "Test Connection" })).toBeVisible();
+  expect(latestRequestedAt).toBeGreaterThan(0);
+  expect(latestRequestedAt).toBeLessThan(configFulfilledAt);
+});
+
+test("integrity scan failure never renders All Clear and remains retryable", async ({ page }) => {
+  await page.route("**/api/v1/admin/integrity-check/latest", (route) => route.fulfill({
+    json: { snapshot: null, current: null },
+  }));
+  await page.route("**/api/v1/admin/integrity-check", (route) => route.fulfill({
+    status: 202,
+    json: {
+      task_id: "failed-integrity-task", job_id: "admin-failed-integrity-task-attempt-1",
+      status: "enqueued", operation_type: "admin-integrity-scan",
+    },
+  }));
+  await page.route("**/api/v1/admin/operations/failed-integrity-task", (route) => route.fulfill({ json: {
+    task_id: "failed-integrity-task", job_id: "failed-integrity-task", status: "failed",
+    operation_type: "admin-integrity-scan", progress: { phase: "failed", label: "Operation failed" },
+    result: {}, error: "Integrity database unavailable", reason_code: "task_failed",
+  } }));
+
+  await page.goto("/admin/data-mgmt");
+  await page.getByRole("button", { name: "Run Check" }).click();
+  await expect(page.locator("[data-admin-operation='admin-integrity-scan']").getByRole("alert"))
+    .toContainText("Integrity database unavailable");
+  await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+  await expect(page.getByText("All Clear")).toHaveCount(0);
+});
+
 test("profile is independent and the legacy settings URL redirects with its query", async ({ page }) => {
   await page.goto("/admin/profile");
   const breadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });

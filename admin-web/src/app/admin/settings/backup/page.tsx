@@ -155,12 +155,12 @@ export default function BackupPage() {
             <button
               type="button"
               onClick={() => estimate.start(undefined)}
-              disabled={estimate.isStarting || estimate.isActive}
+              disabled={!estimate.canStart}
               className="btn-ghost"
             >
               {estimate.isStarting ? t("admin_operation.starting") : t("backup.refresh_estimate")}
             </button>
-            <button onClick={() => createOperation.start(selectedArr)} disabled={createOperation.isStarting || createOperation.isActive || selected.size === 0}
+            <button onClick={() => createOperation.start(selectedArr)} disabled={!createOperation.canStart || selected.size === 0}
               className="btn-primary">
               {createOperation.isStarting || createOperation.isActive ? t("backup.creating") : t("backup.create")}
             </button>

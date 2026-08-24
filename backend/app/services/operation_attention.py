@@ -742,6 +742,37 @@ async def compact_terminal_tasks(
         ),
     )
     download_missing = ~exists().where(DownloadJob.id == TaskRun.subject_id)
+    # TaskRun is the snapshot authority. Protect exactly the newest completed
+    # row for every registered operation/scope pair, even after its ordinary
+    # 24-hour admin retention expires. A later cycle may delete the former
+    # snapshot once a newer completed row exists.
+    from app.services.operations import (
+        ADMIN_DISPATCH_META_KEY,
+        ADMIN_OPERATION_REGISTRY,
+    )
+
+    snapshot_scope = TaskRun.meta[ADMIN_DISPATCH_META_KEY]["scope_key"].astext
+    protected_snapshot_ids = set(
+        (
+            await db.execute(
+                select(TaskRun.id)
+                .where(
+                    TaskRun.kind == "admin",
+                    TaskRun.operation_type.in_(tuple(ADMIN_OPERATION_REGISTRY)),
+                    TaskRun.status == "complete",
+                    TaskRun.finished_at.is_not(None),
+                    snapshot_scope.is_not(None),
+                )
+                .distinct(TaskRun.operation_type, snapshot_scope)
+                .order_by(
+                    TaskRun.operation_type,
+                    snapshot_scope,
+                    TaskRun.finished_at.desc(),
+                    TaskRun.id.desc(),
+                )
+            )
+        ).scalars()
+    )
     tasks = list(
         (
             await db.execute(
@@ -750,6 +781,9 @@ async def compact_terminal_tasks(
                     TaskRun.compactable_at.is_not(None),
                     TaskRun.compactable_at <= now,
                     TaskRun.attention_state != "open",
+                    TaskRun.id.not_in(protected_snapshot_ids)
+                    if protected_snapshot_ids
+                    else True,
                     ~open_child_attention,
                     or_(TaskRun.subject_type.is_(None), TaskRun.subject_type != "import_job"),
                     or_(
@@ -1024,6 +1058,7 @@ async def operations_overview(
     view: str = "attention",
     offset: int = 0,
     limit: int = 50,
+    excluded_admin_operation_types: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Return one compact operations feed for desktop and mobile clients."""
 
@@ -1107,7 +1142,16 @@ async def operations_overview(
                 "available_actions": ["open_repository", "copy_diagnostics"],
                 "task": None,
             })
-    filters = [TaskRun.kind != "account"]
+    visible_task = (
+        or_(
+            TaskRun.kind != "admin",
+            TaskRun.operation_type.is_(None),
+            TaskRun.operation_type.not_in(excluded_admin_operation_types),
+        )
+        if excluded_admin_operation_types
+        else True
+    )
+    filters = [TaskRun.kind != "account", visible_task]
     if view == "attention":
         filters.append(TaskRun.attention_state == "open")
     elif view == "resolved":
@@ -1138,7 +1182,7 @@ async def operations_overview(
         (
             await db.execute(
                 select(TaskRun.attention_state, func.count(TaskRun.id))
-                .where(TaskRun.kind != "account")
+                .where(TaskRun.kind != "account", visible_task)
                 .group_by(TaskRun.attention_state)
             )
         ).all()
@@ -1148,6 +1192,7 @@ async def operations_overview(
             await db.execute(
                 select(func.count(TaskRun.id)).where(
                     TaskRun.kind != "account",
+                    visible_task,
                     TaskRun.status.in_(ACTIVE_TASK_STATUSES),
                 )
             )
@@ -1164,6 +1209,7 @@ async def operations_overview(
             await db.execute(
                 select(func.count(TaskRun.id)).where(
                     TaskRun.kind != "account",
+                    visible_task,
                     TaskRun.attention_state == "open",
                     TaskRun.reason_code.in_(severe_reason_codes),
                 )
@@ -1175,6 +1221,7 @@ async def operations_overview(
             await db.execute(
                 select(func.count(TaskRun.id)).where(
                     TaskRun.kind != "account",
+                    visible_task,
                     TaskRun.status.in_(ACTIVE_TASK_STATUSES),
                     TaskRun.resource_state == "waiting",
                     TaskRun.resource_reason.is_not(None),

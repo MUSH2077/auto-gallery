@@ -89,6 +89,7 @@ class AdminOperationSpec:
     queue_names: frozenset[str]
     scope_prefixes: tuple[str, ...]
     default_job_timeout: int
+    required_permission: str
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,7 @@ def _spec(
     queues: tuple[str, ...] = ("maintenance",),
     scopes: tuple[str, ...],
     timeout: int = 14400,
+    permission: str = "system",
 ) -> AdminOperationSpec:
     return AdminOperationSpec(
         operation_type=operation_type,
@@ -114,6 +116,7 @@ def _spec(
         queue_names=frozenset(queues),
         scope_prefixes=scopes,
         default_job_timeout=timeout,
+        required_permission=permission,
     )
 
 
@@ -152,6 +155,7 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
             "danbooru-mapping-refresh",
             "app.jobs.admin_operations.run_creator_reenrich_operation",
             scopes=("library:creator-reenrich:active",),
+            permission="subscriptions",
         ),
         _spec(
             "admin-danbooru-batch-import",
@@ -159,6 +163,7 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
             queues=("imports",),
             scopes=("danbooru:batch-import:",),
             timeout=3600,
+            permission="subscriptions",
         ),
         _spec(
             "danbooru-import-all",
@@ -166,6 +171,7 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
             queues=("imports",),
             scopes=("danbooru:import-all:",),
             timeout=3600,
+            permission="subscriptions",
         ),
         _spec(
             "admin-danbooru-url-batch-import",
@@ -173,6 +179,7 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
             queues=("imports",),
             scopes=("danbooru:url-batch-import:",),
             timeout=3600,
+            permission="subscriptions",
         ),
         _spec(
             "admin-search-reindex",
@@ -185,12 +192,14 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
             "app.jobs.admin_operations.run_curation_backfill_operation",
             scopes=("library:curation-backfill:active",),
             timeout=7 * 24 * 60 * 60,
+            permission="curation",
         ),
         _spec(
             "admin-gitllery-verify",
             "app.jobs.admin_operations.run_gitllery_verify_operation",
             scopes=("gitllery:verify:",),
             timeout=7 * 24 * 60 * 60,
+            permission="curation",
         ),
         _spec(
             "admin-gitllery-sync",
@@ -210,6 +219,7 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
             "app.jobs.asset_dedup.run_asset_dedup_scan",
             scopes=("lock:admin:asset-dedup-scan",),
             timeout=3600,
+            permission="curation",
         ),
         _spec(
             "admin-download-conflict-reconciliation",
@@ -247,6 +257,43 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
         ),
     )
 }
+
+
+def admin_operation_required_permission(operation_type: str | None) -> str | None:
+    """Return the owning module for a closed-registry administrator operation."""
+
+    spec = ADMIN_OPERATION_REGISTRY.get(str(operation_type or ""))
+    return spec.required_permission if spec is not None else None
+
+
+def can_access_admin_operation(user: Any, operation_type: str | None) -> bool:
+    """Keep generic task surfaces from crossing an operation's module boundary."""
+
+    required = admin_operation_required_permission(operation_type)
+    if required is None or bool(getattr(user, "is_admin", False)):
+        return True
+    return required in set(getattr(user, "permissions", None) or ())
+
+
+def inaccessible_admin_operation_types(user: Any) -> frozenset[str]:
+    """List registered operation types hidden from this authenticated user."""
+
+    if bool(getattr(user, "is_admin", False)):
+        return frozenset()
+    permissions = set(getattr(user, "permissions", None) or ())
+    return frozenset(
+        operation_type
+        for operation_type, spec in ADMIN_OPERATION_REGISTRY.items()
+        if spec.required_permission not in permissions
+    )
+
+
+def require_admin_operation_access(user: Any, operation_type: str | None) -> None:
+    """Reject generic detail/control access without exposing stored task data."""
+
+    required = admin_operation_required_permission(operation_type)
+    if required is not None and not can_access_admin_operation(user, operation_type):
+        raise HTTPException(status_code=403, detail=f"Missing permission: {required}")
 
 
 _ACQUIRE_ATTEMPT_OPERATION_SCRIPT = """
@@ -1408,7 +1455,7 @@ async def latest_successful_admin_operation(
         queue_name="maintenance",
     )
     scope_text = TaskRun.meta[ADMIN_DISPATCH_META_KEY]["scope_key"].astext
-    task = (
+    snapshot_task = (
         await db.execute(
             select(TaskRun)
             .where(
@@ -1422,18 +1469,42 @@ async def latest_successful_admin_operation(
             .limit(1)
         )
     ).scalar_one_or_none()
-    if task is None:
-        return {"snapshot": None}
-    return {
-        "snapshot": {
-            "task_id": str(task.id),
-            "job_id": task.rq_job_id,
+    current_task = (
+        await db.execute(
+            select(TaskRun)
+            .where(
+                TaskRun.kind == "admin",
+                TaskRun.operation_type == operation_type,
+                TaskRun.status.in_(_ACTIVE_ADMIN_STATUSES),
+                scope_text == scope_key,
+            )
+            .order_by(TaskRun.created_at.desc(), TaskRun.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    snapshot = None
+    if snapshot_task is not None:
+        snapshot = {
+            "task_id": str(snapshot_task.id),
+            "job_id": snapshot_task.rq_job_id,
             "status": "complete",
-            "operation_type": str(task.operation_type),
-            "progress": task.progress_data,
-            "result": dict(task.result_data or {}),
-            "completed_at": task.finished_at,
+            "operation_type": str(snapshot_task.operation_type),
+            "progress": snapshot_task.progress_data,
+            "result": dict(snapshot_task.result_data or {}),
+            "completed_at": snapshot_task.finished_at,
         }
+    current = None
+    if current_task is not None:
+        current = {
+            "task_id": str(current_task.id),
+            "job_id": current_task.rq_job_id,
+            "status": str(current_task.status),
+            "operation_type": str(current_task.operation_type),
+            "progress": current_task.progress_data,
+        }
+    return {
+        "snapshot": snapshot,
+        "current": current,
     }
 
 

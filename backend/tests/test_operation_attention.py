@@ -200,6 +200,90 @@ async def test_compaction_keeps_download_that_owns_recoverable_artifacts():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_compaction_preserves_only_latest_completed_admin_scope_snapshot():
+    """TaskRun retention keeps the one snapshot used by the latest endpoint."""
+    from app.database import async_session, engine
+    from app.models import TaskRun
+    from app.services import operations
+    from app.services.operation_attention import compact_terminal_tasks
+    from app.services.tasks import TaskService
+
+    expired = datetime.now(timezone.utc) - timedelta(minutes=1)
+    ids: list[UUID] = []
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            service = TaskService(db)
+            first = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-integrity-scan",
+                scope_key="diagnostics:integrity:active",
+                title="Integrity scan",
+                entity="integrity",
+                options={},
+            )
+            await service.update_task(
+                first.task,
+                status="complete",
+                result={"issues": [], "generation": 1},
+            )
+            first.task.compactable_at = expired
+            ids.append(first.task.id)
+
+            cancelled = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-integrity-scan",
+                scope_key="diagnostics:integrity:active",
+                title="Integrity scan",
+                entity="integrity",
+                options={},
+            )
+            await service.update_task(cancelled.task, status="cancelled")
+            cancelled.task.compactable_at = expired
+            ids.append(cancelled.task.id)
+
+            latest = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-integrity-scan",
+                scope_key="diagnostics:integrity:active",
+                title="Integrity scan",
+                entity="integrity",
+                options={},
+            )
+            await service.update_task(
+                latest.task,
+                status="complete",
+                result={"issues": [], "generation": 2},
+            )
+            latest.task.compactable_at = expired
+            ids.append(latest.task.id)
+            latest_id = latest.task.id
+            await db.commit()
+
+            report = await compact_terminal_tasks(db, dry_run=False)
+            assert report["deleted_tasks"] == 2
+            remaining = set(
+                (
+                    await db.execute(select(TaskRun.id).where(TaskRun.id.in_(ids)))
+                ).scalars()
+            )
+            assert remaining == {latest_id}
+
+            state = await operations.latest_successful_admin_operation(
+                db,
+                operation_type="admin-integrity-scan",
+                scope_key="diagnostics:integrity:active",
+            )
+            assert state["snapshot"]["task_id"] == str(latest_id)
+            assert state["snapshot"]["result"]["generation"] == 2
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_repository_backlog_guard_ignores_library_metadata_projection():
     """Only DOWNLOAD_ROOT artifacts may keep a repository failure actionable."""
     from app.database import async_session, engine

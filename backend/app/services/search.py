@@ -2206,8 +2206,15 @@ class SearchService:
         offset: int,
         limit: int,
         visibility: str = "all",
+        excluded_admin_operation_types: frozenset[str] = frozenset(),
     ) -> dict:
         conditions = [TaskRun.kind != "account"]
+        if excluded_admin_operation_types:
+            conditions.append(or_(
+                TaskRun.kind != "admin",
+                TaskRun.operation_type.is_(None),
+                TaskRun.operation_type.not_in(excluded_admin_operation_types),
+            ))
         if visibility == "actionable":
             conditions.append(
                 or_(
@@ -2272,6 +2279,7 @@ class SearchService:
         visibility: str = "all",
         offset: int = 0,
         limit: int = 50,
+        excluded_admin_operation_types: frozenset[str] = frozenset(),
     ) -> dict:
         parsed = parse_search_query(query, "tasks")
         resolved = await self._resolve_qualifiers(parsed)
@@ -2281,6 +2289,7 @@ class SearchService:
             offset,
             limit,
             visibility=visibility,
+            excluded_admin_operation_types=excluded_admin_operation_types,
         )
 
     async def search_download_jobs(

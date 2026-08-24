@@ -6,9 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import RequirePermission
 from app.database import get_db
 from app.services.operation_attention import operations_overview
+from app.services.operations import inaccessible_admin_operation_types
 
 
-router = APIRouter(dependencies=[RequirePermission("tasks")])
+_require_tasks = RequirePermission("tasks")
+router = APIRouter(dependencies=[_require_tasks])
 
 
 @router.get("/overview")
@@ -17,6 +19,7 @@ async def get_operations_overview(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
+    user=_require_tasks,
 ):
     try:
         return await operations_overview(
@@ -24,6 +27,7 @@ async def get_operations_overview(
             view=view,
             offset=offset,
             limit=limit,
+            excluded_admin_operation_types=inaccessible_admin_operation_types(user),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

@@ -4092,6 +4092,24 @@ export interface components {
             /** Task Id */
             task_id: string;
         };
+        /** AdminOperationCurrent */
+        AdminOperationCurrent: {
+            /** Job Id */
+            job_id?: string | null;
+            /** Operation Type */
+            operation_type: string;
+            /** Progress */
+            progress?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "enqueued" | "running" | "recovering" | "paused";
+            /** Task Id */
+            task_id: string;
+        };
         /** AdminOperationSnapshot */
         AdminOperationSnapshot: {
             /**
@@ -4121,6 +4139,7 @@ export interface components {
         };
         /** AdminOperationSnapshotResponse */
         AdminOperationSnapshotResponse: {
+            current?: components["schemas"]["AdminOperationCurrent"] | null;
             snapshot?: components["schemas"]["AdminOperationSnapshot"] | null;
         };
         /** AdminSettingsUpdate */

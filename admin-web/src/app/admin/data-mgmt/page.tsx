@@ -424,7 +424,7 @@ export default function DataManagementPage() {
           <button
             aria-label={t("datamgmt.integrity_run")}
             onClick={() => integrity.start(undefined)}
-            disabled={integrity.isStarting || integrity.isActive}
+            disabled={!integrity.canStart}
             className="btn-primary px-3 py-1.5 text-xs"
           >
             {integrity.isStarting || integrity.isActive ? t("datamgmt.integrity_running") : t("datamgmt.integrity_run")}
@@ -618,7 +618,7 @@ export default function DataManagementPage() {
                 <div className="text-sm font-medium mt-0.5">{backups.data?.backups?.length ?? 0}</div>
               </div>
             </div>
-            <button onClick={() => backupOperation.start(undefined)} disabled={backupOperation.isStarting || backupOperation.isActive}
+            <button onClick={() => backupOperation.start(undefined)} disabled={!backupOperation.canStart}
               className="btn-primary w-full">
               {backupOperation.isStarting || backupOperation.isActive ? t("datamgmt.backup_creating") : t("datamgmt.backup_create")}
             </button>

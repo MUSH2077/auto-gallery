@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import UUID
@@ -234,7 +235,7 @@ async def test_latest_snapshot_ignores_failed_runs_and_is_scoped(monkeypatch):
                 headers=_headers(f"{PREFIX}snapshot"),
             )
             assert twitter.status_code == 200
-            assert twitter.json() == {"snapshot": None}
+            assert twitter.json() == {"snapshot": None, "current": None}
     finally:
         async with async_session() as db:
             await _clear_rows(db)
@@ -323,6 +324,320 @@ async def test_failed_backup_estimate_retries_same_task_and_publishes_snapshot(m
             assert latest.status_code == 200
             assert latest.json()["snapshot"]["task_id"] == str(task_id)
             assert latest.json()["snapshot"]["result"] == result
+    finally:
+        async with async_session() as db:
+            await _clear_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_proxy_worker_redacts_credentials_before_logging_and_persisting(
+    monkeypatch,
+    caplog,
+):
+    """Proxy userinfo may configure urllib but must never enter TaskRun history."""
+    from app.api.admin import settings as settings_api
+    from app.database import async_session, engine
+    from app.jobs.admin_operations import _run_registered_admin_operation
+    from app.main import app
+    from app.models import TaskRun
+
+    _stub_rq_transport(monkeypatch)
+    secret = "proxy-secret-password"
+
+    async def credentialed_proxy(*_args, **_kwargs):
+        return {
+            "enabled": True,
+            "http_proxy": f"http://alice:{secret}@proxy.example:7890",
+            "https_proxy": f"https://bob:{secret}@secure-proxy.example:8443",
+            "no_proxy": "",
+            "ssl_verify": True,
+        }
+
+    class FakeSocket:
+        def close(self):
+            return None
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class FakeOpener:
+        def open(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(settings_api, "_get_setting", credentialed_proxy)
+    monkeypatch.setattr("socket.create_connection", lambda *_args, **_kwargs: FakeSocket())
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_args, **_kwargs: FakeOpener())
+    caplog.set_level(logging.INFO, logger=settings_api.__name__)
+
+    transport = ASGITransport(app=app)
+    task_id: UUID | None = None
+    try:
+        async with async_session() as db:
+            await _clear_rows(db)
+            await _seed_user(db, f"{PREFIX}proxy_redaction", permissions=["system"])
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            started = await client.post(
+                "/api/v1/admin/proxy/test",
+                headers=_headers(f"{PREFIX}proxy_redaction"),
+            )
+            assert started.status_code == 202
+            task_id = UUID(started.json()["task_id"])
+
+        result = await _run_registered_admin_operation(str(task_id), 1)
+        rendered = str(result)
+        assert secret not in rendered
+        assert "alice" not in rendered
+        assert "bob" not in rendered
+        assert result["proxy_config"] == {
+            "http": "http://proxy.example:7890",
+            "https": "https://secure-proxy.example:8443",
+        }
+        assert secret not in caplog.text
+        assert "alice" not in caplog.text
+        assert "bob" not in caplog.text
+
+        async with async_session() as db:
+            persisted = await db.get(TaskRun, task_id)
+            assert persisted.status == "complete"
+            assert secret not in str(persisted.result_data)
+            assert persisted.result_data["proxy_config"] == result["proxy_config"]
+    finally:
+        async with async_session() as db:
+            await _clear_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_tasks_permission_cannot_read_list_or_retry_system_operation(monkeypatch):
+    """A tasks-only user cannot cross into a system operation's durable data."""
+    from app.database import async_session, engine
+    from app.main import app
+    from app.services import operations
+    from app.services.tasks import TaskService
+
+    _stub_rq_transport(monkeypatch)
+    secret = "legacy-proxy-password"
+    task_id: UUID | None = None
+    transport = ASGITransport(app=app)
+    try:
+        async with async_session() as db:
+            await _clear_rows(db)
+            await _seed_user(db, f"{PREFIX}tasks_only", permissions=["tasks"])
+            await _seed_user(
+                db,
+                f"{PREFIX}system_tasks",
+                permissions=["tasks", "system"],
+            )
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-proxy-test",
+                scope_key="diagnostics:proxy:active",
+                title="Proxy connectivity test",
+                entity="proxy-test",
+                options={"proxy_url": f"http://alice:{secret}@proxy.example:7890"},
+            )
+            await TaskService(db).update_task(
+                prepared.task,
+                status="failed",
+                progress={"phase": "failed", "label": "Proxy test failed"},
+                result={"proxy": f"http://alice:{secret}@proxy.example:7890"},
+                error=f"Cannot connect through http://alice:{secret}@proxy.example:7890",
+            )
+            await TaskService(db).update_task(
+                prepared.task,
+                attention_state="acknowledged",
+            )
+            task_id = prepared.task.id
+            await db.commit()
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            tasks_headers = _headers(f"{PREFIX}tasks_only")
+            detail = await client.get(f"/api/v1/tasks/{task_id}", headers=tasks_headers)
+            assert detail.status_code == 403
+            assert secret not in detail.text
+
+            listed = await client.get(
+                "/api/v1/tasks?include_account=true",
+                headers=tasks_headers,
+            )
+            assert listed.status_code == 200
+            assert str(task_id) not in listed.text
+            assert secret not in listed.text
+
+            searched = await client.get(
+                "/api/v1/tasks?q=Proxy",
+                headers=tasks_headers,
+            )
+            assert searched.status_code == 200
+            assert str(task_id) not in searched.text
+            assert secret not in searched.text
+
+            overview = await client.get(
+                "/api/v1/operations/overview?view=resolved",
+                headers=tasks_headers,
+            )
+            assert overview.status_code == 200
+            assert str(task_id) not in overview.text
+            assert secret not in overview.text
+
+            denied_retry = await client.post(
+                f"/api/v1/tasks/{task_id}/retry",
+                headers=tasks_headers,
+            )
+            assert denied_retry.status_code == 403
+            assert secret not in denied_retry.text
+
+            privileged_detail = await client.get(
+                f"/api/v1/tasks/{task_id}",
+                headers=_headers(f"{PREFIX}system_tasks"),
+            )
+            assert privileged_detail.status_code == 200
+            assert privileged_detail.json()["id"] == str(task_id)
+    finally:
+        async with async_session() as db:
+            await _clear_rows(db)
+        await engine.dispose()
+
+
+def test_admin_operation_registry_uses_the_owning_module_permission():
+    """Generic task access follows the API module that starts each operation."""
+    from app.services.operations import admin_operation_required_permission
+
+    assert admin_operation_required_permission("admin-proxy-test") == "system"
+    assert admin_operation_required_permission("danbooru-mapping-refresh") == "subscriptions"
+    assert admin_operation_required_permission("admin-danbooru-batch-import") == "subscriptions"
+    assert admin_operation_required_permission("danbooru-import-all") == "subscriptions"
+    assert admin_operation_required_permission("admin-danbooru-url-batch-import") == "subscriptions"
+    assert admin_operation_required_permission("admin-curation-backfill") == "curation"
+    assert admin_operation_required_permission("admin-gitllery-verify") == "curation"
+
+
+@pytest.mark.asyncio
+async def test_integrity_scan_rolls_back_and_raises_an_essential_query_failure():
+    """An aborted scan is never translated into an empty All Clear result."""
+    from app.api.admin import settings as settings_api
+
+    class BrokenSession:
+        rolled_back = False
+
+        async def execute(self, *_args, **_kwargs):
+            raise RuntimeError("integrity database unavailable")
+
+        async def rollback(self):
+            self.rolled_back = True
+
+    db = BrokenSession()
+    with pytest.raises(RuntimeError, match="integrity database unavailable"):
+        await settings_api._run_integrity_check(db)
+    assert db.rolled_back is True
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_integrity_aborted_transaction_fails_task_and_remains_retryable(monkeypatch):
+    """Worker failure recording uses a fresh transaction after the scan aborts."""
+    from sqlalchemy import text as sql_text
+
+    from app.api.admin import settings as settings_api
+    from app.database import async_session, engine
+    from app.jobs.admin_operations import _run_registered_admin_operation
+    from app.main import app
+    from app.models import TaskRun
+
+    _stub_rq_transport(monkeypatch)
+
+    async def abort_transaction(db):
+        await db.execute(sql_text("SELECT * FROM task2_missing_integrity_table"))
+
+    monkeypatch.setattr(settings_api, "_run_integrity_check", abort_transaction)
+    task_id: UUID | None = None
+    transport = ASGITransport(app=app)
+    try:
+        async with async_session() as db:
+            await _clear_rows(db)
+            await _seed_user(db, f"{PREFIX}integrity_failure", permissions=["system"])
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            started = await client.post(
+                "/api/v1/admin/integrity-check",
+                headers=_headers(f"{PREFIX}integrity_failure"),
+            )
+            assert started.status_code == 202
+            task_id = UUID(started.json()["task_id"])
+
+            with pytest.raises(Exception, match="task2_missing_integrity_table"):
+                await _run_registered_admin_operation(str(task_id), 1)
+
+            async with async_session() as db:
+                failed = await db.get(TaskRun, task_id)
+                assert failed.status == "failed"
+                assert failed.result_data in (None, {})
+                assert "task2_missing_integrity_table" in failed.error_log
+
+            retry = await client.post(
+                f"/api/v1/admin/operations/{task_id}/retry",
+                headers=_headers(f"{PREFIX}integrity_failure"),
+            )
+            assert retry.status_code == 202
+            assert retry.json()["task_id"] == str(task_id)
+    finally:
+        async with async_session() as db:
+            await _clear_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_latest_endpoint_returns_database_backed_current_operation(monkeypatch):
+    """A remounted client can attach to the active TaskRun before starting."""
+    from app.database import async_session, engine
+    from app.main import app
+    from app.services import operations
+
+    _stub_rq_transport(monkeypatch)
+    task_id: UUID | None = None
+    transport = ASGITransport(app=app)
+    try:
+        async with async_session() as db:
+            await _clear_rows(db)
+            await _seed_user(db, f"{PREFIX}current", permissions=["system"])
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-integrity-scan",
+                scope_key="diagnostics:integrity:active",
+                title="Integrity scan",
+                entity="integrity",
+                options={},
+            )
+            task_id = prepared.task.id
+            await db.commit()
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(
+                "/api/v1/admin/integrity-check/latest",
+                headers=_headers(f"{PREFIX}current"),
+            )
+            assert response.status_code == 200
+            assert response.json() == {
+                "snapshot": None,
+                "current": {
+                    "task_id": str(task_id),
+                    "job_id": f"admin-{task_id}-attempt-1",
+                    "status": "enqueued",
+                    "operation_type": "admin-integrity-scan",
+                    "progress": {"phase": "enqueued", "label": "Integrity scan queued"},
+                },
+            }
     finally:
         async with async_session() as db:
             await _clear_rows(db)

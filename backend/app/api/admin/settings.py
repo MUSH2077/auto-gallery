@@ -809,8 +809,10 @@ async def _run_integrity_check(db: AsyncSession):
                 "description": "下载目录中存在但数据库无对应 work_source 记录的文件",
                 "items": orphaned_files[:50],
             })
-    except Exception as e:
-        logger.warning("Integrity check - orphaned files: %s", e)
+    except Exception:
+        await db.rollback()
+        logger.exception("Integrity check failed while scanning orphaned files")
+        raise
 
     # 2. Missing thumbnails (works with asset but no thumbnail)
     try:
@@ -835,8 +837,10 @@ async def _run_integrity_check(db: AsyncSession):
                 "description": "有资产记录但缺少缩略图的作品",
                 "items": missing_thumbs[:50],
             })
-    except Exception as e:
-        logger.warning("Integrity check - missing thumbs: %s", e)
+    except Exception:
+        await db.rollback()
+        logger.exception("Integrity check failed while scanning missing thumbnails")
+        raise
 
     # 3. Orphaned creators (no works, no subscriptions, no source_creators)
     try:
@@ -856,8 +860,10 @@ async def _run_integrity_check(db: AsyncSession):
                 "description": "无作品、无订阅、无来源账号的孤立创作者",
                 "items": orphaned_creators,
             })
-    except Exception as e:
-        logger.warning("Integrity check - orphaned creators: %s", e)
+    except Exception:
+        await db.rollback()
+        logger.exception("Integrity check failed while scanning orphaned creators")
+        raise
 
     # 4. Orphaned tags (no work_tags associations)
     try:
@@ -875,8 +881,10 @@ async def _run_integrity_check(db: AsyncSession):
                 "description": "无关联作品的孤立标签",
                 "items": orphaned_tags,
             })
-    except Exception as e:
-        logger.warning("Integrity check - orphaned tags: %s", e)
+    except Exception:
+        await db.rollback()
+        logger.exception("Integrity check failed while scanning orphaned tags")
+        raise
 
     # 5. Dead links (asset records where file doesn't exist on disk)
     try:
@@ -924,8 +932,10 @@ async def _run_integrity_check(db: AsyncSession):
                 "description": "数据库记录指向不存在文件的死链",
                 "items": dead_links[:50],
             })
-    except Exception as e:
-        logger.warning("Integrity check - dead links: %s", e)
+    except Exception:
+        await db.rollback()
+        logger.exception("Integrity check failed while scanning dead links")
+        raise
 
     # 6. DB table stats
     try:
@@ -936,7 +946,9 @@ async def _run_integrity_check(db: AsyncSession):
             r = await db.execute(text(f"SELECT COUNT(*) FROM {table}"))
             db_stats[table] = r.scalar() or 0
     except Exception:
-        db_stats = {}
+        await db.rollback()
+        logger.exception("Integrity check failed while collecting database statistics")
+        raise
 
     return {"issues": issues, "db_stats": db_stats, "checked_at": datetime.now(timezone.utc).isoformat()}
 
@@ -1219,7 +1231,7 @@ async def _run_proxy_connectivity_test(db: AsyncSession):
 
     import concurrent.futures
     logger.info("Proxy test starting: enabled=%s proxy=%s targets=%d", enabled,
-                config.get("http_proxy", "not set"), len(targets))
+                _redact_proxy_url(config.get("http_proxy")), len(targets))
 
     def _run_all():
         # list(executor.map(...)) blocks until all probes finish (~TEST_TIMEOUT)
@@ -1237,11 +1249,33 @@ async def _run_proxy_connectivity_test(db: AsyncSession):
         "proxy_reachable": proxy_reachable,
         "proxy_reachable_error": proxy_reachable_error,
         "proxy_config": {
-            "http": config.get("http_proxy", "not set"),
-            "https": config.get("https_proxy", "not set"),
+            "http": _redact_proxy_url(config.get("http_proxy")),
+            "https": _redact_proxy_url(config.get("https_proxy")),
         },
         "results": results,
     }
+
+
+def _redact_proxy_url(value: object) -> str:
+    """Return a useful proxy endpoint without persisting or logging userinfo."""
+
+    import urllib.parse
+
+    raw = str(value or "").strip()
+    if not raw:
+        return "not set"
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        hostname = parsed.hostname
+        if not hostname:
+            return "configured"
+        rendered_host = f"[{hostname}]" if ":" in hostname else hostname
+        port = f":{parsed.port}" if parsed.port is not None else ""
+        return urllib.parse.urlunsplit(
+            (parsed.scheme, f"{rendered_host}{port}", parsed.path, parsed.query, parsed.fragment)
+        )
+    except (TypeError, ValueError):
+        return "configured"
 
 
 # ── Data Management ──

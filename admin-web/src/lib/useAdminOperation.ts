@@ -22,6 +22,7 @@ export interface AdminOperationController<TResult, TVariables = void> {
   isRetrying: boolean;
   isActive: boolean;
   isLatestLoading: boolean;
+  canStart: boolean;
   startError: Error | null;
   taskError: Error | null;
   latestError: Error | null;
@@ -44,8 +45,10 @@ export function useAdminOperation<TResult, TVariables = void>({
   onCompleted?: (result: TResult) => void;
 }): AdminOperationController<TResult, TVariables> {
   const queryClient = useQueryClient();
-  const [taskId, setTaskId] = useState<string | null>(null);
+  const identity = `${operationType}:${scope}`;
+  const [startedTask, setStartedTask] = useState<{ identity: string; taskId: string } | null>(null);
   const notifiedCompletion = useRef<string | null>(null);
+  const reconciledTerminal = useRef<string | null>(null);
   const snapshotKey = useMemo(
     () => ["admin-operation-snapshot", operationType, scope] as const,
     [operationType, scope],
@@ -57,11 +60,22 @@ export function useAdminOperation<TResult, TVariables = void>({
     staleTime: 30_000,
     refetchOnWindowFocus: false,
   });
+  const current = latestQuery.data?.current ?? null;
+  const startedTaskId = startedTask?.identity === identity ? startedTask.taskId : null;
+  const taskId = startedTaskId ?? current?.task_id ?? null;
 
   const taskQuery = useQuery({
     queryKey: ["admin-operation-task", taskId],
     queryFn: () => apiTask<TResult>(taskId!),
     enabled: taskId !== null,
+    placeholderData: current?.task_id === taskId
+      ? {
+          ...current,
+          job_id: current.job_id ?? current.task_id,
+          result: null,
+          error: null,
+        }
+      : undefined,
     refetchInterval: (query) => {
       const task = query.state.data;
       return !task || ACTIVE_STATUSES.has(task.status)
@@ -75,7 +89,8 @@ export function useAdminOperation<TResult, TVariables = void>({
     mutationFn: startOperation,
     onSuccess: (accepted) => {
       notifiedCompletion.current = null;
-      setTaskId(accepted.task_id);
+      reconciledTerminal.current = null;
+      setStartedTask({ identity, taskId: accepted.task_id });
       queryClient.setQueryData<AdminOperationStatus<TResult>>(
         ["admin-operation-task", accepted.task_id],
         {
@@ -94,6 +109,8 @@ export function useAdminOperation<TResult, TVariables = void>({
       return retryTask(taskId);
     },
     onSuccess: (accepted) => {
+      notifiedCompletion.current = null;
+      reconciledTerminal.current = null;
       queryClient.setQueryData<AdminOperationStatus<TResult>>(
         ["admin-operation-task", accepted.task_id],
         {
@@ -113,16 +130,21 @@ export function useAdminOperation<TResult, TVariables = void>({
   useEffect(() => {
     if (
       !taskId
-      || task?.status !== "complete"
-      || !task.result
-      || notifiedCompletion.current === taskId
+      || !task
+      || ACTIVE_STATUSES.has(task.status)
+      || reconciledTerminal.current === `${identity}:${taskId}`
     ) {
       return;
     }
-    notifiedCompletion.current = taskId;
-    void queryClient.invalidateQueries({ queryKey: snapshotKey });
-    onCompleted?.(task.result);
-  }, [onCompleted, queryClient, snapshotKey, task, taskId]);
+    reconciledTerminal.current = `${identity}:${taskId}`;
+    if (task.status === "complete") {
+      void queryClient.invalidateQueries({ queryKey: snapshotKey });
+    }
+    if (task.status === "complete" && task.result) {
+      notifiedCompletion.current = `${identity}:${taskId}`;
+      onCompleted?.(task.result);
+    }
+  }, [identity, onCompleted, queryClient, snapshotKey, task, taskId]);
 
   const completedTaskSnapshot: AdminOperationSnapshot<TResult> | null =
     task?.status === "complete" && task.result && taskId
@@ -137,6 +159,12 @@ export function useAdminOperation<TResult, TVariables = void>({
         }
       : null;
   const snapshot = completedTaskSnapshot ?? latestQuery.data?.snapshot ?? null;
+  const isActive = !!task && ACTIVE_STATUSES.has(task.status);
+  const canStart = !latestQuery.isLoading
+    && !latestQuery.isError
+    && !startMutation.isPending
+    && !isActive
+    && current === null;
 
   return {
     operationType,
@@ -146,12 +174,15 @@ export function useAdminOperation<TResult, TVariables = void>({
     result: snapshot?.result ?? null,
     isStarting: startMutation.isPending,
     isRetrying: retryMutation.isPending,
-    isActive: !!task && ACTIVE_STATUSES.has(task.status),
+    isActive,
     isLatestLoading: latestQuery.isLoading,
+    canStart,
     startError: startMutation.error,
     taskError: taskQuery.error,
     latestError: latestQuery.error,
-    start: startMutation.mutate,
+    start: (variables) => {
+      if (canStart) startMutation.mutate(variables);
+    },
     retry: retryMutation.mutate,
     retryLatest: () => { void latestQuery.refetch(); },
   };

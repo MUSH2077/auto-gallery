@@ -6,7 +6,7 @@ import { PageHeader, PageShell, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import { AdminOperationStatus } from "@/components/AdminOperationStatus";
-import { useAdminOperation } from "@/lib/useAdminOperation";
+import { useAdminOperation, type AdminOperationController } from "@/lib/useAdminOperation";
 
 type ProxyTestResult = {
   proxy_enabled: boolean;
@@ -99,13 +99,25 @@ function TestResults({ data, proxyEnabled }: { data: ProxyTestResult | null; pro
 export default function ProxySettingsPage() {
   const t = useT();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
+  const testProxy = useAdminOperation<ProxyTestResult>({
+    operationType: "admin-proxy-test",
+    scope: "global",
+    startOperation: () => api.testProxy(),
+    loadLatest: () => api.getLatestProxyTest(),
+  });
   if (settings.isError) return <PageShell><ErrorState message={settings.error?.message || t("proxy.failed")} onRetry={() => settings.refetch()} /></PageShell>;
   if (!settings.data) return <PageShell><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded-md bg-subtle dark:bg-subtle" /><div className="h-48 rounded-md bg-subtle dark:bg-subtle" /></div></PageShell>;
 
-  return <ProxySettingsForm initial={settings.data.proxy} />;
+  return <ProxySettingsForm initial={settings.data.proxy} testProxy={testProxy} />;
 }
 
-function ProxySettingsForm({ initial }: { initial: ProxySettings }) {
+function ProxySettingsForm({
+  initial,
+  testProxy,
+}: {
+  initial: ProxySettings;
+  testProxy: AdminOperationController<ProxyTestResult>;
+}) {
   const t = useT();
   const toast = useToast();
   const qc = useQueryClient();
@@ -113,12 +125,6 @@ function ProxySettingsForm({ initial }: { initial: ProxySettings }) {
   const save = useMutation({
     mutationFn: (data: ProxySettings) => api.updateAdminSettings({ proxy: data }),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: queryKeys.admin.settings }); toast.success({ message: t("notification.saved") }); },
-  });
-  const testProxy = useAdminOperation<ProxyTestResult>({
-    operationType: "admin-proxy-test",
-    scope: "global",
-    startOperation: () => api.testProxy(),
-    loadLatest: () => api.getLatestProxyTest(),
   });
   const setStr = (key: keyof ProxySettings, val: string) => { if (current) setLocal({ ...current, [key]: val }); };
 
@@ -179,7 +185,7 @@ function ProxySettingsForm({ initial }: { initial: ProxySettings }) {
                 <span className="font-medium text-sm dark:text-white">{t("proxy.connectivity_test")}</span>
                 <p className="text-xs text-muted mt-0.5">{t("proxy.connectivity_test.desc")}</p>
               </div>
-              <button onClick={() => testProxy.start(undefined)} disabled={testProxy.isStarting || testProxy.isActive}
+              <button onClick={() => testProxy.start(undefined)} disabled={!testProxy.canStart}
                 className="btn-primary min-h-11 shrink-0 px-4 text-sm">
                 {testProxy.isStarting ? t("admin_operation.starting") : testProxy.isActive ? t("proxy.testing") : t("proxy.test_now")}
               </button>

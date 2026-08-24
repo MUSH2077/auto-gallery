@@ -418,6 +418,7 @@ class TaskService:
         visibility: str = "all",
         offset: int = 0,
         limit: int = 50,
+        excluded_admin_operation_types: frozenset[str] = frozenset(),
     ) -> tuple[int, list[TaskRun]]:
         stmt = select(TaskRun)
         count_stmt = select(func.count(TaskRun.id))
@@ -439,6 +440,12 @@ class TaskService:
             filters.append(TaskRun.operation_type == operation_type)
         if source:
             filters.append(TaskRun.source == source)
+        if excluded_admin_operation_types:
+            filters.append(or_(
+                TaskRun.kind != "admin",
+                TaskRun.operation_type.is_(None),
+                TaskRun.operation_type.not_in(excluded_admin_operation_types),
+            ))
         for item in filters:
             stmt = stmt.where(item)
             count_stmt = count_stmt.where(item)

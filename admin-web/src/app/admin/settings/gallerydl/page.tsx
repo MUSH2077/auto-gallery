@@ -7,7 +7,7 @@ import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import { PageHeader, ErrorState, PageShell } from "@/components";
 import { AdminOperationStatus } from "@/components/AdminOperationStatus";
-import { useAdminOperation } from "@/lib/useAdminOperation";
+import { useAdminOperation, type AdminOperationController } from "@/lib/useAdminOperation";
 
 type TabKey = "pixiv" | "twitter" | "iwara" | "danbooru" | "pinterest" | "lofter" | "weibo" | "bilibili";
 type PatternTarget = "directory" | "filename";
@@ -480,7 +480,17 @@ function initBilibili(d: any): BilibiliSourceConfig {
 
 export default function GalleryDLConfigPage() {
   const t = useT();
+  const [activeTab, setActiveTab] = useState<TabKey>("pixiv");
   const config = useQuery({ queryKey: ["gallerydl-config"], queryFn: () => api.getGalleryDLConfig() });
+  const connection = useAdminOperation<GalleryConnectionResult, () => Promise<unknown>>({
+    operationType: "admin-gallerydl-connectivity-test",
+    scope: activeTab,
+    startOperation: async (saveConfig) => {
+      await saveConfig();
+      return api.testGalleryDLConnection(activeTab);
+    },
+    loadLatest: () => api.getLatestGalleryDLConnection(activeTab),
+  });
 
   if (config.isError) {
     return <PageShell>
@@ -493,14 +503,30 @@ export default function GalleryDLConfigPage() {
     </PageShell>;
   }
 
-  return <GalleryDLConfigForm initial={config.data} />;
+  return (
+    <GalleryDLConfigForm
+      initial={config.data}
+      activeTab={activeTab}
+      setActiveTab={setActiveTab}
+      connection={connection}
+    />
+  );
 }
 
-function GalleryDLConfigForm({ initial }: { initial: GalleryDLMultiConfig }) {
+function GalleryDLConfigForm({
+  initial,
+  activeTab,
+  setActiveTab,
+  connection,
+}: {
+  initial: GalleryDLMultiConfig;
+  activeTab: TabKey;
+  setActiveTab: (tab: TabKey) => void;
+  connection: AdminOperationController<GalleryConnectionResult, () => Promise<unknown>>;
+}) {
   const t = useT();
   const tabs = useGalleryTabs();
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<TabKey>("pixiv");
   const [saved, setSaved] = useState<string | null>(null);
   const [pixiv, setPixiv] = useState<PixivSourceConfig>(() => initPixiv(initial.pixiv));
   const [twitter, setTwitter] = useState<TwitterSourceConfig>(() => initTwitter(initial.twitter));
@@ -582,8 +608,7 @@ function GalleryDLConfigForm({ initial }: { initial: GalleryDLMultiConfig }) {
         {save.error && <p className="text-danger text-sm mt-2">{(save.error as Error).message}</p>}
 
         <GalleryConnectionControl
-          key={activeTab}
-          source={activeTab}
+          connection={connection}
           saveConfig={() => save.mutateAsync()}
         />
       </div>
@@ -592,29 +617,20 @@ function GalleryDLConfigForm({ initial }: { initial: GalleryDLMultiConfig }) {
 }
 
 function GalleryConnectionControl({
-  source,
+  connection,
   saveConfig,
 }: {
-  source: TabKey;
+  connection: AdminOperationController<GalleryConnectionResult, () => Promise<unknown>>;
   saveConfig: () => Promise<unknown>;
 }) {
   const t = useT();
-  const connection = useAdminOperation<GalleryConnectionResult>({
-    operationType: "admin-gallerydl-connectivity-test",
-    scope: source,
-    startOperation: async () => {
-      await saveConfig();
-      return api.testGalleryDLConnection(source);
-    },
-    loadLatest: () => api.getLatestGalleryDLConnection(source),
-  });
 
   return (
     <div className="pt-2 border-t mt-4">
       <button
         type="button"
-        onClick={() => connection.start(undefined)}
-        disabled={connection.isStarting || connection.isActive}
+        onClick={() => connection.start(saveConfig)}
+        disabled={!connection.canStart}
         className="btn-primary min-h-11 px-3 text-xs"
       >
         {connection.isStarting || connection.isActive ? t("gallerydl.testing") : t("gallerydl.test_connection")}

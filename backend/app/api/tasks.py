@@ -11,7 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import RequireAdminUser, RequirePermission, get_admin_key
 from app.database import get_db
 from app.services.operations import (
+    inaccessible_admin_operation_types,
     get_operation_status,
+    require_admin_operation_access,
     release_owned_operation_lock,
     set_operation_status,
 )
@@ -29,7 +31,8 @@ from app.services.operation_attention import (
     restore_missed_subscription_slot,
 )
 
-router = APIRouter(dependencies=[RequirePermission("tasks")])
+_require_tasks = RequirePermission("tasks")
+router = APIRouter(dependencies=[_require_tasks])
 
 
 class ReconcileTasksRequest(BaseModel):
@@ -70,7 +73,9 @@ async def list_tasks(
     offset: int = 0,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
+    user=_require_tasks,
 ):
+    excluded_operation_types = inaccessible_admin_operation_types(user)
     if include_account:
         svc = TaskService(db)
         total, tasks = await svc.list_tasks(
@@ -82,6 +87,7 @@ async def list_tasks(
             visibility=visibility,
             offset=offset,
             limit=limit,
+            excluded_admin_operation_types=excluded_operation_types,
         )
         return {"total": total, "items": [task_payload(task) for task in tasks]}
     canonical = q or ""
@@ -102,6 +108,7 @@ async def list_tasks(
             offset=offset,
             limit=limit,
             visibility=visibility,
+            excluded_admin_operation_types=excluded_operation_types,
         )
     except SearchQueryError as exc:
         raise HTTPException(status_code=422, detail=exc.diagnostic.payload()) from exc
@@ -113,6 +120,7 @@ async def list_task_anomalies(
     offset: int = 0,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
+    user=_require_tasks,
 ):
     """Compatibility endpoint for the unified attention view."""
 
@@ -121,6 +129,7 @@ async def list_task_anomalies(
         view="attention",
         offset=max(0, offset),
         limit=max(1, min(limit, 100)),
+        excluded_admin_operation_types=inaccessible_admin_operation_types(user),
     )
 
 
@@ -154,11 +163,17 @@ async def reconcile_subscription_slot(
 
 
 @router.get("/{task_id}")
-async def get_task(task_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_task(
+    task_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=_require_tasks,
+):
     svc = TaskService(db)
     task = await svc.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    if task.kind == "admin":
+        require_admin_operation_access(user, task.operation_type)
     events = await svc.task_events(task_id)
     return task_payload(task, events)
 
@@ -263,11 +278,14 @@ async def acknowledge_task(
     task_id: UUID,
     db: AsyncSession = Depends(get_db),
     operator: str = Depends(get_admin_key),
+    user=_require_tasks,
 ):
     svc = TaskService(db)
     task = await svc.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    if task.kind == "admin":
+        require_admin_operation_access(user, task.operation_type)
     if task.attention_state not in {"open", "resolved"}:
         raise HTTPException(status_code=409, detail="Task is not an actionable anomaly")
     await svc.update_task(task, attention_state="acknowledged")
@@ -288,12 +306,14 @@ async def _control_task(
     db: AsyncSession,
     operator: str,
     note: str | None = None,
+    user=None,
 ):
     svc = TaskService(db)
     task = await svc.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     if task.kind == "admin":
+        require_admin_operation_access(user, task.operation_type)
         if action != "retry":
             raise HTTPException(
                 status_code=409,
@@ -891,20 +911,56 @@ async def _retry_admin_task(task, svc: TaskService):
 
 
 @router.post("/{task_id}/retry")
-async def retry_task(task_id: UUID, db: AsyncSession = Depends(get_db), operator: str = Depends(get_admin_key)):
-    return await _control_task(task_id, "retry", db, operator)
+async def retry_task(
+    task_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    operator: str = Depends(get_admin_key),
+    user=_require_tasks,
+):
+    return await _control_task(task_id, "retry", db, operator, user=user)
 
 
 @router.post("/{task_id}/pause")
-async def pause_task(task_id: UUID, data: dict | None = None, db: AsyncSession = Depends(get_db), operator: str = Depends(get_admin_key)):
-    return await _control_task(task_id, "pause", db, operator, note=(data or {}).get("note"))
+async def pause_task(
+    task_id: UUID,
+    data: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+    operator: str = Depends(get_admin_key),
+    user=_require_tasks,
+):
+    return await _control_task(
+        task_id,
+        "pause",
+        db,
+        operator,
+        note=(data or {}).get("note"),
+        user=user,
+    )
 
 
 @router.post("/{task_id}/resume")
-async def resume_task(task_id: UUID, db: AsyncSession = Depends(get_db), operator: str = Depends(get_admin_key)):
-    return await _control_task(task_id, "resume", db, operator)
+async def resume_task(
+    task_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    operator: str = Depends(get_admin_key),
+    user=_require_tasks,
+):
+    return await _control_task(task_id, "resume", db, operator, user=user)
 
 
 @router.post("/{task_id}/cancel")
-async def cancel_task(task_id: UUID, data: dict | None = None, db: AsyncSession = Depends(get_db), operator: str = Depends(get_admin_key)):
-    return await _control_task(task_id, "cancel", db, operator, note=(data or {}).get("note"))
+async def cancel_task(
+    task_id: UUID,
+    data: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+    operator: str = Depends(get_admin_key),
+    user=_require_tasks,
+):
+    return await _control_task(
+        task_id,
+        "cancel",
+        db,
+        operator,
+        note=(data or {}).get("note"),
+        user=user,
+    )

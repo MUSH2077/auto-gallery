@@ -65,6 +65,58 @@
         "title": "AdminOperationAccepted",
         "type": "object"
       },
+      "AdminOperationCurrent": {
+        "properties": {
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "operation_type": {
+            "title": "Operation Type",
+            "type": "string"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress"
+          },
+          "status": {
+            "enum": [
+              "enqueued",
+              "running",
+              "recovering",
+              "paused"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "status",
+          "operation_type"
+        ],
+        "title": "AdminOperationCurrent",
+        "type": "object"
+      },
       "AdminOperationSnapshot": {
         "properties": {
           "completed_at": {
@@ -126,6 +178,16 @@
       },
       "AdminOperationSnapshotResponse": {
         "properties": {
+          "current": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminOperationCurrent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "snapshot": {
             "anyOf": [
               {

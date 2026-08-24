@@ -287,8 +287,17 @@ export interface AdminOperationSnapshot<TResult = Record<string, unknown>> {
   completed_at: string;
 }
 
+export interface AdminOperationCurrent {
+  task_id: string;
+  job_id?: string | null;
+  status: "enqueued" | "running" | "recovering" | "paused";
+  operation_type: string;
+  progress?: AdminOperationStatus["progress"];
+}
+
 export interface AdminOperationSnapshotResponse<TResult = Record<string, unknown>> {
   snapshot: AdminOperationSnapshot<TResult> | null;
+  current?: AdminOperationCurrent | null;
 }
 
 export type DownloadConflictWinner = "canonical" | "staged";
