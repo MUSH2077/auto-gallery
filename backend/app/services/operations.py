@@ -92,11 +92,57 @@ async def compensate_operation_enqueue_failure(
     *,
     lock_key: str | None = None,
     redis_client=None,
+    publisher_attempt: str | None = None,
 ) -> None:
     """Make a committed admin operation terminal when RQ publication fails."""
 
     message = f"Queue publication failed: {error}"
     redis = redis_client or get_redis()
+
+    async def compensate_task_run() -> bool:
+        try:
+            from uuid import UUID
+
+            from app.database import async_session
+            from app.services.publisher_attempts import (
+                current_publisher_attempt,
+                lock_publisher_task,
+            )
+            from app.services.tasks import TaskService
+
+            async with async_session() as task_db:
+                service = TaskService(task_db)
+                task = (
+                    await lock_publisher_task(task_db, UUID(job_id))
+                    if publisher_attempt is not None
+                    else await service.get(UUID(job_id))
+                )
+                if publisher_attempt is not None and (
+                    task is None
+                    or current_publisher_attempt(task) != publisher_attempt
+                ):
+                    await task_db.rollback()
+                    return False
+                if task is not None:
+                    await service.update_task(
+                        task,
+                        status="failed",
+                        progress={"phase": "failed", "label": message},
+                        error=message,
+                    )
+                    await task_db.commit()
+            return True
+        except Exception:
+            logger.exception(
+                "Unable to compensate failed operation TaskRun job=%s",
+                job_id,
+            )
+            return False
+
+    # For immutable publishers the durable row is the authority boundary for
+    # every compensating write, including the transient lock/status records.
+    if publisher_attempt is not None and not await compensate_task_run():
+        return
     if lock_key:
         try:
             release_owned_operation_lock(redis, lock_key, job_id)
@@ -122,25 +168,8 @@ async def compensate_operation_enqueue_failure(
             exc_info=True,
         )
 
-    try:
-        from uuid import UUID
-
-        from app.database import async_session
-        from app.services.tasks import TaskService
-
-        async with async_session() as task_db:
-            service = TaskService(task_db)
-            task = await service.get(UUID(job_id))
-            if task is not None:
-                await service.update_task(
-                    task,
-                    status="failed",
-                    progress={"phase": "failed", "label": message},
-                    error=message,
-                )
-                await task_db.commit()
-    except Exception:
-        logger.exception("Unable to compensate failed operation TaskRun job=%s", job_id)
+    if publisher_attempt is None:
+        await compensate_task_run()
 
 
 async def enqueue_admin_operation(

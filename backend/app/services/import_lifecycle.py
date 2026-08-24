@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from inspect import isawaitable
 from typing import Any
 from uuid import UUID
 
@@ -269,6 +270,8 @@ async def coordinate_import_parent_completion(
 async def close_bounded_import_publication(
     db: AsyncSession,
     download_job_id: UUID,
+    *,
+    publisher_checkpoint=None,
 ) -> ImportParentCompletion | None:
     """Close child publication and elect a finalizer if all children finished."""
 
@@ -278,6 +281,10 @@ async def close_bounded_import_publication(
     manifest = get_manifest(parent)
     if not manifest.get("disk_import_recovery"):
         return None
+    if publisher_checkpoint is not None:
+        checkpoint = publisher_checkpoint(db, lock_task=True)
+        if isawaitable(checkpoint):
+            await checkpoint
     batch_results = dict(manifest.get("bounded_import_batches") or {})
     update_manifest(
         parent,

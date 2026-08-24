@@ -9,6 +9,7 @@ import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
+from inspect import isawaitable
 from pathlib import Path
 from uuid import UUID
 
@@ -341,6 +342,7 @@ async def _prepare_import_intent(
     locked_artifact_ids: set[UUID] | None = None,
     recoverable_page: bool = False,
     require_assignment: bool = False,
+    publisher_checkpoint=None,
 ):
     """Prepare one child in artifact -> parent -> child -> task lock order."""
 
@@ -399,6 +401,10 @@ async def _prepare_import_intent(
     ).scalar_one_or_none()
     if download_job is None:
         return None
+    if publisher_checkpoint is not None:
+        checkpoint = publisher_checkpoint(db, lock_task=True)
+        if isawaitable(checkpoint):
+            await checkpoint
 
     repo = DownloadJobRepository(db)
     extra = {"error_log": import_error} if import_error else {}
@@ -564,6 +570,8 @@ async def _enqueue_import(
     download_job_id: str,
     import_error: str | None = None,
     new_json_paths: set[str] | None = None,
+    *,
+    publisher_checkpoint=None,
 ):
     """Create and publish one durable, exactly assigned import intent."""
 
@@ -574,6 +582,7 @@ async def _enqueue_import(
                 UUID(download_job_id),
                 import_error=import_error,
                 new_json_paths=new_json_paths,
+                publisher_checkpoint=publisher_checkpoint,
             )
             if prepared is None:
                 await db.rollback()

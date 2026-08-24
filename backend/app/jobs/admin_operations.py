@@ -21,11 +21,12 @@ logger = logging.getLogger(__name__)
 class _DiskImportPublisherGuard:
     """Redis race arbiter plus durable TaskRun checkpoint for one publisher."""
 
-    def __init__(self, job_id: str):
+    def __init__(self, job_id: str, attempt_token: str | None = None):
         from app.services.redis_client import get_redis
 
         self.job_id = job_id
         self.task_id = UUID(job_id)
+        self.attempt_token = attempt_token
         self.redis = get_redis()
         self._lost = threading.Event()
         self._lost_reason: str | None = None
@@ -45,6 +46,10 @@ class _DiskImportPublisherGuard:
             recovery_won=self._recovery_won,
         )
 
+    @property
+    def authority_lost(self) -> bool:
+        return self._lost.is_set()
+
     def publish_heartbeat(self) -> bool:
         """Publish only if recovery has not atomically won the Redis fence."""
 
@@ -56,11 +61,14 @@ class _DiskImportPublisherGuard:
                 recovery_won=self._recovery_won,
             )
         try:
+            if not self.attempt_token:
+                raise RuntimeError("publisher attempt was not initialized")
             published = TaskEventPublisher.publish_heartbeat(
                 self.job_id,
                 "admin",
                 pid=os.getpid(),
                 fence_aware=True,
+                attempt_token=self.attempt_token,
                 redis_client=self.redis,
             )
         except Exception as exc:
@@ -75,6 +83,46 @@ class _DiskImportPublisherGuard:
             )
         return True
 
+    async def initialize_attempt(self) -> str:
+        """Capture/mint the immutable attempt before the first Redis action."""
+
+        from app.services.publisher_attempts import (
+            current_publisher_attempt,
+            ensure_publisher_attempt,
+            lock_publisher_task,
+        )
+
+        async with async_session() as db:
+            task = await lock_publisher_task(db, self.task_id)
+            if task is None:
+                raise self._lose(
+                    "disk import publisher has no durable TaskRun",
+                    recovery_won=True,
+                )
+            durable = current_publisher_attempt(task)
+            if self.attempt_token is None and durable is not None:
+                raise self._lose(
+                    "disk import publisher fence rejected a legacy delivery "
+                    "without its captured attempt",
+                    recovery_won=True,
+                )
+            if (
+                self.attempt_token is not None
+                and durable is not None
+                and durable != self.attempt_token
+            ):
+                raise self._lose(
+                    "disk import publisher attempt is no longer current",
+                    recovery_won=True,
+                )
+            durable, _minted = ensure_publisher_attempt(
+                task,
+                captured_attempt=self.attempt_token,
+            )
+            self.attempt_token = durable
+            await db.commit()
+        return durable
+
     async def checkpoint(
         self,
         db,
@@ -82,26 +130,60 @@ class _DiskImportPublisherGuard:
         allowed_statuses: Iterable[str] = ("running",),
         lock_task: bool = False,
     ):
-        """Prove Redis ownership, then reject a durable stale/final TaskRun."""
+        """Reject a stale attempt, then prove its attempt-scoped Redis lease."""
 
         from sqlalchemy import select
 
         from app.models.task_run import TaskRun
+        from app.services.publisher_attempts import (
+            current_publisher_attempt,
+            ensure_publisher_attempt,
+            lock_publisher_task,
+        )
 
-        await asyncio.to_thread(self.publish_heartbeat)
-        statement = select(TaskRun).where(TaskRun.id == self.task_id)
         if lock_task:
-            statement = statement.with_for_update(of=TaskRun)
-        with db.no_autoflush:
-            task = (
-                await db.execute(
-                    statement.execution_options(populate_existing=True),
-                )
-            ).scalar_one_or_none()
+            task = await lock_publisher_task(db, self.task_id)
+        else:
+            with db.no_autoflush:
+                task = (
+                    await db.execute(
+                        select(TaskRun)
+                        .where(
+                            TaskRun.id == self.task_id,
+                            TaskRun.kind == "admin",
+                            TaskRun.operation_type == "admin-disk-import",
+                        )
+                        .execution_options(populate_existing=True),
+                    )
+                ).scalar_one_or_none()
         allowed = frozenset(allowed_statuses)
         if task is None:
             raise self._lose(
                 "disk import publisher fence has no durable TaskRun",
+                recovery_won=True,
+            )
+        durable_attempt = current_publisher_attempt(task)
+        if self.attempt_token is None and durable_attempt is not None:
+            raise self._lose(
+                "disk import publisher fence rejected a legacy delivery "
+                "without its captured attempt",
+                recovery_won=True,
+            )
+        if durable_attempt is None:
+            if not lock_task:
+                raise self._lose(
+                    "disk import publisher attempt is not initialized",
+                    recovery_won=True,
+                )
+            durable_attempt, _minted = ensure_publisher_attempt(
+                task,
+                captured_attempt=self.attempt_token,
+            )
+        if self.attempt_token is None:
+            self.attempt_token = durable_attempt
+        elif durable_attempt != self.attempt_token:
+            raise self._lose(
+                "disk import publisher attempt is no longer current",
                 recovery_won=True,
             )
         if task.status not in allowed:
@@ -110,6 +192,7 @@ class _DiskImportPublisherGuard:
                 f"'{task.status}'",
                 recovery_won=True,
             )
+        await asyncio.to_thread(self.publish_heartbeat)
         return task
 
 
@@ -258,25 +341,56 @@ async def _run_library_rebuild_operation(job_id: str, options: dict) -> dict:
         release_owned_operation_lock(redis, "library:rebuild:active", job_id)
 
 
-def run_disk_import_operation(job_id: str, options: dict | None = None) -> dict:
+def run_disk_import_operation(
+    job_id: str,
+    options: dict | None = None,
+    attempt_token: str | None = None,
+) -> dict:
     """Entry point for RQ workers — import on-disk download files into the DB."""
-    return asyncio.run(run_heavy_io_operation(
-        "operation:disk-import", job_id,
-        lambda: _run_disk_import_operation(job_id, options or {})))
+
+    async def run_authorized() -> dict:
+        guard = _DiskImportPublisherGuard(job_id, attempt_token)
+        await guard.initialize_attempt()
+        async with async_session() as startup_db:
+            await guard.checkpoint(
+                startup_db,
+                allowed_statuses=("enqueued", "running"),
+                lock_task=True,
+            )
+            await startup_db.rollback()
+        return await run_heavy_io_operation(
+            "operation:disk-import",
+            job_id,
+            lambda: _run_disk_import_operation(
+                job_id,
+                options or {},
+                attempt_token,
+                publisher_guard=guard,
+            ),
+        )
+
+    return asyncio.run(run_authorized())
 
 
-async def _run_disk_import_operation(job_id: str, options: dict) -> dict:
+async def _run_disk_import_operation(
+    job_id: str,
+    options: dict,
+    attempt_token: str | None = None,
+    *,
+    publisher_guard: _DiskImportPublisherGuard | None = None,
+) -> dict:
     from app.jobs.worker_control import HeartbeatPublisher
     from app.services.disk_import import reconcile_downloads_to_db
     from app.services.tasks import TaskService
 
-    guard = _DiskImportPublisherGuard(job_id)
+    guard = publisher_guard or _DiskImportPublisherGuard(job_id, attempt_token)
     heartbeat = HeartbeatPublisher(
         job_id,
         "admin",
         heartbeat_callback=guard.publish_heartbeat,
     )
     try:
+        await guard.initialize_attempt()
         async with async_session() as task_db:
             svc = TaskService(task_db)
             task = await guard.checkpoint(
@@ -365,55 +479,37 @@ async def _run_disk_import_operation(job_id: str, options: dict) -> dict:
         return result
     except PublisherFenceError as exc:
         logger.warning("Disk import publisher stopped: job_id=%s error=%s", job_id, exc)
-        async with async_session() as task_db:
-            svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if (
-                not exc.recovery_won
-                and task
-                and task.status in {"enqueued", "running", "recovering"}
-            ):
-                await svc.update_task(
-                    task,
-                    status="failed",
-                    progress={"phase": "failed"},
-                    error=str(exc),
-                    reason_code="publisher_fence_lost",
-                )
-                await task_db.commit()
-        if not exc.recovery_won:
-            try:
-                set_operation_status(
-                    job_id,
-                    "failed",
-                    "admin-disk-import",
-                    progress={"phase": "failed"},
-                    error=str(exc),
-                    meta={"entity": "disk-import", **options},
-                )
-            except Exception:
-                logger.debug(
-                    "Unable to cache fenced disk-import status %s",
-                    job_id,
-                    exc_info=True,
-                )
+        # A fence/mismatch is itself proof that this worker cannot authorize a
+        # durable or cache mutation. Recovery owns the stale transition; Redis
+        # uncertainty remains fail-closed until a later authoritative scan.
         raise
     except Exception as exc:
         logger.exception("Disk import failed: job_id=%s", job_id)
+        failed_current_attempt = False
         async with async_session() as task_db:
             svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if task:
+            try:
+                task = await guard.checkpoint(
+                    task_db,
+                    allowed_statuses=("enqueued", "running", "recovering"),
+                    lock_task=True,
+                )
+            except PublisherFenceError:
+                await task_db.rollback()
+            else:
                 await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
                 await task_db.commit()
-        set_operation_status(job_id, "failed", "admin-disk-import",
-            progress={"phase": "failed"}, error=str(exc), meta={"entity": "disk-import", **options})
+                failed_current_attempt = True
+        if failed_current_attempt:
+            set_operation_status(job_id, "failed", "admin-disk-import",
+                progress={"phase": "failed"}, error=str(exc), meta={"entity": "disk-import", **options})
         raise
     finally:
         heartbeat.stop()
         from app.services.redis_client import get_redis
         redis = get_redis()
-        release_owned_operation_lock(redis, "library:disk-import:active", job_id)
+        if not guard.authority_lost:
+            release_owned_operation_lock(redis, "library:disk-import:active", job_id)
 
 
 def run_gitllery_rebuild_operation(job_id: str, options: dict | None = None) -> dict:

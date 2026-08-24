@@ -425,7 +425,14 @@ async def import_from_disk(
     redis = get_redis()
     ensure_redis_enqueue_capacity(redis)
     job_id = str(uuid.uuid4())
+    from app.services.publisher_attempts import (
+        PUBLISHER_ATTEMPT_META_KEY,
+        current_publisher_attempt,
+        lock_publisher_task,
+        new_publisher_attempt,
+    )
     from app.services.tasks import TaskService
+    attempt_token = new_publisher_attempt()
     active_job = redis.get("library:disk-import:active")
     if isinstance(active_job, bytes):
         active_job = active_job.decode()
@@ -451,7 +458,11 @@ async def import_from_disk(
             status="enqueued",
             queue_name="maintenance",
             progress={"phase": "enqueued", "label": "Disk import queued"},
-            meta={"entity": "disk-import", **options},
+            meta={
+                "entity": "disk-import",
+                **options,
+                PUBLISHER_ATTEMPT_META_KEY: attempt_token,
+            },
         )
         await task_db.commit()
     try:
@@ -461,7 +472,8 @@ async def import_from_disk(
         rq_job = checked_enqueue(
             Queue(name="maintenance", connection=redis),
             "app.jobs.admin_operations.run_disk_import_operation",
-            job_id, options, job_timeout=14400, result_ttl=604800)
+            job_id, options, attempt_token,
+            job_timeout=14400, result_ttl=604800)
     except Exception as exc:
         await compensate_operation_enqueue_failure(
             job_id,
@@ -469,14 +481,20 @@ async def import_from_disk(
             exc,
             lock_key="library:disk-import:active",
             redis_client=redis,
+            publisher_attempt=attempt_token,
         )
         raise
     async with async_session() as task_db:
         svc = TaskService(task_db)
-        current = await svc.get(task.id)
-        if current:
+        current = await lock_publisher_task(task_db, task.id)
+        if (
+            current
+            and current_publisher_attempt(current) == attempt_token
+        ):
             await svc.update_task(current, rq_job_id=rq_job.id)
             await task_db.commit()
+        else:
+            await task_db.rollback()
 
     return {"status": "enqueued", "job_id": job_id, "message": "Disk import queued", "options": options}
 

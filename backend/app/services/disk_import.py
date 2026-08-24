@@ -260,10 +260,10 @@ async def _drain_pending_ledger(
     seen_sources: set[str] = set()
     scope_cursor: tuple[str, str, str] | None = None
 
-    async def checkpoint() -> None:
+    async def checkpoint(*, lock_task: bool = False) -> None:
         if publisher_checkpoint is None:
             return
-        outcome = publisher_checkpoint(db)
+        outcome = publisher_checkpoint(db, lock_task=lock_task)
         if isawaitable(outcome):
             await outcome
 
@@ -413,7 +413,7 @@ async def _drain_pending_ledger(
                     WorkSource.source_work_id.in_(claimable_work_ids),
                 )
             )).scalars())
-            await checkpoint()
+            await checkpoint(lock_task=True)
             if existing_ids:
                 await db.execute(
                     update(StorageArtifact)
@@ -469,7 +469,7 @@ async def _drain_pending_ledger(
                 stats["skipped"] += len(missing_ids)
 
             if not importable_work_ids:
-                await checkpoint()
+                await checkpoint(lock_task=True)
                 await db.commit()
                 await report(source)
                 continue
@@ -517,7 +517,7 @@ async def _drain_pending_ledger(
                     last_error=None,
                 )
             )
-            await checkpoint()
+            await checkpoint(lock_task=True)
             await db.commit()
 
             metadata_paths = {
@@ -527,9 +527,12 @@ async def _drain_pending_ledger(
             }
             try:
                 await checkpoint()
+                enqueue_kwargs = {"new_json_paths": metadata_paths}
+                if publisher_checkpoint is not None:
+                    enqueue_kwargs["publisher_checkpoint"] = publisher_checkpoint
                 import_job_id = await enqueue_import(
                     str(recovery_job.id),
-                    new_json_paths=metadata_paths,
+                    **enqueue_kwargs,
                 )
             except PublisherFenceError:
                 raise
@@ -540,6 +543,15 @@ async def _drain_pending_ledger(
                     creator_dir,
                     exc_info=True,
                 )
+                recovery_job = (
+                    await db.execute(
+                        select(DownloadJob)
+                        .where(DownloadJob.id == recovery_job.id)
+                        .with_for_update(of=DownloadJob)
+                        .execution_options(populate_existing=True)
+                    )
+                ).scalar_one()
+                await checkpoint(lock_task=True)
                 recovery_job.status = "failed"
                 recovery_job.error_log = str(exc)[:4000]
                 await db.commit()
@@ -559,7 +571,7 @@ async def _drain_pending_ledger(
                             UUID(str(import_job_id)),
                         )
                         if task:
-                            await checkpoint()
+                            await checkpoint(lock_task=True)
                             await TaskService(db).update_task(
                                 task,
                                 parent_task_id=UUID(str(parent_task_id)),
@@ -589,6 +601,7 @@ async def _drain_pending_ledger(
             completion = await close_bounded_import_publication(
                 db,
                 recovery_job.id,
+                publisher_checkpoint=publisher_checkpoint,
             )
             if completion is not None and completion.should_finalize:
                 from app.services.download_finalization import (
@@ -623,7 +636,7 @@ async def _drain_pending_ledger(
                     assets=completion.stats["assets"],
                 )
             else:
-                await checkpoint()
+                await checkpoint(lock_task=True)
                 await db.commit()
 
         if imported_scope:
@@ -641,10 +654,10 @@ async def reconcile_downloads_to_db(
     """Import on-disk download files (not yet imported) into the DB. Idempotent."""
     from app.jobs.download import _enqueue_import
 
-    async def checkpoint() -> None:
+    async def checkpoint(*, lock_task: bool = False) -> None:
         if publisher_checkpoint is None:
             return
-        outcome = publisher_checkpoint(db)
+        outcome = publisher_checkpoint(db, lock_task=lock_task)
         if isawaitable(outcome):
             await outcome
 
@@ -947,14 +960,17 @@ async def reconcile_downloads_to_db(
             await CreatorService(db)._request_creator_projection(
                 provisioned.creator.id,
             )
-            await checkpoint()
+            await checkpoint(lock_task=True)
             await db.commit()
 
             try:
                 await checkpoint()
+                enqueue_kwargs = {"new_json_paths": new_paths}
+                if publisher_checkpoint is not None:
+                    enqueue_kwargs["publisher_checkpoint"] = publisher_checkpoint
                 import_job_id = await _enqueue_import(
                     str(job.id),
-                    new_json_paths=new_paths,
+                    **enqueue_kwargs,
                 )
             except PublisherFenceError:
                 raise
@@ -969,6 +985,15 @@ async def reconcile_downloads_to_db(
                     creator_dir,
                     exc_info=True,
                 )
+                job = (
+                    await db.execute(
+                        select(DownloadJob)
+                        .where(DownloadJob.id == job.id)
+                        .with_for_update(of=DownloadJob)
+                        .execution_options(populate_existing=True)
+                    )
+                ).scalar_one()
+                await checkpoint(lock_task=True)
                 job.status = "failed"
                 job.error_log = str(exc)[:4000]
                 await checkpoint()
@@ -984,7 +1009,7 @@ async def reconcile_downloads_to_db(
                         from app.services.tasks import TaskService
                         task = await TaskService(db).get_by_subject("import_job", UUID(import_job_id))
                         if task:
-                            await checkpoint()
+                            await checkpoint(lock_task=True)
                             await TaskService(db).update_task(task, parent_task_id=UUID(str(parent_task_id)))
                             await checkpoint()
                             await db.commit()

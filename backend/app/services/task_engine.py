@@ -69,7 +69,10 @@ STALE_START_GRACE_SECONDS = TaskEventPublisher.HEARTBEAT_TTL
 STALE_SCAN_LIMIT = 100
 
 
-def _heartbeat_presence(redis_client, task_ids: list[UUID]) -> list[bool]:
+def _heartbeat_presence(
+    redis_client,
+    heartbeat_keys: list[str | UUID],
+) -> list[bool]:
     """Read all heartbeat TTL keys in one Redis round trip.
 
     Exceptions deliberately propagate.  The caller treats an unreadable Redis
@@ -78,10 +81,18 @@ def _heartbeat_presence(redis_client, task_ids: list[UUID]) -> list[bool]:
     """
 
     pipeline = redis_client.pipeline(transaction=False)
-    for task_id in task_ids:
-        pipeline.exists(f"task:{task_id}:heartbeat_ts")
+    resolved_keys = [
+        (
+            f"task:{heartbeat_key}:heartbeat_ts"
+            if isinstance(heartbeat_key, UUID)
+            else heartbeat_key
+        )
+        for heartbeat_key in heartbeat_keys
+    ]
+    for heartbeat_key in resolved_keys:
+        pipeline.exists(heartbeat_key)
     values = pipeline.execute()
-    if len(values) != len(task_ids):
+    if len(values) != len(heartbeat_keys):
         raise RuntimeError("Redis heartbeat pipeline returned an incomplete result")
     return [bool(value) for value in values]
 
@@ -705,6 +716,7 @@ class TaskEngine:
                     TaskRun.started_at,
                     TaskRun.created_at,
                 ).label("started_or_created_at"),
+                TaskRun.meta,
             )
             .where(
                 TaskRun.kind == "admin",
@@ -715,19 +727,30 @@ class TaskEngine:
             .limit(bounded_limit)
         )).all())
 
-        candidates: list[tuple[str, UUID]] = [
-            ("download", task_id)
+        candidates: list[tuple[str, UUID, str | None]] = [
+            ("download", task_id, None)
             for task_id, anchor in download_candidates
             if _outside_start_grace(anchor, checked_at)
         ]
         candidates.extend(
-            ("import", task_id)
+            ("import", task_id, None)
             for task_id, _parent_id, anchor in import_candidates
             if _outside_start_grace(anchor, checked_at)
         )
+        from app.services.publisher_attempts import PUBLISHER_ATTEMPT_META_KEY
+
         candidates.extend(
-            ("admin_publisher", task_id)
-            for task_id, anchor in admin_candidates
+            (
+                "admin_publisher",
+                task_id,
+                (
+                    meta.get(PUBLISHER_ATTEMPT_META_KEY)
+                    if isinstance(meta, dict)
+                    and isinstance(meta.get(PUBLISHER_ATTEMPT_META_KEY), str)
+                    else None
+                ),
+            )
+            for task_id, anchor, meta in admin_candidates
             if _outside_start_grace(anchor, checked_at)
         )
         if not candidates:
@@ -738,7 +761,17 @@ class TaskEngine:
             heartbeat_exists = await asyncio.to_thread(
                 _heartbeat_presence,
                 client,
-                [task_id for _task_type, task_id in candidates],
+                [
+                    (
+                        TaskEventPublisher.publisher_heartbeat_key(
+                            str(task_id),
+                            attempt_token,
+                        )
+                        if task_type == "admin_publisher" and attempt_token
+                        else f"task:{task_id}:heartbeat_ts"
+                    )
+                    for task_type, task_id, attempt_token in candidates
+                ],
             )
         except Exception:
             logger.warning(
@@ -749,7 +782,7 @@ class TaskEngine:
 
         missing_download_ids = [
             task_id
-            for (task_type, task_id), exists in zip(
+            for (task_type, task_id, _attempt), exists in zip(
                 candidates,
                 heartbeat_exists,
                 strict=True,
@@ -758,7 +791,7 @@ class TaskEngine:
         ]
         missing_import_ids = [
             task_id
-            for (task_type, task_id), exists in zip(
+            for (task_type, task_id, _attempt), exists in zip(
                 candidates,
                 heartbeat_exists,
                 strict=True,
@@ -767,7 +800,7 @@ class TaskEngine:
         ]
         missing_admin_ids = [
             task_id
-            for (task_type, task_id), exists in zip(
+            for (task_type, task_id, _attempt), exists in zip(
                 candidates,
                 heartbeat_exists,
                 strict=True,
@@ -836,7 +869,8 @@ class TaskEngine:
             )).scalars())
 
         locked_admin_rows = []
-        publisher_fence_tokens: dict[UUID, str] = {}
+        publisher_fence_tokens: dict[UUID, tuple[str, str]] = {}
+        publisher_attempts_minted = False
         if missing_admin_ids:
             locked_admin_rows = list((await self.db.execute(
                 select(TaskRun)
@@ -851,24 +885,43 @@ class TaskEngine:
             )).scalars())
             fenced_admin_rows = []
             try:
+                from app.services.publisher_attempts import (
+                    current_publisher_attempt,
+                    ensure_publisher_attempt,
+                )
+
                 for task in locked_admin_rows:
-                    token = uuid4().hex
+                    previous_attempt = current_publisher_attempt(task)
+                    attempt_token, minted = ensure_publisher_attempt(task)
+                    publisher_attempts_minted = (
+                        publisher_attempts_minted or minted
+                    )
+                    owner_token = uuid4().hex
                     if await asyncio.to_thread(
                         TaskEventPublisher.try_claim_publisher_fence,
                         client,
                         str(task.id),
-                        token,
+                        attempt_token,
+                        owner_token,
+                        check_legacy_heartbeat=(previous_attempt is None),
                     ):
-                        publisher_fence_tokens[task.id] = token
+                        publisher_fence_tokens[task.id] = (
+                            attempt_token,
+                            owner_token,
+                        )
                         fenced_admin_rows.append(task)
             except Exception:
-                for task_id, token in publisher_fence_tokens.items():
+                for task_id, (
+                    attempt_token,
+                    owner_token,
+                ) in publisher_fence_tokens.items():
                     try:
                         await asyncio.to_thread(
                             TaskEventPublisher.release_publisher_fence,
                             client,
                             str(task_id),
-                            token,
+                            attempt_token,
+                            owner_token,
                         )
                     except Exception:
                         logger.debug(
@@ -876,7 +929,10 @@ class TaskEngine:
                             task_id,
                             exc_info=True,
                         )
-                await self.db.rollback()
+                if publisher_attempts_minted:
+                    await self.db.commit()
+                else:
+                    await self.db.rollback()
                 logger.warning(
                     "Stale publisher detection skipped because Redis fencing "
                     "is unreadable",
@@ -979,13 +1035,17 @@ class TaskEngine:
             stale_count += 1
 
         if not stale_count:
-            for task_id, token in publisher_fence_tokens.items():
+            for task_id, (
+                attempt_token,
+                owner_token,
+            ) in publisher_fence_tokens.items():
                 try:
                     await asyncio.to_thread(
                         TaskEventPublisher.release_publisher_fence,
                         client,
                         str(task_id),
-                        token,
+                        attempt_token,
+                        owner_token,
                     )
                 except Exception:
                     logger.debug(
@@ -996,7 +1056,10 @@ class TaskEngine:
             # Release any TaskRun/parent locks acquired during the repeated
             # active-state scan, including a publisher whose resurrected
             # heartbeat defeated our atomic fence claim.
-            await self.db.rollback()
+            if publisher_attempts_minted:
+                await self.db.commit()
+            else:
+                await self.db.rollback()
             return 0
 
         try:
@@ -1007,13 +1070,17 @@ class TaskEngine:
             await self.db.commit()
         except Exception:
             await self.db.rollback()
-            for task_id, token in publisher_fence_tokens.items():
+            for task_id, (
+                attempt_token,
+                owner_token,
+            ) in publisher_fence_tokens.items():
                 try:
                     await asyncio.to_thread(
                         TaskEventPublisher.release_publisher_fence,
                         client,
                         str(task_id),
-                        token,
+                        attempt_token,
+                        owner_token,
                     )
                 except Exception:
                     logger.debug(

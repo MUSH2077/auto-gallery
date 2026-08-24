@@ -32,6 +32,17 @@ end
 return 0
 """
 
+_CLAIM_LEGACY_PUBLISHER_FENCE_SCRIPT = """
+if redis.call('exists', KEYS[1]) == 1 or redis.call('exists', KEYS[3]) == 1 then
+  return 0
+end
+local acquired = redis.call('set', KEYS[2], ARGV[1], 'NX', 'EX', ARGV[2])
+if acquired then
+  return 1
+end
+return 0
+"""
+
 _RELEASE_PUBLISHER_FENCE_SCRIPT = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
   return redis.call('del', KEYS[1])
@@ -208,23 +219,43 @@ class TaskEventPublisher:
     PUBLISHER_FENCE_TTL = 300
 
     @staticmethod
-    def publisher_fence_key(task_id: str) -> str:
-        return f"task:{task_id}:publisher_fence"
+    def publisher_heartbeat_key(task_id: str, attempt_token: str) -> str:
+        return f"task:{task_id}:publisher:{attempt_token}:heartbeat_ts"
+
+    @staticmethod
+    def publisher_fence_key(task_id: str, attempt_token: str) -> str:
+        return f"task:{task_id}:publisher:{attempt_token}:fence"
 
     @staticmethod
     def try_claim_publisher_fence(
         redis_client,
         task_id: str,
-        token: str,
+        attempt_token: str,
+        owner_token: str,
+        *,
+        check_legacy_heartbeat: bool = False,
     ) -> bool:
         """Atomically fence a publisher only while its heartbeat is absent."""
 
+        if check_legacy_heartbeat:
+            return bool(redis_client.eval(
+                _CLAIM_LEGACY_PUBLISHER_FENCE_SCRIPT,
+                3,
+                TaskEventPublisher.publisher_heartbeat_key(
+                    task_id,
+                    attempt_token,
+                ),
+                TaskEventPublisher.publisher_fence_key(task_id, attempt_token),
+                f"task:{task_id}:heartbeat_ts",
+                owner_token,
+                TaskEventPublisher.PUBLISHER_FENCE_TTL,
+            ))
         return bool(redis_client.eval(
             _CLAIM_PUBLISHER_FENCE_SCRIPT,
             2,
-            f"task:{task_id}:heartbeat_ts",
-            TaskEventPublisher.publisher_fence_key(task_id),
-            token,
+            TaskEventPublisher.publisher_heartbeat_key(task_id, attempt_token),
+            TaskEventPublisher.publisher_fence_key(task_id, attempt_token),
+            owner_token,
             TaskEventPublisher.PUBLISHER_FENCE_TTL,
         ))
 
@@ -232,15 +263,16 @@ class TaskEventPublisher:
     def release_publisher_fence(
         redis_client,
         task_id: str,
-        token: str,
+        attempt_token: str,
+        owner_token: str,
     ) -> bool:
         """Release only this scanner's fence; never delete a newer claim."""
 
         return bool(redis_client.eval(
             _RELEASE_PUBLISHER_FENCE_SCRIPT,
             1,
-            TaskEventPublisher.publisher_fence_key(task_id),
-            token,
+            TaskEventPublisher.publisher_fence_key(task_id, attempt_token),
+            owner_token,
         ))
 
     @staticmethod
@@ -251,6 +283,7 @@ class TaskEventPublisher:
         pid: int | None = None,
         stage: str | None = None,
         fence_aware: bool = False,
+        attempt_token: str | None = None,
         redis_client=None,
     ) -> bool:
         """Publish a worker heartbeat ping.
@@ -258,10 +291,10 @@ class TaskEventPublisher:
         Called every ~10s by the worker's heartbeat thread. The WebSocket
         manager and stale-detector use this to know the worker is alive.
 
-        Also sets a Redis key ``task:{task_id}:heartbeat_ts`` with a TTL so
-        that the scheduler's stale-detection can check liveness without
-        querying the database (the heartbeat thread cannot safely use
-        async DB sessions).
+        Also sets a TTL liveness key so the scheduler can check the worker
+        without querying the database (the heartbeat thread cannot safely use
+        async DB sessions). Fence-aware publishers use an attempt-scoped key;
+        ordinary workers retain the legacy task-scoped key.
         """
         event: dict[str, Any] = {
             "type": "heartbeat",
@@ -277,11 +310,18 @@ class TaskEventPublisher:
         payload = json.dumps(event, ensure_ascii=False)
         r = redis_client if redis_client is not None else get_redis()
         if fence_aware:
+            if not attempt_token:
+                raise ValueError(
+                    "fence-aware publisher heartbeat requires an attempt token"
+                )
             return bool(r.eval(
                 _FENCED_HEARTBEAT_SCRIPT,
                 3,
-                f"task:{task_id}:heartbeat_ts",
-                TaskEventPublisher.publisher_fence_key(task_id),
+                TaskEventPublisher.publisher_heartbeat_key(
+                    task_id,
+                    attempt_token,
+                ),
+                TaskEventPublisher.publisher_fence_key(task_id, attempt_token),
                 TaskChannel.heartbeat(task_id),
                 TaskEventPublisher.HEARTBEAT_TTL,
                 event["timestamp"],

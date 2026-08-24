@@ -1,7 +1,12 @@
+import asyncio
 import json
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select, text, update
+
+
+_PUBLISHER_ATTEMPT_META_KEY = "_bounded_import_publisher_attempt"
 
 
 def test_reconcile_downloads_to_db_is_importable():
@@ -748,6 +753,217 @@ async def test_disk_import_records_enqueue_failure_and_leaves_ledger_resumable(t
             states = set((await db.execute(select(StorageArtifact.state))).scalars())
             assert states == {"new"}
     finally:
+        async with async_session() as db:
+            await _clear_pipeline_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_stale_bounded_enqueue_failure_cannot_fail_parent_or_commit_progress(
+    tmp_path,
+    monkeypatch,
+):
+    """Authority rotation after the last checkpoint defeats the failure commit."""
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.jobs.admin_operations import _DiskImportPublisherGuard
+    from app.models.creator import Creator
+    from app.models.download_job import DownloadJob
+    from app.models.storage_artifact import StorageArtifact
+    from app.models.subscription import Subscription
+    from app.models.subscription_source import SubscriptionSource
+    from app.models.task_run import TaskRun
+    from app.services import disk_import as disk_import_service
+    from app.services.redis_client import get_redis
+    from app.services.redis_pubsub import PublisherFenceError
+    from app.services.tasks import TaskService
+
+    task_id = uuid4()
+    attempt_a = uuid4().hex
+    attempt_b = uuid4().hex
+    enqueue_entered = asyncio.Event()
+    release_enqueue = asyncio.Event()
+    download_root = tmp_path / "downloads"
+    metadata = download_root / "pixiv" / "1980643" / "001" / "metadata.json"
+    metadata.parent.mkdir(parents=True)
+    metadata.write_text(json.dumps(_pixiv_metadata(work_id=1)), encoding="utf-8")
+    monkeypatch.setattr(settings, "download_root", str(download_root))
+
+    async def no_capacity_wait(_parent_task_id):
+        return None
+
+    async def suspended_enqueue(*_args, **_kwargs):
+        enqueue_entered.set()
+        await asyncio.wait_for(release_enqueue.wait(), timeout=3)
+        raise RuntimeError("bounded queue unavailable")
+
+    monkeypatch.setattr(
+        disk_import_service,
+        "_wait_for_batch_capacity",
+        no_capacity_wait,
+    )
+    redis_client = get_redis()
+    redis_client.delete(
+        f"task:{task_id}:heartbeat_ts",
+        f"task:{task_id}:publisher_fence",
+        f"task:{task_id}:publisher:{attempt_a}:heartbeat_ts",
+        f"task:{task_id}:publisher:{attempt_a}:fence",
+        f"task:{task_id}:publisher:{attempt_b}:heartbeat_ts",
+        f"task:{task_id}:publisher:{attempt_b}:fence",
+    )
+    guard = _DiskImportPublisherGuard(str(task_id))
+    guard.attempt_token = attempt_a
+    drain_task = None
+
+    try:
+        async with async_session() as setup_db:
+            await _clear_pipeline_tables(setup_db)
+            creator = Creator(name="stale-enqueue-owner")
+            setup_db.add(creator)
+            await setup_db.flush()
+            subscription = Subscription(
+                creator_id=creator.id,
+                name="Stale enqueue owner",
+            )
+            setup_db.add(subscription)
+            await setup_db.flush()
+            repository = SubscriptionSource(
+                subscription_id=subscription.id,
+                source="pixiv",
+                source_creator_id="1980643",
+                source_url="https://www.pixiv.net/users/1980643",
+            )
+            setup_db.add(repository)
+            await setup_db.flush()
+            historical = DownloadJob(
+                subscription_id=subscription.id,
+                subscription_source_id=repository.id,
+                source="pixiv",
+                source_url=repository.source_url,
+                status="complete",
+            )
+            setup_db.add(historical)
+            await setup_db.flush()
+            setup_db.add(StorageArtifact(
+                storage_root="downloads",
+                file_path="pixiv/1980643/001/metadata.json",
+                source="pixiv",
+                creator_dir="1980643",
+                source_work_id="001",
+                file_name="metadata.json",
+                artifact_type="metadata_json",
+                download_job_id=historical.id,
+                state="new",
+            ))
+            await TaskService(setup_db).create_task(
+                task_id=task_id,
+                kind="admin",
+                operation_type="admin-disk-import",
+                title="bounded enqueue attempt A",
+                status="running",
+                queue_name="maintenance",
+                meta={
+                    "entity": "disk-import",
+                    _PUBLISHER_ATTEMPT_META_KEY: attempt_a,
+                },
+            )
+            await setup_db.commit()
+            repository_id = repository.id
+
+        stats = {
+            "sources": 0,
+            "creators": 0,
+            "jobs": 0,
+            "skipped_done": 0,
+            "skipped_invalid_metadata": 0,
+            "danbooru_enriched": 0,
+            "metadata_fallback": 0,
+            "subscription_sources_created": 0,
+            "import_job_ids": [],
+            "scanned": 0,
+            "existing": 0,
+            "imported": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
+
+        async def run_drain():
+            async with async_session() as publisher_db:
+                repository = await publisher_db.get(
+                    SubscriptionSource,
+                    repository_id,
+                )
+                try:
+                    result = await disk_import_service._drain_pending_ledger(
+                        publisher_db,
+                        root=download_root,
+                        source_filter="pixiv",
+                        repository=repository,
+                        repository_dirs={"1980643"},
+                        parent_task_id=str(task_id),
+                        stats=stats,
+                        progress_callback=None,
+                        enqueue_import=suspended_enqueue,
+                        publisher_checkpoint=guard.checkpoint,
+                    )
+                except PublisherFenceError:
+                    return "fenced"
+                return ("returned", result)
+
+        drain_task = asyncio.create_task(run_drain())
+        await asyncio.wait_for(enqueue_entered.wait(), timeout=3)
+
+        async with async_session() as rotate_db:
+            task = (
+                await rotate_db.execute(
+                    select(TaskRun)
+                    .where(TaskRun.id == task_id)
+                    .with_for_update(of=TaskRun)
+                )
+            ).scalar_one()
+            task.meta = {
+                **dict(task.meta or {}),
+                _PUBLISHER_ATTEMPT_META_KEY: attempt_b,
+            }
+            task.status = "running"
+            await rotate_db.commit()
+        redis_client.setex(
+            f"task:{task_id}:publisher:{attempt_a}:fence",
+            300,
+            "recovery-owner-a",
+        )
+        release_enqueue.set()
+        outcome = await asyncio.wait_for(drain_task, timeout=5)
+
+        async with async_session() as verify_db:
+            recovery_parent = (
+                await verify_db.execute(
+                    select(DownloadJob).where(
+                        DownloadJob.manifest["disk_import_recovery"]
+                        .as_boolean()
+                        .is_(True)
+                    )
+                )
+            ).scalar_one()
+            current_task = await verify_db.get(TaskRun, task_id)
+            assert outcome == "fenced"
+            assert recovery_parent.status == "downloaded"
+            assert recovery_parent.error_log is None
+            assert current_task.status == "running"
+            assert current_task.meta[_PUBLISHER_ATTEMPT_META_KEY] == attempt_b
+    finally:
+        release_enqueue.set()
+        if drain_task is not None and not drain_task.done():
+            drain_task.cancel()
+        redis_client.delete(
+            f"task:{task_id}:heartbeat_ts",
+            f"task:{task_id}:publisher_fence",
+            f"task:{task_id}:publisher:{attempt_a}:heartbeat_ts",
+            f"task:{task_id}:publisher:{attempt_a}:fence",
+            f"task:{task_id}:publisher:{attempt_b}:heartbeat_ts",
+            f"task:{task_id}:publisher:{attempt_b}:fence",
+        )
         async with async_session() as db:
             await _clear_pipeline_tables(db)
         await engine.dispose()

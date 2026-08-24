@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
@@ -29,6 +30,15 @@ ACTIVE_PUBLISHER_TASK_STATUSES = frozenset({
     "recovering",
     "paused",
 })
+
+
+@dataclass(frozen=True, slots=True)
+class _PublisherTaskState:
+    active: bool
+    attempt_minted: bool = False
+
+    def __bool__(self) -> bool:
+        return self.active
 
 
 def _recoverable_unassigned_metadata(parent_id: UUID, now: datetime):
@@ -65,16 +75,27 @@ def _outstanding_unassigned_metadata(parent_id: UUID):
 async def _publisher_task_is_active(
     db: AsyncSession,
     parent: DownloadJob,
-) -> bool:
+) -> _PublisherTaskState:
     raw_task_id = get_manifest(parent).get("bounded_import_publisher_task_id")
     if not raw_task_id:
-        return False
+        return _PublisherTaskState(False)
     try:
         task_id = UUID(str(raw_task_id))
     except (TypeError, ValueError):
-        return False
-    task = await db.get(TaskRun, task_id)
-    return bool(task and task.status in ACTIVE_PUBLISHER_TASK_STATUSES)
+        return _PublisherTaskState(False)
+    from app.services.publisher_attempts import (
+        ensure_publisher_attempt,
+        lock_publisher_task,
+    )
+
+    task = await lock_publisher_task(db, task_id)
+    if task is None:
+        return _PublisherTaskState(False)
+    _attempt, minted = ensure_publisher_attempt(task)
+    return _PublisherTaskState(
+        task.status in ACTIVE_PUBLISHER_TASK_STATUSES,
+        attempt_minted=minted,
+    )
 
 
 async def _finalize_bounded_recovery_completion(db, completion) -> None:
@@ -262,13 +283,19 @@ async def recover_import_pipeline(
                 await db.rollback()
                 continue
             manifest = get_manifest(parent)
-            if (
+            publisher_state = _PublisherTaskState(False)
+            invalid_parent = (
                 not manifest.get("disk_import_recovery")
                 or not manifest.get("bounded_import_publication_open")
                 or parent.updated_at >= cutoff
-                or await _publisher_task_is_active(db, parent)
-            ):
-                await db.rollback()
+            )
+            if not invalid_parent:
+                publisher_state = await _publisher_task_is_active(db, parent)
+            if invalid_parent or publisher_state:
+                if publisher_state.attempt_minted:
+                    await db.commit()
+                else:
+                    await db.rollback()
                 continue
 
             page_rows = artifact_rows[:BOUNDED_RECOVERY_PAGE_SIZE]

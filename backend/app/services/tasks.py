@@ -419,6 +419,8 @@ class TaskService:
 
 
 def task_payload(task: TaskRun, events: list[TaskEvent] | None = None) -> dict[str, Any]:
+    from app.services.publisher_attempts import public_task_meta
+
     return {
         "id": str(task.id),
         "kind": task.kind,
@@ -445,7 +447,7 @@ def task_payload(task: TaskRun, events: list[TaskEvent] | None = None) -> dict[s
         "progress_data": task.progress_data,
         "result_data": task.result_data,
         "error_log": task.error_log,
-        "meta": task.meta,
+        "meta": public_task_meta(task.meta),
         "priority": task.priority,
         "attempts": task.attempts,
         "enqueued_at": task.enqueued_at.isoformat() if task.enqueued_at else None,

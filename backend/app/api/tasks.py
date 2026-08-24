@@ -419,6 +419,20 @@ _RETRYABLE_ADMIN_OPERATIONS = {
 async def _retry_admin_task(task, svc: TaskService):
     from rq import Queue
 
+    from app.models.task_run import TaskRun
+
+    with svc.db.no_autoflush:
+        task = (
+            await svc.db.execute(
+                select(TaskRun)
+                .where(TaskRun.id == task.id)
+                .with_for_update(of=TaskRun)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
     spec = _RETRYABLE_ADMIN_OPERATIONS.get(task.operation_type)
     if spec is None:
         raise HTTPException(status_code=400, detail="This admin operation cannot be retried")
@@ -455,6 +469,15 @@ async def _retry_admin_task(task, svc: TaskService):
         active_status = get_operation_status(active_job)
         if not active_status or active_status.get("status") in {"complete", "failed", "cancelled", "stale"}:
             release_owned_operation_lock(redis, lock_key, active_job)
+        elif (
+            task.operation_type == "admin-disk-import"
+            and active_job == str(task.id)
+        ):
+            # Recovery may have durably fenced this exact logical TaskRun while
+            # its attempt-A cache/UUID lock still says running. The stale
+            # attempt cannot release attempt B because its guard is terminal;
+            # reclaim the logical lock so the rotated attempt can start now.
+            release_owned_operation_lock(redis, lock_key, active_job)
         elif active_job != str(task.id):
             raise HTTPException(status_code=409, detail={"message": "Operation already running", "job_id": active_job})
 
@@ -469,7 +492,9 @@ async def _retry_admin_task(task, svc: TaskService):
             active_job = active_job.decode()
         raise HTTPException(status_code=409, detail={"message": "Operation already running", "job_id": active_job})
 
-    meta = dict(task.meta or {})
+    from app.services.publisher_attempts import public_task_meta
+
+    meta = dict(public_task_meta(task.meta) or {})
     options = {k: v for k, v in meta.items() if k != "entity"}
     dedup_retry: tuple[UUID, int] | None = None
     if task.operation_type == "asset-dedup-scan":
@@ -510,7 +535,39 @@ async def _retry_admin_task(task, svc: TaskService):
         options["_scan_generation"] = generation
         dedup_retry = (scan_id, generation)
     progress = {"phase": "enqueued", "label": label}
+    publisher_attempt = None
+    if task.operation_type == "admin-disk-import":
+        from app.services.publisher_attempts import (
+            PUBLISHER_ATTEMPT_META_KEY,
+            ensure_publisher_attempt,
+        )
+
+        publisher_attempt, _rotated = ensure_publisher_attempt(
+            task,
+            rotate=True,
+        )
+        task.queue_name = "maintenance"
+        await svc.update_task(
+            task,
+            status="enqueued",
+            progress=progress,
+            result={},
+            error="",
+            meta={
+                "entity": entity,
+                **options,
+                PUBLISHER_ATTEMPT_META_KEY: publisher_attempt,
+            },
+        )
+        # The immutable attempt is an outbox boundary: it must be durable
+        # before Redis/RQ can expose the exact captured token to a worker.
+        await svc.db.commit()
     try:
+        worker_args = (
+            (str(task.id), options, publisher_attempt)
+            if publisher_attempt is not None
+            else (str(task.id), options)
+        )
         rq_job = checked_enqueue(
             Queue(
                 # All long/admin coordinators now run on the governed
@@ -520,8 +577,7 @@ async def _retry_admin_task(task, svc: TaskService):
                 connection=redis,
             ),
             func,
-            str(task.id),
-            options,
+            *worker_args,
             job_timeout=retry_job_timeout,
             result_ttl=604800,
         )
@@ -552,6 +608,31 @@ async def _retry_admin_task(task, svc: TaskService):
                         await svc.db.commit()
             except Exception:
                 await svc.db.rollback()
+        if publisher_attempt is not None:
+            from app.services.publisher_attempts import (
+                current_publisher_attempt,
+                lock_publisher_task,
+            )
+
+            await svc.db.rollback()
+            current = await lock_publisher_task(svc.db, task.id)
+            if (
+                current is not None
+                and current_publisher_attempt(current) == publisher_attempt
+            ):
+                await svc.update_task(
+                    current,
+                    status="failed",
+                    progress={
+                        "phase": "failed",
+                        "label": "Disk import queue publication failed",
+                    },
+                    error="Disk import queue publication failed",
+                    reason_code="queue_publication_failed",
+                )
+                await svc.db.commit()
+            else:
+                await svc.db.rollback()
         try:
             release_owned_operation_lock(redis, lock_key, str(task.id))
         except Exception:
@@ -559,17 +640,41 @@ async def _retry_admin_task(task, svc: TaskService):
             # stale lock once Redis is reachable again.
             pass
         raise
-    task.queue_name = "maintenance"
-    await svc.update_task(
-        task,
-        status="enqueued",
-        progress=progress,
-        result={},
-        error="",
-        meta={"entity": entity, **options},
-        rq_job_id=rq_job.id,
-    )
-    await svc.db.commit()
+    if publisher_attempt is not None:
+        from app.services.publisher_attempts import (
+            current_publisher_attempt,
+            lock_publisher_task,
+        )
+
+        current = await lock_publisher_task(svc.db, task.id)
+        if (
+            current is None
+            or current_publisher_attempt(current) != publisher_attempt
+            or current.status != "enqueued"
+        ):
+            await svc.db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "publisher_attempt_superseded",
+                    "message": "Disk import retry was superseded before publication",
+                },
+            )
+        task = current
+        await svc.update_task(task, rq_job_id=rq_job.id)
+        await svc.db.commit()
+    else:
+        task.queue_name = "maintenance"
+        await svc.update_task(
+            task,
+            status="enqueued",
+            progress=progress,
+            result={},
+            error="",
+            meta={"entity": entity, **options},
+            rq_job_id=rq_job.id,
+        )
+        await svc.db.commit()
     set_operation_status(
         str(task.id),
         "enqueued",
