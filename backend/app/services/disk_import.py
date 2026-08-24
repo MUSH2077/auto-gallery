@@ -33,6 +33,7 @@ from app.services.artifact_ledger import (
 )
 from app.services.artifact_discovery import group_metadata_by_work, media_files_for_group
 from app.services.disk_identity import extract_metadata_identity, provision_identity_for_disk_import
+from app.services.redis_pubsub import PublisherFenceError
 from app.services.settings import source_key_for_extractor
 
 logger = logging.getLogger(__name__)
@@ -248,6 +249,7 @@ async def _drain_pending_ledger(
     stats: dict,
     progress_callback,
     enqueue_import,
+    publisher_checkpoint=None,
 ) -> dict:
     """Publish bounded keyset pages from the durable downloads ledger."""
 
@@ -258,9 +260,17 @@ async def _drain_pending_ledger(
     seen_sources: set[str] = set()
     scope_cursor: tuple[str, str, str] | None = None
 
+    async def checkpoint() -> None:
+        if publisher_checkpoint is None:
+            return
+        outcome = publisher_checkpoint(db)
+        if isawaitable(outcome):
+            await outcome
+
     async def report(source: str) -> None:
         if not progress_callback:
             return
+        await checkpoint()
         payload = {
             "phase": "running",
             "scanned": stats["scanned"],
@@ -276,6 +286,7 @@ async def _drain_pending_ledger(
             await outcome
 
     while True:
+        await checkpoint()
         now = datetime.now(timezone.utc)
         scope = await _next_pending_scope(
             db,
@@ -305,6 +316,7 @@ async def _drain_pending_ledger(
         recovery_job: DownloadJob | None = None
         imported_scope = False
         while True:
+            await checkpoint()
             now = datetime.now(timezone.utc)
             work_ids = await _pending_work_page(
                 db,
@@ -319,6 +331,7 @@ async def _drain_pending_ledger(
             work_cursor = work_ids[-1]
             stats["scanned"] += len(work_ids)
             await _wait_for_batch_capacity(parent_task_id)
+            await checkpoint()
 
             try:
                 resolved_repository, subscription = (
@@ -400,6 +413,7 @@ async def _drain_pending_ledger(
                     WorkSource.source_work_id.in_(claimable_work_ids),
                 )
             )).scalars())
+            await checkpoint()
             if existing_ids:
                 await db.execute(
                     update(StorageArtifact)
@@ -455,6 +469,7 @@ async def _drain_pending_ledger(
                 stats["skipped"] += len(missing_ids)
 
             if not importable_work_ids:
+                await checkpoint()
                 await db.commit()
                 await report(source)
                 continue
@@ -502,6 +517,7 @@ async def _drain_pending_ledger(
                     last_error=None,
                 )
             )
+            await checkpoint()
             await db.commit()
 
             metadata_paths = {
@@ -510,10 +526,13 @@ async def _drain_pending_ledger(
                 for path in metadata_by_work[work_id]
             }
             try:
+                await checkpoint()
                 import_job_id = await enqueue_import(
                     str(recovery_job.id),
                     new_json_paths=metadata_paths,
                 )
+            except PublisherFenceError:
+                raise
             except Exception as exc:
                 logger.warning(
                     "disk_import: import publication failed for %s/%s",
@@ -540,6 +559,7 @@ async def _drain_pending_ledger(
                             UUID(str(import_job_id)),
                         )
                         if task:
+                            await checkpoint()
                             await TaskService(db).update_task(
                                 task,
                                 parent_task_id=UUID(str(parent_task_id)),
@@ -565,6 +585,7 @@ async def _drain_pending_ledger(
                 close_bounded_import_publication,
             )
 
+            await checkpoint()
             completion = await close_bounded_import_publication(
                 db,
                 recovery_job.id,
@@ -602,6 +623,7 @@ async def _drain_pending_ledger(
                     assets=completion.stats["assets"],
                 )
             else:
+                await checkpoint()
                 await db.commit()
 
         if imported_scope:
@@ -609,9 +631,22 @@ async def _drain_pending_ledger(
 
     return stats
 
-async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_callback=None) -> dict:
+async def reconcile_downloads_to_db(
+    db: AsyncSession,
+    options: dict,
+    progress_callback=None,
+    *,
+    publisher_checkpoint=None,
+) -> dict:
     """Import on-disk download files (not yet imported) into the DB. Idempotent."""
     from app.jobs.download import _enqueue_import
+
+    async def checkpoint() -> None:
+        if publisher_checkpoint is None:
+            return
+        outcome = publisher_checkpoint(db)
+        if isawaitable(outcome):
+            await outcome
 
     root = Path(str(settings.download_root))
     requested_source = options.get("source")
@@ -677,6 +712,7 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
     async def report_progress(source: str, total: int) -> None:
         if not progress_callback:
             return
+        await checkpoint()
         payload = {
             "phase": "running",
             "scanned": stats["scanned"],
@@ -702,6 +738,7 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
             stats=stats,
             progress_callback=progress_callback,
             enqueue_import=_enqueue_import,
+            publisher_checkpoint=publisher_checkpoint,
         )
 
     # Recursive discovery is intentionally confined to the explicit reset /
@@ -722,6 +759,7 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
             sources.append((d.name, canonical_source))
 
     for disk_source, source in sources:
+        await checkpoint()
         stats["sources"] += 1
         scan_root = root / disk_source
 
@@ -750,6 +788,7 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
 
         total = len(groups)
         for i, (creator_dir, jsons) in enumerate(sorted(groups.items())):
+            await checkpoint()
             stats["scanned"] += 1
             provisioned = None
             identity = None
@@ -807,6 +846,7 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
                     )
                 )).scalar() or 0)
                 if active_job.status == "downloaded" and pending_artifacts == 0:
+                    await checkpoint()
                     active_job.status = "complete"
                     active_job.error_log = active_job.error_log or (
                         "Closed by disk recovery after its artifact ledger was fully consumed"
@@ -874,6 +914,7 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
                 stats["skipped"] += 1
                 await report_progress(source, total)
                 continue
+            await checkpoint()
             await ArtifactLedger(db).upsert_many(rows)
             if reset_ledger:
                 # ``upsert_many`` deliberately preserves an unchanged ``done``
@@ -906,13 +947,17 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
             await CreatorService(db)._request_creator_projection(
                 provisioned.creator.id,
             )
+            await checkpoint()
             await db.commit()
 
             try:
+                await checkpoint()
                 import_job_id = await _enqueue_import(
                     str(job.id),
                     new_json_paths=new_paths,
                 )
+            except PublisherFenceError:
+                raise
             except Exception as exc:
                 # The artifact ledger was committed before publication.  Keep
                 # those rows ``new`` and terminalize only this synthetic owner,
@@ -926,6 +971,7 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
                 )
                 job.status = "failed"
                 job.error_log = str(exc)[:4000]
+                await checkpoint()
                 await db.commit()
                 stats["failed"] += 1
                 await report_progress(source, total)
@@ -938,7 +984,9 @@ async def reconcile_downloads_to_db(db: AsyncSession, options: dict, progress_ca
                         from app.services.tasks import TaskService
                         task = await TaskService(db).get_by_subject("import_job", UUID(import_job_id))
                         if task:
+                            await checkpoint()
                             await TaskService(db).update_task(task, parent_task_id=UUID(str(parent_task_id)))
+                            await checkpoint()
                             await db.commit()
                     except Exception:
                         logger.warning("disk_import: could not link child import task %s to %s", import_job_id, parent_task_id, exc_info=True)

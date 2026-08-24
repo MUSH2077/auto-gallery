@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import text
@@ -57,13 +57,23 @@ async def test_disk_import_operation_publishes_real_task_heartbeats(monkeypatch)
                 self.heartbeat_keys.append(key)
             return True
 
-        def eval(self, *_args):
+        def eval(self, _script, numkeys, *args):
+            if numkeys == 3:
+                self.heartbeat_keys.append(args[0])
+                return 1
             return 0
 
     fake_redis = FakeRedis()
     job_id = str(uuid4())
 
-    async def slow_reconcile(_db, _options, _progress):
+    async def slow_reconcile(
+        _db,
+        _options,
+        _progress,
+        *,
+        publisher_checkpoint=None,
+    ):
+        assert publisher_checkpoint is not None
         await asyncio.sleep(0.05)
         return {
             "jobs": 0,
@@ -93,10 +103,30 @@ async def test_disk_import_operation_publishes_real_task_heartbeats(monkeypatch)
         lambda: None,
     )
 
-    result = await admin_operations._run_disk_import_operation(job_id, {})
+    from app.database import async_session, engine
+    from app.services.tasks import TaskService
 
-    assert result["jobs"] == 0
-    assert f"task:{job_id}:heartbeat_ts" in fake_redis.heartbeat_keys
+    try:
+        async with async_session() as db:
+            await _clear_task_test_tables(db)
+            await TaskService(db).create_task(
+                task_id=UUID(job_id),
+                kind="admin",
+                operation_type="admin-disk-import",
+                title="Heartbeat publisher",
+                status="enqueued",
+                queue_name="maintenance",
+            )
+            await db.commit()
+
+        result = await admin_operations._run_disk_import_operation(job_id, {})
+
+        assert result["jobs"] == 0
+        assert f"task:{job_id}:heartbeat_ts" in fake_redis.heartbeat_keys
+    finally:
+        async with async_session() as db:
+            await _clear_task_test_tables(db)
+        await engine.dispose()
 
 
 async def _clear_task_test_tables(db):

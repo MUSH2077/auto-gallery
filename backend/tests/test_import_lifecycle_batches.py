@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -40,7 +41,63 @@ class _HeartbeatRedis:
 
     def setex(self, key: str, _ttl: int, value):
         self.writes[key] = value
+        self.live_keys.add(key)
         return True
+
+    def eval(self, _script: str, numkeys: int, *args):
+        keys = list(args[:numkeys])
+        argv = list(args[numkeys:])
+        if numkeys == 2 and keys[0].endswith(":heartbeat_ts"):
+            heartbeat_key, fence_key = keys
+            if heartbeat_key in self.live_keys or fence_key in self.writes:
+                return 0
+            self.writes[fence_key] = argv[0]
+            return 1
+        if numkeys == 3 and keys[0].endswith(":heartbeat_ts"):
+            heartbeat_key, fence_key, _channel = keys
+            if fence_key in self.writes:
+                return 0
+            self.live_keys.add(heartbeat_key)
+            self.writes[heartbeat_key] = argv[1]
+            return 1
+        if numkeys == 1:
+            key = keys[0]
+            if self.writes.get(key) == argv[0]:
+                self.writes.pop(key, None)
+                self.live_keys.discard(key)
+                return 1
+            return 0
+        raise AssertionError(f"unexpected Redis script shape: {numkeys}")
+
+
+class _SignalingRedisPipeline:
+    def __init__(self, pipeline, executed: threading.Event):
+        self._pipeline = pipeline
+        self._executed = executed
+
+    def exists(self, key: str):
+        self._pipeline.exists(key)
+        return self
+
+    def execute(self):
+        values = self._pipeline.execute()
+        self._executed.set()
+        return values
+
+
+class _SignalingRedis:
+    def __init__(self, client, pipeline_executed: threading.Event):
+        self._client = client
+        self._pipeline_executed = pipeline_executed
+
+    def pipeline(self, *, transaction: bool):
+        return _SignalingRedisPipeline(
+            self._client.pipeline(transaction=transaction),
+            self._pipeline_executed,
+        )
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
 
 
 async def _clear(db):
@@ -1143,6 +1200,353 @@ async def test_recovery_assigns_failed_and_expired_page_without_touching_live_le
             assert live.lease_expires_at > now
             assert first["imports_enqueued"] == 1
             assert second["imports_enqueued"] == 0
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_live_unassigned_lease_keeps_publication_open_until_expiry(
+    tmp_path,
+    monkeypatch,
+):
+    """A live lease is outstanding work, but never a claimable recovery page."""
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models.download_job import DownloadJob
+    from app.models.import_job import ImportJob
+    from app.models.storage_artifact import StorageArtifact
+    from app.services.artifact_ledger import ArtifactLedger
+    from app.services.import_recovery import recover_import_pipeline
+
+    download_root = tmp_path / "downloads"
+    relative_path = "pixiv/bounded/live-only/metadata.json"
+    metadata = download_root / relative_path
+    metadata.parent.mkdir(parents=True, exist_ok=True)
+    metadata.write_text(json.dumps({"id": "live-only"}), encoding="utf-8")
+    monkeypatch.setattr(settings, "download_root", str(download_root))
+    redis = _HeartbeatRedis()
+
+    async def fake_publish(*_args, **_kwargs):
+        return "replayed"
+
+    monkeypatch.setattr("app.jobs.download.get_redis", lambda: redis)
+    monkeypatch.setattr("app.jobs.download.publish_prepared_import", fake_publish)
+    monkeypatch.setattr("app.jobs.download.publish_progress", lambda *_a, **_k: None)
+
+    now = datetime.now(timezone.utc)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            parent = await _shared_parent(db)
+            parent.updated_at = now - timedelta(hours=2)
+            lease_token = uuid4()
+            live = StorageArtifact(
+                storage_root="downloads",
+                file_path=relative_path,
+                source="pixiv",
+                creator_dir="bounded",
+                source_work_id="live-only",
+                file_name="metadata.json",
+                artifact_type="metadata_json",
+                download_job_id=parent.id,
+                state="importing",
+                lease_token=lease_token,
+                lease_expires_at=now + timedelta(minutes=5),
+            )
+            db.add(live)
+            await db.commit()
+            parent_id = parent.id
+            artifact_id = live.id
+
+            while_live = await recover_import_pipeline(
+                db,
+                redis_client=redis,
+                stale_after_seconds=60,
+            )
+            db.expire_all()
+            live_parent = await db.get(DownloadJob, parent_id)
+            live_artifact = await db.get(StorageArtifact, artifact_id)
+            assert while_live["imports_enqueued"] == 0
+            assert live_parent.manifest["bounded_import_publication_open"] is True
+            assert live_artifact.state == "importing"
+            assert live_artifact.import_job_id is None
+            assert live_artifact.lease_token == lease_token
+
+            live_artifact.lease_expires_at = now - timedelta(seconds=1)
+            live_parent.updated_at = now - timedelta(hours=2)
+            await db.commit()
+
+            after_expiry = await recover_import_pipeline(
+                db,
+                redis_client=redis,
+                stale_after_seconds=60,
+            )
+            repeated = await recover_import_pipeline(
+                db,
+                redis_client=redis,
+                stale_after_seconds=60,
+            )
+            db.expire_all()
+            recovered_parent = await db.get(DownloadJob, parent_id)
+            recovered_artifact = await db.get(StorageArtifact, artifact_id)
+            imports = list((await db.execute(
+                select(ImportJob).where(ImportJob.download_job_id == parent_id)
+            )).scalars())
+
+            assert len(imports) == 1
+            assert after_expiry["imports_enqueued"] == 1
+            assert repeated["imports_enqueued"] == 0
+            assert recovered_parent.manifest["bounded_import_publication_open"] is False
+            assert recovered_artifact.import_job_id == imports[0].id
+            assert await ArtifactLedger(db).new_metadata_paths(
+                parent_id,
+                import_job_id=imports[0].id,
+            ) == [relative_path]
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_heartbeat_resurrection_during_task_lock_prevents_publisher_theft():
+    """A heartbeat returning after the stale scan must win before mutation."""
+    from app.database import async_session, engine
+    from app.models.download_job import DownloadJob
+    from app.models.task_run import TaskRun
+    from app.services.import_recovery import recover_import_pipeline
+    from app.services.redis_client import get_redis
+    from app.services.task_engine import TaskEngine
+    from app.services.tasks import TaskService
+
+    task_id = uuid4()
+    heartbeat_key = f"task:{task_id}:heartbeat_ts"
+    fence_key = f"task:{task_id}:publisher_fence"
+    redis_client = get_redis()
+    redis_client.delete(heartbeat_key, fence_key)
+    pipeline_executed = threading.Event()
+    interleaved_redis = _SignalingRedis(redis_client, pipeline_executed)
+    old = datetime.now(timezone.utc) - timedelta(hours=2)
+
+    try:
+        async with async_session() as setup_db:
+            await _clear(setup_db)
+            parent = await _shared_parent(
+                setup_db,
+                manifest={
+                    "disk_import_recovery": True,
+                    "bounded_import_publication_open": True,
+                    "bounded_import_publisher_task_id": str(task_id),
+                },
+            )
+            parent.updated_at = old
+            task = await TaskService(setup_db).create_task(
+                task_id=task_id,
+                kind="admin",
+                operation_type="admin-disk-import",
+                title="resurrecting publisher",
+                status="running",
+                queue_name="maintenance",
+            )
+            task.started_at = old
+            task.updated_at = old
+            await setup_db.commit()
+            parent_id = parent.id
+
+        async with async_session() as lock_db:
+            await lock_db.execute(
+                select(TaskRun)
+                .where(TaskRun.id == task_id)
+                .with_for_update()
+            )
+
+            async def scan_in_second_session():
+                async with async_session() as scan_db:
+                    return await TaskEngine(scan_db).detect_stale_tasks(
+                        redis_client=interleaved_redis,
+                        now=datetime.now(timezone.utc),
+                    )
+
+            scan = asyncio.create_task(scan_in_second_session())
+            assert await asyncio.to_thread(pipeline_executed.wait, 2)
+            redis_client.setex(heartbeat_key, 90, "resurrected")
+            await lock_db.commit()
+            stale_count = await asyncio.wait_for(scan, timeout=5)
+
+        async with async_session() as recovery_db:
+            recovered = await recover_import_pipeline(
+                recovery_db,
+                redis_client=interleaved_redis,
+                stale_after_seconds=60,
+            )
+            recovery_db.expire_all()
+            task = await recovery_db.get(TaskRun, task_id)
+            parent = await recovery_db.get(DownloadJob, parent_id)
+            assert stale_count == 0
+            assert task.status == "running"
+            assert recovered["imports_enqueued"] == 0
+            assert parent.manifest["bounded_import_publication_open"] is True
+    finally:
+        redis_client.delete(heartbeat_key, fence_key)
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_recovery_fence_stops_resumed_publisher_before_reconcile(
+    monkeypatch,
+):
+    """A stale-scan winner prevents the old admin worker's next mutation."""
+    from app.database import async_session, engine
+    from app.jobs import admin_operations
+    from app.models.task_run import TaskRun
+    from app.services.redis_client import get_redis
+    from app.services.task_engine import TaskEngine
+    from app.services.tasks import TaskService
+
+    task_id = uuid4()
+    heartbeat_key = f"task:{task_id}:heartbeat_ts"
+    fence_key = f"task:{task_id}:publisher_fence"
+    redis_client = get_redis()
+    redis_client.delete(heartbeat_key, fence_key)
+    old = datetime.now(timezone.utc) - timedelta(hours=2)
+    reconcile_calls = 0
+
+    async def mutation_probe(*_args, **_kwargs):
+        nonlocal reconcile_calls
+        reconcile_calls += 1
+        return {
+            "jobs": 0,
+            "scanned": 0,
+            "existing": 0,
+            "imported": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
+
+    monkeypatch.setattr(
+        "app.services.disk_import.reconcile_downloads_to_db",
+        mutation_probe,
+    )
+    monkeypatch.setattr(admin_operations, "set_operation_status", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        admin_operations,
+        "release_owned_operation_lock",
+        lambda *_a, **_k: False,
+    )
+    monkeypatch.setattr(
+        "app.api.admin.settings.invalidate_storage_breakdown_cache",
+        lambda: None,
+    )
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            task = await TaskService(db).create_task(
+                task_id=task_id,
+                kind="admin",
+                operation_type="admin-disk-import",
+                title="recovery-fenced publisher",
+                status="running",
+                queue_name="maintenance",
+            )
+            task.started_at = old
+            task.updated_at = old
+            await db.commit()
+            assert await TaskEngine(db).detect_stale_tasks(
+                redis_client=redis_client,
+                now=datetime.now(timezone.utc),
+            ) == 1
+
+        with pytest.raises(RuntimeError, match="publisher fence"):
+            await admin_operations._run_disk_import_operation(str(task_id), {})
+
+        async with async_session() as verify_db:
+            task = await verify_db.get(TaskRun, task_id)
+            assert reconcile_calls == 0
+            assert task.status == "stale"
+    finally:
+        redis_client.delete(heartbeat_key, fence_key)
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_disk_publisher_redis_uncertainty_is_fail_closed(monkeypatch):
+    """An unreadable fence cannot allow the publisher into reconciliation."""
+    from app.database import async_session, engine
+    from app.jobs import admin_operations
+    from app.services.tasks import TaskService
+
+    class UnavailableRedis:
+        def eval(self, *_args, **_kwargs):
+            raise ConnectionError("Redis unavailable")
+
+        def get(self, *_args, **_kwargs):
+            return None
+
+        def delete(self, *_args, **_kwargs):
+            return 0
+
+    task_id = uuid4()
+    reconcile_calls = 0
+
+    async def mutation_probe(*_args, **_kwargs):
+        nonlocal reconcile_calls
+        reconcile_calls += 1
+        return {
+            "jobs": 0,
+            "scanned": 0,
+            "existing": 0,
+            "imported": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
+
+    unavailable = UnavailableRedis()
+    monkeypatch.setattr(
+        "app.services.disk_import.reconcile_downloads_to_db",
+        mutation_probe,
+    )
+    monkeypatch.setattr(
+        "app.services.redis_pubsub.get_redis",
+        lambda: unavailable,
+    )
+    monkeypatch.setattr(
+        "app.services.redis_client.get_redis",
+        lambda: unavailable,
+    )
+    monkeypatch.setattr(admin_operations, "set_operation_status", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        admin_operations,
+        "release_owned_operation_lock",
+        lambda *_a, **_k: False,
+    )
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            await TaskService(db).create_task(
+                task_id=task_id,
+                kind="admin",
+                operation_type="admin-disk-import",
+                title="uncertain publisher",
+                status="enqueued",
+                queue_name="maintenance",
+            )
+            await db.commit()
+
+        with pytest.raises(RuntimeError, match="publisher fence"):
+            await admin_operations._run_disk_import_operation(str(task_id), {})
+        assert reconcile_calls == 0
     finally:
         async with async_session() as db:
             await _clear(db)

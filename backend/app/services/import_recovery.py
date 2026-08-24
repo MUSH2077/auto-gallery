@@ -50,6 +50,18 @@ def _recoverable_unassigned_metadata(parent_id: UUID, now: datetime):
     )
 
 
+def _outstanding_unassigned_metadata(parent_id: UUID):
+    """Return work that keeps publication open, whether claimable yet or not."""
+
+    return and_(
+        downloads_artifact_predicate(),
+        StorageArtifact.download_job_id == parent_id,
+        StorageArtifact.artifact_type == "metadata_json",
+        StorageArtifact.import_job_id.is_(None),
+        StorageArtifact.state.in_(("new", "failed", "importing")),
+    )
+
+
 async def _publisher_task_is_active(
     db: AsyncSession,
     parent: DownloadJob,
@@ -263,7 +275,7 @@ async def recover_import_pipeline(
             page_ids = [row.id for row in page_rows]
             outstanding = bool((await db.execute(
                 select(exists().where(
-                    _recoverable_unassigned_metadata(parent_id, now),
+                    _outstanding_unassigned_metadata(parent_id),
                     *(
                         (StorageArtifact.id.not_in(page_ids),)
                         if page_ids

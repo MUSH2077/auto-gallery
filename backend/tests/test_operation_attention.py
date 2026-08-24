@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import func, select, text
@@ -747,6 +747,167 @@ async def test_bounded_truth_reconciliation_waits_for_publication_then_aggregate
             assert closed_download.status == "failed"
             assert closed_parent_task.status == "failed"
             assert parent_task.id == closed_parent_task.id
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_bounded_truth_reconciliation_repairs_domain_only_mismatch():
+    """A correct TaskRun must not hide a wrong bounded parent status."""
+    from app.database import async_session, engine
+    from app.models import DownloadJob, ImportJob
+    from app.services.operation_attention import reconcile_task_truth
+    from app.services.tasks import TaskService
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            _repository, download = await _repository_fixture(
+                db,
+                download_status="failed",
+            )
+            download.manifest = {
+                **dict(download.manifest or {}),
+                "disk_import_recovery": True,
+                "bounded_import_publication_open": True,
+            }
+            child = ImportJob(download_job_id=download.id, status="running")
+            db.add(child)
+            await db.flush()
+            parent_task = await TaskService(db).ensure_download_task(download)
+            await TaskService(db).update_task(parent_task, status="running")
+            await TaskService(db).ensure_import_task(child)
+            await db.commit()
+            download_id = download.id
+
+            first = await reconcile_task_truth(db, dry_run=False)
+            second = await reconcile_task_truth(db, dry_run=False)
+            db.expire_all()
+            repaired_download = await db.get(DownloadJob, download_id)
+            repaired_task = await TaskService(db).get_by_subject(
+                "download_job",
+                download_id,
+            )
+
+            assert first["corrected"] == 1
+            assert second["corrected"] == 0
+            assert repaired_download.status == "importing"
+            assert repaired_task.status == "running"
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_truth_and_repository_owner_locking_share_uuid_parent_order():
+    """Truth reconciliation cannot retain B then wait on owner-locked A."""
+    from app.database import async_session, engine
+    from app.models import Creator, DownloadJob, ImportJob, Subscription, TaskRun
+    from app.services.operation_attention import reconcile_task_truth
+    from app.services.repository_artifact_reconciliation import (
+        _locked_recoverable_download_owner_ids,
+    )
+    from app.services.tasks import TaskService
+
+    parent_a_id = UUID("10000000-0000-0000-0000-000000000001")
+    parent_b_id = UUID("20000000-0000-0000-0000-000000000002")
+    old = datetime.now(timezone.utc) - timedelta(hours=2)
+
+    try:
+        async with async_session() as setup_db:
+            await _clear(setup_db)
+            creator = Creator(name=f"truth-lock-order-{uuid4()}")
+            setup_db.add(creator)
+            await setup_db.flush()
+            subscription = Subscription(
+                creator_id=creator.id,
+                name="Truth lock order",
+            )
+            setup_db.add(subscription)
+            await setup_db.flush()
+            parent_a = DownloadJob(
+                id=parent_a_id,
+                subscription_id=subscription.id,
+                source="pixiv",
+                source_url="https://www.pixiv.net/users/1001",
+                status="failed",
+                manifest={
+                    "disk_import_recovery": True,
+                    "bounded_import_publication_open": False,
+                },
+            )
+            parent_b = DownloadJob(
+                id=parent_b_id,
+                subscription_id=subscription.id,
+                source="pixiv",
+                source_url="https://www.pixiv.net/users/2002",
+                status="failed",
+                manifest={
+                    "disk_import_recovery": True,
+                    "bounded_import_publication_open": False,
+                },
+            )
+            setup_db.add_all([parent_a, parent_b])
+            await setup_db.flush()
+            setup_db.add_all([
+                ImportJob(download_job_id=parent_a.id, status="complete"),
+                ImportJob(download_job_id=parent_b.id, status="complete"),
+            ])
+            await setup_db.flush()
+
+            # Task creation order deliberately conflicts with UUID owner order.
+            task_b = await TaskService(setup_db).ensure_download_task(parent_b)
+            task_b.created_at = old
+            await TaskService(setup_db).update_task(task_b, status="running")
+            task_a = await TaskService(setup_db).ensure_download_task(parent_a)
+            task_a.created_at = old + timedelta(seconds=1)
+            await TaskService(setup_db).update_task(task_a, status="running")
+            await setup_db.commit()
+
+        async with async_session() as owner_db:
+            await owner_db.execute(
+                select(DownloadJob)
+                .where(DownloadJob.id == parent_a_id)
+                .with_for_update()
+            )
+
+            async def reconcile_in_second_session():
+                async with async_session() as truth_db:
+                    return await reconcile_task_truth(truth_db, dry_run=False)
+
+            truth = asyncio.create_task(reconcile_in_second_session())
+            await asyncio.sleep(0.2)
+            locked_ids = await _locked_recoverable_download_owner_ids(
+                owner_db,
+                {parent_a_id, parent_b_id},
+            )
+            assert locked_ids == {parent_a_id, parent_b_id}
+            await owner_db.commit()
+            report = await asyncio.wait_for(truth, timeout=5)
+
+        async with async_session() as verify_db:
+            parents = {
+                parent.id: parent
+                for parent in (await verify_db.execute(
+                    select(DownloadJob).where(
+                        DownloadJob.id.in_((parent_a_id, parent_b_id)),
+                    )
+                )).scalars()
+            }
+            tasks = list((await verify_db.execute(
+                select(TaskRun).where(
+                    TaskRun.subject_type == "download_job",
+                    TaskRun.subject_id.in_((parent_a_id, parent_b_id)),
+                )
+            )).scalars())
+            assert report["corrected"] == 2
+            assert {parent.status for parent in parents.values()} == {"complete"}
+            assert {task.status for task in tasks} == {"complete"}
     finally:
         async with async_session() as db:
             await _clear(db)

@@ -309,6 +309,34 @@ async def reconcile_task_truth(
             )
         ).scalars()
     )
+
+    # Truth reconciliation retains row locks until its final commit. Acquire
+    # every parent it may project in the same UUID order used by repository
+    # artifact ownership before any child or TaskRun mutation can take a lock.
+    parent_ids = {
+        task.subject_id
+        for task in tasks
+        if task.subject_type == "download_job" and task.subject_id is not None
+    }
+    import_subject_ids = {
+        task.subject_id
+        for task in tasks
+        if task.subject_type == "import_job" and task.subject_id is not None
+    }
+    if import_subject_ids:
+        parent_ids.update((await db.execute(
+            select(ImportJob.download_job_id).where(
+                ImportJob.id.in_(import_subject_ids),
+            )
+        )).scalars())
+    if parent_ids:
+        await db.execute(
+            select(DownloadJob.id)
+            .where(DownloadJob.id.in_(parent_ids))
+            .order_by(DownloadJob.id.asc())
+            .with_for_update(of=DownloadJob)
+        )
+
     report: dict[str, Any] = {
         "dry_run": dry_run,
         "scanned": len(tasks),
@@ -557,7 +585,23 @@ async def reconcile_task_truth(
                 reason_code = infer_reason_code(target_status, domain_job.error_log)
                 message = f"Import job is authoritative: {domain_job.status}"
 
-        if not target_status or target_status == task.status:
+        task_needs_correction = bool(
+            target_status and target_status != task.status
+        )
+        effective_domain_status = target_domain_status
+        if (
+            effective_domain_status is None
+            and isinstance(domain_job, DownloadJob)
+            and domain_job.status == "importing"
+            and target_status in {"failed", "stale"}
+        ):
+            effective_domain_status = target_status
+        domain_needs_correction = bool(
+            isinstance(domain_job, DownloadJob)
+            and effective_domain_status
+            and domain_job.status != effective_domain_status
+        )
+        if not task_needs_correction and not domain_needs_correction:
             continue
         issue = {
             "task_id": str(task.id),
@@ -567,6 +611,12 @@ async def reconcile_task_truth(
             "to_status": target_status,
             "reason_code": reason_code,
             "message": message,
+            "domain_from_status": (
+                domain_job.status
+                if isinstance(domain_job, DownloadJob)
+                else None
+            ),
+            "domain_to_status": effective_domain_status,
         }
         report["issues"].append(issue)
         report["corrected"] += 1
@@ -574,27 +624,26 @@ async def reconcile_task_truth(
             continue
 
         if isinstance(domain_job, DownloadJob):
-            if target_domain_status is not None:
-                domain_job.status = target_domain_status
+            if domain_needs_correction:
+                domain_job.status = effective_domain_status
                 domain_job.error_log = (
                     message
-                    if target_domain_status in {"failed", "stale"}
+                    if effective_domain_status in {"failed", "stale"}
                     else None
                 )
-            elif (
-                domain_job.status == "importing"
-                and target_status in {"failed", "stale"}
-            ):
-                domain_job.status = target_status
-                domain_job.error_log = message
-        await task_service.update_task(
-            task,
-            status=target_status,
-            error=message if target_status in {"failed", "stale"} else None,
-            resource_state="yielded",
-            resource_reason=None,
-            reason_code=reason_code,
-        )
+        if task_needs_correction:
+            await task_service.update_task(
+                task,
+                status=target_status,
+                error=(
+                    message
+                    if target_status in {"failed", "stale"}
+                    else None
+                ),
+                resource_state="yielded",
+                resource_reason=None,
+                reason_code=reason_code,
+            )
         await task_service.add_event(
             task,
             "reconciled",
@@ -603,8 +652,15 @@ async def reconcile_task_truth(
             message=message,
             payload={"source": "reconciliation", "reason_code": reason_code},
         )
-        if isinstance(domain_job, DownloadJob) and target_status in {"failed", "stale", "complete"}:
-            await upsert_repository_sync_receipt(db, domain_job, status=target_status)
+        if (
+            isinstance(domain_job, DownloadJob)
+            and effective_domain_status in {"failed", "stale", "complete"}
+        ):
+            await upsert_repository_sync_receipt(
+                db,
+                domain_job,
+                status=effective_domain_status,
+            )
 
     if dry_run:
         await db.rollback()

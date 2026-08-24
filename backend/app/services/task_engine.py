@@ -20,7 +20,7 @@ import logging
 import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -836,6 +836,7 @@ class TaskEngine:
             )).scalars())
 
         locked_admin_rows = []
+        publisher_fence_tokens: dict[UUID, str] = {}
         if missing_admin_ids:
             locked_admin_rows = list((await self.db.execute(
                 select(TaskRun)
@@ -848,6 +849,41 @@ class TaskEngine:
                 .order_by(TaskRun.id)
                 .with_for_update(of=TaskRun, skip_locked=True)
             )).scalars())
+            fenced_admin_rows = []
+            try:
+                for task in locked_admin_rows:
+                    token = uuid4().hex
+                    if await asyncio.to_thread(
+                        TaskEventPublisher.try_claim_publisher_fence,
+                        client,
+                        str(task.id),
+                        token,
+                    ):
+                        publisher_fence_tokens[task.id] = token
+                        fenced_admin_rows.append(task)
+            except Exception:
+                for task_id, token in publisher_fence_tokens.items():
+                    try:
+                        await asyncio.to_thread(
+                            TaskEventPublisher.release_publisher_fence,
+                            client,
+                            str(task_id),
+                            token,
+                        )
+                    except Exception:
+                        logger.debug(
+                            "Unable to release aborted publisher fence %s",
+                            task_id,
+                            exc_info=True,
+                        )
+                await self.db.rollback()
+                logger.warning(
+                    "Stale publisher detection skipped because Redis fencing "
+                    "is unreadable",
+                    exc_info=True,
+                )
+                return 0
+            locked_admin_rows = fenced_admin_rows
 
         task_service = TaskService(self.db)
         notifications: list[tuple[str, str, str, str]] = []
@@ -943,13 +979,49 @@ class TaskEngine:
             stale_count += 1
 
         if not stale_count:
+            for task_id, token in publisher_fence_tokens.items():
+                try:
+                    await asyncio.to_thread(
+                        TaskEventPublisher.release_publisher_fence,
+                        client,
+                        str(task_id),
+                        token,
+                    )
+                except Exception:
+                    logger.debug(
+                        "Unable to release unused publisher fence %s",
+                        task_id,
+                        exc_info=True,
+                    )
+            # Release any TaskRun/parent locks acquired during the repeated
+            # active-state scan, including a publisher whose resurrected
+            # heartbeat defeated our atomic fence claim.
+            await self.db.rollback()
             return 0
 
-        await request_search_projection(
-            self.db,
-            subscription_ids=subscription_ids,
-        )
-        await self.db.commit()
+        try:
+            await request_search_projection(
+                self.db,
+                subscription_ids=subscription_ids,
+            )
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            for task_id, token in publisher_fence_tokens.items():
+                try:
+                    await asyncio.to_thread(
+                        TaskEventPublisher.release_publisher_fence,
+                        client,
+                        str(task_id),
+                        token,
+                    )
+                except Exception:
+                    logger.debug(
+                        "Unable to release rolled-back publisher fence %s",
+                        task_id,
+                        exc_info=True,
+                    )
+            raise
 
         # Publish only after the domain rows, TaskRuns, and search outbox are
         # atomically committed.  Pub/sub is best effort and never rolls state

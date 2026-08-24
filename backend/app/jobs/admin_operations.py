@@ -4,13 +4,113 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import threading
+from collections.abc import Iterable
+from uuid import UUID
 
 from app.database import async_session
 from app.services.admin_data import clear_entity_data
 from app.services.operations import release_owned_operation_lock, set_operation_status
 from app.services.heavy_io import run_heavy_io_operation
+from app.services.redis_pubsub import PublisherFenceError
 
 logger = logging.getLogger(__name__)
+
+
+class _DiskImportPublisherGuard:
+    """Redis race arbiter plus durable TaskRun checkpoint for one publisher."""
+
+    def __init__(self, job_id: str):
+        from app.services.redis_client import get_redis
+
+        self.job_id = job_id
+        self.task_id = UUID(job_id)
+        self.redis = get_redis()
+        self._lost = threading.Event()
+        self._lost_reason: str | None = None
+        self._recovery_won = False
+
+    def _lose(
+        self,
+        reason: str,
+        *,
+        recovery_won: bool,
+    ) -> PublisherFenceError:
+        self._lost_reason = self._lost_reason or reason
+        self._recovery_won = self._recovery_won or recovery_won
+        self._lost.set()
+        return PublisherFenceError(
+            self._lost_reason,
+            recovery_won=self._recovery_won,
+        )
+
+    def publish_heartbeat(self) -> bool:
+        """Publish only if recovery has not atomically won the Redis fence."""
+
+        from app.services.redis_pubsub import TaskEventPublisher
+
+        if self._lost.is_set():
+            raise PublisherFenceError(
+                self._lost_reason or "disk import publisher fence was lost",
+                recovery_won=self._recovery_won,
+            )
+        try:
+            published = TaskEventPublisher.publish_heartbeat(
+                self.job_id,
+                "admin",
+                pid=os.getpid(),
+                fence_aware=True,
+                redis_client=self.redis,
+            )
+        except Exception as exc:
+            raise self._lose(
+                "disk import publisher fence is unavailable; stopping fail-closed",
+                recovery_won=False,
+            ) from exc
+        if not published:
+            raise self._lose(
+                "disk import publisher fence was won by recovery",
+                recovery_won=True,
+            )
+        return True
+
+    async def checkpoint(
+        self,
+        db,
+        *,
+        allowed_statuses: Iterable[str] = ("running",),
+        lock_task: bool = False,
+    ):
+        """Prove Redis ownership, then reject a durable stale/final TaskRun."""
+
+        from sqlalchemy import select
+
+        from app.models.task_run import TaskRun
+
+        await asyncio.to_thread(self.publish_heartbeat)
+        statement = select(TaskRun).where(TaskRun.id == self.task_id)
+        if lock_task:
+            statement = statement.with_for_update(of=TaskRun)
+        with db.no_autoflush:
+            task = (
+                await db.execute(
+                    statement.execution_options(populate_existing=True),
+                )
+            ).scalar_one_or_none()
+        allowed = frozenset(allowed_statuses)
+        if task is None:
+            raise self._lose(
+                "disk import publisher fence has no durable TaskRun",
+                recovery_won=True,
+            )
+        if task.status not in allowed:
+            raise self._lose(
+                "disk import publisher fence rejected durable status "
+                f"'{task.status}'",
+                recovery_won=True,
+            )
+        return task
 
 
 def disk_import_completion_progress(result: dict) -> dict:
@@ -168,24 +268,43 @@ def run_disk_import_operation(job_id: str, options: dict | None = None) -> dict:
 async def _run_disk_import_operation(job_id: str, options: dict) -> dict:
     from app.jobs.worker_control import HeartbeatPublisher
     from app.services.disk_import import reconcile_downloads_to_db
-    from uuid import UUID
     from app.services.tasks import TaskService
-    async with async_session() as task_db:
-        svc = TaskService(task_db)
-        task = await svc.get(UUID(job_id))
-        if task:
+
+    guard = _DiskImportPublisherGuard(job_id)
+    heartbeat = HeartbeatPublisher(
+        job_id,
+        "admin",
+        heartbeat_callback=guard.publish_heartbeat,
+    )
+    try:
+        async with async_session() as task_db:
+            svc = TaskService(task_db)
+            task = await guard.checkpoint(
+                task_db,
+                allowed_statuses=("enqueued", "running"),
+                lock_task=True,
+            )
             await svc.update_task(
                 task,
                 status="running",
-                progress={"phase": "running", "label": "Scanning download root..."},
+                progress={
+                    "phase": "running",
+                    "label": "Scanning download root...",
+                },
             )
             await task_db.commit()
-    set_operation_status(job_id, "running", "admin-disk-import",
-        progress={"phase": "running", "label": "Scanning download root..."},
-        meta={"entity": "disk-import", **options})
-    heartbeat = HeartbeatPublisher(job_id, "admin")
-    heartbeat.start()
-    try:
+        set_operation_status(
+            job_id,
+            "running",
+            "admin-disk-import",
+            progress={
+                "phase": "running",
+                "label": "Scanning download root...",
+            },
+            meta={"entity": "disk-import", **options},
+        )
+        heartbeat.start()
+
         async def update_progress(progress: dict):
             task_progress = {
                 **progress,
@@ -194,41 +313,91 @@ async def _run_disk_import_operation(job_id: str, options: dict) -> dict:
                     f"scanned {progress.get('scanned', 0)} of {progress.get('total', 0)}"
                 ),
             }
-            set_operation_status(job_id, "running", "admin-disk-import",
-                progress=task_progress,
-                meta={"entity": "disk-import", **options})
             # The operations cache is transient; the TaskRun is the durable UI
             # projection and must retain the same resumable counters.
             async with async_session() as progress_db:
-                progress_task = await TaskService(progress_db).get(UUID(job_id))
-                if progress_task:
-                    await TaskService(progress_db).update_task(
-                        progress_task,
-                        status="running",
-                        progress=task_progress,
-                    )
-                    await progress_db.commit()
+                progress_task = await guard.checkpoint(
+                    progress_db,
+                    lock_task=True,
+                )
+                await TaskService(progress_db).update_task(
+                    progress_task,
+                    status="running",
+                    progress=task_progress,
+                )
+                await progress_db.commit()
+            set_operation_status(
+                job_id,
+                "running",
+                "admin-disk-import",
+                progress=task_progress,
+                meta={"entity": "disk-import", **options},
+            )
 
         async with async_session() as db:
-            result = await reconcile_downloads_to_db(db, {**options, "parent_task_id": job_id}, update_progress)
+            result = await reconcile_downloads_to_db(
+                db,
+                {**options, "parent_task_id": job_id},
+                update_progress,
+                publisher_checkpoint=guard.checkpoint,
+            )
         from app.api.admin.settings import invalidate_storage_breakdown_cache
         invalidate_storage_breakdown_cache()
         async with async_session() as task_db:
             svc = TaskService(task_db)
+            task = await guard.checkpoint(task_db, lock_task=True)
+            completion_progress = disk_import_completion_progress(result)
+            await svc.update_task(
+                task,
+                status="complete",
+                progress=completion_progress,
+                result=result,
+            )
+            await task_db.commit()
+        set_operation_status(
+            job_id,
+            "complete",
+            "admin-disk-import",
+            progress=disk_import_completion_progress(result),
+            result=result,
+            meta={"entity": "disk-import", **options},
+        )
+        return result
+    except PublisherFenceError as exc:
+        logger.warning("Disk import publisher stopped: job_id=%s error=%s", job_id, exc)
+        async with async_session() as task_db:
+            svc = TaskService(task_db)
             task = await svc.get(UUID(job_id))
-            if task:
-                completion_progress = disk_import_completion_progress(result)
+            if (
+                not exc.recovery_won
+                and task
+                and task.status in {"enqueued", "running", "recovering"}
+            ):
                 await svc.update_task(
                     task,
-                    status="complete",
-                    progress=completion_progress,
-                    result=result,
+                    status="failed",
+                    progress={"phase": "failed"},
+                    error=str(exc),
+                    reason_code="publisher_fence_lost",
                 )
                 await task_db.commit()
-        set_operation_status(job_id, "complete", "admin-disk-import",
-            progress=disk_import_completion_progress(result),
-            result=result, meta={"entity": "disk-import", **options})
-        return result
+        if not exc.recovery_won:
+            try:
+                set_operation_status(
+                    job_id,
+                    "failed",
+                    "admin-disk-import",
+                    progress={"phase": "failed"},
+                    error=str(exc),
+                    meta={"entity": "disk-import", **options},
+                )
+            except Exception:
+                logger.debug(
+                    "Unable to cache fenced disk-import status %s",
+                    job_id,
+                    exc_info=True,
+                )
+        raise
     except Exception as exc:
         logger.exception("Disk import failed: job_id=%s", job_id)
         async with async_session() as task_db:
