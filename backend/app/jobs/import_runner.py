@@ -1893,13 +1893,12 @@ async def run_import_job(import_job_id: str):
                         progress=ij.progress_data,
                         error=_empty_msg,
                     )
-                    # Also fail the parent download_job so an empty parse is not a
-                    # silent complete-but-empty (G1).
-                    _dj_repo = DownloadJobRepository(db)
-                    _parent = await _dj_repo.get(ij.download_job_id)
-                    if _parent:
-                        await _dj_repo.update_status(_parent, "failed", _empty_msg)
-                        apply_download_progress(_parent, "failed", _empty_msg)
+                    await project_import_pipeline_state(
+                        db,
+                        ij,
+                        status="failed",
+                        error=_empty_msg,
+                    )
                     await db.commit()
             return
 

@@ -621,7 +621,7 @@ class ArtifactLedger:
         import_job_id: UUID,
         lease_token: UUID,
     ) -> set[str]:
-        """Return unfinished leases owned by one execution to the ready pool."""
+        """Release one execution lease while retaining its durable child feed."""
 
         result = await self.db.execute(
             update(StorageArtifact)
@@ -633,7 +633,6 @@ class ArtifactLedger:
             )
             .values(
                 state="new",
-                import_job_id=None,
                 lease_token=None,
                 lease_expires_at=None,
             )

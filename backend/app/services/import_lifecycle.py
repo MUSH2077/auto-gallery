@@ -51,18 +51,18 @@ async def _bounded_parent_completion(
         .where(ImportJob.download_job_id == parent.id)
         .order_by(ImportJob.created_at, ImportJob.id)
     )).scalars())
-    pending = any(
-        child_status not in IMPORT_TERMINAL_STATUSES
-        for child_status in child_statuses
-    )
     manifest = get_manifest(parent)
     publication_open = bool(manifest.get("bounded_import_publication_open"))
     parent_is_terminal = parent.status in PARENT_TERMINAL_STATUSES
-    should_finalize = (
-        bool(child_statuses)
-        and not publication_open
-        and not pending
-        and not parent_is_terminal
+    active = any(
+        child_status not in IMPORT_TERMINAL_STATUSES
+        and child_status != "paused"
+        for child_status in child_statuses
+    )
+    paused = any(child_status == "paused" for child_status in child_statuses)
+    all_terminal = bool(child_statuses) and all(
+        child_status in IMPORT_TERMINAL_STATUSES
+        for child_status in child_statuses
     )
 
     aggregate_stats = {
@@ -76,21 +76,39 @@ async def _bounded_parent_completion(
         int(result.get("total_groups") or 0)
         for result in batch_results.values()
     )
-    aggregate_status = (
-        "complete"
-        if child_statuses and all(value == "complete" for value in child_statuses)
-        else "failed"
-    )
-    aggregate_message = (
-        fallback_message
-        if aggregate_status == "complete" and len(child_statuses) == 1
-        else (
-            f"Imported {aggregate_stats['works']} works across "
-            f"{len(child_statuses)} bounded batches"
-            if aggregate_status == "complete"
-            else "One or more bounded import batches failed"
+    if parent_is_terminal:
+        aggregate_status = parent.status
+    elif publication_open or active:
+        aggregate_status = "importing"
+    elif paused:
+        aggregate_status = "paused"
+    elif any(value == "failed" for value in child_statuses):
+        aggregate_status = "failed"
+    elif any(value == "cancelled" for value in child_statuses):
+        aggregate_status = "cancelled"
+    elif all_terminal:
+        aggregate_status = "complete"
+    else:
+        aggregate_status = "importing"
+
+    should_finalize = all_terminal and not publication_open and not parent_is_terminal
+    if aggregate_status == "complete":
+        aggregate_message = (
+            fallback_message
+            if len(child_statuses) == 1
+            else (
+                f"Imported {aggregate_stats['works']} works across "
+                f"{len(child_statuses)} bounded batches"
+            )
         )
-    )
+    elif aggregate_status == "cancelled":
+        aggregate_message = "One or more bounded import batches were cancelled"
+    elif aggregate_status == "failed":
+        aggregate_message = "One or more bounded import batches failed"
+    elif aggregate_status == "paused":
+        aggregate_message = "All active bounded import batches are paused"
+    else:
+        aggregate_message = "Bounded import publication or child batches remain active"
     return ImportParentCompletion(
         parent=parent,
         should_finalize=should_finalize,
@@ -117,6 +135,7 @@ async def coordinate_import_parent_completion(
             select(DownloadJob)
             .where(DownloadJob.id == import_job.download_job_id)
             .with_for_update(of=DownloadJob)
+            .execution_options(populate_existing=True)
         )
     ).scalar_one()
     manifest = get_manifest(parent)
@@ -167,7 +186,12 @@ async def close_bounded_import_publication(
     if not manifest.get("disk_import_recovery"):
         return None
     batch_results = dict(manifest.get("bounded_import_batches") or {})
-    update_manifest(parent, bounded_import_publication_open=False)
+    update_manifest(
+        parent,
+        bounded_import_publication_open=False,
+        bounded_import_recovery_claim=None,
+        bounded_import_recovery_claimed_at=None,
+    )
     await db.flush()
     return await _bounded_parent_completion(
         db,
@@ -194,33 +218,66 @@ async def project_import_pipeline_state(
     """
 
     child_status = status or import_job.status
+    parent = (
+        await db.execute(
+            select(DownloadJob)
+            .where(DownloadJob.id == import_job.download_job_id)
+            .with_for_update(of=DownloadJob)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if parent is None:
+        return None
+
     task_service = TaskService(db)
     child_task = await task_service.get_by_subject("import_job", import_job.id)
     if child_task is None:
         child_task = await task_service.ensure_import_task(import_job)
-    else:
-        child_kwargs: dict[str, Any] = {}
-        if reason_code is not None:
-            child_kwargs["reason_code"] = reason_code
-        await task_service.update_task(
-            child_task,
-            status=child_status,
-            progress=(
-                import_job.progress_data
+    child_kwargs: dict[str, Any] = {}
+    if reason_code is not None:
+        child_kwargs["reason_code"] = reason_code
+    await task_service.update_task(
+        child_task,
+        status=child_status,
+        progress=(
+            import_job.progress_data
+            if isinstance(import_job.progress_data, dict)
+            else None
+        ),
+        result=result,
+        error=error,
+        **child_kwargs,
+    )
+
+    parent_task = await task_service.get_by_subject("download_job", parent.id)
+    manifest = get_manifest(parent)
+    bounded = bool(manifest.get("disk_import_recovery"))
+    if bounded:
+        batch_results = dict(manifest.get("bounded_import_batches") or {})
+        result_data = result if isinstance(result, dict) else {}
+        result_stats = result_data.get("stats")
+        batch_results[str(import_job.id)] = {
+            "status": child_status,
+            "stats": dict(result_stats) if isinstance(result_stats, dict) else {},
+            "total_groups": int(result_data.get("total_groups") or 0),
+            "message": error or (
+                (import_job.progress_data or {}).get("message")
                 if isinstance(import_job.progress_data, dict)
                 else None
             ),
-            result=result,
-            error=error,
-            **child_kwargs,
+        }
+        update_manifest(parent, bounded_import_batches=batch_results)
+        await db.flush()
+        completion = await _bounded_parent_completion(
+            db,
+            parent,
+            batch_results=batch_results,
+            fallback_message=error or "Bounded import state changed",
         )
+        target_status = completion.status
+    else:
+        target_status = IMPORT_PARENT_STATUS.get(child_status)
 
-    parent = await db.get(DownloadJob, import_job.download_job_id)
-    if parent is None:
-        return None
-
-    parent_task = await task_service.get_by_subject("download_job", parent.id)
-    target_status = IMPORT_PARENT_STATUS.get(child_status)
     if target_status and parent.status != target_status:
         # Never resurrect or rewrite a previously terminal parent based on a
         # stale child process. Execution tokens and reconciliation handle that
@@ -235,7 +292,9 @@ async def project_import_pipeline_state(
                 to_status=target_status,
                 import_job_id=str(import_job.id),
             )
-    elif error is not None and parent.status == target_status:
+    elif error is not None and parent.status == target_status and not (
+        bounded and target_status == "importing"
+    ):
         parent.error_log = error
 
     parent_progress = dict(parent.progress_data or {})
@@ -254,13 +313,17 @@ async def project_import_pipeline_state(
         parent_task = await task_service.ensure_download_task(parent)
     else:
         parent_kwargs: dict[str, Any] = {}
-        if reason_code is not None:
+        if reason_code is not None and parent.status in {"failed", "stale"}:
             parent_kwargs["reason_code"] = reason_code
         await task_service.update_task(
             parent_task,
             status=parent.status,
             progress=parent_progress,
-            error=error,
+            error=(
+                error
+                if parent.status in {"failed", "stale"}
+                else None
+            ),
             **parent_kwargs,
         )
 

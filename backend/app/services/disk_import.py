@@ -472,6 +472,10 @@ async def _drain_pending_ledger(
                     manifest={
                         "disk_import_recovery": True,
                         "bounded_import_publication_open": True,
+                        "bounded_import_publisher_task_id": (
+                            str(parent_task_id) if parent_task_id else None
+                        ),
+                        "bounded_import_publisher_started_at": now.isoformat(),
                     },
                 )
                 db.add(recovery_job)

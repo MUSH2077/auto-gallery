@@ -23,6 +23,7 @@ from app.jobs.worker_control import (
     HeartbeatPublisher,
     signal_process_group,
 )
+from app.models.download_job import DownloadJob
 from app.models.subscription_source import SubscriptionSource
 from app.repositories.download_job import DownloadJobRepository
 from app.models.task_state import transition_download_job
@@ -358,6 +359,7 @@ async def _enqueue_import(download_job_id: str, import_error: str | None = None,
                             StorageArtifact.artifact_type == "metadata_json",
                             StorageArtifact.file_path.in_(relative_paths),
                             StorageArtifact.state == "new",
+                            StorageArtifact.import_job_id.is_(None),
                         )
                         .values(import_job_id=import_job.id)
                     )
@@ -367,7 +369,18 @@ async def _enqueue_import(download_job_id: str, import_error: str | None = None,
                 "Queued; waiting for import worker",
                 publish=False,
             )
-            download_job = await repo.get(UUID(download_job_id))
+            # Artifact ownership is acquired first, then every bounded-parent
+            # JSONB read-modify-write is serialized on the DownloadJob row.
+            # This preserves the global artifact -> owner lock order used by
+            # disk adoption and child-result coordination.
+            download_job = (
+                await db.execute(
+                    select(DownloadJob)
+                    .where(DownloadJob.id == UUID(download_job_id))
+                    .with_for_update(of=DownloadJob)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one_or_none()
             if download_job:
                 await repo.update_status(download_job, "importing", import_error)
                 apply_download_progress(

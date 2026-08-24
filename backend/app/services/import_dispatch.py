@@ -20,18 +20,16 @@ import redis as redis_lib
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
 from app.models.task_run import TaskRun
-from app.models.task_state import transition_download_job, transition_import_job
-from app.services.job_progress import apply_download_progress, apply_import_progress
+from app.models.task_state import transition_import_job
+from app.services.job_progress import apply_import_progress
 from app.services.queue_admission import (
     QueueAdmissionError,
     checked_enqueue,
     checked_enqueue_in,
 )
 from app.services.redis_client import get_redis
-from app.services.search_projection_outbox import request_search_projection
 from app.services.tasks import TaskService
 
 logger = logging.getLogger(__name__)
@@ -212,28 +210,18 @@ async def _persist_invalid_dispatch(
         rq_job_id=task.rq_job_id,
     )
 
-    # Initial imports leave their parent download in importing.  Preserve the
-    # old explicit-failure behaviour for code/serialization faults, while never
-    # applying it to Redis capacity or connectivity failures.
-    parent = await db.get(DownloadJob, job.download_job_id)
-    if parent is not None and parent.status == "importing":
-        transition_download_job(parent, "failed", message)
-        apply_download_progress(parent, "failed", message, publish=False)
-        await TaskService(db).update_subject(
-            "download_job",
-            parent.id,
-            status="failed",
-            progress=parent.progress_data,
-            error=message,
-        )
-        await request_search_projection(
-            db,
-            subscription_ids=(
-                [parent.subscription_id]
-                if parent.subscription_id
-                else ()
-            ),
-        )
+    # Invalid durable publication is one terminal child outcome. Shared disk
+    # import parents derive their state under the same sibling/publication lock
+    # as every other exit; ordinary one-child parents retain explicit failure.
+    from app.services.import_lifecycle import project_import_pipeline_state
+
+    await project_import_pipeline_state(
+        db,
+        job,
+        status="failed",
+        error=message,
+        reason_code="import_dispatch_invalid",
+    )
     await db.commit()
 
 
