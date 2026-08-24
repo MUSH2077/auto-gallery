@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -16,6 +17,15 @@ class _Rows:
     def all(self):
         return list(self._rows)
 
+    def scalars(self):
+        return self
+
+    def scalar_one_or_none(self):
+        return self._rows[0] if self._rows else None
+
+    def __iter__(self):
+        return iter(self._rows)
+
 
 class _Database:
     def __init__(self, responses):
@@ -28,7 +38,11 @@ class _Database:
         self.execute_count += 1
         return _Rows(self.responses.pop(0))
 
-    async def flush(self):
+    @property
+    def no_autoflush(self):
+        return nullcontext()
+
+    async def flush(self, *_args):
         return None
 
     async def commit(self):
@@ -92,13 +106,14 @@ async def test_unreadable_redis_never_marks_an_old_active_task_stale():
     db = _Database((
         ((job_id, now - timedelta(minutes=10)),),
         (),
+        (),
     ))
     count = await TaskEngine(db).detect_stale_tasks(
         redis_client=_Redis(error=ConnectionError("redis unavailable")),
         now=now,
     )
     assert count == 0
-    assert db.execute_count == 2
+    assert db.execute_count == 3
     assert db.commit_count == 0
 
 
@@ -155,8 +170,14 @@ async def test_import_stale_transition_updates_parent_tasks_and_outbox(monkeypat
     )
     db = _Database((
         (),
-        ((import_job.id, old),),
-        ((import_job, import_task, parent, parent_task),),
+        ((import_job.id, parent.id, old),),
+        (),
+        (parent,),
+        (import_job,),
+        (parent,),
+        (),
+        (import_task,),
+        (parent_task,),
     ))
 
     projection_requests = []

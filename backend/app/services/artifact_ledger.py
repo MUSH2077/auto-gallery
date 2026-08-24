@@ -174,18 +174,63 @@ class ArtifactLedger:
             return list(result.scalars())
 
         if import_job_id is not None:
-            assigned = await load_paths(StorageArtifact.import_job_id == import_job_id)
-            if assigned:
-                return assigned
-            # Compatibility for durable jobs created before batch assignment was
-            # introduced. New batch publications always have an exact assignment.
-            return await load_paths(StorageArtifact.import_job_id.is_(None))
+            return await load_paths(
+                StorageArtifact.import_job_id == import_job_id,
+            )
         result = await self.db.execute(
             select(StorageArtifact.file_path)
             .where(*filters)
             .order_by(StorageArtifact.created_at, StorageArtifact.id)
         )
         return list(result.scalars())
+
+    async def reset_retry_assignment(
+        self,
+        download_job_id: UUID,
+        import_job_id: UUID,
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        """Reset only retryable rows already owned by one durable child.
+
+        Artifact rows are locked before the caller locks the parent/child
+        lifecycle rows.  A live lease remains owned by its concrete execution;
+        failed rows and expired executions retain the same ``import_job_id``.
+        """
+
+        checked_at = now or datetime.now(timezone.utc)
+        retryable = (
+            (StorageArtifact.state == "failed")
+            | (
+                (StorageArtifact.state == "importing")
+                & (
+                    StorageArtifact.lease_expires_at.is_(None)
+                    | (StorageArtifact.lease_expires_at <= checked_at)
+                )
+            )
+        )
+        rows = list((await self.db.execute(
+            select(StorageArtifact)
+            .where(
+                downloads_artifact_predicate(),
+                StorageArtifact.download_job_id == download_job_id,
+                StorageArtifact.import_job_id == import_job_id,
+                retryable,
+            )
+            .order_by(
+                StorageArtifact.source_work_id,
+                StorageArtifact.created_at,
+                StorageArtifact.id,
+            )
+            .with_for_update(of=StorageArtifact)
+        )).scalars())
+        for row in rows:
+            row.state = "new"
+            row.lease_token = None
+            row.lease_expires_at = None
+            row.last_error = None
+        await self.db.flush()
+        return len(rows)
 
     async def counts(self, download_job_id: UUID) -> tuple[int, int, list[str]]:
         result = await self.db.execute(

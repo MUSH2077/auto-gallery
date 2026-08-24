@@ -11,6 +11,38 @@ import pytest
 from sqlalchemy import func, select, text
 
 
+class _HeartbeatPipeline:
+    def __init__(self, live_keys: set[str]):
+        self.live_keys = live_keys
+        self.keys: list[str] = []
+
+    def exists(self, key: str):
+        self.keys.append(key)
+        return self
+
+    def execute(self):
+        return [key in self.live_keys for key in self.keys]
+
+
+class _HeartbeatRedis:
+    def __init__(self, live_task_ids=()):
+        self.live_keys = {
+            f"task:{task_id}:heartbeat_ts" for task_id in live_task_ids
+        }
+        self.writes: dict[str, object] = {}
+
+    def pipeline(self, *, transaction: bool):
+        assert transaction is False
+        return _HeartbeatPipeline(self.live_keys)
+
+    def exists(self, key: str):
+        return key in self.live_keys
+
+    def setex(self, key: str, _ttl: int, value):
+        self.writes[key] = value
+        return True
+
+
 async def _clear(db):
     await db.execute(text("""
         TRUNCATE
@@ -672,6 +704,652 @@ async def test_enqueue_waits_for_parent_lock_and_preserves_child_batch_manifest(
                     ImportJob.download_job_id == parent_id,
                 )
             )).scalar_one()) == 2
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_failed_child_feed_never_falls_back_to_unassigned_sibling():
+    """An explicit child UUID is an exact feed even when none of it is runnable."""
+    from app.database import async_session, engine
+    from app.models.import_job import ImportJob
+    from app.models.storage_artifact import StorageArtifact
+    from app.services.artifact_ledger import ArtifactLedger
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            parent = await _shared_parent(db)
+            child = ImportJob(download_job_id=parent.id, status="failed")
+            db.add(child)
+            await db.flush()
+            db.add_all([
+                StorageArtifact(
+                    storage_root="downloads",
+                    file_path="pixiv/bounded/own/metadata.json",
+                    source="pixiv",
+                    creator_dir="bounded",
+                    source_work_id="own",
+                    file_name="metadata.json",
+                    artifact_type="metadata_json",
+                    download_job_id=parent.id,
+                    import_job_id=child.id,
+                    state="failed",
+                ),
+                StorageArtifact(
+                    storage_root="downloads",
+                    file_path="pixiv/bounded/sibling/metadata.json",
+                    source="pixiv",
+                    creator_dir="bounded",
+                    source_work_id="sibling",
+                    file_name="metadata.json",
+                    artifact_type="metadata_json",
+                    download_job_id=parent.id,
+                    state="new",
+                ),
+            ])
+            await db.commit()
+
+            assert await ArtifactLedger(db).new_metadata_paths(
+                parent.id,
+                import_job_id=child.id,
+            ) == []
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_retry_resets_only_child_assignment_reopens_parent_and_aggregates(
+    monkeypatch,
+):
+    """A bounded retry owns its prior failed row and runs under an active parent."""
+    import app.services.task_engine as task_engine
+
+    from app.database import async_session, engine
+    from app.models.import_job import ImportJob
+    from app.models.storage_artifact import StorageArtifact
+    from app.services.artifact_ledger import ArtifactLedger
+    from app.services.import_lifecycle import coordinate_import_parent_completion
+    from app.services.tasks import TaskService
+
+    async def publish_and_commit(db, *_args, **_kwargs):
+        await db.commit()
+        return "existing"
+
+    monkeypatch.setattr(task_engine, "publish_prepared_import", publish_and_commit)
+    monkeypatch.setattr(
+        task_engine.TaskEventPublisher,
+        "publish_status_change",
+        lambda *_args, **_kwargs: None,
+    )
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            parent = await _shared_parent(
+                db,
+                manifest={
+                    "disk_import_recovery": True,
+                    "bounded_import_publication_open": False,
+                },
+            )
+            parent.status = "failed"
+            parent.error_log = "previous bounded failure"
+            child = ImportJob(download_job_id=parent.id, status="failed")
+            db.add(child)
+            await db.flush()
+            await TaskService(db).ensure_download_task(parent)
+            await TaskService(db).ensure_import_task(child)
+            own = StorageArtifact(
+                storage_root="downloads",
+                file_path="pixiv/bounded/retry-own/metadata.json",
+                source="pixiv",
+                creator_dir="bounded",
+                source_work_id="retry-own",
+                file_name="metadata.json",
+                artifact_type="metadata_json",
+                download_job_id=parent.id,
+                import_job_id=child.id,
+                state="failed",
+                last_error="parse failed",
+            )
+            sibling = StorageArtifact(
+                storage_root="downloads",
+                file_path="pixiv/bounded/retry-sibling/metadata.json",
+                source="pixiv",
+                creator_dir="bounded",
+                source_work_id="retry-sibling",
+                file_name="metadata.json",
+                artifact_type="metadata_json",
+                download_job_id=parent.id,
+                state="new",
+            )
+            db.add_all([own, sibling])
+            await db.commit()
+            parent_id = parent.id
+            child_id = child.id
+            own_id = own.id
+            sibling_id = sibling.id
+
+            result = await task_engine.TaskEngine(db).retry_import(child_id)
+            db.expire_all()
+            retried_parent = await db.get(type(parent), parent_id)
+            retried_child = await db.get(ImportJob, child_id)
+            own = await db.get(StorageArtifact, own_id)
+            sibling = await db.get(StorageArtifact, sibling_id)
+
+            assert result["status"] == "enqueued"
+            assert retried_parent.status == "importing"
+            assert retried_parent.error_log is None
+            assert own.state == "new"
+            assert own.import_job_id == retried_child.id
+            assert own.last_error is None
+            assert sibling.state == "new"
+            assert sibling.import_job_id is None
+            assert await ArtifactLedger(db).new_metadata_paths(
+                retried_parent.id,
+                import_job_id=retried_child.id,
+            ) == ["pixiv/bounded/retry-own/metadata.json"]
+
+            sibling.state = "done"
+            retried_child.status = "complete"
+            completion = await coordinate_import_parent_completion(
+                db,
+                retried_child,
+                status="complete",
+                stats={
+                    "works": 1,
+                    "assets": 1,
+                    "multi_page": 0,
+                    "skipped": 0,
+                    "existing": 0,
+                },
+                total_groups=1,
+                message="Imported retry assignment",
+            )
+            assert completion.should_finalize is True
+            assert completion.status == "complete"
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_real_disk_publishers_distinguish_expired_and_live_heartbeats(
+    tmp_path,
+    monkeypatch,
+):
+    """Only the crashed admin publisher is staled, resumed, and closed."""
+    import app.services.task_engine as task_engine
+
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models.download_job import DownloadJob
+    from app.models.import_job import ImportJob
+    from app.models.storage_artifact import StorageArtifact
+    from app.models.task_run import TaskRun
+    from app.services.import_recovery import recover_import_pipeline
+    from app.services.tasks import TaskService
+
+    download_root = tmp_path / "downloads"
+    monkeypatch.setattr(settings, "download_root", str(download_root))
+    stale_publisher_id = uuid4()
+    live_publisher_id = uuid4()
+    redis = _HeartbeatRedis({live_publisher_id})
+
+    async def fake_publish(*_args, **_kwargs):
+        return "replayed"
+
+    async def no_projection(*_args, **_kwargs):
+        return 0
+
+    monkeypatch.setattr("app.jobs.download.get_redis", lambda: redis)
+    monkeypatch.setattr("app.jobs.download.publish_prepared_import", fake_publish)
+    monkeypatch.setattr("app.jobs.download.publish_progress", lambda *_a, **_k: None)
+    monkeypatch.setattr(task_engine, "request_search_projection", no_projection)
+    monkeypatch.setattr(
+        task_engine.TaskEventPublisher,
+        "publish_status_change",
+        lambda *_args, **_kwargs: None,
+    )
+
+    old = datetime.now(timezone.utc) - timedelta(hours=2)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            parents = []
+            for label, publisher_id in (
+                ("expired", stale_publisher_id),
+                ("live", live_publisher_id),
+            ):
+                metadata = (
+                    download_root
+                    / "pixiv"
+                    / "bounded"
+                    / label
+                    / "metadata.json"
+                )
+                metadata.parent.mkdir(parents=True, exist_ok=True)
+                metadata.write_text(json.dumps({"id": label}), encoding="utf-8")
+                parent = await _shared_parent(
+                    db,
+                    manifest={
+                        "disk_import_recovery": True,
+                        "bounded_import_publication_open": True,
+                        "bounded_import_publisher_task_id": str(publisher_id),
+                    },
+                )
+                task = await TaskService(db).create_task(
+                    task_id=publisher_id,
+                    kind="admin",
+                    operation_type="admin-disk-import",
+                    title=f"{label} publisher",
+                    status="running",
+                    queue_name="maintenance",
+                )
+                task.started_at = old
+                task.updated_at = old
+                parent.updated_at = old
+                db.add(StorageArtifact(
+                    storage_root="downloads",
+                    file_path=f"pixiv/bounded/{label}/metadata.json",
+                    source="pixiv",
+                    creator_dir="bounded",
+                    source_work_id=label,
+                    file_name="metadata.json",
+                    artifact_type="metadata_json",
+                    download_job_id=parent.id,
+                    state="new",
+                ))
+                parents.append(parent)
+            await db.commit()
+            stale_parent_id, live_parent_id = (parent.id for parent in parents)
+
+            stale_count = await task_engine.TaskEngine(db).detect_stale_tasks(
+                redis_client=redis,
+                now=datetime.now(timezone.utc),
+            )
+            first = await recover_import_pipeline(
+                db,
+                redis_client=redis,
+                stale_after_seconds=60,
+                dispatch_grace_seconds=60,
+            )
+            second = await recover_import_pipeline(
+                db,
+                redis_client=redis,
+                stale_after_seconds=60,
+                dispatch_grace_seconds=60,
+            )
+
+            db.expire_all()
+            stale_task = await db.get(TaskRun, stale_publisher_id)
+            live_task = await db.get(TaskRun, live_publisher_id)
+            stale_parent = await db.get(DownloadJob, stale_parent_id)
+            live_parent = await db.get(DownloadJob, live_parent_id)
+            stale_imports = list((await db.execute(
+                select(ImportJob).where(ImportJob.download_job_id == stale_parent_id)
+            )).scalars())
+            live_imports = list((await db.execute(
+                select(ImportJob).where(ImportJob.download_job_id == live_parent_id)
+            )).scalars())
+
+            assert stale_count == 1
+            assert stale_task.status == "stale"
+            assert live_task.status == "running"
+            assert len(stale_imports) == 1
+            assert live_imports == []
+            assert stale_parent.manifest["bounded_import_publication_open"] is False
+            assert live_parent.manifest["bounded_import_publication_open"] is True
+            assert first["imports_enqueued"] == 1
+            assert second["imports_enqueued"] == 0
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_recovery_assigns_failed_and_expired_page_without_touching_live_lease(
+    tmp_path,
+    monkeypatch,
+):
+    """Recovery publishes a non-empty exact child feed from every eligible state."""
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models.import_job import ImportJob
+    from app.models.storage_artifact import StorageArtifact
+    from app.services.artifact_ledger import ArtifactLedger
+    from app.services.import_recovery import recover_import_pipeline
+
+    download_root = tmp_path / "downloads"
+    monkeypatch.setattr(settings, "download_root", str(download_root))
+    redis = _HeartbeatRedis()
+
+    async def fake_publish(*_args, **_kwargs):
+        return "replayed"
+
+    monkeypatch.setattr("app.jobs.download.get_redis", lambda: redis)
+    monkeypatch.setattr("app.jobs.download.publish_prepared_import", fake_publish)
+    monkeypatch.setattr("app.jobs.download.publish_progress", lambda *_a, **_k: None)
+
+    now = datetime.now(timezone.utc)
+    paths = {
+        "failed": "pixiv/bounded/failed/metadata.json",
+        "expired": "pixiv/bounded/expired/metadata.json",
+        "live": "pixiv/bounded/live/metadata.json",
+    }
+    for label, relative in paths.items():
+        metadata = download_root / relative
+        metadata.parent.mkdir(parents=True, exist_ok=True)
+        metadata.write_text(json.dumps({"id": label}), encoding="utf-8")
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            parent = await _shared_parent(db)
+            parent.updated_at = now - timedelta(hours=2)
+            expired_token = uuid4()
+            live_token = uuid4()
+            failed = StorageArtifact(
+                storage_root="downloads",
+                file_path=paths["failed"],
+                source="pixiv",
+                creator_dir="bounded",
+                source_work_id="failed",
+                file_name="metadata.json",
+                artifact_type="metadata_json",
+                download_job_id=parent.id,
+                state="failed",
+                last_error="previous failure",
+            )
+            expired = StorageArtifact(
+                storage_root="downloads",
+                file_path=paths["expired"],
+                source="pixiv",
+                creator_dir="bounded",
+                source_work_id="expired",
+                file_name="metadata.json",
+                artifact_type="metadata_json",
+                download_job_id=parent.id,
+                state="importing",
+                lease_token=expired_token,
+                lease_expires_at=now - timedelta(minutes=5),
+            )
+            live = StorageArtifact(
+                storage_root="downloads",
+                file_path=paths["live"],
+                source="pixiv",
+                creator_dir="bounded",
+                source_work_id="live",
+                file_name="metadata.json",
+                artifact_type="metadata_json",
+                download_job_id=parent.id,
+                state="importing",
+                lease_token=live_token,
+                lease_expires_at=now + timedelta(minutes=5),
+            )
+            db.add_all([failed, expired, live])
+            await db.commit()
+            failed_id = failed.id
+            expired_id = expired.id
+            live_id = live.id
+
+            first = await recover_import_pipeline(
+                db,
+                redis_client=redis,
+                stale_after_seconds=60,
+            )
+            second = await recover_import_pipeline(
+                db,
+                redis_client=redis,
+                stale_after_seconds=60,
+            )
+
+            imports = list((await db.execute(
+                select(ImportJob).where(ImportJob.download_job_id == parent.id)
+            )).scalars())
+            assert len(imports) == 1
+            import_id = imports[0].id
+            feed = await ArtifactLedger(db).new_metadata_paths(
+                parent.id,
+                import_job_id=import_id,
+            )
+            assert len(feed) == 2
+            assert set(feed) == {paths["expired"], paths["failed"]}
+
+            db.expire_all()
+            failed = await db.get(StorageArtifact, failed_id)
+            expired = await db.get(StorageArtifact, expired_id)
+            live = await db.get(StorageArtifact, live_id)
+            assert failed.state == "new"
+            assert failed.import_job_id == import_id
+            assert failed.last_error is None
+            assert expired.state == "new"
+            assert expired.import_job_id == import_id
+            assert expired.lease_token is None
+            assert live.state == "importing"
+            assert live.import_job_id is None
+            assert live.lease_token == live_token
+            assert live.lease_expires_at > now
+            assert first["imports_enqueued"] == 1
+            assert second["imports_enqueued"] == 0
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_heartbeat_stale_child_uses_open_then_closed_sibling_aggregate(
+    monkeypatch,
+):
+    """Heartbeat expiry cannot stale an open parent, then settles as stale."""
+    import app.services.task_engine as task_engine
+
+    from app.database import async_session, engine
+    from app.models.import_job import ImportJob
+    from app.services.import_lifecycle import (
+        close_bounded_import_publication,
+        project_import_pipeline_state,
+    )
+    from app.services.tasks import TaskService
+
+    async def no_projection(*_args, **_kwargs):
+        return 0
+
+    monkeypatch.setattr(task_engine, "request_search_projection", no_projection)
+    monkeypatch.setattr(
+        task_engine.TaskEventPublisher,
+        "publish_status_change",
+        lambda *_args, **_kwargs: None,
+    )
+
+    old = datetime.now(timezone.utc) - timedelta(hours=2)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            parent = await _shared_parent(db)
+            stale_child = ImportJob(
+                download_job_id=parent.id,
+                status="running",
+                created_at=old,
+                updated_at=old,
+            )
+            live_sibling = ImportJob(
+                download_job_id=parent.id,
+                status="running",
+                created_at=old,
+                updated_at=old,
+            )
+            db.add_all([stale_child, live_sibling])
+            await db.flush()
+            parent_task = await TaskService(db).ensure_download_task(parent)
+            stale_task = await TaskService(db).ensure_import_task(stale_child)
+            live_task = await TaskService(db).ensure_import_task(live_sibling)
+            stale_task.started_at = old
+            stale_task.updated_at = old
+            live_task.started_at = old
+            live_task.updated_at = old
+            await db.commit()
+            parent_id = parent.id
+            stale_child_id = stale_child.id
+            live_sibling_id = live_sibling.id
+
+            redis = _HeartbeatRedis({live_sibling_id})
+            await task_engine.TaskEngine(db).detect_stale_tasks(
+                redis_client=redis,
+                now=datetime.now(timezone.utc),
+            )
+            db.expire_all()
+            parent = await db.get(type(parent), parent_id)
+            parent_task = await TaskService(db).get_by_subject(
+                "download_job",
+                parent_id,
+            )
+            stale_child = await db.get(ImportJob, stale_child_id)
+            live_sibling = await db.get(ImportJob, live_sibling_id)
+            assert stale_child.status == "stale"
+            assert live_sibling.status == "running"
+            assert parent.status == "importing"
+            assert parent_task.status == "running"
+
+            live_sibling.status = "complete"
+            completion = await close_bounded_import_publication(db, parent.id)
+            assert completion is not None
+            assert completion.should_finalize is True
+            assert completion.status == "stale"
+            await project_import_pipeline_state(
+                db,
+                stale_child,
+                status="stale",
+                error="Redis heartbeat TTL expired while import was running",
+                reason_code="lost_heartbeat",
+            )
+            await db.commit()
+            assert parent.status == "stale"
+            assert parent_task.status == "stale"
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_invalid_dispatch_and_parent_projection_complete_without_deadlock(
+    monkeypatch,
+):
+    """Invalid publication releases child locks before parent-first projection."""
+    import app.services.import_dispatch as import_dispatch
+    import app.services.import_lifecycle as import_lifecycle
+
+    from app.database import async_session, engine
+    from app.models.download_job import DownloadJob
+    from app.models.import_job import ImportJob
+    from app.services.import_dispatch import (
+        prepare_import_dispatch,
+        publish_prepared_import,
+    )
+    from app.services.import_lifecycle import project_import_pipeline_state
+    from app.services.tasks import TaskService
+
+    invalid_path_holds_child = asyncio.Event()
+    projection_holds_parent = asyncio.Event()
+    original_persist = import_dispatch._persist_invalid_dispatch
+    original_lock_parent = import_lifecycle._lock_parent
+
+    async def interleaved_persist(db, job, task, error):
+        invalid_path_holds_child.set()
+        await asyncio.wait_for(projection_holds_parent.wait(), timeout=2)
+        return await original_persist(db, job, task, error)
+
+    async def signal_parent_lock(db, download_job_id):
+        parent = await original_lock_parent(db, download_job_id)
+        current = asyncio.current_task()
+        if current is not None and current.get_name() == "bounded-projection":
+            projection_holds_parent.set()
+        return parent
+
+    monkeypatch.setattr(import_dispatch, "_persist_invalid_dispatch", interleaved_persist)
+    monkeypatch.setattr(import_lifecycle, "_lock_parent", signal_parent_lock)
+
+    try:
+        async with async_session() as setup_db:
+            await _clear(setup_db)
+            parent = await _shared_parent(setup_db)
+            child = ImportJob(download_job_id=parent.id, status="enqueued")
+            sibling = ImportJob(download_job_id=parent.id, status="running")
+            setup_db.add_all([child, sibling])
+            await setup_db.flush()
+            parent_task = await TaskService(setup_db).ensure_download_task(parent)
+            prepared = await prepare_import_dispatch(
+                setup_db,
+                child,
+                parent_task_id=parent_task.id,
+            )
+            prepared.task.queue_name = "wrong-queue"
+            await setup_db.commit()
+            parent_id = parent.id
+            child_id = child.id
+
+        async def publish_invalid():
+            async with async_session() as publish_db:
+                return await publish_prepared_import(
+                    publish_db,
+                    child_id,
+                    prepared.rq_job_id,
+                )
+
+        async def project_pause():
+            await invalid_path_holds_child.wait()
+            async with async_session() as projection_db:
+                projected_child = await projection_db.get(ImportJob, child_id)
+                await project_import_pipeline_state(
+                    projection_db,
+                    projected_child,
+                    status="paused",
+                )
+                await projection_db.commit()
+
+        publication, _ = await asyncio.wait_for(
+            asyncio.gather(
+                asyncio.create_task(
+                    publish_invalid(),
+                    name="invalid-publisher",
+                ),
+                asyncio.create_task(
+                    project_pause(),
+                    name="bounded-projection",
+                ),
+            ),
+            timeout=5,
+        )
+        assert publication == "invalid"
+
+        async with async_session() as db:
+            child = await db.get(ImportJob, child_id)
+            parent = await db.get(DownloadJob, parent_id)
+            child_task = await TaskService(db).get_by_subject(
+                "import_job",
+                child_id,
+            )
+            assert child.status == "failed"
+            assert child_task.status == "failed"
+            assert parent.status == "importing"
+            assert parent.manifest["bounded_import_batches"][str(child_id)][
+                "status"
+            ] == "failed"
     finally:
         async with async_session() as db:
             await _clear(db)

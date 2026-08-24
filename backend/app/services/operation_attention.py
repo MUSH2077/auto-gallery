@@ -22,8 +22,9 @@ from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.models.storage_artifact import StorageArtifact
 from app.models.task_run import TaskRun
+from app.services.job_manifest import get_manifest
 from app.services.sync_outcome import download_job_outcome
-from app.services.tasks import TaskService, task_payload
+from app.services.tasks import TaskService, normalize_task_status, task_payload
 
 logger = logging.getLogger(__name__)
 
@@ -452,6 +453,7 @@ async def reconcile_task_truth(
 
     for task in tasks:
         target_status: str | None = None
+        target_domain_status: str | None = None
         reason_code: str | None = None
         message: str | None = None
         domain_job: DownloadJob | ImportJob | None = None
@@ -499,6 +501,33 @@ async def reconcile_task_truth(
                 reason_code = "orphaned_subject"
                 message = "Task references a download job that no longer exists"
                 report["orphaned"] += 1
+            elif get_manifest(domain_job).get("disk_import_recovery"):
+                from app.services.import_lifecycle import (
+                    bounded_import_parent_completion,
+                )
+
+                completion = await bounded_import_parent_completion(
+                    db,
+                    domain_job.id,
+                    fallback_message="Bounded import truth reconciled",
+                )
+                if completion is not None:
+                    domain_job = completion.parent
+                    expected_task_status = normalize_task_status(
+                        completion.status,
+                    )
+                    if (
+                        domain_job.status != completion.status
+                        or task.status != expected_task_status
+                    ):
+                        target_domain_status = completion.status
+                        target_status = expected_task_status
+                        reason_code = infer_reason_code(
+                            completion.status,
+                            completion.message,
+                        )
+                        message = completion.message
+                        report["parent_child_conflicts"] += 1
             elif domain_job.status == "importing":
                 child = (
                     await db.execute(
@@ -544,13 +573,24 @@ async def reconcile_task_truth(
         if dry_run:
             continue
 
-        if isinstance(domain_job, DownloadJob) and domain_job.status == "importing" and target_status in {"failed", "stale"}:
-            domain_job.status = target_status
-            domain_job.error_log = message
+        if isinstance(domain_job, DownloadJob):
+            if target_domain_status is not None:
+                domain_job.status = target_domain_status
+                domain_job.error_log = (
+                    message
+                    if target_domain_status in {"failed", "stale"}
+                    else None
+                )
+            elif (
+                domain_job.status == "importing"
+                and target_status in {"failed", "stale"}
+            ):
+                domain_job.status = target_status
+                domain_job.error_log = message
         await task_service.update_task(
             task,
             status=target_status,
-            error=message,
+            error=message if target_status in {"failed", "stale"} else None,
             resource_state="yielded",
             resource_reason=None,
             reason_code=reason_code,

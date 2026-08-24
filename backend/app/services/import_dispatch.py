@@ -20,6 +20,7 @@ import redis as redis_lib
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
 from app.models.task_run import TaskRun
 from app.models.task_state import transition_import_job
@@ -197,6 +198,53 @@ async def _persist_invalid_dispatch(
     """Make non-retryable publication errors terminal and explicit."""
 
     message = f"Import queue publication failed: {error}"
+    job_id = job.id
+    parent_id = job.download_job_id
+    task_id = task.id
+    rq_job_id = task.rq_job_id
+    attempt = int(
+        (((task.meta or {}).get(IMPORT_DISPATCH_META_KEY) or {}).get("attempt"))
+        or 0,
+    )
+
+    # The caller validated while holding ImportJob -> TaskRun.  Release those
+    # locks before asking for the shared parent, then reacquire and revalidate
+    # in the lifecycle-wide parent -> child -> TaskRun order.
+    await db.rollback()
+    parent = (
+        await db.execute(
+            select(DownloadJob)
+            .where(DownloadJob.id == parent_id)
+            .with_for_update(of=DownloadJob)
+        )
+    ).scalar_one_or_none()
+    job = (
+        await db.execute(
+            select(ImportJob)
+            .where(ImportJob.id == job_id)
+            .with_for_update(of=ImportJob)
+        )
+    ).scalar_one_or_none()
+    task = (
+        await db.execute(
+            select(TaskRun)
+            .where(TaskRun.id == task_id)
+            .with_for_update(of=TaskRun)
+        )
+    ).scalar_one_or_none()
+    if parent is None or job is None or task is None:
+        await db.rollback()
+        return
+    dispatch = (task.meta or {}).get(IMPORT_DISPATCH_META_KEY) or {}
+    if (
+        job.status != "enqueued"
+        or task.rq_job_id != rq_job_id
+        or int(dispatch.get("attempt") or 0) != attempt
+        or dispatch.get("state") == IMPORT_DISPATCH_PUBLISHED
+    ):
+        await db.rollback()
+        return
+
     _set_dispatch_state(task, IMPORT_DISPATCH_INVALID, error=error)
     if job.status == "enqueued":
         transition_import_job(job, "failed", message)

@@ -313,109 +313,153 @@ AUTH_WARNING_PATTERNS = [
 ]
 
 
-async def _enqueue_import(download_job_id: str, import_error: str | None = None, new_json_paths: set[str] | None = None):
-    """Create a durable import publication intent. Returns its import job id.
-
-    If new_json_paths is provided, stores the file list in Redis so the
-    import runner can process exactly those files without re-scanning.
-
-    PostgreSQL is committed before RQ publication.  Redis pressure or a short
-    disconnect therefore leaves the ImportJob/TaskRun enqueued for the import
-    recovery loop instead of incorrectly failing the completed download.
-    """
-    import_job_id = None
-    try:
-        async with async_session() as db:
-            repo = DownloadJobRepository(db)
-            extra = {"error_log": import_error} if import_error else {}
-            import_job = await repo.create_import({
-                "download_job_id": UUID(download_job_id),
-                "status": "enqueued",
-                **extra,
-            })
-            if new_json_paths:
-                from app.models.storage_artifact import StorageArtifact
-                from app.services.artifact_ledger import downloads_artifact_predicate
-
-                download_root = Path(settings.download_root)
-                relative_paths: set[str] = set()
-                for raw_path in new_json_paths:
-                    path = Path(raw_path)
-                    try:
-                        relative = (
-                            path.relative_to(download_root)
-                            if path.is_absolute()
-                            else path
-                        )
-                    except ValueError:
-                        continue
-                    relative_paths.add(str(relative))
-                if relative_paths:
-                    await db.execute(
-                        update(StorageArtifact)
-                        .where(
-                            downloads_artifact_predicate(),
-                            StorageArtifact.download_job_id == UUID(download_job_id),
-                            StorageArtifact.artifact_type == "metadata_json",
-                            StorageArtifact.file_path.in_(relative_paths),
-                            StorageArtifact.state == "new",
-                            StorageArtifact.import_job_id.is_(None),
-                        )
-                        .values(import_job_id=import_job.id)
-                    )
-            apply_import_progress(
-                import_job,
-                "enqueued",
-                "Queued; waiting for import worker",
-                publish=False,
+def _relative_import_paths(new_json_paths: set[str] | None) -> set[str] | None:
+    if new_json_paths is None:
+        return None
+    download_root = Path(settings.download_root)
+    relative_paths: set[str] = set()
+    for raw_path in new_json_paths:
+        path = Path(raw_path)
+        try:
+            relative = (
+                path.relative_to(download_root)
+                if path.is_absolute()
+                else path
             )
-            # Artifact ownership is acquired first, then every bounded-parent
-            # JSONB read-modify-write is serialized on the DownloadJob row.
-            # This preserves the global artifact -> owner lock order used by
-            # disk adoption and child-result coordination.
-            download_job = (
-                await db.execute(
-                    select(DownloadJob)
-                    .where(DownloadJob.id == UUID(download_job_id))
-                    .with_for_update(of=DownloadJob)
-                    .execution_options(populate_existing=True)
+        except ValueError:
+            continue
+        relative_paths.add(str(relative))
+    return relative_paths
+
+
+async def _prepare_import_intent(
+    db,
+    download_job_id: UUID,
+    *,
+    import_error: str | None,
+    new_json_paths: set[str] | None,
+    locked_artifact_ids: set[UUID] | None = None,
+    recoverable_page: bool = False,
+    require_assignment: bool = False,
+):
+    """Prepare one child in artifact -> parent -> child -> task lock order."""
+
+    from app.models.storage_artifact import StorageArtifact
+    from app.services.artifact_ledger import downloads_artifact_predicate
+
+    relative_paths = _relative_import_paths(new_json_paths)
+    now = datetime.now(timezone.utc)
+    artifact_conditions = [
+        downloads_artifact_predicate(),
+        StorageArtifact.download_job_id == download_job_id,
+        StorageArtifact.artifact_type == "metadata_json",
+        StorageArtifact.import_job_id.is_(None),
+    ]
+    if recoverable_page:
+        artifact_conditions.append(
+            (StorageArtifact.state.in_(("new", "failed")))
+            | (
+                (StorageArtifact.state == "importing")
+                & (
+                    StorageArtifact.lease_expires_at.is_(None)
+                    | (StorageArtifact.lease_expires_at <= now)
                 )
-            ).scalar_one_or_none()
-            if download_job:
-                await repo.update_status(download_job, "importing", import_error)
-                apply_download_progress(
-                    download_job,
-                    "importing",
-                    "Import job queued; waiting for import worker",
-                    publish=False,
-                    import_job_id=str(import_job.id),
-                )
-                append_manifest_event(download_job, "import_job_created", import_job_id=str(import_job.id), reason=import_error)
-            from app.services.tasks import TaskService
-            task_svc = TaskService(db)
-            parent_task = None
-            if download_job:
-                parent_task = await task_svc.ensure_download_task(download_job)
-                await task_svc.update_task(parent_task, status="running", progress=download_job.progress_data)
-            prepared = await prepare_import_dispatch(
-                db,
-                import_job,
-                parent_task_id=parent_task.id if parent_task else None,
-                job_timeout=RQ_JOB_TIMEOUT,
-            )
-            await db.commit()
-            import_job_id = str(import_job.id)
-            rq_job_id = prepared.rq_job_id
-    except Exception as exc:
-        logger.error(
-            "Failed to create import publication for download %s: %s",
-            download_job_id,
-            exc,
-            exc_info=True,
+            ),
         )
-        raise RuntimeError(
-            f"Could not create import job for download {download_job_id}"
-        ) from exc
+    else:
+        artifact_conditions.append(StorageArtifact.state == "new")
+    if locked_artifact_ids is not None:
+        artifact_conditions.append(StorageArtifact.id.in_(locked_artifact_ids))
+    elif relative_paths is not None:
+        artifact_conditions.append(StorageArtifact.file_path.in_(relative_paths))
+
+    artifact_rows = []
+    if relative_paths is None or relative_paths or locked_artifact_ids:
+        artifact_rows = list((await db.execute(
+            select(StorageArtifact)
+            .where(*artifact_conditions)
+            .order_by(
+                StorageArtifact.source_work_id,
+                StorageArtifact.created_at,
+                StorageArtifact.id,
+            )
+            .with_for_update(of=StorageArtifact)
+        )).scalars())
+    if require_assignment and not artifact_rows:
+        return None
+
+    # All participating artifact rows are locked before the shared owner.
+    download_job = (
+        await db.execute(
+            select(DownloadJob)
+            .where(DownloadJob.id == download_job_id)
+            .with_for_update(of=DownloadJob)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if download_job is None:
+        return None
+
+    repo = DownloadJobRepository(db)
+    extra = {"error_log": import_error} if import_error else {}
+    import_job = await repo.create_import({
+        "download_job_id": download_job_id,
+        "status": "enqueued",
+        **extra,
+    })
+    for artifact in artifact_rows:
+        artifact.state = "new"
+        artifact.import_job_id = import_job.id
+        artifact.lease_token = None
+        artifact.lease_expires_at = None
+        artifact.last_error = None
+    await db.flush()
+
+    apply_import_progress(
+        import_job,
+        "enqueued",
+        "Queued; waiting for import worker",
+        publish=False,
+    )
+    await repo.update_status(download_job, "importing", import_error)
+    apply_download_progress(
+        download_job,
+        "importing",
+        "Import job queued; waiting for import worker",
+        publish=False,
+        import_job_id=str(import_job.id),
+    )
+    append_manifest_event(
+        download_job,
+        "import_job_created",
+        import_job_id=str(import_job.id),
+        reason=import_error,
+    )
+    from app.services.tasks import TaskService
+
+    task_svc = TaskService(db)
+    parent_task = await task_svc.ensure_download_task(download_job)
+    await task_svc.update_task(
+        parent_task,
+        status="running",
+        progress=download_job.progress_data,
+    )
+    prepared = await prepare_import_dispatch(
+        db,
+        import_job,
+        parent_task_id=parent_task.id,
+        job_timeout=RQ_JOB_TIMEOUT,
+    )
+    return str(import_job.id), prepared.rq_job_id
+
+
+async def _publish_import_intent(
+    download_job_id: str,
+    import_job_id: str,
+    rq_job_id: str,
+    new_json_paths: set[str] | None,
+) -> str:
+    """Publish a committed child intent and its compatibility handoff."""
 
     # Store new JSON file paths in Redis for the import runner.  The disk copy
     # remains authoritative when Redis is unavailable or publication is delayed.
@@ -514,6 +558,78 @@ async def _enqueue_import(download_job_id: str, import_error: str | None = None,
         download_job_id,
     )
     return import_job_id
+
+
+async def _enqueue_import(
+    download_job_id: str,
+    import_error: str | None = None,
+    new_json_paths: set[str] | None = None,
+):
+    """Create and publish one durable, exactly assigned import intent."""
+
+    try:
+        async with async_session() as db:
+            prepared = await _prepare_import_intent(
+                db,
+                UUID(download_job_id),
+                import_error=import_error,
+                new_json_paths=new_json_paths,
+            )
+            if prepared is None:
+                await db.rollback()
+                return None
+            await db.commit()
+    except Exception as exc:
+        logger.error(
+            "Failed to create import publication for download %s: %s",
+            download_job_id,
+            exc,
+            exc_info=True,
+        )
+        raise RuntimeError(
+            f"Could not create import job for download {download_job_id}"
+        ) from exc
+    return await _publish_import_intent(
+        download_job_id,
+        *prepared,
+        new_json_paths,
+    )
+
+
+async def _enqueue_import_from_locked_page(
+    db,
+    download_job_id: UUID,
+    *,
+    artifact_ids: set[UUID],
+    import_error: str,
+) -> str | None:
+    """Atomically assign a recovery page before exposing its child intent."""
+
+    from app.models.storage_artifact import StorageArtifact
+
+    prepared = await _prepare_import_intent(
+        db,
+        download_job_id,
+        import_error=import_error,
+        new_json_paths=None,
+        locked_artifact_ids=artifact_ids,
+        recoverable_page=True,
+        require_assignment=True,
+    )
+    if prepared is None:
+        await db.rollback()
+        return None
+    assigned_paths = set((await db.execute(
+        select(StorageArtifact.file_path).where(
+            StorageArtifact.import_job_id == UUID(prepared[0]),
+        )
+    )).scalars())
+    await db.commit()
+    return await _publish_import_intent(
+        str(download_job_id),
+        *prepared,
+        assigned_paths,
+    )
 
 
 @heavy_io_async_job("download", source_identity_resolver=_download_source_identity)

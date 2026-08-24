@@ -1,4 +1,6 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
@@ -35,6 +37,66 @@ def test_disk_import_completion_progress_keeps_durable_counters():
         "skipped": 1,
         "failed": 1,
     }
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_disk_import_operation_publishes_real_task_heartbeats(monkeypatch):
+    """The durable admin publisher owns the heartbeat used by recovery."""
+    from app.jobs import admin_operations, worker_control
+
+    class FakeRedis:
+        def __init__(self):
+            self.heartbeat_keys: list[str] = []
+
+        def publish(self, _channel, _payload):
+            return 1
+
+        def setex(self, key, _ttl, _value):
+            if key.endswith(":heartbeat_ts"):
+                self.heartbeat_keys.append(key)
+            return True
+
+        def eval(self, *_args):
+            return 0
+
+    fake_redis = FakeRedis()
+    job_id = str(uuid4())
+
+    async def slow_reconcile(_db, _options, _progress):
+        await asyncio.sleep(0.05)
+        return {
+            "jobs": 0,
+            "scanned": 0,
+            "existing": 0,
+            "imported": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
+
+    monkeypatch.setattr(worker_control, "HEARTBEAT_INTERVAL", 0.01)
+    monkeypatch.setattr(
+        "app.services.redis_pubsub.get_redis",
+        lambda: fake_redis,
+    )
+    monkeypatch.setattr(
+        "app.services.redis_client.get_redis",
+        lambda: fake_redis,
+    )
+    monkeypatch.setattr(
+        "app.services.disk_import.reconcile_downloads_to_db",
+        slow_reconcile,
+    )
+    monkeypatch.setattr(admin_operations, "set_operation_status", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "app.api.admin.settings.invalidate_storage_breakdown_cache",
+        lambda: None,
+    )
+
+    result = await admin_operations._run_disk_import_operation(job_id, {})
+
+    assert result["jobs"] == 0
+    assert f"task:{job_id}:heartbeat_ts" in fake_redis.heartbeat_keys
 
 
 async def _clear_task_test_tables(db):

@@ -11,10 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
-from app.models.task_state import IMPORT_TERMINAL_STATUSES, transition_download_job
+from app.models.task_state import transition_download_job
 from app.services.job_manifest import append_manifest_event, get_manifest, update_manifest
 from app.services.tasks import TaskService
 
+
+# Stable lifecycle lock order across workers, recovery, retries, and projection:
+# downloads StorageArtifact rows (when present) -> DownloadJob -> ImportJob ->
+# TaskRun.  Callers that do not participate in an earlier relation begin at the
+# next relation and never acquire an earlier lock afterward.
 
 IMPORT_PARENT_STATUS = {
     "enqueued": "importing",
@@ -27,6 +32,12 @@ IMPORT_PARENT_STATUS = {
 }
 
 PARENT_TERMINAL_STATUSES = frozenset({"complete", "cancelled", "failed"})
+BOUNDED_SETTLED_STATUSES = frozenset({
+    "complete",
+    "cancelled",
+    "failed",
+    "stale",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,15 +64,14 @@ async def _bounded_parent_completion(
     )).scalars())
     manifest = get_manifest(parent)
     publication_open = bool(manifest.get("bounded_import_publication_open"))
-    parent_is_terminal = parent.status in PARENT_TERMINAL_STATUSES
     active = any(
-        child_status not in IMPORT_TERMINAL_STATUSES
+        child_status not in BOUNDED_SETTLED_STATUSES
         and child_status != "paused"
         for child_status in child_statuses
     )
     paused = any(child_status == "paused" for child_status in child_statuses)
-    all_terminal = bool(child_statuses) and all(
-        child_status in IMPORT_TERMINAL_STATUSES
+    all_settled = bool(child_statuses) and all(
+        child_status in BOUNDED_SETTLED_STATUSES
         for child_status in child_statuses
     )
 
@@ -76,22 +86,26 @@ async def _bounded_parent_completion(
         int(result.get("total_groups") or 0)
         for result in batch_results.values()
     )
-    if parent_is_terminal:
-        aggregate_status = parent.status
-    elif publication_open or active:
+    if publication_open or active:
         aggregate_status = "importing"
     elif paused:
         aggregate_status = "paused"
     elif any(value == "failed" for value in child_statuses):
         aggregate_status = "failed"
+    elif any(value == "stale" for value in child_statuses):
+        aggregate_status = "stale"
     elif any(value == "cancelled" for value in child_statuses):
         aggregate_status = "cancelled"
-    elif all_terminal:
+    elif all_settled:
         aggregate_status = "complete"
     else:
         aggregate_status = "importing"
 
-    should_finalize = all_terminal and not publication_open and not parent_is_terminal
+    should_finalize = (
+        all_settled
+        and not publication_open
+        and parent.status != aggregate_status
+    )
     if aggregate_status == "complete":
         aggregate_message = (
             fallback_message
@@ -105,6 +119,8 @@ async def _bounded_parent_completion(
         aggregate_message = "One or more bounded import batches were cancelled"
     elif aggregate_status == "failed":
         aggregate_message = "One or more bounded import batches failed"
+    elif aggregate_status == "stale":
+        aggregate_message = "One or more bounded import batches lost its worker"
     elif aggregate_status == "paused":
         aggregate_message = "All active bounded import batches are paused"
     else:
@@ -119,6 +135,75 @@ async def _bounded_parent_completion(
     )
 
 
+def _apply_bounded_parent_aggregate(
+    parent: DownloadJob,
+    completion: ImportParentCompletion,
+    *,
+    event: str,
+    import_job_id: UUID | None = None,
+    error: str | None = None,
+) -> None:
+    """Apply an already-serialized aggregate without state-machine races."""
+
+    if parent.status == completion.status:
+        if error is not None and completion.status in {"failed", "stale"}:
+            parent.error_log = error
+        return
+    old_parent_status = parent.status
+    parent.status = completion.status
+    parent.error_log = (
+        error or completion.message
+        if completion.status in {"failed", "stale"}
+        else None
+    )
+    append_manifest_event(
+        parent,
+        event,
+        from_status=old_parent_status,
+        to_status=completion.status,
+        import_job_id=str(import_job_id) if import_job_id else None,
+    )
+
+
+async def _lock_parent(
+    db: AsyncSession,
+    download_job_id: UUID,
+) -> DownloadJob | None:
+    """Lock the shared parent without autoflushing a dirty child first."""
+
+    with db.no_autoflush:
+        return (
+            await db.execute(
+                select(DownloadJob)
+                .where(DownloadJob.id == download_job_id)
+                .with_for_update(of=DownloadJob)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+
+
+async def bounded_import_parent_completion(
+    db: AsyncSession,
+    download_job_id: UUID,
+    *,
+    fallback_message: str = "Bounded import state changed",
+) -> ImportParentCompletion | None:
+    """Return the serialized aggregate for one bounded shared parent."""
+
+    parent = await _lock_parent(db, download_job_id)
+    if parent is None:
+        return None
+    manifest = get_manifest(parent)
+    if not manifest.get("disk_import_recovery"):
+        return None
+    return await _bounded_parent_completion(
+        db,
+        parent,
+        batch_results=dict(manifest.get("bounded_import_batches") or {}),
+        fallback_message=fallback_message,
+    )
+
+
 async def coordinate_import_parent_completion(
     db: AsyncSession,
     import_job: ImportJob,
@@ -130,14 +215,21 @@ async def coordinate_import_parent_completion(
 ) -> ImportParentCompletion:
     """Serialize bounded child results before terminalizing their one parent."""
 
-    parent = (
-        await db.execute(
-            select(DownloadJob)
-            .where(DownloadJob.id == import_job.download_job_id)
-            .with_for_update(of=DownloadJob)
-            .execution_options(populate_existing=True)
+    parent = await _lock_parent(db, import_job.download_job_id)
+    if parent is None:
+        raise RuntimeError(
+            f"download job {import_job.download_job_id} disappeared during import",
         )
-    ).scalar_one()
+    # Stable lifecycle order: parent -> child -> TaskRun.  The parent query
+    # deliberately ran under ``no_autoflush`` so a dirty child could not take
+    # its row lock first.
+    with db.no_autoflush:
+        await db.execute(
+            select(ImportJob.id)
+            .where(ImportJob.id == import_job.id)
+            .with_for_update(of=ImportJob)
+        )
+    await db.flush([import_job])
     manifest = get_manifest(parent)
     if not manifest.get("disk_import_recovery"):
         return ImportParentCompletion(
@@ -158,12 +250,20 @@ async def coordinate_import_parent_completion(
     }
     update_manifest(parent, bounded_import_batches=batch_results)
     await db.flush()
-    return await _bounded_parent_completion(
+    completion = await _bounded_parent_completion(
         db,
         parent,
         batch_results=batch_results,
         fallback_message=message,
     )
+    if not completion.should_finalize:
+        _apply_bounded_parent_aggregate(
+            parent,
+            completion,
+            event="import_aggregate",
+            import_job_id=import_job.id,
+        )
+    return completion
 
 
 async def close_bounded_import_publication(
@@ -172,14 +272,7 @@ async def close_bounded_import_publication(
 ) -> ImportParentCompletion | None:
     """Close child publication and elect a finalizer if all children finished."""
 
-    parent = (
-        await db.execute(
-            select(DownloadJob)
-            .where(DownloadJob.id == download_job_id)
-            .with_for_update(of=DownloadJob)
-            .execution_options(populate_existing=True)
-        )
-    ).scalar_one_or_none()
+    parent = await _lock_parent(db, download_job_id)
     if parent is None:
         return None
     manifest = get_manifest(parent)
@@ -193,12 +286,19 @@ async def close_bounded_import_publication(
         bounded_import_recovery_claimed_at=None,
     )
     await db.flush()
-    return await _bounded_parent_completion(
+    completion = await _bounded_parent_completion(
         db,
         parent,
         batch_results=batch_results,
         fallback_message="Bounded import publication complete",
     )
+    if not completion.should_finalize:
+        _apply_bounded_parent_aggregate(
+            parent,
+            completion,
+            event="bounded_import_publication_closed",
+        )
+    return completion
 
 
 async def project_import_pipeline_state(
@@ -218,16 +318,17 @@ async def project_import_pipeline_state(
     """
 
     child_status = status or import_job.status
-    parent = (
-        await db.execute(
-            select(DownloadJob)
-            .where(DownloadJob.id == import_job.download_job_id)
-            .with_for_update(of=DownloadJob)
-            .execution_options(populate_existing=True)
-        )
-    ).scalar_one_or_none()
+    parent = await _lock_parent(db, import_job.download_job_id)
     if parent is None:
         return None
+
+    with db.no_autoflush:
+        await db.execute(
+            select(ImportJob.id)
+            .where(ImportJob.id == import_job.id)
+            .with_for_update(of=ImportJob)
+        )
+    await db.flush([import_job])
 
     task_service = TaskService(db)
     child_task = await task_service.get_by_subject("import_job", import_job.id)
@@ -279,11 +380,22 @@ async def project_import_pipeline_state(
         target_status = IMPORT_PARENT_STATUS.get(child_status)
 
     if target_status and parent.status != target_status:
-        # Never resurrect or rewrite a previously terminal parent based on a
-        # stale child process. Execution tokens and reconciliation handle that
-        # race; this seam only advances the currently active pipeline.
-        if parent.status not in PARENT_TERMINAL_STATUSES:
-            old_parent_status = parent.status
+        old_parent_status = parent.status
+        if bounded:
+            # Bounded parents are an aggregate, not an independent terminal
+            # latch.  A retried/active child reopens a failed or stale parent;
+            # a closed settled child set deterministically elects the terminal
+            # status above.
+            _apply_bounded_parent_aggregate(
+                parent,
+                completion,
+                event="import_projection",
+                import_job_id=import_job.id,
+                error=error,
+            )
+        # Ordinary one-child parents retain their terminal guard. Execution
+        # tokens and reconciliation handle a stale child process race.
+        elif parent.status not in PARENT_TERMINAL_STATUSES:
             transition_download_job(parent, target_status, error)
             append_manifest_event(
                 parent,
@@ -292,8 +404,10 @@ async def project_import_pipeline_state(
                 to_status=target_status,
                 import_job_id=str(import_job.id),
             )
-    elif error is not None and parent.status == target_status and not (
-        bounded and target_status == "importing"
+    elif (
+        error is not None
+        and parent.status == target_status
+        and target_status in {"failed", "stale"}
     ):
         parent.error_log = error
 

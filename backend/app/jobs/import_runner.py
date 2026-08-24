@@ -1710,6 +1710,20 @@ async def _claim_import_execution(
 
     execution_token = uuid4()
     async with async_session() as db:
+        parent_id = (
+            await db.execute(
+                select(ImportJob.download_job_id).where(ImportJob.id == job_uuid)
+            )
+        ).scalar_one_or_none()
+        if parent_id is None:
+            return None
+        # Import execution follows the same parent -> child -> TaskRun order as
+        # every projection.  The status predicate is repeated after both locks.
+        await db.execute(
+            select(DownloadJob.id)
+            .where(DownloadJob.id == parent_id)
+            .with_for_update(of=DownloadJob)
+        )
         result = await db.execute(
             select(ImportJob)
             .where(
@@ -1731,14 +1745,10 @@ async def _claim_import_execution(
             current=0,
             total=import_job.progress_works_total,
         )
-        from app.services.tasks import TaskService
-
-        await TaskService(db).ensure_import_task(import_job)
-        await TaskService(db).update_subject(
-            "import_job",
-            import_job.id,
+        await project_import_pipeline_state(
+            db,
+            import_job,
             status="running",
-            progress=import_job.progress_data,
         )
         await db.commit()
         return import_job, execution_token
@@ -1885,14 +1895,6 @@ async def run_import_job(import_job_id: str):
                 if ij:
                     apply_import_progress(ij, "failed", _empty_msg)
                     transition_import_job(ij, "failed", _empty_msg)
-                    from app.services.tasks import TaskService
-                    await TaskService(db).update_subject(
-                        "import_job",
-                        ij.id,
-                        status="failed",
-                        progress=ij.progress_data,
-                        error=_empty_msg,
-                    )
                     await project_import_pipeline_state(
                         db,
                         ij,
@@ -2584,15 +2586,6 @@ async def run_import_job(import_job_id: str):
                 ij, status, message,
                 current=stats["works"], total=total_groups, assets=stats["assets"],
             )
-            from app.services.tasks import TaskService
-            await TaskService(db).update_subject(
-                "import_job",
-                ij.id,
-                status=status,
-                progress=ij.progress_data,
-                result={"stats": stats, "message": message} if status == "complete" else None,
-                error=message if status == "failed" else None,
-            )
             if status == "failed":
                 logger.warning("Import %s classified failed: %s", import_job_id, message)
 
@@ -2604,8 +2597,40 @@ async def run_import_job(import_job_id: str):
                 total_groups=total_groups,
                 message=message,
             )
+            # Parent and child rows are now locked in the stable order; the
+            # child TaskRun projection follows before any parent finalization.
+            from app.services.tasks import TaskService
+
+            task_service = TaskService(db)
+            await task_service.update_subject(
+                "import_job",
+                ij.id,
+                status=status,
+                progress=ij.progress_data,
+                result={"stats": stats, "message": message}
+                if status == "complete"
+                else None,
+                error=message if status == "failed" else None,
+            )
             dj = completion.parent
             if dj:
+                parent_task = await task_service.get_by_subject(
+                    "download_job",
+                    dj.id,
+                )
+                if parent_task is None:
+                    await task_service.ensure_download_task(dj)
+                else:
+                    await task_service.update_task(
+                        parent_task,
+                        status=dj.status,
+                        progress=dj.progress_data,
+                        error=(
+                            dj.error_log
+                            if dj.status in {"failed", "stale"}
+                            else None
+                        ),
+                    )
                 status = completion.status
                 message = completion.message
                 stats = completion.stats
@@ -2676,12 +2701,10 @@ async def run_import_job(import_job_id: str):
                         "enqueued",
                         f"Retry {retry_count}/{max_retries} queued after import error",
                     )
-                    from app.services.tasks import TaskService
-                    await TaskService(db).update_subject(
-                        "import_job",
-                        ij.id,
+                    await project_import_pipeline_state(
+                        db,
+                        ij,
                         status="enqueued",
-                        progress=ij.progress_data,
                         error=f"RETRY {retry_count}/{max_retries}\n{error_text}",
                     )
                     backoff_seconds = 60 * retry_count

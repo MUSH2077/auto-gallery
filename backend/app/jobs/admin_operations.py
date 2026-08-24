@@ -166,6 +166,7 @@ def run_disk_import_operation(job_id: str, options: dict | None = None) -> dict:
 
 
 async def _run_disk_import_operation(job_id: str, options: dict) -> dict:
+    from app.jobs.worker_control import HeartbeatPublisher
     from app.services.disk_import import reconcile_downloads_to_db
     from uuid import UUID
     from app.services.tasks import TaskService
@@ -182,6 +183,8 @@ async def _run_disk_import_operation(job_id: str, options: dict) -> dict:
     set_operation_status(job_id, "running", "admin-disk-import",
         progress={"phase": "running", "label": "Scanning download root..."},
         meta={"entity": "disk-import", **options})
+    heartbeat = HeartbeatPublisher(job_id, "admin")
+    heartbeat.start()
     try:
         async def update_progress(progress: dict):
             task_progress = {
@@ -238,6 +241,7 @@ async def _run_disk_import_operation(job_id: str, options: dict) -> dict:
             progress={"phase": "failed"}, error=str(exc), meta={"entity": "disk-import", **options})
         raise
     finally:
+        heartbeat.stop()
         from app.services.redis_client import get_redis
         redis = get_redis()
         release_owned_operation_lock(redis, "library:disk-import:active", job_id)

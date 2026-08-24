@@ -221,7 +221,7 @@ async def recover_import_pipeline(
     )).scalars())
 
     if bounded_parent_ids:
-        from app.jobs.download import _enqueue_import
+        from app.jobs.download import _enqueue_import_from_locked_page
         from app.services.import_lifecycle import close_bounded_import_publication
 
         for parent_id in bounded_parent_ids:
@@ -291,22 +291,25 @@ async def recover_import_pipeline(
                 paths=len(page_rows),
                 has_more=has_more,
             )
-            await db.commit()
 
             import_job_id = None
             if page_rows:
                 try:
-                    import_job_id = await _enqueue_import(
-                        str(parent_id),
+                    import_job_id = await _enqueue_import_from_locked_page(
+                        db,
+                        parent_id,
+                        artifact_ids=set(page_ids),
                         import_error="auto recovery after interrupted bounded publication",
-                        new_json_paths={row.file_path for row in page_rows},
                     )
                 except Exception:
+                    await db.rollback()
                     logger.warning(
                         "bounded import publisher recovery failed for %s",
                         parent_id,
                         exc_info=True,
                     )
+                    continue
+                if import_job_id is None:
                     continue
                 result["imports_enqueued"] += 1
                 result["download_job_ids"].append(str(parent_id))

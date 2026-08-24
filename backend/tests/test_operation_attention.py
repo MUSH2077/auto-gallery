@@ -691,6 +691,70 @@ async def test_import_pause_resume_cancel_updates_parent_and_both_task_runs_atom
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_bounded_truth_reconciliation_waits_for_publication_then_aggregates():
+    """Periodic truth uses all bounded children and the publication barrier."""
+    from app.database import async_session, engine
+    from app.models import ImportJob
+    from app.services.import_lifecycle import close_bounded_import_publication
+    from app.services.operation_attention import reconcile_task_truth
+    from app.services.tasks import TaskService
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            _repository, download = await _repository_fixture(
+                db,
+                download_status="importing",
+            )
+            download.manifest = {
+                **dict(download.manifest or {}),
+                "disk_import_recovery": True,
+                "bounded_import_publication_open": True,
+            }
+            child = ImportJob(download_job_id=download.id, status="failed")
+            db.add(child)
+            await db.flush()
+            parent_task = await TaskService(db).ensure_download_task(download)
+            await TaskService(db).ensure_import_task(child)
+            await db.commit()
+            download_id = download.id
+
+            open_report = await reconcile_task_truth(db, dry_run=False)
+            db.expire_all()
+            open_download = await db.get(type(download), download_id)
+            open_parent_task = await TaskService(db).get_by_subject(
+                "download_job",
+                download_id,
+            )
+            assert open_report["corrected"] == 0
+            assert open_download.status == "importing"
+            assert open_parent_task.status == "running"
+
+            completion = await close_bounded_import_publication(db, download_id)
+            assert completion is not None
+            assert completion.should_finalize is True
+            assert completion.status == "failed"
+            await db.commit()
+
+            closed_report = await reconcile_task_truth(db, dry_run=False)
+            db.expire_all()
+            closed_download = await db.get(type(download), download_id)
+            closed_parent_task = await TaskService(db).get_by_subject(
+                "download_job",
+                download_id,
+            )
+            assert closed_report["corrected"] == 1
+            assert closed_download.status == "failed"
+            assert closed_parent_task.status == "failed"
+            assert parent_task.id == closed_parent_task.id
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_unhealthy_repository_auth_appears_without_creating_task_run():
     from app.database import async_session, engine
     from app.models import TaskRun
