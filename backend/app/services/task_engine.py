@@ -20,7 +20,7 @@ import logging
 import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -709,24 +709,6 @@ class TaskEngine:
             .limit(bounded_limit)
         )).all())
 
-        admin_candidates = list((await self.db.execute(
-            select(
-                TaskRun.id,
-                func.coalesce(
-                    TaskRun.started_at,
-                    TaskRun.created_at,
-                ).label("started_or_created_at"),
-                TaskRun.meta,
-            )
-            .where(
-                TaskRun.kind == "admin",
-                TaskRun.operation_type == "admin-disk-import",
-                TaskRun.status == "running",
-            )
-            .order_by(TaskRun.created_at, TaskRun.id)
-            .limit(bounded_limit)
-        )).all())
-
         candidates: list[tuple[str, UUID, str | None]] = [
             ("download", task_id, None)
             for task_id, anchor in download_candidates
@@ -735,22 +717,6 @@ class TaskEngine:
         candidates.extend(
             ("import", task_id, None)
             for task_id, _parent_id, anchor in import_candidates
-            if _outside_start_grace(anchor, checked_at)
-        )
-        from app.services.publisher_attempts import PUBLISHER_ATTEMPT_META_KEY
-
-        candidates.extend(
-            (
-                "admin_publisher",
-                task_id,
-                (
-                    meta.get(PUBLISHER_ATTEMPT_META_KEY)
-                    if isinstance(meta, dict)
-                    and isinstance(meta.get(PUBLISHER_ATTEMPT_META_KEY), str)
-                    else None
-                ),
-            )
-            for task_id, anchor, meta in admin_candidates
             if _outside_start_grace(anchor, checked_at)
         )
         if not candidates:
@@ -763,12 +729,7 @@ class TaskEngine:
                 client,
                 [
                     (
-                        TaskEventPublisher.publisher_heartbeat_key(
-                            str(task_id),
-                            attempt_token,
-                        )
-                        if task_type == "admin_publisher" and attempt_token
-                        else f"task:{task_id}:heartbeat_ts"
+                        f"task:{task_id}:heartbeat_ts"
                     )
                     for task_type, task_id, attempt_token in candidates
                 ],
@@ -798,20 +759,7 @@ class TaskEngine:
             )
             if task_type == "import" and not exists
         ]
-        missing_admin_ids = [
-            task_id
-            for (task_type, task_id, _attempt), exists in zip(
-                candidates,
-                heartbeat_exists,
-                strict=True,
-            )
-            if task_type == "admin_publisher" and not exists
-        ]
-        if (
-            not missing_download_ids
-            and not missing_import_ids
-            and not missing_admin_ids
-        ):
+        if not missing_download_ids and not missing_import_ids:
             return 0
 
         # Re-read and lock only missing-heartbeat rows.  A worker may have
@@ -867,79 +815,6 @@ class TaskEngine:
                     skip_locked=True,
                 )
             )).scalars())
-
-        locked_admin_rows = []
-        publisher_fence_tokens: dict[UUID, tuple[str, str]] = {}
-        publisher_attempts_minted = False
-        if missing_admin_ids:
-            locked_admin_rows = list((await self.db.execute(
-                select(TaskRun)
-                .where(
-                    TaskRun.id.in_(missing_admin_ids),
-                    TaskRun.kind == "admin",
-                    TaskRun.operation_type == "admin-disk-import",
-                    TaskRun.status == "running",
-                )
-                .order_by(TaskRun.id)
-                .with_for_update(of=TaskRun, skip_locked=True)
-            )).scalars())
-            fenced_admin_rows = []
-            try:
-                from app.services.publisher_attempts import (
-                    current_publisher_attempt,
-                    ensure_publisher_attempt,
-                )
-
-                for task in locked_admin_rows:
-                    previous_attempt = current_publisher_attempt(task)
-                    attempt_token, minted = ensure_publisher_attempt(task)
-                    publisher_attempts_minted = (
-                        publisher_attempts_minted or minted
-                    )
-                    owner_token = uuid4().hex
-                    if await asyncio.to_thread(
-                        TaskEventPublisher.try_claim_publisher_fence,
-                        client,
-                        str(task.id),
-                        attempt_token,
-                        owner_token,
-                        check_legacy_heartbeat=(previous_attempt is None),
-                    ):
-                        publisher_fence_tokens[task.id] = (
-                            attempt_token,
-                            owner_token,
-                        )
-                        fenced_admin_rows.append(task)
-            except Exception:
-                for task_id, (
-                    attempt_token,
-                    owner_token,
-                ) in publisher_fence_tokens.items():
-                    try:
-                        await asyncio.to_thread(
-                            TaskEventPublisher.release_publisher_fence,
-                            client,
-                            str(task_id),
-                            attempt_token,
-                            owner_token,
-                        )
-                    except Exception:
-                        logger.debug(
-                            "Unable to release aborted publisher fence %s",
-                            task_id,
-                            exc_info=True,
-                        )
-                if publisher_attempts_minted:
-                    await self.db.commit()
-                else:
-                    await self.db.rollback()
-                logger.warning(
-                    "Stale publisher detection skipped because Redis fencing "
-                    "is unreadable",
-                    exc_info=True,
-                )
-                return 0
-            locked_admin_rows = fenced_admin_rows
 
         task_service = TaskService(self.db)
         notifications: list[tuple[str, str, str, str]] = []
@@ -1021,45 +896,10 @@ class TaskEngine:
                 ))
                 stale_count += 1
 
-        for task in locked_admin_rows:
-            old_status = task.status
-            await task_service.update_task(
-                task,
-                status="stale",
-                error="Redis heartbeat TTL expired while disk import was running",
-                resource_state="yielded",
-                resource_reason=None,
-                reason_code="lost_heartbeat",
-            )
-            notifications.append((str(task.id), "admin", old_status, "stale"))
-            stale_count += 1
-
         if not stale_count:
-            for task_id, (
-                attempt_token,
-                owner_token,
-            ) in publisher_fence_tokens.items():
-                try:
-                    await asyncio.to_thread(
-                        TaskEventPublisher.release_publisher_fence,
-                        client,
-                        str(task_id),
-                        attempt_token,
-                        owner_token,
-                    )
-                except Exception:
-                    logger.debug(
-                        "Unable to release unused publisher fence %s",
-                        task_id,
-                        exc_info=True,
-                    )
             # Release any TaskRun/parent locks acquired during the repeated
-            # active-state scan, including a publisher whose resurrected
-            # heartbeat defeated our atomic fence claim.
-            if publisher_attempts_minted:
-                await self.db.commit()
-            else:
-                await self.db.rollback()
+            # active-state scan.
+            await self.db.rollback()
             return 0
 
         try:
@@ -1070,24 +910,6 @@ class TaskEngine:
             await self.db.commit()
         except Exception:
             await self.db.rollback()
-            for task_id, (
-                attempt_token,
-                owner_token,
-            ) in publisher_fence_tokens.items():
-                try:
-                    await asyncio.to_thread(
-                        TaskEventPublisher.release_publisher_fence,
-                        client,
-                        str(task_id),
-                        attempt_token,
-                        owner_token,
-                    )
-                except Exception:
-                    logger.debug(
-                        "Unable to release rolled-back publisher fence %s",
-                        task_id,
-                        exc_info=True,
-                    )
             raise
 
         # Publish only after the domain rows, TaskRuns, and search outbox are

@@ -30,18 +30,15 @@ async def _publish_progress(job_id: str, progress: dict, redis_client) -> None:
 
     from app.services.operations import (
         current_admin_operation_attempt,
-        update_admin_task,
+        update_current_admin_operation_progress,
     )
 
     delivery = current_admin_operation_attempt()
     if delivery is not None and str(delivery[0]) == str(job_id):
-        if not await update_admin_task(
+        await update_current_admin_operation_progress(
             job_id,
-            delivery[1],
-            status="running",
-            progress={"phase": "running", **progress},
-        ):
-            raise RuntimeError("Administrator operation attempt is no longer current")
+            {"phase": "running", **progress},
+        )
         return
     progress_key, _result_key = _redis_keys(job_id)
     redis_client.setex(progress_key, PROGRESS_TTL, json.dumps(progress))
@@ -96,7 +93,11 @@ async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
     errors = []
 
     total = len(pixiv_ids)
-    from app.services.operations import current_admin_operation_attempt
+    from app.services.operations import (
+        AdminOperationAttemptRejected,
+        current_admin_operation_attempt,
+        fence_current_admin_operation_transaction,
+    )
 
     delivery = current_admin_operation_attempt()
     r = None if delivery is not None else get_redis()
@@ -113,6 +114,8 @@ async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
                     "current": idx + 1, "total": total,
                     "imported": len(imported), "errors": len(errors),
                 }, r)
+            except AdminOperationAttemptRejected:
+                raise
             except Exception:
                 pass
 
@@ -254,6 +257,7 @@ async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
 
                 from app.services.creator import CreatorService
                 await CreatorService(db)._request_creator_projection(creator.id)
+                await fence_current_admin_operation_transaction(db, task_id=job_id)
                 await db.commit()
                 # Release all ORM objects from the session so the identity
                 # map doesn't grow unboundedly across hundreds of iterations.
@@ -269,6 +273,10 @@ async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
                     "merged": was_merged,
                 })
 
+            except AdminOperationAttemptRejected:
+                await db.rollback()
+                db.expunge_all()
+                raise
             except Exception as e:
                 try:
                     await db.rollback()
@@ -321,7 +329,11 @@ async def _url_batch_import(urls: list[str], job_id: str) -> dict:
     errors = []
 
     total = len(urls)
-    from app.services.operations import current_admin_operation_attempt
+    from app.services.operations import (
+        AdminOperationAttemptRejected,
+        current_admin_operation_attempt,
+        fence_current_admin_operation_transaction,
+    )
 
     delivery = current_admin_operation_attempt()
     r = None if delivery is not None else get_redis()
@@ -338,6 +350,8 @@ async def _url_batch_import(urls: list[str], job_id: str) -> dict:
                     "current": idx + 1, "total": total,
                     "imported": len(imported), "errors": len(errors),
                 }, r)
+            except AdminOperationAttemptRejected:
+                raise
             except Exception:
                 pass
 
@@ -451,6 +465,7 @@ async def _url_batch_import(urls: list[str], job_id: str) -> dict:
 
                 from app.services.creator import CreatorService
                 await CreatorService(db)._request_creator_projection(creator.id)
+                await fence_current_admin_operation_transaction(db, task_id=job_id)
                 await db.commit()
                 # Release all ORM objects from the session so the identity
                 # map doesn't grow unboundedly across hundreds of iterations.
@@ -466,6 +481,10 @@ async def _url_batch_import(urls: list[str], job_id: str) -> dict:
                     "created_new": created_new,
                 })
 
+            except AdminOperationAttemptRejected:
+                await db.rollback()
+                db.expunge_all()
+                raise
             except Exception as e:
                 try:
                     await db.rollback()

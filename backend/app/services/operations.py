@@ -1649,6 +1649,8 @@ async def recover_admin_operation_dispatches(
 async def update_admin_task(
     task_id: UUID | str,
     attempt: int | str | None,
+    *,
+    allowed_current_statuses: Iterable[str] | None = None,
     **changes: Any,
 ) -> bool:
     """Apply a worker callback only for its exact durable current attempt."""
@@ -1682,6 +1684,13 @@ async def update_admin_task(
         if task is None or task.kind != "admin":
             await db.rollback()
             return False
+        if (
+            allowed_current_statuses is not None
+            and task.status
+            not in frozenset(str(status) for status in allowed_current_statuses)
+        ):
+            await db.rollback()
+            return False
         await TaskService(db).update_task(task, **changes)
         await db.commit()
         return True
@@ -1701,12 +1710,60 @@ async def update_current_admin_operation_progress(
     if not await update_admin_task(
         delivery[0],
         delivery[1],
+        allowed_current_statuses=_ACTIVE_ADMIN_STATUSES,
         status="running",
         progress=_validated_options(progress),
     ):
         raise AdminOperationAttemptRejected(
             "Administrator operation attempt is no longer current"
         )
+
+
+async def fence_current_admin_operation_transaction(
+    db: AsyncSession,
+    *,
+    task_id: UUID | str | None = None,
+    allowed_statuses: Iterable[str] = _ACTIVE_ADMIN_STATUSES,
+):
+    """Lock and validate the current TaskRun as the final row in a business tx.
+
+    Registered handlers call this immediately before each domain commit.  The
+    TaskRun lock is deliberately acquired after domain rows to preserve the
+    global lock order, and a superseded delivery raises a typed exception so a
+    broad best-effort handler cannot turn fencing into an item-level warning.
+    Legacy handlers without a registered context remain unaffected.
+    """
+
+    from app.models.task_run import TaskRun
+
+    delivery = current_admin_operation_attempt()
+    if delivery is None:
+        return None
+    if task_id is not None and delivery[0] != UUID(str(task_id)):
+        raise AdminOperationAttemptRejected(
+            "Administrator operation transaction belongs to another task"
+        )
+    task = (
+        await db.execute(
+            select(TaskRun)
+            .where(TaskRun.id == delivery[0])
+            .with_for_update(of=TaskRun)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    dispatch = _admin_dispatch(task) if task is not None else None
+    allowed = frozenset(str(status) for status in allowed_statuses)
+    if (
+        task is None
+        or task.kind != "admin"
+        or dispatch is None
+        or int(dispatch.get("attempt") or 0) != delivery[1]
+        or task.status not in allowed
+    ):
+        raise AdminOperationAttemptRejected(
+            "Administrator operation attempt is no longer current"
+        )
+    return task
 
 
 async def get_current_admin_operation_checkpoint(
@@ -1720,7 +1777,7 @@ async def get_current_admin_operation_checkpoint(
     delivery = current_admin_operation_attempt()
     if delivery is None:
         return None
-    task = await db.get(TaskRun, delivery[0])
+    task = await db.get(TaskRun, delivery[0], populate_existing=True)
     dispatch = _admin_dispatch(task) if task is not None else None
     if dispatch is None or int(dispatch.get("attempt") or 0) != delivery[1]:
         raise AdminOperationAttemptRejected(
@@ -1747,12 +1804,8 @@ async def set_current_admin_operation_checkpoint(
         raise AdminOperationAttemptRejected(
             "Administrator operation checkpoint has no current attempt"
         )
-    task = await db.get(TaskRun, delivery[0])
-    dispatch = _admin_dispatch(task) if task is not None else None
-    if dispatch is None or int(dispatch.get("attempt") or 0) != delivery[1]:
-        raise AdminOperationAttemptRejected(
-            "Administrator operation attempt is no longer current"
-        )
+    task = await fence_current_admin_operation_transaction(db)
+    dispatch = _admin_dispatch(task)
     checkpoints = dict(dispatch.get("checkpoints") or {})
     if checkpoint is None:
         checkpoints.pop(name, None)

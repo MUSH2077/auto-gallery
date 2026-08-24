@@ -134,7 +134,7 @@ def test_offline_restore_contract_is_chunked_typed_and_never_multipart():
         "/api/v1/admin/backup/restore/uploads/{upload_id}/chunks/{chunk_index}"
     ]["put"]
     binary = chunk["requestBody"]["content"]["application/octet-stream"]["schema"]
-    assert binary == {"type": "string", "format": "binary", "title": "Data"}
+    assert binary == {"type": "string", "format": "binary"}
     assert chunk["responses"]["200"]["content"]["application/json"]["schema"][
         "$ref"
     ].endswith("/RestoreChunkResponse")

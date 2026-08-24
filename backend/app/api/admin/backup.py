@@ -1,5 +1,6 @@
 """Backup creation and non-destructive offline-restore staging."""
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -11,12 +12,11 @@ import tarfile
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Annotated
 from uuid import UUID
 
-from fastapi import Body, Depends, Header, HTTPException, Request
+from fastapi import Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, WithJsonSchema
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -324,6 +324,7 @@ def _create_backup_sync(data: dict | None = None):
             "created_at": ts,
             "version": "0.3.0",
             "contents": selected,
+            "restorable": "database" in selected,
             "component_sizes": {k: v for k, v in sizes.items()},
             "entries": entries,
             "total_uncompressed_bytes": sum(
@@ -352,6 +353,7 @@ def _create_backup_sync(data: dict | None = None):
             "size_bytes": file_size,
             "size_mb": round(file_size / 1024 / 1024, 1),
             "contents": selected,
+            "restorable": "database" in selected,
             "component_sizes": {k: round(v / 1024, 1) for k, v in sizes.items()},
         }
 
@@ -430,10 +432,24 @@ async def list_backups():
     result = []
     for f in existing:
         stat = f.stat()
+        restorable = False
+        try:
+            with tarfile.open(f, "r:gz") as archive:
+                member = archive.getmember("manifest.json")
+                if member.isreg() and 0 < member.size <= 4 * 1024 * 1024:
+                    source = archive.extractfile(member)
+                    manifest = json.loads(source.read(member.size + 1)) if source else {}
+                    restorable = bool(
+                        isinstance(manifest, dict)
+                        and "database" in (manifest.get("contents") or [])
+                    )
+        except (KeyError, OSError, tarfile.TarError, json.JSONDecodeError):
+            restorable = False
         result.append({
             "filename": f.name,
             "size_mb": round(stat.st_size / 1024 / 1024, 1),
             "created_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+            "restorable": restorable,
         })
     return {"backups": result}
 
@@ -497,41 +513,94 @@ async def get_restore_upload(
 @router.put(
     "/backup/restore/uploads/{upload_id}/chunks/{chunk_index}",
     response_model=RestoreChunkResponse,
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/octet-stream": {
+                    "schema": {"type": "string", "format": "binary"}
+                }
+            },
+        }
+    },
 )
 async def upload_restore_chunk(
     upload_id: str,
     chunk_index: int,
     request: Request,
-    data: Annotated[
-        bytes,
-        WithJsonSchema({"type": "string", "format": "binary"}),
-        Body(media_type="application/octet-stream"),
-    ],
     restore_token: str = Header(alias="X-Restore-Token"),
     chunk_sha256: str = Header(alias="X-Chunk-SHA256"),
 ):
     """Persist exactly one ordered chunk; identical retries are idempotent."""
 
-    from app.services.offline_restore import MAX_CHUNK_SIZE, put_upload_chunk, staging_root
+    from app.services.offline_restore import (
+        MAX_CHUNK_SIZE,
+        put_upload_chunk_file,
+        staging_root,
+    )
 
+    temporary_path: Path | None = None
     try:
         content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > MAX_CHUNK_SIZE:
-            raise HTTPException(status_code=413, detail="Restore chunk is too large")
-        if len(data) > MAX_CHUNK_SIZE:
-            raise HTTPException(status_code=413, detail="Restore chunk is too large")
-        return put_upload_chunk(
-            root=staging_root(),
+        if content_length is not None:
+            try:
+                declared_length = int(content_length)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Restore chunk Content-Length is invalid",
+                ) from exc
+            if declared_length < 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Restore chunk Content-Length is invalid",
+                )
+            if declared_length > MAX_CHUNK_SIZE:
+                raise HTTPException(status_code=413, detail="Restore chunk is too large")
+
+        root = staging_root()
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=".restore-chunk-ingress-",
+            suffix=".tmp",
+            dir=root,
+        )
+        temporary_path = Path(temporary_name)
+        total = 0
+        digest = hashlib.sha256()
+        with os.fdopen(fd, "wb") as ingress:
+            async for block in request.stream():
+                if not block:
+                    continue
+                total += len(block)
+                if total > MAX_CHUNK_SIZE:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Restore chunk is too large",
+                    )
+                digest.update(block)
+                ingress.write(block)
+            ingress.flush()
+            os.fsync(ingress.fileno())
+
+        return await asyncio.to_thread(
+            put_upload_chunk_file,
+            root=root,
             upload_id=upload_id,
             token=restore_token,
             index=chunk_index,
-            data=data,
+            source_path=temporary_path,
+            size=total,
+            actual_sha256=digest.hexdigest(),
             sha256=chunk_sha256,
         )
     except HTTPException:
         raise
     except Exception as exc:
         raise _restore_http_error(exc) from exc
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 @router.post(
@@ -552,40 +621,88 @@ async def validate_restore_upload(
         seal_upload_for_validation,
         staging_root,
     )
-    from app.services.operations import start_admin_operation
+    from app.models import TaskRun
+    from app.services.operations import (
+        ADMIN_DISPATCH_META_KEY,
+        prepare_admin_operation,
+        publish_admin_operation,
+    )
+    from sqlalchemy import select
+
+    scope_key = f"restore:validate:{upload_id}"
+
+    async def active_scope_task():
+        scope_text = TaskRun.meta[ADMIN_DISPATCH_META_KEY]["scope_key"].astext
+        return (
+            await db.execute(
+                select(TaskRun)
+                .where(
+                    TaskRun.kind == "admin",
+                    TaskRun.operation_type == "admin-restore-validate",
+                    TaskRun.status.in_({"enqueued", "running", "paused", "recovering"}),
+                    scope_text == scope_key,
+                )
+                .order_by(TaskRun.created_at.desc(), TaskRun.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+    def accepted(task: TaskRun) -> dict[str, str]:
+        return {
+            "task_id": str(task.id),
+            "job_id": str(task.rq_job_id),
+            "status": "enqueued",
+            "operation_type": "admin-restore-validate",
+        }
 
     try:
         session = get_upload_session(
             root=staging_root(), upload_id=upload_id, token=restore_token
         )
-        if session.get("validation_task_id"):
-            from app.models import TaskRun
-            from app.services.operations import ADMIN_DISPATCH_META_KEY
-
-            task = await db.get(TaskRun, UUID(str(session["validation_task_id"])))
-            dispatch = (
-                (task.meta or {}).get(ADMIN_DISPATCH_META_KEY, {}) if task else {}
-            )
+        attached_id = session.get("validation_task_id")
+        attached = None
+        if attached_id:
+            try:
+                attached = await db.get(TaskRun, UUID(str(attached_id)))
+            except ValueError:
+                attached = None
+        if attached is not None:
+            dispatch = (attached.meta or {}).get(ADMIN_DISPATCH_META_KEY, {})
             options = dispatch.get("options", {}) if isinstance(dispatch, dict) else {}
             if (
-                task is None
-                or task.operation_type != "admin-restore-validate"
+                attached.operation_type != "admin-restore-validate"
                 or not isinstance(options, dict)
                 or options.get("upload_id") != upload_id
-                or not task.rq_job_id
+                or not attached.rq_job_id
             ):
                 raise RestoreConflict("Restore validation TaskRun is unavailable")
-            return {
-                "task_id": str(task.id),
-                "job_id": task.rq_job_id,
-                "status": "enqueued",
-                "operation_type": task.operation_type,
-            }
-        if session["state"] != "uploaded":
+            response = accepted(attached)
+            attempt = attached.attempts
+            await db.rollback()
+            await publish_admin_operation(response["task_id"], attempt)
+            return response
+
+        active = await active_scope_task()
+        if active is not None:
+            response = accepted(active)
+            attempt = active.attempts
+            seal_upload_for_validation(
+                root=staging_root(),
+                upload_id=upload_id,
+                token=restore_token,
+                task_id=str(active.id),
+                replace_task_id=str(attached_id) if attached_id else None,
+            )
+            await db.rollback()
+            await publish_admin_operation(response["task_id"], attempt)
+            return response
+
+        if session["state"] not in {"uploaded", "validating", "validation_failed"}:
             raise RestoreConflict("Restore upload is not complete")
-        accepted = await start_admin_operation(
+        prepared = await prepare_admin_operation(
+            db,
             operation_type="admin-restore-validate",
-            scope_key=f"restore:validate:{upload_id}",
+            scope_key=scope_key,
             title="Validate restore upload",
             entity="restore-upload",
             options={"upload_id": upload_id},
@@ -596,10 +713,17 @@ async def validate_restore_upload(
             root=staging_root(),
             upload_id=upload_id,
             token=restore_token,
-            task_id=accepted["task_id"],
+            task_id=str(prepared.task.id),
+            replace_task_id=str(attached_id) if attached_id else None,
         )
-        return accepted
+        await db.commit()
+        await publish_admin_operation(
+            prepared.task.id,
+            prepared.attempt,
+        )
+        return accepted(prepared.task)
     except Exception as exc:
+        await db.rollback()
         if isinstance(exc, HTTPException):
             raise
         raise _restore_http_error(exc) from exc

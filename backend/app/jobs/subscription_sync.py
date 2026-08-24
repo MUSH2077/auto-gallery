@@ -828,6 +828,15 @@ async def _sync_subscriptions_locked(parent_task_id=None):
     except Exception:
         logger.warning("Failed to ensure SQLite maintenance schedule", exc_info=True)
 
+    # Recurring backup intent is PostgreSQL-owned.  Each scheduler scan claims
+    # a due occurrence and commits its TaskRun before attempting Redis publish.
+    try:
+        from app.services.backup_schedule import dispatch_due_backup
+
+        await dispatch_due_backup()
+    except Exception:
+        logger.warning("Failed to dispatch due PostgreSQL backup", exc_info=True)
+
     return {
         "created": jobs_created,
         "skipped": skipped_count,

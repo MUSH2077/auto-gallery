@@ -216,6 +216,38 @@ def disk_import_completion_progress(result: dict) -> dict:
     }
 
 
+def _registered_terminal_outcome(
+    operation_type: str,
+    result: dict,
+) -> tuple[str, str | None, str | None]:
+    """Interpret semantic handler outcomes at the sole terminal writer."""
+
+    if operation_type in {"admin-creator-reenrich", "danbooru-mapping-refresh"} and result.get(
+        "aborted"
+    ):
+        reason = str(result.get("abort_reason") or "creator mapping refresh aborted")
+        return "failed", reason, "operation_semantic_failure"
+    if (
+        operation_type == "admin-search-reindex"
+        and "status" in result
+        and result.get("status") != "ok"
+    ):
+        reason = str(result.get("message") or "search reindex failed")
+        return "failed", reason, "operation_semantic_failure"
+    if operation_type == "asset-dedup-scan" and result.get("status") in {
+        "failed",
+        "superseded",
+    }:
+        status = str(result.get("status"))
+        reason = str(result.get("message") or f"asset dedup scan {status}")
+        return (
+            "failed",
+            reason,
+            "operation_superseded" if status == "superseded" else "operation_semantic_failure",
+        )
+    return "complete", None, None
+
+
 def run_registered_admin_operation(task_id: str, attempt: int) -> dict:
     """Single RQ entrypoint: PostgreSQL supplies every validated argument."""
 
@@ -240,16 +272,26 @@ async def _run_registered_admin_operation(task_id: str, attempt: int) -> dict:
             )
         if result.get("_admin_handoff"):
             return result
+        terminal_status, terminal_error, reason_code = _registered_terminal_outcome(
+            operation_type,
+            result,
+        )
         if not await update_admin_task(
             task_id,
             attempt,
-            status="complete",
+            allowed_current_statuses=("enqueued", "running", "paused", "recovering"),
+            status=terminal_status,
             progress={
-                "phase": "complete",
-                "label": str(result.get("message") or "Complete"),
+                "phase": terminal_status,
+                "label": str(
+                    result.get("message")
+                    or terminal_error
+                    or ("Complete" if terminal_status == "complete" else "Operation failed")
+                ),
             },
             result=result,
-            error=None,
+            error=terminal_error,
+            reason_code=reason_code,
         ):
             raise RuntimeError("Administrator operation attempt is no longer current")
         return result
@@ -257,6 +299,7 @@ async def _run_registered_admin_operation(task_id: str, attempt: int) -> dict:
         await update_admin_task(
             task_id,
             attempt,
+            allowed_current_statuses=("enqueued", "running", "paused", "recovering"),
             status="failed",
             progress={"phase": "failed", "label": "Operation failed"},
             error=str(exc),
@@ -284,13 +327,9 @@ async def _execute_registered_admin_operation(
     if operation_type == "admin-rebuild":
         return await _run_library_rebuild_operation(task_id, options)
     if operation_type == "admin-disk-import":
-        # The bounded disk publisher's existing checkpoint accepts a captured
-        # string token. The TaskRun registry's monotonically increasing attempt
-        # is that token; its outer terminal write is independently fenced too.
-        return await _run_disk_import_operation(
+        return await _run_registered_disk_import_operation(
             task_id,
             options,
-            str(attempt),
         )
     if operation_type in {"admin-creator-reenrich", "danbooru-mapping-refresh"}:
         return await _run_creator_reenrich_operation(task_id, options)
@@ -427,62 +466,78 @@ def run_cleanup_metadata_jsons_operation(
 async def _run_clear_operation(entity: str, job_id: str) -> dict:
     from uuid import UUID
     from app.services.tasks import TaskService
-    async with async_session() as task_db:
-        svc = TaskService(task_db)
-        task = await svc.get(UUID(job_id))
-        if task:
-            await svc.update_task(
-                task,
-                status="running",
-                progress={"phase": "running", "label": f"Clearing {entity}"},
-            )
-            await task_db.commit()
-    set_operation_status(
-        job_id,
-        "running",
-        "admin-clear",
-        progress={"phase": "running", "label": f"Clearing {entity}"},
-        meta={"entity": entity},
-    )
-    try:
-        async with async_session() as db:
-            result = await clear_entity_data(entity, db)
+    registered = current_admin_operation_attempt() is not None
+    running_progress = {"phase": "running", "label": f"Clearing {entity}"}
+    if registered:
+        await update_current_admin_operation_progress(job_id, running_progress)
+    else:
         async with async_session() as task_db:
             svc = TaskService(task_db)
             task = await svc.get(UUID(job_id))
             if task:
                 await svc.update_task(
                     task,
-                    status="complete",
-                    progress={"phase": "complete", "label": result.get("message", "Complete")},
-                    result=result,
+                    status="running",
+                    progress=running_progress,
                 )
                 await task_db.commit()
         set_operation_status(
             job_id,
-            "complete",
+            "running",
             "admin-clear",
-            progress={"phase": "complete", "label": result.get("message", "Complete")},
-            result=result,
+            progress=running_progress,
             meta={"entity": entity},
         )
+    try:
+        async with async_session() as db:
+            result = await clear_entity_data(entity, db)
+        if not registered:
+            complete_progress = {
+                "phase": "complete",
+                "label": result.get("message", "Complete"),
+            }
+            async with async_session() as task_db:
+                svc = TaskService(task_db)
+                task = await svc.get(UUID(job_id))
+                if task:
+                    await svc.update_task(
+                        task,
+                        status="complete",
+                        progress=complete_progress,
+                        result=result,
+                    )
+                    await task_db.commit()
+            set_operation_status(
+                job_id,
+                "complete",
+                "admin-clear",
+                progress=complete_progress,
+                result=result,
+                meta={"entity": entity},
+            )
         return result
     except Exception as exc:
         logger.exception("Admin clear operation failed: job_id=%s entity=%s", job_id, entity)
-        async with async_session() as task_db:
-            svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if task:
-                await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
-                await task_db.commit()
-        set_operation_status(
-            job_id,
-            "failed",
-            "admin-clear",
-            progress={"phase": "failed"},
-            error=str(exc),
-            meta={"entity": entity},
-        )
+        if not registered:
+            async with async_session() as task_db:
+                svc = TaskService(task_db)
+                task = await svc.get(UUID(job_id))
+                if task:
+                    await svc.update_task(
+                        task,
+                        status="failed",
+                        progress={"phase": "failed"},
+                        error=str(exc),
+                    )
+                    await task_db.commit()
+            set_operation_status(
+                job_id,
+                "failed",
+                "admin-clear",
+                progress={"phase": "failed"},
+                error=str(exc),
+                meta={"entity": entity},
+            )
         raise
 
 
@@ -497,19 +552,31 @@ async def _run_library_rebuild_operation(job_id: str, options: dict) -> dict:
     from app.services.admin_data import rebuild_library_index
     from uuid import UUID
     from app.services.tasks import TaskService
-    async with async_session() as task_db:
-        svc = TaskService(task_db)
-        task = await svc.get(UUID(job_id))
-        if task:
-            await svc.update_task(
-                task,
-                status="running",
-                progress={"phase": "running", "label": "Rebuilding library index..."},
-            )
-            await task_db.commit()
-    set_operation_status(job_id, "running", "admin-rebuild",
-        progress={"phase": "running", "label": "Rebuilding library index..."},
-        meta={"entity": "library", **options})
+    registered = current_admin_operation_attempt() is not None
+    running_progress = {
+        "phase": "running",
+        "label": "Rebuilding library index...",
+    }
+    if registered:
+        await update_current_admin_operation_progress(job_id, running_progress)
+    else:
+        async with async_session() as task_db:
+            svc = TaskService(task_db)
+            task = await svc.get(UUID(job_id))
+            if task:
+                await svc.update_task(
+                    task,
+                    status="running",
+                    progress=running_progress,
+                )
+                await task_db.commit()
+        set_operation_status(
+            job_id,
+            "running",
+            "admin-rebuild",
+            progress=running_progress,
+            meta={"entity": "library", **options},
+        )
     try:
         async def update_progress(progress: dict):
             task_progress = {
@@ -532,34 +599,57 @@ async def _run_library_rebuild_operation(job_id: str, options: dict) -> dict:
 
         async with async_session() as db:
             result = await rebuild_library_index(db, options, update_progress)
-        async with async_session() as task_db:
-            svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if task:
-                await svc.update_task(
-                    task,
-                    status="complete",
-                    progress={"phase": "complete", "label": result.get("message", "Complete")},
-                    result=result,
-                )
-                await task_db.commit()
-        set_operation_status(job_id, "complete", "admin-rebuild",
-            progress={"phase": "complete", "label": result.get("message", "Complete")},
-            result=result, meta={"entity": "library", **options})
+        if not registered:
+            complete_progress = {
+                "phase": "complete",
+                "label": result.get("message", "Complete"),
+            }
+            async with async_session() as task_db:
+                svc = TaskService(task_db)
+                task = await svc.get(UUID(job_id))
+                if task:
+                    await svc.update_task(
+                        task,
+                        status="complete",
+                        progress=complete_progress,
+                        result=result,
+                    )
+                    await task_db.commit()
+            set_operation_status(
+                job_id,
+                "complete",
+                "admin-rebuild",
+                progress=complete_progress,
+                result=result,
+                meta={"entity": "library", **options},
+            )
         return result
     except Exception as exc:
         logger.exception("Library rebuild failed: job_id=%s", job_id)
-        async with async_session() as task_db:
-            svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if task:
-                await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
-                await task_db.commit()
-        set_operation_status(job_id, "failed", "admin-rebuild",
-            progress={"phase": "failed"}, error=str(exc), meta={"entity": "library", **options})
+        if not registered:
+            async with async_session() as task_db:
+                svc = TaskService(task_db)
+                task = await svc.get(UUID(job_id))
+                if task:
+                    await svc.update_task(
+                        task,
+                        status="failed",
+                        progress={"phase": "failed"},
+                        error=str(exc),
+                    )
+                    await task_db.commit()
+            set_operation_status(
+                job_id,
+                "failed",
+                "admin-rebuild",
+                progress={"phase": "failed"},
+                error=str(exc),
+                meta={"entity": "library", **options},
+            )
         raise
     finally:
-        release_legacy_operation_lock("library:rebuild:active", job_id)
+        if not registered:
+            release_legacy_operation_lock("library:rebuild:active", job_id)
 
 
 def run_disk_import_operation(
@@ -619,6 +709,63 @@ def run_disk_import_operation(
         )
 
     return asyncio.run(run_authorized())
+
+
+async def _run_registered_disk_import_operation(
+    job_id: str,
+    options: dict,
+) -> dict:
+    """Run a dispatch-backed disk import with PostgreSQL as sole authority."""
+
+    from app.api.admin.settings import invalidate_storage_breakdown_cache
+    from app.services.disk_import import reconcile_downloads_to_db
+    from app.services.operations import fence_current_admin_operation_transaction
+
+    async def checkpoint(
+        db,
+        *,
+        allowed_statuses: Iterable[str] = ("running",),
+        lock_task: bool = False,
+    ):
+        del lock_task
+        return await fence_current_admin_operation_transaction(
+            db,
+            task_id=job_id,
+            allowed_statuses=allowed_statuses,
+        )
+
+    await update_current_admin_operation_progress(
+        job_id,
+        {"phase": "running", "label": "Scanning download root..."},
+    )
+
+    async def update_progress(progress: dict) -> None:
+        await update_current_admin_operation_progress(
+            job_id,
+            {
+                **progress,
+                "label": (
+                    f"Imported {progress.get('imported', 0)}; "
+                    f"scanned {progress.get('scanned', 0)} of {progress.get('total', 0)}"
+                ),
+            },
+        )
+
+    async with async_session() as db:
+        result = await reconcile_downloads_to_db(
+            db,
+            {**options, "parent_task_id": job_id},
+            update_progress,
+            publisher_checkpoint=checkpoint,
+            # Registered attempts never install a Redis publisher token. Redis
+            # remains transport/observability for child import publication.
+            publisher_attempt=None,
+        )
+    invalidate_storage_breakdown_cache()
+    return {
+        **result,
+        "message": result.get("message") or f"Queued {result.get('jobs', 0)} import jobs",
+    }
 
 
 async def _run_disk_import_operation(
@@ -828,16 +975,17 @@ async def _run_creator_reenrich_operation(job_id: str, options: dict) -> dict:
         else "Searching Danbooru..."
     )
 
-    async with async_session() as task_db:
-        svc = TaskService(task_db)
-        task = await svc.get(UUID(job_id))
-        if task:
-            await svc.update_task(
-                task,
-                status="running",
-                progress={"phase": "running", "label": running_label},
-            )
-            await task_db.commit()
+    if current_admin_operation_attempt() is None:
+        async with async_session() as task_db:
+            svc = TaskService(task_db)
+            task = await svc.get(UUID(job_id))
+            if task:
+                await svc.update_task(
+                    task,
+                    status="running",
+                    progress={"phase": "running", "label": running_label},
+                )
+                await task_db.commit()
     set_operation_status(job_id, "running", operation_type,
         progress={"phase": "running", "label": running_label},
         meta={"entity": entity, **options})
@@ -880,18 +1028,19 @@ async def _run_creator_reenrich_operation(job_id: str, options: dict) -> dict:
             label += " — aborted: Danbooru unreachable"
             terminal_status = "failed"
             terminal_error = "Danbooru became unavailable; partial results were retained"
-        async with async_session() as task_db:
-            svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if task:
-                await svc.update_task(
-                    task,
-                    status=terminal_status,
-                    progress={"phase": terminal_status, "label": label},
-                    result=result,
-                    error=terminal_error,
-                )
-                await task_db.commit()
+        if current_admin_operation_attempt() is None:
+            async with async_session() as task_db:
+                svc = TaskService(task_db)
+                task = await svc.get(UUID(job_id))
+                if task:
+                    await svc.update_task(
+                        task,
+                        status=terminal_status,
+                        progress={"phase": terminal_status, "label": label},
+                        result=result,
+                        error=terminal_error,
+                    )
+                    await task_db.commit()
         set_operation_status(job_id, terminal_status, operation_type,
             progress={"phase": terminal_status, "label": label},
             result=result, error=terminal_error,
@@ -903,12 +1052,13 @@ async def _run_creator_reenrich_operation(job_id: str, options: dict) -> dict:
         return result
     except Exception as exc:
         logger.exception("Creator re-enrichment failed: job_id=%s", job_id)
-        async with async_session() as task_db:
-            svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if task:
-                await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
-                await task_db.commit()
+        if current_admin_operation_attempt() is None:
+            async with async_session() as task_db:
+                svc = TaskService(task_db)
+                task = await svc.get(UUID(job_id))
+                if task:
+                    await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
+                    await task_db.commit()
         set_operation_status(job_id, "failed", operation_type,
             progress={"phase": "failed"}, error=str(exc), meta={"entity": entity, **options})
         raise
@@ -943,16 +1093,24 @@ async def _run_gitllery_verify_operation(job_id: str, options: dict) -> dict:
 
     repository_id = str(options.get("repository_id") or "")
     deep = bool(options.get("deep"))
-    async with async_session() as db:
-        task_service = TaskService(db)
-        task = await task_service.get(UUID(job_id))
-        if task:
-            await task_service.update_task(
-                task,
-                status="running",
-                progress={"phase": "running", "label": "Verifying Gitllery repository"},
-            )
-            await db.commit()
+    registered = current_admin_operation_attempt() is not None
+    running_progress = {
+        "phase": "running",
+        "label": "Verifying Gitllery repository",
+    }
+    if registered:
+        await update_current_admin_operation_progress(job_id, running_progress)
+    else:
+        async with async_session() as db:
+            task_service = TaskService(db)
+            task = await task_service.get(UUID(job_id))
+            if task:
+                await task_service.update_task(
+                    task,
+                    status="running",
+                    progress=running_progress,
+                )
+                await db.commit()
     set_operation_status(
         job_id,
         "running",
@@ -967,18 +1125,22 @@ async def _run_gitllery_verify_operation(job_id: str, options: dict) -> dict:
                 deep=deep,
             )
         status = "complete" if result["ok"] else "failed"
-        async with async_session() as db:
-            task_service = TaskService(db)
-            task = await task_service.get(UUID(job_id))
-            if task:
-                await task_service.update_task(
-                    task,
-                    status=status,
-                    progress={"phase": status, "label": "Gitllery verification finished"},
-                    result=result,
-                    error=None if result["ok"] else "; ".join(result["errors"]),
-                )
-                await db.commit()
+        if not registered:
+            async with async_session() as db:
+                task_service = TaskService(db)
+                task = await task_service.get(UUID(job_id))
+                if task:
+                    await task_service.update_task(
+                        task,
+                        status=status,
+                        progress={
+                            "phase": status,
+                            "label": "Gitllery verification finished",
+                        },
+                        result=result,
+                        error=None if result["ok"] else "; ".join(result["errors"]),
+                    )
+                    await db.commit()
         set_operation_status(
             job_id,
             status,
@@ -1020,17 +1182,24 @@ async def _run_gitllery_sync_operation(job_id: str, options: dict) -> dict:
 
     mode = options.get("mode") or "reconcile"
     repository_id = options.get("repository_id")
-
-    async with async_session() as task_db:
-        svc = TaskService(task_db)
-        task = await svc.get(UUID(job_id))
-        if task:
-            await svc.update_task(
-                task,
-                status="running",
-                progress={"phase": "running", "label": "Projecting curation history..."},
-            )
-            await task_db.commit()
+    registered = current_admin_operation_attempt() is not None
+    running_progress = {
+        "phase": "running",
+        "label": "Projecting curation history...",
+    }
+    if registered:
+        await update_current_admin_operation_progress(job_id, running_progress)
+    else:
+        async with async_session() as task_db:
+            svc = TaskService(task_db)
+            task = await svc.get(UUID(job_id))
+            if task:
+                await svc.update_task(
+                    task,
+                    status="running",
+                    progress=running_progress,
+                )
+                await task_db.commit()
     set_operation_status(job_id, "running", "admin-gitllery-sync",
         progress={"phase": "running", "label": "Projecting curation history..."},
         meta={"entity": "gitllery-sync", **options})
@@ -1068,29 +1237,36 @@ async def _run_gitllery_sync_operation(job_id: str, options: dict) -> dict:
             "checkpoint_rebuilt": checkpoint_set,
         }
         label = f"Projected {result['projected_commits']} commits across {result['projected_repos']} repos"
-        async with async_session() as task_db:
-            svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if task:
-                await svc.update_task(
-                    task,
-                    status="complete",
-                    progress={"phase": "complete", "label": label},
-                    result=result,
-                )
-                await task_db.commit()
+        if not registered:
+            async with async_session() as task_db:
+                svc = TaskService(task_db)
+                task = await svc.get(UUID(job_id))
+                if task:
+                    await svc.update_task(
+                        task,
+                        status="complete",
+                        progress={"phase": "complete", "label": label},
+                        result=result,
+                    )
+                    await task_db.commit()
         set_operation_status(job_id, "complete", "admin-gitllery-sync",
             progress={"phase": "complete", "label": label},
             result=result, meta={"entity": "gitllery-sync", **options})
         return result
     except Exception as exc:
         logger.exception("Gitllery sync failed: job_id=%s", job_id)
-        async with async_session() as task_db:
-            svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if task:
-                await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
-                await task_db.commit()
+        if not registered:
+            async with async_session() as task_db:
+                svc = TaskService(task_db)
+                task = await svc.get(UUID(job_id))
+                if task:
+                    await svc.update_task(
+                        task,
+                        status="failed",
+                        progress={"phase": "failed"},
+                        error=str(exc),
+                    )
+                    await task_db.commit()
         set_operation_status(job_id, "failed", "admin-gitllery-sync",
             progress={"phase": "failed"}, error=str(exc), meta={"entity": "gitllery-sync", **options})
         raise
@@ -1114,16 +1290,17 @@ async def _run_search_reindex_operation(job_id: str, options: dict) -> dict:
     from app.services.search import SearchService
     from app.services.tasks import TaskService
 
-    async with async_session() as task_db:
-        svc = TaskService(task_db)
-        task = await svc.get(UUID(job_id))
-        if task:
-            await svc.update_task(
-                task,
-                status="running",
-                progress={"phase": "running", "label": "Rebuilding search index..."},
-            )
-            await task_db.commit()
+    if current_admin_operation_attempt() is None:
+        async with async_session() as task_db:
+            svc = TaskService(task_db)
+            task = await svc.get(UUID(job_id))
+            if task:
+                await svc.update_task(
+                    task,
+                    status="running",
+                    progress={"phase": "running", "label": "Rebuilding search index..."},
+                )
+                await task_db.commit()
     set_operation_status(job_id, "running", "admin-search-reindex",
         progress={"phase": "running", "label": "Rebuilding search index..."},
         meta={"entity": "search-reindex", **options})
@@ -1134,29 +1311,31 @@ async def _run_search_reindex_operation(job_id: str, options: dict) -> dict:
         operation_status = (
             "complete" if result.get("status") == "ok" else "failed"
         )
-        async with async_session() as task_db:
-            svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if task:
-                await svc.update_task(
-                    task,
-                    status=operation_status,
-                    progress={"phase": operation_status, "label": label},
-                    result=result,
-                )
-                await task_db.commit()
+        if current_admin_operation_attempt() is None:
+            async with async_session() as task_db:
+                svc = TaskService(task_db)
+                task = await svc.get(UUID(job_id))
+                if task:
+                    await svc.update_task(
+                        task,
+                        status=operation_status,
+                        progress={"phase": operation_status, "label": label},
+                        result=result,
+                    )
+                    await task_db.commit()
         set_operation_status(job_id, operation_status, "admin-search-reindex",
             progress={"phase": operation_status, "label": label},
             result=result, meta={"entity": "search-reindex", **options})
         return result
     except Exception as exc:
         logger.exception("Search reindex failed: job_id=%s", job_id)
-        async with async_session() as task_db:
-            svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if task:
-                await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
-                await task_db.commit()
+        if current_admin_operation_attempt() is None:
+            async with async_session() as task_db:
+                svc = TaskService(task_db)
+                task = await svc.get(UUID(job_id))
+                if task:
+                    await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
+                    await task_db.commit()
         set_operation_status(job_id, "failed", "admin-search-reindex",
             progress={"phase": "failed"}, error=str(exc), meta={"entity": "search-reindex", **options})
         raise
@@ -1177,16 +1356,24 @@ async def _run_curation_backfill_operation(job_id: str, options: dict) -> dict:
     from app.services.curation import CurationService
     from app.services.tasks import TaskService
 
-    async with async_session() as task_db:
-        svc = TaskService(task_db)
-        task = await svc.get(UUID(job_id))
-        if task:
-            await svc.update_task(
-                task,
-                status="running",
-                progress={"phase": "running", "label": "Backfilling curation baseline..."},
-            )
-            await task_db.commit()
+    registered = current_admin_operation_attempt() is not None
+    running_progress = {
+        "phase": "running",
+        "label": "Backfilling curation baseline...",
+    }
+    if registered:
+        await update_current_admin_operation_progress(job_id, running_progress)
+    else:
+        async with async_session() as task_db:
+            svc = TaskService(task_db)
+            task = await svc.get(UUID(job_id))
+            if task:
+                await svc.update_task(
+                    task,
+                    status="running",
+                    progress=running_progress,
+                )
+                await task_db.commit()
     set_operation_status(job_id, "running", "admin-curation-backfill",
         progress={"phase": "running", "label": "Backfilling curation baseline..."},
         meta={"entity": "curation-backfill", **options})
@@ -1198,29 +1385,36 @@ async def _run_curation_backfill_operation(job_id: str, options: dict) -> dict:
         created = result.get("created", {})
         label = (f"Baseline: {created.get('creators', 0)} creators, "
                  f"{created.get('repositories', 0)} repos, {created.get('work_groups', 0)} work groups")
-        async with async_session() as task_db:
-            svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if task:
-                await svc.update_task(
-                    task,
-                    status="complete",
-                    progress={"phase": "complete", "label": label},
-                    result=result,
-                )
-                await task_db.commit()
+        if not registered:
+            async with async_session() as task_db:
+                svc = TaskService(task_db)
+                task = await svc.get(UUID(job_id))
+                if task:
+                    await svc.update_task(
+                        task,
+                        status="complete",
+                        progress={"phase": "complete", "label": label},
+                        result=result,
+                    )
+                    await task_db.commit()
         set_operation_status(job_id, "complete", "admin-curation-backfill",
             progress={"phase": "complete", "label": label},
             result=result, meta={"entity": "curation-backfill", **options})
         return result
     except Exception as exc:
         logger.exception("Curation backfill failed: job_id=%s", job_id)
-        async with async_session() as task_db:
-            svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if task:
-                await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
-                await task_db.commit()
+        if not registered:
+            async with async_session() as task_db:
+                svc = TaskService(task_db)
+                task = await svc.get(UUID(job_id))
+                if task:
+                    await svc.update_task(
+                        task,
+                        status="failed",
+                        progress={"phase": "failed"},
+                        error=str(exc),
+                    )
+                    await task_db.commit()
         set_operation_status(job_id, "failed", "admin-curation-backfill",
             progress={"phase": "failed"}, error=str(exc), meta={"entity": "curation-backfill", **options})
         raise
@@ -1254,22 +1448,26 @@ async def _run_hierarchy_delete_operation(job_id: str, options: dict) -> dict:
     if not entity_ids:
         raise ValueError("Hierarchy deletion requires at least one target")
     delete_files = bool(options.get("delete_files"))
-
-    async with async_session() as task_db:
-        svc = TaskService(task_db)
-        task = await svc.get(UUID(job_id))
-        if task:
-            await svc.update_task(
-                task,
-                status="running",
-                progress={
-                    "phase": "preflight",
-                    "label": "Checking deletion scope",
-                    "current": 0,
-                    "total": 0,
-                },
-            )
-            await task_db.commit()
+    registered = current_admin_operation_attempt() is not None
+    preflight_progress = {
+        "phase": "preflight",
+        "label": "Checking deletion scope",
+        "current": 0,
+        "total": 0,
+    }
+    if registered:
+        await update_current_admin_operation_progress(job_id, preflight_progress)
+    else:
+        async with async_session() as task_db:
+            svc = TaskService(task_db)
+            task = await svc.get(UUID(job_id))
+            if task:
+                await svc.update_task(
+                    task,
+                    status="running",
+                    progress=preflight_progress,
+                )
+                await task_db.commit()
     set_operation_status(
         job_id,
         "running",
@@ -1285,12 +1483,15 @@ async def _run_hierarchy_delete_operation(job_id: str, options: dict) -> dict:
             "current": current,
             "total": total,
         }
-        async with async_session() as progress_db:
-            progress_service = TaskService(progress_db)
-            progress_task = await progress_service.get(UUID(job_id))
-            if progress_task:
-                await progress_service.update_task(progress_task, progress=progress)
-                await progress_db.commit()
+        if registered:
+            await update_current_admin_operation_progress(job_id, progress)
+        else:
+            async with async_session() as progress_db:
+                progress_service = TaskService(progress_db)
+                progress_task = await progress_service.get(UUID(job_id))
+                if progress_task:
+                    await progress_service.update_task(progress_task, progress=progress)
+                    await progress_db.commit()
         set_operation_status(
             job_id,
             "running",
@@ -1311,22 +1512,23 @@ async def _run_hierarchy_delete_operation(job_id: str, options: dict) -> dict:
         from app.services.cache import invalidate_creator_subscription_caches
 
         invalidate_creator_subscription_caches(include_works=True)
-        async with async_session() as task_db:
-            svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if task:
-                await svc.update_task(
-                    task,
-                    status="complete",
-                    progress={
-                        "phase": "complete",
-                        "label": result["message"],
-                        "current": result["trashed_or_purged_works"],
-                        "total": result["trashed_or_purged_works"],
-                    },
-                    result=result,
-                )
-                await task_db.commit()
+        if not registered:
+            async with async_session() as task_db:
+                svc = TaskService(task_db)
+                task = await svc.get(UUID(job_id))
+                if task:
+                    await svc.update_task(
+                        task,
+                        status="complete",
+                        progress={
+                            "phase": "complete",
+                            "label": result["message"],
+                            "current": result["trashed_or_purged_works"],
+                            "total": result["trashed_or_purged_works"],
+                        },
+                        result=result,
+                    )
+                    await task_db.commit()
         set_operation_status(
             job_id,
             "complete",
@@ -1338,17 +1540,18 @@ async def _run_hierarchy_delete_operation(job_id: str, options: dict) -> dict:
         return result
     except Exception as exc:
         logger.exception("Hierarchy deletion failed: job_id=%s", job_id)
-        async with async_session() as task_db:
-            svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if task:
-                await svc.update_task(
-                    task,
-                    status="failed",
-                    progress={"phase": "failed", "label": "Deletion failed"},
-                    error=str(exc),
-                )
-                await task_db.commit()
+        if not registered:
+            async with async_session() as task_db:
+                svc = TaskService(task_db)
+                task = await svc.get(UUID(job_id))
+                if task:
+                    await svc.update_task(
+                        task,
+                        status="failed",
+                        progress={"phase": "failed", "label": "Deletion failed"},
+                        error=str(exc),
+                    )
+                    await task_db.commit()
         set_operation_status(
             job_id,
             "failed",

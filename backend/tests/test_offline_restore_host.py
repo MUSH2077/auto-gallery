@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -54,7 +55,9 @@ if sabotage_on and sabotage_on in joined:
         shutil.rmtree(sabotage)
     else:
         sabotage.unlink(missing_ok=True)
-if "--set=offline_restore_phase=rollback-identities" in args:
+if "POSTGRES_USER" in joined and "POSTGRES_DB" in joined and "pg_dump" not in joined:
+    sys.stdout.write(os.environ.get("FAKE_POSTGRES_IDENTITY", "autogallery\\nautogallery\\n"))
+elif "--set=offline_restore_phase=rollback-identities" in args:
     sys.stdout.write(os.environ.get("FAKE_DATABASE_IDENTITIES", ""))
 elif any("pg_dump" in arg for arg in args):
     sys.stdout.buffer.write(b"disposable-postgres-snapshot")
@@ -381,6 +384,8 @@ def test_file_rollback_failure_still_attempts_database_redis_and_foreground(tmp_
     """One damaged file rollback must not abort independent service recovery."""
     fixture = _fixture(tmp_path)
     old_app = fixture["live_app"].with_name(f".{fixture['live_app'].name}.restore-old-{fixture['request_id']}")
+    assert old_app.is_relative_to(tmp_path)
+    assert not old_app.is_symlink()
     fixture["env"].update(
         {
             "FAKE_REMOVE_PATH_ON": "admin-web",
@@ -492,3 +497,334 @@ def test_dangling_restore_temp_symlink_is_rejected_without_following_it(tmp_path
 
     assert result.returncode != 0
     assert not outside.exists()
+
+
+def test_postgres_identity_comes_from_compose_and_every_command_is_explicit(tmp_path):
+    """Host libpq variables must never silently select a host user/database."""
+    fixture = _fixture(tmp_path)
+    fixture["env"].update(
+        {
+            "POSTGRES_USER": "wrong_host_user",
+            "POSTGRES_DB": "wrong_host_database",
+            "FAKE_POSTGRES_IDENTITY": "compose_restore_user\ncompose_restore_db\n",
+            "FAKE_DATABASE_IDENTITIES": (
+                "compose_restore_db\nag_rollback_000000000000\n"
+            ),
+        }
+    )
+
+    result = _run(fixture)
+
+    assert result.returncode == 0, result.stderr
+    commands = _commands(fixture)
+    database_commands = [
+        command
+        for command in commands
+        if any(tool in " ".join(command) for tool in ("pg_dump", "pg_restore", "psql"))
+    ]
+    assert database_commands
+    for command in database_commands:
+        rendered = " ".join(command)
+        assert "compose_restore_user" in rendered
+        assert "wrong_host_user" not in rendered
+    rendered_all = "\n".join(" ".join(command) for command in commands)
+    assert "ALTER DATABASE compose_restore_db RENAME TO" in rendered_all
+    assert "ALTER DATABASE wrong_host_database" not in rendered_all
+
+
+SWAP_BOUNDARIES = [
+    f"{kind}:{component}:{boundary}"
+    for kind, component in (
+        ("directory", "app-config"),
+        ("file", "library-metadata"),
+    )
+    for boundary in (
+        "prepared-journal",
+        "old-renamed",
+        "old-fsynced",
+        "old-journal",
+        "new-renamed",
+        "new-fsynced",
+        "applied-journal",
+        "committed-journal",
+    )
+]
+
+
+@pytest.mark.parametrize("action", ["fail", "kill"])
+@pytest.mark.parametrize("boundary", SWAP_BOUNDARIES)
+def test_every_filesystem_swap_boundary_has_deterministic_recovery(
+    tmp_path,
+    boundary,
+    action,
+):
+    """Prepared/applied journal states make each rename/fsync crash recoverable."""
+    fixture = _fixture(tmp_path)
+    fixture["env"].update(
+        {
+            "RESTORE_FAULT_BOUNDARY": boundary,
+            "RESTORE_FAULT_ACTION": action,
+        }
+    )
+
+    result = _run(fixture)
+
+    if action == "fail":
+        assert result.returncode == 1, result.stderr
+    else:
+        assert result.returncode < 0, result.stderr
+        rollback_dir = (
+            fixture["receipts"] / "rollbacks" / fixture["request_id"]
+        )
+        assert rollback_dir.is_relative_to(tmp_path)
+        rollback = subprocess.run(
+            [str(rollback_dir / "rollback.sh")],
+            env=fixture["env"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        assert rollback.returncode == 0, rollback.stderr
+    assert (fixture["live_app"] / "value.txt").read_text() == "old-app"
+    assert (fixture["live_gallery"] / "value.txt").read_text() == "old-gallery"
+    assert not (fixture["library"] / "creator" / "metadata.json").exists()
+
+
+def test_file_rollback_aggregates_swap_errors_and_continues_earlier_records(tmp_path):
+    """A broken later swap cannot prevent an earlier independent swap rollback."""
+    fixture = _fixture(tmp_path)
+    result = _run(fixture)
+    assert result.returncode == 0, result.stderr
+    old_gallery = fixture["live_gallery"].with_name(
+        f".{fixture['live_gallery'].name}.restore-old-{fixture['request_id']}"
+    )
+    assert old_gallery.is_relative_to(tmp_path)
+    assert old_gallery.is_dir()
+    for child in old_gallery.iterdir():
+        assert child.is_relative_to(tmp_path)
+        child.unlink()
+    old_gallery.rmdir()
+
+    rollback = subprocess.run(
+        [
+            str(
+                fixture["receipts"]
+                / "rollbacks"
+                / fixture["request_id"]
+                / "rollback.sh"
+            )
+        ],
+        env=fixture["env"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+
+    assert rollback.returncode == 1
+    assert (fixture["live_app"] / "value.txt").read_text() == "old-app"
+    assert (fixture["live_gallery"] / "value.txt").read_text() == "new-gallery"
+
+
+@pytest.mark.integration
+def test_real_disposable_postgres_redis_switch_and_snapshot_rollback(tmp_path):
+    """Exercise host switch/rollback against isolated non-default real services."""
+
+    if os.environ.get("RUN_REAL_OFFLINE_RESTORE_INTEGRATION") != "1":
+        pytest.skip("set RUN_REAL_OFFLINE_RESTORE_INTEGRATION=1 for Docker services")
+
+    suffix = f"{os.getpid()}_{uuid4().hex[:8]}"
+    pg_container = f"ag_finalfix_host_pg_{suffix}"
+    redis_container = f"ag_finalfix_host_redis_{suffix}"
+    assert pg_container.startswith("ag_finalfix_host_pg_")
+    assert redis_container.startswith("ag_finalfix_host_redis_")
+    assert "/" not in pg_container and "/" not in redis_container
+    pg_user = "compose_restore_user"
+    pg_password = "disposable_restore_password"
+    live_database = "compose_restore_db"
+
+    def command(*args, **kwargs):
+        return subprocess.run(args, check=True, capture_output=True, **kwargs)
+
+    subprocess.run(
+        [
+            "docker", "run", "--detach", "--name", pg_container,
+            "--env", f"POSTGRES_USER={pg_user}",
+            "--env", f"POSTGRES_PASSWORD={pg_password}",
+            "--env", f"POSTGRES_DB={live_database}",
+            "postgres:16-alpine",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["docker", "run", "--detach", "--name", redis_container, "redis:7-alpine"],
+        check=True,
+        capture_output=True,
+    )
+    try:
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            ready = subprocess.run(
+                [
+                    "docker", "exec", pg_container, "pg_isready",
+                    "--username", pg_user, "--dbname", live_database,
+                ],
+                capture_output=True,
+            )
+            if ready.returncode == 0:
+                break
+            time.sleep(0.25)
+        else:
+            pytest.fail("disposable PostgreSQL did not become ready")
+
+        command(
+            "docker", "exec", pg_container, "psql",
+            "--username", pg_user, "--dbname", live_database,
+            "--set", "ON_ERROR_STOP=1", "--command",
+            (
+                "CREATE TABLE restore_marker(value text NOT NULL);"
+                "INSERT INTO restore_marker VALUES ('old');"
+                "CREATE TABLE alembic_version(version_num varchar(32) NOT NULL);"
+                "INSERT INTO alembic_version VALUES ('disposable');"
+            ),
+        )
+        command(
+            "docker", "exec", pg_container, "createdb",
+            "--username", pg_user, "desired_restore",
+        )
+        command(
+            "docker", "exec", pg_container, "psql",
+            "--username", pg_user, "--dbname", "desired_restore",
+            "--set", "ON_ERROR_STOP=1", "--command",
+            (
+                "CREATE TABLE restore_marker(value text NOT NULL);"
+                "INSERT INTO restore_marker VALUES ('new');"
+                "CREATE TABLE alembic_version(version_num varchar(32) NOT NULL);"
+                "INSERT INTO alembic_version VALUES ('disposable');"
+            ),
+        )
+        command(
+            "docker", "exec", redis_container,
+            "redis-cli", "SET", "restore:marker", "old",
+        )
+
+        fixture = _fixture(tmp_path)
+        payload_dump = fixture["request"].parent / "payload/database.dump"
+        with payload_dump.open("wb") as output:
+            subprocess.run(
+                [
+                    "docker", "exec", pg_container, "pg_dump",
+                    "--username", pg_user, "--dbname", "desired_restore",
+                    "--format=custom", "--no-owner", "--no-acl",
+                ],
+                check=True,
+                stdout=output,
+            )
+        request = json.loads(fixture["request"].read_text(encoding="utf-8"))
+        old_size = request["manifest"]["entries"]["database.dump"]["size"]
+        request["manifest"]["entries"]["database.dump"] = {
+            "size": payload_dump.stat().st_size,
+            "sha256": hashlib.sha256(payload_dump.read_bytes()).hexdigest(),
+        }
+        request["manifest"]["total_uncompressed_bytes"] += (
+            payload_dump.stat().st_size - old_size
+        )
+        fixture["request"].chmod(0o600)
+        fixture["request"].write_text(json.dumps(request), encoding="utf-8")
+        fixture["request"].chmod(0o444)
+
+        shim = tmp_path / "real-compose-shim.py"
+        shim.write_text(
+            """#!/usr/bin/env python3
+import os, subprocess, sys
+args = sys.argv[1:]
+pg = os.environ["REAL_PG_CONTAINER"]
+redis = os.environ["REAL_REDIS_CONTAINER"]
+if args[:3] == ["exec", "-T", "postgres"]:
+    raise SystemExit(subprocess.run(["docker", "exec", "-i", pg, *args[3:]]).returncode)
+if args[:3] == ["exec", "-T", "redis"]:
+    raise SystemExit(subprocess.run(["docker", "exec", "-i", redis, *args[3:]]).returncode)
+if args and args[0] == "cp":
+    source, target = args[1], args[2]
+    if source.startswith("redis:"):
+        source = redis + source.removeprefix("redis")
+    if target.startswith("redis:"):
+        target = redis + target.removeprefix("redis")
+    raise SystemExit(subprocess.run(["docker", "cp", source, target]).returncode)
+if args and args[0] == "stop":
+    if "redis" in args:
+        subprocess.run(["docker", "stop", "--time", "5", redis], check=True)
+    raise SystemExit(0)
+if args and args[0] == "up":
+    for service, container in (("postgres", pg), ("redis", redis)):
+        if service in args:
+            subprocess.run(["docker", "start", container], check=True, stdout=subprocess.DEVNULL)
+    raise SystemExit(0)
+raise SystemExit(0)
+""",
+            encoding="utf-8",
+        )
+        shim.chmod(0o700)
+        fixture["env"].update(
+            {
+                "RESTORE_COMPOSE_COMMAND": str(shim),
+                "REAL_PG_CONTAINER": pg_container,
+                "REAL_REDIS_CONTAINER": redis_container,
+                # These are deliberately wrong: discovery must use the service.
+                "POSTGRES_USER": "wrong_host_user",
+                "POSTGRES_DB": "wrong_host_database",
+            }
+        )
+
+        result = _run(fixture)
+        assert result.returncode == 0, result.stderr
+        current = command(
+            "docker", "exec", pg_container, "psql",
+            "--username", pg_user, "--dbname", live_database,
+            "--tuples-only", "--no-align", "--command",
+            "SELECT value FROM restore_marker;",
+        ).stdout.decode().strip()
+        assert current == "new"
+        cleared = command(
+            "docker", "exec", redis_container,
+            "redis-cli", "--raw", "GET", "restore:marker",
+        ).stdout.decode().strip()
+        assert cleared == ""
+
+        rollback = (
+            fixture["receipts"] / "rollbacks" / fixture["request_id"] / "rollback.sh"
+        )
+        rollback_result = subprocess.run(
+            [str(rollback)],
+            env=fixture["env"],
+            capture_output=True,
+            text=True,
+            timeout=45,
+            check=False,
+        )
+        assert rollback_result.returncode == 0, rollback_result.stderr
+        restored_db = command(
+            "docker", "exec", pg_container, "psql",
+            "--username", pg_user, "--dbname", live_database,
+            "--tuples-only", "--no-align", "--command",
+            "SELECT value FROM restore_marker;",
+        ).stdout.decode().strip()
+        assert restored_db == "old"
+        restored_redis = command(
+            "docker", "exec", redis_container,
+            "redis-cli", "--raw", "GET", "restore:marker",
+        ).stdout.decode().strip()
+        assert restored_redis == "old"
+    finally:
+        for container, prefix in (
+            (pg_container, "ag_finalfix_host_pg_"),
+            (redis_container, "ag_finalfix_host_redis_"),
+        ):
+            assert container.startswith(prefix) and "/" not in container
+            subprocess.run(
+                ["docker", "rm", "--force", container],
+                check=False,
+                capture_output=True,
+            )

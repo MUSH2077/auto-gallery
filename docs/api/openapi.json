@@ -881,6 +881,26 @@
         "title": "AssetDedupScanRequest",
         "type": "object"
       },
+      "BackupScheduleRequest": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "interval_hours": {
+            "default": 24,
+            "maximum": 8760.0,
+            "minimum": 1.0,
+            "title": "Interval Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "BackupScheduleRequest",
+        "type": "object"
+      },
       "BatchCurateRequest": {
         "properties": {
           "action": {
@@ -10333,7 +10353,6 @@
             "application/octet-stream": {
               "schema": {
                 "format": "binary",
-                "title": "Data",
                 "type": "string"
               }
             }
@@ -10573,15 +10592,13 @@
     },
     "/api/v1/admin/backup/schedule": {
       "post": {
-        "description": "Schedule recurring auto-backup. {enabled: bool, interval_hours: int}",
+        "description": "Persist recurring backup intent in PostgreSQL.",
         "operationId": "post_api_v1_admin_backup_schedule",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "title": "Data",
-                "type": "object"
+                "$ref": "#/components/schemas/BackupScheduleRequest"
               }
             }
           },
@@ -10880,7 +10897,7 @@
     },
     "/api/v1/admin/clear/{entity}": {
       "post": {
-        "description": "Clear a specific entity or 'all' for complete cleanup.",
+        "description": "Compatibility route for the registered asynchronous clear operation.",
         "operationId": "post_api_v1_admin_clear_entity",
         "parameters": [
           {
@@ -10913,7 +10930,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {

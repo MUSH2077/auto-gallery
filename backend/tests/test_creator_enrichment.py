@@ -2,6 +2,7 @@
 
 import asyncio
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import select, text
@@ -464,6 +465,7 @@ async def test_creator_sweeps_await_async_progress_callbacks(monkeypatch, refres
         id=creator_id,
         name="callback-creator",
         display_name="Callback creator",
+        created_at=datetime.now(timezone.utc),
     )
     source_creator = SimpleNamespace(
         creator_id=creator_id,
@@ -478,6 +480,9 @@ async def test_creator_sweeps_await_async_progress_callbacks(monkeypatch, refres
         def all(self):
             return list(self._values)
 
+        def __iter__(self):
+            return iter(self._values)
+
     class Result:
         def __init__(self, values):
             self._values = values
@@ -485,9 +490,34 @@ async def test_creator_sweeps_await_async_progress_callbacks(monkeypatch, refres
         def scalars(self):
             return ScalarValues(self._values)
 
+        def one_or_none(self):
+            return self._values[0] if self._values else None
+
+    class Savepoint:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, _exc_type, _exc, _traceback):
+            return False
+
     class FakeDB:
+        execute_calls = 0
+
         async def execute(self, _statement):
-            return Result([creator_id] if refresh_all else [source_creator])
+            if not refresh_all:
+                return Result([source_creator])
+            self.execute_calls += 1
+            if self.execute_calls == 1:
+                return Result([(creator.created_at, creator.id)])
+            if self.execute_calls == 2:
+                return Result([creator])
+            return Result([])
+
+        async def scalar(self, _statement):
+            return 1
+
+        def begin_nested(self):
+            return Savepoint()
 
         async def get(self, _model, _id):
             return creator

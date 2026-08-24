@@ -986,6 +986,62 @@ async def test_registered_rebuild_persists_awaited_progress_without_redis(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_registered_curation_backfill_leaves_terminal_write_to_outer(
+    monkeypatch,
+):
+    """A legacy-shaped handler must return while its current TaskRun is active."""
+    from app.database import async_session, engine
+    from app.jobs import admin_operations
+    from app.models import TaskRun
+    from app.services import operations
+    from app.services.curation import CurationService
+
+    result = {
+        "created": {"creators": 1, "repositories": 2, "work_groups": 3},
+        "message": "Curation baseline complete",
+    }
+
+    async def run_backfill(_self, *, resource_owner):
+        assert resource_owner == str(task_id)
+        return result
+
+    monkeypatch.setattr(CurationService, "run_backfill", run_backfill)
+    task_id = None
+    try:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-curation-backfill",
+                scope_key="library:curation-backfill:active",
+                title="Curation baseline",
+                entity="curation-backfill",
+                options={},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            task_id = prepared.task.id
+            await db.commit()
+
+        returned = await asyncio.to_thread(
+            admin_operations.run_registered_admin_operation,
+            str(task_id),
+            1,
+        )
+
+        assert returned == result
+        async with async_session() as db:
+            task = await db.get(TaskRun, task_id)
+            assert task.status == "complete"
+            assert task.result_data == result
+    finally:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_rebuild_progress_callback_rejects_attempt_after_retry(monkeypatch):
     """A rebuild callback from attempt 1 cannot overwrite attempt 2 progress."""
     from app.database import async_session, engine

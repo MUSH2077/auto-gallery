@@ -318,7 +318,7 @@ export interface paths {
         put?: never;
         /**
          * Schedule Backup
-         * @description Schedule recurring auto-backup. {enabled: bool, interval_hours: int}
+         * @description Persist recurring backup intent in PostgreSQL.
          */
         post: operations["post_api_v1_admin_backup_schedule"];
         delete?: never;
@@ -398,7 +398,7 @@ export interface paths {
         put?: never;
         /**
          * Clear Entity
-         * @description Clear a specific entity or 'all' for complete cleanup.
+         * @description Compatibility route for the registered asynchronous clear operation.
          */
         post: operations["post_api_v1_admin_clear_entity"];
         delete?: never;
@@ -4472,6 +4472,16 @@ export interface components {
              */
             batch_size: number;
         };
+        /** BackupScheduleRequest */
+        BackupScheduleRequest: {
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Interval Hours
+             * @default 24
+             */
+            interval_hours: number;
+        };
         /** BatchCurateRequest */
         BatchCurateRequest: {
             /**
@@ -8209,9 +8219,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["BackupScheduleRequest"];
             };
         };
         responses: {
@@ -8414,7 +8422,7 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };

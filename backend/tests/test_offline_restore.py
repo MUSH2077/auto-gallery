@@ -8,13 +8,14 @@ import json
 import os
 import stat
 import tarfile
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete, text
+from sqlalchemy import delete, select, text
 
 
 def _sha256(data: bytes) -> str:
@@ -555,3 +556,245 @@ async def test_restore_api_is_authorized_isolated_and_dispatches_validation_task
             assert options == {"upload_id": created["upload_id"]}
     finally:
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("declared_length", [None, 400])
+async def test_restore_chunk_stream_stops_at_cumulative_limit_without_buffering(
+    tmp_path,
+    monkeypatch,
+    declared_length,
+):
+    """Missing or dishonest length cannot make FastAPI buffer the full body."""
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import TaskEvent, TaskRun
+    from app.services import offline_restore
+
+    monkeypatch.setenv("RESTORE_STAGING_ROOT", str(tmp_path / "staging"))
+    archive = b"123456789"
+    created = offline_restore.create_upload_session(
+        root=tmp_path / "staging",
+        filename="auto-gallery-backup_20260824_120000.tar.gz",
+        size_bytes=len(archive),
+        sha256=_sha256(archive),
+        chunk_size=len(archive),
+        total_chunks=1,
+    )
+    monkeypatch.setattr(offline_restore, "MAX_CHUNK_SIZE", 8)
+    username = f"{API_PREFIX}stream"
+    yielded = 0
+
+    async def oversized_body():
+        nonlocal yielded
+        for _ in range(100):
+            yielded += 1
+            yield b"1234"
+            await asyncio.sleep(0)
+
+    headers = {
+        **_api_headers(username),
+        "Content-Type": "application/octet-stream",
+        "X-Restore-Token": created["upload_token"],
+        "X-Chunk-SHA256": _sha256(archive),
+    }
+    if declared_length is not None:
+        headers["Content-Length"] = str(declared_length)
+    try:
+        async with async_session() as db:
+            await db.execute(delete(TaskEvent))
+            await db.execute(delete(TaskRun).where(TaskRun.kind == "admin"))
+            await db.execute(
+                text("DELETE FROM users WHERE username = :username"),
+                {"username": username},
+            )
+            await db.commit()
+            await _seed_api_user(db, username, ["system"])
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            response = await client.put(
+                (
+                    "/api/v1/admin/backup/restore/uploads/"
+                    f"{created['upload_id']}/chunks/0"
+                ),
+                content=oversized_body(),
+                headers=headers,
+            )
+
+        assert response.status_code == 413
+        assert yielded <= (0 if declared_length is not None else 3)
+        chunks = list(
+            (tmp_path / "staging" / created["upload_id"] / "chunks").iterdir()
+        )
+        assert chunks == []
+    finally:
+        async with async_session() as db:
+            await db.execute(
+                text("DELETE FROM users WHERE username = :username"),
+                {"username": username},
+            )
+            await db.commit()
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_validation_prepare_attachment_adopts_exact_task_after_loss_and_redis_outage(
+    tmp_path,
+    monkeypatch,
+):
+    """No committed validation intent may become orphaned from its upload scope."""
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import TaskEvent, TaskRun
+    from app.services import offline_restore, operations
+
+    monkeypatch.setenv("RESTORE_STAGING_ROOT", str(tmp_path / "staging"))
+    monkeypatch.setenv("RESTORE_RECEIPTS_ROOT", str(tmp_path / "receipts"))
+    monkeypatch.setattr(operations, "_fetch_admin_rq", lambda *_args, **_kwargs: None)
+
+    def unavailable_enqueue(*_args, **_kwargs):
+        raise RuntimeError("redis publication unavailable")
+
+    monkeypatch.setattr(operations, "_enqueue_admin_rq", unavailable_enqueue)
+    archive = _archive_bytes({"database.sql": b"select 1;"})
+    created = _new_session(tmp_path / "staging", archive, chunk_size=len(archive))
+    _upload_all(
+        tmp_path / "staging",
+        created,
+        archive,
+        chunk_size=len(archive),
+    )
+    username = f"{API_PREFIX}attach"
+    original_seal = offline_restore.seal_upload_for_validation
+    first_attach = True
+
+    def fail_first_attach(**kwargs):
+        nonlocal first_attach
+        if first_attach:
+            first_attach = False
+            raise RuntimeError("injected commit-to-attach boundary")
+        return original_seal(**kwargs)
+
+    monkeypatch.setattr(offline_restore, "seal_upload_for_validation", fail_first_attach)
+    path = (
+        "/api/v1/admin/backup/restore/uploads/"
+        f"{created['upload_id']}/validate"
+    )
+    headers = {
+        **_api_headers(username),
+        "X-Restore-Token": created["upload_token"],
+    }
+    try:
+        async with async_session() as db:
+            await db.execute(delete(TaskEvent))
+            await db.execute(delete(TaskRun).where(TaskRun.kind == "admin"))
+            await db.execute(
+                text("DELETE FROM users WHERE username = :username"),
+                {"username": username},
+            )
+            await db.commit()
+            await _seed_api_user(db, username, ["system"])
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            first = await client.post(path, headers=headers)
+            assert first.status_code == 500
+
+            accepted_response = await client.post(path, headers=headers)
+            assert accepted_response.status_code == 202
+            accepted = accepted_response.json()
+
+            # Simulate durable filesystem response/attachment loss after the
+            # database accepted this exact scope. A remounted request adopts it.
+            metadata_path = (
+                tmp_path
+                / "staging"
+                / created["upload_id"]
+                / "metadata.json"
+            )
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata.pop("validation_task_id", None)
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            adopted_response = await client.post(path, headers=headers)
+            assert adopted_response.status_code == 202
+            assert adopted_response.json() == accepted
+
+        session = offline_restore.get_upload_session(
+            root=tmp_path / "staging",
+            upload_id=created["upload_id"],
+            token=created["upload_token"],
+        )
+        assert session["validation_task_id"] == accepted["task_id"]
+        async with async_session() as db:
+            tasks = list(
+                (
+                    await db.execute(
+                        select(TaskRun).where(
+                            TaskRun.kind == "admin",
+                            TaskRun.operation_type == "admin-restore-validate",
+                        )
+                    )
+                ).scalars()
+            )
+            assert [str(task.id) for task in tasks] == [accepted["task_id"]]
+            assert tasks[0].meta[operations.ADMIN_DISPATCH_META_KEY][
+                "publication_state"
+            ] == operations.ADMIN_DISPATCH_PENDING
+    finally:
+        async with async_session() as db:
+            await db.execute(delete(TaskEvent))
+            await db.execute(delete(TaskRun).where(TaskRun.kind == "admin"))
+            await db.execute(
+                text("DELETE FROM users WHERE username = :username"),
+                {"username": username},
+            )
+            await db.commit()
+        await engine.dispose()
+
+
+def test_component_only_archive_is_downloadable_but_never_restore_ready(
+    tmp_path,
+    monkeypatch,
+):
+    """Host restore always switches PostgreSQL, so readiness requires a DB dump."""
+    from app.api.admin import backup
+    from app.services.offline_restore import RestoreValidationError, validate_upload
+
+    archive = _archive_bytes(
+        {"app-config/config.json": b"{}"},
+        contents=["app-config"],
+    )
+    created = _new_session(tmp_path / "staging", archive, chunk_size=len(archive))
+    _upload_all(
+        tmp_path / "staging",
+        created,
+        archive,
+        chunk_size=len(archive),
+    )
+    with pytest.raises(RestoreValidationError, match="database|restorable"):
+        validate_upload(
+            root=tmp_path / "staging",
+            upload_id=created["upload_id"],
+            task_id="00000000-0000-0000-0000-000000000099",
+        )
+
+    backup_root = tmp_path / "backups"
+    app_config = tmp_path / "app-config"
+    app_config.mkdir()
+    (app_config / "config.json").write_text("{}", encoding="utf-8")
+    original_backup_dir = backup.BACKUP_DIR
+    try:
+        backup.BACKUP_DIR = backup_root
+        monkeypatch.setenv("APP_CONFIG_ROOT", str(app_config))
+        result = backup._create_backup_sync({"contents": ["app-config"]})
+        assert result["restorable"] is False
+        assert (backup_root / result["filename"]).is_file()
+    finally:
+        backup.BACKUP_DIR = original_backup_dir

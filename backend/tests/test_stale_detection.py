@@ -106,14 +106,13 @@ async def test_unreadable_redis_never_marks_an_old_active_task_stale():
     db = _Database((
         ((job_id, now - timedelta(minutes=10)),),
         (),
-        (),
     ))
     count = await TaskEngine(db).detect_stale_tasks(
         redis_client=_Redis(error=ConnectionError("redis unavailable")),
         now=now,
     )
     assert count == 0
-    assert db.execute_count == 3
+    assert db.execute_count == 2
     assert db.commit_count == 0
 
 
@@ -171,7 +170,6 @@ async def test_import_stale_transition_updates_parent_tasks_and_outbox(monkeypat
     db = _Database((
         (),
         ((import_job.id, parent.id, old),),
-        (),
         (parent,),
         (import_job,),
         (parent,),

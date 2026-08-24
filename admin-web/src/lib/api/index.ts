@@ -852,12 +852,12 @@ export const api = {
       "/api/v1/admin/backup", { method: "POST", body: JSON.stringify({ contents: contents || ["database", "gallerydl-config", "app-config", "download-archives", "library-metadata"] }) }),
 
   getLatestBackup: () =>
-    request<T.AdminOperationSnapshotResponse<{ status: string; filename: string; size_bytes: number; size_mb: number; contents: string[]; component_sizes: Record<string, number>; message?: string }>>(
+    request<T.AdminOperationSnapshotResponse<{ status: string; filename: string; size_bytes: number; size_mb: number; contents: string[]; restorable: boolean; component_sizes: Record<string, number>; message?: string }>>(
       "/api/v1/admin/backup/latest",
     ),
 
   listBackups: () =>
-    request<{ backups: { filename: string; size_mb: number; created_at: string; contents: string[]; component_sizes?: Record<string, number>; version?: string }[] }>(
+    request<{ backups: { filename: string; size_mb: number; created_at: string; contents: string[]; restorable: boolean; component_sizes?: Record<string, number>; version?: string }[] }>(
       "/api/v1/admin/backup/list"),
 
   startBackupEstimate: () =>

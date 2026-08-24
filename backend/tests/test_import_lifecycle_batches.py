@@ -1018,11 +1018,11 @@ async def test_retry_resets_only_child_assignment_reopens_parent_and_aggregates(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_real_disk_publishers_distinguish_expired_and_live_heartbeats(
+async def test_registered_disk_publishers_use_taskrun_not_redis_heartbeats(
     tmp_path,
     monkeypatch,
 ):
-    """Only the crashed admin publisher is staled, resumed, and closed."""
+    """Registered admin publisher liveness comes only from its durable TaskRun."""
     import app.services.task_engine as task_engine
 
     from app.config import settings
@@ -1137,14 +1137,14 @@ async def test_real_disk_publishers_distinguish_expired_and_live_heartbeats(
                 select(ImportJob).where(ImportJob.download_job_id == live_parent_id)
             )).scalars())
 
-            assert stale_count == 1
-            assert stale_task.status == "stale"
+            assert stale_count == 0
+            assert stale_task.status == "running"
             assert live_task.status == "running"
-            assert len(stale_imports) == 1
+            assert stale_imports == []
             assert live_imports == []
-            assert stale_parent.manifest["bounded_import_publication_open"] is False
+            assert stale_parent.manifest["bounded_import_publication_open"] is True
             assert live_parent.manifest["bounded_import_publication_open"] is True
-            assert first["imports_enqueued"] == 1
+            assert first["imports_enqueued"] == 0
             assert second["imports_enqueued"] == 0
     finally:
         async with async_session() as db:
@@ -1391,8 +1391,8 @@ async def test_live_unassigned_lease_keeps_publication_open_until_expiry(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_heartbeat_resurrection_during_task_lock_prevents_publisher_theft():
-    """A heartbeat returning after the stale scan must win before mutation."""
+async def test_registered_publisher_stale_scan_never_consults_redis():
+    """Admin TaskRun authority is independent of Redis heartbeat availability."""
     from app.database import async_session, engine
     from app.models.download_job import DownloadJob
     from app.models.task_run import TaskRun
@@ -1450,10 +1450,9 @@ async def test_heartbeat_resurrection_during_task_lock_prevents_publisher_theft(
                     )
 
             scan = asyncio.create_task(scan_in_second_session())
-            assert await asyncio.to_thread(pipeline_executed.wait, 2)
-            redis_client.setex(heartbeat_key, 90, "resurrected")
-            await lock_db.commit()
             stale_count = await asyncio.wait_for(scan, timeout=5)
+            assert not pipeline_executed.is_set()
+            await lock_db.commit()
 
         async with async_session() as recovery_db:
             recovered = await recover_import_pipeline(
@@ -1477,23 +1476,16 @@ async def test_heartbeat_resurrection_during_task_lock_prevents_publisher_theft(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_recovery_fence_stops_resumed_publisher_before_reconcile(
+async def test_durable_terminal_task_stops_registered_publisher_before_reconcile(
     monkeypatch,
 ):
-    """A stale-scan winner prevents the old admin worker's next mutation."""
+    """A terminal TaskRun prevents its registered worker from mutating again."""
     from app.database import async_session, engine
     from app.jobs import admin_operations
     from app.models.task_run import TaskRun
-    from app.services.redis_client import get_redis
-    from app.services.task_engine import TaskEngine
-    from app.services.tasks import TaskService
+    from app.services import operations
 
     task_id = uuid4()
-    heartbeat_key = f"task:{task_id}:heartbeat_ts"
-    fence_key = f"task:{task_id}:publisher_fence"
-    redis_client = get_redis()
-    redis_client.delete(heartbeat_key, fence_key)
-    old = datetime.now(timezone.utc) - timedelta(hours=2)
     reconcile_calls = 0
 
     async def mutation_probe(*_args, **_kwargs):
@@ -1512,7 +1504,6 @@ async def test_recovery_fence_stops_resumed_publisher_before_reconcile(
         "app.services.disk_import.reconcile_downloads_to_db",
         mutation_probe,
     )
-    monkeypatch.setattr(admin_operations, "set_operation_status", lambda *_a, **_k: None)
     monkeypatch.setattr(
         "app.api.admin.settings.invalidate_storage_breakdown_cache",
         lambda: None,
@@ -1521,31 +1512,38 @@ async def test_recovery_fence_stops_resumed_publisher_before_reconcile(
     try:
         async with async_session() as db:
             await _clear(db)
-            task = await TaskService(db).create_task(
+            prepared = await operations.prepare_admin_operation(
+                db,
                 task_id=task_id,
-                kind="admin",
                 operation_type="admin-disk-import",
+                scope_key="library:disk-import:active",
                 title="recovery-fenced publisher",
-                status="running",
+                entity="disk-import",
+                options={},
                 queue_name="maintenance",
+                job_timeout=60,
             )
-            task.started_at = old
-            task.updated_at = old
+            prepared.task.status = "failed"
+            prepared.task.error = "durable authority revoked"
             await db.commit()
-            assert await TaskEngine(db).detect_stale_tasks(
-                redis_client=redis_client,
-                now=datetime.now(timezone.utc),
-            ) == 1
 
-        with pytest.raises(RuntimeError, match="publisher fence"):
-            await admin_operations._run_disk_import_operation(str(task_id), {})
+        with (
+            operations.admin_operation_attempt_context(task_id, prepared.attempt),
+            pytest.raises(
+                operations.AdminOperationAttemptRejected,
+                match="no longer current",
+            ),
+        ):
+            await admin_operations._run_registered_disk_import_operation(
+                str(task_id),
+                {},
+            )
 
         async with async_session() as verify_db:
             task = await verify_db.get(TaskRun, task_id)
             assert reconcile_calls == 0
-            assert task.status == "stale"
+            assert task.status == "failed"
     finally:
-        redis_client.delete(heartbeat_key, fence_key)
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
@@ -2047,52 +2045,19 @@ async def test_attempt_a_recovery_fence_does_not_block_rotated_attempt_b(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_recovery_fenced_attempt_settles_actionable_then_retry_starts(
+async def test_failed_durable_attempt_is_actionable_then_retry_starts(
     monkeypatch,
 ):
-    """A recovery winner makes A retryable, and retry starts a distinct B."""
-    import app.services.task_engine as task_engine
-
+    """A durable failed attempt is retryable as a distinct registered delivery."""
     from app.api import tasks as tasks_api
     from app.database import async_session, engine
-    from app.jobs.admin_operations import _DiskImportPublisherGuard
     from app.models.task_run import TaskRun
     from app.services import operations
-    from app.services.redis_client import get_redis
     from app.services.tasks import TaskService
 
     task_id = uuid4()
-    attempt_a = "1"
-    old = datetime.now(timezone.utc) - timedelta(hours=2)
-    redis_client = get_redis()
-    redis_client.delete(
-        f"task:{task_id}:heartbeat_ts",
-        f"task:{task_id}:publisher_fence",
-        _publisher_heartbeat_key(task_id, attempt_a),
-        _publisher_fence_key(task_id, attempt_a),
-        "library:disk-import:active",
-    )
-    queued = _install_admin_retry_fakes(monkeypatch, tasks_api, redis_client)
-    redis_client.set("library:disk-import:active", str(task_id), ex=300)
-    monkeypatch.setattr(
-        tasks_api,
-        "get_operation_status",
-        lambda job_id: (
-            {"job_id": job_id, "status": "running"}
-            if job_id == str(task_id)
-            else None
-        ),
-    )
-
-    async def no_projection(*_args, **_kwargs):
-        return 0
-
-    monkeypatch.setattr(task_engine, "request_search_projection", no_projection)
-    monkeypatch.setattr(
-        task_engine.TaskEventPublisher,
-        "publish_status_change",
-        lambda *_a, **_k: None,
-    )
+    attempt_a = 1
+    queued = _install_admin_retry_fakes(monkeypatch, tasks_api, None)
 
     try:
         async with async_session() as db:
@@ -2109,35 +2074,30 @@ async def test_recovery_fenced_attempt_settles_actionable_then_retry_starts(
                 job_timeout=60,
             )
             task = prepared.task
-            task.status = "running"
-            task.started_at = old
-            task.updated_at = old
+            await TaskService(db).update_task(
+                task,
+                status="failed",
+                error="durable attempt failed",
+                reason_code="worker_failed",
+            )
             await db.commit()
 
-            assert await task_engine.TaskEngine(db).detect_stale_tasks(
-                redis_client=redis_client,
-                now=datetime.now(timezone.utc),
-            ) == 1
             db.expire_all()
             task = await db.get(TaskRun, task_id)
-            assert task.status == "stale"
+            assert task.status == "failed"
             assert task.attention_state == "open"
 
             await tasks_api._retry_admin_task(task, TaskService(db))
             assert queued == [(str(task_id), 2)]
-            attempt_b = str(queued[0][1])
+            attempt_b = queued[0][1]
             assert attempt_b != attempt_a
 
-        guard_b = _DiskImportPublisherGuard(str(task_id))
-        guard_b.attempt_token = attempt_b
-        async with async_session() as start_db:
-            task = await guard_b.checkpoint(
-                start_db,
-                allowed_statuses=("enqueued", "running"),
-                lock_task=True,
-            )
-            await TaskService(start_db).update_task(task, status="running")
-            await start_db.commit()
+        operation_type, options = await operations.claim_admin_operation(
+            task_id,
+            attempt_b,
+        )
+        assert operation_type == "admin-disk-import"
+        assert options == {}
 
         async with async_session() as verify_db:
             task = await verify_db.get(TaskRun, task_id)
@@ -2145,21 +2105,6 @@ async def test_recovery_fenced_attempt_settles_actionable_then_retry_starts(
             assert task.attention_state == "none"
             assert task.meta[operations.ADMIN_DISPATCH_META_KEY]["attempt"] == 2
     finally:
-        redis_client.delete(
-            f"task:{task_id}:heartbeat_ts",
-            f"task:{task_id}:publisher_fence",
-            _publisher_heartbeat_key(task_id, attempt_a),
-            _publisher_fence_key(task_id, attempt_a),
-            *(
-                (
-                    _publisher_heartbeat_key(task_id, attempt_b),
-                    _publisher_fence_key(task_id, attempt_b),
-                )
-                if "attempt_b" in locals()
-                else ()
-            ),
-            "library:disk-import:active",
-        )
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()

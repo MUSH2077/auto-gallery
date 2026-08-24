@@ -34,6 +34,7 @@ from app.services.artifact_ledger import (
 from app.services.artifact_discovery import group_metadata_by_work, media_files_for_group
 from app.services.disk_identity import extract_metadata_identity, provision_identity_for_disk_import
 from app.services.redis_pubsub import PublisherFenceError
+from app.services.operations import AdminOperationAttemptRejected
 from app.services.settings import source_key_for_extractor
 
 logger = logging.getLogger(__name__)
@@ -546,7 +547,7 @@ async def _drain_pending_ledger(
                     str(recovery_job.id),
                     **enqueue_kwargs,
                 )
-            except PublisherFenceError:
+            except (PublisherFenceError, AdminOperationAttemptRejected):
                 raise
             except Exception as exc:
                 logger.warning(
@@ -594,6 +595,8 @@ async def _drain_pending_ledger(
                             "disk_import: test/legacy import id is not a UUID: %s",
                             import_job_id,
                         )
+                    except AdminOperationAttemptRejected:
+                        raise
                     except Exception:
                         logger.warning(
                             "disk_import: could not link child import task %s to %s",
@@ -986,7 +989,7 @@ async def reconcile_downloads_to_db(
                     str(job.id),
                     **enqueue_kwargs,
                 )
-            except PublisherFenceError:
+            except (PublisherFenceError, AdminOperationAttemptRejected):
                 raise
             except Exception as exc:
                 # The artifact ledger was committed before publication.  Keep
@@ -1027,6 +1030,8 @@ async def reconcile_downloads_to_db(
                             await TaskService(db).update_task(task, parent_task_id=UUID(str(parent_task_id)))
                             await checkpoint()
                             await db.commit()
+                    except AdminOperationAttemptRejected:
+                        raise
                     except Exception:
                         logger.warning("disk_import: could not link child import task %s to %s", import_job_id, parent_task_id, exc_info=True)
             stats["creators"] += 1

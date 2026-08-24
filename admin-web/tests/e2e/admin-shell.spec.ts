@@ -2483,12 +2483,14 @@ test("slow administrator integrity flow starts once, polls one task, and renders
 test("slow administrator proxy failure exposes structured retry and the successful result", async ({ page }) => {
   let retried = false;
   let postPending = false;
+  let proxyStarts = 0;
   let taskPolls = 0;
   await page.route("**/api/v1/admin/proxy/test/latest", (route) => route.fulfill({
     json: { snapshot: null },
   }));
   await page.route("**/api/v1/admin/proxy/test", async (route) => {
     expect(route.request().method()).toBe("POST");
+    proxyStarts += 1;
     postPending = true;
     await new Promise((resolve) => setTimeout(resolve, 150));
     await route.fulfill({
@@ -2570,6 +2572,9 @@ test("slow administrator proxy failure exposes structured retry and the successf
   await expect(page.getByText("Testing proxy connectivity")).toBeVisible();
   await expect(page.getByText("Proxy is reachable")).toBeVisible({ timeout: 10_000 });
   expect(retried).toBe(true);
+  await expect(start).toBeEnabled();
+  await start.click();
+  await expect.poll(() => proxyStarts).toBe(2);
 
   const results = await new AxeBuilder({ page })
     .include("[data-admin-operation='admin-proxy-test']")
@@ -2632,7 +2637,10 @@ test("backup estimate and creation use independent TaskRuns without request wate
   await expect(page.getByRole("link", { name: "Task detail" }).last())
     .toHaveAttribute("href", "/admin/jobs?tab=admin&task=backup-task");
   expect(estimateStarts).toBe(1);
-  expect(createStarts).toBe(1);
+  const createButton = page.getByRole("button", { name: "Create Backup" });
+  await expect(createButton).toBeEnabled();
+  await createButton.click();
+  await expect.poll(() => createStarts).toBe(2);
 
   const results = await new AxeBuilder({ page })
     .include("[data-admin-operation]")
@@ -2773,7 +2781,7 @@ test("restore stages ordered chunks, validates once, and surfaces external rollb
   await expect(page.getByText("RestoreHostError: identity unproven")).toBeVisible();
   expect(chunkIndexes).toEqual([0, 1, 2]);
   expect(validationStarts).toBe(1);
-  expect(latestPolls).toBe(0);
+  expect(latestPolls).toBe(1);
   expect(taskPolls).toBe(2);
   expect(receiptPolls).toBe(2);
 
@@ -2781,6 +2789,112 @@ test("restore stages ordered chunks, validates once, and surfaces external rollb
     .include("[data-restore-flow]")
     .analyze();
   expect(results.violations).toEqual([]);
+});
+
+test("restore validation recovers from session token after response loss and remount", async ({ page }) => {
+  const uploadId = "00000000-0000-0000-0000-000000000987";
+  const token = "restore-remount-capability";
+  const session = {
+    upload_id: uploadId,
+    filename: "auto-gallery-backup_20260824_120000.tar.gz",
+    size_bytes: 123,
+    sha256: "a".repeat(64),
+    chunk_size: 123,
+    total_chunks: 1,
+    received_chunks: 1,
+    received_bytes: 123,
+    next_chunk: 1,
+    state: "uploaded",
+    validation_task_id: null,
+    request_id: null,
+    created_at: "2026-08-24T12:00:00Z",
+    updated_at: "2026-08-24T12:00:01Z",
+  };
+  let validationStarts = 0;
+  let latestRequests = 0;
+  let completed = false;
+
+  await page.addInitScript(({ savedSession, savedToken }) => {
+    window.localStorage.setItem(
+      "auto-gallery-restore-upload-v1",
+      JSON.stringify({ session: savedSession, token: savedToken }),
+    );
+  }, { savedSession: session, savedToken: token });
+  await page.route(`**/api/v1/admin/backup/restore/uploads/${uploadId}`, (route) => route.fulfill({
+    json: {
+      ...session,
+      validation_task_id: validationStarts ? "restore-remount-task" : null,
+      state: validationStarts ? "validating" : "uploaded",
+    },
+  }));
+  await page.route(`**/api/v1/admin/backup/restore/uploads/${uploadId}/validation/latest`, (route) => {
+    latestRequests += 1;
+    if (!validationStarts) return route.fulfill({ json: { snapshot: null, current: null } });
+    if (completed) return route.fulfill({ json: {
+      current: null,
+      snapshot: {
+        task_id: "restore-remount-task",
+        job_id: "admin-restore-remount-task-attempt-1",
+        status: "complete",
+        operation_type: "admin-restore-validate",
+        progress: { phase: "ready", label: "Ready for offline host execution" },
+        result: {
+          state: "ready",
+          request_id: uploadId,
+          host_command: "./scripts/offline-restore.py --request ready-request.json",
+          manifest: { version: "0.3.0", contents: ["database"] },
+          message: "Restore request is ready for offline host execution",
+        },
+        completed_at: "2026-08-24T12:00:02Z",
+      },
+    } });
+    return route.fulfill({ json: {
+      snapshot: null,
+      current: {
+        task_id: "restore-remount-task",
+        job_id: "admin-restore-remount-task-attempt-1",
+        status: "running",
+        operation_type: "admin-restore-validate",
+        progress: { phase: "validating", label: "Validating restore archive" },
+      },
+    } });
+  });
+  await page.route(`**/api/v1/admin/backup/restore/uploads/${uploadId}/validate`, async (route) => {
+    validationStarts += 1;
+    // PostgreSQL accepted the exact-scope TaskRun, but the HTTP/Redis handoff
+    // response is lost. The client must discover current state, not POST again.
+    await route.abort("connectionreset");
+  });
+  await page.route("**/api/v1/admin/operations/restore-remount-task", async (route) => {
+    completed = true;
+    await route.fulfill({ json: {
+      task_id: "restore-remount-task",
+      job_id: "admin-restore-remount-task-attempt-1",
+      status: "complete",
+      operation_type: "admin-restore-validate",
+      progress: { phase: "ready", label: "Ready for offline host execution" },
+      result: {
+        state: "ready",
+        request_id: uploadId,
+        host_command: "./scripts/offline-restore.py --request ready-request.json",
+        manifest: { version: "0.3.0", contents: ["database"] },
+        message: "Restore request is ready for offline host execution",
+      },
+      error: null,
+    } });
+  });
+  await page.route(`**/api/v1/admin/backup/restore/receipts/${uploadId}`, (route) => route.fulfill({
+    json: { request_id: uploadId, status: "pending", phase: "handoff" },
+  }));
+
+  await page.goto("/admin/settings/backup");
+  await expect(page.getByText("Ready for offline host execution")).toBeVisible({ timeout: 10_000 });
+  expect(validationStarts).toBe(1);
+  expect(latestRequests).toBeGreaterThanOrEqual(2);
+
+  await page.reload();
+  await expect(page.getByText("Ready for offline host execution")).toBeVisible({ timeout: 10_000 });
+  expect(validationStarts).toBe(1);
 });
 
 test("gallery-dl connectivity saves then starts one asynchronous source test", async ({ page }) => {

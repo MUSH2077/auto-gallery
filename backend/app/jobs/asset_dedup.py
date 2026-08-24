@@ -38,7 +38,10 @@ from app.services.asset_reconciliation import (
     versioned_phash_distance,
 )
 from app.services.operations import (
+    AdminOperationAttemptRejected,
     OPERATION_TTL_SECONDS,
+    current_admin_operation_attempt,
+    fence_current_admin_operation_transaction,
     release_owned_operation_lock,
     set_operation_status,
 )
@@ -566,8 +569,6 @@ async def _run_scan(
 ) -> dict:
     """Run at most one image-derived scan slice and persist its keyset cursor."""
 
-    from app.services.operations import current_admin_operation_attempt
-
     async with async_session() as db:
         scan = (
             await db.execute(
@@ -602,6 +603,7 @@ async def _run_scan(
             1,
             min(int(scan_options.get("batch_size", 100)), 100),
         )
+        await fence_current_admin_operation_transaction(db)
         await db.commit()
 
     delivery = current_admin_operation_attempt()
@@ -671,6 +673,7 @@ async def _run_scan(
                     asset_ids = list((await db.execute(query)).scalars())
                     if not asset_ids:
                         scan.status = "complete"
+                        await fence_current_admin_operation_transaction(db)
                         await db.commit()
                         outcome = _scan_payload(
                             scan,
@@ -687,6 +690,7 @@ async def _run_scan(
                         scan.cases_created += result["cases_created"]
                         scan.assets_grouped += result["assets_grouped"]
                         scan.bytes_reclaimable += result["bytes_reclaimable"]
+                        await fence_current_admin_operation_transaction(db)
                         await db.commit()
                         outcome = _scan_payload(
                             scan,
@@ -850,45 +854,47 @@ async def _update_running_scan_operation(
 
 async def _complete_scan_operation(operation_job_id: str, result: dict) -> None:
     progress = {"phase": "complete", "label": "Asset scan complete"}
+    registered = current_admin_operation_attempt() is not None
     try:
-        try:
-            async with async_session() as db:
-                service = TaskService(db)
-                task = await service.get(UUID(operation_job_id))
-                if task:
-                    await service.update_task(
-                        task,
-                        status="complete",
-                        progress=progress,
-                        result=result,
-                        resource_state="yielded",
-                        resource_reason=None,
-                    )
-                    await db.commit()
-        except Exception:
-            # AssetDedupScan is the durable business record and is already
-            # complete.  A notification write must not roll it back to failed.
-            logger.warning(
-                "Unable to update completed asset dedup TaskRun job=%s",
-                operation_job_id,
-                exc_info=True,
-            )
-        try:
-            await asyncio.to_thread(
-                set_operation_status,
-                operation_job_id,
-                "complete",
-                "asset-dedup-scan",
-                progress=progress,
-                result=result,
-                meta={"entity": "assets", "scan_id": result["scan_id"]},
-            )
-        except Exception:
-            logger.warning(
-                "Unable to publish completed asset dedup operation job=%s",
-                operation_job_id,
-                exc_info=True,
-            )
+        if not registered:
+            try:
+                async with async_session() as db:
+                    service = TaskService(db)
+                    task = await service.get(UUID(operation_job_id))
+                    if task:
+                        await service.update_task(
+                            task,
+                            status="complete",
+                            progress=progress,
+                            result=result,
+                            resource_state="yielded",
+                            resource_reason=None,
+                        )
+                        await db.commit()
+            except Exception:
+                # AssetDedupScan is the durable business record and is already
+                # complete.  A notification write must not roll it back to failed.
+                logger.warning(
+                    "Unable to update completed asset dedup TaskRun job=%s",
+                    operation_job_id,
+                    exc_info=True,
+                )
+            try:
+                await asyncio.to_thread(
+                    set_operation_status,
+                    operation_job_id,
+                    "complete",
+                    "asset-dedup-scan",
+                    progress=progress,
+                    result=result,
+                    meta={"entity": "assets", "scan_id": result["scan_id"]},
+                )
+            except Exception:
+                logger.warning(
+                    "Unable to publish completed asset dedup operation job=%s",
+                    operation_job_id,
+                    exc_info=True,
+                )
         # Storage effects have their own durable outbox.  Completion only wakes
         # one bounded drain; it never keeps the scan coordinator alive.
         try:
@@ -900,9 +906,7 @@ async def _complete_scan_operation(operation_job_id: str, result: dict) -> None:
                 exc_info=True,
             )
     finally:
-        from app.services.operations import current_admin_operation_attempt
-
-        if current_admin_operation_attempt() is None:
+        if not registered:
             try:
                 await asyncio.to_thread(
                     release_owned_operation_lock,
@@ -923,7 +927,10 @@ async def _fail_scan_operation(
     operation_job_id: str,
     error: BaseException,
 ) -> None:
+    if isinstance(error, AdminOperationAttemptRejected):
+        return
     message = str(error)[:4000] or type(error).__name__
+    registered = current_admin_operation_attempt() is not None
     try:
         scan_complete = False
         try:
@@ -933,28 +940,31 @@ async def _fail_scan_operation(
                 if scan is not None and not scan_complete:
                     scan.status = "failed"
                     scan.error = message
-                service = TaskService(db)
-                task = await service.get(UUID(operation_job_id))
-                if task is not None and not scan_complete:
-                    await service.update_task(
-                        task,
-                        status="failed",
-                        progress={"phase": "failed", "label": "Asset scan failed"},
-                        error=message,
-                        resource_state="yielded",
-                        resource_reason=(
-                            "successor_enqueue_failed"
-                            if "enqueue" in message.lower()
-                            else "scan_slice_failed"
-                        ),
-                    )
+                if registered:
+                    await fence_current_admin_operation_transaction(db)
+                else:
+                    service = TaskService(db)
+                    task = await service.get(UUID(operation_job_id))
+                    if task is not None and not scan_complete:
+                        await service.update_task(
+                            task,
+                            status="failed",
+                            progress={"phase": "failed", "label": "Asset scan failed"},
+                            error=message,
+                            resource_state="yielded",
+                            resource_reason=(
+                                "successor_enqueue_failed"
+                                if "enqueue" in message.lower()
+                                else "scan_slice_failed"
+                            ),
+                        )
                 await db.commit()
         except Exception:
             logger.exception(
                 "Unable to persist failed asset dedup scan job=%s",
                 operation_job_id,
             )
-        if not scan_complete:
+        if not scan_complete and not registered:
             try:
                 await asyncio.to_thread(
                     set_operation_status,
@@ -972,9 +982,7 @@ async def _fail_scan_operation(
                     exc_info=True,
                 )
     finally:
-        from app.services.operations import current_admin_operation_attempt
-
-        if current_admin_operation_attempt() is None:
+        if not registered:
             try:
                 await asyncio.to_thread(
                     release_owned_operation_lock,
@@ -1068,6 +1076,8 @@ async def run_registered_asset_dedup_scan(
             "next_attempt": handoff.attempt,
             "successor_rq_job_id": handoff.rq_job_id,
         }
+    except AdminOperationAttemptRejected:
+        raise
     except Exception as exc:
         await _fail_scan_operation(scan_id, task_id, exc)
         raise

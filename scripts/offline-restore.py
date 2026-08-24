@@ -17,6 +17,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -50,7 +51,7 @@ WRITERS = (
 )
 FOREGROUND = ("postgres", "redis", "meilisearch", "migrate", "backend", "admin-web")
 BACKGROUND = ("worker-download", "worker-import", "worker-operations", "scheduler")
-PG_NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
+PG_NAME = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 DIRECTORY = getattr(os, "O_DIRECTORY", 0)
@@ -246,18 +247,15 @@ class RestoreRunner:
         self.phase = "validate_request"
         self.started_at = now()
         suffix = self.request_id.replace("-", "")[:12]
-        live_database = os.environ.get("POSTGRES_DB", "autogallery")
-        if not PG_NAME.fullmatch(live_database):
-            raise RestoreHostError("POSTGRES_DB is not a safe PostgreSQL identifier")
-        self.live_database = live_database
-        self.temp_database = f"ag_restore_{suffix}"
-        self.rollback_database = f"ag_rollback_{suffix}"
-        self.failed_database = f"ag_failed_{suffix}"
         self.compose_command = shlex.split(
             os.environ.get("RESTORE_COMPOSE_COMMAND", "docker compose")
         )
         if not self.compose_command:
             raise RestoreHostError("RESTORE_COMPOSE_COMMAND is empty")
+        self.postgres_user, self.live_database = self._discover_postgres_identity()
+        self.temp_database = f"ag_restore_{suffix}"
+        self.rollback_database = f"ag_rollback_{suffix}"
+        self.failed_database = f"ag_failed_{suffix}"
         self.payload = self.session
         self.archive = self.session
         self.manifest: dict[str, Any] = {}
@@ -265,6 +263,7 @@ class RestoreRunner:
             "version": 1,
             "request_id": self.request_id,
             "project": str(self.project),
+            "postgres_user": self.postgres_user,
             "live_database": self.live_database,
             "temp_database": self.temp_database,
             "rollback_database": self.rollback_database,
@@ -277,6 +276,24 @@ class RestoreRunner:
         }
         self._write_rollback_point()
         self._save_journal()
+
+    def _discover_postgres_identity(self) -> tuple[str, str]:
+        """Read the effective service identity, never host libpq variables."""
+
+        result = self.compose(
+            "exec",
+            "-T",
+            "postgres",
+            "sh",
+            "-c",
+            'printf "%s\\n%s\\n" "$POSTGRES_USER" "$POSTGRES_DB"',
+        )
+        lines = (result.stdout or b"").decode("utf-8").splitlines()
+        if len(lines) != 2 or not all(PG_NAME.fullmatch(line) for line in lines):
+            raise RestoreHostError(
+                "Compose PostgreSQL user/database identity is invalid"
+            )
+        return lines[0], lines[1]
 
     def _write_rollback_point(self) -> None:
         rollback = self.rollback_dir / "rollback.sh"
@@ -339,6 +356,76 @@ class RestoreRunner:
         if os.environ.get("RESTORE_FAIL_PHASE") == phase:
             raise RestoreHostError(f"Injected failure at {phase}")
 
+    def _fault_boundary(self, boundary: str) -> None:
+        if os.environ.get("RESTORE_FAULT_BOUNDARY") != boundary:
+            return
+        action = os.environ.get("RESTORE_FAULT_ACTION", "fail")
+        if action == "kill":
+            os.kill(os.getpid(), signal.SIGKILL)
+        if action != "fail":
+            raise RestoreHostError("Invalid restore fault action")
+        raise RestoreHostError(f"Injected failure at {boundary}")
+
+    @staticmethod
+    def _fsync_tree(root: Path) -> None:
+        """Make a copied directory tree durable before it can become live."""
+
+        for directory, _names, filenames in os.walk(root, topdown=False):
+            directory_path = Path(directory)
+            for name in filenames:
+                target = directory_path / name
+                fd = os.open(target, os.O_RDONLY | NOFOLLOW)
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+            fd = os.open(directory_path, os.O_RDONLY | DIRECTORY | NOFOLLOW)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+
+    def _prepare_file_swap(
+        self,
+        *,
+        kind: str,
+        component: str,
+        target: Path,
+        old_path: Path,
+        new_path: Path,
+        root: Path,
+        relative: str,
+        existed: bool,
+    ) -> dict[str, Any]:
+        swap = {
+            "kind": kind,
+            "component": component,
+            "target": str(target),
+            "old": str(old_path),
+            "new": str(new_path),
+            "root": str(root),
+            "relative": relative,
+            "existed": existed,
+            "state": "prepared",
+        }
+        self.journal["file_swaps"].append(swap)
+        self._save_journal()
+        self._fault_boundary(f"{kind}:{component}:prepared-journal")
+        return swap
+
+    def _transition_file_swap(
+        self,
+        swap: dict[str, Any],
+        state: str,
+        boundary: str,
+    ) -> None:
+        swap["state"] = state
+        swap["updated_at"] = now()
+        self._save_journal()
+        self._fault_boundary(
+            f"{swap['kind']}:{swap['component']}:{boundary}"
+        )
+
     def validate_request(self) -> None:
         self.enter("validate_request")
         if (
@@ -382,6 +469,11 @@ class RestoreRunner:
         manifest = self.request.get("manifest")
         if not isinstance(manifest, dict) or manifest.get("version") != "0.3.0":
             raise RestoreHostError("validated manifest is invalid")
+        contents = manifest.get("contents")
+        if not isinstance(contents, list) or "database" not in contents:
+            raise RestoreHostError(
+                "validated manifest is not restorable without a database component"
+            )
         entries = manifest.get("entries")
         if not isinstance(entries, dict) or not entries:
             raise RestoreHostError("validated manifest entries are missing")
@@ -602,9 +694,13 @@ class RestoreRunner:
             "exec",
             "-T",
             "postgres",
-            "sh",
-            "-c",
-            'exec pg_dump --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --format=custom --compress=3',
+            "pg_dump",
+            "--username",
+            self.postgres_user,
+            "--dbname",
+            self.live_database,
+            "--format=custom",
+            "--compress=3",
             output_path=postgres_dump,
         )
         if not postgres_dump.is_file() or postgres_dump.stat().st_size == 0:
@@ -686,7 +782,9 @@ class RestoreRunner:
             "-T",
             "postgres",
             "psql",
-            "-d",
+            "--username",
+            self.postgres_user,
+            "--dbname",
             "postgres",
             "-v",
             "ON_ERROR_STOP=1",
@@ -698,7 +796,9 @@ class RestoreRunner:
             "-T",
             "postgres",
             "psql",
-            "-d",
+            "--username",
+            self.postgres_user,
+            "--dbname",
             "postgres",
             "-v",
             "ON_ERROR_STOP=1",
@@ -713,10 +813,12 @@ class RestoreRunner:
                 "-T",
                 "postgres",
                 "pg_restore",
+                "--username",
+                self.postgres_user,
                 "--exit-on-error",
                 "--no-owner",
                 "--no-acl",
-                "-d",
+                "--dbname",
                 self.temp_database,
                 input_path=custom,
             )
@@ -726,7 +828,9 @@ class RestoreRunner:
                 "-T",
                 "postgres",
                 "psql",
-                "-d",
+                "--username",
+                self.postgres_user,
+                "--dbname",
                 self.temp_database,
                 "-v",
                 "ON_ERROR_STOP=1",
@@ -758,13 +862,15 @@ class RestoreRunner:
             "-T",
             "postgres",
             "psql",
-            "-d",
+            "--username",
+            self.postgres_user,
+            "--dbname",
             self.temp_database,
             "-v",
             "ON_ERROR_STOP=1",
             "--set=offline_restore_phase=integrity",
             "-c",
-            "SELECT CASE WHEN count(*) > 0 THEN 1 ELSE 1/0 END FROM pg_catalog.pg_tables WHERE schemaname='public'; SELECT count(*) FROM alembic_version;",
+            "SELECT 1 / CASE WHEN count(*) > 0 THEN 1 ELSE 0 END FROM pg_catalog.pg_tables WHERE schemaname='public'; SELECT count(*) FROM alembic_version;",
         )
 
     def switch_database(self) -> None:
@@ -781,7 +887,9 @@ class RestoreRunner:
             "-T",
             "postgres",
             "psql",
-            "-d",
+            "--username",
+            self.postgres_user,
+            "--dbname",
             "postgres",
             "-v",
             "ON_ERROR_STOP=1",
@@ -824,7 +932,19 @@ class RestoreRunner:
                     os.chmod(copied_path / name, 0o700)
                 for name in filenames:
                     os.chmod(copied_path / name, 0o600)
+            self._fsync_tree(new_path)
+            os.fsync(parent_fd)
             existed = _entry_exists(parent_fd, target.name)
+            swap = self._prepare_file_swap(
+                kind="directory",
+                component=component,
+                target=target,
+                old_path=old_path,
+                new_path=new_path,
+                root=target.parent,
+                relative=target.name,
+                existed=existed,
+            )
             if existed:
                 os.rename(
                     target.name,
@@ -832,25 +952,21 @@ class RestoreRunner:
                     src_dir_fd=parent_fd,
                     dst_dir_fd=parent_fd,
                 )
+            self._fault_boundary(f"directory:{component}:old-renamed")
+            os.fsync(parent_fd)
+            self._fault_boundary(f"directory:{component}:old-fsynced")
+            self._transition_file_swap(swap, "old_moved", "old-journal")
             os.rename(
                 new_path.name,
                 target.name,
                 src_dir_fd=parent_fd,
                 dst_dir_fd=parent_fd,
             )
+            self._fault_boundary(f"directory:{component}:new-renamed")
             os.fsync(parent_fd)
-        self.journal["file_swaps"].append(
-            {
-                "kind": "directory",
-                "component": component,
-                "target": str(target),
-                "old": str(old_path),
-                "root": str(target.parent),
-                "relative": target.name,
-                "existed": existed,
-            }
-        )
-        self._save_journal()
+            self._fault_boundary(f"directory:{component}:new-fsynced")
+            self._transition_file_swap(swap, "applied", "applied-journal")
+            self._transition_file_swap(swap, "committed", "committed-journal")
 
     def _atomic_file_group(
         self, source_root: Path, target_root: Path, component: str
@@ -886,7 +1002,18 @@ class RestoreRunner:
                     shutil.copyfileobj(source_file, new_file)
                     new_file.flush()
                     os.fsync(new_file.fileno())
+                os.fsync(parent_fd)
                 existed = _entry_exists(parent_fd, target.name)
+                swap = self._prepare_file_swap(
+                    kind="file",
+                    component=component,
+                    target=target,
+                    old_path=old_path,
+                    new_path=new_path,
+                    root=target_root,
+                    relative=relative.as_posix(),
+                    existed=existed,
+                )
                 if existed:
                     os.rename(
                         target.name,
@@ -894,25 +1021,21 @@ class RestoreRunner:
                         src_dir_fd=parent_fd,
                         dst_dir_fd=parent_fd,
                     )
+                self._fault_boundary(f"file:{component}:old-renamed")
+                os.fsync(parent_fd)
+                self._fault_boundary(f"file:{component}:old-fsynced")
+                self._transition_file_swap(swap, "old_moved", "old-journal")
                 os.rename(
                     new_path.name,
                     target.name,
                     src_dir_fd=parent_fd,
                     dst_dir_fd=parent_fd,
                 )
+                self._fault_boundary(f"file:{component}:new-renamed")
                 os.fsync(parent_fd)
-            self.journal["file_swaps"].append(
-                {
-                    "kind": "file",
-                    "component": component,
-                    "target": str(target),
-                    "old": str(old_path),
-                    "root": str(target_root),
-                    "relative": relative.as_posix(),
-                    "existed": existed,
-                }
-            )
-            self._save_journal()
+                self._fault_boundary(f"file:{component}:new-fsynced")
+                self._transition_file_swap(swap, "applied", "applied-journal")
+                self._transition_file_swap(swap, "committed", "committed-journal")
 
     def clear_redis(self) -> None:
         self.enter("clear_redis")
@@ -1038,7 +1161,9 @@ class RestoreRunner:
                 "-T",
                 "postgres",
                 "psql",
-                "-d",
+                "--username",
+                self.postgres_user,
+                "--dbname",
                 "postgres",
                 "-At",
                 "--set=offline_restore_phase=rollback-identities",
@@ -1073,7 +1198,9 @@ class RestoreRunner:
             "-T",
             "postgres",
             "psql",
-            "-d",
+            "--username",
+            self.postgres_user,
+            "--dbname",
             "postgres",
             "-v",
             "ON_ERROR_STOP=1",
@@ -1092,7 +1219,9 @@ class RestoreRunner:
             "-T",
             "postgres",
             "psql",
-            "-d",
+            "--username",
+            self.postgres_user,
+            "--dbname",
             "postgres",
             "-v",
             "ON_ERROR_STOP=1",
@@ -1101,29 +1230,56 @@ class RestoreRunner:
         )
 
     def _rollback_files(self) -> None:
+        errors: list[str] = []
         for swap in reversed(list(self.journal.get("file_swaps") or [])):
-            root = explicit_root(str(Path(swap["root"])), "rollback file root")
-            relative = safe_relative(str(swap["relative"]), "rollback relative path")
-            target = root.joinpath(*relative.parts)
-            old = target.with_name(f".{target.name}.restore-old-{self.request_id}")
-            if target != Path(swap["target"]) or old != Path(swap["old"]):
-                raise RestoreHostError("Rollback file journal paths are inconsistent")
-            with safe_directory_fd(root, relative.parent.parts) as (_, parent_fd):
-                old_exists = _entry_exists(parent_fd, old.name)
-                target_exists = _entry_exists(parent_fd, target.name)
-                if bool(swap.get("existed")) and not old_exists:
-                    raise RestoreHostError(f"Rollback original is missing: {old.name}")
-                if bool(swap.get("existed")):
-                    failed_name = f".{target.name}.restore-failed-{self.request_id}"
-                    if _entry_exists(parent_fd, failed_name):
-                        raise RestoreHostError("Rollback failed path already exists")
+            try:
+                self._rollback_file_swap(swap)
+                swap["state"] = "rolled_back"
+                swap["rolled_back_at"] = now()
+                self._save_journal()
+            except Exception as exc:  # noqa: BLE001 - reconcile all swaps
+                errors.append(
+                    f"{swap.get('component', 'unknown')}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+        if errors:
+            raise RestoreHostError(
+                "One or more filesystem swaps could not be rolled back: "
+                + "; ".join(errors)
+            )
+
+    def _rollback_file_swap(self, swap: dict[str, Any]) -> None:
+        root = explicit_root(str(Path(swap["root"])), "rollback file root")
+        relative = safe_relative(str(swap["relative"]), "rollback relative path")
+        target = root.joinpath(*relative.parts)
+        old = target.with_name(f".{target.name}.restore-old-{self.request_id}")
+        new = target.with_name(f".{target.name}.restore-new-{self.request_id}")
+        if (
+            target != Path(swap["target"])
+            or old != Path(swap["old"])
+            or new != Path(swap.get("new", new))
+        ):
+            raise RestoreHostError("Rollback file journal paths are inconsistent")
+        kind = str(swap["kind"])
+        with safe_directory_fd(root, relative.parent.parts) as (_, parent_fd):
+            old_exists = _entry_exists(parent_fd, old.name)
+            target_exists = _entry_exists(parent_fd, target.name)
+            new_exists = _entry_exists(parent_fd, new.name)
+            failed_name = f".{target.name}.restore-failed-{self.request_id}"
+            failed_exists = _entry_exists(parent_fd, failed_name)
+
+            if bool(swap.get("existed")):
+                if old_exists:
                     if target_exists:
+                        if failed_exists:
+                            self._remove_explicit_at(parent_fd, failed_name, kind)
                         os.rename(
                             target.name,
                             failed_name,
                             src_dir_fd=parent_fd,
                             dst_dir_fd=parent_fd,
                         )
+                        failed_exists = True
                     os.rename(
                         old.name,
                         target.name,
@@ -1131,13 +1287,29 @@ class RestoreRunner:
                         dst_dir_fd=parent_fd,
                     )
                     os.fsync(parent_fd)
-                    if target_exists:
-                        self._remove_explicit_at(
-                            parent_fd, failed_name, str(swap["kind"])
-                        )
-                elif target_exists:
-                    self._remove_explicit_at(parent_fd, target.name, str(swap["kind"]))
-                os.fsync(parent_fd)
+                    if failed_exists:
+                        self._remove_explicit_at(parent_fd, failed_name, kind)
+                    if new_exists:
+                        self._remove_explicit_at(parent_fd, new.name, kind)
+                elif swap.get("state") in {"prepared", "rolled_back"} and target_exists:
+                    # Either no live rename occurred, or a prior rollback
+                    # restored the target before its final journal write.
+                    if new_exists:
+                        self._remove_explicit_at(parent_fd, new.name, kind)
+                    if failed_exists:
+                        self._remove_explicit_at(parent_fd, failed_name, kind)
+                else:
+                    raise RestoreHostError(
+                        f"Rollback original is missing: {old.name}"
+                    )
+            else:
+                if target_exists:
+                    self._remove_explicit_at(parent_fd, target.name, kind)
+                if new_exists:
+                    self._remove_explicit_at(parent_fd, new.name, kind)
+                if failed_exists:
+                    self._remove_explicit_at(parent_fd, failed_name, kind)
+            os.fsync(parent_fd)
 
     @staticmethod
     def _remove_explicit_at(parent_fd: int, name: str, kind: str) -> None:
@@ -1184,6 +1356,9 @@ def load_rollback_runner(rollback_dir: Path) -> RestoreRunner:
     runner.journal = journal
     runner.phase = "rollback"
     runner.started_at = now()
+    runner.postgres_user = str(journal.get("postgres_user") or "")
+    if not PG_NAME.fullmatch(runner.postgres_user):
+        raise RestoreHostError("Rollback PostgreSQL user identity is invalid")
     runner.live_database = journal["live_database"]
     runner.temp_database = journal["temp_database"]
     runner.rollback_database = journal["rollback_database"]

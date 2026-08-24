@@ -9,7 +9,7 @@ import subprocess
 import tarfile
 import tempfile
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 from uuid import UUID
@@ -17,7 +17,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,19 +28,12 @@ logger = logging.getLogger(__name__)
 from app.auth import RequirePermission
 from app.database import async_session, get_db
 from app.services.redis_client import get_redis
-from app.services.queue_admission import checked_enqueue_in
 from app.services.operations import get_operation_status
 from app.services.settings import source_key_for_extractor
 from app.schemas.admin_operations import AdminOperationAccepted
-from app.services import admin_data
-from app.services.admin_data import (
-    CONFIRMATION_PHRASES,
-    ENTITIES,
-    clear_entity_data,
-    preview_clear_entity_data,
-)
+from app.services.admin_data import CONFIRMATION_PHRASES, preview_clear_entity_data
 
-from ._routers import router, _clear_files
+from ._routers import _clear_files, router
 
 
 DEFAULT_DEDUP = {
@@ -96,40 +89,38 @@ async def import_progress():
 
 
 
+class BackupScheduleRequest(BaseModel):
+    enabled: bool
+    interval_hours: int = Field(default=24, ge=1, le=8760)
+
+
 @router.post("/backup/schedule")
-async def schedule_backup(data: dict):
-    """Schedule recurring auto-backup. {enabled: bool, interval_hours: int}"""
-    from rq import Queue
-    from datetime import timedelta
+async def schedule_backup(
+    data: BackupScheduleRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Persist recurring backup intent in PostgreSQL."""
+    from app.models.system_setting import SystemSetting
 
-    enabled = str(data.get("enabled", "")).lower() in ("true", "1", "yes")
-    interval = int(data.get("interval_hours", 24))
-    r = get_redis()
-    q = Queue(name="scheduled", connection=r)
-
-    # Snapshot the old jobs, publish the replacement, and only then remove the
-    # old schedule. A late Redis admission failure leaves the known-good job.
-    old_job_ids = []
-    for jid in list(q.scheduled_job_registry.get_job_ids()):
-        job = q.fetch_job(jid)
-        if job and "auto_backup" in str(job.func_name):
-            old_job_ids.append(jid)
-
-    if enabled:
-        new_job = checked_enqueue_in(
-            q,
-            timedelta(hours=interval),
-            "app.jobs.backup.run_auto_backup",
-            interval=interval,
-            job_timeout=3600,
-        )
-        for jid in old_job_ids:
-            if jid != new_job.id:
-                q.scheduled_job_registry.remove(jid, delete_job=True)
-        return {"status": "ok", "message": f"Auto-backup enabled, every {interval}h"}
-
-    for jid in old_job_ids:
-        q.scheduled_job_registry.remove(jid, delete_job=True)
+    now = datetime.now(timezone.utc)
+    value = {
+        "enabled": data.enabled,
+        "interval_hours": data.interval_hours,
+        "next_run_at": (
+            now + timedelta(hours=data.interval_hours)
+        ).isoformat() if data.enabled else None,
+    }
+    row = await db.get(SystemSetting, "backup_schedule")
+    if row is None:
+        db.add(SystemSetting(key="backup_schedule", value=value))
+    else:
+        row.value = value
+    await db.commit()
+    if data.enabled:
+        return {
+            "status": "ok",
+            "message": f"Auto-backup enabled, every {data.interval_hours}h",
+        }
     return {"status": "ok", "message": "Auto-backup disabled"}
 
 
@@ -159,20 +150,25 @@ def _validate_clear_confirmation(data: ClearOperationRequest) -> None:
 async def preview_clear_entity(entity: ClearEntity, db: AsyncSession = Depends(get_db)):
     return await preview_clear_entity_data(entity, db)
 
-@router.post("/clear/{entity}")
+@router.post("/clear/{entity}", status_code=202)
 async def clear_entity(entity: ClearEntity, data: ClearOperationRequest, db: AsyncSession = Depends(get_db)):
-    """Clear a specific entity or 'all' for complete cleanup."""
+    """Compatibility route for the registered asynchronous clear operation."""
     if data.entity != entity:
         raise HTTPException(status_code=422, detail="Path and request entity do not match")
     _validate_clear_confirmation(data)
-    try:
-        admin_data._clear_files = _clear_files
-        return await clear_entity_data(entity, db)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"{exc}. Valid: all, {', '.join(ENTITIES.keys())}",
-        ) from exc
+    from app.services.operations import enqueue_admin_operation
+
+    await db.rollback()
+    return await enqueue_admin_operation(
+        lock_key=f"library:clear:{entity}",
+        operation_type="admin-clear",
+        title=f"Clear {entity}",
+        entity=entity,
+        func="app.jobs.admin_operations.run_clear_operation",
+        options={"entity": entity},
+        job_timeout=7200,
+        queue_name="maintenance",
+    )
 
 
 @router.post("/operations/clear", status_code=202)

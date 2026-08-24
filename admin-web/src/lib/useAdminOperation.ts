@@ -53,6 +53,9 @@ export function useAdminOperation<TResult, TVariables = void>({
       ? { identity, taskId: initialAccepted.task_id }
       : null,
   );
+  const [displayedTaskId, setDisplayedTaskId] = useState<string | null>(
+    () => initialAccepted?.task_id ?? null,
+  );
   const notifiedCompletion = useRef<string | null>(null);
   const reconciledTerminal = useRef<string | null>(null);
   const snapshotKey = useMemo(
@@ -69,7 +72,7 @@ export function useAdminOperation<TResult, TVariables = void>({
   });
   const current = latestQuery.data?.current ?? null;
   const startedTaskId = startedTask?.identity === identity ? startedTask.taskId : null;
-  const taskId = startedTaskId ?? current?.task_id ?? null;
+  const taskId = startedTaskId ?? current?.task_id ?? displayedTaskId;
 
   const taskQuery = useQuery({
     queryKey: ["admin-operation-task", taskId],
@@ -98,6 +101,7 @@ export function useAdminOperation<TResult, TVariables = void>({
       notifiedCompletion.current = null;
       reconciledTerminal.current = null;
       setStartedTask({ identity, taskId: accepted.task_id });
+      setDisplayedTaskId(accepted.task_id);
       queryClient.setQueryData<AdminOperationStatus<TResult>>(
         ["admin-operation-task", accepted.task_id],
         {
@@ -107,6 +111,9 @@ export function useAdminOperation<TResult, TVariables = void>({
           error: null,
         },
       );
+    },
+    onError: () => {
+      void latestQuery.refetch();
     },
   });
 
@@ -118,6 +125,8 @@ export function useAdminOperation<TResult, TVariables = void>({
     onSuccess: (accepted) => {
       notifiedCompletion.current = null;
       reconciledTerminal.current = null;
+      setStartedTask({ identity, taskId: accepted.task_id });
+      setDisplayedTaskId(accepted.task_id);
       queryClient.setQueryData<AdminOperationStatus<TResult>>(
         ["admin-operation-task", accepted.task_id],
         {
@@ -130,6 +139,9 @@ export function useAdminOperation<TResult, TVariables = void>({
       void queryClient.invalidateQueries({
         queryKey: ["admin-operation-task", accepted.task_id],
       });
+    },
+    onError: () => {
+      void latestQuery.refetch();
     },
   });
 
@@ -144,8 +156,37 @@ export function useAdminOperation<TResult, TVariables = void>({
       return;
     }
     reconciledTerminal.current = `${identity}:${taskId}`;
+    setDisplayedTaskId(taskId);
+    setStartedTask((active) => (
+      active?.identity === identity && active.taskId === taskId ? null : active
+    ));
     if (task.status === "complete") {
-      void queryClient.invalidateQueries({ queryKey: snapshotKey });
+      const completed: AdminOperationSnapshot<TResult> | null = task.result
+        ? {
+            task_id: taskId,
+            job_id: task.rq_job_id ?? task.job_id,
+            status: "complete",
+            operation_type: task.operation_type,
+            progress: task.progress,
+            result: task.result,
+            completed_at: new Date().toISOString(),
+          }
+        : null;
+      queryClient.setQueryData<AdminOperationSnapshotResponse<TResult>>(
+        snapshotKey,
+        (previous) => ({
+          snapshot: completed ?? previous?.snapshot ?? null,
+          current: null,
+        }),
+      );
+    } else {
+      queryClient.setQueryData<AdminOperationSnapshotResponse<TResult>>(
+        snapshotKey,
+        (previous) => ({
+          snapshot: previous?.snapshot ?? null,
+          current: null,
+        }),
+      );
     }
     if (task.status === "complete" && task.result) {
       notifiedCompletion.current = `${identity}:${taskId}`;
@@ -167,10 +208,12 @@ export function useAdminOperation<TResult, TVariables = void>({
       : null;
   const snapshot = completedTaskSnapshot ?? latestQuery.data?.snapshot ?? null;
   const isActive = !!task && ACTIVE_STATUSES.has(task.status);
+  const hasRetryableFailure = task?.status === "failed";
   const canStart = !latestQuery.isLoading
     && !latestQuery.isError
     && !startMutation.isPending
     && !isActive
+    && !hasRetryableFailure
     && startedTaskId === null
     && current === null;
 

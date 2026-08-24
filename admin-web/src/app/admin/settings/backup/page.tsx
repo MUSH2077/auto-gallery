@@ -1,8 +1,8 @@
 "use client";
-import { useCallback, useState, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import type { AdminOperationAccepted, RestoreReceipt, RestoreUploadSession, RestoreValidationResult } from "@/lib/api/types";
+import type { RestoreReceipt, RestoreUploadSession, RestoreValidationResult } from "@/lib/api/types";
 import { useT } from "@/lib/i18n";
 import { sha256Blob } from "@/lib/sha256";
 import { useStaggeredEntrance } from "@/lib/motion";
@@ -21,13 +21,13 @@ type BackupCreateResult = {
   size_bytes: number;
   size_mb: number;
   contents: string[];
+  restorable: boolean;
   component_sizes: Record<string, number>;
   message?: string;
 };
 type RestoreFlow = {
   session: RestoreUploadSession;
   token: string;
-  accepted: AdminOperationAccepted;
 };
 
 const RESTORE_CHUNK_SIZE = 1024 * 1024;
@@ -61,7 +61,7 @@ function loadSavedRestoreFlow(): RestoreFlow | null {
   if (typeof window === "undefined") return null;
   try {
     const value = JSON.parse(localStorage.getItem(RESTORE_STORAGE_KEY) || "null");
-    return value?.session?.upload_id && value?.token && value?.accepted?.task_id
+    return value?.session?.upload_id && value?.token
       ? value as RestoreFlow
       : null;
   } catch {
@@ -69,15 +69,32 @@ function loadSavedRestoreFlow(): RestoreFlow | null {
   }
 }
 
+function saveRestoreFlow(flow: RestoreFlow): void {
+  try {
+    localStorage.setItem(RESTORE_STORAGE_KEY, JSON.stringify(flow));
+  } catch {
+    // Restore progress remains usable for this mount when storage is blocked.
+  }
+}
+
 function RestoreValidationFlow({ flow }: { flow: RestoreFlow }) {
   const t = useT();
+  const requestedValidation = useRef(false);
   const validation = useAdminOperation<RestoreValidationResult>({
     operationType: "admin-restore-validate",
     scope: flow.session.upload_id,
-    initialAccepted: flow.accepted,
     startOperation: () => api.startRestoreValidation(flow.session.upload_id, flow.token),
     loadLatest: () => api.getLatestRestoreValidation(flow.session.upload_id, flow.token),
   });
+  const shouldStartValidation = !validation.isLatestLoading
+    && !validation.result
+    && validation.canStart
+    && ["uploaded", "validating", "validation_failed"].includes(flow.session.state);
+  useEffect(() => {
+    if (!shouldStartValidation || requestedValidation.current) return;
+    requestedValidation.current = true;
+    validation.start(undefined);
+  }, [shouldStartValidation, validation]);
   const requestId = validation.result?.request_id ?? null;
   const receipt = useQuery<RestoreReceipt>({
     queryKey: ["restore-receipt", requestId],
@@ -199,10 +216,7 @@ export default function BackupPage() {
     setRestoreError(null);
     try {
       const archiveHash = await sha256Blob(restoreFile);
-      const saved = (() => {
-        try { return JSON.parse(localStorage.getItem(RESTORE_STORAGE_KEY) || "null"); }
-        catch { return null; }
-      })();
+      const saved = loadSavedRestoreFlow();
       let token: string;
       let session: RestoreUploadSession;
       if (
@@ -225,7 +239,7 @@ export default function BackupPage() {
         token = created.upload_token;
         session = created;
       }
-      localStorage.setItem(RESTORE_STORAGE_KEY, JSON.stringify({ session, token }));
+      saveRestoreFlow({ session, token });
       for (let index = session.next_chunk; index < session.total_chunks; index += 1) {
         const start = index * session.chunk_size;
         const chunk = restoreFile.slice(start, Math.min(start + session.chunk_size, restoreFile.size));
@@ -239,11 +253,10 @@ export default function BackupPage() {
         );
         session = { ...session, ...updated };
         setRestoreProgress({ current: session.received_chunks, total: session.total_chunks });
-        localStorage.setItem(RESTORE_STORAGE_KEY, JSON.stringify({ session, token }));
+        saveRestoreFlow({ session, token });
       }
-      const accepted = await api.startRestoreValidation(session.upload_id, token);
-      const flow = { session, token, accepted };
-      localStorage.setItem(RESTORE_STORAGE_KEY, JSON.stringify(flow));
+      const flow = { session, token };
+      saveRestoreFlow(flow);
       setRestoreFlow(flow);
     } catch (e) {
       setRestoreError((e as Error).message);
@@ -349,6 +362,11 @@ export default function BackupPage() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-medium dark:text-white font-mono text-xs">{b.filename}</span>
                     {b.version && <span className="text-[10px] text-muted">{t("backup.manifest_version")} {b.version}</span>}
+                    {b.restorable === false ? (
+                      <span className="rounded-full bg-warning-subtle px-1.5 py-0.5 text-[10px] text-warning">
+                        {t("backup.non_restorable")}
+                      </span>
+                    ) : null}
                   </div>
                   <div className="text-xs text-muted mt-1">{b.size_mb} MB &middot; {fmt.dateTime(b.created_at)}</div>
                   {b.contents && b.contents.length > 0 && (

@@ -307,19 +307,21 @@ def get_upload_session(*, root: Path, upload_id: str, token: str) -> dict[str, A
         return _public_session(metadata)
 
 
-def put_upload_chunk(
+def _put_upload_chunk_source(
     *,
     root: Path,
     upload_id: str,
     token: str,
     index: int,
-    data: bytes,
+    size: int,
+    actual_hash: str,
     sha256: str,
+    data: bytes | None = None,
+    source_path: Path | None = None,
 ) -> dict[str, Any]:
     session = _session_dir(Path(root), upload_id)
     if not session.is_dir() or session.is_symlink():
         raise RestoreValidationError("Restore upload not found")
-    actual_hash = hashlib.sha256(data).hexdigest()
     if not _SHA256_RE.fullmatch(str(sha256)) or not hmac.compare_digest(actual_hash, str(sha256)):
         raise RestoreValidationError("Restore chunk hash does not match its bytes")
 
@@ -333,7 +335,7 @@ def put_upload_chunk(
         index = int(index)
         if index < len(chunks):
             existing = chunks[index]
-            if int(existing["size"]) != len(data) or not hmac.compare_digest(str(existing["sha256"]), actual_hash):
+            if int(existing["size"]) != size or not hmac.compare_digest(str(existing["sha256"]), actual_hash):
                 raise RestoreConflict("Chunk was already uploaded with different content")
             return {**_public_session(metadata), "idempotent": True}
         if index != len(chunks):
@@ -343,8 +345,8 @@ def put_upload_chunk(
         expected_size = int(metadata["chunk_size"])
         if index == int(metadata["total_chunks"]) - 1:
             expected_size = int(metadata["size_bytes"]) - (int(metadata["chunk_size"]) * index)
-        if len(data) != expected_size:
-            raise RestoreValidationError(f"Restore chunk size is {len(data)}; expected {expected_size}")
+        if size != expected_size:
+            raise RestoreValidationError(f"Restore chunk size is {size}; expected {expected_size}")
         chunks_dir = session / "chunks"
         chunk_name = f"{index:08d}.part"
         temporary_name = f"{chunk_name}.tmp"
@@ -363,7 +365,36 @@ def put_upload_chunk(
                 dir_fd=chunks_fd,
             )
             with os.fdopen(fd, "wb") as handle:
-                handle.write(data)
+                written = 0
+                digest = hashlib.sha256()
+                if source_path is not None:
+                    source_fd = os.open(source_path, os.O_RDONLY | _NOFOLLOW)
+                    try:
+                        source_stat = os.fstat(source_fd)
+                        if not stat.S_ISREG(source_stat.st_mode):
+                            raise RestoreValidationError("Restore chunk source is invalid")
+                        with os.fdopen(source_fd, "rb") as source:
+                            source_fd = -1
+                            while block := source.read(1024 * 1024):
+                                written += len(block)
+                                digest.update(block)
+                                handle.write(block)
+                    finally:
+                        if source_fd >= 0:
+                            os.close(source_fd)
+                else:
+                    assert data is not None
+                    for offset in range(0, len(data), 1024 * 1024):
+                        block = data[offset:offset + 1024 * 1024]
+                        written += len(block)
+                        digest.update(block)
+                        handle.write(block)
+                if written != size or not hmac.compare_digest(
+                    digest.hexdigest(), actual_hash
+                ):
+                    raise RestoreValidationError(
+                        "Restore chunk source changed while it was persisted"
+                    )
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(
@@ -380,7 +411,7 @@ def put_upload_chunk(
             except FileNotFoundError:
                 pass
             os.close(chunks_fd)
-        chunks.append({"index": index, "size": len(data), "sha256": actual_hash})
+        chunks.append({"index": index, "size": size, "sha256": actual_hash})
         metadata["chunks"] = chunks
         metadata["state"] = "uploaded" if len(chunks) == int(metadata["total_chunks"]) else "uploading"
         metadata["updated_at"] = _now()
@@ -388,8 +419,63 @@ def put_upload_chunk(
         return {**_public_session(metadata), "idempotent": False}
 
 
-def seal_upload_for_validation(*, root: Path, upload_id: str, token: str, task_id: str) -> dict[str, Any]:
-    """Seal all chunks and attach the durable validation TaskRun."""
+def put_upload_chunk(
+    *,
+    root: Path,
+    upload_id: str,
+    token: str,
+    index: int,
+    data: bytes,
+    sha256: str,
+) -> dict[str, Any]:
+    """Persist an in-memory chunk for non-HTTP/internal callers."""
+
+    return _put_upload_chunk_source(
+        root=root,
+        upload_id=upload_id,
+        token=token,
+        index=index,
+        size=len(data),
+        actual_hash=hashlib.sha256(data).hexdigest(),
+        sha256=sha256,
+        data=data,
+    )
+
+
+def put_upload_chunk_file(
+    *,
+    root: Path,
+    upload_id: str,
+    token: str,
+    index: int,
+    source_path: Path,
+    size: int,
+    actual_sha256: str,
+    sha256: str,
+) -> dict[str, Any]:
+    """Persist a bounded, no-follow HTTP ingress file without buffering it."""
+
+    return _put_upload_chunk_source(
+        root=root,
+        upload_id=upload_id,
+        token=token,
+        index=index,
+        size=int(size),
+        actual_hash=actual_sha256,
+        sha256=sha256,
+        source_path=Path(source_path),
+    )
+
+
+def seal_upload_for_validation(
+    *,
+    root: Path,
+    upload_id: str,
+    token: str,
+    task_id: str,
+    replace_task_id: str | None = None,
+) -> dict[str, Any]:
+    """Seal all chunks and attach or exactly replace a validation TaskRun."""
 
     session = _session_dir(Path(root), upload_id)
     with _session_lock(session):
@@ -397,7 +483,11 @@ def seal_upload_for_validation(*, root: Path, upload_id: str, token: str, task_i
         _authorize(metadata, token)
         _reconcile_durable_chunks(session, metadata)
         current_task = metadata.get("validation_task_id")
-        if current_task and current_task != task_id:
+        if (
+            current_task
+            and current_task != task_id
+            and current_task != replace_task_id
+        ):
             raise RestoreConflict("Restore validation has already started")
         if metadata["state"] == "ready":
             if current_task != str(task_id) or not (session / "ready-request.json").is_file():
@@ -456,6 +546,10 @@ def _validated_manifest(archive: tarfile.TarFile, members: list[tarfile.TarInfo]
     contents = manifest.get("contents")
     if not isinstance(contents, list) or not contents or len(contents) != len(set(contents)) or not set(contents).issubset(_COMPONENTS):
         raise RestoreValidationError("Archive manifest contents are invalid")
+    if "database" not in contents:
+        raise RestoreValidationError(
+            "Archive is downloadable but not restorable because it has no database component"
+        )
     entries = manifest.get("entries")
     if not isinstance(entries, dict) or not entries:
         raise RestoreValidationError("Archive manifest entries are missing")
