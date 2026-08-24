@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import RequireAdminUser, RequirePermission, get_admin_key
 from app.database import get_db
 from app.services.operations import (
+    admin_operation_permissions_for_user,
     inaccessible_admin_operation_types,
     get_operation_status,
     require_admin_operation_access,
@@ -108,7 +109,7 @@ async def list_tasks(
             offset=offset,
             limit=limit,
             visibility=visibility,
-            excluded_admin_operation_types=excluded_operation_types,
+            permissions=admin_operation_permissions_for_user(user),
         )
     except SearchQueryError as exc:
         raise HTTPException(status_code=422, detail=exc.diagnostic.payload()) from exc

@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Iterable
 from uuid import UUID, uuid4
 
 import redis as redis_lib
@@ -275,16 +275,34 @@ def can_access_admin_operation(user: Any, operation_type: str | None) -> bool:
     return required in set(getattr(user, "permissions", None) or ())
 
 
-def inaccessible_admin_operation_types(user: Any) -> frozenset[str]:
-    """List registered operation types hidden from this authenticated user."""
+def admin_operation_permissions_for_user(user: Any) -> frozenset[str]:
+    """Return operation-owner permissions, expanding administrator access."""
 
     if bool(getattr(user, "is_admin", False)):
-        return frozenset()
-    permissions = set(getattr(user, "permissions", None) or ())
+        return frozenset(
+            spec.required_permission for spec in ADMIN_OPERATION_REGISTRY.values()
+        )
+    return frozenset(getattr(user, "permissions", None) or ())
+
+
+def inaccessible_admin_operation_types_for_permissions(
+    permissions: Iterable[str],
+) -> frozenset[str]:
+    """Derive hidden registered operations from an explicit permission set."""
+
+    permission_set = set(permissions)
     return frozenset(
         operation_type
         for operation_type, spec in ADMIN_OPERATION_REGISTRY.items()
-        if spec.required_permission not in permissions
+        if spec.required_permission not in permission_set
+    )
+
+
+def inaccessible_admin_operation_types(user: Any) -> frozenset[str]:
+    """List registered operation types hidden from this authenticated user."""
+
+    return inaccessible_admin_operation_types_for_permissions(
+        admin_operation_permissions_for_user(user)
     )
 
 

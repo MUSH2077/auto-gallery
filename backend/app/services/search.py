@@ -93,6 +93,7 @@ from app.services.search_language import (
     qualifier_catalog,
 )
 from app.services.search_consistency import search_index_consistency
+from app.services.operations import inaccessible_admin_operation_types_for_permissions
 from app.services.source_search_identity import (
     ParsedSourceURL,
     parse_source_identity,
@@ -2028,7 +2029,13 @@ class SearchService:
                 "index_status": "required",
             })
         if "tasks" in targets:
-            groups["tasks"] = await self._search_tasks(parsed, resolved, offset, limit)
+            groups["tasks"] = await self._search_tasks(
+                parsed,
+                resolved,
+                offset,
+                limit,
+                permissions=permission_set,
+            )
         if "scheduler" in targets:
             groups["scheduler"] = await self._search_scheduler(parsed, resolved, offset, limit)
 
@@ -2206,9 +2213,13 @@ class SearchService:
         offset: int,
         limit: int,
         visibility: str = "all",
-        excluded_admin_operation_types: frozenset[str] = frozenset(),
+        *,
+        permissions: set[str] | frozenset[str],
     ) -> dict:
         conditions = [TaskRun.kind != "account"]
+        excluded_admin_operation_types = (
+            inaccessible_admin_operation_types_for_permissions(permissions)
+        )
         if excluded_admin_operation_types:
             conditions.append(or_(
                 TaskRun.kind != "admin",
@@ -2279,7 +2290,7 @@ class SearchService:
         visibility: str = "all",
         offset: int = 0,
         limit: int = 50,
-        excluded_admin_operation_types: frozenset[str] = frozenset(),
+        permissions: set[str] | frozenset[str] | None = None,
     ) -> dict:
         parsed = parse_search_query(query, "tasks")
         resolved = await self._resolve_qualifiers(parsed)
@@ -2289,7 +2300,7 @@ class SearchService:
             offset,
             limit,
             visibility=visibility,
-            excluded_admin_operation_types=excluded_admin_operation_types,
+            permissions=permissions if permissions is not None else frozenset(),
         )
 
     async def search_download_jobs(

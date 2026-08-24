@@ -26,7 +26,13 @@ async def _clear_rows(db) -> None:
     await db.commit()
 
 
-async def _seed_user(db, username: str, *, permissions: list[str]) -> None:
+async def _seed_user(
+    db,
+    username: str,
+    *,
+    permissions: list[str],
+    is_admin: bool = False,
+) -> None:
     from app.auth import hash_password
     from app.models.user import User
 
@@ -34,7 +40,7 @@ async def _seed_user(db, username: str, *, permissions: list[str]) -> None:
         User(
             username=username,
             password_hash=hash_password("hunter22"),
-            is_admin=False,
+            is_admin=is_admin,
             is_active=True,
             permissions=permissions,
             must_change_password=False,
@@ -423,9 +429,23 @@ async def test_tasks_permission_cannot_read_list_or_retry_system_operation(monke
     from app.database import async_session, engine
     from app.main import app
     from app.services import operations
+    from app.services.search import SearchService
     from app.services.tasks import TaskService
 
     _stub_rq_transport(monkeypatch)
+
+    async def empty_external_search(
+        _self,
+        _query,
+        targets,
+        _resolved,
+        _offset,
+        _limit,
+        _force_sfw,
+    ):
+        return {target: {"total": 0, "items": []} for target in targets}
+
+    monkeypatch.setattr(SearchService, "_search_meili", empty_external_search)
     secret = "legacy-proxy-password"
     task_id: UUID | None = None
     transport = ASGITransport(app=app)
@@ -435,8 +455,19 @@ async def test_tasks_permission_cannot_read_list_or_retry_system_operation(monke
             await _seed_user(db, f"{PREFIX}tasks_only", permissions=["tasks"])
             await _seed_user(
                 db,
+                f"{PREFIX}mixed_tasks",
+                permissions=["library", "tasks"],
+            )
+            await _seed_user(
+                db,
                 f"{PREFIX}system_tasks",
                 permissions=["tasks", "system"],
+            )
+            await _seed_user(
+                db,
+                f"{PREFIX}admin_tasks",
+                permissions=[],
+                is_admin=True,
             )
             prepared = await operations.prepare_admin_operation(
                 db,
@@ -482,6 +513,24 @@ async def test_tasks_permission_cannot_read_list_or_retry_system_operation(monke
             assert str(task_id) not in searched.text
             assert secret not in searched.text
 
+            scoped_search = await client.get(
+                "/api/v1/search?scope=tasks&q=Proxy",
+                headers=tasks_headers,
+            )
+            assert scoped_search.status_code == 200
+            assert scoped_search.json()["groups"]["tasks"]["total"] == 0
+            assert str(task_id) not in scoped_search.text
+            assert secret not in scoped_search.text
+
+            global_search = await client.get(
+                "/api/v1/search?scope=global&q=Proxy",
+                headers=_headers(f"{PREFIX}mixed_tasks"),
+            )
+            assert global_search.status_code == 200
+            assert "tasks" not in global_search.json()["groups"]
+            assert str(task_id) not in global_search.text
+            assert secret not in global_search.text
+
             overview = await client.get(
                 "/api/v1/operations/overview?view=resolved",
                 headers=tasks_headers,
@@ -503,6 +552,16 @@ async def test_tasks_permission_cannot_read_list_or_retry_system_operation(monke
             )
             assert privileged_detail.status_code == 200
             assert privileged_detail.json()["id"] == str(task_id)
+
+            for username in (f"{PREFIX}system_tasks", f"{PREFIX}admin_tasks"):
+                privileged_search = await client.get(
+                    "/api/v1/search?scope=tasks&q=Proxy",
+                    headers=_headers(username),
+                )
+                assert privileged_search.status_code == 200
+                items = privileged_search.json()["groups"]["tasks"]["items"]
+                assert [item["id"] for item in items] == [str(task_id)]
+                assert secret in privileged_search.text
     finally:
         async with async_session() as db:
             await _clear_rows(db)
