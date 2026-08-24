@@ -24,7 +24,15 @@ def upgrade() -> None:
             schedule_rule,
             '{times}',
             COALESCE((
-                SELECT jsonb_agg(btrim(item.value) ORDER BY item.ordinality)
+                SELECT jsonb_agg(
+                    regexp_replace(
+                        item.value,
+                        '^[[:space:]]+|[[:space:]]+$',
+                        '',
+                        'g'
+                    )
+                    ORDER BY item.ordinality
+                )
                 FROM jsonb_array_elements_text(schedule_rule->'times')
                     WITH ORDINALITY AS item(value, ordinality)
             ), '[]'::jsonb),
@@ -35,7 +43,12 @@ def upgrade() -> None:
           AND EXISTS (
               SELECT 1
               FROM jsonb_array_elements_text(schedule_rule->'times') AS item(value)
-              WHERE item.value IS DISTINCT FROM btrim(item.value)
+              WHERE item.value IS DISTINCT FROM regexp_replace(
+                  item.value,
+                  '^[[:space:]]+|[[:space:]]+$',
+                  '',
+                  'g'
+              )
           )
     """)
     op.execute("""
@@ -44,7 +57,15 @@ def upgrade() -> None:
             value,
             '{schedule_rule,times}',
             COALESCE((
-                SELECT jsonb_agg(btrim(item.value) ORDER BY item.ordinality)
+                SELECT jsonb_agg(
+                    regexp_replace(
+                        item.value,
+                        '^[[:space:]]+|[[:space:]]+$',
+                        '',
+                        'g'
+                    )
+                    ORDER BY item.ordinality
+                )
                 FROM jsonb_array_elements_text(value->'schedule_rule'->'times')
                     WITH ORDINALITY AS item(value, ordinality)
             ), '[]'::jsonb),
@@ -58,7 +79,12 @@ def upgrade() -> None:
               SELECT 1
               FROM jsonb_array_elements_text(value->'schedule_rule'->'times')
                   AS item(value)
-              WHERE item.value IS DISTINCT FROM btrim(item.value)
+              WHERE item.value IS DISTINCT FROM regexp_replace(
+                  item.value,
+                  '^[[:space:]]+|[[:space:]]+$',
+                  '',
+                  'g'
+              )
           )
     """)
 

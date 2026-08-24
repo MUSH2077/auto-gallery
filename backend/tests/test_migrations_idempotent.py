@@ -348,13 +348,31 @@ class TestMigrationIdempotency:
                 '44444444-4444-4444-4444-444444444444',
                 '33333333-3333-3333-3333-333333333333',
                 TRUE, TRUE, 6, 'calendar',
-                '{"frequency":"weekly","weekdays":[1,5],"times":[" 03:00 ","21:30:00 "]}'::jsonb
+                jsonb_build_object(
+                    'frequency', 'weekly',
+                    'weekdays', jsonb_build_array(1, 5),
+                    'times', jsonb_build_array(
+                        chr(9) || '03:00:00.000' || chr(10),
+                        chr(13) || '21:30:00' || chr(9),
+                        ' 12:' || chr(9) || '34:56.789 ' || chr(13)
+                    )
+                )
             );
             DELETE FROM system_settings WHERE key = 'subscription_defaults';
             INSERT INTO system_settings (key, value)
             VALUES (
                 'subscription_defaults',
-                '{"schedule_mode":"calendar","schedule_rule":{"frequency":"daily","times":[" 05:15:00","18:45 "]}}'::jsonb
+                jsonb_build_object(
+                    'schedule_mode', 'calendar',
+                    'schedule_rule', jsonb_build_object(
+                        'frequency', 'daily',
+                        'times', jsonb_build_array(
+                            chr(10) || '05:15:00.120' || chr(13),
+                            chr(9) || '18:45' || chr(13) || chr(10),
+                            chr(13) || '07:' || chr(10) || '08:09.010' || chr(9)
+                        )
+                    )
+                )
             );
         """))
 
@@ -373,8 +391,16 @@ class TestMigrationIdempotency:
             FROM subscriptions
             WHERE id = '44444444-4444-4444-4444-444444444444'
         """))
-        assert normalized["subscription_times"] == ["03:00", "21:30:00"]
-        assert normalized["default_times"] == ["05:15:00", "18:45"]
+        assert normalized["subscription_times"] == [
+            "03:00:00.000",
+            "21:30:00",
+            "12:\t34:56.789",
+        ]
+        assert normalized["default_times"] == [
+            "05:15:00.120",
+            "18:45",
+            "07:\n08:09.010",
+        ]
 
         downgraded = self._run_alembic("downgrade", previous_head)
         assert downgraded.returncode == 0, downgraded.stderr
@@ -392,8 +418,16 @@ class TestMigrationIdempotency:
             FROM subscriptions
             WHERE id = '44444444-4444-4444-4444-444444444444'
         """))
-        assert after_downgrade["subscription_times"] == ["03:00", "21:30:00"]
-        assert after_downgrade["default_times"] == ["05:15:00", "18:45"]
+        assert after_downgrade["subscription_times"] == [
+            "03:00:00.000",
+            "21:30:00",
+            "12:\t34:56.789",
+        ]
+        assert after_downgrade["default_times"] == [
+            "05:15:00.120",
+            "18:45",
+            "07:\n08:09.010",
+        ]
         assert after_downgrade["schedule_rule_type"] == "jsonb"
 
         final_up = self._run_alembic("upgrade", "head")
@@ -411,5 +445,13 @@ class TestMigrationIdempotency:
             FROM subscriptions
             WHERE id = '44444444-4444-4444-4444-444444444444'
         """))
-        assert after_round_trip["subscription_times"] == ["03:00", "21:30:00"]
-        assert after_round_trip["default_times"] == ["05:15:00", "18:45"]
+        assert after_round_trip["subscription_times"] == [
+            "03:00:00.000",
+            "21:30:00",
+            "12:\t34:56.789",
+        ]
+        assert after_round_trip["default_times"] == [
+            "05:15:00.120",
+            "18:45",
+            "07:\n08:09.010",
+        ]

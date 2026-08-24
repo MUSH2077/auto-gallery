@@ -304,3 +304,96 @@ No known code or validation concern remains in this review gate. Deployment,
 rollback capture, production smoke tests, repository recount/repair, and global
 ledger repair are intentionally deferred until both independent whole-branch
 reviews are clean; this commit does not claim those post-review operations.
+
+## Review fix round 1/5: POSIX edge-whitespace normalization
+
+The whole-branch review found that PostgreSQL's one-argument `btrim` removes
+ordinary spaces but not every edge character accepted by application
+`str.strip()`. The migration test was extended first with real PostgreSQL
+values built from `chr(9)` (tab), `chr(10)` (newline), and `chr(13)` (carriage
+return). Literal expectations also preserve an internal tab/newline,
+millisecond precision, and array order before downgrade, after downgrade, and
+after re-upgrade.
+
+RED against the original Task 4 revision:
+
+```bash
+docker compose run --rm --no-deps -v "$PWD:/workspace" \
+  -w /workspace/backend backend python -m pytest -q \
+  tests/test_migrations_idempotent.py::TestMigrationIdempotency::test_forward_calendar_repair_normalizes_times_across_round_trip
+# 1 failed in 25.93s
+# At index 0: '\t03:00:00.000\n' != '03:00:00.000'
+```
+
+The unpublished Task 4 revision now uses the same anchored POSIX expression in
+both `jsonb_agg` transforms and both `EXISTS` change predicates:
+
+```sql
+regexp_replace(item.value, '^[[:space:]]+|[[:space:]]+$', '', 'g')
+```
+
+The anchors remove only leading/trailing POSIX whitespace. Internal characters,
+time precision, and `WITH ORDINALITY` ordering remain unchanged.
+
+Focused GREEN:
+
+```bash
+docker compose run --rm --no-deps -v "$PWD:/workspace" \
+  -w /workspace/backend backend python -m pytest -q \
+  tests/test_migrations_idempotent.py::TestMigrationIdempotency::test_forward_calendar_repair_normalizes_times_across_round_trip
+# 1 passed in 31.52s
+```
+
+Full migration chain and calendar baseline:
+
+```bash
+docker compose run --rm --no-deps -v "$PWD:/workspace" \
+  -w /workspace/backend backend python -m pytest -q \
+  tests/test_migrations_idempotent.py
+# 10 passed in 80.14s (0:01:20)
+
+docker compose run --rm --no-deps -v "$PWD:/workspace" \
+  -w /workspace/backend backend python -m pytest -q \
+  tests/test_calendar_schedule_schema.py \
+  tests/test_subscription_schedule_consistency.py \
+  tests/test_subscription_scheduler_persistence.py \
+  tests/test_subscription_reliable_schedule.py \
+  tests/test_scheduler_contract.py \
+  tests/test_operation_attention.py
+# 60 passed in 186.85s (0:03:06)
+```
+
+Static, history, and hygiene checks:
+
+```bash
+backend/.venv/bin/ruff check \
+  backend/alembic/versions/b3d5f7a9c1e4_repair_calendar_schedule_rules.py \
+  backend/tests/test_migrations_idempotent.py
+# All checks passed!
+
+backend/.venv/bin/python -m compileall -q \
+  backend/alembic/versions/b3d5f7a9c1e4_repair_calendar_schedule_rules.py \
+  backend/tests/test_migrations_idempotent.py
+# passed
+
+cd backend && .venv/bin/alembic heads
+# b3d5f7a9c1e4 (head)
+
+git diff --check
+# passed
+```
+
+Review-fix self-review:
+
+- All four former `btrim` sites use one identical anchored expression; the
+  transform and change predicate cannot disagree.
+- Leading/trailing tab, newline, carriage return, and ordinary space are
+  covered with literal PostgreSQL-backed expectations.
+- Internal tab/newline characters, fractional time precision, JSONB shape, and
+  array order remain exact through downgrade and re-upgrade.
+- The published `a7c9e1f3b5d7` revision remains untouched; only the unpublished
+  Task 4 repair revision and its integration test changed.
+- The earlier complete backend result (`1013 passed, 4 skipped`) remains the
+  release baseline; per review instructions it was not rerun for this isolated
+  migration-expression correction, and the focused integration matrices are
+  green.
