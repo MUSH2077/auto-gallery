@@ -41,7 +41,10 @@ logger = logging.getLogger(__name__)
 DISK_IMPORT_WORK_BATCH_SIZE = 25
 
 
-async def _wait_for_batch_capacity(parent_task_id: str | None) -> None:
+async def _wait_for_batch_capacity(
+    parent_task_id: str | None,
+    publisher_attempt: str | None = None,
+) -> None:
     """Recheck host and Redis admission before each bounded publication."""
 
     if not parent_task_id:
@@ -52,6 +55,7 @@ async def _wait_for_batch_capacity(parent_task_id: str | None) -> None:
     await wait_for_resource_capacity(
         workload="import_db",
         owner=str(parent_task_id),
+        publisher_attempt=publisher_attempt,
     )
     await asyncio.to_thread(ensure_redis_enqueue_capacity)
 
@@ -250,6 +254,7 @@ async def _drain_pending_ledger(
     progress_callback,
     enqueue_import,
     publisher_checkpoint=None,
+    publisher_attempt: str | None = None,
 ) -> dict:
     """Publish bounded keyset pages from the durable downloads ledger."""
 
@@ -330,7 +335,14 @@ async def _drain_pending_ledger(
                 break
             work_cursor = work_ids[-1]
             stats["scanned"] += len(work_ids)
-            await _wait_for_batch_capacity(parent_task_id)
+            await _wait_for_batch_capacity(
+                parent_task_id,
+                **(
+                    {"publisher_attempt": publisher_attempt}
+                    if publisher_attempt is not None
+                    else {}
+                ),
+            )
             await checkpoint()
 
             try:
@@ -650,6 +662,7 @@ async def reconcile_downloads_to_db(
     progress_callback=None,
     *,
     publisher_checkpoint=None,
+    publisher_attempt: str | None = None,
 ) -> dict:
     """Import on-disk download files (not yet imported) into the DB. Idempotent."""
     from app.jobs.download import _enqueue_import
@@ -752,6 +765,7 @@ async def reconcile_downloads_to_db(
             progress_callback=progress_callback,
             enqueue_import=_enqueue_import,
             publisher_checkpoint=publisher_checkpoint,
+            publisher_attempt=publisher_attempt,
         )
 
     # Recursive discovery is intentionally confined to the explicit reset /

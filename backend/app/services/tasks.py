@@ -475,6 +475,8 @@ async def update_task_resource_state(
     owner: str,
     state: str,
     reason: str | None,
+    *,
+    publisher_attempt: str | None = None,
 ) -> None:
     """Bridge a resource-profile owner to its user-facing TaskRun.
 
@@ -490,19 +492,36 @@ async def update_task_resource_state(
     from app.database import async_session
 
     async with async_session() as db:
-        task = (
-            await db.execute(
-                select(TaskRun)
-                .where(
-                    (TaskRun.id == owner_id) | (TaskRun.subject_id == owner_id)
-                )
-                .order_by((TaskRun.id == owner_id).desc())
-                .limit(1)
+        if publisher_attempt is not None:
+            from app.services.publisher_attempts import (
+                current_publisher_attempt,
+                lock_publisher_task,
             )
-        ).scalar_one_or_none()
+
+            task = await lock_publisher_task(db, owner_id)
+            if (
+                task is None
+                or current_publisher_attempt(task) != publisher_attempt
+            ):
+                await db.rollback()
+                return
+        else:
+            task = (
+                await db.execute(
+                    select(TaskRun)
+                    .where(
+                        (TaskRun.id == owner_id)
+                        | (TaskRun.subject_id == owner_id)
+                    )
+                    .order_by((TaskRun.id == owner_id).desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
         if task is None or (
             task.resource_state == state and task.resource_reason == reason
         ):
+            if publisher_attempt is not None:
+                await db.rollback()
             return
         task.resource_state = state
         task.resource_reason = reason

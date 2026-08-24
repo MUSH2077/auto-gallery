@@ -317,6 +317,7 @@ def _enqueue_import_rq(
     enqueue_kwargs = {
         "job_id": rq_job_id,
         "job_timeout": int(job_timeout),
+        "description": f"import task={import_job_id}",
     }
     if delay_seconds is not None and delay_seconds > 0:
         return checked_enqueue_in(

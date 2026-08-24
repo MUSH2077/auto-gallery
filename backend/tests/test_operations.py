@@ -18,6 +18,16 @@ class FakeRedis:
     def get(self, key):
         return self.values.get(key)
 
+    def delete(self, key):
+        return int(self.values.pop(key, None) is not None)
+
+    def set(self, key, value, nx=False, ex=None):
+        if nx and key in self.values:
+            return False
+        self.values[key] = value.encode() if isinstance(value, str) else value
+        self.ttls[key] = ex
+        return True
+
 
 def test_operation_status_roundtrip(monkeypatch):
     from app.services import operations
@@ -46,6 +56,108 @@ def test_unknown_operation_returns_none(monkeypatch):
     monkeypatch.setattr(operations, "get_redis", lambda: FakeRedis())
 
     assert operations.get_operation_status("missing") is None
+
+
+def test_legacy_uuid_only_operation_lock_and_cache_remain_compatible(monkeypatch):
+    """Non-bounded operations keep their historical UUID-only contract."""
+    from app.services import operations
+
+    fake = FakeRedis()
+    monkeypatch.setattr(operations, "get_redis", lambda: fake)
+    fake.values["library:legacy:active"] = b"legacy-job"
+
+    operations.set_operation_status(
+        "legacy-job",
+        "running",
+        "admin-rebuild",
+        progress={"phase": "running"},
+    )
+
+    assert operations.get_operation_status("legacy-job")["status"] == "running"
+    assert operations.release_owned_operation_lock(
+        fake,
+        "library:legacy:active",
+        "legacy-job",
+    ) is True
+    assert fake.get("library:legacy:active") is None
+
+
+def test_attemptless_operation_writes_cannot_mutate_attempt_owned_state(
+    monkeypatch,
+):
+    """Rolling attemptless callers are stale once a private owner exists."""
+    from app.services import operations
+
+    fake = FakeRedis()
+    monkeypatch.setattr(operations, "get_redis", lambda: fake)
+    fake.values["library:disk-import:active"] = b"bounded-job"
+    fake.values[operations.operation_attempt_key("bounded-job")] = b"attempt-b"
+    operations.set_operation_status(
+        "bounded-job",
+        "running",
+        "admin-disk-import",
+        progress={"phase": "running"},
+        publisher_attempt="attempt-b",
+        redis_client=fake,
+    )
+
+    assert operations.set_operation_status(
+        "bounded-job",
+        "failed",
+        "admin-disk-import",
+        error="stale legacy delivery",
+    ) is None
+    assert operations.release_owned_operation_lock(
+        fake,
+        "library:disk-import:active",
+        "bounded-job",
+    ) is False
+    assert fake.get("library:disk-import:active") == b"bounded-job"
+    assert operations.get_operation_status("bounded-job")["status"] == "running"
+
+
+def test_attempt_cas_fails_closed_when_redis_eval_is_unavailable(monkeypatch):
+    """A Redis execution error never degrades attempt CAS to check-then-write."""
+    from app.services import operations
+
+    class FailingEvalRedis(FakeRedis):
+        def eval(self, *_args, **_kwargs):
+            raise RuntimeError("redis eval unavailable")
+
+    fake = FailingEvalRedis()
+    monkeypatch.setattr(operations, "get_redis", lambda: fake)
+    fake.values["library:disk-import:active"] = b"bounded-job"
+    fake.values[operations.operation_attempt_key("bounded-job")] = b"attempt-b"
+
+    with pytest.raises(RuntimeError, match="eval unavailable"):
+        operations.set_operation_status(
+            "bounded-job",
+            "running",
+            "admin-disk-import",
+            publisher_attempt="attempt-b",
+            redis_client=fake,
+        )
+    with pytest.raises(RuntimeError, match="eval unavailable"):
+        operations.release_owned_operation_lock(
+            fake,
+            "library:disk-import:active",
+            "bounded-job",
+            publisher_attempt="attempt-b",
+        )
+    with pytest.raises(RuntimeError, match="eval unavailable"):
+        operations.acquire_operation_lock(
+            fake,
+            "library:other-disk-import:active",
+            "other-job",
+            ttl_seconds=60,
+            publisher_attempt="attempt-c",
+        )
+    with pytest.raises(RuntimeError, match="eval unavailable"):
+        operations.get_operation_status("bounded-job")
+
+    assert fake.get(operations.operation_key("bounded-job")) is None
+    assert fake.get("library:disk-import:active") == b"bounded-job"
+    assert fake.get("library:other-disk-import:active") is None
 
 
 def test_invalidate_api_caches_deletes_expected_domains(monkeypatch):

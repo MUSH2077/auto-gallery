@@ -49,6 +49,7 @@ def _set_resource_state_sync(
     reason: str | None,
     *,
     workload: str,
+    publisher_attempt: str | None = None,
 ) -> None:
     """Persist one parent-worker transition without crossing event loops.
 
@@ -68,6 +69,7 @@ def _set_resource_state_sync(
                 state,
                 reason,
                 workload=workload,
+                publisher_attempt=publisher_attempt,
             )
         finally:
             await engine.dispose()
@@ -656,6 +658,7 @@ class ResourceAwareWorker(Worker):
                     "waiting",
                     wait_reason,
                     workload=workload,
+                    publisher_attempt=self._job_publisher_attempt(job),
                 )
                 last_job_reason = wait_reason
 
@@ -842,6 +845,19 @@ class ResourceAwareWorker(Worker):
         return str(job.id)
 
     @staticmethod
+    def _job_publisher_attempt(job) -> str | None:
+        """Return private disk-publisher authority without copying it to meta."""
+
+        func_name = str(getattr(job, "func_name", "") or "").lower()
+        if "run_disk_import_operation" not in func_name:
+            return None
+        args = tuple(getattr(job, "args", ()) or ())
+        raw = args[2] if len(args) > 2 else None
+        if raw is None:
+            raw = (getattr(job, "kwargs", None) or {}).get("attempt_token")
+        return raw if isinstance(raw, str) and raw else None
+
+    @staticmethod
     def _set_job_resource_meta(job, workload: str, state: str, reason: str | None) -> None:
         metadata = getattr(job, "meta", None)
         if not isinstance(metadata, dict):
@@ -869,9 +885,8 @@ class ResourceAwareWorker(Worker):
     def _profile_admission(self, job, workload: str):
         """Wait without a lock, then hold one profile lease for this slice."""
 
-        from app.services.heavy_io import set_resource_state
-
         owner = self._job_owner(job)
+        publisher_attempt = self._job_publisher_attempt(job)
         attempt = 0
         while True:
             snapshot = self._wait_until_pressure_allows_dequeue(
@@ -910,7 +925,11 @@ class ResourceAwareWorker(Worker):
                 self._active_profile_snapshot = {}
                 self._set_job_resource_meta(job, workload, "running", None)
                 _set_resource_state_sync(
-                    owner, "running", None, workload=workload
+                    owner,
+                    "running",
+                    None,
+                    workload=workload,
+                    publisher_attempt=publisher_attempt,
                 )
                 return None, None, owner
 
@@ -936,6 +955,7 @@ class ResourceAwareWorker(Worker):
                         "waiting",
                         lease_reason,
                         workload=workload,
+                        publisher_attempt=publisher_attempt,
                     )
                     self._wait_for_control_event(adaptive_wait_delay(attempt), workload)
                     attempt += 1
@@ -964,6 +984,7 @@ class ResourceAwareWorker(Worker):
                         "waiting",
                         lease_reason,
                         workload=workload,
+                        publisher_attempt=publisher_attempt,
                     )
                     self._wait_for_control_event(adaptive_wait_delay(attempt), workload)
                     attempt += 1
@@ -988,7 +1009,13 @@ class ResourceAwareWorker(Worker):
             self._apply_profile_slice(job, workload, snapshot)
             self._active_profile_snapshot = snapshot
             self._set_job_resource_meta(job, workload, "running", None)
-            _set_resource_state_sync(owner, "running", None, workload=workload)
+            _set_resource_state_sync(
+                owner,
+                "running",
+                None,
+                workload=workload,
+                publisher_attempt=publisher_attempt,
+            )
             return local_lock, lease, owner
 
     def execute_job(self, job, queue):
@@ -998,6 +1025,7 @@ class ResourceAwareWorker(Worker):
             return super().execute_job(job, queue)
 
         workload = self._job_workload(job, queue)
+        publisher_attempt = self._job_publisher_attempt(job)
         internally_sliced = self._internal_slice_workload(job) is not None
         self._bound_job_slice(job, workload)
         local_lock, lease, owner = self._profile_admission(job, workload)
@@ -1028,6 +1056,7 @@ class ResourceAwareWorker(Worker):
                 "yielded",
                 "slice_complete",
                 workload=workload,
+                publisher_attempt=publisher_attempt,
             )
             # Batch shrinking limits peak cost but cannot lower the sustained
             # rate of a permanently backlogged queue.  Sleep only after the

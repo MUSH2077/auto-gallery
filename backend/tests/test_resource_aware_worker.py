@@ -1,8 +1,11 @@
+import asyncio
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import redis
 import pytest
 from rq import Worker
+from sqlalchemy import text
 
 from app.services.resource_aware_worker import (
     ResourceAwareWorker,
@@ -320,6 +323,67 @@ def test_operations_worker_selects_profile_from_job_function(monkeypatch):
 
     assert events == ["search_index", "workhorse", "released"]
     assert heavy_io.worker_flock_is_inherited() is False
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_disk_publisher_parent_admission_cannot_mutate_rotated_attempt_resource_state():
+    """The pre-workhorse admission projection belongs to the captured attempt."""
+    from app.database import async_session, engine
+    from app.models.task_run import TaskRun
+    from app.services.heavy_io import register_resource_state_callback
+    from app.services.tasks import TaskService, update_task_resource_state
+
+    task_id = uuid4()
+    attempt_a = uuid4().hex
+    attempt_b = uuid4().hex
+    worker = _bare_worker()
+    worker._wait_until_pressure_allows_dequeue = lambda *_args, **_kwargs: {}
+    job = type(
+        "Job",
+        (),
+        {
+            "id": "rq-stale-admission",
+            "func_name": "app.jobs.admin_operations.run_disk_import_operation",
+            "args": (str(task_id), {}, attempt_a),
+            "meta": {},
+            "save_meta": lambda self: None,
+        },
+    )()
+
+    try:
+        register_resource_state_callback(update_task_resource_state)
+        async with async_session() as db:
+            await db.execute(text("TRUNCATE task_events, task_runs RESTART IDENTITY CASCADE"))
+            await TaskService(db).create_task(
+                task_id=task_id,
+                kind="admin",
+                operation_type="admin-disk-import",
+                title="rotated admission",
+                status="enqueued",
+                queue_name="maintenance",
+                meta={"_bounded_import_publisher_attempt": attempt_b},
+            )
+            await db.commit()
+
+        result = await asyncio.to_thread(
+            worker._profile_admission,
+            job,
+            "maintenance",
+        )
+        assert result == (None, None, str(task_id))
+
+        async with async_session() as verify_db:
+            current = await verify_db.get(TaskRun, task_id)
+            assert current.meta["_bounded_import_publisher_attempt"] == attempt_b
+            assert current.resource_state == "waiting"
+            assert current.resource_reason is None
+    finally:
+        register_resource_state_callback(None)
+        async with async_session() as db:
+            await db.execute(text("TRUNCATE task_events, task_runs RESTART IDENTITY CASCADE"))
+            await db.commit()
+        await engine.dispose()
 
 
 @pytest.mark.parametrize(

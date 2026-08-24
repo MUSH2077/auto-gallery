@@ -34,7 +34,9 @@ from app.services.queue_admission import (
     ensure_redis_enqueue_capacity,
 )
 from app.services.operations import (
+    acquire_operation_lock,
     compensate_operation_enqueue_failure,
+    current_operation_attempt,
     get_operation_status,
     release_owned_operation_lock,
     set_operation_status,
@@ -422,6 +424,9 @@ async def import_from_disk(
                 detail={"code": "repository_source_mismatch", "message": "source does not match repository source"},
             )
     options = request.model_dump(mode="json")
+    # Repository validation is complete; release its read transaction before
+    # any Redis admission or RQ publication can wait on external state.
+    await db.rollback()
     redis = get_redis()
     ensure_redis_enqueue_capacity(redis)
     job_id = str(uuid.uuid4())
@@ -439,12 +444,24 @@ async def import_from_disk(
     if active_job:
         active_status = get_operation_status(active_job)
         if not active_status or active_status.get("status") in {"complete", "failed", "cancelled"}:
+            active_attempt = current_operation_attempt(redis, active_job)
             release_owned_operation_lock(
                 redis,
                 "library:disk-import:active",
                 active_job,
+                **(
+                    {"publisher_attempt": active_attempt}
+                    if active_attempt is not None
+                    else {}
+                ),
             )
-    if not redis.set("library:disk-import:active", job_id, nx=True, ex=604800):
+    if not acquire_operation_lock(
+        redis,
+        "library:disk-import:active",
+        job_id,
+        ttl_seconds=604800,
+        publisher_attempt=attempt_token,
+    ):
         active_job = redis.get("library:disk-import:active")
         if isinstance(active_job, bytes):
             active_job = active_job.decode()
@@ -468,12 +485,19 @@ async def import_from_disk(
     try:
         set_operation_status(job_id, "enqueued", "admin-disk-import",
             progress={"phase": "enqueued", "label": "Disk import queued"},
-            meta={"entity": "disk-import", **options})
+            meta={"entity": "disk-import", **options},
+            publisher_attempt=attempt_token,
+            redis_client=redis)
+        from app.services.publisher_attempts import publisher_job_description
+
         rq_job = checked_enqueue(
             Queue(name="maintenance", connection=redis),
             "app.jobs.admin_operations.run_disk_import_operation",
             job_id, options, attempt_token,
-            job_timeout=14400, result_ttl=604800)
+            job_timeout=14400,
+            result_ttl=604800,
+            description=publisher_job_description(job_id),
+        )
     except Exception as exc:
         await compensate_operation_enqueue_failure(
             job_id,
@@ -483,6 +507,11 @@ async def import_from_disk(
             redis_client=redis,
             publisher_attempt=attempt_token,
         )
+        from app.services.publisher_attempts import redact_publisher_attempt
+
+        safe_error = redact_publisher_attempt(exc, attempt_token)
+        if safe_error != str(exc):
+            raise RuntimeError(safe_error) from None
         raise
     async with async_session() as task_db:
         svc = TaskService(task_db)

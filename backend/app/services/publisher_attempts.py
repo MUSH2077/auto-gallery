@@ -19,6 +19,24 @@ def new_publisher_attempt() -> str:
     return secrets.token_urlsafe(32)
 
 
+def redact_publisher_attempt(
+    value: BaseException | str,
+    attempt_token: str | None,
+) -> str:
+    """Remove private authority from text that may enter public projections."""
+
+    text = str(value)
+    if attempt_token:
+        text = text.replace(attempt_token, "[redacted publisher attempt]")
+    return text
+
+
+def publisher_job_description(task_id: UUID | str) -> str:
+    """Return the stable, public-safe RQ description for a disk publisher."""
+
+    return f"admin-disk-import task={task_id}"
+
+
 def current_publisher_attempt(task: TaskRun) -> str | None:
     raw = (task.meta or {}).get(PUBLISHER_ATTEMPT_META_KEY)
     return raw if isinstance(raw, str) and raw else None

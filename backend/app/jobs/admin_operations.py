@@ -11,7 +11,12 @@ from uuid import UUID
 
 from app.database import async_session
 from app.services.admin_data import clear_entity_data
-from app.services.operations import release_owned_operation_lock, set_operation_status
+from app.services.operations import (
+    OPERATION_TTL_SECONDS,
+    acquire_operation_lock,
+    release_owned_operation_lock,
+    set_operation_status,
+)
 from app.services.heavy_io import run_heavy_io_operation
 from app.services.redis_pubsub import PublisherFenceError
 
@@ -358,15 +363,28 @@ def run_disk_import_operation(
                 lock_task=True,
             )
             await startup_db.rollback()
+        if not acquire_operation_lock(
+            guard.redis,
+            "library:disk-import:active",
+            job_id,
+            ttl_seconds=OPERATION_TTL_SECONDS,
+            publisher_attempt=guard.attempt_token,
+            replace_same_job=True,
+        ):
+            raise guard._lose(
+                "disk import operational owner is no longer current",
+                recovery_won=True,
+            )
         return await run_heavy_io_operation(
             "operation:disk-import",
             job_id,
             lambda: _run_disk_import_operation(
                 job_id,
                 options or {},
-                attempt_token,
+                guard.attempt_token,
                 publisher_guard=guard,
             ),
+            publisher_attempt=guard.attempt_token,
         )
 
     return asyncio.run(run_authorized())
@@ -416,6 +434,8 @@ async def _run_disk_import_operation(
                 "label": "Scanning download root...",
             },
             meta={"entity": "disk-import", **options},
+            publisher_attempt=guard.attempt_token,
+            redis_client=guard.redis,
         )
         heartbeat.start()
 
@@ -446,6 +466,8 @@ async def _run_disk_import_operation(
                 "admin-disk-import",
                 progress=task_progress,
                 meta={"entity": "disk-import", **options},
+                publisher_attempt=guard.attempt_token,
+                redis_client=guard.redis,
             )
 
         async with async_session() as db:
@@ -454,6 +476,7 @@ async def _run_disk_import_operation(
                 {**options, "parent_task_id": job_id},
                 update_progress,
                 publisher_checkpoint=guard.checkpoint,
+                publisher_attempt=guard.attempt_token,
             )
         from app.api.admin.settings import invalidate_storage_breakdown_cache
         invalidate_storage_breakdown_cache()
@@ -475,6 +498,8 @@ async def _run_disk_import_operation(
             progress=disk_import_completion_progress(result),
             result=result,
             meta={"entity": "disk-import", **options},
+            publisher_attempt=guard.attempt_token,
+            redis_client=guard.redis,
         )
         return result
     except PublisherFenceError as exc:
@@ -484,7 +509,14 @@ async def _run_disk_import_operation(
         # uncertainty remains fail-closed until a later authoritative scan.
         raise
     except Exception as exc:
-        logger.exception("Disk import failed: job_id=%s", job_id)
+        from app.services.publisher_attempts import redact_publisher_attempt
+
+        safe_error = redact_publisher_attempt(exc, guard.attempt_token)
+        logger.error(
+            "Disk import failed: job_id=%s error=%s",
+            job_id,
+            safe_error,
+        )
         failed_current_attempt = False
         async with async_session() as task_db:
             svc = TaskService(task_db)
@@ -497,19 +529,39 @@ async def _run_disk_import_operation(
             except PublisherFenceError:
                 await task_db.rollback()
             else:
-                await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
+                await svc.update_task(
+                    task,
+                    status="failed",
+                    progress={"phase": "failed"},
+                    error=safe_error,
+                )
                 await task_db.commit()
                 failed_current_attempt = True
         if failed_current_attempt:
-            set_operation_status(job_id, "failed", "admin-disk-import",
-                progress={"phase": "failed"}, error=str(exc), meta={"entity": "disk-import", **options})
+            set_operation_status(
+                job_id,
+                "failed",
+                "admin-disk-import",
+                progress={"phase": "failed"},
+                error=safe_error,
+                meta={"entity": "disk-import", **options},
+                publisher_attempt=guard.attempt_token,
+                redis_client=guard.redis,
+            )
+        if safe_error != str(exc):
+            raise RuntimeError(safe_error) from None
         raise
     finally:
         heartbeat.stop()
         from app.services.redis_client import get_redis
         redis = get_redis()
         if not guard.authority_lost:
-            release_owned_operation_lock(redis, "library:disk-import:active", job_id)
+            release_owned_operation_lock(
+                redis,
+                "library:disk-import:active",
+                job_id,
+                publisher_attempt=guard.attempt_token,
+            )
 
 
 def run_gitllery_rebuild_operation(job_id: str, options: dict | None = None) -> dict:
