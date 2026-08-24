@@ -37,6 +37,7 @@ from app.services.operations import (
     acquire_operation_lock,
     compensate_operation_enqueue_failure,
     current_operation_attempt,
+    durable_operation_attempt_is_terminal,
     get_operation_status,
     release_owned_operation_lock,
     set_operation_status,
@@ -274,14 +275,19 @@ async def list_active_operations():
     # bounded once the matching keys are known.
     keys = list(r.scan_iter(match="admin_operation:*", count=100))
     ops = []
-    for raw in (r.mget(keys) if keys else []):
-        if raw:
-            try:
-                payload = json.loads(raw if isinstance(raw, str) else raw.decode("utf-8"))
-                if payload.get("status") in ("queued", "enqueued", "running"):
-                    ops.append(payload)
-            except Exception:
-                pass
+    for raw_key in keys:
+        try:
+            key = raw_key.decode("utf-8") if isinstance(raw_key, bytes) else raw_key
+            job_id = key.removeprefix("admin_operation:")
+            payload = get_operation_status(job_id, redis_client=r)
+            if payload and payload.get("status") in (
+                "queued",
+                "enqueued",
+                "running",
+            ):
+                ops.append(payload)
+        except Exception:
+            pass
     ops.sort(key=lambda o: o.get("updated_at", 0), reverse=True)
     return {"operations": ops}
 
@@ -443,8 +449,21 @@ async def import_from_disk(
         active_job = active_job.decode()
     if active_job:
         active_status = get_operation_status(active_job)
-        if not active_status or active_status.get("status") in {"complete", "failed", "cancelled"}:
-            active_attempt = current_operation_attempt(redis, active_job)
+        active_attempt = current_operation_attempt(redis, active_job)
+        reclaimable = (
+            active_status
+            and active_status.get("status") in {"complete", "failed", "cancelled"}
+        ) or (not active_status and active_attempt is None)
+        if (
+            not reclaimable
+            and not active_status
+            and active_attempt is not None
+        ):
+            reclaimable = await durable_operation_attempt_is_terminal(
+                active_job,
+                active_attempt,
+            )
+        if reclaimable:
             release_owned_operation_lock(
                 redis,
                 "library:disk-import:active",

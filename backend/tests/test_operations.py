@@ -1,5 +1,6 @@
 import json
 import asyncio
+import threading
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -154,10 +155,174 @@ def test_attempt_cas_fails_closed_when_redis_eval_is_unavailable(monkeypatch):
         )
     with pytest.raises(RuntimeError, match="eval unavailable"):
         operations.get_operation_status("bounded-job")
+    with pytest.raises(RuntimeError, match="eval unavailable"):
+        operations.set_operation_status(
+            "legacy-job",
+            "running",
+            "admin-rebuild",
+            redis_client=fake,
+        )
+    fake.values["library:legacy:active"] = b"legacy-job"
+    with pytest.raises(RuntimeError, match="eval unavailable"):
+        operations.release_owned_operation_lock(
+            fake,
+            "library:legacy:active",
+            "legacy-job",
+        )
 
     assert fake.get(operations.operation_key("bounded-job")) is None
     assert fake.get("library:disk-import:active") == b"bounded-job"
     assert fake.get("library:other-disk-import:active") is None
+    assert fake.get("library:legacy:active") == b"legacy-job"
+
+
+def test_attempt_release_requires_positive_pointer_ownership():
+    """A missing pointer is uncertainty, never proof that an attempt owns a lock."""
+    from app.services import operations
+    from app.services.redis_client import get_redis
+
+    redis_client = get_redis()
+    job_id = f"release-positive-{uuid4()}"
+    lock_key = f"library:disk-import:test:{uuid4()}"
+    redis_client.delete(
+        lock_key,
+        operations.operation_attempt_key(job_id),
+    )
+    try:
+        redis_client.set(lock_key, job_id, ex=60)
+
+        assert operations.release_owned_operation_lock(
+            redis_client,
+            lock_key,
+            job_id,
+            publisher_attempt="attempt-a",
+        ) is False
+        assert redis_client.get(lock_key) is not None
+    finally:
+        redis_client.delete(
+            lock_key,
+            operations.operation_attempt_key(job_id),
+        )
+
+
+def test_legacy_status_racing_attempt_install_is_rejected_atomically():
+    """A UUID-only publisher cannot write between B's owner install and cache."""
+    from app.services import operations
+    from app.services.redis_client import get_redis
+
+    redis_client = get_redis()
+    job_id = f"legacy-race-{uuid4()}"
+    entered = threading.Event()
+    resume = threading.Event()
+
+    class InterleavingRedis:
+        def get(self, key):
+            value = redis_client.get(key)
+            if key == operations.operation_attempt_key(job_id):
+                entered.set()
+                assert resume.wait(5)
+            return value
+
+        def eval(self, *args, **kwargs):
+            entered.set()
+            assert resume.wait(5)
+            return redis_client.eval(*args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(redis_client, name)
+
+    result: dict[str, object] = {}
+
+    def legacy_write() -> None:
+        result["value"] = operations.set_operation_status(
+            job_id,
+            "running",
+            "admin-disk-import",
+            progress={"phase": "legacy-a"},
+            redis_client=InterleavingRedis(),
+        )
+
+    keys = (
+        operations.operation_key(job_id),
+        operations.operation_attempt_key(job_id),
+        operations.operation_cache_attempt_key(job_id),
+    )
+    redis_client.delete(*keys)
+    writer = threading.Thread(target=legacy_write, name="legacy-cache-writer")
+    try:
+        writer.start()
+        assert entered.wait(5)
+        redis_client.setex(
+            operations.operation_attempt_key(job_id),
+            60,
+            "attempt-b",
+        )
+        resume.set()
+        writer.join(5)
+        assert not writer.is_alive()
+
+        assert result["value"] is None
+        assert redis_client.get(operations.operation_key(job_id)) is None
+        assert operations.get_operation_status(job_id) is None
+    finally:
+        resume.set()
+        if writer.is_alive():
+            writer.join(5)
+        redis_client.delete(*keys)
+
+
+@pytest.mark.asyncio
+async def test_active_operations_filter_stale_attempt_cache_and_keep_legacy():
+    """The collection endpoint applies the same owner check as item reads."""
+    from app.api.admin import data as data_api
+    from app.services import operations
+    from app.services.redis_client import get_redis
+
+    redis_client = get_redis()
+    stale_id = f"stale-list-{uuid4()}"
+    legacy_id = f"legacy-list-{uuid4()}"
+    stale_payload = json.dumps({
+        "job_id": stale_id,
+        "status": "running",
+        "operation_type": "admin-disk-import",
+        "updated_at": 2,
+    })
+    legacy_payload = json.dumps({
+        "job_id": legacy_id,
+        "status": "running",
+        "operation_type": "admin-rebuild",
+        "updated_at": 1,
+    })
+    keys = (
+        operations.operation_key(stale_id),
+        operations.operation_attempt_key(stale_id),
+        operations.operation_cache_attempt_key(stale_id),
+        operations.operation_key(legacy_id),
+        operations.operation_attempt_key(legacy_id),
+        operations.operation_cache_attempt_key(legacy_id),
+    )
+    redis_client.delete(*keys)
+    try:
+        redis_client.setex(operations.operation_key(stale_id), 60, stale_payload)
+        redis_client.setex(
+            operations.operation_attempt_key(stale_id),
+            60,
+            "attempt-b",
+        )
+        redis_client.setex(
+            operations.operation_cache_attempt_key(stale_id),
+            60,
+            "attempt-a",
+        )
+        redis_client.setex(operations.operation_key(legacy_id), 60, legacy_payload)
+
+        response = await data_api.list_active_operations()
+        visible = {item["job_id"] for item in response["operations"]}
+
+        assert stale_id not in visible
+        assert legacy_id in visible
+    finally:
+        redis_client.delete(*keys)
 
 
 def test_invalidate_api_caches_deletes_expected_domains(monkeypatch):

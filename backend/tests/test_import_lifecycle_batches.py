@@ -113,13 +113,26 @@ class _HeartbeatRedis:
                 return 0
             self.writes[fence_key] = argv[0]
             return 1
-        if numkeys == 2 and len(argv) == 4:
+        if numkeys == 2 and len(argv) == 6:
             lock_key, attempt_key = keys
-            job_id, attempt_token, _ttl, replace_same_job = argv
+            (
+                job_id,
+                attempt_token,
+                _ttl,
+                replace_same_job,
+                expect_missing,
+                expected_attempt,
+            ) = argv
             current = self.writes.get(lock_key)
+            current_attempt = self.writes.get(attempt_key)
             if current is not None and (
                 current != job_id or replace_same_job != "1"
             ):
+                return 0
+            if expect_missing == "1":
+                if current_attempt is not None:
+                    return 0
+            elif current_attempt != expected_attempt:
                 return 0
             self.writes[lock_key] = job_id
             self.writes[attempt_key] = attempt_token

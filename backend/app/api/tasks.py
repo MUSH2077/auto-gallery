@@ -478,15 +478,31 @@ async def _retry_admin_task(task, svc: TaskService):
         active_status = get_operation_status(active_job)
         if is_disk_publisher:
             if active_job != str(logical_task_id):
-                if not active_status or active_status.get("status") in {
-                    "complete",
-                    "failed",
-                    "cancelled",
-                    "stale",
-                }:
-                    from app.services.operations import current_operation_attempt
+                from app.services.operations import (
+                    current_operation_attempt,
+                    durable_operation_attempt_is_terminal,
+                )
 
-                    active_attempt = current_operation_attempt(redis, active_job)
+                active_attempt = current_operation_attempt(redis, active_job)
+                reclaimable = (
+                    active_status
+                    and active_status.get("status") in {
+                        "complete",
+                        "failed",
+                        "cancelled",
+                        "stale",
+                    }
+                ) or (not active_status and active_attempt is None)
+                if (
+                    not reclaimable
+                    and not active_status
+                    and active_attempt is not None
+                ):
+                    reclaimable = await durable_operation_attempt_is_terminal(
+                        active_job,
+                        active_attempt,
+                    )
+                if reclaimable:
                     release_owned_operation_lock(
                         redis,
                         lock_key,
@@ -596,8 +612,28 @@ async def _retry_admin_task(task, svc: TaskService):
     if is_disk_publisher:
         from app.services.publisher_attempts import (
             PUBLISHER_ATTEMPT_META_KEY,
+            current_publisher_attempt,
             ensure_publisher_attempt,
         )
+        from app.services.operations import current_operation_attempt
+
+        previous_publisher_attempt = current_publisher_attempt(task)
+        expected_operational_attempt = current_operation_attempt(
+            redis,
+            str(task.id),
+        )
+        if expected_operational_attempt not in {
+            None,
+            previous_publisher_attempt,
+        }:
+            await svc.db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "publisher_attempt_conflict",
+                    "message": "Disk import operational attempt is inconsistent",
+                },
+            )
 
         publisher_attempt, _rotated = ensure_publisher_attempt(
             task,
@@ -631,6 +667,7 @@ async def _retry_admin_task(task, svc: TaskService):
             ),
             publisher_attempt=publisher_attempt,
             replace_same_job=True,
+            expected_current_attempt=expected_operational_attempt,
         ):
             from app.services.publisher_attempts import current_publisher_attempt
 

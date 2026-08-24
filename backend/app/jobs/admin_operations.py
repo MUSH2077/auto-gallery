@@ -363,6 +363,20 @@ def run_disk_import_operation(
                 lock_task=True,
             )
             await startup_db.rollback()
+        from app.services.operations import current_operation_attempt
+
+        expected_operational_attempt = current_operation_attempt(
+            guard.redis,
+            job_id,
+        )
+        if expected_operational_attempt not in {
+            None,
+            guard.attempt_token,
+        }:
+            raise guard._lose(
+                "disk import operational attempt is no longer current",
+                recovery_won=True,
+            )
         if not acquire_operation_lock(
             guard.redis,
             "library:disk-import:active",
@@ -370,6 +384,7 @@ def run_disk_import_operation(
             ttl_seconds=OPERATION_TTL_SECONDS,
             publisher_attempt=guard.attempt_token,
             replace_same_job=True,
+            expected_current_attempt=expected_operational_attempt,
         ):
             raise guard._lose(
                 "disk import operational owner is no longer current",

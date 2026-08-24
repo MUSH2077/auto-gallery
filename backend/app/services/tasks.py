@@ -517,6 +517,12 @@ async def update_task_resource_state(
                     .limit(1)
                 )
             ).scalar_one_or_none()
+            if task is not None:
+                from app.services.publisher_attempts import current_publisher_attempt
+
+                if current_publisher_attempt(task) is not None:
+                    await db.rollback()
+                    return
         if task is None or (
             task.resource_state == state and task.resource_reason == reason
         ):

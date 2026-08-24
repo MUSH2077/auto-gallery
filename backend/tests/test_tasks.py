@@ -84,6 +84,367 @@ def test_disk_import_entrypoint_validates_attempt_before_heavy_io(monkeypatch):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_worker_startup_cannot_replace_rotated_operational_attempt(
+    monkeypatch,
+):
+    """A validated A resuming after B's handoff leaves all Redis state at B."""
+    from app.database import async_session, engine
+    from app.jobs import admin_operations
+    from app.models.task_run import TaskRun
+    from app.services import operations
+    from app.services.publisher_attempts import set_publisher_attempt
+    from app.services.redis_client import get_redis
+    from app.services.redis_pubsub import PublisherFenceError
+    from app.services.tasks import TaskService
+
+    task_id = uuid4()
+    attempt_a = uuid4().hex
+    attempt_b = uuid4().hex
+    redis_client = get_redis()
+    entered_a_admission = threading.Event()
+    resume_a_admission = threading.Event()
+    original_acquire = admin_operations.acquire_operation_lock
+    outcome: dict[str, object] = {}
+
+    def pausing_acquire(*args, **kwargs):
+        if kwargs.get("publisher_attempt") == attempt_a:
+            entered_a_admission.set()
+            assert resume_a_admission.wait(5)
+        return original_acquire(*args, **kwargs)
+
+    async def should_not_run_heavy_io(*_args, **_kwargs):
+        return {"stale_attempt_entered_heavy_io": True}
+
+    monkeypatch.setattr(admin_operations, "acquire_operation_lock", pausing_acquire)
+    monkeypatch.setattr(
+        admin_operations,
+        "run_heavy_io_operation",
+        should_not_run_heavy_io,
+    )
+
+    def run_attempt_a() -> None:
+        try:
+            outcome["result"] = admin_operations.run_disk_import_operation(
+                str(task_id),
+                {},
+                attempt_a,
+            )
+        except BaseException as exc:
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=run_attempt_a, name="startup-attempt-a")
+    try:
+        _clear_disk_operation_redis(redis_client, task_id)
+        async with async_session() as db:
+            await _clear_task_test_tables(db)
+            await TaskService(db).create_task(
+                task_id=task_id,
+                kind="admin",
+                operation_type="admin-disk-import",
+                title="startup attempt A",
+                status="enqueued",
+                queue_name="maintenance",
+                meta={_PUBLISHER_ATTEMPT_META_KEY: attempt_a},
+            )
+            await db.commit()
+        assert operations.acquire_operation_lock(
+            redis_client,
+            "library:disk-import:active",
+            str(task_id),
+            ttl_seconds=604800,
+            publisher_attempt=attempt_a,
+        )
+
+        worker.start()
+        assert await asyncio.to_thread(entered_a_admission.wait, 5)
+
+        async with async_session() as rotate_db:
+            current = await rotate_db.get(TaskRun, task_id, with_for_update=True)
+            set_publisher_attempt(current, attempt_b)
+            await rotate_db.commit()
+        pipe = redis_client.pipeline(transaction=True)
+        pipe.set(
+            "library:disk-import:active",
+            str(task_id),
+            ex=604800,
+        )
+        pipe.set(
+            operations.operation_attempt_key(str(task_id)),
+            attempt_b,
+            ex=604800,
+        )
+        pipe.execute()
+        operations.set_operation_status(
+            str(task_id),
+            "enqueued",
+            "admin-disk-import",
+            progress={"phase": "attempt-b"},
+            publisher_attempt=attempt_b,
+            redis_client=redis_client,
+        )
+
+        resume_a_admission.set()
+        await asyncio.to_thread(worker.join, 5)
+        assert not worker.is_alive()
+
+        assert isinstance(outcome.get("error"), PublisherFenceError)
+        assert "result" not in outcome
+        assert operations.current_operation_attempt(
+            redis_client,
+            str(task_id),
+        ) == attempt_b
+        assert operations.get_operation_status(str(task_id))["progress"] == {
+            "phase": "attempt-b"
+        }
+        assert redis_client.get("library:disk-import:active") in {
+            str(task_id),
+            str(task_id).encode(),
+        }
+        assert operations.acquire_operation_lock(
+            redis_client,
+            "library:disk-import:active",
+            str(uuid4()),
+            ttl_seconds=60,
+            publisher_attempt=uuid4().hex,
+        ) is False
+    finally:
+        resume_a_admission.set()
+        if worker.is_alive():
+            await asyncio.to_thread(worker.join, 5)
+        _clear_disk_operation_redis(redis_client, task_id)
+        async with async_session() as db:
+            await _clear_task_test_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_initial_disk_import_cannot_reclaim_attempt_owner_before_first_cache(
+    monkeypatch,
+):
+    """B's lock/pointer are authoritative during its first cache publication gap."""
+    from fastapi import HTTPException
+
+    from app.api.admin import data as data_api
+    from app.api.admin.data import ImportFromDiskRequest
+    from app.database import async_session, engine
+    from app.services import operations
+    from app.services.redis_client import get_redis
+    from app.services.tasks import TaskService
+
+    redis_client = get_redis()
+    task_b = uuid4()
+    attempt_b = uuid4().hex
+    enqueues: list[tuple] = []
+    monkeypatch.setattr(data_api, "ensure_redis_enqueue_capacity", lambda _r: None)
+    monkeypatch.setattr(
+        data_api,
+        "checked_enqueue",
+        lambda *args, **kwargs: (
+            enqueues.append((args, kwargs)) or SimpleNamespace(id="unexpected-rq")
+        ),
+    )
+
+    try:
+        _clear_disk_operation_redis(redis_client, task_b)
+        async with async_session() as setup_db:
+            await _clear_task_test_tables(setup_db)
+            await TaskService(setup_db).create_task(
+                task_id=task_b,
+                kind="admin",
+                operation_type="admin-disk-import",
+                title="attempt B publishing",
+                status="enqueued",
+                queue_name="maintenance",
+                meta={_PUBLISHER_ATTEMPT_META_KEY: attempt_b},
+            )
+            await setup_db.commit()
+        assert operations.acquire_operation_lock(
+            redis_client,
+            "library:disk-import:active",
+            str(task_b),
+            ttl_seconds=604800,
+            publisher_attempt=attempt_b,
+        )
+        assert operations.get_operation_status(str(task_b)) is None
+
+        async with async_session() as request_db:
+            with pytest.raises(HTTPException) as failure:
+                await data_api.import_from_disk(
+                    ImportFromDiskRequest(),
+                    request_db,
+                )
+
+        assert failure.value.status_code == 409
+        assert enqueues == []
+        assert redis_client.get("library:disk-import:active") in {
+            str(task_b),
+            str(task_b).encode(),
+        }
+        assert operations.current_operation_attempt(
+            redis_client,
+            str(task_b),
+        ) == attempt_b
+    finally:
+        _clear_disk_operation_redis(redis_client, task_b)
+        async with async_session() as db:
+            await _clear_task_test_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_initial_disk_import_reclaims_cacheless_owner_only_with_terminal_taskrun(
+    monkeypatch,
+):
+    """A cache miss is reclaimable only after durable terminal evidence."""
+    from app.api.admin import data as data_api
+    from app.api.admin.data import ImportFromDiskRequest
+    from app.database import async_session, engine
+    from app.services import operations
+    from app.services.redis_client import get_redis
+    from app.services.tasks import TaskService
+
+    redis_client = get_redis()
+    task_b = uuid4()
+    attempt_b = uuid4().hex
+    monkeypatch.setattr(data_api, "ensure_redis_enqueue_capacity", lambda _r: None)
+    monkeypatch.setattr(
+        data_api,
+        "checked_enqueue",
+        lambda *_args, **_kwargs: SimpleNamespace(id="rq-after-terminal-b"),
+    )
+
+    result = None
+    try:
+        _clear_disk_operation_redis(redis_client, task_b)
+        async with async_session() as setup_db:
+            await _clear_task_test_tables(setup_db)
+            await TaskService(setup_db).create_task(
+                task_id=task_b,
+                kind="admin",
+                operation_type="admin-disk-import",
+                title="terminal attempt B",
+                status="failed",
+                queue_name="maintenance",
+                meta={_PUBLISHER_ATTEMPT_META_KEY: attempt_b},
+            )
+            await setup_db.commit()
+        assert operations.acquire_operation_lock(
+            redis_client,
+            "library:disk-import:active",
+            str(task_b),
+            ttl_seconds=604800,
+            publisher_attempt=attempt_b,
+        )
+        assert operations.get_operation_status(str(task_b)) is None
+
+        async with async_session() as request_db:
+            result = await data_api.import_from_disk(
+                ImportFromDiskRequest(),
+                request_db,
+            )
+
+        assert result["status"] == "enqueued"
+        assert result["job_id"] != str(task_b)
+        assert redis_client.get("library:disk-import:active") in {
+            result["job_id"],
+            result["job_id"].encode(),
+        }
+    finally:
+        _clear_disk_operation_redis(
+            redis_client,
+            task_b,
+            *((result["job_id"],) if result is not None else ()),
+        )
+        async with async_session() as db:
+            await _clear_task_test_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_retry_cannot_reclaim_other_attempt_owner_before_first_cache(
+    monkeypatch,
+):
+    """Retry C cannot treat B's cache-publication gap as a stale owner."""
+    from fastapi import HTTPException
+
+    from app.api import tasks as tasks_api
+    from app.database import async_session, engine
+    from app.services import operations
+    from app.services.redis_client import get_redis
+    from app.services.tasks import TaskService
+
+    redis_client = get_redis()
+    task_b = uuid4()
+    task_c = uuid4()
+    attempt_b = uuid4().hex
+    enqueues: list[tuple] = []
+    monkeypatch.setattr(tasks_api, "ensure_redis_enqueue_capacity", lambda _r: None)
+    monkeypatch.setattr(
+        tasks_api,
+        "checked_enqueue",
+        lambda *args, **kwargs: (
+            enqueues.append((args, kwargs)) or SimpleNamespace(id="unexpected-rq")
+        ),
+    )
+
+    try:
+        _clear_disk_operation_redis(redis_client, task_b, task_c)
+        async with async_session() as db:
+            await _clear_task_test_tables(db)
+            service = TaskService(db)
+            await service.create_task(
+                task_id=task_b,
+                kind="admin",
+                operation_type="admin-disk-import",
+                title="attempt B publishing",
+                status="enqueued",
+                queue_name="maintenance",
+                meta={_PUBLISHER_ATTEMPT_META_KEY: attempt_b},
+            )
+            retry_task = await service.create_task(
+                task_id=task_c,
+                kind="admin",
+                operation_type="admin-disk-import",
+                title="independent retry C",
+                status="failed",
+                queue_name="maintenance",
+                meta={"entity": "disk-import"},
+            )
+            await db.commit()
+            assert operations.acquire_operation_lock(
+                redis_client,
+                "library:disk-import:active",
+                str(task_b),
+                ttl_seconds=604800,
+                publisher_attempt=attempt_b,
+            )
+            assert operations.get_operation_status(str(task_b)) is None
+
+            with pytest.raises(HTTPException) as failure:
+                await tasks_api._retry_admin_task(retry_task, service)
+
+        assert failure.value.status_code == 409
+        assert enqueues == []
+        assert redis_client.get("library:disk-import:active") in {
+            str(task_b),
+            str(task_b).encode(),
+        }
+        assert operations.current_operation_attempt(
+            redis_client,
+            str(task_b),
+        ) == attempt_b
+    finally:
+        _clear_disk_operation_redis(redis_client, task_b, task_c)
+        async with async_session() as db:
+            await _clear_task_test_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_legacy_disk_worker_adopts_attempt_owned_operational_pointer(
     monkeypatch,
 ):

@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 _ACQUIRE_ATTEMPT_OPERATION_SCRIPT = """
 local current = redis.call('get', KEYS[1])
+local current_attempt = redis.call('get', KEYS[2])
 if current then
   if current ~= ARGV[1] then
     return 0
@@ -27,18 +28,50 @@ if current then
     return 0
   end
 end
+if ARGV[5] == '1' then
+  if current_attempt then
+    return 0
+  end
+elseif current_attempt ~= ARGV[6] then
+  return 0
+end
 redis.call('set', KEYS[1], ARGV[1], 'EX', ARGV[3])
 redis.call('set', KEYS[2], ARGV[2], 'EX', ARGV[3])
 return 1
 """
 
+_ACQUIRE_LEGACY_OPERATION_SCRIPT = """
+if redis.call('exists', KEYS[2]) == 1 or redis.call('exists', KEYS[3]) == 1 then
+  return 0
+end
+return redis.call('set', KEYS[1], ARGV[1], 'NX', 'EX', ARGV[2]) and 1 or 0
+"""
+
 _RELEASE_ATTEMPT_OPERATION_SCRIPT = """
 local current = redis.call('get', KEYS[1])
 local attempt = redis.call('get', KEYS[2])
-if current == ARGV[1] and (not attempt or attempt == ARGV[2]) then
+if current == ARGV[1] and attempt == ARGV[2] then
   return redis.call('del', KEYS[1])
 end
 return 0
+"""
+
+_RELEASE_LEGACY_OPERATION_SCRIPT = """
+if redis.call('exists', KEYS[2]) == 1 or redis.call('exists', KEYS[3]) == 1 then
+  return 0
+end
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('del', KEYS[1])
+end
+return 0
+"""
+
+_SET_LEGACY_OPERATION_STATUS_SCRIPT = """
+if redis.call('exists', KEYS[1]) == 1 or redis.call('exists', KEYS[2]) == 1 then
+  return 0
+end
+redis.call('setex', KEYS[3], ARGV[1], ARGV[2])
+return 1
 """
 
 _SET_ATTEMPT_OPERATION_STATUS_SCRIPT = """
@@ -90,6 +123,38 @@ def current_operation_attempt(redis, job_id: str) -> str | None:
     return raw if isinstance(raw, str) and raw else None
 
 
+async def durable_operation_attempt_is_terminal(
+    job_id: str,
+    publisher_attempt: str,
+) -> bool:
+    """Return terminal evidence only for the exact durable disk attempt.
+
+    The Redis pointer remains the release CAS. This database read lets callers
+    distinguish a valid first-cache publication gap from a genuinely terminal
+    owner without holding a database row lock across Redis I/O.
+    """
+
+    from uuid import UUID
+
+    from app.database import async_session
+    from app.models.task_run import TaskRun
+    from app.services.publisher_attempts import current_publisher_attempt
+
+    try:
+        task_id = UUID(job_id)
+    except (TypeError, ValueError):
+        return False
+    async with async_session() as db:
+        task = await db.get(TaskRun, task_id)
+        return bool(
+            task is not None
+            and task.kind == "admin"
+            and task.operation_type == "admin-disk-import"
+            and current_publisher_attempt(task) == publisher_attempt
+            and task.status in {"complete", "failed", "stale", "cancelled"}
+        )
+
+
 def acquire_operation_lock(
     redis,
     lock_key: str,
@@ -98,6 +163,7 @@ def acquire_operation_lock(
     ttl_seconds: int,
     publisher_attempt: str | None = None,
     replace_same_job: bool = False,
+    expected_current_attempt: str | None = None,
 ) -> bool:
     """Acquire one single-flight owner, optionally scoped to an attempt.
 
@@ -106,9 +172,23 @@ def acquire_operation_lock(
     returned by public conflict responses.
     """
 
-    if publisher_attempt is None:
-        return bool(redis.set(lock_key, job_id, nx=True, ex=ttl_seconds))
     eval_script = getattr(redis, "eval", None)
+    if publisher_attempt is None:
+        if callable(eval_script):
+            return bool(redis.eval(
+                _ACQUIRE_LEGACY_OPERATION_SCRIPT,
+                3,
+                lock_key,
+                operation_attempt_key(job_id),
+                operation_cache_attempt_key(job_id),
+                job_id,
+                int(ttl_seconds),
+            ))
+        if current_operation_attempt(redis, job_id) is not None or _decoded(
+            redis.get(operation_cache_attempt_key(job_id))
+        ) is not None:
+            return False
+        return bool(redis.set(lock_key, job_id, nx=True, ex=ttl_seconds))
     if callable(eval_script):
         return bool(redis.eval(
             _ACQUIRE_ATTEMPT_OPERATION_SCRIPT,
@@ -119,14 +199,19 @@ def acquire_operation_lock(
             publisher_attempt,
             int(ttl_seconds),
             "1" if replace_same_job else "0",
+            "1" if expected_current_attempt is None else "0",
+            expected_current_attempt or "",
         ))
     # Compatibility for simple test/rolling clients with no EVAL method.
     # An actual EVAL failure must propagate fail-closed; check-then-write is
     # never a production fallback for immutable-attempt authority.
     current = _decoded(redis.get(lock_key))
+    current_attempt = current_operation_attempt(redis, job_id)
     if current is not None and (
         current != job_id or not replace_same_job
     ):
+        return False
+    if current_attempt != expected_current_attempt:
         return False
     if not redis.set(lock_key, job_id, ex=int(ttl_seconds)):
         return False
@@ -167,16 +252,30 @@ def set_operation_status(
 
     redis = redis_client if redis_client is not None else get_redis()
     encoded = json.dumps(payload, default=str)
-    if publisher_attempt is None:
-        if current_operation_attempt(redis, job_id) is not None:
-            return None
-        redis.setex(
-            operation_key(job_id),
-            OPERATION_TTL_SECONDS,
-            encoded,
-        )
-        return payload
     eval_script = getattr(redis, "eval", None)
+    if publisher_attempt is None:
+        if callable(eval_script):
+            written = bool(redis.eval(
+                _SET_LEGACY_OPERATION_STATUS_SCRIPT,
+                3,
+                operation_attempt_key(job_id),
+                operation_cache_attempt_key(job_id),
+                operation_key(job_id),
+                OPERATION_TTL_SECONDS,
+                encoded,
+            ))
+        else:
+            if current_operation_attempt(redis, job_id) is not None or _decoded(
+                redis.get(operation_cache_attempt_key(job_id))
+            ) is not None:
+                return None
+            redis.setex(
+                operation_key(job_id),
+                OPERATION_TTL_SECONDS,
+                encoded,
+            )
+            written = True
+        return payload if written else None
     if callable(eval_script):
         written = bool(redis.eval(
             _SET_ATTEMPT_OPERATION_STATUS_SCRIPT,
@@ -207,8 +306,12 @@ def set_operation_status(
     return payload
 
 
-def get_operation_status(job_id: str) -> dict[str, Any] | None:
-    redis = get_redis()
+def get_operation_status(
+    job_id: str,
+    *,
+    redis_client=None,
+) -> dict[str, Any] | None:
+    redis = redis_client if redis_client is not None else get_redis()
     eval_script = getattr(redis, "eval", None)
     if callable(eval_script):
         raw = redis.eval(
@@ -255,30 +358,31 @@ def release_owned_operation_lock(
             ))
         current = _decoded(redis.get(lock_key))
         attempt = current_operation_attempt(redis, job_id)
-        if current != job_id or attempt not in {None, publisher_attempt}:
+        if current != job_id or attempt != publisher_attempt:
             return False
         return bool(redis.delete(lock_key))
 
-    # Once an immutable attempt pointer exists, UUID-only rolling callers are
-    # stale by definition. Non-bounded operations never create this pointer.
-    if current_operation_attempt(redis, job_id) is not None:
+    eval_script = getattr(redis, "eval", None)
+    if callable(eval_script):
+        return bool(redis.eval(
+            _RELEASE_LEGACY_OPERATION_SCRIPT,
+            3,
+            lock_key,
+            operation_attempt_key(job_id),
+            operation_cache_attempt_key(job_id),
+            job_id,
+        ))
+    # Deliberate compatibility for minimal in-memory clients that have no Lua
+    # executor. Production Redis errors propagate instead of degrading to a
+    # check/delete race.
+    if current_operation_attempt(redis, job_id) is not None or _decoded(
+        redis.get(operation_cache_attempt_key(job_id))
+    ) is not None:
         return False
-
-    script = """
-    if redis.call('get', KEYS[1]) == ARGV[1] then
-      return redis.call('del', KEYS[1])
-    end
-    return 0
-    """
-    try:
-        return bool(redis.eval(script, 1, lock_key, job_id))
-    except Exception:
-        # Some test/fallback clients do not implement EVAL. Preserve ownership
-        # checking in the non-atomic fallback; never delete a newer job's lock.
-        current = _decoded(redis.get(lock_key))
-        if current != job_id:
-            return False
-        return bool(redis.delete(lock_key))
+    current = _decoded(redis.get(lock_key))
+    if current != job_id:
+        return False
+    return bool(redis.delete(lock_key))
 
 
 async def compensate_operation_enqueue_failure(
