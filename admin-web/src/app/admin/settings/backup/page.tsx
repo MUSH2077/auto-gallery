@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef } from "react";
+import { useCallback, useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
@@ -8,8 +8,20 @@ import { PageHeader, PageShell, ConfirmDialog, EmptyState, ErrorState, RowAction
 import { useToast } from "@/components/Toast";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { Archive, Database, FileJson, FileText, Settings } from "lucide-react";
+import { AdminOperationStatus } from "@/components/AdminOperationStatus";
+import { useAdminOperation } from "@/lib/useAdminOperation";
 
 const ALL_CONTENTS = ["database", "gallerydl-config", "app-config", "download-archives", "library-metadata"] as const;
+type BackupEstimateResult = { components: Record<string, number>; message?: string };
+type BackupCreateResult = {
+  status: string;
+  filename: string;
+  size_bytes: number;
+  size_mb: number;
+  contents: string[];
+  component_sizes: Record<string, number>;
+  message?: string;
+};
 
 const CONTENT_ICONS = {
   database: Database,
@@ -48,11 +60,25 @@ export default function BackupPage() {
   const [restoreManifest, setRestoreManifest] = useState<any>(null);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-  const [isCreating, setIsCreating] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
 
   const backups = useQuery({ queryKey: queryKeys.backups.list, queryFn: api.listBackups });
-  const estimate = useQuery({ queryKey: queryKeys.backups.estimate, queryFn: () => api.estimateBackupSizes() });
+  const handleBackupCompleted = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: queryKeys.backups.list });
+  }, [qc]);
+  const estimate = useAdminOperation<BackupEstimateResult>({
+    operationType: "admin-backup-estimate",
+    scope: "global",
+    startOperation: () => api.startBackupEstimate(),
+    loadLatest: () => api.getLatestBackupEstimate(),
+  });
+  const createOperation = useAdminOperation<BackupCreateResult, string[]>({
+    operationType: "admin-backup-create",
+    scope: "global",
+    startOperation: (contents) => api.createBackup(contents),
+    loadLatest: () => api.getLatestBackup(),
+    onCompleted: handleBackupCompleted,
+  });
   const backupItems = backups.data?.backups || [];
   const backupEntrance = useStaggeredEntrance(backupItems.map((backup) => backup.filename));
 
@@ -63,18 +89,8 @@ export default function BackupPage() {
   };
   const toggleAll = () => setSelected(selected.size === ALL_CONTENTS.length ? new Set() : new Set(ALL_CONTENTS));
   const selectedArr = [...selected];
-  const estTotal = estimate.data?.components
-    ? selectedArr.reduce((sum, c) => sum + (estimate.data!.components[c] || 0), 0) : 0;
-
-  const handleCreate = async () => {
-    setIsCreating(true);
-    try {
-      const data = await api.createBackup(selectedArr);
-      toast.success({ message: t("backup.created").replace("{filename}", data.filename).replace("{size}", String(data.size_mb)) });
-      qc.invalidateQueries({ queryKey: ["backups"] });
-    } catch (e) { toast.error({ message: (e as Error).message }); }
-    setIsCreating(false);
-  };
+  const estTotal = estimate.result?.components
+    ? selectedArr.reduce((sum, c) => sum + (estimate.result!.components[c] || 0), 0) : 0;
 
   const handleRestoreClick = () => fileRef.current?.click();
 
@@ -136,12 +152,26 @@ export default function BackupPage() {
             <span className="text-xs text-muted">
               {t("backup.estimated_size")}: <span className="font-mono font-medium">{fmtKB(estTotal)}</span>
             </span>
-            <button onClick={handleCreate} disabled={isCreating || selected.size === 0}
+            <button
+              type="button"
+              onClick={() => estimate.start(undefined)}
+              disabled={estimate.isStarting || estimate.isActive}
+              className="btn-ghost"
+            >
+              {estimate.isStarting ? t("admin_operation.starting") : t("backup.refresh_estimate")}
+            </button>
+            <button onClick={() => createOperation.start(selectedArr)} disabled={createOperation.isStarting || createOperation.isActive || selected.size === 0}
               className="btn-primary">
-              {isCreating ? t("backup.creating") : t("backup.create")}
+              {createOperation.isStarting || createOperation.isActive ? t("backup.creating") : t("backup.create")}
             </button>
           </div>
         </div>
+
+        <AdminOperationStatus controller={estimate} />
+        <AdminOperationStatus controller={createOperation} />
+        {createOperation.result?.filename ? (
+          <p className="mt-2 text-xs text-success">{createOperation.result.filename}</p>
+        ) : null}
 
         <label className="flex items-center gap-2 mb-3 text-xs text-muted cursor-pointer">
           <input type="checkbox" aria-label={t("backup.select_all")} checked={selected.size === ALL_CONTENTS.length} onChange={toggleAll} className="rounded" />
@@ -150,7 +180,7 @@ export default function BackupPage() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
           {ALL_CONTENTS.map((c) => {
-            const size = estimate.data?.components?.[c];
+            const size = estimate.result?.components?.[c];
             const checked = selected.has(c);
             const keyMap: Record<string, string> = {
               database: "db", "gallerydl-config": "config", "app-config": "appconfig",

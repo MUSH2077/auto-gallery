@@ -1,12 +1,32 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, ProxySettings } from "@/lib/api";
 import { PageHeader, PageShell, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
+import { AdminOperationStatus } from "@/components/AdminOperationStatus";
+import { useAdminOperation } from "@/lib/useAdminOperation";
 
-function TestResults({ data, proxyEnabled }: { data: any | null; proxyEnabled: boolean }) {
+type ProxyTestResult = {
+  proxy_enabled: boolean;
+  proxy_reachable: boolean | null;
+  proxy_reachable_error: string;
+  proxy_config: { http: string; https: string };
+  results: {
+    name: string;
+    url: string;
+    direct_ok: boolean;
+    direct_ms: number;
+    direct_error: string;
+    proxy_ok: boolean | null;
+    proxy_ms: number | null;
+    proxy_error: string;
+  }[];
+  message?: string;
+};
+
+function TestResults({ data, proxyEnabled }: { data: ProxyTestResult | null; proxyEnabled: boolean }) {
   const t = useT();
   if (!data) return null;
   const { results, proxy_reachable, proxy_reachable_error } = data;
@@ -78,34 +98,35 @@ function TestResults({ data, proxyEnabled }: { data: any | null; proxyEnabled: b
 
 export default function ProxySettingsPage() {
   const t = useT();
-  const toast = useToast();
-  const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
-  const [local, setLocal] = useState<ProxySettings | null>(null);
-
-  useEffect(() => {
-    if (settings.data?.proxy) {
-      setLocal((current) => current ?? { ...settings.data!.proxy });
-    }
-  }, [settings.data]);
-
-  const save = useMutation({
-    mutationFn: (data: ProxySettings) => api.updateAdminSettings({ proxy: data }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.admin.settings }); toast.success({ message: t("notification.saved") }); },
-  });
-  const testProxy = useMutation({ mutationFn: () => api.testProxy() });
-
-  const current = local || settings.data?.proxy;
   if (settings.isError) return <PageShell><ErrorState message={settings.error?.message || t("proxy.failed")} onRetry={() => settings.refetch()} /></PageShell>;
   if (!settings.data) return <PageShell><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded-md bg-subtle dark:bg-subtle" /><div className="h-48 rounded-md bg-subtle dark:bg-subtle" /></div></PageShell>;
+
+  return <ProxySettingsForm initial={settings.data.proxy} />;
+}
+
+function ProxySettingsForm({ initial }: { initial: ProxySettings }) {
+  const t = useT();
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [current, setLocal] = useState<ProxySettings>(() => ({ ...initial }));
+  const save = useMutation({
+    mutationFn: (data: ProxySettings) => api.updateAdminSettings({ proxy: data }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: queryKeys.admin.settings }); toast.success({ message: t("notification.saved") }); },
+  });
+  const testProxy = useAdminOperation<ProxyTestResult>({
+    operationType: "admin-proxy-test",
+    scope: "global",
+    startOperation: () => api.testProxy(),
+    loadLatest: () => api.getLatestProxyTest(),
+  });
   const setStr = (key: keyof ProxySettings, val: string) => { if (current) setLocal({ ...current, [key]: val }); };
 
   return (
     <PageShell>
       <PageHeader title={t("proxy.title")} description={t("proxy.desc")} />
 
-      {current && (
-        <>
+      <>
           <div className="card p-6 space-y-5">
             <div className="flex items-center justify-between pb-4 border-b border-border">
               <div>
@@ -158,13 +179,13 @@ export default function ProxySettingsPage() {
                 <span className="font-medium text-sm dark:text-white">{t("proxy.connectivity_test")}</span>
                 <p className="text-xs text-muted mt-0.5">{t("proxy.connectivity_test.desc")}</p>
               </div>
-              <button onClick={() => testProxy.mutate()} disabled={testProxy.isPending}
+              <button onClick={() => testProxy.start(undefined)} disabled={testProxy.isStarting || testProxy.isActive}
                 className="btn-primary min-h-11 shrink-0 px-4 text-sm">
-                {testProxy.isPending ? t("proxy.testing") : t("proxy.test_now")}
+                {testProxy.isStarting ? t("admin_operation.starting") : testProxy.isActive ? t("proxy.testing") : t("proxy.test_now")}
               </button>
             </div>
-            {testProxy.error && <p className="text-danger text-xs mt-2">{(testProxy.error as Error).message}</p>}
-            {testProxy.data && <TestResults data={testProxy.data} proxyEnabled={testProxy.data.proxy_enabled} />}
+            <AdminOperationStatus controller={testProxy} />
+            {testProxy.result && <TestResults data={testProxy.result} proxyEnabled={testProxy.result.proxy_enabled} />}
           </div>
 
           <div className="mt-4 flex justify-end items-center">
@@ -176,7 +197,6 @@ export default function ProxySettingsPage() {
             </button>
           </div>
         </>
-      )}
     </PageShell>
   );
 }

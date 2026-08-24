@@ -78,13 +78,7 @@ export interface paths {
         put?: never;
         /**
          * Create Backup
-         * @description Create a system backup with optional content selection.
-         *
-         *     Body (optional): {contents: ["database", "gallerydl-config", ...]}
-         *     Defaults to all components if not specified.
-         *
-         *     The whole body is blocking (pg_dump, copytree, rglob, tar.gz) and is run
-         *     off the event loop so a backup doesn't freeze the gallery for everyone.
+         * @description Start backup creation and return its durable TaskRun immediately.
          */
         post: operations["post_api_v1_admin_backup"];
         delete?: never;
@@ -120,14 +114,51 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Estimate Backup Sizes
-         * @description Return estimated sizes for each backup component.
-         *
-         *     Offloaded to a thread — _estimate_component_sizes walks lib_root for
-         *     metadata.json files, a full-tree traversal that must not block the loop.
+         * @description Start a backup estimate without traversing storage in this request.
          */
-        get: operations["get_api_v1_admin_backup_estimate"];
+        post: operations["post_api_v1_admin_backup_estimate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backup/estimate/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Backup Estimate
+         * @description Read the latest successful backup estimate from PostgreSQL.
+         */
+        get: operations["get_api_v1_admin_backup_estimate_latest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backup/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Backup
+         * @description Read the latest successful backup-creation result.
+         */
+        get: operations["get_api_v1_admin_backup_latest"];
         put?: never;
         post?: never;
         delete?: never;
@@ -495,9 +526,29 @@ export interface paths {
         put?: never;
         /**
          * Test Source Connection
-         * @description Test gallery-dl connectivity for a given source using current credentials.
+         * @description Start a gallery-dl connectivity test as a durable TaskRun.
          */
         post: operations["post_api_v1_admin_gallerydl_config_test_connection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/gallerydl-config/test-connection/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Source Connection
+         * @description Read the latest successful connectivity result for one source.
+         */
+        get: operations["get_api_v1_admin_gallerydl_config_test_connection_latest"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -555,11 +606,31 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Integrity Check
-         * @description Scan for data integrity issues: orphaned files, missing thumbnails, orphaned records.
+         * @description Start a durable integrity scan without walking storage in this request.
          */
-        get: operations["get_api_v1_admin_integrity_check"];
+        post: operations["post_api_v1_admin_integrity_check"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/integrity-check/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Integrity Check
+         * @description Read the latest successful integrity result from PostgreSQL.
+         */
+        get: operations["get_api_v1_admin_integrity_check_latest"];
         put?: never;
         post?: never;
         delete?: never;
@@ -617,10 +688,7 @@ export interface paths {
         };
         /**
          * Memory Diagnostics
-         * @description Memory snapshot for OOM diagnosis: process RSS + a census of the most
-         *     common live Python object types. A runaway type count (e.g. millions of
-         *     Work/Row/dict) points straight at what is filling RAM. Cheap — no
-         *     always-on tracemalloc.
+         * @description Return bounded Linux process and SQLAlchemy pool metrics.
          */
         get: operations["get_api_v1_admin_memory"];
         put?: never;
@@ -712,6 +780,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/operations/{task_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Registered Admin Operation
+         * @description Retry a failed registered administrator operation on the same TaskRun.
+         */
+        post: operations["post_api_v1_admin_operations_task_id_retry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/proxy/test": {
         parameters: {
             query?: never;
@@ -723,9 +811,29 @@ export interface paths {
         put?: never;
         /**
          * Test Proxy Connectivity
-         * @description Test connectivity through the configured proxy to key external sites.
+         * @description Start the proxy connectivity test as a durable TaskRun.
          */
         post: operations["post_api_v1_admin_proxy_test"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/proxy/test/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Proxy Connectivity
+         * @description Read the latest successful proxy connectivity result.
+         */
+        get: operations["get_api_v1_admin_proxy_test_latest"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3970,6 +4078,51 @@ export interface components {
             /** Source Url */
             source_url?: string | null;
         };
+        /** AdminOperationAccepted */
+        AdminOperationAccepted: {
+            /** Job Id */
+            job_id: string;
+            /** Operation Type */
+            operation_type: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "enqueued";
+            /** Task Id */
+            task_id: string;
+        };
+        /** AdminOperationSnapshot */
+        AdminOperationSnapshot: {
+            /**
+             * Completed At
+             * Format: date-time
+             */
+            completed_at: string;
+            /** Job Id */
+            job_id?: string | null;
+            /** Operation Type */
+            operation_type: string;
+            /** Progress */
+            progress?: {
+                [key: string]: unknown;
+            } | null;
+            /** Result */
+            result: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @constant
+             */
+            status: "complete";
+            /** Task Id */
+            task_id: string;
+        };
+        /** AdminOperationSnapshotResponse */
+        AdminOperationSnapshotResponse: {
+            snapshot?: components["schemas"]["AdminOperationSnapshot"] | null;
+        };
         /** AdminSettingsUpdate */
         AdminSettingsUpdate: {
             dedup?: components["schemas"]["DedupSettings"] | null;
@@ -7207,12 +7360,12 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -7296,7 +7449,54 @@ export interface operations {
             };
         };
     };
-    get_api_v1_admin_backup_estimate: {
+    post_api_v1_admin_backup_estimate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_backup_estimate_latest: {
         parameters: {
             query?: never;
             header?: never;
@@ -7311,7 +7511,54 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_backup_latest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -8254,12 +8501,61 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_gallerydl_config_test_connection_latest: {
+        parameters: {
+            query: {
+                source: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -8385,7 +8681,54 @@ export interface operations {
             };
         };
     };
-    get_api_v1_admin_integrity_check: {
+    post_api_v1_admin_integrity_check: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_integrity_check_latest: {
         parameters: {
             query?: never;
             header?: never;
@@ -8400,7 +8743,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -8777,7 +9120,103 @@ export interface operations {
             };
         };
     };
+    post_api_v1_admin_operations_task_id_retry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     post_api_v1_admin_proxy_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_proxy_test_latest: {
         parameters: {
             query?: never;
             header?: never;
@@ -8792,7 +9231,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */

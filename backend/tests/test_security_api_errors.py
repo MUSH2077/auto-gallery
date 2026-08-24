@@ -37,7 +37,7 @@ async def test_gallerydl_connection_does_not_expose_internal_exception(monkeypat
 
     monkeypatch.setattr(settings_service, "build_effective_gallerydl_config", fail_config)
 
-    result = await gallerydl.test_source_connection({"source": "pixiv"})
+    result = await gallerydl._run_source_connection_test("pixiv")
 
     assert result["success"] is False
     assert result["message"] == "Connection test failed unexpectedly."

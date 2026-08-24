@@ -36,6 +36,110 @@
         "title": "ActivatedSubscriptionSource",
         "type": "object"
       },
+      "AdminOperationAccepted": {
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "operation_type": {
+            "title": "Operation Type",
+            "type": "string"
+          },
+          "status": {
+            "const": "enqueued",
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "job_id",
+          "status",
+          "operation_type"
+        ],
+        "title": "AdminOperationAccepted",
+        "type": "object"
+      },
+      "AdminOperationSnapshot": {
+        "properties": {
+          "completed_at": {
+            "format": "date-time",
+            "title": "Completed At",
+            "type": "string"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "operation_type": {
+            "title": "Operation Type",
+            "type": "string"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress"
+          },
+          "result": {
+            "additionalProperties": true,
+            "title": "Result",
+            "type": "object"
+          },
+          "status": {
+            "const": "complete",
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "status",
+          "operation_type",
+          "result",
+          "completed_at"
+        ],
+        "title": "AdminOperationSnapshot",
+        "type": "object"
+      },
+      "AdminOperationSnapshotResponse": {
+        "properties": {
+          "snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminOperationSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "AdminOperationSnapshotResponse",
+        "type": "object"
+      },
       "AdminSettingsUpdate": {
         "properties": {
           "dedup": {
@@ -9027,7 +9131,7 @@
     },
     "/api/v1/admin/backup": {
       "post": {
-        "description": "Create a system backup with optional content selection.\n\nBody (optional): {contents: [\"database\", \"gallerydl-config\", ...]}\nDefaults to all components if not specified.\n\nThe whole body is blocking (pg_dump, copytree, rglob, tar.gz) and is run\noff the event loop so a backup doesn't freeze the gallery for everyone.",
+        "description": "Start backup creation and return its durable TaskRun immediately.",
         "operationId": "post_api_v1_admin_backup",
         "requestBody": {
           "content": {
@@ -9048,11 +9152,11 @@
           }
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
                 }
               }
             },
@@ -9105,8 +9209,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/admin/backup/download": {
@@ -9200,15 +9303,15 @@
       }
     },
     "/api/v1/admin/backup/estimate": {
-      "get": {
-        "description": "Return estimated sizes for each backup component.\n\nOffloaded to a thread — _estimate_component_sizes walks lib_root for\nmetadata.json files, a full-tree traversal that must not block the loop.",
-        "operationId": "get_api_v1_admin_backup_estimate",
+      "post": {
+        "description": "Start a backup estimate without traversing storage in this request.",
+        "operationId": "post_api_v1_admin_backup_estimate",
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
                 }
               }
             },
@@ -9261,8 +9364,137 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
+        ]
+      }
+    },
+    "/api/v1/admin/backup/estimate/latest": {
+      "get": {
+        "description": "Read the latest successful backup estimate from PostgreSQL.",
+        "operationId": "get_api_v1_admin_backup_estimate_latest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
         ],
-        "x-response-schema-status": "generic"
+        "summary": "Latest Backup Estimate",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/admin/backup/latest": {
+      "get": {
+        "description": "Read the latest successful backup-creation result.",
+        "operationId": "get_api_v1_admin_backup_latest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Latest Backup",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
       }
     },
     "/api/v1/admin/backup/list": {
@@ -10695,7 +10927,7 @@
     },
     "/api/v1/admin/gallerydl-config/test-connection": {
       "post": {
-        "description": "Test gallery-dl connectivity for a given source using current credentials.",
+        "description": "Start a gallery-dl connectivity test as a durable TaskRun.",
         "operationId": "post_api_v1_admin_gallerydl_config_test_connection",
         "requestBody": {
           "content": {
@@ -10710,11 +10942,11 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
                 }
               }
             },
@@ -10767,8 +10999,83 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
+        ]
+      }
+    },
+    "/api/v1/admin/gallerydl-config/test-connection/latest": {
+      "get": {
+        "description": "Read the latest successful connectivity result for one source.",
+        "operationId": "get_api_v1_admin_gallerydl_config_test_connection_latest",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "source",
+            "required": true,
+            "schema": {
+              "title": "Source",
+              "type": "string"
+            }
+          }
         ],
-        "x-response-schema-status": "generic"
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Latest Source Connection",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
       }
     },
     "/api/v1/admin/gitllery/settings": {
@@ -10903,15 +11210,15 @@
       }
     },
     "/api/v1/admin/integrity-check": {
-      "get": {
-        "description": "Scan for data integrity issues: orphaned files, missing thumbnails, orphaned records.",
-        "operationId": "get_api_v1_admin_integrity_check",
+      "post": {
+        "description": "Start a durable integrity scan without walking storage in this request.",
+        "operationId": "post_api_v1_admin_integrity_check",
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
                 }
               }
             },
@@ -10964,8 +11271,72 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
+        ]
+      }
+    },
+    "/api/v1/admin/integrity-check/latest": {
+      "get": {
+        "description": "Read the latest successful integrity result from PostgreSQL.",
+        "operationId": "get_api_v1_admin_integrity_check_latest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
         ],
-        "x-response-schema-status": "generic"
+        "summary": "Latest Integrity Check",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
       }
     },
     "/api/v1/admin/library/import-from-disk": {
@@ -11136,7 +11507,7 @@
     },
     "/api/v1/admin/memory": {
       "get": {
-        "description": "Memory snapshot for OOM diagnosis: process RSS + a census of the most\ncommon live Python object types. A runaway type count (e.g. millions of\nWork/Row/dict) points straight at what is filling RAM. Cheap — no\nalways-on tracemalloc.",
+        "description": "Return bounded Linux process and SQLAlchemy pool metrics.",
         "operationId": "get_api_v1_admin_memory",
         "parameters": [
           {
@@ -11499,16 +11870,93 @@
         "x-response-schema-status": "generic"
       }
     },
-    "/api/v1/admin/proxy/test": {
+    "/api/v1/admin/operations/{task_id}/retry": {
       "post": {
-        "description": "Test connectivity through the configured proxy to key external sites.",
-        "operationId": "post_api_v1_admin_proxy_test",
+        "description": "Retry a failed registered administrator operation on the same TaskRun.",
+        "operationId": "post_api_v1_admin_operations_task_id_retry",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Retry Registered Admin Operation",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": true,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/admin/proxy/test": {
+      "post": {
+        "description": "Start the proxy connectivity test as a durable TaskRun.",
+        "operationId": "post_api_v1_admin_proxy_test",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
                 }
               }
             },
@@ -11561,8 +12009,72 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
+        ]
+      }
+    },
+    "/api/v1/admin/proxy/test/latest": {
+      "get": {
+        "description": "Read the latest successful proxy connectivity result.",
+        "operationId": "get_api_v1_admin_proxy_test_latest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
         ],
-        "x-response-schema-status": "generic"
+        "summary": "Latest Proxy Connectivity",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
       }
     },
     "/api/v1/admin/reset-settings": {

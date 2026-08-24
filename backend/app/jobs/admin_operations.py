@@ -329,6 +329,59 @@ async def _execute_registered_admin_operation(
         return await reconcile_historical_download_conflicts_unlocked(
             int(options.get("limit") or 500)
         )
+    if operation_type == "admin-integrity-scan":
+        from app.api.admin.settings import _run_integrity_check
+
+        await update_current_admin_operation_progress(
+            task_id,
+            {"phase": "scanning", "label": "Scanning data integrity"},
+        )
+        async with async_session() as db:
+            result = await _run_integrity_check(db)
+        return {**result, "message": "Integrity scan complete"}
+    if operation_type == "admin-backup-estimate":
+        from app.api.admin.backup import _estimate_component_sizes
+
+        await update_current_admin_operation_progress(
+            task_id,
+            {"phase": "estimating", "label": "Estimating backup size"},
+        )
+        sizes = await asyncio.to_thread(_estimate_component_sizes)
+        return {
+            "components": {
+                key: round(value / 1024, 1)
+                for key, value in sizes.items()
+            },
+            "message": "Backup estimate complete",
+        }
+    if operation_type == "admin-backup-create":
+        from app.api.admin.backup import _create_backup_sync
+
+        await update_current_admin_operation_progress(
+            task_id,
+            {"phase": "creating", "label": "Creating backup archive"},
+        )
+        result = await asyncio.to_thread(_create_backup_sync, options)
+        return {**result, "message": "Backup created"}
+    if operation_type == "admin-proxy-test":
+        from app.api.admin.settings import _run_proxy_connectivity_test
+
+        await update_current_admin_operation_progress(
+            task_id,
+            {"phase": "testing", "label": "Testing proxy connectivity"},
+        )
+        async with async_session() as db:
+            result = await _run_proxy_connectivity_test(db)
+        return {**result, "message": "Proxy connectivity test complete"}
+    if operation_type == "admin-gallerydl-connectivity-test":
+        from app.api.admin.gallerydl import _run_source_connection_test
+
+        source = str(options.get("source") or "")
+        await update_current_admin_operation_progress(
+            task_id,
+            {"phase": "testing", "label": f"Testing {source} connectivity"},
+        )
+        return await _run_source_connection_test(source)
     raise ValueError(f"Unsupported registered administrator operation: {operation_type}")
 
 

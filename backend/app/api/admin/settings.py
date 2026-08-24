@@ -31,6 +31,10 @@ from app.models.subscription_source import SubscriptionSource
 from app.schemas.schedule import CalendarScheduleRule, normalize_legacy_schedule_payload
 from app.schemas.gitllery import GitllerySettingsResponse
 from app.schemas.data_center import StorageBreakdownResponse, SystemInfoResponse
+from app.schemas.admin_operations import (
+    AdminOperationAccepted,
+    AdminOperationSnapshotResponse,
+)
 from app.services.redis_client import get_redis
 from app.services.queue_admission import (
     QueueAdmissionError,
@@ -399,40 +403,62 @@ def _current_rss_mb() -> float | None:
 
 @router.get("/memory")
 async def memory_diagnostics(top: int = 25):
-    """Memory snapshot for OOM diagnosis: process RSS + a census of the most
-    common live Python object types. A runaway type count (e.g. millions of
-    Work/Row/dict) points straight at what is filling RAM. Cheap — no
-    always-on tracemalloc."""
-    import gc
-    import sys
-    from collections import Counter
+    """Return bounded Linux process and SQLAlchemy pool metrics."""
+    del top  # Kept as a rolling compatibility query parameter.
 
-    def _snapshot() -> dict:
-        gc.collect()
-        counts: Counter = Counter()
-        sizes: Counter = Counter()
-        for obj in gc.get_objects():
-            try:
-                tn = type(obj).__name__
-                counts[tn] += 1
-                sizes[tn] += sys.getsizeof(obj)
-            except Exception:
-                continue
-        top_by_count = [
-            {"type": t, "count": c, "approx_kb": round(sizes[t] / 1024, 1)}
-            for t, c in counts.most_common(max(1, min(top, 100)))
-        ]
-        return {
-            "total_tracked_objects": sum(counts.values()),
-            "gc_counts": gc.get_count(),
-            "top_types": top_by_count,
-        }
+    proc: dict[str, int | float] = {}
+    try:
+        with open("/proc/self/status", encoding="utf-8") as status_file:
+            for line in status_file:
+                name, separator, raw = line.partition(":")
+                if not separator or name not in {
+                    "VmRSS",
+                    "VmSize",
+                    "RssAnon",
+                    "RssFile",
+                    "Threads",
+                }:
+                    continue
+                value = raw.strip().split()[0]
+                if name == "Threads":
+                    proc["threads"] = int(value)
+                else:
+                    proc[
+                        {
+                            "VmRSS": "rss_mb",
+                            "VmSize": "virtual_mb",
+                            "RssAnon": "anonymous_rss_mb",
+                            "RssFile": "file_rss_mb",
+                        }[name]
+                    ] = round(int(value) / 1024, 1)
+    except (OSError, ValueError, IndexError):
+        proc = {}
 
-    snap = await asyncio.to_thread(_snapshot)
+    from app.database import engine
+
+    pool = engine.sync_engine.pool
+
+    def pool_value(name: str):
+        value = getattr(pool, name, None)
+        if not callable(value):
+            return None
+        try:
+            return int(value())
+        except Exception:
+            return None
+
+    runtime_size = pool_value("size")
     return {
-        "rss_mb": _current_rss_mb(),
-        "pool": {"size": settings.db_pool_size, "max_overflow": settings.db_max_overflow},
-        **snap,
+        "source": "/proc/self/status",
+        "rss_mb": proc.get("rss_mb", _current_rss_mb()),
+        "proc": proc,
+        "pool": {
+            "size": runtime_size if runtime_size is not None else settings.db_pool_size,
+            "max_overflow": settings.db_max_overflow,
+            "checked_in": pool_value("checkedin"),
+            "checked_out": pool_value("checkedout"),
+            "overflow": pool_value("overflow"),
+        },
     }
 
 
@@ -705,8 +731,41 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     return result
 
 
-@router.get("/integrity-check")
-async def integrity_check(db: AsyncSession = Depends(get_db)):
+@router.post(
+    "/integrity-check",
+    status_code=202,
+    response_model=AdminOperationAccepted,
+)
+async def integrity_check():
+    """Start a durable integrity scan without walking storage in this request."""
+    from app.services.operations import start_admin_operation
+
+    return await start_admin_operation(
+        operation_type="admin-integrity-scan",
+        scope_key="diagnostics:integrity:active",
+        title="Integrity scan",
+        entity="integrity",
+        options={},
+        queue_name="maintenance",
+    )
+
+
+@router.get(
+    "/integrity-check/latest",
+    response_model=AdminOperationSnapshotResponse,
+)
+async def latest_integrity_check(db: AsyncSession = Depends(get_db)):
+    """Read the latest successful integrity result from PostgreSQL."""
+    from app.services.operations import latest_successful_admin_operation
+
+    return await latest_successful_admin_operation(
+        db,
+        operation_type="admin-integrity-scan",
+        scope_key="diagnostics:integrity:active",
+    )
+
+
+async def _run_integrity_check(db: AsyncSession):
     """Scan for data integrity issues: orphaned files, missing thumbnails, orphaned records."""
     from sqlalchemy import text
     issues = []
@@ -1001,8 +1060,41 @@ async def update_settings(data: AdminSettingsUpdate, db: AsyncSession = Depends(
 
 # ── Proxy Test ──
 
-@router.post("/proxy/test")
-async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
+@router.post(
+    "/proxy/test",
+    status_code=202,
+    response_model=AdminOperationAccepted,
+)
+async def test_proxy_connectivity():
+    """Start the proxy connectivity test as a durable TaskRun."""
+    from app.services.operations import start_admin_operation
+
+    return await start_admin_operation(
+        operation_type="admin-proxy-test",
+        scope_key="diagnostics:proxy:active",
+        title="Proxy connectivity test",
+        entity="proxy-test",
+        options={},
+        queue_name="maintenance",
+    )
+
+
+@router.get(
+    "/proxy/test/latest",
+    response_model=AdminOperationSnapshotResponse,
+)
+async def latest_proxy_connectivity(db: AsyncSession = Depends(get_db)):
+    """Read the latest successful proxy connectivity result."""
+    from app.services.operations import latest_successful_admin_operation
+
+    return await latest_successful_admin_operation(
+        db,
+        operation_type="admin-proxy-test",
+        scope_key="diagnostics:proxy:active",
+    )
+
+
+async def _run_proxy_connectivity_test(db: AsyncSession):
     """Test connectivity through the configured proxy to key external sites."""
     import urllib.error
     import urllib.parse

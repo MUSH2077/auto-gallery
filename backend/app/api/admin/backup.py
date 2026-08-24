@@ -23,6 +23,10 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.schemas.admin_operations import (
+    AdminOperationAccepted,
+    AdminOperationSnapshotResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -124,28 +128,71 @@ def _estimate_component_sizes() -> dict[str, int]:
     return sizes
 
 
-@router.get("/backup/estimate")
+@router.post(
+    "/backup/estimate",
+    status_code=202,
+    response_model=AdminOperationAccepted,
+)
 async def estimate_backup_sizes():
-    """Return estimated sizes for each backup component.
+    """Start a backup estimate without traversing storage in this request."""
+    from app.services.operations import start_admin_operation
 
-    Offloaded to a thread — _estimate_component_sizes walks lib_root for
-    metadata.json files, a full-tree traversal that must not block the loop.
-    """
-    sizes = await asyncio.to_thread(_estimate_component_sizes)
-    return {"components": {k: round(v / 1024, 1) for k, v in sizes.items()}}
+    return await start_admin_operation(
+        operation_type="admin-backup-estimate",
+        scope_key="backup:estimate:active",
+        title="Backup estimate",
+        entity="backup-estimate",
+        options={},
+        queue_name="maintenance",
+    )
 
 
-@router.post("/backup")
+@router.get(
+    "/backup/estimate/latest",
+    response_model=AdminOperationSnapshotResponse,
+)
+async def latest_backup_estimate(db: AsyncSession = Depends(get_db)):
+    """Read the latest successful backup estimate from PostgreSQL."""
+    from app.services.operations import latest_successful_admin_operation
+
+    return await latest_successful_admin_operation(
+        db,
+        operation_type="admin-backup-estimate",
+        scope_key="backup:estimate:active",
+    )
+
+
+@router.post(
+    "/backup",
+    status_code=202,
+    response_model=AdminOperationAccepted,
+)
 async def create_backup(data: dict | None = None):
-    """Create a system backup with optional content selection.
+    """Start backup creation and return its durable TaskRun immediately."""
+    from app.services.operations import start_admin_operation
 
-    Body (optional): {contents: ["database", "gallerydl-config", ...]}
-    Defaults to all components if not specified.
+    selected = (data or {}).get("contents", list(ALL_BACKUP_CONTENTS))
+    return await start_admin_operation(
+        operation_type="admin-backup-create",
+        scope_key="backup:create:active",
+        title="Create backup",
+        entity="backup",
+        options={"contents": selected},
+        queue_name="maintenance",
+        job_timeout=3600,
+    )
 
-    The whole body is blocking (pg_dump, copytree, rglob, tar.gz) and is run
-    off the event loop so a backup doesn't freeze the gallery for everyone.
-    """
-    return await asyncio.to_thread(_create_backup_sync, data)
+
+@router.get("/backup/latest", response_model=AdminOperationSnapshotResponse)
+async def latest_backup(db: AsyncSession = Depends(get_db)):
+    """Read the latest successful backup-creation result."""
+    from app.services.operations import latest_successful_admin_operation
+
+    return await latest_successful_admin_operation(
+        db,
+        operation_type="admin-backup-create",
+        scope_key="backup:create:active",
+    )
 
 
 def _create_backup_sync(data: dict | None = None):

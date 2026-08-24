@@ -251,6 +251,46 @@ export interface TaskRunListResponse {
   items: TaskRun[];
 }
 
+export interface AdminOperationAccepted {
+  task_id: string;
+  job_id: string;
+  status: "enqueued";
+  operation_type: string;
+}
+
+export interface AdminOperationStatus<TResult = Record<string, unknown>> {
+  task_id: string;
+  job_id: string;
+  rq_job_id?: string | null;
+  status: "enqueued" | "running" | "recovering" | "paused" | "complete" | "failed" | "stale" | "cancelled" | string;
+  operation_type: string;
+  progress?: {
+    phase?: string;
+    label?: string;
+    current?: number;
+    total?: number;
+    percent?: number;
+  } | null;
+  result?: TResult | null;
+  error?: string | null;
+  reason_code?: string | null;
+  updated_at?: number | string | null;
+}
+
+export interface AdminOperationSnapshot<TResult = Record<string, unknown>> {
+  task_id: string;
+  job_id?: string | null;
+  status: "complete";
+  operation_type: string;
+  progress?: AdminOperationStatus<TResult>["progress"];
+  result: TResult;
+  completed_at: string;
+}
+
+export interface AdminOperationSnapshotResponse<TResult = Record<string, unknown>> {
+  snapshot: AdminOperationSnapshot<TResult> | null;
+}
+
 export type DownloadConflictWinner = "canonical" | "staged";
 
 export interface DownloadConflictEvidence {

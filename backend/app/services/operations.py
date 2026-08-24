@@ -49,6 +49,11 @@ _ADMIN_INTERNAL_RESOURCE_PROFILES = {
     "admin-gitllery-sync": "git_projection",
     "hierarchy-delete": "maintenance",
     "asset-dedup-scan": "image_derive",
+    "admin-integrity-scan": "maintenance",
+    "admin-backup-estimate": "maintenance",
+    "admin-backup-create": "maintenance",
+    "admin-proxy-test": "maintenance",
+    "admin-gallerydl-connectivity-test": "maintenance",
 }
 _ADMIN_OPERATION_ATTEMPT: ContextVar[tuple[UUID, int] | None] = ContextVar(
     "admin_operation_attempt",
@@ -211,6 +216,34 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
             "app.jobs.download_conflicts.reconcile_historical_download_conflicts",
             scopes=("diagnostics:download-conflicts:active",),
             timeout=3600,
+        ),
+        _spec(
+            "admin-integrity-scan",
+            "app.jobs.admin_operations.run_integrity_scan_operation",
+            scopes=("diagnostics:integrity:active",),
+        ),
+        _spec(
+            "admin-backup-estimate",
+            "app.jobs.admin_operations.run_backup_estimate_operation",
+            scopes=("backup:estimate:active",),
+        ),
+        _spec(
+            "admin-backup-create",
+            "app.jobs.admin_operations.run_backup_create_operation",
+            scopes=("backup:create:active",),
+            timeout=3600,
+        ),
+        _spec(
+            "admin-proxy-test",
+            "app.jobs.admin_operations.run_proxy_test_operation",
+            scopes=("diagnostics:proxy:active",),
+            timeout=120,
+        ),
+        _spec(
+            "admin-gallerydl-connectivity-test",
+            "app.jobs.admin_operations.run_gallerydl_connectivity_test_operation",
+            scopes=("diagnostics:gallerydl:",),
+            timeout=180,
         ),
     )
 }
@@ -1356,6 +1389,51 @@ async def retry_admin_operation(
             if publication in {"published", "existing"}
             else ADMIN_DISPATCH_PENDING
         ),
+    }
+
+
+async def latest_successful_admin_operation(
+    db: AsyncSession,
+    *,
+    operation_type: str,
+    scope_key: str,
+) -> dict[str, Any]:
+    """Return the latest completed TaskRun result for one registered scope."""
+
+    from app.models.task_run import TaskRun
+
+    _registered_spec(
+        operation_type,
+        scope_key=scope_key,
+        queue_name="maintenance",
+    )
+    scope_text = TaskRun.meta[ADMIN_DISPATCH_META_KEY]["scope_key"].astext
+    task = (
+        await db.execute(
+            select(TaskRun)
+            .where(
+                TaskRun.kind == "admin",
+                TaskRun.operation_type == operation_type,
+                TaskRun.status == "complete",
+                scope_text == scope_key,
+                TaskRun.finished_at.is_not(None),
+            )
+            .order_by(TaskRun.finished_at.desc(), TaskRun.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if task is None:
+        return {"snapshot": None}
+    return {
+        "snapshot": {
+            "task_id": str(task.id),
+            "job_id": task.rq_job_id,
+            "status": "complete",
+            "operation_type": str(task.operation_type),
+            "progress": task.progress_data,
+            "result": dict(task.result_data or {}),
+            "completed_at": task.finished_at,
+        }
     }
 
 

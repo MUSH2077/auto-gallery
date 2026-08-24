@@ -599,24 +599,28 @@ export const api = {
 
   getAuthStatus: () => request<T.AuthStatusResponse>("/api/v1/admin/auth-status"),
 
-  testProxy: () => request<{
+  testProxy: () => request<T.AdminOperationAccepted>("/api/v1/admin/proxy/test", { method: "POST" }),
+  getLatestProxyTest: () => request<T.AdminOperationSnapshotResponse<{
     proxy_enabled: boolean;
     proxy_reachable: boolean | null;
     proxy_reachable_error: string;
     proxy_config: { http: string; https: string };
     results: { name: string; url: string; direct_ok: boolean; direct_ms: number; direct_error: string; proxy_ok: boolean | null; proxy_ms: number | null; proxy_error: string }[];
-  }>("/api/v1/admin/proxy/test", { method: "POST" }),
+    message?: string;
+  }>>("/api/v1/admin/proxy/test/latest"),
 
   getSystemInfo: () => request<T.SystemInfoResponse>("/api/v1/admin/system-info"),
   getImportProgress: () => request<{ running: number; pending: number; complete: number; failed: number; recent: { id: string; status: string; error: string }[] }>("/api/v1/admin/import-progress"),
   cleanupMetadataJSONs: () => request<{ status: string; removed: number }>("/api/v1/admin/cleanup-metadata-jsons", { method: "POST" }),
   getStorageBreakdown: () =>
     request<T.StorageBreakdownResponse>("/api/v1/admin/storage-breakdown"),
-  getIntegrityCheck: () => request<{
+  startIntegrityCheck: () => request<T.AdminOperationAccepted>("/api/v1/admin/integrity-check", { method: "POST" }),
+  getLatestIntegrityCheck: () => request<T.AdminOperationSnapshotResponse<{
     issues: { type: string; severity: string; count: number; description: string; items: any[] }[];
     db_stats: Record<string, number>;
     checked_at: string;
-  }>("/api/v1/admin/integrity-check"),
+    message?: string;
+  }>>("/api/v1/admin/integrity-check/latest"),
   clearEntity: (entity: T.ClearEntity, confirmation: string) =>
     request<{ status: string; message: string; deleted?: Record<string, number> }>(`/api/v1/admin/clear/${entity}`, {
       method: "POST",
@@ -667,6 +671,12 @@ export const api = {
       meta?: Record<string, any>;
       updated_at?: number;
     }>(`/api/v1/admin/operations/${jobId}`),
+
+  getAdminOperationTask: <TResult = Record<string, unknown>>(taskId: string) =>
+    request<T.AdminOperationStatus<TResult>>(`/api/v1/admin/operations/${taskId}`),
+
+  retryAdminOperation: (taskId: string) =>
+    request<T.AdminOperationAccepted>(`/api/v1/admin/operations/${taskId}/retry`, { method: "POST" }),
 
   resetSettings: () =>
     request<{ status: string; message: string }>("/api/v1/admin/reset-settings", { method: "POST" }),
@@ -829,19 +839,34 @@ export const api = {
     request<{ status: string; message: string; path: string }>("/api/v1/admin/gallerydl-config", { method: "PUT", body: JSON.stringify(data) }),
 
   testGalleryDLConnection: (source: string) =>
-    request<{ source: string; success: boolean; message: string; details: string }>("/api/v1/admin/gallerydl-config/test-connection", { method: "POST", body: JSON.stringify({ source }) }),
+    request<T.AdminOperationAccepted>("/api/v1/admin/gallerydl-config/test-connection", { method: "POST", body: JSON.stringify({ source }) }),
+
+  getLatestGalleryDLConnection: (source: string) =>
+    request<T.AdminOperationSnapshotResponse<{ source: string; success: boolean; message: string; details: string }>>(
+      `/api/v1/admin/gallerydl-config/test-connection/latest?source=${encodeURIComponent(source)}`,
+    ),
 
   // Backup & Restore
   createBackup: (contents?: string[]) =>
-    request<{ status: string; filename: string; size_bytes: number; size_mb: number; contents: string[]; component_sizes: Record<string, number> }>(
+    request<T.AdminOperationAccepted>(
       "/api/v1/admin/backup", { method: "POST", body: JSON.stringify({ contents: contents || ["database", "gallerydl-config", "app-config", "download-archives", "library-metadata"] }) }),
+
+  getLatestBackup: () =>
+    request<T.AdminOperationSnapshotResponse<{ status: string; filename: string; size_bytes: number; size_mb: number; contents: string[]; component_sizes: Record<string, number>; message?: string }>>(
+      "/api/v1/admin/backup/latest",
+    ),
 
   listBackups: () =>
     request<{ backups: { filename: string; size_mb: number; created_at: string; contents: string[]; component_sizes?: Record<string, number>; version?: string }[] }>(
       "/api/v1/admin/backup/list"),
 
-  estimateBackupSizes: () =>
-    request<{ components: Record<string, number> }>("/api/v1/admin/backup/estimate"),
+  startBackupEstimate: () =>
+    request<T.AdminOperationAccepted>("/api/v1/admin/backup/estimate", { method: "POST" }),
+
+  getLatestBackupEstimate: () =>
+    request<T.AdminOperationSnapshotResponse<{ components: Record<string, number>; message?: string }>>(
+      "/api/v1/admin/backup/estimate/latest",
+    ),
 
   restoreBackup: (file: File) => {
     const formData = new FormData();

@@ -31,6 +31,7 @@ from app.services.redis_client import get_redis
 from app.services.queue_admission import checked_enqueue_in
 from app.services.operations import get_operation_status
 from app.services.settings import source_key_for_extractor
+from app.schemas.admin_operations import AdminOperationAccepted
 from app.services import admin_data
 from app.services.admin_data import (
     CONFIRMATION_PHRASES,
@@ -221,6 +222,7 @@ async def get_admin_operation(job_id: str):
                     "progress": payload["progress_data"],
                     "result": payload["result_data"],
                     "error": payload["error_log"],
+                    "reason_code": payload["reason_code"],
                     "meta": payload["meta"],
                     "updated_at": task.updated_at.timestamp() if task.updated_at else None,
                 }
@@ -234,6 +236,18 @@ async def get_admin_operation(job_id: str):
     if status:
         return status
     raise HTTPException(status_code=404, detail="Operation not found")
+
+
+@router.post(
+    "/operations/{task_id}/retry",
+    status_code=202,
+    response_model=AdminOperationAccepted,
+)
+async def retry_registered_admin_operation(task_id: UUID):
+    """Retry a failed registered administrator operation on the same TaskRun."""
+    from app.services.operations import retry_admin_operation
+
+    return await retry_admin_operation(task_id)
 
 
 @router.get("/operations")

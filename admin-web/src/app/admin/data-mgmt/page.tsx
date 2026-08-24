@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, type ClearEntity } from "@/lib/api";
 import { PageHeader, ConfirmDialog, Modal, PageShell, StatusBadge, PermissionGuard } from "@/components";
@@ -14,8 +14,25 @@ import { useStaggeredEntrance } from "@/lib/motion";
 import { useRouter } from "next/navigation";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { adminRoutes } from "@/lib/adminRoutes";
+import { AdminOperationStatus } from "@/components/AdminOperationStatus";
+import { useAdminOperation } from "@/lib/useAdminOperation";
 
 type Severity = "error" | "warning" | "info";
+type IntegrityResult = {
+  issues: { type: string; severity: string; count: number; description: string; items: any[] }[];
+  db_stats: Record<string, number>;
+  checked_at: string;
+  message?: string;
+};
+type BackupResult = {
+  status: string;
+  filename: string;
+  size_bytes: number;
+  size_mb: number;
+  contents: string[];
+  component_sizes: Record<string, number>;
+  message?: string;
+};
 
 function formatSize(mb: number): string {
   if (!Number.isFinite(mb)) return "-";
@@ -68,8 +85,23 @@ export default function DataManagementPage() {
     queryFn: () => api.getStorageBreakdown(),
     placeholderData: (previousData) => previousData,
   });
-  const integrity = useQuery({ queryKey: ["integrity-check"], queryFn: () => api.getIntegrityCheck(), enabled: false });
   const backups = useQuery({ queryKey: ["backups"], queryFn: () => api.listBackups() });
+  const refreshBackups = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: ["backups"] });
+  }, [qc]);
+  const integrity = useAdminOperation<IntegrityResult>({
+    operationType: "admin-integrity-scan",
+    scope: "global",
+    startOperation: () => api.startIntegrityCheck(),
+    loadLatest: () => api.getLatestIntegrityCheck(),
+  });
+  const backupOperation = useAdminOperation<BackupResult>({
+    operationType: "admin-backup-create",
+    scope: "global",
+    startOperation: () => api.createBackup(),
+    loadLatest: () => api.getLatestBackup(),
+    onCompleted: refreshBackups,
+  });
 
   // ── Mutations ──
   const cleanupJSON = useMutation({
@@ -121,17 +153,6 @@ export default function DataManagementPage() {
     onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
   });
 
-  const createBackupMut = useMutation({
-    mutationFn: () => api.createBackup(),
-    onSuccess: (d: any) => {
-      setResult({ ok: true, msg: t("backup.created", { filename: d.filename, size: d.size_mb }) });
-      backups.refetch();
-    },
-    onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
-  });
-
-  const runIntegrity = () => integrity.refetch();
-
   const dangerActions = [
     { key: "all", title: t("datamgmt.danger_clear_all"), desc: t("datamgmt.danger_clear_all_desc"), color: "red" },
   ] satisfies { key: ClearEntity; title: string; desc: string; color: string }[];
@@ -173,8 +194,9 @@ export default function DataManagementPage() {
   // Computed
   const info = systemInfo.data;
   const breakdown = storageBreakdown.data;
-  const issues = integrity.data?.issues || [];
+  const issues = integrity.result?.issues || [];
   const dbStats = breakdown?.db_stats || info?.db_stats;
+  const integrityDbStats = integrity.result?.db_stats;
   const overviewError = (systemInfo.isError && !info) || (storageBreakdown.isError && !breakdown);
   const overviewLoading = !overviewError && (!info || !breakdown);
   const lastBackup = backups.data?.backups?.[0];
@@ -400,15 +422,17 @@ export default function DataManagementPage() {
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-medium text-sm">{t("datamgmt.integrity_title")}</h3>
           <button
-            onClick={runIntegrity}
-            disabled={integrity.isFetching}
+            aria-label={t("datamgmt.integrity_run")}
+            onClick={() => integrity.start(undefined)}
+            disabled={integrity.isStarting || integrity.isActive}
             className="btn-primary px-3 py-1.5 text-xs"
           >
-            {integrity.isFetching ? t("datamgmt.integrity_running") : t("datamgmt.integrity_run")}
+            {integrity.isStarting || integrity.isActive ? t("datamgmt.integrity_running") : t("datamgmt.integrity_run")}
           </button>
         </div>
+        <AdminOperationStatus controller={integrity} />
 
-        {integrity.data ? (
+        {integrity.result ? (
           <>
             {issues.length === 0 ? (
               <div className="text-center py-6 text-success">
@@ -454,11 +478,11 @@ export default function DataManagementPage() {
               </div>
             )}
 
-            {dbStats && (
+            {integrityDbStats && (
               <div className="mt-4 pt-3 border-t">
                 <h4 className="text-xs font-medium text-muted mb-2">{t("datamgmt.integrity_db_stats")}</h4>
                 <div className="grid grid-cols-3 md:grid-cols-5 gap-2">
-                  {Object.entries(dbStats).map(([tbl, count]) => (
+                  {Object.entries(integrityDbStats).map(([tbl, count]) => (
                     <div key={tbl} className="text-center bg-subtle rounded p-2">
                       <div className="text-sm font-mono font-bold">{count}</div>
                       <div className="text-[10px] text-muted">{tbl}</div>
@@ -468,9 +492,9 @@ export default function DataManagementPage() {
               </div>
             )}
 
-            {integrity.data.checked_at && (
+            {integrity.result.checked_at && (
               <p className="text-xs text-muted mt-3">
-                {t("datamgmt.integrity_checked_at")}: {fmt.dateTime(integrity.data.checked_at)}
+                {t("datamgmt.integrity_checked_at")}: {fmt.dateTime(integrity.result.checked_at)}
               </p>
             )}
           </>
@@ -594,10 +618,14 @@ export default function DataManagementPage() {
                 <div className="text-sm font-medium mt-0.5">{backups.data?.backups?.length ?? 0}</div>
               </div>
             </div>
-            <button onClick={() => createBackupMut.mutate()} disabled={createBackupMut.isPending}
+            <button onClick={() => backupOperation.start(undefined)} disabled={backupOperation.isStarting || backupOperation.isActive}
               className="btn-primary w-full">
-              {createBackupMut.isPending ? t("datamgmt.backup_creating") : t("datamgmt.backup_create")}
+              {backupOperation.isStarting || backupOperation.isActive ? t("datamgmt.backup_creating") : t("datamgmt.backup_create")}
             </button>
+            <AdminOperationStatus controller={backupOperation} />
+            {backupOperation.result?.filename ? (
+              <p className="text-xs text-success">{backupOperation.result.filename}</p>
+            ) : null}
 
             <div className="pt-3 border-t">
               <h4 className="text-xs font-medium text-muted mb-2">{t("datamgmt.db_stats_title")}</h4>
