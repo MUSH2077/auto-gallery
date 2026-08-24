@@ -397,3 +397,150 @@ Review-fix self-review:
   release baseline; per review instructions it was not rerun for this isolated
   migration-expression correction, and the focused integration matrices are
   green.
+
+## Review fix round 2/5: exact Python edge-whitespace semantics
+
+The second whole-branch review correctly identified that PostgreSQL POSIX
+`[[:space:]]` is still not equivalent to Python 3 `str.strip()`. The migration
+now supplies two-argument `btrim`, superseding the round-1 POSIX expression,
+with a literal SQL Unicode-escape character set containing exactly these 29
+code points:
+
+```text
+U+0009-U+000D, U+001C-U+001F, U+0020, U+0085, U+00A0, U+1680,
+U+2000-U+200A, U+2028-U+2029, U+202F, U+205F, U+3000
+```
+
+The integration inputs use PostgreSQL `U&'...'` literals and cover every
+listed group: ASCII whitespace, the four information separators, NEL, NBSP,
+OGHAM SPACE MARK, every U+2000-family character, line/paragraph separators,
+narrow no-break space, medium mathematical space, and ideographic space.
+Expected arrays are hard-coded literals; no production normalization helper is
+used to calculate them. Internal NBSP/U+2003/U+202F and U+2028 characters are
+retained while array order and fractional precision remain literal.
+
+RED against the POSIX implementation:
+
+```bash
+docker compose run --rm --no-deps -v "$PWD:/workspace" \
+  -w /workspace/backend backend python -m pytest -q \
+  tests/test_migrations_idempotent.py::TestMigrationIdempotency::test_forward_calendar_repair_normalizes_times_across_round_trip
+# 1 failed in 25.98s
+# At index 0: '\x1c\x1d03:00:00.000\x1e\x1f' != '03:00:00.000'
+```
+
+The first implementation run exposed an f-string interpolation mistake in the
+SQL JSONB path before any green result was accepted:
+
+```text
+# 1 failed in 22.77s
+# NameError: name 'times' is not defined
+```
+
+Escaping the literal JSONB path braces fixed that construction error. The
+reviewed expression is shared by both `jsonb_agg` transforms and both `EXISTS`
+change predicates, so they cannot disagree:
+
+```sql
+btrim(
+    item.value,
+    U&'\0009\000A\000B\000C\000D\001C\001D\001E\001F\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000'
+)
+```
+
+Focused GREEN, including downgrade and re-upgrade:
+
+```bash
+docker compose run --rm --no-deps -v "$PWD:/workspace" \
+  -w /workspace/backend backend python -m pytest -q \
+  tests/test_migrations_idempotent.py::TestMigrationIdempotency::test_forward_calendar_repair_normalizes_times_across_round_trip
+# 1 passed in 33.36s
+```
+
+Migration chain and calendar baseline:
+
+```bash
+docker compose run --rm --no-deps -v "$PWD:/workspace" \
+  -w /workspace/backend backend python -m pytest -q \
+  tests/test_migrations_idempotent.py
+# 10 passed in 77.80s (0:01:17)
+
+docker compose run --rm --no-deps -v "$PWD:/workspace" \
+  -w /workspace/backend backend python -m pytest -q \
+  tests/test_calendar_schedule_schema.py \
+  tests/test_subscription_schedule_consistency.py \
+  tests/test_subscription_scheduler_persistence.py \
+  tests/test_subscription_reliable_schedule.py \
+  tests/test_scheduler_contract.py \
+  tests/test_operation_attention.py
+# 60 passed in 167.52s (0:02:47)
+```
+
+Exact-set, static, history, and hygiene checks:
+
+```bash
+backend/.venv/bin/python - <<'PY'
+import importlib.util
+import re
+from pathlib import Path
+
+path = Path(
+    "backend/alembic/versions/"
+    "b3d5f7a9c1e4_repair_calendar_schedule_rules.py"
+)
+spec = importlib.util.spec_from_file_location("migration", path)
+migration = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(migration)
+actual = [
+    int(value, 16)
+    for value in re.findall(
+        r"\\([0-9A-F]{4})", migration._PYTHON_STRIP_CHARACTERS_SQL
+    )
+]
+expected = [
+    codepoint for codepoint in range(0x110000) if chr(codepoint).isspace()
+]
+assert actual == expected, (actual, expected)
+print(f"exact Python whitespace repertoire: {len(actual)} code points")
+PY
+# exact Python whitespace repertoire: 29 code points
+
+backend/.venv/bin/ruff check \
+  backend/alembic/versions/b3d5f7a9c1e4_repair_calendar_schedule_rules.py \
+  backend/tests/test_migrations_idempotent.py
+# All checks passed!
+
+backend/.venv/bin/python -m compileall -q \
+  backend/alembic/versions/b3d5f7a9c1e4_repair_calendar_schedule_rules.py \
+  backend/tests/test_migrations_idempotent.py
+# passed
+
+cd backend && .venv/bin/alembic heads
+# b3d5f7a9c1e4 (head)
+
+git diff --exit-code HEAD -- \
+  backend/alembic/versions/a7c9e1f3b5d7_add_structured_calendar_subscription_rules.py
+# passed; published migration unchanged
+
+git diff --check
+# passed
+```
+
+Round-2 self-review:
+
+- The SQL character literal was exhaustively compared with Python
+  `str.isspace()` across all Unicode scalar values and matches exactly 29 code
+  points; behavior no longer depends on PostgreSQL regex locale/classes.
+- All edge characters are exercised through real PostgreSQL JSONB values.
+  Concatenated prefix/suffix sequences ensure an omitted character would stop
+  `btrim` and make the literal expected array fail.
+- Two-argument `btrim` removes only listed characters at the two ends. The
+  test proves internal Unicode whitespace, time precision, array order, and
+  JSONB storage survive upgrade, downgrade, and re-upgrade.
+- Both transforms and both predicates interpolate the same immutable SQL
+  expression. The two JSONB paths remain literal after f-string brace escaping.
+- The published `a7c9e1f3b5d7` migration is unchanged; only the unpublished
+  Task 4 forward repair and its PostgreSQL integration test changed.
+- Per the round-2 instruction, the prior complete backend release result
+  (`1013 passed, 4 skipped`) was not rerun. The focused migration and calendar
+  matrices are green, with no known code concern.

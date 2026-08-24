@@ -336,7 +336,7 @@ class TestMigrationIdempotency:
             finally:
                 await conn.close()
 
-        asyncio.run(execute_sql("""
+        asyncio.run(execute_sql(r"""
             INSERT INTO creators (id, name, is_active)
             VALUES ('33333333-3333-3333-3333-333333333333', 'calendar-repair', TRUE)
             ON CONFLICT (id) DO NOTHING;
@@ -352,9 +352,12 @@ class TestMigrationIdempotency:
                     'frequency', 'weekly',
                     'weekdays', jsonb_build_array(1, 5),
                     'times', jsonb_build_array(
-                        chr(9) || '03:00:00.000' || chr(10),
-                        chr(13) || '21:30:00' || chr(9),
-                        ' 12:' || chr(9) || '34:56.789 ' || chr(13)
+                        U&'\001C\001D' || '03:00:00.000' || U&'\001E\001F',
+                        U&'\0085\00A0\1680\2000\2001\2002\2003\2004\2005'
+                            || '21:30:00' || U&'\2006\2007\2008\2009\200A',
+                        ' ' || U&'\2028\2029' || '12:'
+                            || U&'\00A0\2003\202F' || '34:56.789'
+                            || U&'\202F\205F\3000' || ' '
                     )
                 )
             );
@@ -367,9 +370,13 @@ class TestMigrationIdempotency:
                     'schedule_rule', jsonb_build_object(
                         'frequency', 'daily',
                         'times', jsonb_build_array(
-                            chr(10) || '05:15:00.120' || chr(13),
-                            chr(9) || '18:45' || chr(13) || chr(10),
-                            chr(13) || '07:' || chr(10) || '08:09.010' || chr(9)
+                            U&'\0009\000A\000B\000C\000D'
+                                || '05:15:00.120'
+                                || U&'\0009\000A\000B\000C\000D',
+                            U&'\001F\00A0\1680\2000' || '18:45'
+                                || U&'\202F\205F\3000',
+                            U&'\2028\2029' || '07:' || U&'\2028'
+                                || '08:09.010' || U&'\202F\205F\3000'
                         )
                     )
                 )
@@ -394,12 +401,12 @@ class TestMigrationIdempotency:
         assert normalized["subscription_times"] == [
             "03:00:00.000",
             "21:30:00",
-            "12:\t34:56.789",
+            "12:\u00a0\u2003\u202f34:56.789",
         ]
         assert normalized["default_times"] == [
             "05:15:00.120",
             "18:45",
-            "07:\n08:09.010",
+            "07:\u202808:09.010",
         ]
 
         downgraded = self._run_alembic("downgrade", previous_head)
@@ -421,12 +428,12 @@ class TestMigrationIdempotency:
         assert after_downgrade["subscription_times"] == [
             "03:00:00.000",
             "21:30:00",
-            "12:\t34:56.789",
+            "12:\u00a0\u2003\u202f34:56.789",
         ]
         assert after_downgrade["default_times"] == [
             "05:15:00.120",
             "18:45",
-            "07:\n08:09.010",
+            "07:\u202808:09.010",
         ]
         assert after_downgrade["schedule_rule_type"] == "jsonb"
 
@@ -448,10 +455,10 @@ class TestMigrationIdempotency:
         assert after_round_trip["subscription_times"] == [
             "03:00:00.000",
             "21:30:00",
-            "12:\t34:56.789",
+            "12:\u00a0\u2003\u202f34:56.789",
         ]
         assert after_round_trip["default_times"] == [
             "05:15:00.120",
             "18:45",
-            "07:\n08:09.010",
+            "07:\u202808:09.010",
         ]
