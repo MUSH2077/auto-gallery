@@ -59,7 +59,7 @@ async def test_saving_enabled_auto_resolution_enqueues_historical_reconciliation
     async def fake_put_setting(db, key, value):
         stored.append((db, key, value))
 
-    def fake_enqueue():
+    async def fake_enqueue():
         enqueued["count"] += 1
         return {"job_id": "reconcile-1", "status": "enqueued"}
 

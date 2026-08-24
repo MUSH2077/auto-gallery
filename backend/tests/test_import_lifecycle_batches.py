@@ -24,31 +24,15 @@ def _publisher_fence_key(task_id, attempt):
 
 
 def _install_admin_retry_fakes(monkeypatch, tasks_api, redis_client):
-    queued: list[tuple[tuple, dict]] = []
+    from app.services import operations
 
-    class RecordingQueue:
-        def __init__(self, name, connection):
-            assert name == "maintenance"
-            assert connection is redis_client
+    queued: list[tuple[str, int]] = []
 
-        def enqueue(self, *args, **kwargs):
-            queued.append((args, kwargs))
+    async def record_publish(task_id, attempt, *, redis_client=None):
+        queued.append((str(task_id), int(attempt)))
+        return "published"
 
-            class Job:
-                id = f"rq-attempt-{len(queued)}"
-
-            return Job()
-
-    monkeypatch.setattr(tasks_api, "get_redis", lambda: redis_client)
-    monkeypatch.setattr(tasks_api, "ensure_redis_enqueue_capacity", lambda _r: None)
-    monkeypatch.setattr(tasks_api, "get_operation_status", lambda _job_id: None)
-    monkeypatch.setattr(tasks_api, "set_operation_status", lambda *_a, **_k: None)
-    monkeypatch.setattr(
-        tasks_api,
-        "checked_enqueue",
-        lambda queue, *args, **kwargs: queue.enqueue(*args, **kwargs),
-    )
-    monkeypatch.setattr("rq.Queue", RecordingQueue)
+    monkeypatch.setattr(operations, "publish_admin_operation", record_publish)
     return queued
 
 
@@ -1530,11 +1514,6 @@ async def test_recovery_fence_stops_resumed_publisher_before_reconcile(
     )
     monkeypatch.setattr(admin_operations, "set_operation_status", lambda *_a, **_k: None)
     monkeypatch.setattr(
-        admin_operations,
-        "release_owned_operation_lock",
-        lambda *_a, **_k: False,
-    )
-    monkeypatch.setattr(
         "app.api.admin.settings.invalidate_storage_breakdown_cache",
         lambda: None,
     )
@@ -1621,11 +1600,6 @@ async def test_disk_publisher_redis_uncertainty_is_fail_closed(monkeypatch, lega
         lambda: unavailable,
     )
     monkeypatch.setattr(admin_operations, "set_operation_status", lambda *_a, **_k: None)
-    monkeypatch.setattr(
-        admin_operations,
-        "release_owned_operation_lock",
-        lambda *_a, **_k: False,
-    )
 
     try:
         async with async_session() as db:
@@ -1990,11 +1964,12 @@ async def test_attempt_a_recovery_fence_does_not_block_rotated_attempt_b(
     from app.database import async_session, engine
     from app.jobs.admin_operations import _DiskImportPublisherGuard
     from app.models.task_run import TaskRun
+    from app.services import operations
     from app.services.redis_client import get_redis
     from app.services.tasks import TaskService
 
     task_id = uuid4()
-    attempt_a = uuid4().hex
+    attempt_a = "1"
     redis_client = get_redis()
     redis_client.delete(
         f"task:{task_id}:heartbeat_ts",
@@ -2012,24 +1987,25 @@ async def test_attempt_a_recovery_fence_does_not_block_rotated_attempt_b(
     try:
         async with async_session() as db:
             await _clear(db)
-            task = await TaskService(db).create_task(
+            prepared = await operations.prepare_admin_operation(
+                db,
                 task_id=task_id,
-                kind="admin",
                 operation_type="admin-disk-import",
+                scope_key="library:disk-import:active",
                 title="fenced attempt A",
-                status="stale",
+                entity="disk-import",
+                options={},
                 queue_name="maintenance",
-                meta={
-                    "entity": "disk-import",
-                    _PUBLISHER_ATTEMPT_META_KEY: attempt_a,
-                },
+                job_timeout=60,
             )
+            task = prepared.task
+            task.status = "stale"
             await db.commit()
 
             result = await tasks_api._retry_admin_task(task, TaskService(db))
             assert result["status"] == "enqueued"
-            assert len(queued) == 1 and len(queued[0][0]) == 4
-            attempt_b = queued[0][0][3]
+            assert queued == [(str(task_id), 2)]
+            attempt_b = str(queued[0][1])
             assert attempt_b != attempt_a
 
         guard_b = _DiskImportPublisherGuard(str(task_id))
@@ -2046,7 +2022,7 @@ async def test_attempt_a_recovery_fence_does_not_block_rotated_attempt_b(
         async with async_session() as verify_db:
             task = await verify_db.get(TaskRun, task_id)
             assert task.status == "running"
-            assert task.meta[_PUBLISHER_ATTEMPT_META_KEY] == attempt_b
+            assert task.meta[operations.ADMIN_DISPATCH_META_KEY]["attempt"] == 2
             assert redis_client.exists(_publisher_fence_key(task_id, attempt_a))
     finally:
         redis_client.delete(
@@ -2081,11 +2057,12 @@ async def test_recovery_fenced_attempt_settles_actionable_then_retry_starts(
     from app.database import async_session, engine
     from app.jobs.admin_operations import _DiskImportPublisherGuard
     from app.models.task_run import TaskRun
+    from app.services import operations
     from app.services.redis_client import get_redis
     from app.services.tasks import TaskService
 
     task_id = uuid4()
-    attempt_a = uuid4().hex
+    attempt_a = "1"
     old = datetime.now(timezone.utc) - timedelta(hours=2)
     redis_client = get_redis()
     redis_client.delete(
@@ -2120,18 +2097,19 @@ async def test_recovery_fenced_attempt_settles_actionable_then_retry_starts(
     try:
         async with async_session() as db:
             await _clear(db)
-            task = await TaskService(db).create_task(
+            prepared = await operations.prepare_admin_operation(
+                db,
                 task_id=task_id,
-                kind="admin",
                 operation_type="admin-disk-import",
+                scope_key="library:disk-import:active",
                 title="recover current attempt",
-                status="running",
+                entity="disk-import",
+                options={},
                 queue_name="maintenance",
-                meta={
-                    "entity": "disk-import",
-                    _PUBLISHER_ATTEMPT_META_KEY: attempt_a,
-                },
+                job_timeout=60,
             )
+            task = prepared.task
+            task.status = "running"
             task.started_at = old
             task.updated_at = old
             await db.commit()
@@ -2146,8 +2124,8 @@ async def test_recovery_fenced_attempt_settles_actionable_then_retry_starts(
             assert task.attention_state == "open"
 
             await tasks_api._retry_admin_task(task, TaskService(db))
-            assert len(queued) == 1 and len(queued[0][0]) == 4
-            attempt_b = queued[0][0][3]
+            assert queued == [(str(task_id), 2)]
+            attempt_b = str(queued[0][1])
             assert attempt_b != attempt_a
 
         guard_b = _DiskImportPublisherGuard(str(task_id))
@@ -2165,7 +2143,7 @@ async def test_recovery_fenced_attempt_settles_actionable_then_retry_starts(
             task = await verify_db.get(TaskRun, task_id)
             assert task.status == "running"
             assert task.attention_state == "none"
-            assert task.meta[_PUBLISHER_ATTEMPT_META_KEY] == attempt_b
+            assert task.meta[operations.ADMIN_DISPATCH_META_KEY]["attempt"] == 2
     finally:
         redis_client.delete(
             f"task:{task_id}:heartbeat_ts",
@@ -2189,7 +2167,7 @@ async def test_recovery_fenced_attempt_settles_actionable_then_retry_starts(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_concurrent_legacy_recovery_and_retry_serialize_attempt_rotation(
+async def test_concurrent_recovery_and_retry_serialize_attempt_rotation(
     tmp_path,
     monkeypatch,
 ):
@@ -2201,6 +2179,7 @@ async def test_concurrent_legacy_recovery_and_retry_serialize_attempt_rotation(
     from app.models.storage_artifact import StorageArtifact
     from app.models.task_run import TaskRun
     from app.services import import_recovery
+    from app.services import operations
     from app.services.import_recovery import recover_import_pipeline
     from app.services.tasks import TaskService
 
@@ -2241,15 +2220,18 @@ async def test_concurrent_legacy_recovery_and_retry_serialize_attempt_rotation(
                 },
             )
             parent.updated_at = old
-            await TaskService(setup_db).create_task(
+            prepared = await operations.prepare_admin_operation(
+                setup_db,
                 task_id=task_id,
-                kind="admin",
                 operation_type="admin-disk-import",
+                scope_key="library:disk-import:active",
                 title="legacy publisher",
-                status="stale",
+                entity="disk-import",
+                options={},
                 queue_name="maintenance",
-                meta={"entity": "disk-import"},
+                job_timeout=60,
             )
+            prepared.task.status = "stale"
             setup_db.add(StorageArtifact(
                 storage_root="downloads",
                 file_path="pixiv/bounded/concurrent/metadata.json",
@@ -2294,8 +2276,8 @@ async def test_concurrent_legacy_recovery_and_retry_serialize_attempt_rotation(
         assert retry_was_serialized is True
         assert recovery_result["imports_enqueued"] == 1
         assert retry_result["status"] == "enqueued"
-        assert len(queued) == 1 and len(queued[0][0]) == 4
-        attempt_b = queued[0][0][3]
+        assert queued == [(str(task_id), 2)]
+        attempt_b = queued[0][1]
 
         async with async_session() as verify_db:
             task = await verify_db.get(TaskRun, task_id)
@@ -2303,7 +2285,7 @@ async def test_concurrent_legacy_recovery_and_retry_serialize_attempt_rotation(
                 select(ImportJob).where(ImportJob.download_job_id == parent_id)
             )).scalars())
             assert len(imports) == 1
-            assert task.meta[_PUBLISHER_ATTEMPT_META_KEY] == attempt_b
+            assert task.meta[operations.ADMIN_DISPATCH_META_KEY]["attempt"] == attempt_b
             assert task.status == "enqueued"
     finally:
         release_recovery.set()

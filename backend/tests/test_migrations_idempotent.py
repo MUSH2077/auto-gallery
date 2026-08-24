@@ -264,3 +264,152 @@ class TestMigrationIdempotency:
 
         final_up = self._run_alembic("upgrade", "head")
         assert final_up.returncode == 0, final_up.stderr
+
+    def test_forward_calendar_repair_adds_missing_schedule_rule_from_previous_head(self):
+        import asyncpg
+
+        previous_head = "a7c9e1f3b5d7"
+        initial_up = self._run_alembic("upgrade", "head")
+        assert initial_up.returncode == 0, initial_up.stderr
+        down = self._run_alembic("downgrade", previous_head)
+        assert down.returncode == 0, down.stderr
+
+        async def execute_sql(sql: str):
+            conn = await asyncpg.connect(
+                self.test_database_url.replace("postgresql+asyncpg://", "postgresql://")
+            )
+            try:
+                await conn.execute(sql)
+            finally:
+                await conn.close()
+
+        async def fetch_value(sql: str):
+            conn = await asyncpg.connect(
+                self.test_database_url.replace("postgresql+asyncpg://", "postgresql://")
+            )
+            try:
+                return await conn.fetchval(sql)
+            finally:
+                await conn.close()
+
+        asyncio.run(execute_sql("ALTER TABLE subscriptions DROP COLUMN schedule_rule"))
+        stamped_revision = asyncio.run(
+            fetch_value("SELECT version_num FROM alembic_version")
+        )
+        assert stamped_revision == previous_head
+
+        repaired = self._run_alembic("upgrade", "head")
+        assert repaired.returncode == 0, repaired.stderr
+        column_type = asyncio.run(fetch_value("""
+            SELECT data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'subscriptions'
+              AND column_name = 'schedule_rule'
+        """))
+        assert column_type == "jsonb"
+
+    def test_forward_calendar_repair_normalizes_times_across_round_trip(self):
+        import asyncpg
+
+        previous_head = "a7c9e1f3b5d7"
+        at_head = self._run_alembic("upgrade", "head")
+        assert at_head.returncode == 0, at_head.stderr
+        down = self._run_alembic("downgrade", previous_head)
+        assert down.returncode == 0, down.stderr
+
+        async def execute_sql(sql: str):
+            conn = await asyncpg.connect(
+                self.test_database_url.replace("postgresql+asyncpg://", "postgresql://")
+            )
+            try:
+                await conn.execute(sql)
+            finally:
+                await conn.close()
+
+        async def fetch_row(sql: str):
+            conn = await asyncpg.connect(
+                self.test_database_url.replace("postgresql+asyncpg://", "postgresql://")
+            )
+            try:
+                return await conn.fetchrow(sql)
+            finally:
+                await conn.close()
+
+        asyncio.run(execute_sql("""
+            INSERT INTO creators (id, name, is_active)
+            VALUES ('33333333-3333-3333-3333-333333333333', 'calendar-repair', TRUE)
+            ON CONFLICT (id) DO NOTHING;
+            DELETE FROM subscriptions WHERE id = '44444444-4444-4444-4444-444444444444';
+            INSERT INTO subscriptions (
+                id, creator_id, is_active, sync_enabled, sync_interval_hours,
+                schedule_mode, schedule_rule
+            ) VALUES (
+                '44444444-4444-4444-4444-444444444444',
+                '33333333-3333-3333-3333-333333333333',
+                TRUE, TRUE, 6, 'calendar',
+                '{"frequency":"weekly","weekdays":[1,5],"times":[" 03:00 ","21:30:00 "]}'::jsonb
+            );
+            DELETE FROM system_settings WHERE key = 'subscription_defaults';
+            INSERT INTO system_settings (key, value)
+            VALUES (
+                'subscription_defaults',
+                '{"schedule_mode":"calendar","schedule_rule":{"frequency":"daily","times":[" 05:15:00","18:45 "]}}'::jsonb
+            );
+        """))
+
+        upgraded = self._run_alembic("upgrade", "head")
+        assert upgraded.returncode == 0, upgraded.stderr
+        normalized = asyncio.run(fetch_row("""
+            SELECT
+                ARRAY(
+                    SELECT jsonb_array_elements_text(schedule_rule->'times')
+                ) AS subscription_times,
+                ARRAY(
+                    SELECT jsonb_array_elements_text(value->'schedule_rule'->'times')
+                    FROM system_settings
+                    WHERE key = 'subscription_defaults'
+                ) AS default_times
+            FROM subscriptions
+            WHERE id = '44444444-4444-4444-4444-444444444444'
+        """))
+        assert normalized["subscription_times"] == ["03:00", "21:30:00"]
+        assert normalized["default_times"] == ["05:15:00", "18:45"]
+
+        downgraded = self._run_alembic("downgrade", previous_head)
+        assert downgraded.returncode == 0, downgraded.stderr
+        after_downgrade = asyncio.run(fetch_row("""
+            SELECT
+                ARRAY(
+                    SELECT jsonb_array_elements_text(schedule_rule->'times')
+                ) AS subscription_times,
+                ARRAY(
+                    SELECT jsonb_array_elements_text(value->'schedule_rule'->'times')
+                    FROM system_settings
+                    WHERE key = 'subscription_defaults'
+                ) AS default_times,
+                pg_typeof(schedule_rule)::text AS schedule_rule_type
+            FROM subscriptions
+            WHERE id = '44444444-4444-4444-4444-444444444444'
+        """))
+        assert after_downgrade["subscription_times"] == ["03:00", "21:30:00"]
+        assert after_downgrade["default_times"] == ["05:15:00", "18:45"]
+        assert after_downgrade["schedule_rule_type"] == "jsonb"
+
+        final_up = self._run_alembic("upgrade", "head")
+        assert final_up.returncode == 0, final_up.stderr
+        after_round_trip = asyncio.run(fetch_row("""
+            SELECT
+                ARRAY(
+                    SELECT jsonb_array_elements_text(schedule_rule->'times')
+                ) AS subscription_times,
+                ARRAY(
+                    SELECT jsonb_array_elements_text(value->'schedule_rule'->'times')
+                    FROM system_settings
+                    WHERE key = 'subscription_defaults'
+                ) AS default_times
+            FROM subscriptions
+            WHERE id = '44444444-4444-4444-4444-444444444444'
+        """))
+        assert after_round_trip["subscription_times"] == ["03:00", "21:30:00"]
+        assert after_round_trip["default_times"] == ["05:15:00", "18:45"]
