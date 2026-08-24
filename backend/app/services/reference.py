@@ -3,19 +3,14 @@
 import asyncio
 import logging
 import re
-import uuid
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.models.creator_link import CreatorLink
 from app.models.source_creator import SourceCreator
 from app.services import danbooru as danbooru_svc
-from app.services.redis_client import get_redis
-from app.services.queue_admission import checked_enqueue, ensure_redis_enqueue_capacity
-from app.services.operations import set_operation_status
 
 logger = logging.getLogger(__name__)
 
@@ -138,48 +133,25 @@ class ReferenceService:
         return {"status": "ok", "imported": created, "artist_name": artist["name"]}
 
     @staticmethod
-    def enqueue_async_import(data: dict) -> dict:
-        from rq import Queue
+    async def enqueue_async_import(data: dict) -> dict:
+        from app.services.operations import enqueue_admin_operation
+
         source_url = data.get("url") or data.get("source_url")
         pixiv_id = data.get("pixiv_id")
         artist_name = data.get("name") or data.get("tag")
         if not source_url and not pixiv_id and not artist_name:
             raise ValueError("At least one of url, pixiv_id, or name is required")
-
-        redis = get_redis()
-        ensure_redis_enqueue_capacity(redis)
-        job_id = str(uuid.uuid4())
-        queue = Queue(name="imports", connection=redis)
-        try:
-            set_operation_status(job_id, "queued", "danbooru-import-all",
-                                 progress={"phase": "queued", "label": "Queued Danbooru import"},
-                                 meta={"name": artist_name, "pixiv_id": pixiv_id})
-            rq_job = checked_enqueue(
-                queue,
-                "app.jobs.danbooru_import.run_import_all_danbooru",
-                data,
-                job_id,
-                job_timeout=3600,
-                result_ttl=7200,
-            )
-        except Exception as exc:
-            try:
-                set_operation_status(
-                    job_id,
-                    "failed",
-                    "danbooru-import-all",
-                    progress={"phase": "failed", "label": "Queue publication failed"},
-                    error=str(exc),
-                )
-            except Exception:
-                logger.warning(
-                    "Unable to compensate Danbooru import queue failure job=%s",
-                    job_id,
-                    exc_info=True,
-                )
-            raise
-        logger.info("Enqueued Danbooru import-all operation job_id=%s rq_job=%s", job_id, rq_job.id)
-        return {"job_id": job_id, "status": "queued"}
+        operation_id = uuid4()
+        return await enqueue_admin_operation(
+            lock_key=f"danbooru:import-all:{operation_id}",
+            operation_type="danbooru-import-all",
+            title="Import Danbooru artist",
+            entity="danbooru-artist",
+            func="app.jobs.danbooru_import.run_import_all_danbooru",
+            options=data,
+            job_timeout=3600,
+            queue_name="imports",
+        )
 
     @staticmethod
     async def precheck_pixiv_ids(pixiv_ids: list[str]) -> dict:

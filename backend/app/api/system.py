@@ -746,7 +746,7 @@ async def clear_failed_jobs():
     return {"status": "ok", "message": f"Removed {total} failed jobs from Redis"}
 
 
-@tasks_ops_router.post("/system/reindex-works")
+@tasks_ops_router.post("/system/reindex-works", status_code=202)
 async def reindex_works():
     """Queue a full Meilisearch rebuild on the protected import worker.
 

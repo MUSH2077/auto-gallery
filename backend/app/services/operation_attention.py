@@ -294,6 +294,9 @@ async def reconcile_task_truth(
 ) -> dict[str, Any]:
     """Reconcile TaskRun projections with their authoritative domain rows."""
 
+    # Candidate selection is deliberately lock-free. The lifecycle-wide order
+    # is StorageArtifact -> DownloadJob -> ImportJob -> TaskRun; taking a
+    # TaskRun here would invert reconciliation's DownloadJob -> TaskRun path.
     tasks = list(
         (
             await db.execute(
@@ -759,7 +762,6 @@ async def compact_terminal_tasks(
                 )
                 .order_by(TaskRun.compactable_at.asc(), TaskRun.id.asc())
                 .limit(max(1, min(limit, 1000)))
-                .with_for_update(skip_locked=True)
             )
         ).scalars()
     )
@@ -843,7 +845,10 @@ async def compact_terminal_tasks(
         import_ids.update(
             (
                 await db.execute(
-                    select(ImportJob.id).where(ImportJob.download_job_id.in_(download_ids))
+                    select(ImportJob.id)
+                    .where(ImportJob.download_job_id.in_(download_ids))
+                    .order_by(ImportJob.id.asc())
+                    .with_for_update(of=ImportJob)
                 )
             ).scalars()
         )
@@ -870,7 +875,38 @@ async def compact_terminal_tasks(
             ).scalars()
         )
 
-    all_task_ids = selected_task_ids | child_task_ids
+    proposed_task_ids = selected_task_ids | child_task_ids
+    # TaskRun is always last. Recheck mutable attention/compaction predicates
+    # under these locks because the initial candidates were intentionally
+    # lock-free and a concurrent retry/reconciliation may have changed them.
+    locked_task_ids: set[UUID] = set()
+    if proposed_task_ids:
+        locked_task_ids.update(
+            (
+                await db.execute(
+                    select(TaskRun.id)
+                    .where(
+                        TaskRun.id.in_(proposed_task_ids),
+                        TaskRun.attention_state != "open",
+                        or_(
+                            TaskRun.id.in_(child_task_ids)
+                            if child_task_ids
+                            else False,
+                            and_(
+                                TaskRun.id.in_(selected_task_ids),
+                                TaskRun.compactable_at.is_not(None),
+                                TaskRun.compactable_at <= now,
+                            )
+                            if selected_task_ids
+                            else False,
+                        ),
+                    )
+                    .order_by(TaskRun.id.asc())
+                    .with_for_update(of=TaskRun)
+                )
+            ).scalars()
+        )
+    all_task_ids = locked_task_ids
     compacted_ids = [str(task_id) for task_id in sorted(all_task_ids, key=str)]
     report["deleted_tasks"] = len(all_task_ids)
     report["deleted_import_jobs"] = len(import_ids)

@@ -693,6 +693,6 @@ async def enqueue_permanent_deletion(
         "entity_type": entity_type,
         "entity_ids": entity_ids,
         "delete_files": delete_files,
-        "task_id": UUID(operation["job_id"]),
+        "task_id": UUID(operation["task_id"]),
         "message": "Permanent deletion queued.",
     }

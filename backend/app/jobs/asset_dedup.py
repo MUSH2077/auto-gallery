@@ -566,6 +566,8 @@ async def _run_scan(
 ) -> dict:
     """Run at most one image-derived scan slice and persist its keyset cursor."""
 
+    from app.services.operations import current_admin_operation_attempt
+
     async with async_session() as db:
         scan = (
             await db.execute(
@@ -602,11 +604,13 @@ async def _run_scan(
         )
         await db.commit()
 
-    if not await asyncio.to_thread(
-        _refresh_owned_scan_operation_lock,
-        operation_job_id,
-    ):
-        raise RuntimeError("Asset dedup scan operation ownership was lost")
+    delivery = current_admin_operation_attempt()
+    if delivery is None or str(delivery[0]) != str(operation_job_id):
+        if not await asyncio.to_thread(
+            _refresh_owned_scan_operation_lock,
+            operation_job_id,
+        ):
+            raise RuntimeError("Asset dedup scan operation ownership was lost")
 
     cooldown: dict[str, float] = {}
     resource_unavailable = False
@@ -896,19 +900,22 @@ async def _complete_scan_operation(operation_job_id: str, result: dict) -> None:
                 exc_info=True,
             )
     finally:
-        try:
-            await asyncio.to_thread(
-                release_owned_operation_lock,
-                get_redis(),
-                ASSET_DEDUP_SCAN_OPERATION_LOCK,
-                operation_job_id,
-            )
-        except Exception:
-            logger.warning(
-                "Unable to release completed asset dedup operation lock job=%s",
-                operation_job_id,
-                exc_info=True,
-            )
+        from app.services.operations import current_admin_operation_attempt
+
+        if current_admin_operation_attempt() is None:
+            try:
+                await asyncio.to_thread(
+                    release_owned_operation_lock,
+                    get_redis(),
+                    ASSET_DEDUP_SCAN_OPERATION_LOCK,
+                    operation_job_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Unable to release completed asset dedup operation lock job=%s",
+                    operation_job_id,
+                    exc_info=True,
+                )
 
 
 async def _fail_scan_operation(
@@ -965,19 +972,105 @@ async def _fail_scan_operation(
                     exc_info=True,
                 )
     finally:
-        try:
-            await asyncio.to_thread(
-                release_owned_operation_lock,
-                get_redis(),
-                ASSET_DEDUP_SCAN_OPERATION_LOCK,
-                operation_job_id,
+        from app.services.operations import current_admin_operation_attempt
+
+        if current_admin_operation_attempt() is None:
+            try:
+                await asyncio.to_thread(
+                    release_owned_operation_lock,
+                    get_redis(),
+                    ASSET_DEDUP_SCAN_OPERATION_LOCK,
+                    operation_job_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Unable to release failed asset dedup operation lock job=%s",
+                    operation_job_id,
+                    exc_info=True,
+                )
+
+
+async def run_registered_asset_dedup_scan(
+    task_id: str,
+    attempt: int,
+    options: dict,
+) -> dict:
+    """Run one scan slice and durably hand the next slice to TaskRun recovery."""
+
+    from app.services.operations import prepare_admin_operation_handoff
+
+    scan_id = UUID(options["scan_id"])
+    expected_generation = max(0, int(options.get("_scan_generation", 0)))
+    try:
+        result = await _run_scan(
+            scan_id,
+            operation_job_id=task_id,
+            expected_generation=expected_generation,
+        )
+        if result["status"] in {"superseded", "failed"}:
+            return result
+        if result["status"] == "complete":
+            await _complete_scan_operation(task_id, result)
+            return result
+
+        async with async_session() as db:
+            scan = (
+                await db.execute(
+                    select(AssetDedupScan)
+                    .where(AssetDedupScan.id == scan_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if scan is None or scan.status != "running":
+                await db.rollback()
+                return {**result, "status": "superseded"}
+            scan_options = dict(scan.options or {})
+            if (
+                _scan_generation(scan_options) != expected_generation
+                or str(scan_options.get("_operation_job_id")) != task_id
+            ):
+                await db.rollback()
+                return {**result, "status": "superseded"}
+
+            next_generation = expected_generation + 1
+            scan_options["_rq_generation"] = next_generation
+            scan_options["_next_rq_job_id"] = (
+                f"admin-{task_id}-attempt-{int(attempt) + 1}"
             )
-        except Exception:
-            logger.warning(
-                "Unable to release failed asset dedup operation lock job=%s",
-                operation_job_id,
-                exc_info=True,
+            scan.options = scan_options
+            next_options = {
+                **options,
+                "_scan_generation": next_generation,
+            }
+            handoff = await prepare_admin_operation_handoff(
+                db,
+                task_id,
+                attempt,
+                options=next_options,
+                delay_seconds=float(result["successor_delay_seconds"]),
+                progress={
+                    "phase": (
+                        "waiting"
+                        if result.get("resource_state") == "waiting"
+                        else "scanning"
+                    ),
+                    "label": f"Scanned {result['assets_scanned']} assets",
+                    "current": result["assets_scanned"],
+                },
             )
+            if handoff is None:
+                await db.rollback()
+                return {**result, "status": "superseded"}
+            await db.commit()
+        return {
+            **result,
+            "_admin_handoff": True,
+            "next_attempt": handoff.attempt,
+            "successor_rq_job_id": handoff.rq_job_id,
+        }
+    except Exception as exc:
+        await _fail_scan_operation(scan_id, task_id, exc)
+        raise
 
 
 def run_asset_dedup_scan(job_id: str, options: dict) -> dict:

@@ -190,6 +190,41 @@ class TaskService:
         attention_state: str | None = None,
         reason_code: str | None | object = _UNSET,
     ) -> TaskRun:
+        # Registered administrator workers carry their immutable delivery in
+        # a context variable.  Re-lock and refresh the TaskRun before every
+        # nested business-handler update, so a retry handoff cannot race a
+        # stale progress or terminal write between an in-memory check and
+        # flush.  Control-plane callers have no worker context and retain
+        # their existing explicit locking rules.
+        from app.services.operations import (
+            ADMIN_DISPATCH_META_KEY,
+            AdminOperationAttemptRejected,
+            current_admin_operation_attempt,
+        )
+
+        delivery = current_admin_operation_attempt()
+        if delivery is not None and task.id == delivery[0]:
+            task = (
+                await self.db.execute(
+                    select(TaskRun)
+                    .where(TaskRun.id == task.id)
+                    .with_for_update(of=TaskRun)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one_or_none()
+            dispatch = (
+                (task.meta or {}).get(ADMIN_DISPATCH_META_KEY)
+                if task is not None
+                else None
+            )
+            if (
+                task is None
+                or not isinstance(dispatch, dict)
+                or int(dispatch.get("attempt") or 0) != delivery[1]
+            ):
+                raise AdminOperationAttemptRejected(
+                    "Administrator operation attempt is no longer current"
+                )
         old_status = task.status
         if status is not None:
             task.status = normalize_task_status(status)
@@ -493,16 +528,31 @@ async def update_task_resource_state(
 
     async with async_session() as db:
         if publisher_attempt is not None:
-            from app.services.publisher_attempts import (
-                current_publisher_attempt,
-                lock_publisher_task,
+            task = (
+                await db.execute(
+                    select(TaskRun)
+                    .where(TaskRun.id == owner_id, TaskRun.kind == "admin")
+                    .with_for_update(of=TaskRun)
+                )
+            ).scalar_one_or_none()
+            dispatch = (
+                ((task.meta or {}).get("admin_dispatch") or {})
+                if task is not None
+                else {}
             )
+            if dispatch:
+                try:
+                    owned = int(dispatch.get("attempt") or 0) == int(publisher_attempt)
+                except (TypeError, ValueError):
+                    owned = False
+            else:
+                from app.services.publisher_attempts import current_publisher_attempt
 
-            task = await lock_publisher_task(db, owner_id)
-            if (
-                task is None
-                or current_publisher_attempt(task) != publisher_attempt
-            ):
+                owned = bool(
+                    task is not None
+                    and current_publisher_attempt(task) == publisher_attempt
+                )
+            if task is None or not owned:
                 await db.rollback()
                 return
         else:
@@ -520,7 +570,10 @@ async def update_task_resource_state(
             if task is not None:
                 from app.services.publisher_attempts import current_publisher_attempt
 
-                if current_publisher_attempt(task) is not None:
+                if (
+                    (task.meta or {}).get("admin_dispatch") is not None
+                    or current_publisher_attempt(task) is not None
+                ):
                     await db.rollback()
                     return
         if task is None or (

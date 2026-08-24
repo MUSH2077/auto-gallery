@@ -476,6 +476,25 @@ def test_asset_dedup_coordinator_uses_child_owned_image_slices():
     assert ResourceAwareWorker._internal_slice_workload(job) == "image_derive"
 
 
+def test_registered_admin_transport_preserves_child_owned_resource_profile():
+    job = type(
+        "Job",
+        (),
+        {
+            "func_name": "app.jobs.admin_operations.run_registered_admin_operation",
+            "meta": {
+                "registered_admin_operation": "asset-dedup-scan",
+                "registered_admin_internal_profile": "image_derive",
+            },
+        },
+    )()
+    queue = type("Queue", (), {"name": "maintenance"})()
+
+    assert ResourceAwareWorker._job_workload(job, queue) == "image_derive"
+    assert ResourceAwareWorker._internal_slice_workload(job) == "image_derive"
+    assert ResourceAwareWorker._job_uses_nonblocking_child_admission(job) is True
+
+
 def test_outbox_slice_bounds_are_applied_before_fork():
     media = type("Job", (), {
         "func_name": "app.jobs.media_derivatives.run_media_derivative_outbox",

@@ -94,17 +94,19 @@ def _reschedule_subscription_sync_scan(config: dict) -> dict:
     return {"removed": removed, "job_id": job.id, "interval_minutes": interval}
 
 
-def _enqueue_download_conflict_reconciliation() -> dict:
-    from rq import Queue
+async def _enqueue_download_conflict_reconciliation() -> dict:
+    from app.services.operations import enqueue_admin_operation
 
-    job = checked_enqueue(
-        Queue(name="maintenance", connection=get_redis()),
-        "app.jobs.download_conflicts.reconcile_historical_download_conflicts",
-        500,
+    return await enqueue_admin_operation(
+        lock_key="diagnostics:download-conflicts:active",
+        operation_type="admin-download-conflict-reconciliation",
+        title="Reconcile historical download conflicts",
+        entity="download-conflicts",
+        func="app.jobs.download_conflicts.reconcile_historical_download_conflicts",
+        options={"limit": 500},
         job_timeout=3600,
-        result_ttl=86400,
+        queue_name="maintenance",
     )
-    return {"job_id": job.id, "status": "enqueued"}
 
 
 DEFAULT_DEDUP = {
@@ -984,7 +986,7 @@ async def update_settings(data: AdminSettingsUpdate, db: AsyncSession = Depends(
         await _put_setting(db, "download_defaults", download_defaults)
         if download_defaults.get("auto_resolve_upstream_conflicts", True):
             try:
-                conflict_reconciliation = _enqueue_download_conflict_reconciliation()
+                conflict_reconciliation = await _enqueue_download_conflict_reconciliation()
             except Exception:
                 logger.warning("Failed to enqueue historical conflict reconciliation", exc_info=True)
     if data.proxy is not None:

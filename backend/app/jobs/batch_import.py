@@ -25,6 +25,28 @@ def _redis_keys(job_id: str) -> tuple[str, str]:
     return (f"batch_import:{job_id}:progress", f"batch_import:{job_id}:result")
 
 
+async def _publish_progress(job_id: str, progress: dict, redis_client) -> None:
+    """Fence registered progress in PostgreSQL; retain legacy Redis transport."""
+
+    from app.services.operations import (
+        current_admin_operation_attempt,
+        update_admin_task,
+    )
+
+    delivery = current_admin_operation_attempt()
+    if delivery is not None and str(delivery[0]) == str(job_id):
+        if not await update_admin_task(
+            job_id,
+            delivery[1],
+            status="running",
+            progress={"phase": "running", **progress},
+        ):
+            raise RuntimeError("Administrator operation attempt is no longer current")
+        return
+    progress_key, _result_key = _redis_keys(job_id)
+    redis_client.setex(progress_key, PROGRESS_TTL, json.dumps(progress))
+
+
 def _get_auto_enable_sources() -> set[str]:
     """Read auto-enable-on-import from gallery-dl config.json per extractor."""
     try:
@@ -74,7 +96,10 @@ async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
     errors = []
 
     total = len(pixiv_ids)
-    r = get_redis()
+    from app.services.operations import current_admin_operation_attempt
+
+    delivery = current_admin_operation_attempt()
+    r = None if delivery is not None else get_redis()
     progress_key, result_key = _redis_keys(job_id)
 
     async with async_session() as db:
@@ -84,10 +109,10 @@ async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
                 continue
 
             try:
-                r.setex(progress_key, PROGRESS_TTL, json.dumps({
+                await _publish_progress(job_id, {
                     "current": idx + 1, "total": total,
                     "imported": len(imported), "errors": len(errors),
-                }))
+                }, r)
             except Exception:
                 pass
 
@@ -270,8 +295,9 @@ async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
         invalidate_creator_subscription_caches()
 
     try:
-        r.setex(result_key, RESULT_TTL, json.dumps(result, default=str))
-        r.delete(progress_key)
+        if r is not None:
+            r.setex(result_key, RESULT_TTL, json.dumps(result, default=str))
+            r.delete(progress_key)
     except Exception:
         pass
 
@@ -295,7 +321,10 @@ async def _url_batch_import(urls: list[str], job_id: str) -> dict:
     errors = []
 
     total = len(urls)
-    r = get_redis()
+    from app.services.operations import current_admin_operation_attempt
+
+    delivery = current_admin_operation_attempt()
+    r = None if delivery is not None else get_redis()
     progress_key, result_key = _redis_keys(job_id)
 
     async with async_session() as db:
@@ -305,10 +334,10 @@ async def _url_batch_import(urls: list[str], job_id: str) -> dict:
                 continue
 
             try:
-                r.setex(progress_key, PROGRESS_TTL, json.dumps({
+                await _publish_progress(job_id, {
                     "current": idx + 1, "total": total,
                     "imported": len(imported), "errors": len(errors),
-                }))
+                }, r)
             except Exception:
                 pass
 
@@ -461,8 +490,9 @@ async def _url_batch_import(urls: list[str], job_id: str) -> dict:
         invalidate_creator_subscription_caches()
 
     try:
-        r.setex(result_key, RESULT_TTL, json.dumps(result, default=str))
-        r.delete(progress_key)
+        if r is not None:
+            r.setex(result_key, RESULT_TTL, json.dumps(result, default=str))
+            r.delete(progress_key)
     except Exception:
         pass
 

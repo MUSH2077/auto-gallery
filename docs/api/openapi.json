@@ -9579,7 +9579,7 @@
         "description": "Remove all gallery-dl metadata JSON files from downloads directory.",
         "operationId": "post_api_v1_admin_cleanup_metadata_jsons",
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -9827,7 +9827,7 @@
         "description": "Enqueue a Danbooru re-enrichment sweep for creators flagged needs_enrichment.",
         "operationId": "post_api_v1_admin_creators_re_enrich",
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -10304,7 +10304,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -10990,7 +10990,7 @@
           }
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -11073,7 +11073,7 @@
           }
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -11361,7 +11361,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -11719,7 +11719,7 @@
         "description": "Enqueue a full Meilisearch reindex — a whole-library walk that belongs\nin a worker, not inline in the backend process.",
         "operationId": "post_api_v1_admin_search_reindex",
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -14257,7 +14257,7 @@
         "description": "Enqueue the baseline backfill — it replays the whole library and must\nrun in a worker, never inline in the backend process.",
         "operationId": "post_api_v1_curation_backfill",
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -15369,7 +15369,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -18206,7 +18206,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -18602,7 +18602,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -18823,7 +18823,7 @@
         "description": "Incrementally refresh Danbooru mappings for every current creator.",
         "operationId": "post_api_v1_reference_danbooru_mappings_refresh",
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -18976,7 +18976,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -21864,7 +21864,7 @@
         "description": "Queue a full Meilisearch rebuild on the protected import worker.\n\nThis compatibility endpoint used to run the whole-library scan inside the\nbackend request process, bypassing the NAS pressure and heavy-I/O gates.\nRoute it through the same operation as the admin data-management endpoint\nso the long coordinator cannot starve bounded operations outboxes.",
         "operationId": "post_api_v1_system_reindex_works",
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {

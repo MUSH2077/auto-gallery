@@ -28,20 +28,8 @@ logger = logging.getLogger(__name__)
 from app.auth import RequirePermission
 from app.database import async_session, get_db
 from app.services.redis_client import get_redis
-from app.services.queue_admission import (
-    checked_enqueue,
-    checked_enqueue_in,
-    ensure_redis_enqueue_capacity,
-)
-from app.services.operations import (
-    acquire_operation_lock,
-    compensate_operation_enqueue_failure,
-    current_operation_attempt,
-    durable_operation_attempt_is_terminal,
-    get_operation_status,
-    release_owned_operation_lock,
-    set_operation_status,
-)
+from app.services.queue_admission import checked_enqueue_in
+from app.services.operations import get_operation_status
 from app.services.settings import source_key_for_extractor
 from app.services import admin_data
 from app.services.admin_data import (
@@ -71,12 +59,21 @@ DEFAULT_DL = {"timeout_seconds": 600, "max_retries": 3, "retry_backoff_base_seco
 
 
 
-@router.post("/cleanup-metadata-jsons")
+@router.post("/cleanup-metadata-jsons", status_code=202)
 async def cleanup_metadata_jsons():
     """Remove all gallery-dl metadata JSON files from downloads directory."""
-    from app.jobs.import_runner import cleanup_metadata_jsons
-    removed = await cleanup_metadata_jsons(settings.download_root)
-    return {"status": "ok", "removed": removed}
+    from app.services.operations import enqueue_admin_operation
+
+    return await enqueue_admin_operation(
+        lock_key="library:cleanup-metadata-jsons:active",
+        operation_type="admin-cleanup-metadata-jsons",
+        title="Clean metadata JSON files",
+        entity="metadata-jsons",
+        func="app.jobs.admin_operations.run_cleanup_metadata_jsons_operation",
+        options={},
+        job_timeout=7200,
+        queue_name="maintenance",
+    )
 
 
 @router.get("/import-progress")
@@ -177,121 +174,126 @@ async def clear_entity(entity: ClearEntity, data: ClearOperationRequest, db: Asy
         ) from exc
 
 
-@router.post("/operations/clear")
+@router.post("/operations/clear", status_code=202)
 async def start_clear_operation(data: ClearOperationRequest, db: AsyncSession = Depends(get_db)):
     """Enqueue a data-management clear operation and return immediately."""
-    from rq import Queue
+    from app.services.operations import enqueue_admin_operation
 
     _validate_clear_confirmation(data)
     entity = data.entity
-
-    redis = get_redis()
-    # Reject the request before committing its TaskRun/operation projection.
-    # checked_enqueue repeats the guard at the actual publication boundary.
-    ensure_redis_enqueue_capacity(redis)
-    job_id = str(uuid.uuid4())
-    from app.services.tasks import TaskService
-    task = await TaskService(db).create_task(
-        task_id=UUID(job_id),
-        kind="admin",
+    await db.rollback()
+    return await enqueue_admin_operation(
+        lock_key=f"library:clear:{entity}",
         operation_type="admin-clear",
         title=f"Clear {entity}",
-        status="enqueued",
+        entity=entity,
+        func="app.jobs.admin_operations.run_clear_operation",
+        options={"entity": entity},
+        job_timeout=7200,
         queue_name="maintenance",
-        meta={"entity": entity},
-        progress={"phase": "enqueued", "label": f"Queued clear for {entity}"},
     )
-    await db.commit()
-    queue = Queue(name="maintenance", connection=redis)
-    try:
-        set_operation_status(
-            job_id,
-            "enqueued",
-            "admin-clear",
-            progress={"phase": "enqueued", "label": f"Queued clear for {entity}"},
-            meta={"entity": entity},
-        )
-        rq_job = checked_enqueue(
-            queue,
-            "app.jobs.admin_operations.run_clear_operation",
-            entity,
-            job_id,
-            job_timeout=7200,
-            result_ttl=7200,
-        )
-    except Exception as exc:
-        await compensate_operation_enqueue_failure(
-            job_id,
-            "admin-clear",
-            exc,
-            redis_client=redis,
-        )
-        raise
-    async with async_session() as task_db:
-        svc = TaskService(task_db)
-        current = await svc.get(task.id)
-        if current:
-            await svc.update_task(current, rq_job_id=rq_job.id)
-            await task_db.commit()
-    logger.info("Enqueued admin clear operation job_id=%s rq_job=%s entity=%s", job_id, rq_job.id, entity)
-    return {"job_id": job_id, "status": "enqueued"}
 
 
 @router.get("/operations/{job_id}")
 async def get_admin_operation(job_id: str):
-    status = get_operation_status(job_id)
-    if not status:
-        try:
-            from app.services.tasks import TaskService, task_payload
-            async with async_session() as db:
-                task = await TaskService(db).get(UUID(job_id))
-                if task and task.kind == "admin":
-                    payload = task_payload(task)
-                    return {
-                        "job_id": payload["id"],
-                        "status": payload["status"],
-                        "operation_type": payload["operation_type"],
-                        "progress": payload["progress_data"],
-                        "result": payload["result_data"],
-                        "error": payload["error_log"],
-                        "meta": payload["meta"],
-                        "updated_at": task.updated_at.timestamp() if task.updated_at else None,
-                    }
-        except ValueError:
-            pass
-        raise HTTPException(status_code=404, detail="Operation not found")
-    return status
+    from app.services.tasks import TaskService, task_payload
+
+    task_id_text = job_id
+    if job_id.startswith("admin-") and "-attempt-" in job_id:
+        task_id_text = job_id.removeprefix("admin-").rsplit("-attempt-", 1)[0]
+    try:
+        task_id = UUID(task_id_text)
+    except ValueError:
+        task_id = None
+    if task_id is not None:
+        async with async_session() as db:
+            task = await TaskService(db).get(task_id)
+            if task and task.kind == "admin":
+                payload = task_payload(task)
+                return {
+                    "task_id": payload["id"],
+                    # Keep the historical logical-id field for polling clients;
+                    # the durable RQ transport id is explicit below.
+                    "job_id": payload["id"],
+                    "rq_job_id": payload["rq_job_id"],
+                    "status": payload["status"],
+                    "operation_type": payload["operation_type"],
+                    "progress": payload["progress_data"],
+                    "result": payload["result_data"],
+                    "error": payload["error_log"],
+                    "meta": payload["meta"],
+                    "updated_at": task.updated_at.timestamp() if task.updated_at else None,
+                }
+
+    # One-version, read-only compatibility for operations created before the
+    # TaskRun registry existed. Redis never participates in current authority.
+    try:
+        status = get_operation_status(job_id)
+    except Exception:
+        status = None
+    if status:
+        return status
+    raise HTTPException(status_code=404, detail="Operation not found")
 
 
 @router.get("/operations")
 async def list_active_operations():
     """List all active (running + enqueued) admin operations."""
-    import json
-    from app.services.redis_client import get_redis
-    r = get_redis()
-    # Never issue Redis KEYS from an HTTP request: even this normally-small
-    # namespace shares the RQ server and a growing keyspace would block every
-    # queue producer.  SCAN is incremental and MGET keeps the round trips
-    # bounded once the matching keys are known.
-    keys = list(r.scan_iter(match="admin_operation:*", count=100))
-    ops = []
-    for raw_key in keys:
-        try:
+    from app.models.task_run import TaskRun
+    from app.services.tasks import task_payload
+
+    async with async_session() as db:
+        tasks = list(
+            (
+                await db.execute(
+                    select(TaskRun)
+                    .where(
+                        TaskRun.kind == "admin",
+                        TaskRun.status.in_({"enqueued", "running", "recovering", "paused"}),
+                    )
+                    .order_by(TaskRun.created_at.desc())
+                    .limit(100)
+                )
+            ).scalars()
+        )
+        ops = []
+        for task in tasks:
+            payload = task_payload(task)
+            ops.append(
+                {
+                    "task_id": payload["id"],
+                    "job_id": payload["id"],
+                    "rq_job_id": payload["rq_job_id"],
+                    "status": payload["status"],
+                    "operation_type": payload["operation_type"],
+                    "progress": payload["progress_data"],
+                    "result": payload["result_data"],
+                    "error": payload["error_log"],
+                    "meta": payload["meta"],
+                    "updated_at": task.updated_at.timestamp() if task.updated_at else None,
+                }
+            )
+
+    known = {item["job_id"] for item in ops}
+    # Merge legacy Redis-only rows after the authoritative query. Transport
+    # outage merely removes the compatibility tail; PostgreSQL results remain.
+    try:
+        r = get_redis()
+        keys = list(r.scan_iter(match="admin_operation:*", count=100))
+        for raw_key in keys:
             key = raw_key.decode("utf-8") if isinstance(raw_key, bytes) else raw_key
-            job_id = key.removeprefix("admin_operation:")
-            payload = get_operation_status(job_id, redis_client=r)
-            if payload and payload.get("status") in (
-                "queued",
-                "enqueued",
-                "running",
-            ):
+            legacy_id = key.removeprefix("admin_operation:")
+            if legacy_id in known:
+                continue
+            payload = get_operation_status(legacy_id, redis_client=r)
+            if payload and payload.get("status") in ("queued", "enqueued", "running"):
                 ops.append(payload)
-        except Exception:
-            pass
+    except Exception:
+        pass
     ops.sort(key=lambda o: o.get("updated_at", 0), reverse=True)
     return {"operations": ops}
 
-@router.post("/search/reindex")
+@router.post("/search/reindex", status_code=202)
 async def reindex_search():
     """Enqueue a full Meilisearch reindex — a whole-library walk that belongs
     in a worker, not inline in the backend process."""
@@ -322,72 +324,23 @@ class RebuildLibraryRequest(BaseModel):
     resume: bool = True
 
 
-@router.post("/library/rebuild")
+@router.post("/library/rebuild", status_code=202)
 async def rebuild_library(data: RebuildLibraryRequest | None = None):
     """Enqueue a library rebuild operation and return immediately."""
-    from rq import Queue
-    import uuid
-    from app.services.redis_client import get_redis
-    from app.services.operations import set_operation_status
+    from app.services.operations import enqueue_admin_operation
 
     options = (data or RebuildLibraryRequest()).model_dump(mode="json")
-    redis = get_redis()
-    ensure_redis_enqueue_capacity(redis)
-    job_id = str(uuid.uuid4())
-    from app.services.tasks import TaskService
-    active_job = redis.get("library:rebuild:active")
-    if isinstance(active_job, bytes):
-        active_job = active_job.decode()
-    if active_job:
-        active_status = get_operation_status(active_job)
-        if not active_status or active_status.get("status") in {"complete", "failed", "cancelled"}:
-            release_owned_operation_lock(
-                redis,
-                "library:rebuild:active",
-                active_job,
-            )
-    if not redis.set("library:rebuild:active", job_id, nx=True, ex=604800):
-        active_job = redis.get("library:rebuild:active")
-        if isinstance(active_job, bytes):
-            active_job = active_job.decode()
-        raise HTTPException(status_code=409, detail={"message": "Library rebuild already running", "job_id": active_job})
-    async with async_session() as task_db:
-        task = await TaskService(task_db).create_task(
-            task_id=UUID(job_id),
-            kind="admin",
-            operation_type="admin-rebuild",
-            title="Rebuild library index",
-            status="enqueued",
-            queue_name="maintenance",
-            progress={"phase": "enqueued", "label": "Library rebuild queued"},
-            meta={"entity": "library", **options},
-        )
-        await task_db.commit()
-    try:
-        set_operation_status(job_id, "enqueued", "admin-rebuild",
-            progress={"phase": "enqueued", "label": "Library rebuild queued"},
-            meta={"entity": "library", **options})
-        rq_job = checked_enqueue(
-            Queue(name="maintenance", connection=redis),
-            "app.jobs.admin_operations.run_library_rebuild_operation",
-            job_id, options, job_timeout=14400, result_ttl=604800)
-    except Exception as exc:
-        await compensate_operation_enqueue_failure(
-            job_id,
-            "admin-rebuild",
-            exc,
-            lock_key="library:rebuild:active",
-            redis_client=redis,
-        )
-        raise
-    async with async_session() as task_db:
-        svc = TaskService(task_db)
-        current = await svc.get(task.id)
-        if current:
-            await svc.update_task(current, rq_job_id=rq_job.id)
-            await task_db.commit()
-
-    return {"status": "enqueued", "job_id": job_id, "message": "Library rebuild queued", "options": options}
+    operation = await enqueue_admin_operation(
+        lock_key="library:rebuild:active",
+        operation_type="admin-rebuild",
+        title="Rebuild library index",
+        entity="library",
+        func="app.jobs.admin_operations.run_library_rebuild_operation",
+        options=options,
+        job_timeout=14400,
+        queue_name="maintenance",
+    )
+    return {**operation, "message": "Library rebuild queued", "options": options}
 
 
 class ImportFromDiskRequest(BaseModel):
@@ -399,16 +352,13 @@ class ImportFromDiskRequest(BaseModel):
     reset_ledger: bool = False
 
 
-@router.post("/library/import-from-disk")
+@router.post("/library/import-from-disk", status_code=202)
 async def import_from_disk(
     data: ImportFromDiskRequest | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Enqueue an idempotent import of on-disk download files into the DB."""
-    from rq import Queue
-    import uuid
-    from app.services.redis_client import get_redis
-    from app.services.operations import set_operation_status
+    from app.services.operations import enqueue_admin_operation
 
     request = data or ImportFromDiskRequest()
     if request.repository_id is not None:
@@ -433,186 +383,35 @@ async def import_from_disk(
     # Repository validation is complete; release its read transaction before
     # any Redis admission or RQ publication can wait on external state.
     await db.rollback()
-    redis = get_redis()
-    ensure_redis_enqueue_capacity(redis)
-    job_id = str(uuid.uuid4())
-    from app.services.publisher_attempts import (
-        PUBLISHER_ATTEMPT_META_KEY,
-        current_publisher_attempt,
-        lock_publisher_task,
-        new_publisher_attempt,
+    operation = await enqueue_admin_operation(
+        lock_key="library:disk-import:active",
+        operation_type="admin-disk-import",
+        title="Import from disk",
+        entity="disk-import",
+        func="app.jobs.admin_operations.run_disk_import_operation",
+        options=options,
+        job_timeout=14400,
+        queue_name="maintenance",
     )
-    from app.services.tasks import TaskService
-    attempt_token = new_publisher_attempt()
-    active_job = redis.get("library:disk-import:active")
-    if isinstance(active_job, bytes):
-        active_job = active_job.decode()
-    if active_job:
-        active_status = get_operation_status(active_job)
-        active_attempt = current_operation_attempt(redis, active_job)
-        reclaimable = (
-            active_status
-            and active_status.get("status") in {"complete", "failed", "cancelled"}
-        ) or (not active_status and active_attempt is None)
-        if (
-            not reclaimable
-            and not active_status
-            and active_attempt is not None
-        ):
-            reclaimable = await durable_operation_attempt_is_terminal(
-                active_job,
-                active_attempt,
-            )
-        if reclaimable:
-            release_owned_operation_lock(
-                redis,
-                "library:disk-import:active",
-                active_job,
-                **(
-                    {"publisher_attempt": active_attempt}
-                    if active_attempt is not None
-                    else {}
-                ),
-            )
-    if not acquire_operation_lock(
-        redis,
-        "library:disk-import:active",
-        job_id,
-        ttl_seconds=604800,
-        publisher_attempt=attempt_token,
-    ):
-        active_job = redis.get("library:disk-import:active")
-        if isinstance(active_job, bytes):
-            active_job = active_job.decode()
-        raise HTTPException(status_code=409, detail={"message": "Disk import already running", "job_id": active_job})
-    async with async_session() as task_db:
-        task = await TaskService(task_db).create_task(
-            task_id=UUID(job_id),
-            kind="admin",
-            operation_type="admin-disk-import",
-            title="Import from disk",
-            status="enqueued",
-            queue_name="maintenance",
-            progress={"phase": "enqueued", "label": "Disk import queued"},
-            meta={
-                "entity": "disk-import",
-                **options,
-                PUBLISHER_ATTEMPT_META_KEY: attempt_token,
-            },
-        )
-        await task_db.commit()
-    try:
-        set_operation_status(job_id, "enqueued", "admin-disk-import",
-            progress={"phase": "enqueued", "label": "Disk import queued"},
-            meta={"entity": "disk-import", **options},
-            publisher_attempt=attempt_token,
-            redis_client=redis)
-        from app.services.publisher_attempts import publisher_job_description
-
-        rq_job = checked_enqueue(
-            Queue(name="maintenance", connection=redis),
-            "app.jobs.admin_operations.run_disk_import_operation",
-            job_id, options, attempt_token,
-            job_timeout=14400,
-            result_ttl=604800,
-            description=publisher_job_description(job_id),
-        )
-    except Exception as exc:
-        await compensate_operation_enqueue_failure(
-            job_id,
-            "admin-disk-import",
-            exc,
-            lock_key="library:disk-import:active",
-            redis_client=redis,
-            publisher_attempt=attempt_token,
-        )
-        from app.services.publisher_attempts import redact_publisher_attempt
-
-        safe_error = redact_publisher_attempt(exc, attempt_token)
-        if safe_error != str(exc):
-            raise RuntimeError(safe_error) from None
-        raise
-    async with async_session() as task_db:
-        svc = TaskService(task_db)
-        current = await lock_publisher_task(task_db, task.id)
-        if (
-            current
-            and current_publisher_attempt(current) == attempt_token
-        ):
-            await svc.update_task(current, rq_job_id=rq_job.id)
-            await task_db.commit()
-        else:
-            await task_db.rollback()
-
-    return {"status": "enqueued", "job_id": job_id, "message": "Disk import queued", "options": options}
+    return {**operation, "message": "Disk import queued", "options": options}
 
 
-@router.post("/creators/re-enrich")
+@router.post("/creators/re-enrich", status_code=202)
 async def reenrich_creators():
     """Enqueue a Danbooru re-enrichment sweep for creators flagged needs_enrichment."""
-    from rq import Queue
-    import uuid
-    from app.services.redis_client import get_redis
-    from app.services.operations import set_operation_status
-    from app.services.tasks import TaskService
+    from app.services.operations import enqueue_admin_operation
 
-    redis = get_redis()
-    ensure_redis_enqueue_capacity(redis)
-    job_id = str(uuid.uuid4())
-    active_job = redis.get("library:creator-reenrich:active")
-    if isinstance(active_job, bytes):
-        active_job = active_job.decode()
-    if active_job:
-        active_status = get_operation_status(active_job)
-        if not active_status or active_status.get("status") in {"complete", "failed", "cancelled"}:
-            release_owned_operation_lock(
-                redis,
-                "library:creator-reenrich:active",
-                active_job,
-            )
-    if not redis.set("library:creator-reenrich:active", job_id, nx=True, ex=86400):
-        active_job = redis.get("library:creator-reenrich:active")
-        if isinstance(active_job, bytes):
-            active_job = active_job.decode()
-        raise HTTPException(status_code=409, detail={
-            "message": "Creator re-enrichment already running", "job_id": active_job})
-    async with async_session() as task_db:
-        task = await TaskService(task_db).create_task(
-            task_id=UUID(job_id),
-            kind="admin",
-            operation_type="admin-creator-reenrich",
-            title="Re-enrich creators from Danbooru",
-            status="enqueued",
-            queue_name="maintenance",
-            progress={"phase": "enqueued", "label": "Creator re-enrichment queued"},
-            meta={"entity": "creator-reenrich"},
-        )
-        await task_db.commit()
-    try:
-        set_operation_status(job_id, "enqueued", "admin-creator-reenrich",
-            progress={"phase": "enqueued", "label": "Creator re-enrichment queued"},
-            meta={"entity": "creator-reenrich"})
-        rq_job = checked_enqueue(
-            Queue(name="maintenance", connection=redis),
-            "app.jobs.admin_operations.run_creator_reenrich_operation",
-            job_id, {}, job_timeout=7200, result_ttl=604800)
-    except Exception as exc:
-        await compensate_operation_enqueue_failure(
-            job_id,
-            "admin-creator-reenrich",
-            exc,
-            lock_key="library:creator-reenrich:active",
-            redis_client=redis,
-        )
-        raise
-    async with async_session() as task_db:
-        svc = TaskService(task_db)
-        current = await svc.get(task.id)
-        if current:
-            await svc.update_task(current, rq_job_id=rq_job.id)
-            await task_db.commit()
-
-    return {"status": "enqueued", "job_id": job_id, "message": "Creator re-enrichment queued"}
+    operation = await enqueue_admin_operation(
+        lock_key="library:creator-reenrich:active",
+        operation_type="admin-creator-reenrich",
+        title="Re-enrich creators from Danbooru",
+        entity="creator-reenrich",
+        func="app.jobs.admin_operations.run_creator_reenrich_operation",
+        options={},
+        job_timeout=7200,
+        queue_name="maintenance",
+    )
+    return {**operation, "message": "Creator re-enrichment queued"}
 
 
 # ── gallery-dl Config ──

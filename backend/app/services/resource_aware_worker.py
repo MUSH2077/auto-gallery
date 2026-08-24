@@ -402,6 +402,10 @@ class ResourceAwareWorker(Worker):
         workhorse.  The child acquires and renews one bounded slice at a time.
         """
 
+        metadata = getattr(job, "meta", None) or {}
+        registered_profile = metadata.get("registered_admin_internal_profile")
+        if registered_profile:
+            return str(registered_profile)
         func_name = str(getattr(job, "func_name", "") or "").lower()
         profiles = (
             ("run_clear_operation", "maintenance"),
@@ -448,6 +452,9 @@ class ResourceAwareWorker(Worker):
     def _job_uses_nonblocking_child_admission(job) -> bool:
         """Whether a coordinator yields when its child permit is unavailable."""
 
+        metadata = getattr(job, "meta", None) or {}
+        if metadata.get("registered_admin_operation") == "asset-dedup-scan":
+            return True
         func_name = str(getattr(job, "func_name", "") or "").lower()
         return any(
             name in func_name
@@ -846,12 +853,18 @@ class ResourceAwareWorker(Worker):
 
     @staticmethod
     def _job_publisher_attempt(job) -> str | None:
-        """Return private disk-publisher authority without copying it to meta."""
+        """Return captured TaskRun authority without copying it to RQ meta."""
 
         func_name = str(getattr(job, "func_name", "") or "").lower()
+        args = tuple(getattr(job, "args", ()) or ())
+        if "run_registered_admin_operation" in func_name:
+            raw = args[1] if len(args) > 1 else None
+            try:
+                return str(int(raw))
+            except (TypeError, ValueError):
+                return None
         if "run_disk_import_operation" not in func_name:
             return None
-        args = tuple(getattr(job, "args", ()) or ())
         raw = args[2] if len(args) > 2 else None
         if raw is None:
             raw = (getattr(job, "kwargs", None) or {}).get("attempt_token")

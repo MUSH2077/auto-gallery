@@ -38,7 +38,19 @@ def publisher_job_description(task_id: UUID | str) -> str:
 
 
 def current_publisher_attempt(task: TaskRun) -> str | None:
-    raw = (task.meta or {}).get(PUBLISHER_ATTEMPT_META_KEY)
+    meta = task.meta or {}
+    # New disk-import deliveries use the registry attempt persisted on this
+    # same TaskRun. Ignore any rolling-upgrade private token left by an older
+    # attempt so a retry cannot fence its own successor.
+    dispatch = meta.get("admin_dispatch")
+    if isinstance(dispatch, dict) and task.operation_type == "admin-disk-import":
+        try:
+            attempt = int(dispatch.get("attempt") or 0)
+        except (TypeError, ValueError):
+            attempt = 0
+        if attempt > 0:
+            return str(attempt)
+    raw = meta.get(PUBLISHER_ATTEMPT_META_KEY)
     return raw if isinstance(raw, str) and raw else None
 
 

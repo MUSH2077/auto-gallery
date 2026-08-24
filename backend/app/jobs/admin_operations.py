@@ -214,10 +214,140 @@ def disk_import_completion_progress(result: dict) -> dict:
     }
 
 
+def run_registered_admin_operation(task_id: str, attempt: int) -> dict:
+    """Single RQ entrypoint: PostgreSQL supplies every validated argument."""
+
+    return asyncio.run(_run_registered_admin_operation(task_id, int(attempt)))
+
+
+async def _run_registered_admin_operation(task_id: str, attempt: int) -> dict:
+    from app.services.operations import (
+        admin_operation_attempt_context,
+        claim_admin_operation,
+        update_admin_task,
+    )
+
+    operation_type, options = await claim_admin_operation(task_id, attempt)
+    try:
+        with admin_operation_attempt_context(task_id, attempt):
+            result = await _execute_registered_admin_operation(
+                operation_type,
+                task_id,
+                attempt,
+                options,
+            )
+        if result.get("_admin_handoff"):
+            return result
+        if not await update_admin_task(
+            task_id,
+            attempt,
+            status="complete",
+            progress={
+                "phase": "complete",
+                "label": str(result.get("message") or "Complete"),
+            },
+            result=result,
+            error=None,
+        ):
+            raise RuntimeError("Administrator operation attempt is no longer current")
+        return result
+    except Exception as exc:
+        await update_admin_task(
+            task_id,
+            attempt,
+            status="failed",
+            progress={"phase": "failed", "label": "Operation failed"},
+            error=str(exc),
+        )
+        raise
+
+
+async def _execute_registered_admin_operation(
+    operation_type: str,
+    task_id: str,
+    attempt: int,
+    options: dict,
+) -> dict:
+    """Dispatch a registered business handler after its durable claim."""
+
+    if operation_type == "admin-clear":
+        entity = str(options.get("entity") or "")
+        return await _run_clear_operation(entity, task_id)
+    if operation_type == "admin-cleanup-metadata-jsons":
+        from app.config import settings
+        from app.jobs.import_runner import cleanup_metadata_jsons
+
+        removed = await cleanup_metadata_jsons(settings.download_root)
+        return {"removed": removed, "message": f"Removed {removed} metadata files"}
+    if operation_type == "admin-rebuild":
+        return await _run_library_rebuild_operation(task_id, options)
+    if operation_type == "admin-disk-import":
+        # The bounded disk publisher's existing checkpoint accepts a captured
+        # string token. The TaskRun registry's monotonically increasing attempt
+        # is that token; its outer terminal write is independently fenced too.
+        return await _run_disk_import_operation(
+            task_id,
+            options,
+            str(attempt),
+        )
+    if operation_type in {"admin-creator-reenrich", "danbooru-mapping-refresh"}:
+        return await _run_creator_reenrich_operation(task_id, options)
+    if operation_type == "danbooru-import-all":
+        from app.services.danbooru_import import import_all_danbooru_artist
+
+        async with async_session() as db:
+            return await import_all_danbooru_artist(options, db)
+    if operation_type == "admin-search-reindex":
+        return await _run_search_reindex_operation(task_id, options)
+    if operation_type == "admin-curation-backfill":
+        return await _run_curation_backfill_operation(task_id, options)
+    if operation_type == "admin-gitllery-verify":
+        return await _run_gitllery_verify_operation(task_id, options)
+    if operation_type == "admin-gitllery-sync":
+        return await _run_gitllery_sync_operation(task_id, options)
+    if operation_type == "hierarchy-delete":
+        return await _run_hierarchy_delete_operation(task_id, options)
+    if operation_type == "asset-dedup-scan":
+        from app.jobs.asset_dedup import run_registered_asset_dedup_scan
+
+        return await run_registered_asset_dedup_scan(task_id, attempt, options)
+    if operation_type == "admin-danbooru-batch-import":
+        from app.jobs.batch_import import _batch_import
+
+        return await _batch_import(list(options.get("pixiv_ids") or []), task_id)
+    if operation_type == "admin-danbooru-url-batch-import":
+        from app.jobs.batch_import import _url_batch_import
+
+        return await _url_batch_import(list(options.get("urls") or []), task_id)
+    if operation_type == "admin-download-conflict-reconciliation":
+        from app.jobs.download_conflicts import (
+            reconcile_historical_download_conflicts_unlocked,
+        )
+
+        return await reconcile_historical_download_conflicts_unlocked(
+            int(options.get("limit") or 500)
+        )
+    raise ValueError(f"Unsupported registered administrator operation: {operation_type}")
+
+
 def run_clear_operation(entity: str, job_id: str) -> dict:
     """Entry point for RQ workers."""
     return asyncio.run(run_heavy_io_operation(
         "operation:clear", job_id, lambda: _run_clear_operation(entity, job_id)))
+
+
+def run_cleanup_metadata_jsons_operation(
+    job_id: str,
+    options: dict | None = None,
+) -> dict:
+    """Rolling-upgrade bridge; new deliveries use the registered entrypoint."""
+
+    del job_id, options
+    from app.config import settings
+    from app.jobs.import_runner import cleanup_metadata_jsons
+
+    removed = asyncio.run(cleanup_metadata_jsons(settings.download_root))
+    return {"removed": removed, "message": f"Removed {removed} metadata files"}
 
 
 async def _run_clear_operation(entity: str, job_id: str) -> dict:

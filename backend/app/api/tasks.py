@@ -417,6 +417,21 @@ _RETRYABLE_ADMIN_OPERATIONS = {
 
 
 async def _retry_admin_task(task, svc: TaskService):
+    if isinstance((task.meta or {}).get("admin_dispatch"), dict):
+        from app.services.operations import retry_admin_operation
+
+        task_id = task.id
+        await svc.db.rollback()
+        return await retry_admin_operation(task_id)
+
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "This legacy admin operation is available for read-only "
+            "compatibility and cannot be retried"
+        ),
+    )
+
     from rq import Queue
 
     from app.models.task_run import TaskRun

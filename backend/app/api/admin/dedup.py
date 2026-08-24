@@ -125,7 +125,7 @@ async def decide_asset_dedup_case(
     return result
 
 
-@curation_ops_router.post("/dedup/scans")
+@curation_ops_router.post("/dedup/scans", status_code=202)
 async def start_asset_dedup_scan(
     data: AssetDedupScanRequest,
     db: AsyncSession = Depends(get_db),
@@ -164,8 +164,10 @@ async def start_asset_dedup_scan(
         raise
     return {
         "scan_id": str(scan.id),
+        "task_id": operation["task_id"],
         "job_id": operation["job_id"],
         "status": operation["status"],
+        "operation_type": operation["operation_type"],
     }
 
 

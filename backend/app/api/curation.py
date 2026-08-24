@@ -125,7 +125,7 @@ async def curation_backfill_status(db: AsyncSession = Depends(get_db)):
     return await svc.backfill_status()
 
 
-@router.post("/backfill")
+@router.post("/backfill", status_code=202)
 async def run_curation_backfill():
     """Enqueue the baseline backfill — it replays the whole library and must
     run in a worker, never inline in the backend process."""
@@ -286,7 +286,7 @@ async def gitllery_rebuild(
     return await gitllery_backfill(_admin, db)
 
 
-@router.post("/gitllery/verify")
+@router.post("/gitllery/verify", status_code=202)
 async def gitllery_verify(
     request: GitlleryVerifyRequest,
     _admin=RequireAdminUser,
