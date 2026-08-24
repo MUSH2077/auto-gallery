@@ -44,9 +44,8 @@ from app.services.asset_reconciliation import (
 from app.services.redis_client import get_redis
 from app.services.queue_admission import checked_enqueue
 from app.services.operations import (
-    enqueue_admin_operation,
-    get_operation_status,
-    set_operation_status,
+    prepare_admin_operation,
+    publish_admin_operation,
 )
 
 from ._routers import router, curation_ops_router
@@ -138,15 +137,14 @@ async def start_asset_dedup_scan(
         },
     )
     db.add(scan)
-    await db.commit()
-    await db.refresh(scan)
     try:
-        operation = await enqueue_admin_operation(
-            lock_key="lock:admin:asset-dedup-scan",
+        await db.flush()
+        prepared = await prepare_admin_operation(
+            db,
             operation_type="asset-dedup-scan",
+            scope_key="lock:admin:asset-dedup-scan",
             title="Asset dedup scan",
             entity="assets",
-            func="app.jobs.asset_dedup.run_asset_dedup_scan",
             options={"scan_id": str(scan.id)},
             # One RQ job owns only one adaptive asset slice.  It persists the
             # keyset cursor and publishes a delayed successor, so a normal
@@ -157,17 +155,17 @@ async def start_asset_dedup_scan(
             # successor yields after one bounded adaptive slice.
             queue_name="maintenance",
         )
-    except Exception:
-        scan.status = "failed"
-        scan.error = "Unable to enqueue asset dedup scan"
         await db.commit()
+    except Exception:
+        await db.rollback()
         raise
+    await publish_admin_operation(prepared.task.id, prepared.attempt)
     return {
         "scan_id": str(scan.id),
-        "task_id": operation["task_id"],
-        "job_id": operation["job_id"],
-        "status": operation["status"],
-        "operation_type": operation["operation_type"],
+        "task_id": str(prepared.task.id),
+        "job_id": prepared.rq_job_id,
+        "status": "enqueued",
+        "operation_type": "asset-dedup-scan",
     }
 
 

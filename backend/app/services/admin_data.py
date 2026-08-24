@@ -210,8 +210,14 @@ async def clear_entity_data(entity: str, db: AsyncSession) -> dict:
 async def rebuild_library_index(db: AsyncSession, options: dict | None = None, progress_callback=None) -> dict:
     """Incrementally repair /library/ with bounded keyset-pagination batches."""
     from app.models import Work, WorkSource, Asset, AssetSource, SourceCreator
+    from app.services.operations import (
+        current_admin_operation_attempt,
+        get_current_admin_operation_checkpoint,
+        set_current_admin_operation_checkpoint,
+    )
     from app.services.settings import load_gallerydl_config
     options = options or {}
+    registered_delivery = current_admin_operation_attempt()
     mode = options.get("mode", "repair")
     if mode not in {"repair", "full"}:
         raise ValueError("mode must be 'repair' or 'full'")
@@ -235,27 +241,51 @@ async def rebuild_library_index(db: AsyncSession, options: dict | None = None, p
     id_query = select(Work.id, Work.created_at).where(*filters)
     total = (await db.execute(select(func.count()).select_from(id_query.subquery()))).scalar_one()
     if total == 0:
+        if registered_delivery is not None:
+            await set_current_admin_operation_checkpoint(
+                db,
+                "library_rebuild",
+                None,
+            )
+            await db.commit()
         return {"status": "ok", "message": "No works to rebuild", "scanned": 0, "skipped": 0,
                 "metadata_written": 0, "thumbnails_generated": 0, "errors": 0, "cursor": None}
 
-    r = get_redis()
     progress_key = "library:rebuild:progress"
     checkpoint_key = "library:rebuild:checkpoint"
+    legacy_redis = None
     cursor_created_at = None
     cursor_id = None
     resumed_stats = None
     resumed_errors = 0
     if options.get("resume", True):
-        raw_checkpoint = r.get(checkpoint_key)
-        if raw_checkpoint:
-            if isinstance(raw_checkpoint, bytes):
-                raw_checkpoint = raw_checkpoint.decode()
-            checkpoint = json.loads(raw_checkpoint)
-            if checkpoint.get("options") == {k: options.get(k) for k in ("mode", "source", "creator_id", "work_id")}:
-                cursor_created_at = datetime.fromisoformat(checkpoint["created_at"])
-                cursor_id = UUID(checkpoint["id"])
-                resumed_stats = checkpoint.get("stats")
-                resumed_errors = int(checkpoint.get("errors", 0))
+        checkpoint = None
+        if registered_delivery is not None:
+            checkpoint = await get_current_admin_operation_checkpoint(
+                db,
+                "library_rebuild",
+            )
+        else:
+            try:
+                legacy_redis = get_redis()
+                raw_checkpoint = legacy_redis.get(checkpoint_key)
+                if raw_checkpoint:
+                    if isinstance(raw_checkpoint, bytes):
+                        raw_checkpoint = raw_checkpoint.decode()
+                    checkpoint = json.loads(raw_checkpoint)
+            except Exception:
+                logger.warning(
+                    "Unable to read legacy library rebuild checkpoint",
+                    exc_info=True,
+                )
+        if checkpoint and checkpoint.get("options") == {
+            key: options.get(key)
+            for key in ("mode", "source", "creator_id", "work_id")
+        }:
+            cursor_created_at = datetime.fromisoformat(checkpoint["created_at"])
+            cursor_id = UUID(checkpoint["id"])
+            resumed_stats = checkpoint.get("stats")
+            resumed_errors = int(checkpoint.get("errors", 0))
 
     from app.services.artifact_ledger import ArtifactLedger, managed_artifact_row
     file_index = None
@@ -377,31 +407,75 @@ async def rebuild_library_index(db: AsyncSession, options: dict | None = None, p
             from app.services.search_projection_outbox import request_search_projection
 
             await request_search_projection(db, projection_work_ids)
-        await db.commit()
         cursor_created_at, cursor_id = page[-1].created_at, page[-1].id
         cursor = {"created_at": cursor_created_at.isoformat(), "id": str(cursor_id)}
         checkpoint = {**cursor, "options": {k: options.get(k) for k in ("mode", "source", "creator_id", "work_id")},
                       "stats": stats, "errors": errors}
-        r.setex(checkpoint_key, 86400, json.dumps(checkpoint))
         progress = {**stats, "errors": errors, "total": total, "cursor": cursor, "phase": "running"}
-        r.setex(progress_key, 3600, json.dumps(progress))
+        if registered_delivery is not None:
+            await set_current_admin_operation_checkpoint(
+                db,
+                "library_rebuild",
+                checkpoint,
+                progress=progress,
+            )
+        await db.commit()
+        if registered_delivery is None:
+            try:
+                legacy_redis = legacy_redis or get_redis()
+                legacy_redis.setex(checkpoint_key, 86400, json.dumps(checkpoint))
+                legacy_redis.setex(progress_key, 3600, json.dumps(progress))
+            except Exception:
+                logger.warning(
+                    "Unable to write legacy library rebuild checkpoint",
+                    exc_info=True,
+                )
         if progress_callback:
             callback_result = progress_callback(progress)
             if inspect.isawaitable(callback_result):
                 await callback_result
         db.expunge_all()
 
-    r.delete(checkpoint_key)
     result = {"status": "ok", **stats, "errors": errors, "cursor": None,
               "message": f"Scanned {stats['scanned']} sources, wrote {stats['metadata_written']} metadata files ({errors} errors)"}
-    r.setex(progress_key, 3600, json.dumps({**result, "status": "done"}))
+    if registered_delivery is not None:
+        await set_current_admin_operation_checkpoint(
+            db,
+            "library_rebuild",
+            None,
+        )
+        await db.commit()
+    else:
+        try:
+            legacy_redis = legacy_redis or get_redis()
+            legacy_redis.delete(checkpoint_key)
+            legacy_redis.setex(
+                progress_key,
+                3600,
+                json.dumps({**result, "status": "done"}),
+            )
+        except Exception:
+            logger.warning(
+                "Unable to finish legacy library rebuild checkpoint",
+                exc_info=True,
+            )
     return result
 
 
 async def _delete_tables(tables: list[str], db: AsyncSession) -> dict[str, int]:
     results = {}
     for table in tables:
-        r = await db.execute(text(f"DELETE FROM {table}"))
+        if table == "task_runs":
+            from app.models.task_run import TaskRun
+            from app.services.tasks import NONTERMINAL_STATUSES
+
+            r = await db.execute(
+                TaskRun.__table__.delete().where(
+                    TaskRun.status.not_in(NONTERMINAL_STATUSES)
+                )
+            )
+        else:
+            r = await db.execute(text(f"DELETE FROM {table}"))
         results[table] = r.rowcount or 0
     return results
 

@@ -1,5 +1,6 @@
 """Tests for Danbooru-first creator enrichment (creation paths + recovery sweep)."""
 
+import asyncio
 import uuid
 
 import pytest
@@ -447,6 +448,94 @@ async def test_refresh_all_creator_mappings_is_incremental_and_includes_inactive
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refresh_all", [False, True])
+async def test_creator_sweeps_await_async_progress_callbacks(monkeypatch, refresh_all):
+    """Both creator sweep variants finish an async progress write before returning."""
+    from types import SimpleNamespace
+
+    from app.services import creator_enrichment as ce
+    from app.services.creator import CreatorService
+
+    creator_id = uuid.uuid4()
+    creator = SimpleNamespace(
+        id=creator_id,
+        name="callback-creator",
+        display_name="Callback creator",
+    )
+    source_creator = SimpleNamespace(
+        creator_id=creator_id,
+        source="pixiv",
+        source_creator_id="123",
+    )
+
+    class ScalarValues:
+        def __init__(self, values):
+            self._values = values
+
+        def all(self):
+            return list(self._values)
+
+    class Result:
+        def __init__(self, values):
+            self._values = values
+
+        def scalars(self):
+            return ScalarValues(self._values)
+
+    class FakeDB:
+        async def execute(self, _statement):
+            return Result([creator_id] if refresh_all else [source_creator])
+
+        async def get(self, _model, _id):
+            return creator
+
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+    async def refresh_mapping(_db, _creator):
+        return {
+            "status": ce.STATUS_FOUND,
+            "artist_id": 1,
+            "artist_name": "callback_artist",
+        }
+
+    async def enrich_mapping(_db, _creator, *, source_creator):
+        del source_creator
+        return {"status": ce.STATUS_FOUND}
+
+    async def request_projection(_service, _creator_id):
+        return None
+
+    monkeypatch.setattr(ce, "refresh_creator_mapping", refresh_mapping)
+    monkeypatch.setattr(ce, "enrich_creator_from_danbooru", enrich_mapping)
+    monkeypatch.setattr(CreatorService, "_request_creator_projection", request_projection)
+    progress_updates = []
+
+    async def record_progress(progress):
+        await asyncio.sleep(0)
+        progress_updates.append(progress)
+
+    if refresh_all:
+        report = await ce.refresh_all_creator_mappings(
+            FakeDB(),
+            progress_cb=record_progress,
+        )
+    else:
+        report = await ce.reenrich_pending(
+            FakeDB(),
+            progress_cb=record_progress,
+        )
+
+    assert report["found"] == 1
+    assert len(progress_updates) == 1
+    assert progress_updates[0]["scanned"] == 1
+    assert progress_updates[0]["total"] == 1
 
 
 @pytest.mark.integration

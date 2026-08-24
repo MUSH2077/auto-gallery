@@ -10,6 +10,7 @@ retried later via reenrich_pending().
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -300,12 +301,14 @@ async def refresh_all_creator_mappings(
                 })
 
         if progress_cb:
-            progress_cb({
+            callback_result = progress_cb({
                 "current": len(items),
                 "scanned": len(items),
                 "total": total,
                 **counts,
             })
+            if inspect.isawaitable(callback_result):
+                await callback_result
         if aborted:
             break
 
@@ -373,7 +376,11 @@ async def reenrich_pending(
             **result,
         })
         if progress_cb:
-            progress_cb({"scanned": idx + 1, "total": len(rows), **counts})
+            callback_result = progress_cb(
+                {"scanned": idx + 1, "total": len(rows), **counts}
+            )
+            if inspect.isawaitable(callback_result):
+                await callback_result
         if status.startswith("danbooru_error:"):
             aborted = True
             break

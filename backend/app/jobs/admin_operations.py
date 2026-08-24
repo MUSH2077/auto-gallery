@@ -14,8 +14,10 @@ from app.services.admin_data import clear_entity_data
 from app.services.operations import (
     OPERATION_TTL_SECONDS,
     acquire_operation_lock,
-    release_owned_operation_lock,
+    current_admin_operation_attempt,
+    release_legacy_operation_lock,
     set_operation_status,
+    update_current_admin_operation_progress,
 )
 from app.services.heavy_io import run_heavy_io_operation
 from app.services.redis_pubsub import PublisherFenceError
@@ -437,10 +439,24 @@ async def _run_library_rebuild_operation(job_id: str, options: dict) -> dict:
         progress={"phase": "running", "label": "Rebuilding library index..."},
         meta={"entity": "library", **options})
     try:
-        def update_progress(progress: dict):
-            set_operation_status(job_id, "running", "admin-rebuild",
-                progress={**progress, "label": f"Scanned {progress['scanned']} of {progress['total']}"},
-                meta={"entity": "library", **options})
+        async def update_progress(progress: dict):
+            task_progress = {
+                **progress,
+                "label": f"Scanned {progress['scanned']} of {progress['total']}",
+            }
+            if current_admin_operation_attempt() is not None:
+                await update_current_admin_operation_progress(
+                    job_id,
+                    task_progress,
+                )
+            else:
+                set_operation_status(
+                    job_id,
+                    "running",
+                    "admin-rebuild",
+                    progress=task_progress,
+                    meta={"entity": "library", **options},
+                )
 
         async with async_session() as db:
             result = await rebuild_library_index(db, options, update_progress)
@@ -471,9 +487,7 @@ async def _run_library_rebuild_operation(job_id: str, options: dict) -> dict:
             progress={"phase": "failed"}, error=str(exc), meta={"entity": "library", **options})
         raise
     finally:
-        from app.services.redis_client import get_redis
-        redis = get_redis()
-        release_owned_operation_lock(redis, "library:rebuild:active", job_id)
+        release_legacy_operation_lock("library:rebuild:active", job_id)
 
 
 def run_disk_import_operation(
@@ -698,11 +712,8 @@ async def _run_disk_import_operation(
         raise
     finally:
         heartbeat.stop()
-        from app.services.redis_client import get_redis
-        redis = get_redis()
         if not guard.authority_lost:
-            release_owned_operation_lock(
-                redis,
+            release_legacy_operation_lock(
                 "library:disk-import:active",
                 job_id,
                 publisher_attempt=guard.attempt_token,
@@ -759,11 +770,27 @@ async def _run_creator_reenrich_operation(job_id: str, options: dict) -> dict:
         progress={"phase": "running", "label": running_label},
         meta={"entity": entity, **options})
     try:
-        def update_progress(progress: dict):
-            set_operation_status(job_id, "running", operation_type,
-                progress={**progress,
-                          "label": f"Mapped {progress.get('found', 0)} of {progress.get('scanned', 0)} scanned"},
-                meta={"entity": entity, **options})
+        async def update_progress(progress: dict):
+            task_progress = {
+                **progress,
+                "label": (
+                    f"Mapped {progress.get('found', 0)} of "
+                    f"{progress.get('scanned', 0)} scanned"
+                ),
+            }
+            if current_admin_operation_attempt() is not None:
+                await update_current_admin_operation_progress(
+                    job_id,
+                    task_progress,
+                )
+            else:
+                set_operation_status(
+                    job_id,
+                    "running",
+                    operation_type,
+                    progress=task_progress,
+                    meta={"entity": entity, **options},
+                )
 
         async with async_session() as db:
             if refresh_all:
@@ -814,10 +841,7 @@ async def _run_creator_reenrich_operation(job_id: str, options: dict) -> dict:
             progress={"phase": "failed"}, error=str(exc), meta={"entity": entity, **options})
         raise
     finally:
-        from app.services.redis_client import get_redis
-        redis = get_redis()
-        release_owned_operation_lock(
-            redis,
+        release_legacy_operation_lock(
             "library:creator-reenrich:active",
             job_id,
         )
@@ -827,13 +851,10 @@ def run_gitllery_sync_operation(job_id: str, options: dict | None = None) -> dic
     """Rolling-upgrade bridge to one bounded v1 segment projection slice."""
 
     from app.jobs.gitllery_projection import run_gitllery_projection_outbox
-    from app.services.redis_client import get_redis
-
     try:
         return run_gitllery_projection_outbox(limit=25, max_seconds=20.0)
     finally:
-        release_owned_operation_lock(
-            get_redis(),
+        release_legacy_operation_lock(
             "library:gitllery-sync:active",
             job_id,
         )
@@ -910,10 +931,7 @@ async def _run_gitllery_verify_operation(job_id: str, options: dict) -> dict:
         )
         raise
     finally:
-        from app.services.redis_client import get_redis
-
-        release_owned_operation_lock(
-            get_redis(),
+        release_legacy_operation_lock(
             f"gitllery:verify:{repository_id}",
             job_id,
         )
@@ -1005,10 +1023,7 @@ async def _run_gitllery_sync_operation(job_id: str, options: dict) -> dict:
             progress={"phase": "failed"}, error=str(exc), meta={"entity": "gitllery-sync", **options})
         raise
     finally:
-        from app.services.redis_client import get_redis
-        redis = get_redis()
-        release_owned_operation_lock(
-            redis,
+        release_legacy_operation_lock(
             "library:gitllery-sync:active",
             job_id,
         )
@@ -1074,10 +1089,7 @@ async def _run_search_reindex_operation(job_id: str, options: dict) -> dict:
             progress={"phase": "failed"}, error=str(exc), meta={"entity": "search-reindex", **options})
         raise
     finally:
-        from app.services.redis_client import get_redis
-        redis = get_redis()
-        release_owned_operation_lock(
-            redis,
+        release_legacy_operation_lock(
             "library:search-reindex:active",
             job_id,
         )
@@ -1141,10 +1153,7 @@ async def _run_curation_backfill_operation(job_id: str, options: dict) -> dict:
             progress={"phase": "failed"}, error=str(exc), meta={"entity": "curation-backfill", **options})
         raise
     finally:
-        from app.services.redis_client import get_redis
-        redis = get_redis()
-        release_owned_operation_lock(
-            redis,
+        release_legacy_operation_lock(
             "library:curation-backfill:active",
             job_id,
         )
@@ -1278,10 +1287,7 @@ async def _run_hierarchy_delete_operation(job_id: str, options: dict) -> dict:
         )
         raise
     finally:
-        from app.services.redis_client import get_redis
-
-        release_owned_operation_lock(
-            get_redis(),
+        release_legacy_operation_lock(
             "library:hierarchy-delete:active",
             job_id,
         )

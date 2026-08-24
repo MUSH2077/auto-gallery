@@ -15,7 +15,7 @@ from uuid import UUID, uuid4
 import redis as redis_lib
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import func as sql_func, select
+from sqlalchemy import DateTime, cast, func as sql_func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.redis_client import get_redis
@@ -589,6 +589,33 @@ def release_owned_operation_lock(
     return bool(redis.delete(lock_key))
 
 
+def release_legacy_operation_lock(
+    lock_key: str,
+    job_id: str,
+    *,
+    publisher_attempt: str | None = None,
+) -> bool:
+    """Best-effort rolling cleanup which never runs for registered workers."""
+
+    if current_admin_operation_attempt() is not None:
+        return False
+    try:
+        return release_owned_operation_lock(
+            get_redis(),
+            lock_key,
+            job_id,
+            publisher_attempt=publisher_attempt,
+        )
+    except Exception:
+        logger.warning(
+            "Unable to release legacy operation lock key=%s job=%s",
+            lock_key,
+            job_id,
+            exc_info=True,
+        )
+        return False
+
+
 async def compensate_operation_enqueue_failure(
     job_id: str,
     operation_type: str,
@@ -846,6 +873,7 @@ def _new_dispatch(
         "publication_state": ADMIN_DISPATCH_PENDING,
         "publication_failures": 0,
         "next_retry_at": None,
+        "next_probe_at": None,
         "last_error": None,
         "attempt": attempt,
         "rq_job_id": deterministic_admin_rq_job_id(task_id, attempt),
@@ -981,6 +1009,9 @@ async def prepare_admin_operation_retry(
             options=_validated_options(dispatch.get("options") or {}),
             job_timeout=int(dispatch.get("job_timeout") or 14400),
         )
+        checkpoints = dispatch.get("checkpoints")
+        if isinstance(checkpoints, dict) and checkpoints:
+            next_dispatch["checkpoints"] = _validated_options(checkpoints)
         meta = dict(task.meta or {})
         meta[ADMIN_DISPATCH_META_KEY] = next_dispatch
         task.attempts = attempt
@@ -1208,7 +1239,7 @@ async def publish_admin_operation(
                     redis_client=redis_client,
                 )
                 outcome = "published"
-        except (QueueAdmissionError, redis_lib.RedisError, OSError) as exc:
+        except Exception as exc:
             failures = int(dispatch.get("publication_failures") or 0) + 1
             dispatch.update(
                 {
@@ -1234,12 +1265,17 @@ async def publish_admin_operation(
             )
             return "deferred"
 
-        now = _utcnow().isoformat()
+        now_value = _utcnow()
+        now = now_value.isoformat()
         dispatch.update(
             {
                 "publication_state": ADMIN_DISPATCH_PUBLISHED,
                 "published_at": now,
                 "next_retry_at": None,
+                "next_probe_at": (
+                    now_value
+                    + timedelta(seconds=ADMIN_DISPATCH_RECOVERY_INTERVAL_SECONDS)
+                ).isoformat(),
                 "last_error": None,
                 "updated_at": now,
             }
@@ -1350,37 +1386,75 @@ async def recover_admin_operation_dispatches(
 
     current = now or _utcnow()
     bounded_limit = max(1, min(int(limit), ADMIN_DISPATCH_RECOVERY_LIMIT))
+    prepared_text = TaskRun.meta[ADMIN_DISPATCH_META_KEY]["prepared_at"].astext
+    prepared_at = cast(prepared_text, DateTime(timezone=True))
+    retry_text = TaskRun.meta[ADMIN_DISPATCH_META_KEY]["next_retry_at"].astext
+    retry_at = cast(retry_text, DateTime(timezone=True))
+    grace_cutoff = current - timedelta(seconds=max(0, grace_seconds))
+    common_filters = (
+        TaskRun.kind == "admin",
+        TaskRun.status.in_(_ACTIVE_ADMIN_STATUSES),
+        prepared_at <= grace_cutoff,
+    )
+
     async with async_session() as db:
-        states = [ADMIN_DISPATCH_PENDING]
-        if include_published:
-            states.append(ADMIN_DISPATCH_PUBLISHED)
-        candidates = list(
+        pending = list(
             (
                 await db.execute(
                     select(TaskRun)
                     .where(
-                        TaskRun.kind == "admin",
-                        TaskRun.status.in_(_ACTIVE_ADMIN_STATUSES),
+                        *common_filters,
                         TaskRun.meta[ADMIN_DISPATCH_META_KEY]["publication_state"]
-                        .astext.in_(states),
+                        .astext
+                        == ADMIN_DISPATCH_PENDING,
+                        or_(retry_text.is_(None), retry_at <= current),
                     )
-                    .order_by(TaskRun.created_at.asc(), TaskRun.id.asc())
-                    .limit(ADMIN_DISPATCH_RECOVERY_LIMIT * 4)
+                    .order_by(
+                        retry_at.asc().nullsfirst(),
+                        prepared_at.asc(),
+                        TaskRun.id.asc(),
+                    )
+                    .limit(bounded_limit)
                 )
             ).scalars()
         )
-    due: list[tuple[UUID, int]] = []
-    for task in candidates:
-        dispatch = _admin_dispatch(task) or {}
-        prepared_at = _parse_dispatch_time(dispatch.get("prepared_at"))
-        retry_at = _parse_dispatch_time(dispatch.get("next_retry_at"))
-        if prepared_at is None or prepared_at > current - timedelta(seconds=max(0, grace_seconds)):
-            continue
-        if retry_at is not None and retry_at > current:
-            continue
-        due.append((task.id, int(dispatch.get("attempt") or 0)))
-        if len(due) >= bounded_limit:
-            break
+        due = [
+            (task.id, int((_admin_dispatch(task) or {}).get("attempt") or 0))
+            for task in pending
+        ]
+
+        remaining = bounded_limit - len(due)
+        if include_published and remaining > 0:
+            probe_text = TaskRun.meta[ADMIN_DISPATCH_META_KEY]["next_probe_at"].astext
+            probe_at = cast(probe_text, DateTime(timezone=True))
+            published = list(
+                (
+                    await db.execute(
+                        select(TaskRun)
+                        .where(
+                            *common_filters,
+                            TaskRun.meta[ADMIN_DISPATCH_META_KEY][
+                                "publication_state"
+                            ].astext
+                            == ADMIN_DISPATCH_PUBLISHED,
+                            or_(probe_text.is_(None), probe_at <= current),
+                        )
+                        .order_by(
+                            probe_at.asc().nullsfirst(),
+                            prepared_at.asc(),
+                            TaskRun.id.asc(),
+                        )
+                        .limit(remaining)
+                    )
+                ).scalars()
+            )
+            due.extend(
+                (
+                    task.id,
+                    int((_admin_dispatch(task) or {}).get("attempt") or 0),
+                )
+                for task in published
+            )
 
     report = {"scanned": len(due), "published": 0, "deferred": 0, "failed": 0}
     for candidate_id, attempt in due:
@@ -1437,6 +1511,88 @@ async def update_admin_task(
         await TaskService(db).update_task(task, **changes)
         await db.commit()
         return True
+
+
+async def update_current_admin_operation_progress(
+    task_id: UUID | str,
+    progress: dict[str, Any],
+) -> None:
+    """Durably update progress for the registered attempt in this context."""
+
+    delivery = current_admin_operation_attempt()
+    if delivery is None or delivery[0] != UUID(str(task_id)):
+        raise AdminOperationAttemptRejected(
+            "Administrator operation progress has no current attempt"
+        )
+    if not await update_admin_task(
+        delivery[0],
+        delivery[1],
+        status="running",
+        progress=_validated_options(progress),
+    ):
+        raise AdminOperationAttemptRejected(
+            "Administrator operation attempt is no longer current"
+        )
+
+
+async def get_current_admin_operation_checkpoint(
+    db: AsyncSession,
+    name: str,
+) -> dict[str, Any] | None:
+    """Read one checkpoint only from the exact registered TaskRun attempt."""
+
+    from app.models.task_run import TaskRun
+
+    delivery = current_admin_operation_attempt()
+    if delivery is None:
+        return None
+    task = await db.get(TaskRun, delivery[0])
+    dispatch = _admin_dispatch(task) if task is not None else None
+    if dispatch is None or int(dispatch.get("attempt") or 0) != delivery[1]:
+        raise AdminOperationAttemptRejected(
+            "Administrator operation attempt is no longer current"
+        )
+    checkpoint = (dispatch.get("checkpoints") or {}).get(name)
+    return _validated_options(checkpoint) if isinstance(checkpoint, dict) else None
+
+
+async def set_current_admin_operation_checkpoint(
+    db: AsyncSession,
+    name: str,
+    checkpoint: dict[str, Any] | None,
+    *,
+    progress: dict[str, Any] | None = None,
+) -> None:
+    """Persist or clear a checkpoint below the exact current TaskRun attempt."""
+
+    from app.models.task_run import TaskRun
+    from app.services.tasks import TaskService
+
+    delivery = current_admin_operation_attempt()
+    if delivery is None:
+        raise AdminOperationAttemptRejected(
+            "Administrator operation checkpoint has no current attempt"
+        )
+    task = await db.get(TaskRun, delivery[0])
+    dispatch = _admin_dispatch(task) if task is not None else None
+    if dispatch is None or int(dispatch.get("attempt") or 0) != delivery[1]:
+        raise AdminOperationAttemptRejected(
+            "Administrator operation attempt is no longer current"
+        )
+    checkpoints = dict(dispatch.get("checkpoints") or {})
+    if checkpoint is None:
+        checkpoints.pop(name, None)
+    else:
+        checkpoints[name] = _validated_options(checkpoint)
+    dispatch["checkpoints"] = checkpoints
+    dispatch["updated_at"] = _utcnow().isoformat()
+    meta = dict(task.meta or {})
+    meta[ADMIN_DISPATCH_META_KEY] = dispatch
+    await TaskService(db).update_task(
+        task,
+        progress=_validated_options(progress) if progress is not None else None,
+        meta=meta,
+    )
 
 
 async def claim_admin_operation(

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -227,6 +229,169 @@ async def test_queue_capacity_rejection_is_a_recoverable_publication_failure(mon
         async with async_session() as db:
             task = await db.get(TaskRun, task_id)
             assert task.meta[operations.ADMIN_DISPATCH_META_KEY]["publication_failures"] == 1
+    finally:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_recovery_prioritizes_later_pending_intent_over_old_published_probes(
+    monkeypatch,
+):
+    """Published probes cannot consume the batch ahead of a due pending intent."""
+    from app.database import async_session, engine
+    from app.models import TaskRun
+    from app.services import operations
+
+    published_ids: set[str] = set()
+    enqueued_ids: list[str] = []
+    base = datetime.now(timezone.utc) - timedelta(hours=2)
+
+    class QueuedJob:
+        result = None
+
+        @staticmethod
+        def get_status(*, refresh=True):
+            del refresh
+            return "queued"
+
+    def fetch(rq_job_id, *, redis_client=None):
+        del redis_client
+        return QueuedJob() if rq_job_id in published_ids else None
+
+    def enqueue(*_args, rq_job_id, **_kwargs):
+        enqueued_ids.append(rq_job_id)
+        return SimpleNamespace(id=rq_job_id)
+
+    monkeypatch.setattr(operations, "_fetch_admin_rq", fetch)
+    monkeypatch.setattr(operations, "_enqueue_admin_rq", enqueue)
+    pending_id = None
+    old_published_task_ids: list[UUID] = []
+    try:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            for index in range(26):
+                prepared = await operations.prepare_admin_operation(
+                    db,
+                    operation_type="admin-gitllery-verify",
+                    scope_key=f"gitllery:verify:{uuid4()}",
+                    title=f"Published probe {index}",
+                    entity="gitllery-verify",
+                    options={"repository_id": str(uuid4())},
+                    queue_name="maintenance",
+                    job_timeout=60,
+                )
+                prepared.task.created_at = base + timedelta(seconds=index)
+                dispatch = dict(
+                    prepared.task.meta[operations.ADMIN_DISPATCH_META_KEY]
+                )
+                dispatch["prepared_at"] = base.isoformat()
+                dispatch["publication_state"] = operations.ADMIN_DISPATCH_PUBLISHED
+                prepared.task.meta = {
+                    **prepared.task.meta,
+                    operations.ADMIN_DISPATCH_META_KEY: dispatch,
+                }
+                published_ids.add(prepared.rq_job_id)
+                old_published_task_ids.append(prepared.task.id)
+
+            pending = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-gitllery-verify",
+                scope_key=f"gitllery:verify:{uuid4()}",
+                title="Later lost publication",
+                entity="gitllery-verify",
+                options={"repository_id": str(uuid4())},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            pending.task.created_at = base + timedelta(minutes=10)
+            pending_dispatch = dict(
+                pending.task.meta[operations.ADMIN_DISPATCH_META_KEY]
+            )
+            pending_dispatch["prepared_at"] = base.isoformat()
+            pending.task.meta = {
+                **pending.task.meta,
+                operations.ADMIN_DISPATCH_META_KEY: pending_dispatch,
+            }
+            pending_id = pending.task.id
+            pending_rq_job_id = pending.rq_job_id
+            await db.commit()
+
+        recovered = await operations.recover_admin_operation_dispatches(
+            now=datetime.now(timezone.utc),
+            grace_seconds=0,
+            limit=25,
+            include_published=True,
+        )
+
+        assert recovered == {
+            "scanned": 25,
+            "published": 25,
+            "deferred": 0,
+            "failed": 0,
+        }
+        assert enqueued_ids == [pending_rq_job_id]
+        async with async_session() as verify_db:
+            pending_task = await verify_db.get(TaskRun, pending_id)
+            assert (
+                pending_task.meta[operations.ADMIN_DISPATCH_META_KEY][
+                    "publication_state"
+                ]
+                == operations.ADMIN_DISPATCH_PUBLISHED
+            )
+            probed = 0
+            for task_id in old_published_task_ids:
+                task = await verify_db.get(TaskRun, task_id)
+                dispatch = task.meta[operations.ADMIN_DISPATCH_META_KEY]
+                if dispatch.get("next_probe_at"):
+                    probed += 1
+            assert probed == 24
+    finally:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ordinary_rq_exception_keeps_committed_start_pending(monkeypatch):
+    """An ordinary RQ implementation error is deferred after durable admission."""
+    from app.database import async_session, engine
+    from app.models import TaskRun
+    from app.services import operations
+    from app.services.redis_client import get_redis
+
+    monkeypatch.setattr(
+        operations,
+        "_enqueue_admin_rq",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("rq serializer exploded")
+        ),
+    )
+    task_id = None
+    try:
+        result = await operations.start_admin_operation(
+            operation_type="admin-search-reindex",
+            scope_key="library:search-reindex:active",
+            title="Search reindex",
+            entity="search-reindex",
+            options={},
+            queue_name="maintenance",
+            job_timeout=60,
+            redis_client=get_redis(),
+        )
+        task_id = UUID(result["task_id"])
+        assert result["publication_state"] == operations.ADMIN_DISPATCH_PENDING
+        async with async_session() as db:
+            task = await db.get(TaskRun, task_id)
+            dispatch = task.meta[operations.ADMIN_DISPATCH_META_KEY]
+            assert task.status == "enqueued"
+            assert dispatch["publication_state"] == operations.ADMIN_DISPATCH_PENDING
+            assert dispatch["last_error_type"] == "RuntimeError"
+            assert dispatch["last_error"] == "rq serializer exploded"
+            assert dispatch["next_retry_at"] is not None
     finally:
         async with async_session() as db:
             await _clear_dispatch_rows(db)
@@ -640,6 +805,334 @@ async def test_registered_worker_loads_options_and_fences_terminal_write(monkeyp
                 1,
             )
         assert observed == {}
+    finally:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entity", ["jobs", "all"])
+async def test_registered_clear_preserves_current_and_other_active_authorities(
+    entity,
+    monkeypatch,
+):
+    """Clear jobs/all deletes terminal history without deleting live TaskRuns."""
+    from app.database import async_session, engine
+    from app.jobs import admin_operations
+    from app.models import TaskRun
+    from app.services import admin_data, operations
+    from app.services.tasks import TaskService
+
+    monkeypatch.setattr(admin_data, "_clear_files", lambda _paths: None)
+    monkeypatch.setattr(
+        admin_data,
+        "_clear_search_index",
+        lambda _db, _entity: asyncio.sleep(0),
+    )
+    monkeypatch.setattr(
+        admin_data,
+        "clear_failed_rq_jobs",
+        lambda _db: asyncio.sleep(0, result=0),
+    )
+    monkeypatch.setattr(
+        admin_data,
+        "invalidate_api_caches",
+        lambda *_domains: {},
+    )
+    monkeypatch.setattr(
+        admin_data,
+        "invalidate_creator_subscription_caches",
+        lambda **_kwargs: None,
+    )
+    task_id = None
+    active_id = None
+    history_id = None
+    try:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-clear",
+                scope_key=f"library:clear:{entity}",
+                title=f"Clear {entity}",
+                entity=entity,
+                options={"entity": entity},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            task_id = prepared.task.id
+            service = TaskService(db)
+            active = await service.create_task(
+                kind="admin",
+                operation_type="admin-search-reindex",
+                title="Other active authority",
+                status="enqueued",
+            )
+            history = await service.create_task(
+                kind="admin",
+                operation_type="admin-search-reindex",
+                title="Terminal history",
+                status="complete",
+            )
+            active_id = active.id
+            history_id = history.id
+            await db.commit()
+
+        result = await asyncio.to_thread(
+            admin_operations.run_registered_admin_operation,
+            str(task_id),
+            1,
+        )
+
+        assert result["status"] == "ok"
+        async with async_session() as verify_db:
+            current = await verify_db.get(TaskRun, task_id)
+            active = await verify_db.get(TaskRun, active_id)
+            history = await verify_db.get(TaskRun, history_id)
+            assert current is not None
+            assert current.status == "complete"
+            assert active is not None
+            assert active.status == "enqueued"
+            assert history is None
+    finally:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_registered_rebuild_persists_awaited_progress_without_redis(
+    monkeypatch,
+):
+    """A rebuild progress callback durably updates TaskRun before completion."""
+    from app.database import async_session, engine
+    from app.jobs import admin_operations
+    from app.models import TaskRun
+    from app.services import admin_data, operations, redis_client
+
+    observed_progress: list[dict] = []
+
+    async def rebuild(db, options, progress_callback):
+        del options
+        await db.commit()
+        await progress_callback(
+            {
+                "phase": "running",
+                "scanned": 7,
+                "total": 11,
+                "metadata_written": 3,
+            }
+        )
+        async with async_session() as verify_db:
+            task = await verify_db.get(TaskRun, task_id)
+            observed_progress.append(dict(task.progress_data))
+        return {
+            "status": "ok",
+            "message": "Rebuild complete",
+            "scanned": 7,
+            "metadata_written": 3,
+        }
+
+    monkeypatch.setattr(admin_data, "rebuild_library_index", rebuild)
+    monkeypatch.setattr(
+        redis_client,
+        "get_redis",
+        lambda: (_ for _ in ()).throw(redis_lib.ConnectionError("redis down")),
+    )
+    task_id = None
+    try:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-rebuild",
+                scope_key="library:rebuild:active",
+                title="Library rebuild",
+                entity="library",
+                options={},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            task_id = prepared.task.id
+            await db.commit()
+
+        result = await asyncio.to_thread(
+            admin_operations.run_registered_admin_operation,
+            str(task_id),
+            1,
+        )
+
+        assert result["status"] == "ok"
+        assert observed_progress == [
+            {
+                "phase": "running",
+                "scanned": 7,
+                "total": 11,
+                "metadata_written": 3,
+                "label": "Scanned 7 of 11",
+            }
+        ]
+        async with async_session() as db:
+            task = await db.get(TaskRun, task_id)
+            assert task.status == "complete"
+    finally:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_rebuild_progress_callback_rejects_attempt_after_retry(monkeypatch):
+    """A rebuild callback from attempt 1 cannot overwrite attempt 2 progress."""
+    from app.database import async_session, engine
+    from app.jobs import admin_operations
+    from app.models import TaskRun
+    from app.services import admin_data, operations
+
+    entered = threading.Event()
+    resume = threading.Event()
+    rejected_in_progress_callback = threading.Event()
+
+    async def rebuild(_db, _options, progress_callback):
+        entered.set()
+        assert await asyncio.to_thread(resume.wait, 5)
+        try:
+            await progress_callback(
+                {"phase": "running", "scanned": 99, "total": 100}
+            )
+        except operations.AdminOperationAttemptRejected:
+            rejected_in_progress_callback.set()
+            raise
+        return {"status": "ok", "message": "wrong attempt completed"}
+
+    monkeypatch.setattr(admin_data, "rebuild_library_index", rebuild)
+    task_id = None
+    worker = None
+    try:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-rebuild",
+                scope_key="library:rebuild:active",
+                title="Library rebuild",
+                entity="library",
+                options={},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            task_id = prepared.task.id
+            await db.commit()
+
+        worker = asyncio.create_task(
+            asyncio.to_thread(
+                admin_operations.run_registered_admin_operation,
+                str(task_id),
+                1,
+            )
+        )
+        assert await asyncio.to_thread(entered.wait, 5)
+        async with async_session() as db:
+            task = await db.get(TaskRun, task_id)
+            task.status = "failed"
+            await db.commit()
+        retry = await operations.prepare_admin_operation_retry(task_id)
+        assert retry.attempt == 2
+        resume.set()
+
+        with pytest.raises(operations.AdminOperationAttemptRejected):
+            await worker
+        assert rejected_in_progress_callback.is_set()
+        async with async_session() as verify_db:
+            current = await verify_db.get(TaskRun, task_id)
+            assert current.attempts == 2
+            assert current.status == "enqueued"
+            assert current.progress_data["phase"] == "enqueued"
+    finally:
+        resume.set()
+        if worker is not None and not worker.done():
+            await asyncio.gather(worker, return_exceptions=True)
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_registered_creator_refresh_persists_awaited_progress(monkeypatch):
+    """Creator refresh progress is a fenced TaskRun update, not a Redis write."""
+    from app.database import async_session, engine
+    from app.jobs import admin_operations
+    from app.models import TaskRun
+    from app.services import creator_enrichment, operations
+
+    observed_progress: list[dict] = []
+
+    async def reenrich(_db, *, progress_cb):
+        await progress_cb(
+            {
+                "scanned": 4,
+                "total": 8,
+                "found": 0,
+                "not_found": 4,
+                "errors": 0,
+                "skipped": 0,
+            }
+        )
+        async with async_session() as verify_db:
+            task = await verify_db.get(TaskRun, task_id)
+            observed_progress.append(dict(task.progress_data))
+        return {
+            "scanned": 4,
+            "total": 8,
+            "found": 0,
+            "not_found": 4,
+            "errors": 0,
+            "skipped": 0,
+            "aborted": False,
+            "items": [],
+        }
+
+    monkeypatch.setattr(creator_enrichment, "reenrich_pending", reenrich)
+    task_id = None
+    try:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-creator-reenrich",
+                scope_key="library:creator-reenrich:active",
+                title="Creator refresh",
+                entity="creator-reenrich",
+                options={},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            task_id = prepared.task.id
+            await db.commit()
+
+        result = await asyncio.to_thread(
+            admin_operations.run_registered_admin_operation,
+            str(task_id),
+            1,
+        )
+
+        assert result["not_found"] == 4
+        assert observed_progress == [
+            {
+                "scanned": 4,
+                "total": 8,
+                "found": 0,
+                "not_found": 4,
+                "errors": 0,
+                "skipped": 0,
+                "label": "Mapped 0 of 4 scanned",
+            }
+        ]
     finally:
         async with async_session() as db:
             await _clear_dispatch_rows(db)

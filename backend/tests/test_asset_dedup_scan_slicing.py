@@ -2,6 +2,9 @@
 
 import inspect
 
+import pytest
+from sqlalchemy import delete, func, select
+
 
 def test_asset_scan_rq_job_runs_only_one_nonblocking_resource_slice():
     from app.jobs.asset_dedup import _run_scan
@@ -42,3 +45,74 @@ def test_asset_scan_terminal_paths_release_only_the_owned_operation_lock():
     )
     assert "release_owned_operation_lock" in combined
     assert "ASSET_DEDUP_SCAN_OPERATION_LOCK" in combined
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_asset_scan_and_prepared_task_are_one_admission_transaction():
+    """A single-flight conflict cannot leave an orphaned AssetDedupScan."""
+    from fastapi import HTTPException
+
+    from app.api.admin import dedup as dedup_api
+    from app.database import async_session, engine
+    from app.models import AssetDedupScan, TaskEvent, TaskRun
+    from app.schemas.asset_dedup import AssetDedupScanRequest
+    from app.services import operations
+
+    baseline_ids = set()
+    try:
+        async with async_session() as db:
+            await db.execute(delete(TaskEvent))
+            await db.execute(delete(TaskRun).where(TaskRun.kind == "admin"))
+            baseline = int(
+                (await db.execute(select(func.count()).select_from(AssetDedupScan)))
+                .scalar_one()
+            )
+            baseline_ids = set(
+                (await db.execute(select(AssetDedupScan.id))).scalars()
+            )
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="asset-dedup-scan",
+                scope_key="lock:admin:asset-dedup-scan",
+                title="Existing asset dedup scan",
+                entity="assets",
+                options={"scan_id": "existing"},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            await db.commit()
+
+        async with async_session() as request_db:
+            with pytest.raises(HTTPException) as raised:
+                await dedup_api.start_asset_dedup_scan(
+                    AssetDedupScanRequest(auto_apply=False, batch_size=100),
+                    request_db,
+                )
+            assert raised.value.status_code == 409
+
+        async with async_session() as verify_db:
+            count = int(
+                (
+                    await verify_db.execute(
+                        select(func.count()).select_from(AssetDedupScan)
+                    )
+                ).scalar_one()
+            )
+            assert count == baseline
+            task = await verify_db.get(TaskRun, prepared.task.id)
+            assert task.status == "enqueued"
+    finally:
+        async with async_session() as db:
+            await db.execute(delete(TaskEvent))
+            await db.execute(delete(TaskRun).where(TaskRun.kind == "admin"))
+            if baseline_ids:
+                await db.execute(
+                    delete(AssetDedupScan).where(
+                        AssetDedupScan.id.not_in(baseline_ids)
+                    )
+                )
+            else:
+                await db.execute(delete(AssetDedupScan))
+            await db.commit()
+        await engine.dispose()
