@@ -1,6 +1,6 @@
-"""Backup and restore."""
+"""Backup creation and non-destructive offline-restore staging."""
 
-import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -9,17 +9,14 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Annotated
 from uuid import UUID
-import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import Body, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
-from sqlalchemy import and_, select
+from pydantic import BaseModel, WithJsonSchema
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -30,9 +27,7 @@ from app.schemas.admin_operations import (
 
 logger = logging.getLogger(__name__)
 
-from app.auth import RequirePermission
-from app.database import async_session, get_db
-from app.services.operations import get_operation_status, set_operation_status
+from app.database import get_db
 
 from ._routers import router
 
@@ -44,6 +39,53 @@ ALL_BACKUP_CONTENTS = [
     "download-archives",
     "library-metadata",
 ]
+
+
+class RestoreUploadCreateRequest(BaseModel):
+    filename: str
+    size_bytes: int
+    sha256: str
+    chunk_size: int
+    total_chunks: int
+
+
+class RestoreUploadSessionResponse(BaseModel):
+    upload_id: str
+    filename: str
+    size_bytes: int
+    sha256: str
+    chunk_size: int
+    total_chunks: int
+    received_chunks: int
+    received_bytes: int
+    next_chunk: int
+    state: str
+    validation_task_id: str | None = None
+    request_id: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class RestoreUploadCreatedResponse(RestoreUploadSessionResponse):
+    upload_token: str
+
+
+class RestoreChunkResponse(RestoreUploadSessionResponse):
+    idempotent: bool
+
+
+class RestoreReceiptResponse(BaseModel):
+    request_id: str
+    status: str
+    phase: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    rollback_performed: bool | None = None
+    rollback_status: str | None = None
+    diagnostic: str | None = None
+    error: str | None = None
+    rollback_command: str | None = None
+
 
 def _parse_db_url(url: str) -> dict:
     """Parse DATABASE_URL into pg_dump-compatible components.
@@ -213,11 +255,12 @@ def _create_backup_sync(data: dict | None = None):
     try:
         # 1. PostgreSQL dump
         if "database" in selected:
-            dump_path = os.path.join(tmpdir, "database.sql")
+            dump_path = os.path.join(tmpdir, "database.dump")
             env = _pg_env_with_passfile(tmpdir, db_info)
             result = subprocess.run(
                 ["pg_dump", "-h", db_info["host"], "-p", db_info["port"], "-U", db_info["user"],
-                 "-d", db_info["dbname"], "--no-owner", "--no-acl", "-f", dump_path],
+                 "-d", db_info["dbname"], "--format=custom", "--compress=3",
+                 "--no-owner", "--no-acl", "-f", dump_path],
                 capture_output=True, text=True, env=env, timeout=120)
             if result.returncode != 0:
                 raise RuntimeError(f"Database dump failed: {result.stderr[:500]}")
@@ -259,12 +302,32 @@ def _create_backup_sync(data: dict | None = None):
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(str(mf), str(dest))
 
-        # Manifest
+        # Manifest: restore validation treats this as the portable trust
+        # boundary. Every regular payload file is independently sized and
+        # hashed; manifest.json itself is intentionally excluded to avoid a
+        # circular digest.
+        entries: dict[str, dict[str, int | str]] = {}
+        for payload_path in sorted(Path(tmpdir).rglob("*")):
+            if payload_path.is_symlink() or not payload_path.is_file():
+                continue
+            digest = hashlib.sha256()
+            with payload_path.open("rb") as payload_file:
+                while block := payload_file.read(1024 * 1024):
+                    digest.update(block)
+            relative = payload_path.relative_to(tmpdir).as_posix()
+            entries[relative] = {
+                "size": payload_path.stat().st_size,
+                "sha256": digest.hexdigest(),
+            }
         manifest = {
             "created_at": ts,
-            "version": "0.2.0",
+            "version": "0.3.0",
             "contents": selected,
             "component_sizes": {k: v for k, v in sizes.items()},
+            "entries": entries,
+            "total_uncompressed_bytes": sum(
+                int(entry["size"]) for entry in entries.values()
+            ),
         }
         with open(os.path.join(tmpdir, "manifest.json"), "w") as f:
             json.dump(manifest, f, indent=2)
@@ -293,10 +356,6 @@ def _create_backup_sync(data: dict | None = None):
 
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-
-
-# restore_backup is defined below with _safe_extract_tar, .pgpass handling,
-# and confirm=DELETE-EVERYTHING guard.  See the second definition in this file.
 
 
 BACKUP_NAME_PATTERN = re.compile(r"auto-gallery-backup_[0-9]{8}_[0-9]{6}\.tar\.gz")
@@ -378,118 +437,222 @@ async def list_backups():
     return {"backups": result}
 
 
-def _safe_extract_tar(tar_path: str, dest_dir: str) -> None:
-    """Extract a tar.gz file, validating all member paths stay within dest_dir."""
-    with tarfile.open(tar_path, "r:gz") as tar:
-        for member in tar.getmembers():
-            member_path = os.path.join(dest_dir, member.name)
-            resolved = os.path.realpath(member_path)
-            resolved_dest = os.path.realpath(dest_dir)
-            if os.path.commonpath([resolved, resolved_dest]) != resolved_dest:
-                logger.warning("Rejected tar member outside dest: %s -> %s", member.name, resolved)
-                continue
-            if member.isdir():
-                os.makedirs(resolved, exist_ok=True)
-            elif member.isfile():
-                os.makedirs(os.path.dirname(resolved), exist_ok=True)
-                src = tar.extractfile(member)
-                if src is None:
-                    continue
-                with src, open(resolved, "wb") as dst:
-                    dst.write(src.read())
+def _restore_http_error(exc: Exception) -> HTTPException:
+    from app.services.offline_restore import (
+        RestoreConflict,
+        RestoreForbidden,
+        RestoreValidationError,
+    )
+
+    if isinstance(exc, RestoreForbidden):
+        return HTTPException(status_code=403, detail=str(exc))
+    if isinstance(exc, RestoreConflict):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, RestoreValidationError):
+        return HTTPException(status_code=400, detail=str(exc))
+    logger.exception("Offline restore staging failed", exc_info=exc)
+    return HTTPException(
+        status_code=500,
+        detail="Restore staging failed. Check the backend logs for details.",
+    )
 
 
-def _do_restore(upload_path: str, tmpdir: str) -> dict:
-    """Blocking restore work (tar extract, psql subprocesses, config copy).
-    Runs in a thread so a restore doesn't freeze the event loop."""
-    extract_dir = os.path.join(tmpdir, "extracted")
-    os.makedirs(extract_dir, exist_ok=True)
-    _safe_extract_tar(upload_path, extract_dir)
+@router.post(
+    "/backup/restore/uploads",
+    status_code=201,
+    response_model=RestoreUploadCreatedResponse,
+)
+async def create_restore_upload(data: RestoreUploadCreateRequest):
+    """Create a resumable upload outside every live configuration directory."""
 
-    manifest_path = os.path.join(extract_dir, "manifest.json")
-    if not os.path.exists(manifest_path):
-        return {"status": "error", "message": "Invalid backup: no manifest.json found"}
+    from app.services.offline_restore import create_upload_session, staging_root
 
-    results = []
-
-    # 1. Restore database
-    dump_path = os.path.join(extract_dir, "database.sql")
-    if os.path.exists(dump_path):
-        db = _parse_db_url(settings.database_url)
-        env = _pg_env_with_passfile(tmpdir, db)
-        result = subprocess.run(
-            ["psql", "-h", db["host"], "-p", db["port"], "-U", db["user"], "-d", db["dbname"],
-             "-c", "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"],
-            capture_output=True, text=True, env=env, timeout=30,
-        )
-        if result.returncode != 0:
-            logger.error("Schema reset failed: %s", result.stderr)
-            results.append({"item": "database", "status": "error", "error": result.stderr[:200]})
-        else:
-            result = subprocess.run(
-                ["psql", "-h", db["host"], "-p", db["port"], "-U", db["user"], "-d", db["dbname"],
-                 "-f", dump_path],
-                capture_output=True, text=True, env=env, timeout=120,
-            )
-            if result.returncode == 0:
-                results.append({"item": "database", "status": "restored"})
-                logger.info("Database restored from backup")
-            else:
-                logger.error("DB restore failed: %s", result.stderr)
-                results.append({"item": "database", "status": "error", "error": result.stderr[:200]})
-
-    # 2. Restore config files
-    for src_name, dst_env in [("gallerydl-config", "GALLERYDL_CONFIG_ROOT"),
-                               ("app-config", "APP_CONFIG_ROOT")]:
-        src = os.path.join(extract_dir, src_name)
-        if os.path.exists(src):
-            dst = os.environ.get(dst_env, f"/{src_name}")
-            if os.path.exists(dst):
-                shutil.rmtree(dst, ignore_errors=True)
-            shutil.copytree(src, dst, symlinks=False, ignore_dangling_symlinks=True)
-            results.append({"item": src_name, "status": "restored"})
-
-    # 3. Restore download archives
-    archives_src = os.path.join(extract_dir, "download-archives")
-    if os.path.exists(archives_src):
-        dl_root = str(settings.download_root)
-        for af in os.listdir(archives_src):
-            shutil.copy2(os.path.join(archives_src, af), os.path.join(dl_root, af))
-        results.append({"item": "download-archives", "status": "restored"})
-
-    return {"status": "ok", "results": results}
-
-
-@router.post("/backup/restore")
-async def restore_backup(file: UploadFile = File(...), confirm: str = ""):
-    """Restore system from a backup file. THIS IS DESTRUCTIVE — replaces current data.
-
-    Requires ``?confirm=DELETE-EVERYTHING`` to prevent accidental invocation.
-    """
-    if confirm != "DELETE-EVERYTHING":
-        return {"status": "error", "message": "Add ?confirm=DELETE-EVERYTHING to proceed with restore"}
-    if not file.filename or not file.filename.endswith(".tar.gz"):
-        return {"status": "error", "message": "Invalid file: must be a .tar.gz backup"}
-
-    logger.warning("Backup restore initiated (confirm=%s, file=%s)", confirm, file.filename)
-
-    tmpdir = tempfile.mkdtemp(prefix="ag-restore-")
     try:
-        # Save uploaded file with a fixed name (ignore user-supplied filename for safety)
-        upload_path = os.path.join(tmpdir, "upload.tar.gz")
-        with open(upload_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
+        return create_upload_session(root=staging_root(), **data.model_dump())
+    except Exception as exc:
+        raise _restore_http_error(exc) from exc
 
-        # Extract + DB restore + config copy are all blocking (tar, psql
-        # subprocesses, copytree) — run off the event loop.
-        return await asyncio.to_thread(_do_restore, upload_path, tmpdir)
 
-    except Exception:
-        logger.exception("Restore failed")
-        return {
-            "status": "error",
-            "message": "Restore failed. Check the backend logs for the request details.",
-        }
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+@router.get(
+    "/backup/restore/uploads/{upload_id}",
+    response_model=RestoreUploadSessionResponse,
+)
+async def get_restore_upload(
+    upload_id: str,
+    restore_token: str = Header(alias="X-Restore-Token"),
+):
+    """Resume one capability-isolated upload without enumerating its siblings."""
+
+    from app.services.offline_restore import get_upload_session, staging_root
+
+    try:
+        return get_upload_session(
+            root=staging_root(), upload_id=upload_id, token=restore_token
+        )
+    except Exception as exc:
+        raise _restore_http_error(exc) from exc
+
+
+@router.put(
+    "/backup/restore/uploads/{upload_id}/chunks/{chunk_index}",
+    response_model=RestoreChunkResponse,
+)
+async def upload_restore_chunk(
+    upload_id: str,
+    chunk_index: int,
+    request: Request,
+    data: Annotated[
+        bytes,
+        WithJsonSchema({"type": "string", "format": "binary"}),
+        Body(media_type="application/octet-stream"),
+    ],
+    restore_token: str = Header(alias="X-Restore-Token"),
+    chunk_sha256: str = Header(alias="X-Chunk-SHA256"),
+):
+    """Persist exactly one ordered chunk; identical retries are idempotent."""
+
+    from app.services.offline_restore import MAX_CHUNK_SIZE, put_upload_chunk, staging_root
+
+    try:
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > MAX_CHUNK_SIZE:
+            raise HTTPException(status_code=413, detail="Restore chunk is too large")
+        if len(data) > MAX_CHUNK_SIZE:
+            raise HTTPException(status_code=413, detail="Restore chunk is too large")
+        return put_upload_chunk(
+            root=staging_root(),
+            upload_id=upload_id,
+            token=restore_token,
+            index=chunk_index,
+            data=data,
+            sha256=chunk_sha256,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _restore_http_error(exc) from exc
+
+
+@router.post(
+    "/backup/restore/uploads/{upload_id}/validate",
+    status_code=202,
+    response_model=AdminOperationAccepted,
+)
+async def validate_restore_upload(
+    upload_id: str,
+    restore_token: str = Header(alias="X-Restore-Token"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Start archive validation; this action cannot execute a host restore."""
+
+    from app.services.offline_restore import (
+        RestoreConflict,
+        get_upload_session,
+        seal_upload_for_validation,
+        staging_root,
+    )
+    from app.services.operations import start_admin_operation
+
+    try:
+        session = get_upload_session(
+            root=staging_root(), upload_id=upload_id, token=restore_token
+        )
+        if session.get("validation_task_id"):
+            from app.models import TaskRun
+            from app.services.operations import ADMIN_DISPATCH_META_KEY
+
+            task = await db.get(TaskRun, UUID(str(session["validation_task_id"])))
+            dispatch = (
+                (task.meta or {}).get(ADMIN_DISPATCH_META_KEY, {}) if task else {}
+            )
+            options = dispatch.get("options", {}) if isinstance(dispatch, dict) else {}
+            if (
+                task is None
+                or task.operation_type != "admin-restore-validate"
+                or not isinstance(options, dict)
+                or options.get("upload_id") != upload_id
+                or not task.rq_job_id
+            ):
+                raise RestoreConflict("Restore validation TaskRun is unavailable")
+            return {
+                "task_id": str(task.id),
+                "job_id": task.rq_job_id,
+                "status": "enqueued",
+                "operation_type": task.operation_type,
+            }
+        if session["state"] != "uploaded":
+            raise RestoreConflict("Restore upload is not complete")
+        accepted = await start_admin_operation(
+            operation_type="admin-restore-validate",
+            scope_key=f"restore:validate:{upload_id}",
+            title="Validate restore upload",
+            entity="restore-upload",
+            options={"upload_id": upload_id},
+            queue_name="maintenance",
+            job_timeout=3600,
+        )
+        seal_upload_for_validation(
+            root=staging_root(),
+            upload_id=upload_id,
+            token=restore_token,
+            task_id=accepted["task_id"],
+        )
+        return accepted
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        raise _restore_http_error(exc) from exc
+
+
+@router.get(
+    "/backup/restore/uploads/{upload_id}/validation/latest",
+    response_model=AdminOperationSnapshotResponse,
+)
+async def latest_restore_validation(
+    upload_id: str,
+    restore_token: str = Header(alias="X-Restore-Token"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Load the durable validator state after a frontend remount."""
+
+    from app.services.offline_restore import get_upload_session, staging_root
+    from app.services.operations import latest_successful_admin_operation
+
+    try:
+        get_upload_session(root=staging_root(), upload_id=upload_id, token=restore_token)
+        return await latest_successful_admin_operation(
+            db,
+            operation_type="admin-restore-validate",
+            scope_key=f"restore:validate:{upload_id}",
+        )
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        raise _restore_http_error(exc) from exc
+
+
+@router.get(
+    "/backup/restore/receipts/{request_id}",
+    response_model=RestoreReceiptResponse,
+)
+async def get_restore_receipt(
+    request_id: str,
+    restore_token: str = Header(alias="X-Restore-Token"),
+):
+    """Read the external immutable host receipt without using TaskRun state."""
+
+    from app.services.offline_restore import (
+        read_restore_receipt,
+        receipts_root,
+        staging_root,
+    )
+
+    try:
+        return read_restore_receipt(
+            staging=staging_root(),
+            receipts=receipts_root(),
+            request_id=request_id,
+            token=restore_token,
+        )
+    except Exception as exc:
+        raise _restore_http_error(exc) from exc

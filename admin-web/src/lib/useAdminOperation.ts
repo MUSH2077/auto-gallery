@@ -36,17 +36,23 @@ export function useAdminOperation<TResult, TVariables = void>({
   scope,
   startOperation,
   loadLatest,
+  initialAccepted,
   onCompleted,
 }: {
   operationType: string;
   scope: string;
   startOperation: (variables: TVariables) => Promise<AdminOperationAccepted>;
   loadLatest: () => Promise<AdminOperationSnapshotResponse<TResult>>;
+  initialAccepted?: AdminOperationAccepted | null;
   onCompleted?: (result: TResult) => void;
 }): AdminOperationController<TResult, TVariables> {
   const queryClient = useQueryClient();
   const identity = `${operationType}:${scope}`;
-  const [startedTask, setStartedTask] = useState<{ identity: string; taskId: string } | null>(null);
+  const [startedTask, setStartedTask] = useState<{ identity: string; taskId: string } | null>(
+    () => initialAccepted
+      ? { identity, taskId: initialAccepted.task_id }
+      : null,
+  );
   const notifiedCompletion = useRef<string | null>(null);
   const reconciledTerminal = useRef<string | null>(null);
   const snapshotKey = useMemo(
@@ -57,6 +63,7 @@ export function useAdminOperation<TResult, TVariables = void>({
   const latestQuery = useQuery({
     queryKey: snapshotKey,
     queryFn: loadLatest,
+    enabled: initialAccepted == null,
     staleTime: 30_000,
     refetchOnWindowFocus: false,
   });
@@ -164,6 +171,7 @@ export function useAdminOperation<TResult, TVariables = void>({
     && !latestQuery.isError
     && !startMutation.isPending
     && !isActive
+    && startedTaskId === null
     && current === null;
 
   return {

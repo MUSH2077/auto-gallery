@@ -187,7 +187,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/admin/backup/restore": {
+    "/api/v1/admin/backup/restore/receipts/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Restore Receipt
+         * @description Read the external immutable host receipt without using TaskRun state.
+         */
+        get: operations["get_api_v1_admin_backup_restore_receipts_request_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backup/restore/uploads": {
         parameters: {
             query?: never;
             header?: never;
@@ -197,12 +217,90 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Restore Backup
-         * @description Restore system from a backup file. THIS IS DESTRUCTIVE — replaces current data.
-         *
-         *     Requires ``?confirm=DELETE-EVERYTHING`` to prevent accidental invocation.
+         * Create Restore Upload
+         * @description Create a resumable upload outside every live configuration directory.
          */
-        post: operations["post_api_v1_admin_backup_restore"];
+        post: operations["post_api_v1_admin_backup_restore_uploads"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backup/restore/uploads/{upload_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Restore Upload
+         * @description Resume one capability-isolated upload without enumerating its siblings.
+         */
+        get: operations["get_api_v1_admin_backup_restore_uploads_upload_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backup/restore/uploads/{upload_id}/chunks/{chunk_index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Upload Restore Chunk
+         * @description Persist exactly one ordered chunk; identical retries are idempotent.
+         */
+        put: operations["put_api_v1_admin_backup_restore_uploads_upload_id_chunks_chunk_index"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backup/restore/uploads/{upload_id}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Restore Upload
+         * @description Start archive validation; this action cannot execute a host restore.
+         */
+        post: operations["post_api_v1_admin_backup_restore_uploads_upload_id_validate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backup/restore/uploads/{upload_id}/validation/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Restore Validation
+         * @description Load the durable validator state after a frontend remount.
+         */
+        get: operations["get_api_v1_admin_backup_restore_uploads_upload_id_validation_latest"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4408,11 +4506,6 @@ export interface components {
             /** Sleep Request */
             sleep_request?: string | null;
         };
-        /** Body_post_api_v1_admin_backup_restore */
-        Body_post_api_v1_admin_backup_restore: {
-            /** File */
-            file: string;
-        };
         /** Body_post_api_v1_upload */
         Body_post_api_v1_upload: {
             /** Creator Id */
@@ -6145,6 +6238,62 @@ export interface components {
             /** Resolution Id */
             resolution_id?: string | null;
         };
+        /** RestoreChunkResponse */
+        RestoreChunkResponse: {
+            /** Chunk Size */
+            chunk_size: number;
+            /** Created At */
+            created_at: string;
+            /** Filename */
+            filename: string;
+            /** Idempotent */
+            idempotent: boolean;
+            /** Next Chunk */
+            next_chunk: number;
+            /** Received Bytes */
+            received_bytes: number;
+            /** Received Chunks */
+            received_chunks: number;
+            /** Request Id */
+            request_id?: string | null;
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** State */
+            state: string;
+            /** Total Chunks */
+            total_chunks: number;
+            /** Updated At */
+            updated_at: string;
+            /** Upload Id */
+            upload_id: string;
+            /** Validation Task Id */
+            validation_task_id?: string | null;
+        };
+        /** RestoreReceiptResponse */
+        RestoreReceiptResponse: {
+            /** Completed At */
+            completed_at?: string | null;
+            /** Diagnostic */
+            diagnostic?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Phase */
+            phase: string;
+            /** Request Id */
+            request_id: string;
+            /** Rollback Command */
+            rollback_command?: string | null;
+            /** Rollback Performed */
+            rollback_performed?: boolean | null;
+            /** Rollback Status */
+            rollback_status?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Status */
+            status: string;
+        };
         /** RestoreSubscriptionSlotRequest */
         RestoreSubscriptionSlotRequest: {
             /**
@@ -6159,6 +6308,83 @@ export interface components {
             slot_at: string;
             /** Source Ids */
             source_ids: string[];
+        };
+        /** RestoreUploadCreateRequest */
+        RestoreUploadCreateRequest: {
+            /** Chunk Size */
+            chunk_size: number;
+            /** Filename */
+            filename: string;
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Total Chunks */
+            total_chunks: number;
+        };
+        /** RestoreUploadCreatedResponse */
+        RestoreUploadCreatedResponse: {
+            /** Chunk Size */
+            chunk_size: number;
+            /** Created At */
+            created_at: string;
+            /** Filename */
+            filename: string;
+            /** Next Chunk */
+            next_chunk: number;
+            /** Received Bytes */
+            received_bytes: number;
+            /** Received Chunks */
+            received_chunks: number;
+            /** Request Id */
+            request_id?: string | null;
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** State */
+            state: string;
+            /** Total Chunks */
+            total_chunks: number;
+            /** Updated At */
+            updated_at: string;
+            /** Upload Id */
+            upload_id: string;
+            /** Upload Token */
+            upload_token: string;
+            /** Validation Task Id */
+            validation_task_id?: string | null;
+        };
+        /** RestoreUploadSessionResponse */
+        RestoreUploadSessionResponse: {
+            /** Chunk Size */
+            chunk_size: number;
+            /** Created At */
+            created_at: string;
+            /** Filename */
+            filename: string;
+            /** Next Chunk */
+            next_chunk: number;
+            /** Received Bytes */
+            received_bytes: number;
+            /** Received Chunks */
+            received_chunks: number;
+            /** Request Id */
+            request_id?: string | null;
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** State */
+            state: string;
+            /** Total Chunks */
+            total_chunks: number;
+            /** Updated At */
+            updated_at: string;
+            /** Upload Id */
+            upload_id: string;
+            /** Validation Task Id */
+            validation_task_id?: string | null;
         };
         /** RuleSuggestionRead */
         RuleSuggestionRead: {
@@ -7656,18 +7882,175 @@ export interface operations {
             };
         };
     };
-    post_api_v1_admin_backup_restore: {
+    get_api_v1_admin_backup_restore_receipts_request_id: {
         parameters: {
-            query?: {
-                confirm?: string;
+            query?: never;
+            header: {
+                "X-Restore-Token": string;
             };
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreReceiptResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_admin_backup_restore_uploads: {
+        parameters: {
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody: {
             content: {
-                "multipart/form-data": components["schemas"]["Body_post_api_v1_admin_backup_restore"];
+                "application/json": components["schemas"]["RestoreUploadCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreUploadCreatedResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_backup_restore_uploads_upload_id: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Restore-Token": string;
+            };
+            path: {
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreUploadSessionResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_api_v1_admin_backup_restore_uploads_upload_id_chunks_chunk_index: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Restore-Token": string;
+                "X-Chunk-SHA256": string;
+            };
+            path: {
+                upload_id: string;
+                chunk_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
             };
         };
         responses: {
@@ -7677,7 +8060,109 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["RestoreChunkResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_admin_backup_restore_uploads_upload_id_validate: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Restore-Token": string;
+            };
+            path: {
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_backup_restore_uploads_upload_id_validation_latest: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Restore-Token": string;
+            };
+            path: {
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */

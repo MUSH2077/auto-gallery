@@ -363,6 +363,25 @@ async def _execute_registered_admin_operation(
         )
         result = await asyncio.to_thread(_create_backup_sync, options)
         return {**result, "message": "Backup created"}
+    if operation_type == "admin-restore-validate":
+        from app.services.offline_restore import staging_root, validate_upload
+
+        upload_id = str(options.get("upload_id") or "")
+        await update_current_admin_operation_progress(
+            task_id,
+            {"phase": "validating", "label": "Validating restore archive"},
+        )
+        result = await asyncio.to_thread(
+            validate_upload,
+            root=staging_root(),
+            upload_id=upload_id,
+            task_id=task_id,
+        )
+        await update_current_admin_operation_progress(
+            task_id,
+            {"phase": "ready", "label": "Ready for offline host execution"},
+        )
+        return result
     if operation_type == "admin-proxy-test":
         from app.api.admin.settings import _run_proxy_connectivity_test
 

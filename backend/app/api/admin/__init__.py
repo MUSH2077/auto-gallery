@@ -16,7 +16,6 @@ from app.services.admin_data import ENTITIES, clear_entity_data
 _clear_files = data._clear_files
 BACKUP_DIR = backup.BACKUP_DIR
 _pg_env_with_passfile = backup._pg_env_with_passfile
-_safe_extract_tar = backup._safe_extract_tar
 
 
 async def clear_entity(entity: str, db):

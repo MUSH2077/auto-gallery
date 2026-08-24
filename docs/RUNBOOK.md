@@ -313,3 +313,42 @@ curl -H "Authorization: Bearer <token>" http://localhost:8818/api/v1/admin/backu
 Auto-backup runs every 24 hours if enabled via Settings > Backup & Restore in the admin web.
 
 <!-- /AUTO-GENERATED -->
+
+## Staged offline restore
+
+The admin Backup settings page uploads the archive in resumable chunks and runs
+the non-destructive validation TaskRun. It does not modify PostgreSQL, Redis,
+configuration, or library data. Continue only after the page shows **Ready for
+offline host execution**, a request ID, and a host command.
+
+Before running that command, open a host shell in the exact Compose project and
+export the absolute paths from the deployment's `.env`. `HOST_RESTORE_STAGING`
+and `HOST_RESTORE_RECEIPTS` must be different directories; config, downloads,
+and library targets must not overlap either directory or each other.
+
+```bash
+cd /volume2/docker/auto-gallery
+export PROJECT_ROOT="$PWD"
+export HOST_RESTORE_STAGING=/volume1/auto-gallery/restore-staging
+export HOST_RESTORE_RECEIPTS=/volume1/auto-gallery/restore-receipts
+export RESTORE_STAGING_ROOT="$HOST_RESTORE_STAGING"
+export RESTORE_RECEIPTS_ROOT="$HOST_RESTORE_RECEIPTS"
+export HOST_CONFIG_APP=/volume1/auto-gallery/config/app
+export HOST_CONFIG_GALLERYDL=/volume1/auto-gallery/config/gallery-dl
+export HOST_DOWNLOADS=/volume1/auto-gallery/downloads
+export HOST_LIBRARY=/volume1/auto-gallery/library
+
+# Paste the exact read-only ready-request command shown by the admin page.
+./scripts/offline-restore.py --request \
+  "$HOST_RESTORE_STAGING/<request-id>/ready-request.json"
+```
+
+The command is non-interactive and takes an exclusive lock. On success it
+starts foreground and background services and writes a create-once receipt at
+`$HOST_RESTORE_RECEIPTS/<request-id>.json`. On any phase failure it restores the
+database/config/Redis rollback point, starts foreground services only, leaves
+writers stopped for diagnosis, and publishes the failing phase and rollback
+status in that external receipt. The receipt's `rollback_command` is an
+executable recovery point; invoke it only for that exact request after reviewing
+the receipt and journal under
+`$HOST_RESTORE_RECEIPTS/rollbacks/<request-id>/`.

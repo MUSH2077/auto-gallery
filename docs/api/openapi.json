@@ -1011,20 +1011,6 @@
         "title": "BilibiliSourceConfig",
         "type": "object"
       },
-      "Body_post_api_v1_admin_backup_restore": {
-        "properties": {
-          "file": {
-            "contentMediaType": "application/octet-stream",
-            "title": "File",
-            "type": "string"
-          }
-        },
-        "required": [
-          "file"
-        ],
-        "title": "Body_post_api_v1_admin_backup_restore",
-        "type": "object"
-      },
       "Body_post_api_v1_upload": {
         "properties": {
           "creator_id": {
@@ -5863,6 +5849,201 @@
         "title": "ResolveDownloadConflictRequest",
         "type": "object"
       },
+      "RestoreChunkResponse": {
+        "properties": {
+          "chunk_size": {
+            "title": "Chunk Size",
+            "type": "integer"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "idempotent": {
+            "title": "Idempotent",
+            "type": "boolean"
+          },
+          "next_chunk": {
+            "title": "Next Chunk",
+            "type": "integer"
+          },
+          "received_bytes": {
+            "title": "Received Bytes",
+            "type": "integer"
+          },
+          "received_chunks": {
+            "title": "Received Chunks",
+            "type": "integer"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "total_chunks": {
+            "title": "Total Chunks",
+            "type": "integer"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "upload_id": {
+            "title": "Upload Id",
+            "type": "string"
+          },
+          "validation_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validation Task Id"
+          }
+        },
+        "required": [
+          "upload_id",
+          "filename",
+          "size_bytes",
+          "sha256",
+          "chunk_size",
+          "total_chunks",
+          "received_chunks",
+          "received_bytes",
+          "next_chunk",
+          "state",
+          "created_at",
+          "updated_at",
+          "idempotent"
+        ],
+        "title": "RestoreChunkResponse",
+        "type": "object"
+      },
+      "RestoreReceiptResponse": {
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "diagnostic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diagnostic"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "rollback_command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rollback Command"
+          },
+          "rollback_performed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rollback Performed"
+          },
+          "rollback_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rollback Status"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "status",
+          "phase"
+        ],
+        "title": "RestoreReceiptResponse",
+        "type": "object"
+      },
       "RestoreSubscriptionSlotRequest": {
         "properties": {
           "dry_run": {
@@ -5891,6 +6072,224 @@
           "source_ids"
         ],
         "title": "RestoreSubscriptionSlotRequest",
+        "type": "object"
+      },
+      "RestoreUploadCreateRequest": {
+        "properties": {
+          "chunk_size": {
+            "title": "Chunk Size",
+            "type": "integer"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "total_chunks": {
+            "title": "Total Chunks",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "filename",
+          "size_bytes",
+          "sha256",
+          "chunk_size",
+          "total_chunks"
+        ],
+        "title": "RestoreUploadCreateRequest",
+        "type": "object"
+      },
+      "RestoreUploadCreatedResponse": {
+        "properties": {
+          "chunk_size": {
+            "title": "Chunk Size",
+            "type": "integer"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "next_chunk": {
+            "title": "Next Chunk",
+            "type": "integer"
+          },
+          "received_bytes": {
+            "title": "Received Bytes",
+            "type": "integer"
+          },
+          "received_chunks": {
+            "title": "Received Chunks",
+            "type": "integer"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "total_chunks": {
+            "title": "Total Chunks",
+            "type": "integer"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "upload_id": {
+            "title": "Upload Id",
+            "type": "string"
+          },
+          "upload_token": {
+            "title": "Upload Token",
+            "type": "string"
+          },
+          "validation_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validation Task Id"
+          }
+        },
+        "required": [
+          "upload_id",
+          "filename",
+          "size_bytes",
+          "sha256",
+          "chunk_size",
+          "total_chunks",
+          "received_chunks",
+          "received_bytes",
+          "next_chunk",
+          "state",
+          "created_at",
+          "updated_at",
+          "upload_token"
+        ],
+        "title": "RestoreUploadCreatedResponse",
+        "type": "object"
+      },
+      "RestoreUploadSessionResponse": {
+        "properties": {
+          "chunk_size": {
+            "title": "Chunk Size",
+            "type": "integer"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "next_chunk": {
+            "title": "Next Chunk",
+            "type": "integer"
+          },
+          "received_bytes": {
+            "title": "Received Bytes",
+            "type": "integer"
+          },
+          "received_chunks": {
+            "title": "Received Chunks",
+            "type": "integer"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "total_chunks": {
+            "title": "Total Chunks",
+            "type": "integer"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "upload_id": {
+            "title": "Upload Id",
+            "type": "string"
+          },
+          "validation_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validation Task Id"
+          }
+        },
+        "required": [
+          "upload_id",
+          "filename",
+          "size_bytes",
+          "sha256",
+          "chunk_size",
+          "total_chunks",
+          "received_chunks",
+          "received_bytes",
+          "next_chunk",
+          "state",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "RestoreUploadSessionResponse",
         "type": "object"
       },
       "RuleSuggestionRead": {
@@ -9625,38 +10024,36 @@
         "x-response-schema-status": "generic"
       }
     },
-    "/api/v1/admin/backup/restore": {
-      "post": {
-        "description": "Restore system from a backup file. THIS IS DESTRUCTIVE — replaces current data.\n\nRequires ``?confirm=DELETE-EVERYTHING`` to prevent accidental invocation.",
-        "operationId": "post_api_v1_admin_backup_restore",
+    "/api/v1/admin/backup/restore/receipts/{request_id}": {
+      "get": {
+        "description": "Read the external immutable host receipt without using TaskRun state.",
+        "operationId": "get_api_v1_admin_backup_restore_receipts_request_id",
         "parameters": [
           {
-            "in": "query",
-            "name": "confirm",
-            "required": false,
+            "in": "path",
+            "name": "request_id",
+            "required": true,
             "schema": {
-              "default": "",
-              "title": "Confirm",
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Restore-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Restore-Token",
               "type": "string"
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/Body_post_api_v1_admin_backup_restore"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/RestoreReceiptResponse"
                 }
               }
             },
@@ -9698,7 +10095,7 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Restore Backup",
+        "summary": "Get Restore Receipt",
         "tags": [
           "admin"
         ],
@@ -9709,8 +10106,452 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
+        ]
+      }
+    },
+    "/api/v1/admin/backup/restore/uploads": {
+      "post": {
+        "description": "Create a resumable upload outside every live configuration directory.",
+        "operationId": "post_api_v1_admin_backup_restore_uploads",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreUploadCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreUploadCreatedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
         ],
-        "x-response-schema-status": "generic"
+        "summary": "Create Restore Upload",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": true,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/admin/backup/restore/uploads/{upload_id}": {
+      "get": {
+        "description": "Resume one capability-isolated upload without enumerating its siblings.",
+        "operationId": "get_api_v1_admin_backup_restore_uploads_upload_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "title": "Upload Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Restore-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Restore-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreUploadSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Restore Upload",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": true,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/admin/backup/restore/uploads/{upload_id}/chunks/{chunk_index}": {
+      "put": {
+        "description": "Persist exactly one ordered chunk; identical retries are idempotent.",
+        "operationId": "put_api_v1_admin_backup_restore_uploads_upload_id_chunks_chunk_index",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "title": "Upload Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "chunk_index",
+            "required": true,
+            "schema": {
+              "title": "Chunk Index",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Restore-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Restore-Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Chunk-SHA256",
+            "required": true,
+            "schema": {
+              "title": "X-Chunk-Sha256",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "format": "binary",
+                "title": "Data",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreChunkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upload Restore Chunk",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": true,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/admin/backup/restore/uploads/{upload_id}/validate": {
+      "post": {
+        "description": "Start archive validation; this action cannot execute a host restore.",
+        "operationId": "post_api_v1_admin_backup_restore_uploads_upload_id_validate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "title": "Upload Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Restore-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Restore-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Validate Restore Upload",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": true,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/admin/backup/restore/uploads/{upload_id}/validation/latest": {
+      "get": {
+        "description": "Load the durable validator state after a frontend remount.",
+        "operationId": "get_api_v1_admin_backup_restore_uploads_upload_id_validation_latest",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "title": "Upload Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Restore-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Restore-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Latest Restore Validation",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": true,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
       }
     },
     "/api/v1/admin/backup/schedule": {

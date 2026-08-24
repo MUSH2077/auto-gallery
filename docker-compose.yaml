@@ -158,6 +158,8 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
+      RESTORE_STAGING_ROOT: /restore-staging
+      RESTORE_RECEIPTS_ROOT: /restore-receipts
       DOWNLOAD_ROOT: /downloads
       LIBRARY_ROOT: /library
       GALLERYDL_CONFIG_ROOT: /gallerydl-config
@@ -187,6 +189,8 @@ services:
       - ${HOST_LIBRARY:-./data/library}:/library
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
+      - ${HOST_RESTORE_STAGING:-./data/restore-staging}:/restore-staging
+      - ${HOST_RESTORE_RECEIPTS:-./data/restore-receipts}:/restore-receipts:ro
       # alembic/versions are baked into the image via COPY . .
       # No bind mount needed — avoids WSL 2 filesystem access issues.
     depends_on:
@@ -308,6 +312,7 @@ services:
       # interleaves at slice boundaries instead of running heavy I/O alongside
       # the normal import worker.
       WORKER_EXTRA_QUEUES: maintenance
+      RESTORE_STAGING_ROOT: /restore-staging
       DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-1}
       DB_MAX_OVERFLOW: ${WORKER_DB_MAX_OVERFLOW:-1}
       VIPS_CONCURRENCY: ${VIPS_CONCURRENCY:-1}
@@ -317,6 +322,7 @@ services:
       - ${HOST_LIBRARY:-./data/library}:/library
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
+      - ${HOST_RESTORE_STAGING:-./data/restore-staging}:/restore-staging
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

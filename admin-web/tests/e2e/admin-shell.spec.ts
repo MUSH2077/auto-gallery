@@ -1,5 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { createHash } from "node:crypto";
 
 const me = {
   id: 1,
@@ -2635,6 +2636,141 @@ test("backup estimate and creation use independent TaskRuns without request wate
 
   const results = await new AxeBuilder({ page })
     .include("[data-admin-operation]")
+    .analyze();
+  expect(results.violations).toEqual([]);
+});
+
+test("restore stages ordered chunks, validates once, and surfaces external rollback diagnostics", async ({ page }) => {
+  const uploadId = "00000000-0000-0000-0000-000000000123";
+  const token = "restore-capability";
+  const restoreBytes = Buffer.alloc(2 * 1024 * 1024 + 3, 7);
+  const expectedArchiveHash = createHash("sha256").update(restoreBytes).digest("hex");
+  const chunkIndexes: number[] = [];
+  let validationStarts = 0;
+  let latestPolls = 0;
+  let taskPolls = 0;
+  let receiptPolls = 0;
+
+  await page.route("**/api/v1/admin/backup/restore/uploads", async (route) => {
+    expect(route.request().method()).toBe("POST");
+    const body = route.request().postDataJSON();
+    expect(body.filename).toBe("restore-fixture.tar.gz");
+    expect(body.total_chunks).toBe(3);
+    expect(body.sha256).toBe(expectedArchiveHash);
+    await route.fulfill({ status: 201, json: {
+      upload_id: uploadId,
+      upload_token: token,
+      filename: body.filename,
+      size_bytes: body.size_bytes,
+      sha256: body.sha256,
+      chunk_size: body.chunk_size,
+      total_chunks: body.total_chunks,
+      received_chunks: 0,
+      received_bytes: 0,
+      next_chunk: 0,
+      state: "uploading",
+      created_at: "2026-08-24T12:00:00Z",
+      updated_at: "2026-08-24T12:00:00Z",
+    } });
+  });
+  await page.route(`**/api/v1/admin/backup/restore/uploads/${uploadId}/chunks/*`, async (route) => {
+    const index = Number(new URL(route.request().url()).pathname.split("/").at(-1));
+    expect(route.request().method()).toBe("PUT");
+    expect(route.request().headers()["x-restore-token"]).toBe(token);
+    const chunkBody = route.request().postDataBuffer();
+    expect(chunkBody).not.toBeNull();
+    expect(route.request().headers()["x-chunk-sha256"]).toBe(
+      createHash("sha256").update(chunkBody!).digest("hex"),
+    );
+    chunkIndexes.push(index);
+    await route.fulfill({ json: {
+      upload_id: uploadId,
+      next_chunk: index + 1,
+      received_chunks: index + 1,
+      received_bytes: Math.min((index + 1) * 1024 * 1024, 2 * 1024 * 1024 + 3),
+      total_chunks: 3,
+      state: index === 2 ? "uploaded" : "uploading",
+      idempotent: false,
+    } });
+  });
+  await page.route(`**/api/v1/admin/backup/restore/uploads/${uploadId}/validation/latest`, (route) => {
+    latestPolls += 1;
+    return route.fulfill({ json: { snapshot: null } });
+  });
+  await page.route(`**/api/v1/admin/backup/restore/uploads/${uploadId}/validate`, async (route) => {
+    validationStarts += 1;
+    await route.fulfill({ status: 202, json: {
+      task_id: "restore-validation-task",
+      job_id: "admin-restore-validation-task-attempt-1",
+      status: "enqueued",
+      operation_type: "admin-restore-validate",
+    } });
+  });
+  await page.route("**/api/v1/admin/operations/restore-validation-task", async (route) => {
+    taskPolls += 1;
+    if (taskPolls === 1) {
+      await route.fulfill({ json: {
+        task_id: "restore-validation-task",
+        job_id: "admin-restore-validation-task-attempt-1",
+        status: "running",
+        operation_type: "admin-restore-validate",
+        progress: { phase: "validating", label: "Validating restore archive", current: 2, total: 3 },
+        result: null,
+      } });
+      return;
+    }
+    await route.fulfill({ json: {
+      task_id: "restore-validation-task",
+      job_id: "admin-restore-validation-task-attempt-1",
+      status: "complete",
+      operation_type: "admin-restore-validate",
+      progress: { phase: "ready", label: "Ready for offline host execution" },
+      result: {
+        state: "ready",
+        request_id: uploadId,
+        host_command: `./scripts/offline-restore.py --request "$HOST_RESTORE_STAGING/${uploadId}/ready-request.json"`,
+        manifest: { version: "0.3.0", contents: ["database"] },
+        message: "Restore request is ready for offline host execution",
+      },
+    } });
+  });
+  await page.route(`**/api/v1/admin/backup/restore/receipts/${uploadId}`, async (route) => {
+    receiptPolls += 1;
+    await route.fulfill({ json: receiptPolls === 1
+      ? { request_id: uploadId, status: "pending", phase: "handoff" }
+      : {
+          request_id: uploadId,
+          status: "rolled_back",
+          phase: "integrity",
+          rollback_performed: true,
+          rollback_status: "complete",
+          diagnostic: "Foreground services only; background writers remain stopped.",
+          error: "Restore failed during integrity: RestoreHostError",
+        },
+    });
+  });
+
+  await page.goto("/admin/settings/backup");
+  const fileInput = page.locator('input[type="file"]');
+  await fileInput.setInputFiles({
+    name: "restore-fixture.tar.gz",
+    mimeType: "application/gzip",
+    buffer: restoreBytes,
+  });
+  await page.getByRole("dialog").getByRole("button", { name: "Confirm" }).click();
+
+  await expect(page.getByText("Ready for offline host execution")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(uploadId, { exact: true })).toBeVisible();
+  await expect(page.getByText("Foreground services only; background writers remain stopped.")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("Rollback complete")).toBeVisible();
+  expect(chunkIndexes).toEqual([0, 1, 2]);
+  expect(validationStarts).toBe(1);
+  expect(latestPolls).toBe(0);
+  expect(taskPolls).toBe(2);
+  expect(receiptPolls).toBe(2);
+
+  const results = await new AxeBuilder({ page })
+    .include("[data-restore-flow]")
     .analyze();
   expect(results.violations).toEqual([]);
 });

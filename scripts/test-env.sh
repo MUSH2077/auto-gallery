@@ -86,6 +86,7 @@ new_run() {
   install -d -m 700 "$TEST_ROOT" "$TEST_ROOT/reports" "$TEST_ROOT/postgres" \
     "$TEST_ROOT/redis" "$TEST_ROOT/meilisearch" "$TEST_ROOT/downloads" \
     "$TEST_ROOT/library" "$TEST_ROOT/gallery-dl" "$TEST_ROOT/app-config" \
+    "$TEST_ROOT/restore-staging" "$TEST_ROOT/restore-receipts" \
     "$TEST_ROOT/fixtures"
   printf '%s\n' "$TEST_RUN_ID" >"$TEST_ROOT/.auto-gallery-test-root"
   printf '%s\n' "$SOURCE_DIGEST" >"$TEST_ROOT/source-digest.txt"
@@ -113,6 +114,8 @@ HOST_DOWNLOADS=$TEST_ROOT/downloads
 HOST_LIBRARY=$TEST_ROOT/library
 HOST_CONFIG_GALLERYDL=$TEST_ROOT/gallery-dl
 HOST_CONFIG_APP=$TEST_ROOT/app-config
+HOST_RESTORE_STAGING=$TEST_ROOT/restore-staging
+HOST_RESTORE_RECEIPTS=$TEST_ROOT/restore-receipts
 BACKEND_PORT=$backend_port
 ADMIN_WEB_PORT=$admin_port
 BACKEND_INTERNAL_URL=http://backend:8000

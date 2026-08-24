@@ -300,6 +300,49 @@ export interface AdminOperationSnapshotResponse<TResult = Record<string, unknown
   current?: AdminOperationCurrent | null;
 }
 
+export interface RestoreUploadSession {
+  upload_id: string;
+  upload_token?: string;
+  filename: string;
+  size_bytes: number;
+  sha256: string;
+  chunk_size: number;
+  total_chunks: number;
+  received_chunks: number;
+  received_bytes: number;
+  next_chunk: number;
+  state: "uploading" | "uploaded" | "validating" | "validation_failed" | "ready" | string;
+  validation_task_id?: string | null;
+  request_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RestoreValidationResult {
+  state: "ready";
+  request_id: string;
+  host_command: string;
+  manifest: {
+    version: string;
+    contents: string[];
+    entries?: Record<string, { size: number; sha256: string }>;
+  };
+  message: string;
+}
+
+export interface RestoreReceipt {
+  request_id: string;
+  status: "pending" | "success" | "rolled_back" | "failed" | string;
+  phase: string;
+  started_at?: string;
+  completed_at?: string;
+  rollback_performed?: boolean;
+  rollback_status?: string;
+  diagnostic?: string;
+  error?: string;
+  rollback_command?: string;
+}
+
 export type DownloadConflictWinner = "canonical" | "staged";
 
 export interface DownloadConflictEvidence {

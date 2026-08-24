@@ -52,6 +52,7 @@ _ADMIN_INTERNAL_RESOURCE_PROFILES = {
     "admin-integrity-scan": "maintenance",
     "admin-backup-estimate": "maintenance",
     "admin-backup-create": "maintenance",
+    "admin-restore-validate": "maintenance",
     "admin-proxy-test": "maintenance",
     "admin-gallerydl-connectivity-test": "maintenance",
 }
@@ -241,6 +242,12 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
             "admin-backup-create",
             "app.jobs.admin_operations.run_backup_create_operation",
             scopes=("backup:create:active",),
+            timeout=3600,
+        ),
+        _spec(
+            "admin-restore-validate",
+            "app.jobs.admin_operations.run_restore_validation_operation",
+            scopes=("restore:validate:",),
             timeout=3600,
         ),
         _spec(

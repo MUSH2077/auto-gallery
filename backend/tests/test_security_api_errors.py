@@ -1,30 +1,35 @@
 """Security regression tests for administrator-facing error responses."""
 
-import io
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException, Response
 from pydantic import ValidationError
-from starlette.datastructures import UploadFile
 
 
 @pytest.mark.asyncio
 async def test_restore_backup_does_not_expose_internal_exception(monkeypatch):
     from app.api.admin import backup
+    from app.services import offline_restore
 
-    async def fail_restore(*_args, **_kwargs):
+    def fail_restore(*_args, **_kwargs):
         raise RuntimeError("/private/path/database.sql")
 
-    monkeypatch.setattr(backup.asyncio, "to_thread", fail_restore)
-    upload = UploadFile(filename="backup.tar.gz", file=io.BytesIO(b"not-a-tar"))
+    monkeypatch.setattr(offline_restore, "create_upload_session", fail_restore)
+    request = backup.RestoreUploadCreateRequest(
+        filename="backup.tar.gz",
+        size_bytes=1,
+        sha256="0" * 64,
+        chunk_size=1,
+        total_chunks=1,
+    )
+    with pytest.raises(HTTPException) as error:
+        await backup.create_restore_upload(request)
 
-    result = await backup.restore_backup(upload, confirm="DELETE-EVERYTHING")
-
-    assert result["status"] == "error"
-    assert result["message"] == "Restore failed. Check the backend logs for the request details."
-    assert "/private/path" not in result["message"]
+    assert error.value.status_code == 500
+    assert error.value.detail == "Restore staging failed. Check the backend logs for details."
+    assert "/private/path" not in error.value.detail
 
 
 @pytest.mark.asyncio

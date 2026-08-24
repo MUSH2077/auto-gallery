@@ -118,6 +118,32 @@ def test_contract_uses_real_upload_and_binary_content_types():
     assert backup["application/gzip"]["schema"]["format"] == "binary"
 
 
+def test_offline_restore_contract_is_chunked_typed_and_never_multipart():
+    from app.main import app
+
+    app.openapi_schema = None
+    schema = app.openapi()
+    paths = schema["paths"]
+    assert "/api/v1/admin/backup/restore" not in paths
+    create = paths["/api/v1/admin/backup/restore/uploads"]["post"]
+    assert set(create["requestBody"]["content"]) == {"application/json"}
+    assert create["responses"]["201"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/RestoreUploadCreatedResponse")
+    chunk = paths[
+        "/api/v1/admin/backup/restore/uploads/{upload_id}/chunks/{chunk_index}"
+    ]["put"]
+    binary = chunk["requestBody"]["content"]["application/octet-stream"]["schema"]
+    assert binary == {"type": "string", "format": "binary", "title": "Data"}
+    assert chunk["responses"]["200"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/RestoreChunkResponse")
+    receipt = paths["/api/v1/admin/backup/restore/receipts/{request_id}"]["get"]
+    assert receipt["responses"]["200"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/RestoreReceiptResponse")
+
+
 def test_asyncapi_only_exposes_public_websocket_protocol():
     from app.api_docs import _ASYNCAPI_PATH
 

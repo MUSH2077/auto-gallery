@@ -868,11 +868,58 @@ export const api = {
       "/api/v1/admin/backup/estimate/latest",
     ),
 
-  restoreBackup: (file: File) => {
-    const formData = new FormData();
-    formData.append("file", file);
-    return fetch("/api/v1/admin/backup/restore?confirm=DELETE-EVERYTHING", { method: "POST", body: formData }).then(r => r.json()) as Promise<{ status: string; restored: string[]; errors: string[]; manifest: any }>;
-  },
+  createRestoreUpload: (data: {
+    filename: string;
+    size_bytes: number;
+    sha256: string;
+    chunk_size: number;
+    total_chunks: number;
+  }) => request<T.RestoreUploadSession & { upload_token: string }>(
+    "/api/v1/admin/backup/restore/uploads",
+    { method: "POST", body: JSON.stringify(data) },
+  ),
+
+  getRestoreUpload: (uploadId: string, token: string) => request<T.RestoreUploadSession>(
+    `/api/v1/admin/backup/restore/uploads/${encodeURIComponent(uploadId)}`,
+    { headers: { "X-Restore-Token": token } },
+  ),
+
+  uploadRestoreChunk: (
+    uploadId: string,
+    token: string,
+    index: number,
+    data: Blob,
+    sha256: string,
+  ) => request<T.RestoreUploadSession & { idempotent: boolean }>(
+    `/api/v1/admin/backup/restore/uploads/${encodeURIComponent(uploadId)}/chunks/${index}`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Restore-Token": token,
+        "X-Chunk-SHA256": sha256,
+      },
+      body: data,
+    },
+  ),
+
+  startRestoreValidation: (uploadId: string, token: string) =>
+    request<T.AdminOperationAccepted>(
+      `/api/v1/admin/backup/restore/uploads/${encodeURIComponent(uploadId)}/validate`,
+      { method: "POST", headers: { "X-Restore-Token": token } },
+    ),
+
+  getLatestRestoreValidation: (uploadId: string, token: string) =>
+    request<T.AdminOperationSnapshotResponse<T.RestoreValidationResult>>(
+      `/api/v1/admin/backup/restore/uploads/${encodeURIComponent(uploadId)}/validation/latest`,
+      { headers: { "X-Restore-Token": token } },
+    ),
+
+  getRestoreReceipt: (requestId: string, token: string) =>
+    request<T.RestoreReceipt>(
+      `/api/v1/admin/backup/restore/receipts/${encodeURIComponent(requestId)}`,
+      { headers: { "X-Restore-Token": token } },
+    ),
 
   deleteBackup: (filename: string) =>
     request<{ status: string; message: string }>(`/api/v1/admin/backup/${encodeURIComponent(filename)}`, { method: "DELETE" }),
