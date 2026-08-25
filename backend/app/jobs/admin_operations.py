@@ -203,12 +203,19 @@ class _DiskImportPublisherGuard:
         return task
 
 
+def _disk_import_publication_count(result: dict) -> int:
+    import_job_ids = result.get("import_job_ids")
+    if isinstance(import_job_ids, (list, tuple, set)):
+        return len(import_job_ids)
+    return int(result.get("imported", result.get("jobs", 0)) or 0)
+
+
 def disk_import_completion_progress(result: dict) -> dict:
     """Keep the resumable drain counters visible after terminal transition."""
 
     return {
         "phase": "complete",
-        "label": f"Queued {result['jobs']} import jobs",
+        "label": f"Queued {_disk_import_publication_count(result)} import jobs",
         **{
             key: result.get(key, 0)
             for key in ("scanned", "existing", "imported", "skipped", "failed")
@@ -764,7 +771,8 @@ async def _run_registered_disk_import_operation(
     invalidate_storage_breakdown_cache()
     return {
         **result,
-        "message": result.get("message") or f"Queued {result.get('jobs', 0)} import jobs",
+        "message": result.get("message")
+        or f"Queued {_disk_import_publication_count(result)} import jobs",
     }
 
 

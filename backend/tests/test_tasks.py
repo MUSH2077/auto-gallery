@@ -71,7 +71,8 @@ def test_disk_import_completion_progress_keeps_durable_counters():
     from app.jobs.admin_operations import disk_import_completion_progress
 
     progress = disk_import_completion_progress({
-        "jobs": 2,
+        "jobs": 1,
+        "import_job_ids": ["first-import", "second-import"],
         "scanned": 5,
         "existing": 1,
         "imported": 2,
