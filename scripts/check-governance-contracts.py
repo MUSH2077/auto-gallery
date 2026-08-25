@@ -92,6 +92,15 @@ def main() -> int:
             failures.append(f"deployment still contains a host-specific veto: {forbidden}")
     if 'if [[ "$DEPLOY_MODE" == "verified" ]]' not in deploy:
         failures.append("default deploy must not read acceptance state")
+    logical_deploy = re.sub(r"\\\n[ \t]*", " ", deploy)
+    for line in logical_deploy.splitlines():
+        if not re.search(r"\bcompose\b.*\bup\b", line) or "--force-recreate" not in line:
+            continue
+        stateful_services = {"postgres", "redis", "meilisearch"}
+        if stateful_services.intersection(line.split()):
+            failures.append(
+                "deployment must not force-recreate stateful services: " + line.strip()
+            )
 
     compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
     for variable in (

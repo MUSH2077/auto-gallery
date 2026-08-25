@@ -449,8 +449,16 @@ docker image tag "auto-gallery-admin-web:rollback-$DEPLOYMENT_ID" auto-gallery-a
 docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
   --env-file "$ROLLBACK_DIR/.env.predeploy" \
   -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
-  up -d --force-recreate --no-build --wait --wait-timeout 180 \
-  postgres redis meilisearch migrate backend admin-web
+  up -d --no-build --wait --wait-timeout 180 postgres redis meilisearch
+docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
+  --env-file "$ROLLBACK_DIR/.env.predeploy" \
+  -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
+  up --force-recreate --no-deps --no-build migrate
+docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
+  --env-file "$ROLLBACK_DIR/.env.predeploy" \
+  -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
+  up -d --force-recreate --no-deps --no-build --wait --wait-timeout 180 \
+  backend admin-web
 docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
   --env-file "$ROLLBACK_DIR/.env.predeploy" \
   -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" ps
@@ -618,9 +626,11 @@ echo -e "${YELLOW}[5/7] Freezing foreground writes and creating checked backups.
 compose stop -t 120 admin-web backend
 backup_frozen_state
 [[ "$BACKUP_READY" -eq 1 && -f "$ROLLBACK_DIR/snapshot.complete" ]]
-echo -e "${YELLOW}[5/7] Recreating the protected stack one service at a time...${NC}"
-COMPOSE_PARALLEL_LIMIT=1 compose up -d --force-recreate \
-    postgres redis meilisearch migrate backend admin-web
+echo -e "${YELLOW}[5/7] Keeping stateful services and replacing application containers...${NC}"
+compose up -d --no-build --wait --wait-timeout 180 postgres redis meilisearch
+compose up --force-recreate --no-deps --no-build migrate
+COMPOSE_PARALLEL_LIMIT=1 compose up -d --force-recreate --no-deps --no-build \
+    backend admin-web
 compose stop -t 60 worker-download worker-import worker-operations scheduler >/dev/null 2>&1 || true
 
 # ── 6. Wait for healthy ───────────────────────────────────────────────
