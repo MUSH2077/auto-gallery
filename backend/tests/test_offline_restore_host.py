@@ -71,6 +71,10 @@ if "--set=offline_restore_phase=database-identities" in args and state_path:
         sys.exit(1)
 if "CREATE DATABASE ag_restore_" in joined:
     state = "temp"
+elif "--set=offline_restore_phase=database-authority-forward" in args:
+    state = "switched"
+elif "--set=offline_restore_phase=database-authority-rollback" in args:
+    state = "rolled-back"
 elif "ALTER DATABASE ag_restore_" in joined and "RENAME TO" in joined:
     state = "switched"
 elif "ALTER DATABASE ag_rollback_" in joined and "RENAME TO" in joined:
@@ -473,7 +477,9 @@ def test_failed_atomic_database_switch_does_not_rename_the_untouched_live_databa
     fixture = _fixture(tmp_path)
     fixture["env"].update(
         {
-            "FAKE_COMPOSE_FAIL_CONTAINS": ("ALTER DATABASE autogallery RENAME TO ag_rollback_000000000000"),
+            "FAKE_COMPOSE_FAIL_CONTAINS": (
+                "--set=offline_restore_phase=database-authority-forward"
+            ),
         }
     )
 
@@ -529,7 +535,7 @@ def test_file_rollback_failure_still_attempts_database_redis_and_foreground(tmp_
     assert components["redis"]["status"] == "complete"
     assert components["foreground"]["status"] == "complete"
     commands = [" ".join(command) for command in _commands(fixture)]
-    assert any("ag_rollback_000000000000 RENAME TO autogallery" in command for command in commands)
+    assert any("database-authority-rollback" in command for command in commands)
     assert any("redis:/data" in command for command in commands)
     recovery = [command for command in _commands(fixture) if "up" in command and "backend" in command]
     assert recovery
@@ -540,7 +546,7 @@ def test_file_rollback_failure_still_attempts_database_redis_and_foreground(tmp_
 def test_unproven_post_switch_database_identity_marks_recovery_failed(tmp_path):
     """A failed identity probe after switching can never count as DB recovery."""
     fixture = _fixture(tmp_path)
-    fixture["env"]["FAKE_FAIL_DATABASE_IDENTITIES_AFTER"] = "4"
+    fixture["env"]["FAKE_FAIL_DATABASE_IDENTITIES_AFTER"] = "2"
 
     result = _run(fixture, fail_phase="clear_redis")
 
@@ -665,6 +671,148 @@ def test_top_level_config_symlink_snapshot_never_reads_outside_target(
         assert outside.read_bytes() == secret
 
 
+@pytest.mark.parametrize("outside_kind", ["directory", "file"])
+def test_config_snapshot_leaf_replacement_never_reads_symlink_target(
+    tmp_path,
+    outside_kind,
+):
+    """A leaf replaced after inspection must never redirect snapshot reads."""
+
+    fixture = _fixture(tmp_path)
+    outside = tmp_path / f"outside-race-{outside_kind}"
+    sentinel = f"outside-only-race-sentinel-{outside_kind}".encode()
+    if outside_kind == "directory":
+        outside.mkdir()
+        (outside / "outside-only.txt").write_bytes(sentinel)
+    else:
+        outside.write_bytes(sentinel)
+
+    hook_dir = tmp_path / "snapshot-race-hook"
+    hook_dir.mkdir()
+    ready = tmp_path / "snapshot-race-ready"
+    proceed = tmp_path / "snapshot-race-proceed"
+    (hook_dir / "sitecustomize.py").write_text(
+        """import os, time
+
+_original_lstat = os.lstat
+_original_stat = os.stat
+_fired = False
+
+
+def _absolute(path, dir_fd):
+    value = os.fsdecode(os.fspath(path))
+    if dir_fd is not None and not os.path.isabs(value):
+        value = os.path.join(os.readlink(f\"/proc/self/fd/{dir_fd}\"), value)
+    return os.path.abspath(value)
+
+
+def _pause_after_inspection(path, dir_fd):
+    global _fired
+    if _fired or _absolute(path, dir_fd) != os.environ[\"RESTORE_RACE_LEAF\"]:
+        return
+    _fired = True
+    with open(os.environ[\"RESTORE_RACE_READY\"], \"x\", encoding=\"utf-8\") as output:
+        output.write(\"ready\\n\")
+    deadline = time.monotonic() + 15
+    while not os.path.exists(os.environ[\"RESTORE_RACE_PROCEED\"]):
+        if time.monotonic() >= deadline:
+            raise RuntimeError(\"snapshot race synchronization timed out\")
+        time.sleep(0.01)
+
+
+def _lstat(path, *, dir_fd=None):
+    result = _original_lstat(path, dir_fd=dir_fd)
+    _pause_after_inspection(path, dir_fd)
+    return result
+
+
+def _stat(path, *, dir_fd=None, follow_symlinks=True):
+    result = _original_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+    if not follow_symlinks:
+        _pause_after_inspection(path, dir_fd)
+    return result
+
+
+os.lstat = _lstat
+os.stat = _stat
+""",
+        encoding="utf-8",
+    )
+    fixture["env"].update(
+        {
+            "PYTHONPATH": os.pathsep.join(
+                part
+                for part in (
+                    str(hook_dir),
+                    fixture["env"].get("PYTHONPATH", ""),
+                )
+                if part
+            ),
+            "RESTORE_FAIL_PHASE": "temp_database",
+            "RESTORE_RACE_LEAF": str(fixture["live_app"]),
+            "RESTORE_RACE_READY": str(ready),
+            "RESTORE_RACE_PROCEED": str(proceed),
+        }
+    )
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(fixture["script"]),
+            "--request",
+            str(fixture["request"]),
+        ],
+        env=fixture["env"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    anchored_original = fixture["live_app"].with_name("app-anchored-original")
+    try:
+        deadline = time.monotonic() + 15
+        while not ready.exists() and process.poll() is None:
+            if time.monotonic() >= deadline:
+                process.kill()
+                stdout, stderr = process.communicate(timeout=5)
+                pytest.fail(
+                    "restore never reached the snapshot inspection boundary: "
+                    f"{stdout} {stderr}"
+                )
+            time.sleep(0.01)
+        assert ready.exists(), process.communicate(timeout=5)
+        fixture["live_app"].rename(anchored_original)
+        fixture["live_app"].symlink_to(
+            outside,
+            target_is_directory=outside_kind == "directory",
+        )
+        proceed.write_text("proceed\n", encoding="utf-8")
+        stdout, stderr = process.communicate(timeout=20)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate(timeout=5)
+
+    assert process.returncode != 0, (stdout, stderr)
+    rollback_root = (
+        fixture["receipts"] / "rollbacks" / fixture["request_id"]
+    )
+    captured_contents = []
+    if rollback_root.exists():
+        for root, _directories, files in os.walk(rollback_root, followlinks=False):
+            for name in files:
+                captured = Path(root) / name
+                if not captured.is_symlink():
+                    captured_contents.append(captured.read_bytes())
+    assert sentinel not in captured_contents
+    snapshot = rollback_root / "app-config"
+    if snapshot.is_dir() and not snapshot.is_symlink():
+        assert (snapshot / "value.txt").read_text(encoding="utf-8") == "old-app"
+    assert (anchored_original / "value.txt").read_text(encoding="utf-8") == "old-app"
+    if outside_kind == "directory":
+        assert (outside / "outside-only.txt").read_bytes() == sentinel
+    else:
+        assert outside.read_bytes() == sentinel
+
+
 def test_nested_live_parent_symlink_cannot_redirect_a_restore_write(tmp_path):
     """A relative payload parent must not traverse a live symlink outside its root."""
     fixture = _fixture(tmp_path)
@@ -721,7 +869,8 @@ def test_postgres_identity_comes_from_compose_and_every_command_is_explicit(tmp_
         assert "compose_restore_user" in rendered
         assert "wrong_host_user" not in rendered
     rendered_all = "\n".join(" ".join(command) for command in commands)
-    assert "ALTER DATABASE compose_restore_db RENAME TO" in rendered_all
+    assert "database-authority-forward" in rendered_all
+    assert "'compose_restore_db'::name" in rendered_all
     assert "ALTER DATABASE wrong_host_database" not in rendered_all
 
 
@@ -1405,7 +1554,13 @@ def test_file_rollback_aggregates_swap_errors_and_continues_earlier_records(tmp_
 @pytest.mark.integration
 @pytest.mark.parametrize(
     "scenario",
-    ["occupied-rollback", "failed-forward-switch", "rollback-retry"],
+    [
+        "occupied-rollback",
+        "failed-forward-switch",
+        "rollback-retry",
+        "forward-oid-race",
+        "rollback-oid-race",
+    ],
 )
 def test_real_disposable_postgres_redis_switch_and_snapshot_rollback(
     tmp_path,
@@ -1446,7 +1601,7 @@ def test_real_disposable_postgres_redis_switch_and_snapshot_rollback(
         capture_output=True,
     )
     try:
-        deadline = time.monotonic() + 45
+        deadline = time.monotonic() + 75
         while time.monotonic() < deadline:
             initialized = subprocess.run(
                 ["docker", "logs", pg_container],
@@ -1535,14 +1690,50 @@ pg = os.environ["REAL_PG_CONTAINER"]
 redis = os.environ["REAL_REDIS_CONTAINER"]
 with pathlib.Path(os.environ["REAL_COMPOSE_LOG"]).open("a", encoding="utf-8") as output:
     output.write(json.dumps(args) + "\\n")
+
+
+def trigger_database_race():
+    marker = pathlib.Path(os.environ["REAL_RACE_MARKER"])
+    if marker.exists():
+        return
+    sql = (
+        f"ALTER DATABASE {os.environ['REAL_LIVE_DATABASE']} "
+        f"RENAME TO {os.environ['REAL_RACE_MOVED_DATABASE']};"
+        f"ALTER DATABASE {os.environ['REAL_RACE_REPLACEMENT_DATABASE']} "
+        f"RENAME TO {os.environ['REAL_LIVE_DATABASE']};"
+    )
+    subprocess.run(
+        [
+            "docker", "exec", pg, "psql",
+            "--username", os.environ["REAL_POSTGRES_USER"],
+            "--dbname", "postgres", "-v", "ON_ERROR_STOP=1", "-c", sql,
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    marker.write_text("triggered\\n", encoding="utf-8")
+
+
+race_mode = os.environ.get("REAL_DATABASE_RACE")
+identity_phase = "--set=offline_restore_phase=database-identities" in args
+if args[:3] == ["exec", "-T", "postgres"] and race_mode and identity_phase:
+    count_path = pathlib.Path(os.environ["REAL_RACE_COUNT"])
+    count = int(count_path.read_text()) + 1 if count_path.exists() else 1
+    count_path.write_text(str(count))
+    completed = subprocess.run(["docker", "exec", "-i", pg, *args[3:]])
+    if count == int(os.environ["REAL_RACE_IDENTITY_TARGET"]):
+        trigger_database_race()
+    raise SystemExit(completed.returncode)
+if (
+    args[:3] == ["exec", "-T", "postgres"]
+    and race_mode
+    and f"--set=offline_restore_phase=database-authority-{race_mode}" in args
+):
+    trigger_database_race()
 if (
     args[:3] == ["exec", "-T", "postgres"]
     and os.environ.get("REAL_FAIL_FORWARD_SWITCH") == "after-first-rename"
-    and any(
-        f"ALTER DATABASE {os.environ['REAL_LIVE_DATABASE']} RENAME TO {os.environ['REAL_ROLLBACK_DATABASE']}"
-        in arg
-        for arg in args
-    )
+    and "--set=offline_restore_phase=database-authority-forward" in args
 ):
     partial = subprocess.run(
         [
@@ -1615,6 +1806,76 @@ raise SystemExit(0)
         assert original_live_oid is not None
         assert desired_restore_oid is not None
 
+        race_replacement = "ag_race_replacement_000000000000"
+        race_moved = "ag_race_moved_000000000000"
+        race_unrelated = "ag_race_unrelated_000000000000"
+        replacement_oid = None
+        unrelated_oid = None
+        if scenario in {"forward-oid-race", "rollback-oid-race"}:
+            for database, marker in (
+                (race_replacement, "replacement"),
+                (race_unrelated, "unrelated"),
+            ):
+                command(
+                    "docker", "exec", pg_container, "createdb",
+                    "--username", pg_user, database,
+                )
+                command(
+                    "docker", "exec", pg_container, "psql",
+                    "--username", pg_user, "--dbname", database,
+                    "--set", "ON_ERROR_STOP=1", "--command",
+                    (
+                        "CREATE TABLE restore_marker(value text NOT NULL);"
+                        f"INSERT INTO restore_marker VALUES ('{marker}');"
+                    ),
+                )
+            replacement_oid = database_oid(race_replacement)
+            unrelated_oid = database_oid(race_unrelated)
+            assert replacement_oid is not None
+            assert unrelated_oid is not None
+            fixture["env"].update(
+                {
+                    "REAL_DATABASE_RACE": (
+                        "forward" if scenario == "forward-oid-race" else "rollback"
+                    ),
+                    "REAL_RACE_MARKER": str(tmp_path / "database-race-triggered"),
+                    "REAL_RACE_COUNT": str(tmp_path / "database-race-count"),
+                    "REAL_RACE_IDENTITY_TARGET": (
+                        "3" if scenario == "forward-oid-race" else "5"
+                    ),
+                    "REAL_RACE_MOVED_DATABASE": race_moved,
+                    "REAL_RACE_REPLACEMENT_DATABASE": race_replacement,
+                }
+            )
+
+        if scenario == "forward-oid-race":
+            result = _run(fixture)
+
+            assert result.returncode == 1, result.stderr
+            journal = json.loads(
+                (
+                    fixture["receipts"]
+                    / "rollbacks"
+                    / fixture["request_id"]
+                    / "journal.json"
+                ).read_text()
+            )
+            temp_oid = journal["database_switch_intent"]["temp_database_oid"]
+            assert database_oid(live_database) == replacement_oid
+            assert database_marker(live_database) == "replacement"
+            assert database_oid(race_moved) == original_live_oid
+            assert database_marker(race_moved) == "old"
+            assert database_oid("ag_restore_000000000000") == temp_oid
+            assert database_marker("ag_restore_000000000000") == "new"
+            assert database_oid("ag_rollback_000000000000") is None
+            assert database_oid("ag_failed_000000000000") is None
+            assert database_oid(race_replacement) is None
+            assert database_oid(race_unrelated) == unrelated_oid
+            assert database_marker(race_unrelated) == "unrelated"
+            assert database_oid("desired_restore") == desired_restore_oid
+            assert database_marker("desired_restore") == "new"
+            return
+
         if scenario == "occupied-rollback":
             rollback_database = fixture["env"]["REAL_ROLLBACK_DATABASE"]
             command(
@@ -1671,6 +1932,45 @@ raise SystemExit(0)
             assert intent["original_live_oid"] == original_live_oid
             assert intent["original_live_name"] == live_database
             assert intent["rollback_name_absent"] is True
+            return
+
+        if scenario == "rollback-oid-race":
+            result = _run(fixture)
+            assert result.returncode == 0, result.stderr
+            rollback = (
+                fixture["receipts"]
+                / "rollbacks"
+                / fixture["request_id"]
+                / "rollback.sh"
+            )
+            journal = json.loads((rollback.parent / "journal.json").read_text())
+            temp_oid = journal["database_switch_intent"]["temp_database_oid"]
+            assert database_oid(live_database) == temp_oid
+            assert database_oid("ag_rollback_000000000000") == original_live_oid
+
+            rollback_result = subprocess.run(
+                [str(rollback)],
+                env=fixture["env"],
+                capture_output=True,
+                text=True,
+                timeout=45,
+                check=False,
+            )
+
+            assert rollback_result.returncode == 1, rollback_result.stderr
+            assert database_oid(live_database) == replacement_oid
+            assert database_marker(live_database) == "replacement"
+            assert database_oid("ag_rollback_000000000000") == original_live_oid
+            assert database_marker("ag_rollback_000000000000") == "old"
+            assert database_oid(race_moved) == temp_oid
+            assert database_marker(race_moved) == "new"
+            assert database_oid("ag_restore_000000000000") is None
+            assert database_oid("ag_failed_000000000000") is None
+            assert database_oid(race_replacement) is None
+            assert database_oid(race_unrelated) == unrelated_oid
+            assert database_marker(race_unrelated) == "unrelated"
+            assert database_oid("desired_restore") == desired_restore_oid
+            assert database_marker("desired_restore") == "new"
             return
 
         result = _run(fixture)

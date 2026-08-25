@@ -57,6 +57,8 @@ DATABASE_PAYLOADS = frozenset({"database.dump", "database.sql"})
 MAX_ARCHIVE_SIZE = 64 * 1024 * 1024 * 1024
 NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+DATABASE_LOCK_CLASS = 1_935_764_076
+DATABASE_LOCK_OBJECT = 1_919_247_476
 
 
 class RestoreHostError(RuntimeError):
@@ -850,22 +852,227 @@ class RestoreRunner:
         self._save_journal()
 
     @staticmethod
-    def _snapshot_config_root(source: Path, destination: Path) -> None:
+    def _same_opened_entry(
+        inspected: os.stat_result,
+        opened: os.stat_result,
+    ) -> bool:
+        return (
+            inspected.st_dev == opened.st_dev
+            and inspected.st_ino == opened.st_ino
+            and stat.S_IFMT(inspected.st_mode) == stat.S_IFMT(opened.st_mode)
+        )
+
+    @staticmethod
+    def _apply_snapshot_metadata(
+        destination_fd: int,
+        source_stat: os.stat_result,
+    ) -> None:
+        os.fchmod(destination_fd, stat.S_IMODE(source_stat.st_mode))
+        os.utime(
+            destination_fd,
+            ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns),
+        )
+
+    @classmethod
+    def _snapshot_config_directory(
+        cls,
+        source_fd: int,
+        destination_fd: int,
+    ) -> None:
+        for name in sorted(os.listdir(source_fd)):
+            if name in {"", ".", ".."} or "/" in name:
+                raise RestoreHostError("Live configuration entry name is unsafe")
+            try:
+                source_stat = os.stat(
+                    name,
+                    dir_fd=source_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError as exc:
+                raise RestoreHostError(
+                    "Live configuration changed during snapshot"
+                ) from exc
+
+            if stat.S_ISLNK(source_stat.st_mode):
+                try:
+                    link_target = os.readlink(name, dir_fd=source_fd)
+                    os.symlink(link_target, name, dir_fd=destination_fd)
+                except OSError as exc:
+                    raise RestoreHostError(
+                        "Live configuration symlink changed during snapshot"
+                    ) from exc
+                continue
+
+            if stat.S_ISDIR(source_stat.st_mode):
+                try:
+                    child_source_fd = os.open(
+                        name,
+                        os.O_RDONLY | DIRECTORY | NOFOLLOW,
+                        dir_fd=source_fd,
+                    )
+                except OSError as exc:
+                    raise RestoreHostError(
+                        "Live configuration directory changed during snapshot"
+                    ) from exc
+                try:
+                    opened_stat = os.fstat(child_source_fd)
+                    if not cls._same_opened_entry(source_stat, opened_stat):
+                        raise RestoreHostError(
+                            "Live configuration directory changed during snapshot"
+                        )
+                    os.mkdir(name, 0o700, dir_fd=destination_fd)
+                    child_destination_fd = os.open(
+                        name,
+                        os.O_RDONLY | DIRECTORY | NOFOLLOW,
+                        dir_fd=destination_fd,
+                    )
+                    try:
+                        cls._snapshot_config_directory(
+                            child_source_fd,
+                            child_destination_fd,
+                        )
+                        cls._apply_snapshot_metadata(
+                            child_destination_fd,
+                            opened_stat,
+                        )
+                        os.fsync(child_destination_fd)
+                    finally:
+                        os.close(child_destination_fd)
+                finally:
+                    os.close(child_source_fd)
+                os.fsync(destination_fd)
+                continue
+
+            if stat.S_ISREG(source_stat.st_mode):
+                try:
+                    child_source_fd = os.open(
+                        name,
+                        os.O_RDONLY | NOFOLLOW,
+                        dir_fd=source_fd,
+                    )
+                except OSError as exc:
+                    raise RestoreHostError(
+                        "Live configuration file changed during snapshot"
+                    ) from exc
+                try:
+                    opened_stat = os.fstat(child_source_fd)
+                    if not cls._same_opened_entry(source_stat, opened_stat):
+                        raise RestoreHostError(
+                            "Live configuration file changed during snapshot"
+                        )
+                    child_destination_fd = os.open(
+                        name,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW,
+                        0o600,
+                        dir_fd=destination_fd,
+                    )
+                    try:
+                        with (
+                            os.fdopen(os.dup(child_source_fd), "rb") as source_file,
+                            os.fdopen(
+                                os.dup(child_destination_fd), "wb"
+                            ) as destination_file,
+                        ):
+                            shutil.copyfileobj(source_file, destination_file)
+                            destination_file.flush()
+                        cls._apply_snapshot_metadata(
+                            child_destination_fd,
+                            opened_stat,
+                        )
+                        os.fsync(child_destination_fd)
+                    finally:
+                        os.close(child_destination_fd)
+                finally:
+                    os.close(child_source_fd)
+                os.fsync(destination_fd)
+                continue
+
+            raise RestoreHostError("Live configuration entry has an unsafe type")
+
+    @classmethod
+    def _snapshot_config_root(cls, source: Path, destination: Path) -> None:
         try:
-            source_stat = source.lstat()
+            source_parent_fd = os.open(
+                source.parent,
+                os.O_RDONLY | DIRECTORY | NOFOLLOW,
+            )
         except FileNotFoundError:
             return
-        if stat.S_ISLNK(source_stat.st_mode):
-            destination.symlink_to(os.readlink(source))
-            directory_fd = os.open(destination.parent, os.O_RDONLY | DIRECTORY)
+        except OSError as exc:
+            raise RestoreHostError(
+                "Live configuration parent is unsafe"
+            ) from exc
+        try:
             try:
-                os.fsync(directory_fd)
+                source_stat = os.stat(
+                    source.name,
+                    dir_fd=source_parent_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                return
+
+            destination_parent_fd = os.open(
+                destination.parent,
+                os.O_RDONLY | DIRECTORY | NOFOLLOW,
+            )
+            try:
+                if stat.S_ISLNK(source_stat.st_mode):
+                    try:
+                        link_target = os.readlink(
+                            source.name,
+                            dir_fd=source_parent_fd,
+                        )
+                        os.symlink(
+                            link_target,
+                            destination.name,
+                            dir_fd=destination_parent_fd,
+                        )
+                    except OSError as exc:
+                        raise RestoreHostError(
+                            "Live configuration symlink changed during snapshot"
+                        ) from exc
+                    os.fsync(destination_parent_fd)
+                    return
+                if not stat.S_ISDIR(source_stat.st_mode):
+                    raise RestoreHostError(
+                        "Live configuration root has an unsafe type"
+                    )
+                try:
+                    source_fd = os.open(
+                        source.name,
+                        os.O_RDONLY | DIRECTORY | NOFOLLOW,
+                        dir_fd=source_parent_fd,
+                    )
+                except OSError as exc:
+                    raise RestoreHostError(
+                        "Live configuration root changed during snapshot"
+                    ) from exc
+                try:
+                    opened_stat = os.fstat(source_fd)
+                    if not cls._same_opened_entry(source_stat, opened_stat):
+                        raise RestoreHostError(
+                            "Live configuration root changed during snapshot"
+                        )
+                    os.mkdir(destination.name, 0o700, dir_fd=destination_parent_fd)
+                    destination_fd = os.open(
+                        destination.name,
+                        os.O_RDONLY | DIRECTORY | NOFOLLOW,
+                        dir_fd=destination_parent_fd,
+                    )
+                    try:
+                        cls._snapshot_config_directory(source_fd, destination_fd)
+                        cls._apply_snapshot_metadata(destination_fd, opened_stat)
+                        os.fsync(destination_fd)
+                    finally:
+                        os.close(destination_fd)
+                finally:
+                    os.close(source_fd)
+                os.fsync(destination_parent_fd)
             finally:
-                os.close(directory_fd)
-            return
-        if not stat.S_ISDIR(source_stat.st_mode):
-            raise RestoreHostError("Live configuration root has an unsafe type")
-        shutil.copytree(source, destination, symlinks=True)
+                os.close(destination_parent_fd)
+        finally:
+            os.close(source_parent_fd)
 
     def _snapshot_payload_files(self, component: str, live_root: Path) -> None:
         source_root = self.payload / component
@@ -1037,6 +1244,195 @@ class RestoreRunner:
             "SELECT 1 / CASE WHEN count(*) > 0 THEN 1 ELSE 0 END FROM pg_catalog.pg_tables WHERE schemaname='public'; SELECT count(*) FROM alembic_version;",
         )
 
+    def _run_database_authority(
+        self,
+        operation: str,
+        original_live_oid: int,
+        temp_database_oid: int,
+    ) -> None:
+        database_names = (
+            self.live_database,
+            self.temp_database,
+            self.rollback_database,
+            self.failed_database,
+        )
+        if (
+            operation not in {"forward", "rollback"}
+            or type(original_live_oid) is not int
+            or original_live_oid <= 0
+            or type(temp_database_oid) is not int
+            or temp_database_oid <= 0
+            or original_live_oid == temp_database_oid
+            or any(PG_NAME.fullmatch(name) is None for name in database_names)
+        ):
+            raise RestoreHostError("Database authority input is invalid")
+
+        if operation == "forward":
+            authority_body = f"""
+DECLARE
+    expected_original_oid CONSTANT oid := {original_live_oid};
+    expected_temp_oid CONSTANT oid := {temp_database_oid};
+    original_name name;
+    temp_name name;
+BEGIN
+    LOCK TABLE pg_catalog.pg_database IN SHARE ROW EXCLUSIVE MODE;
+    SELECT datname INTO original_name
+      FROM pg_catalog.pg_database WHERE oid = expected_original_oid;
+    SELECT datname INTO temp_name
+      FROM pg_catalog.pg_database WHERE oid = expected_temp_oid;
+    IF original_name IS DISTINCT FROM '{self.live_database}'::name
+       OR temp_name IS DISTINCT FROM '{self.temp_database}'::name
+       OR EXISTS (
+            SELECT 1 FROM pg_catalog.pg_database
+             WHERE datname IN (
+                '{self.rollback_database}',
+                '{self.failed_database}'
+             )
+       ) THEN
+        RAISE EXCEPTION 'PostgreSQL forward authority topology changed';
+    END IF;
+    PERFORM pg_catalog.pg_terminate_backend(pid)
+      FROM pg_catalog.pg_stat_activity
+     WHERE datid IN (expected_original_oid, expected_temp_oid)
+       AND pid <> pg_catalog.pg_backend_pid();
+    EXECUTE pg_catalog.format(
+        'ALTER DATABASE %I RENAME TO %I',
+        original_name,
+        '{self.rollback_database}'
+    );
+    EXECUTE pg_catalog.format(
+        'ALTER DATABASE %I RENAME TO %I',
+        temp_name,
+        '{self.live_database}'
+    );
+    IF (SELECT datname FROM pg_catalog.pg_database
+         WHERE oid = expected_original_oid)
+           IS DISTINCT FROM '{self.rollback_database}'::name
+       OR (SELECT datname FROM pg_catalog.pg_database
+            WHERE oid = expected_temp_oid)
+           IS DISTINCT FROM '{self.live_database}'::name
+       OR EXISTS (
+            SELECT 1 FROM pg_catalog.pg_database
+             WHERE datname IN (
+                '{self.temp_database}',
+                '{self.failed_database}'
+             )
+       ) THEN
+        RAISE EXCEPTION 'PostgreSQL forward authority postcondition failed';
+    END IF;
+END
+"""
+        else:
+            authority_body = f"""
+DECLARE
+    expected_original_oid CONSTANT oid := {original_live_oid};
+    expected_temp_oid CONSTANT oid := {temp_database_oid};
+    original_name name;
+    temp_name name;
+BEGIN
+    LOCK TABLE pg_catalog.pg_database IN SHARE ROW EXCLUSIVE MODE;
+    SELECT datname INTO original_name
+      FROM pg_catalog.pg_database WHERE oid = expected_original_oid;
+    SELECT datname INTO temp_name
+      FROM pg_catalog.pg_database WHERE oid = expected_temp_oid;
+    IF original_name NOT IN (
+            '{self.live_database}'::name,
+            '{self.rollback_database}'::name
+       )
+       OR (
+            temp_name IS NOT NULL
+            AND temp_name NOT IN (
+                '{self.live_database}'::name,
+                '{self.temp_database}'::name,
+                '{self.failed_database}'::name
+            )
+       )
+       OR EXISTS (
+            SELECT 1 FROM pg_catalog.pg_database
+             WHERE (datname = '{self.live_database}'
+                    AND oid NOT IN (expected_original_oid, expected_temp_oid))
+                OR (datname = '{self.rollback_database}'
+                    AND oid <> expected_original_oid)
+                OR (datname IN (
+                        '{self.temp_database}',
+                        '{self.failed_database}'
+                    ) AND oid <> expected_temp_oid)
+       ) THEN
+        RAISE EXCEPTION 'PostgreSQL rollback authority topology changed';
+    END IF;
+    IF original_name = '{self.rollback_database}'::name THEN
+        PERFORM pg_catalog.pg_terminate_backend(pid)
+          FROM pg_catalog.pg_stat_activity
+         WHERE datid IN (expected_original_oid, expected_temp_oid)
+           AND pid <> pg_catalog.pg_backend_pid();
+        IF temp_name = '{self.live_database}'::name THEN
+            EXECUTE pg_catalog.format(
+                'ALTER DATABASE %I RENAME TO %I',
+                temp_name,
+                '{self.failed_database}'
+            );
+        END IF;
+        EXECUTE pg_catalog.format(
+            'ALTER DATABASE %I RENAME TO %I',
+            original_name,
+            '{self.live_database}'
+        );
+    END IF;
+    SELECT datname INTO original_name
+      FROM pg_catalog.pg_database WHERE oid = expected_original_oid;
+    SELECT datname INTO temp_name
+      FROM pg_catalog.pg_database WHERE oid = expected_temp_oid;
+    IF original_name IS DISTINCT FROM '{self.live_database}'::name
+       OR EXISTS (
+            SELECT 1 FROM pg_catalog.pg_database
+             WHERE datname = '{self.rollback_database}'
+       )
+       OR (
+            temp_name IS NOT NULL
+            AND temp_name NOT IN (
+                '{self.temp_database}'::name,
+                '{self.failed_database}'::name
+            )
+       )
+       OR EXISTS (
+            SELECT 1 FROM pg_catalog.pg_database
+             WHERE (datname = '{self.live_database}'
+                    AND oid <> expected_original_oid)
+                OR (datname IN (
+                        '{self.temp_database}',
+                        '{self.failed_database}'
+                    ) AND oid <> expected_temp_oid)
+       ) THEN
+        RAISE EXCEPTION 'PostgreSQL rollback authority postcondition failed';
+    END IF;
+END
+"""
+
+        sql = (
+            "SELECT pg_catalog.pg_advisory_lock("
+            f"{DATABASE_LOCK_CLASS}, {DATABASE_LOCK_OBJECT}); "
+            "DO $offline_restore$"
+            f"{authority_body}"
+            "$offline_restore$; "
+            "SELECT pg_catalog.pg_advisory_unlock("
+            f"{DATABASE_LOCK_CLASS}, {DATABASE_LOCK_OBJECT});"
+        )
+        self.compose(
+            "exec",
+            "-T",
+            "postgres",
+            "psql",
+            "--username",
+            self.postgres_user,
+            "--dbname",
+            "postgres",
+            "-v",
+            "ON_ERROR_STOP=1",
+            f"--set=offline_restore_phase=database-authority-{operation}",
+            "-c",
+            sql,
+        )
+
     def switch_database(self) -> None:
         self.enter("switch_database")
         preflight = self.journal.get("database_preflight")
@@ -1052,16 +1448,6 @@ class RestoreRunner:
             or temp_database_oid <= 0
         ):
             raise RestoreHostError("Database switch preflight identity is invalid")
-        identities = self._available_database_identities()
-        if (
-            identities.get(self.live_database) != original_live_oid
-            or identities.get(self.temp_database) != temp_database_oid
-            or self.rollback_database in identities
-            or self.failed_database in identities
-        ):
-            raise RestoreHostError(
-                "Database switch identities changed after preflight"
-            )
         self.journal["database_switch_intent"] = {
             "original_live_name": self.live_database,
             "original_live_oid": original_live_oid,
@@ -1075,24 +1461,10 @@ class RestoreRunner:
         }
         self.journal["switch_attempted"] = True
         self._save_journal()
-        sql = (
-            f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('{self.live_database}','{self.temp_database}') AND pid <> pg_backend_pid(); "
-            f"ALTER DATABASE {self.live_database} RENAME TO {self.rollback_database}; "
-            f"ALTER DATABASE {self.temp_database} RENAME TO {self.live_database};"
-        )
-        self.compose(
-            "exec",
-            "-T",
-            "postgres",
-            "psql",
-            "--username",
-            self.postgres_user,
-            "--dbname",
-            "postgres",
-            "-v",
-            "ON_ERROR_STOP=1",
-            "-c",
-            sql,
+        self._run_database_authority(
+            "forward",
+            original_live_oid,
+            temp_database_oid,
         )
         switched = self._available_database_identities()
         if (
@@ -1512,63 +1884,10 @@ class RestoreRunner:
             "database", "in_progress", identity=identity
         )
 
-        identities = self._available_database_identities()
-        if (
-            identities.get(self.live_database) == original_live_oid
-            and self.rollback_database not in identities
-        ):
-            self._verify_completed_database_rollback(identity)
-            self._transition_rollback_component(
-                "database", "complete", identity=identity
-            )
-            return
-        if identities.get(self.rollback_database) != original_live_oid:
-            raise RestoreHostError("Persisted rollback database identity is missing")
-        live_oid = identities.get(self.live_database)
-        temp_oid = identities.get(self.temp_database)
-        failed_oid = identities.get(self.failed_database)
-        if (
-            (live_oid is not None and live_oid != temp_database_oid)
-            or (temp_oid is not None and temp_oid != temp_database_oid)
-            or (failed_oid is not None and failed_oid != temp_database_oid)
-            or sum(value is not None for value in (live_oid, temp_oid, failed_oid)) > 1
-        ):
-            raise RestoreHostError("Database rollback candidate identity is inconsistent")
-        terminate = f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('{self.live_database}','{self.rollback_database}') AND pid <> pg_backend_pid();"
-        self.compose(
-            "exec",
-            "-T",
-            "postgres",
-            "psql",
-            "--username",
-            self.postgres_user,
-            "--dbname",
-            "postgres",
-            "-v",
-            "ON_ERROR_STOP=1",
-            "-c",
-            terminate,
-        )
-        if live_oid is not None:
-            rollback_sql = (
-                f"ALTER DATABASE {self.live_database} RENAME TO {self.failed_database}; "
-                f"ALTER DATABASE {self.rollback_database} RENAME TO {self.live_database};"
-            )
-        else:
-            rollback_sql = f"ALTER DATABASE {self.rollback_database} RENAME TO {self.live_database};"
-        self.compose(
-            "exec",
-            "-T",
-            "postgres",
-            "psql",
-            "--username",
-            self.postgres_user,
-            "--dbname",
-            "postgres",
-            "-v",
-            "ON_ERROR_STOP=1",
-            "-c",
-            rollback_sql,
+        self._run_database_authority(
+            "rollback",
+            original_live_oid,
+            temp_database_oid,
         )
         self._verify_completed_database_rollback(identity)
         self._transition_rollback_component(
