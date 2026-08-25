@@ -361,6 +361,10 @@ async def _drain_pending_ledger(
         if not progress_callback:
             return
         await checkpoint()
+        # Progress publication uses its own durable transaction and may wait on
+        # Redis/WebSocket delivery.  Release this session's read-only fence so
+        # PostgreSQL's idle-in-transaction timeout cannot invalidate it.
+        await db.commit()
         payload = {
             "phase": "running",
             "scanned": stats["scanned"],
@@ -420,6 +424,10 @@ async def _drain_pending_ledger(
                 break
             work_cursor = work_ids[-1]
             stats["scanned"] += len(work_ids)
+            # Capacity admission may block for longer than PostgreSQL's
+            # idle-in-transaction timeout.  The page is deliberately unlocked
+            # and is fully revalidated by the row-locking query after the wait.
+            await db.commit()
             await _wait_for_batch_capacity(
                 parent_task_id,
                 **(
@@ -624,6 +632,10 @@ async def _drain_pending_ledger(
             }
             try:
                 await checkpoint()
+                # _enqueue_import performs its own attempt-fenced transaction;
+                # never retain this session's TaskRun lock while it waits for
+                # queue publication/backpressure.
+                await db.commit()
                 enqueue_kwargs = {"new_json_paths": metadata_paths}
                 if publisher_checkpoint is not None:
                     enqueue_kwargs["publisher_checkpoint"] = publisher_checkpoint
@@ -682,6 +694,7 @@ async def _drain_pending_ledger(
                     except AdminOperationAttemptRejected:
                         raise
                     except Exception:
+                        await db.rollback()
                         logger.warning(
                             "disk_import: could not link child import task %s to %s",
                             import_job_id,
@@ -841,6 +854,7 @@ async def reconcile_downloads_to_db(
         if not progress_callback:
             return
         await checkpoint()
+        await db.commit()
         payload = {
             "phase": "running",
             "scanned": stats["scanned"],
@@ -889,6 +903,7 @@ async def reconcile_downloads_to_db(
 
     for disk_source, source in sources:
         await checkpoint()
+        await db.commit()
         stats["sources"] += 1
         scan_root = root / disk_source
 
@@ -918,6 +933,7 @@ async def reconcile_downloads_to_db(
         total = len(groups)
         for i, (creator_dir, jsons) in enumerate(sorted(groups.items())):
             await checkpoint()
+            await db.commit()
             stats["scanned"] += 1
             provisioned = None
             identity = None
@@ -1081,6 +1097,7 @@ async def reconcile_downloads_to_db(
 
             try:
                 await checkpoint()
+                await db.commit()
                 enqueue_kwargs = {"new_json_paths": new_paths}
                 if publisher_checkpoint is not None:
                     enqueue_kwargs["publisher_checkpoint"] = publisher_checkpoint
@@ -1132,6 +1149,7 @@ async def reconcile_downloads_to_db(
                     except AdminOperationAttemptRejected:
                         raise
                     except Exception:
+                        await db.rollback()
                         logger.warning("disk_import: could not link child import task %s to %s", import_job_id, parent_task_id, exc_info=True)
             stats["creators"] += 1
             stats["jobs"] += 1

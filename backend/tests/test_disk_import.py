@@ -537,13 +537,26 @@ async def test_ordinary_disk_drain_keyset_feeds_25_work_batches_with_backpressur
 
     enqueued: list[list[str]] = []
     capacity_checks: list[str | None] = []
+    external_transaction_states: list[tuple[str, bool]] = []
 
-    async def fake_enqueue(_download_job_id, import_error=None, new_json_paths=None):
+    async def fake_enqueue(
+        _download_job_id,
+        import_error=None,
+        new_json_paths=None,
+        publisher_checkpoint=None,
+    ):
+        del import_error, publisher_checkpoint
+        external_transaction_states.append(("enqueue", db.in_transaction()))
         enqueued.append(sorted(str(path) for path in (new_json_paths or [])))
         return f"batch-import-{len(enqueued)}"
 
     async def record_capacity(parent_task_id):
+        external_transaction_states.append(("capacity", db.in_transaction()))
         capacity_checks.append(parent_task_id)
+
+    async def fence_transaction(session, *, lock_task=False):
+        del lock_task
+        await session.execute(text("SELECT 1"))
 
     monkeypatch.setattr("app.jobs.download._enqueue_import", fake_enqueue)
     monkeypatch.setattr(
@@ -621,11 +634,16 @@ async def test_ordinary_disk_drain_keyset_feeds_25_work_batches_with_backpressur
                     "source": "pixiv",
                     "parent_task_id": "parent-drain",
                 },
+                publisher_checkpoint=fence_transaction,
             )
 
             assert [len(batch) for batch in enqueued] == [25, 25, 1]
             assert len({path for batch in enqueued for path in batch}) == 51
             assert capacity_checks == ["parent-drain"] * 3
+            assert external_transaction_states == [
+                ("capacity", False),
+                ("enqueue", False),
+            ] * 3
             assert result["imported"] == 3
             assert result["scanned"] == 51
             await db.refresh(library_twin)
